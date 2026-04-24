@@ -25,7 +25,8 @@ def tmp_octowright(tmp_path, monkeypatch):
     yield tmp_path
 
 
-@pytest.mark.anyio
+# Asyncio-only: BrowserPool is built on Playwright's asyncio API and is not trio-compatible.
+@pytest.mark.asyncio
 async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
     root = tmp_octowright
     (root / "scn").mkdir(exist_ok=True)
@@ -37,13 +38,15 @@ async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
         pdir.mkdir(parents=True, exist_ok=True)
         (pdir / "profile.yaml").write_text(yaml.safe_dump({"name": name}))
 
+    # about:blank avoids any external network — important for CI / sandboxed runners
+    # where outbound HTTP may be blocked or slow.
     (root / "scn" / "mini.yaml").write_text(
         yaml.safe_dump(
             {
                 "name": "mini",
                 "participants": [
-                    {"persona": "p1", "kind": "webkit", "role": "player", "url": "https://example.com"},
-                    {"persona": "p2", "kind": "webkit", "role": "monitor", "url": "https://example.com"},
+                    {"persona": "p1", "kind": "webkit", "role": "player", "url": "about:blank"},
+                    {"persona": "p2", "kind": "webkit", "role": "monitor", "url": "about:blank"},
                 ],
                 "fixtures": {"dialog_policy": "dismiss"},
             }
