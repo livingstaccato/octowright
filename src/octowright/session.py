@@ -40,6 +40,7 @@ class BrowserSession:
     active_frame: Any | None = None  # playwright.async_api.Frame when set
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)
+    _bg_tasks: set[Any] = field(default_factory=set, repr=False)
 
     def __post_init__(self) -> None:
         # Ensure the initial page is always index 0.
@@ -59,15 +60,14 @@ class BrowserSession:
     def _register_popup(self, page: Page) -> None:
         """Called by context's 'page' event. Appends new page and records the event."""
         from . import pool as _pool
+
         self.pages.append(page)
         page_index = len(self.pages) - 1
         self.recorder.record("popup_opened", page_index=page_index, url=page.url)
         # Attach console listener so logs from the new tab are collected.
         page.on(
             "console",
-            lambda msg: self.console.append(
-                {"level": msg.type, "text": msg.text, "page_index": page_index}
-            ),
+            lambda msg: self.console.append({"level": msg.type, "text": msg.text, "page_index": page_index}),
         )
         _pool._wire_listeners(self, page)
 
@@ -104,9 +104,7 @@ class BrowserSession:
         Raises RuntimeError if this would close the last page.
         """
         if len(self.pages) <= 1:
-            raise RuntimeError(
-                "cannot close the last remaining page; use browser_close to shut the whole instance"
-            )
+            raise RuntimeError("cannot close the last remaining page; use browser_close to shut the whole instance")
         if index < 0 or index >= len(self.pages):
             raise IndexError(f"page index {index} out of range (0..{len(self.pages) - 1})")
         target = self.pages[index]
@@ -229,8 +227,12 @@ class BrowserSession:
     ) -> dict[str, Any]:
         """Switch the active target to an iframe. Exactly one of selector/name/url_pattern must be given."""
         from . import session_frames
+
         frame, info = await session_frames.switch_frame_impl(
-            self.page, selector=selector, name=name, url_pattern=url_pattern,
+            self.page,
+            selector=selector,
+            name=name,
+            url_pattern=url_pattern,
         )
         self.active_frame = frame
         self.recorder.record(
@@ -253,14 +255,21 @@ class BrowserSession:
     def list_frames(self) -> list[dict[str, Any]]:
         """Return [{index, name, url, is_active}, ...] for every frame on the active page."""
         from . import session_frames
+
         return session_frames.list_frames_impl(self.page, self.active_frame)
 
     def _handle_download(self, download: Any) -> None:
         """Registered as page.on('download', ...). Schedules an async save, appends a
         record to self.downloads once the file lands on disk."""
         import asyncio
+
         from . import session_downloads
-        asyncio.create_task(session_downloads.save_download(self, download))
+
+        # Fire-and-forget: Playwright dispatches downloads synchronously but saving is async.
+        # Task reference is kept on the session to prevent GC collecting it mid-flight (RUF006).
+        task = asyncio.create_task(session_downloads.save_download(self, download))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     def list_downloads(self) -> list[dict[str, Any]]:
         return list(self.downloads)
@@ -269,6 +278,7 @@ class BrowserSession:
         """Block until the next download completes (save-to-disk). Raises TimeoutError
         if no download arrives within timeout_ms. Returns the new download record."""
         from . import session_downloads
+
         return await session_downloads.wait_for_download_impl(self, timeout_ms)
 
     def _handle_dialog(self, dialog: Any) -> None:
@@ -299,7 +309,9 @@ class BrowserSession:
             except Exception as e:
                 self.recorder.record("dialog_handler_error", error=repr(e))
 
-        asyncio.create_task(_act())
+        task = asyncio.create_task(_act())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     def set_dialog_policy(self, policy: str, prompt_text: str | None = None) -> dict[str, Any]:
         """Update the session's dialog-handling policy. policy in {accept, dismiss, manual}."""
@@ -322,6 +334,7 @@ class BrowserSession:
         """Install a page.route handler that fulfills matching requests with the given
         response. Store the handler in self._active_routes keyed by url_pattern so we can
         remove it later."""
+
         async def _handler(route: Any) -> None:
             await route.fulfill(
                 status=status,
@@ -363,6 +376,7 @@ class BrowserSession:
         through _target() so this also works inside iframes when one is active.
         """
         from . import session_locators
+
         return session_locators.build_locator(self._target(), **finders)
 
     async def click_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:

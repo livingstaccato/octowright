@@ -9,9 +9,7 @@ def ensure_ffmpeg() -> str:
     """Return the absolute path to ffmpeg. Raises RuntimeError if missing."""
     found = shutil.which("ffmpeg")
     if not found:
-        raise RuntimeError(
-            "ffmpeg not found on PATH — install it first (e.g. 'brew install ffmpeg')"
-        )
+        raise RuntimeError("ffmpeg not found on PATH — install it first (e.g. 'brew install ffmpeg')")
     return found
 
 
@@ -51,20 +49,19 @@ def extract_frames(
 def _run_ffmpeg(cmd: list[str]) -> None:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg exited {result.returncode}:\n{result.stderr}"
-        )
+        raise RuntimeError(f"ffmpeg exited {result.returncode}:\n{result.stderr}")
 
 
-def _extract_by_fps(
-    ffmpeg: str, video_path: Path, out_dir: Path, fps: float
-) -> list[Path]:
+def _extract_by_fps(ffmpeg: str, video_path: Path, out_dir: Path, fps: float) -> list[Path]:
     pattern = str(out_dir / "frame-%04d.png")
     cmd = [
         ffmpeg,
-        "-i", str(video_path),
-        "-vf", f"fps={fps}",
-        "-vsync", "vfr",
+        "-i",
+        str(video_path),
+        "-vf",
+        f"fps={fps}",
+        "-vsync",
+        "vfr",
         pattern,
         "-y",
     ]
@@ -72,17 +69,18 @@ def _extract_by_fps(
     return sorted(out_dir.glob("frame-*.png"))
 
 
-def _extract_at_times(
-    ffmpeg: str, video_path: Path, out_dir: Path, at_times: list[float]
-) -> list[Path]:
+def _extract_at_times(ffmpeg: str, video_path: Path, out_dir: Path, at_times: list[float]) -> list[Path]:
     produced: list[Path] = []
     for idx, t in enumerate(at_times):
         out_file = out_dir / f"frame-{idx:03d}-t{t:.3f}.png"
         cmd = [
             ffmpeg,
-            "-ss", str(t),
-            "-i", str(video_path),
-            "-frames:v", "1",
+            "-ss",
+            str(t),
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
             str(out_file),
             "-y",
         ]

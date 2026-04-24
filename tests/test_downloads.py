@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -10,7 +9,6 @@ import pytest
 
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
-
 
 # ---------------------------------------------------------------------------
 # Fake download object
@@ -72,6 +70,7 @@ async def test_handle_download_appends_record(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("OCTOWRIGHT_RECORDINGS", str(tmp_path))
     # Reload defaults so RECORDINGS_DIR picks up the monkeypatched env var
     import octowright.defaults as defs
+
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
 
     s = _make_session(tmp_path)
@@ -92,6 +91,7 @@ async def test_handle_download_appends_record(tmp_path: Path, monkeypatch: pytes
 @pytest.mark.anyio
 async def test_handle_download_saves_to_downloads_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.defaults as defs
+
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
 
     s = _make_session(tmp_path)
@@ -109,6 +109,7 @@ async def test_handle_download_saves_to_downloads_dir(tmp_path: Path, monkeypatc
 @pytest.mark.anyio
 async def test_handle_download_increments_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.defaults as defs
+
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
 
     s = _make_session(tmp_path)
@@ -136,6 +137,7 @@ def test_list_downloads_empty(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_list_downloads_returns_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.defaults as defs
+
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
 
     s = _make_session(tmp_path)
@@ -159,6 +161,7 @@ async def test_wait_for_download_returns_immediately_if_already_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import octowright.defaults as defs
+
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
 
     s = _make_session(tmp_path)
@@ -171,10 +174,9 @@ async def test_wait_for_download_returns_immediately_if_already_present(
 
 
 @pytest.mark.anyio
-async def test_wait_for_download_blocks_then_resolves(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_wait_for_download_blocks_then_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.defaults as defs
+
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
 
     s = _make_session(tmp_path)

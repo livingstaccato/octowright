@@ -31,15 +31,16 @@ def list_profiles(kind: str | None = None) -> list[dict[str, Any]]:
                 continue
             stat = engine_dir.stat()
             size = sum(f.stat().st_size for f in engine_dir.rglob("*") if f.is_file())
-            out.append({
-                "kind": k,
-                "name": persona_entry.name,
-                "path": str(engine_dir),
-                "size_bytes": size,
-                "mtime": stat.st_mtime,
-                "last_used": datetime.fromtimestamp(stat.st_mtime, UTC)
-                    .isoformat().replace("+00:00", "Z"),
-            })
+            out.append(
+                {
+                    "kind": k,
+                    "name": persona_entry.name,
+                    "path": str(engine_dir),
+                    "size_bytes": size,
+                    "mtime": stat.st_mtime,
+                    "last_used": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat().replace("+00:00", "Z"),
+                }
+            )
     out.sort(key=lambda p: p["mtime"], reverse=True)
     return out
 

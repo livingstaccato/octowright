@@ -77,22 +77,20 @@ def list_personas() -> list[dict[str, Any]]:
             try:
                 raw = yaml.safe_load(yaml_path.read_text()) or {}
                 display_name = raw.get("display_name")
-            except Exception:  # noqa: BLE001 — surface but don't crash listing
+            except Exception:
                 log.warning("persona.yaml_parse_failed", path=str(yaml_path))
-        engines = sorted(
-            sub.name for sub in entry.iterdir()
-            if sub.is_dir() and sub.name in SUPPORTED_KINDS
-        )
+        engines = sorted(sub.name for sub in entry.iterdir() if sub.is_dir() and sub.name in SUPPORTED_KINDS)
         stat = entry.stat()
-        out.append({
-            "name": entry.name,
-            "display_name": display_name,
-            "engines": engines,
-            "path": str(entry),
-            "mtime": stat.st_mtime,
-            "last_used": datetime.fromtimestamp(stat.st_mtime, UTC)
-                .isoformat().replace("+00:00", "Z"),
-        })
+        out.append(
+            {
+                "name": entry.name,
+                "display_name": display_name,
+                "engines": engines,
+                "path": str(entry),
+                "mtime": stat.st_mtime,
+                "last_used": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat().replace("+00:00", "Z"),
+            }
+        )
     out.sort(key=lambda p: p["mtime"], reverse=True)
     return out
 
@@ -117,8 +115,7 @@ def migrate_legacy_layout() -> dict[str, Any]:
             new_engine = PROFILES_DIR / name / kind_dir.name
             new_engine.parent.mkdir(parents=True, exist_ok=True)
             if new_engine.exists():
-                log.warning("migrate.target_exists_skipping",
-                            source=str(legacy_engine), target=str(new_engine))
+                log.warning("migrate.target_exists_skipping", source=str(legacy_engine), target=str(new_engine))
                 continue
             legacy_engine.rename(new_engine)
             moved += 1
@@ -141,7 +138,10 @@ def migrate_legacy_layout() -> dict[str, Any]:
 
 
 def create_persona(
-    name: str, *, display_name: str | None = None, default_url: str | None = None,
+    name: str,
+    *,
+    display_name: str | None = None,
+    default_url: str | None = None,
 ) -> Path:
     """Scaffold a new persona directory + stub profile.yaml.
     Raises FileExistsError if profile.yaml already exists.
@@ -175,15 +175,16 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
         if env_key in creds:
             log.warning("persona.cred.both_set", persona=persona.name, cred_name=cred_name)
         try:
-            result = subprocess.run(  # noqa: S602 — shell usage is a documented feature
-                creds[cmd_key], shell=True, capture_output=True, text=True,
-                check=False, timeout=30,
+            result = subprocess.run(
+                creds[cmd_key],
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
             )
         except subprocess.TimeoutExpired as e:
-            raise MissingCredential(
-                f"persona {persona.name!r} field {cred_name!r}: "
-                f"cmd timed out after 30s"
-            ) from e
+            raise MissingCredential(f"persona {persona.name!r} field {cred_name!r}: cmd timed out after 30s") from e
         if result.returncode != 0:
             raise MissingCredential(
                 f"persona {persona.name!r} field {cred_name!r}: "
@@ -194,12 +195,8 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
         env_name = creds[env_key]
         value = os.environ.get(env_name)
         if value is None:
-            raise MissingCredential(
-                f"persona {persona.name!r} field {cred_name!r}: "
-                f"env var {env_name} is unset"
-            )
+            raise MissingCredential(f"persona {persona.name!r} field {cred_name!r}: env var {env_name} is unset")
         return value
     raise MissingCredential(
-        f"persona {persona.name!r} field {cred_name!r}: "
-        f"no {cred_name}_env or {cred_name}_cmd in credentials"
+        f"persona {persona.name!r} field {cred_name!r}: no {cred_name}_env or {cred_name}_cmd in credentials"
     )

@@ -14,10 +14,13 @@ def fresh_scenarios(tmp_path, monkeypatch):
     monkeypatch.setenv("OCTOWRIGHT_SCENARIOS_DIR", str(scen_dir))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
     from octowright import defaults
+
     importlib.reload(defaults)
     from octowright import personas
+
     importlib.reload(personas)
     from octowright import scenarios
+
     importlib.reload(scenarios)
     return scenarios, scen_dir
 
@@ -28,20 +31,21 @@ def _write_yaml(p: Path, doc: dict) -> None:
 
 def test_load_yaml_scenario(fresh_scenarios):
     scenarios, scen_dir = fresh_scenarios
-    _write_yaml(scen_dir / "raid.yaml", {
-        "name": "raid",
-        "description": "two players plus a monitor",
-        "participants": [
-            {"persona": "alice", "kind": "webkit", "role": "player"},
-            {"persona": "bob",   "kind": "firefox", "role": "player",
-             "startup_macros": ["login"]},
-            {"persona": "ops",   "kind": "chromium", "role": "monitor",
-             "url": "https://ops.example.com"},
-        ],
-        "fixtures": {"mock_routes": [{"pattern": "**/api/time", "status": 200, "body": "{}"}]},
-        "teardown": {"macro": "cleanup"},
-        "verify": {"player": "assert-in", "monitor": "assert-up"},
-    })
+    _write_yaml(
+        scen_dir / "raid.yaml",
+        {
+            "name": "raid",
+            "description": "two players plus a monitor",
+            "participants": [
+                {"persona": "alice", "kind": "webkit", "role": "player"},
+                {"persona": "bob", "kind": "firefox", "role": "player", "startup_macros": ["login"]},
+                {"persona": "ops", "kind": "chromium", "role": "monitor", "url": "https://ops.example.com"},
+            ],
+            "fixtures": {"mock_routes": [{"pattern": "**/api/time", "status": 200, "body": "{}"}]},
+            "teardown": {"macro": "cleanup"},
+            "verify": {"player": "assert-in", "monitor": "assert-up"},
+        },
+    )
     s = scenarios.load_scenario("raid")
     assert s.name == "raid"
     assert len(s.participants) == 3
@@ -96,13 +100,17 @@ def test_py_wins_over_yaml(fresh_scenarios):
 
 def test_duplicate_persona_kind_rejected(fresh_scenarios):
     scenarios, scen_dir = fresh_scenarios
-    (scen_dir / "dup.yaml").write_text(yaml.safe_dump({
-        "name": "dup",
-        "participants": [
-            {"persona": "a", "kind": "webkit", "role": "x"},
-            {"persona": "a", "kind": "webkit", "role": "y"},
-        ],
-    }))
+    (scen_dir / "dup.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "dup",
+                "participants": [
+                    {"persona": "a", "kind": "webkit", "role": "x"},
+                    {"persona": "a", "kind": "webkit", "role": "y"},
+                ],
+            }
+        )
+    )
     with pytest.raises(ValueError, match="duplicate"):
         scenarios.load_scenario("dup")
 
@@ -110,16 +118,20 @@ def test_duplicate_persona_kind_rejected(fresh_scenarios):
 def test_resolve_launch_kwargs_defaults(fresh_scenarios, tmp_path):
     scenarios, _ = fresh_scenarios
     from octowright import personas as _p
+
     # Create a persona with defaults
     pdir = _p.persona_dir("alice")
     pdir.mkdir(parents=True)
-    (pdir / "profile.yaml").write_text(yaml.safe_dump({
-        "name": "alice",
-        "default_url": "https://alice-home.example",
-        "default_macros": ["login"],
-    }))
-    pov = scenarios.Participant(persona="alice", kind="webkit", role="player",
-                                url="https://override.example")
+    (pdir / "profile.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "alice",
+                "default_url": "https://alice-home.example",
+                "default_macros": ["login"],
+            }
+        )
+    )
+    pov = scenarios.Participant(persona="alice", kind="webkit", role="player", url="https://override.example")
     kwargs = scenarios.resolve_launch_kwargs(pov)
     assert kwargs["url"] == "https://override.example"
     assert kwargs["profile"] == "alice"

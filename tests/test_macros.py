@@ -38,6 +38,7 @@ def _import_macros(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
     # Force re-import so module-level constants pick up patched env vars.
     import octowright.macros as _m
+
     importlib.reload(_m)
     return _m
 
@@ -249,9 +250,7 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
             calls.append(("evaluate", (expression,), {}))
             return None
 
-        async def wait_for(
-            self, selector: str | None, text: str | None, timeout_ms: int | None
-        ) -> None:
+        async def wait_for(self, selector: str | None, text: str | None, timeout_ms: int | None) -> None:
             calls.append(("wait_for", (selector, text, timeout_ms), {}))
 
     fake = FakeSession()
@@ -330,6 +329,7 @@ class _FakeSessionForSequence:
 def _save_minimal_macro(m: Any, tmp_path: Path, name: str) -> None:
     """Write a single-navigate macro JSON directly (no recording needed)."""
     import json
+
     (tmp_path / "macros").mkdir(parents=True, exist_ok=True)
     macro = {
         "name": name,
@@ -365,6 +365,7 @@ async def test_run_sequence_stop_on_failure(monkeypatch: pytest.MonkeyPatch, tmp
 
     # middle macro: single fill action that triggers failure
     import json
+
     (tmp_path / "macros").mkdir(parents=True, exist_ok=True)
     bad_macro = {
         "name": "bad",
@@ -392,6 +393,7 @@ async def test_run_sequence_collect_errors(monkeypatch: pytest.MonkeyPatch, tmp_
     _save_minimal_macro(m, tmp_path, "s1")
 
     import json
+
     (tmp_path / "macros").mkdir(parents=True, exist_ok=True)
     bad_macro = {
         "name": "s2-bad",
@@ -425,6 +427,7 @@ async def test_run_macro_dispatches_expect_text(monkeypatch: pytest.MonkeyPatch,
     m = _import_macros(monkeypatch, tmp_path)
 
     import json
+
     (tmp_path / "macros").mkdir(parents=True, exist_ok=True)
     macro = {
         "name": "assert-macro",
@@ -495,13 +498,12 @@ class _FakeSessionWithDiagnostic:
 
 
 @pytest.mark.anyio
-async def test_run_macro_captures_diagnostic_bundle_on_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_run_macro_captures_diagnostic_bundle_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """When an action raises, run_macro wraps the error with a diagnostic bundle."""
     m = _import_macros(monkeypatch, tmp_path)
 
     import json
+
     (tmp_path / "macros").mkdir(parents=True, exist_ok=True)
     macro = {
         "name": "fail-macro",
@@ -537,13 +539,12 @@ async def test_run_macro_captures_diagnostic_bundle_on_failure(
 
 
 @pytest.mark.anyio
-async def test_run_macro_bundle_has_expected_keys(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_run_macro_bundle_has_expected_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The bundle keys match the documented shape even when screenshot is None."""
     m = _import_macros(monkeypatch, tmp_path)
 
     import json
+
     (tmp_path / "macros").mkdir(parents=True, exist_ok=True)
     macro = {
         "name": "fail-click",
@@ -570,13 +571,12 @@ async def test_run_macro_bundle_has_expected_keys(
 
 
 @pytest.mark.anyio
-async def test_run_macro_chained_cause(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_run_macro_chained_cause(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The RuntimeError must chain from the original exception via __cause__."""
     m = _import_macros(monkeypatch, tmp_path)
 
     import json
+
     (tmp_path / "macros").mkdir(parents=True, exist_ok=True)
     macro = {
         "name": "cause-test",

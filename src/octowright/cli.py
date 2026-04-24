@@ -36,16 +36,21 @@ def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | Non
     """Run all test macros in a directory. Outputs JUnit XML."""
     import asyncio
 
-    from .pool import BrowserPool
     from . import runner
+    from .pool import BrowserPool
 
     pool = BrowserPool()
     setup_telemetry()
     try:
-        result = asyncio.run(runner.run_suite(
-            macros_dir=macros_dir, kind=kind, tag=tag,
-            out_path=out_path, pool=pool,
-        ))
+        result = asyncio.run(
+            runner.run_suite(
+                macros_dir=macros_dir,
+                kind=kind,
+                tag=tag,
+                out_path=out_path,
+                pool=pool,
+            )
+        )
         asyncio.run(pool.shutdown())
         click.echo(f"{result['passed']}/{result['total']} passed")
         click.echo(f"report: {result['report_path']}")
@@ -77,6 +82,7 @@ def persona() -> None:
 def persona_list_cmd() -> None:
     """List all personas with engines and last-used timestamps."""
     from . import personas as _p
+
     setup_telemetry()
     try:
         for row in _p.list_personas():
@@ -92,6 +98,7 @@ def persona_list_cmd() -> None:
 def persona_show_cmd(name: str) -> None:
     """Print the full profile.yaml for a persona."""
     from . import personas as _p
+
     setup_telemetry()
     try:
         p = _p.load_persona(name)
@@ -112,15 +119,18 @@ def persona_show_cmd(name: str) -> None:
 def persona_create_cmd(name: str, display_name: str | None, default_url: str | None) -> None:
     """Scaffold a new persona dir + stub profile.yaml."""
     from . import personas as _p
+
     setup_telemetry()
     try:
         try:
             pdir = _p.create_persona(
-                name, display_name=display_name, default_url=default_url,
+                name,
+                display_name=display_name,
+                default_url=default_url,
             )
         except FileExistsError as e:
             click.echo(str(e), err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from e
         click.echo(f"created {pdir}")
     finally:
         shutdown_telemetry()
@@ -131,6 +141,7 @@ def persona_create_cmd(name: str, display_name: str | None, default_url: str | N
 def persona_delete_cmd(name: str) -> None:
     """Delete an entire persona (all engines + metadata)."""
     from .profiles import delete_persona
+
     setup_telemetry()
     try:
         path = delete_persona(name)
@@ -143,6 +154,7 @@ def persona_delete_cmd(name: str) -> None:
 def migrate_profiles_cmd() -> None:
     """One-shot: migrate legacy profiles/<kind>/<name>/ to profiles/<name>/<kind>/."""
     from . import personas as _p
+
     setup_telemetry()
     try:
         summary = _p.migrate_legacy_layout()
@@ -160,6 +172,7 @@ def scenario() -> None:
 def scenario_list_cmd() -> None:
     """List scenario specs on disk."""
     from . import scenarios as _s
+
     setup_telemetry()
     try:
         for row in _s.list_scenarios():
@@ -170,16 +183,16 @@ def scenario_list_cmd() -> None:
 
 @scenario.command("start")
 @click.argument("name")
-@click.option("--test", "test_mode", is_flag=True,
-              help="Run verify macros after start; emit pass/fail and exit.")
-@click.option("--out", "out_path", default=None,
-              help="JUnit XML output path (used with --test).")
+@click.option("--test", "test_mode", is_flag=True, help="Run verify macros after start; emit pass/fail and exit.")
+@click.option("--out", "out_path", default=None, help="JUnit XML output path (used with --test).")
 def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None) -> None:
     """Start a scenario and hold its browsers open until Ctrl-C (or --test exit)."""
     import asyncio as _asyncio
     import signal
-    from .pool import BrowserPool
+
     from . import scenarios as _s
+    from .pool import BrowserPool
+
     setup_telemetry()
 
     async def _run() -> int:
@@ -190,13 +203,14 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None) -> None
             click.echo(f"scenario_id: {live.scenario_id}")
             for p in live.participants:
                 click.echo(
-                    f"  [{p['role']:10s}] {p['persona']:15s} {p['kind']:10s} "
-                    f"{p['instance_id']}  {p.get('url', '')}"
+                    f"  [{p['role']:10s}] {p['persona']:15s} {p['kind']:10s} {p['instance_id']}  {p.get('url', '')}"
                 )
 
             if test_mode:
                 exit_code = await _run_verify_and_report(
-                    pool=pool, live=live, out_path=out_path,
+                    pool=pool,
+                    live=live,
+                    out_path=out_path,
                 )
                 await spool.stop(scenario_id=live.scenario_id, browser_pool=pool)
                 return exit_code
@@ -227,6 +241,7 @@ async def _run_verify_and_report(*, pool: Any, live: Any, out_path: str | None) 
     """Run each participant's role verify macro, write JUnit XML, return 0/1."""
     from datetime import UTC, datetime
     from pathlib import Path
+
     from . import macros as _m
     from . import runner as _r
 
@@ -238,25 +253,31 @@ async def _run_verify_and_report(*, pool: Any, live: Any, out_path: str | None) 
     for p in live.participants:
         macro = live.spec.verify.get(p["role"])
         if not macro:
-            results.append({
-                "name": f"{p['role']}:{p['persona']}",
-                "ok": False,
-                "error": f"no verify macro for role {p['role']!r}",
-                "duration": 0.0,
-            })
+            results.append(
+                {
+                    "name": f"{p['role']}:{p['persona']}",
+                    "ok": False,
+                    "error": f"no verify macro for role {p['role']!r}",
+                    "duration": 0.0,
+                }
+            )
             continue
         start = datetime.now(UTC)
         try:
             session = pool.get(p["instance_id"])
             await _m.run_macro(session=session, name=macro, args={})
             ok, err = True, None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             ok, err = False, repr(e)
         duration = (datetime.now(UTC) - start).total_seconds()
-        results.append({
-            "name": f"{p['role']}:{p['persona']}",
-            "ok": ok, "error": err, "duration": duration,
-        })
+        results.append(
+            {
+                "name": f"{p['role']}:{p['persona']}",
+                "ok": ok,
+                "error": err,
+                "duration": duration,
+            }
+        )
 
     target = Path(out_path) if out_path else _r._default_report_path()
     _r._write_junit(results, target, kind="scenario")

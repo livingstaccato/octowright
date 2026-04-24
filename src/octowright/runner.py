@@ -8,8 +8,8 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from .defaults import DEFAULT_URL
 from . import macros as macro_mod
+from .defaults import DEFAULT_URL
 
 log = get_logger(__name__)
 
@@ -32,7 +32,7 @@ def _is_test(macro: dict[str, Any], tag: str | None) -> bool:
 
 async def run_suite(
     *,
-    macros_dir: str | None,
+    macros_dir: str | None,  # noqa: ARG001 — reserved for per-suite dir override; default MACROS_DIR used today
     kind: str = "webkit",
     tag: str | None = None,
     out_path: str | None = None,
@@ -77,12 +77,14 @@ async def run_suite(
         finally:
             await pool.close(iid)
         duration = (datetime.now(UTC) - start).total_seconds()
-        results.append({
-            "name": t["name"],
-            "ok": ok,
-            "error": err,
-            "duration": duration,
-        })
+        results.append(
+            {
+                "name": t["name"],
+                "ok": ok,
+                "error": err,
+                "duration": duration,
+            }
+        )
 
     passed = sum(1 for r in results if r["ok"])
     failed = len(results) - passed
@@ -112,18 +114,25 @@ def _default_report_path() -> Path:
 
 
 def _write_junit(results: list[dict[str, Any]], path: Path, *, kind: str) -> None:
-    suite = ET.Element("testsuite", {
-        "name": "octowright",
-        "tests": str(len(results)),
-        "failures": str(sum(1 for r in results if not r["ok"])),
-        "time": str(sum(r["duration"] for r in results)),
-    })
+    suite = ET.Element(
+        "testsuite",
+        {
+            "name": "octowright",
+            "tests": str(len(results)),
+            "failures": str(sum(1 for r in results if not r["ok"])),
+            "time": str(sum(r["duration"] for r in results)),
+        },
+    )
     for r in results:
-        case = ET.SubElement(suite, "testcase", {
-            "classname": f"octowright.{kind}",
-            "name": r["name"],
-            "time": str(r["duration"]),
-        })
+        case = ET.SubElement(
+            suite,
+            "testcase",
+            {
+                "classname": f"octowright.{kind}",
+                "name": r["name"],
+                "time": str(r["duration"]),
+            },
+        )
         if not r["ok"]:
             fail = ET.SubElement(case, "failure", {"message": r["error"] or "failed"})
             fail.text = r["error"] or "failed"
