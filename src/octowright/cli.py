@@ -196,7 +196,8 @@ def scenario_list_cmd() -> None:
 @click.argument("name")
 @click.option("--test", "test_mode", is_flag=True, help="Run verify macros after start; emit pass/fail and exit.")
 @click.option("--out", "out_path", default=None, help="JUnit XML output path (used with --test).")
-def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None) -> None:
+@click.option("--watch", is_flag=True, help="Stream participant events as they happen.")
+def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: bool) -> None:
     """Start a scenario and hold its browsers open until Ctrl-C (or --test exit)."""
     import asyncio as _asyncio
     import signal
@@ -227,6 +228,8 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None) -> None
                 return exit_code
 
             click.echo("\nbrowsers open; Ctrl-C to tear down and exit.")
+            if watch:
+                click.echo("(--watch: streaming events; Ctrl-C to stop)\n")
             stop = _asyncio.get_running_loop().create_future()
 
             def _handle(*_: object) -> None:
@@ -235,7 +238,42 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None) -> None
 
             _asyncio.get_running_loop().add_signal_handler(signal.SIGINT, _handle)
             _asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _handle)
+
+            async def _watcher() -> None:
+                cursors: dict[str, int] = {}
+                while not stop.done():
+                    try:
+                        result = spool.tail(scenario_id=live.scenario_id, since_cursors=cursors)
+                    except Exception:
+                        return
+                    cursors = result["cursors"]
+                    for ev in result["events"]:
+                        if ev.get("action") == "console":
+                            continue
+                        ts = ev.get("ts", "")[11:19]  # "HH:MM:SS"
+                        persona = ev.get("persona", "?")
+                        role = ev.get("role", "?")
+                        action = ev.get("action", "?")
+                        extras = " ".join(
+                            f"{k}={v!r}"
+                            for k, v in ev.items()
+                            if k not in ("ts", "action", "instance_id", "persona", "role")
+                        )
+                        click.echo(f"[{ts}][{persona}][{role}] {action} {extras}")
+                    await _asyncio.sleep(1.0)
+
+            if watch:
+                watcher_task: _asyncio.Task[None] | None = _asyncio.create_task(_watcher())
+            else:
+                watcher_task = None
+
             await stop
+            if watcher_task is not None:
+                watcher_task.cancel()
+                try:
+                    await watcher_task
+                except _asyncio.CancelledError:
+                    pass
             await spool.stop(scenario_id=live.scenario_id, browser_pool=pool)
             return 0
         finally:
