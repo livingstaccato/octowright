@@ -1,0 +1,13 @@
+{
+  "name": "inject-form",
+  "description": "Inject a small HTML form (inputs #user, #pass, button #submit) into the current document body. Utility macro reused by other demos to avoid external network.",
+  "parameters": [],
+  "created_at": "2026-04-24T00:00:00Z",
+  "updated_at": "2026-04-24T00:00:00Z",
+  "actions": [
+    {
+      "action": "evaluate",
+      "expression": "document.body.innerHTML = '<form><input id=user name=user><input id=pass type=password name=pass><button id=submit type=button>Go</button></form>'"
+    }
+  ]
+}

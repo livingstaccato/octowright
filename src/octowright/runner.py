@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-Comment: Part of octowright.
+#
+
 from __future__ import annotations
 
 import re
@@ -9,7 +14,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from . import macros as macro_mod
-from .defaults import DEFAULT_URL
+from .defaults import DEFAULT_URL  # noqa: F401 — kept for downstream callers; runner uses about:blank
 
 log = get_logger(__name__)
 
@@ -56,9 +61,12 @@ async def run_suite(
     results: list[dict[str, Any]] = []
     for t in tests:
         start = datetime.now(UTC)
+        # Tests start on about:blank so they don't accidentally depend on the global
+        # DEFAULT_URL (which points at the production site and is CSP-locked).
+        # Macros that need a specific URL should issue `navigate` as their first action.
         launch_result = await pool.launch(
             kind=kind,
-            url=DEFAULT_URL,
+            url="about:blank",
             headed=False,
             label=f"test-{t['name']}",
             viewport_w=1280,

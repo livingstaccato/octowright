@@ -1,0 +1,24 @@
+{
+  "name": "test-selector-presence",
+  "description": "[test] Inject HTML; assert a selector resolves; reset and assert it does not.",
+  "parameters": [],
+  "created_at": "2026-04-24T00:00:00Z",
+  "updated_at": "2026-04-24T00:00:00Z",
+  "actions": [
+    {
+      "action": "evaluate",
+      "expression": "document.body.innerHTML = '<h1 id=title>Demo</h1><p class=note>hi</p>'"
+    },
+    {
+      "action": "expect_selector",
+      "selector": "#title",
+      "present": true
+    },
+    {
+      "action": "expect_text",
+      "selector": "#title",
+      "text": "Demo",
+      "mode": "equals"
+    }
+  ]
+}

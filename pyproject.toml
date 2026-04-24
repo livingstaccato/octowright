@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "MCP server that drives multiple headed Playwright browsers (chromium/firefox/webkit) in parallel with per-instance action recording and persistent profiles."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "Apache-2.0"
+license-files = ["LICENSES/*"]
 authors = [{ name = "Tim", email = "tim@neurotic.org" }]
 dependencies = [
     "mcp>=1.2.0",

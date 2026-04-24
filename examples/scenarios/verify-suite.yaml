@@ -1,0 +1,22 @@
+name: verify-suite
+description: |
+  Three participants with role-specific verify macros. Runs cleanly under
+  `octowright scenario start verify-suite --test --out report.xml`, exiting 0
+  if every role's verify macro passes against its participant.
+participants:
+  - persona: vs-form
+    kind: webkit
+    role: form
+    url: about:blank
+  - persona: vs-counter
+    kind: webkit
+    role: counter
+    url: about:blank
+  - persona: vs-arithmetic
+    kind: webkit
+    role: arithmetic
+    url: about:blank
+verify:
+  form: "test-injected-form-fill"
+  counter: "test-click-counter"
+  arithmetic: "test-assert-arithmetic"
