@@ -9,7 +9,6 @@ import pytest
 
 from octowright.runner import _default_report_path, _is_test, _write_junit, run_suite
 
-
 # ---------------------------------------------------------------------------
 # _is_test
 # ---------------------------------------------------------------------------
@@ -135,6 +134,7 @@ class TestDefaultReportPath:
         assert p.suffix == ".xml"
         # Basic ISO-ish stamp check: 8 digits, T, 6 digits, Z
         import re
+
         assert re.search(r"\d{8}T\d{6}Z", p.name)
 
 
@@ -163,8 +163,11 @@ class TestRunSuite:
             patch("octowright.runner.macro_mod.run_macro", new_callable=AsyncMock),
         ):
             result = await run_suite(
-                macros_dir=None, kind="webkit", tag=None,
-                out_path=str(tmp_path / "out.xml"), pool=fake_pool,
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(tmp_path / "out.xml"),
+                pool=fake_pool,
             )
 
         assert result["total"] == 0
@@ -187,8 +190,11 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None, kind="webkit", tag=None,
-                out_path=str(tmp_path / "out.xml"), pool=fake_pool,
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(tmp_path / "out.xml"),
+                pool=fake_pool,
             )
 
         assert result["total"] == 1
@@ -213,8 +219,11 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None, kind="webkit", tag=None,
-                out_path=str(tmp_path / "out.xml"), pool=fake_pool,
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(tmp_path / "out.xml"),
+                pool=fake_pool,
             )
 
         assert result["total"] == 1
@@ -248,8 +257,11 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None, kind="webkit", tag="smoke",
-                out_path=str(tmp_path / "out.xml"), pool=fake_pool,
+                macros_dir=None,
+                kind="webkit",
+                tag="smoke",
+                out_path=str(tmp_path / "out.xml"),
+                pool=fake_pool,
             )
 
         assert result["total"] == 1
@@ -271,8 +283,11 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None, kind="webkit", tag=None,
-                out_path=str(report_path), pool=fake_pool,
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(report_path),
+                pool=fake_pool,
             )
 
         assert result["report_path"] == str(report_path)

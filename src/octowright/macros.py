@@ -17,9 +17,7 @@ log = get_logger(__name__)
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 # MACROS_DIR sits next to profiles/ by default; env var overrides.
-MACROS_DIR: Path = Path(
-    os.environ.get("OCTOWRIGHT_MACROS_DIR", str(PROFILES_DIR.parent / "macros"))
-)
+MACROS_DIR: Path = Path(os.environ.get("OCTOWRIGHT_MACROS_DIR", str(PROFILES_DIR.parent / "macros")))
 
 # Actions that are lifecycle/inspection-only and are stripped from macros by default.
 _ALWAYS_STRIP = {"close", "snapshot"}
@@ -207,7 +205,7 @@ _REPLAY_SKIP = {"launch", "close", "snapshot"}
 
 
 async def run_macro(
-    session: "BrowserSession",  # noqa: F821 — forward ref, avoids circular import
+    session: BrowserSession,  # noqa: F821 — forward ref, avoids circular import
     name: str,
     args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -215,7 +213,6 @@ async def run_macro(
 
     Returns ``{"macro": name, "executed": N, "skipped": M, "args_used": {...}}``.
     """
-    from .session import BrowserSession  # local import avoids any circular dep
 
     macro = load_macro(name)
     effective_args = args or {}
@@ -333,19 +330,13 @@ async def _check_url(page: Any, pattern: str, mode: str) -> str:
     actual: str = page.url
     if mode == "equals":
         if actual != pattern:
-            raise RuntimeError(
-                f'URL mismatch: expected "{pattern}" (equals), got "{actual}"'
-            )
+            raise RuntimeError(f'URL mismatch: expected "{pattern}" (equals), got "{actual}"')
     elif mode == "contains":
         if pattern not in actual:
-            raise RuntimeError(
-                f'URL mismatch: expected substring "{pattern}" (contains), got "{actual}"'
-            )
+            raise RuntimeError(f'URL mismatch: expected substring "{pattern}" (contains), got "{actual}"')
     elif mode == "regex":
         if not re.search(pattern, actual):
-            raise RuntimeError(
-                f'URL mismatch: expected pattern "{pattern}" (regex), got "{actual}"'
-            )
+            raise RuntimeError(f'URL mismatch: expected pattern "{pattern}" (regex), got "{actual}"')
     else:
         raise ValueError(f"unknown mode {mode!r}; expected 'regex', 'equals', or 'contains'")
     return actual
@@ -367,27 +358,19 @@ async def _check_text(
     try:
         element = await page.wait_for_selector(selector, timeout=timeout)
     except Exception as exc:
-        raise RuntimeError(
-            f'element never appeared within {timeout}ms: selector="{selector}"'
-        ) from exc
+        raise RuntimeError(f'element never appeared within {timeout}ms: selector="{selector}"') from exc
     if element is None:
         raise RuntimeError(f'element never appeared within {timeout}ms: selector="{selector}"')
     actual: str = await element.inner_text()
     if mode == "contains":
         if text not in actual:
-            raise RuntimeError(
-                f'text mismatch on "{selector}": expected to contain "{text}", got "{actual}"'
-            )
+            raise RuntimeError(f'text mismatch on "{selector}": expected to contain "{text}", got "{actual}"')
     elif mode == "equals":
         if actual != text:
-            raise RuntimeError(
-                f'text mismatch on "{selector}": expected "{text}" (equals), got "{actual}"'
-            )
+            raise RuntimeError(f'text mismatch on "{selector}": expected "{text}" (equals), got "{actual}"')
     elif mode == "regex":
         if not re.search(text, actual):
-            raise RuntimeError(
-                f'text mismatch on "{selector}": expected pattern "{text}" (regex), got "{actual}"'
-            )
+            raise RuntimeError(f'text mismatch on "{selector}": expected pattern "{text}" (regex), got "{actual}"')
     else:
         raise ValueError(f"unknown mode {mode!r}; expected 'contains', 'equals', or 'regex'")
     return actual
@@ -408,9 +391,7 @@ async def _check_selector(
         try:
             await page.wait_for_selector(selector, timeout=timeout)
         except Exception as exc:
-            raise RuntimeError(
-                f'selector never appeared within {timeout}ms: "{selector}"'
-            ) from exc
+            raise RuntimeError(f'selector never appeared within {timeout}ms: "{selector}"') from exc
     else:
         # Poll once — if the element exists right now, that's the failure.
         element = await page.query_selector(selector)
@@ -427,14 +408,10 @@ async def _check_js(page: Any, expression: str, equals: Any = None) -> Any:
     result = await page.evaluate(expression)
     if equals is not None:
         if result != equals:
-            raise RuntimeError(
-                f"JS assertion failed: expression={expression!r}, expected={equals!r}, got={result!r}"
-            )
+            raise RuntimeError(f"JS assertion failed: expression={expression!r}, expected={equals!r}, got={result!r}")
     else:
         if not result:
-            raise RuntimeError(
-                f"JS assertion failed (not truthy): expression={expression!r}, got={result!r}"
-            )
+            raise RuntimeError(f"JS assertion failed (not truthy): expression={expression!r}, got={result!r}")
     return result
 
 
@@ -480,7 +457,7 @@ async def run_sequence(
     steps: list[dict[str, Any]] = []
     all_ok = True
 
-    for name, step_args in zip(names, resolved_args):
+    for name, step_args in zip(names, resolved_args, strict=True):
         try:
             outcome = await run_macro(session=session, name=name, args=step_args)
             steps.append({**outcome, "ok": True})

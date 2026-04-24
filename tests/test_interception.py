@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import io
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
-
 
 # ---------------------------------------------------------------------------
 # Minimal stubs — no real browser launched

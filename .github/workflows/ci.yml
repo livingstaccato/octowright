@@ -1,0 +1,68 @@
+name: 🧪 CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_COLOR: "1"
+  # Keep scenarios/profiles quiet during CI — never touch $HOME defaults.
+  OCTOWRIGHT_RECORDINGS: ${{ github.workspace }}/.ci/recordings
+  OCTOWRIGHT_PROFILES_DIR: ${{ github.workspace }}/.ci/profiles
+  OCTOWRIGHT_SCENARIOS_DIR: ${{ github.workspace }}/.ci/scenarios
+  OCTOWRIGHT_MACROS_DIR: ${{ github.workspace }}/.ci/macros
+  OCTOWRIGHT_GOLDENS_DIR: ${{ github.workspace }}/.ci/goldens
+
+jobs:
+  lint:
+    name: 🎨 Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync dev deps
+        run: uv sync --all-groups
+      - name: Ruff check
+        run: uv run --active ruff check .
+      - name: Ruff format check
+        run: uv run --active ruff format --check .
+
+  test:
+    name: 🧪 Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync dev deps
+        run: uv sync --all-groups
+      - name: Install Playwright browsers
+        run: uv run --active playwright install --with-deps webkit firefox chromium
+      - name: Run unit tests (headless)
+        env:
+          OCTOWRIGHT_HEADLESS: "1"
+        run: uv run --active pytest -q tests/
+      - name: Selftest — verify tool registration
+        run: uv run --active octowright selftest
+
+  selftest:
+    name: 🔧 Selftest — quick smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync
+        run: uv sync
+      - name: Selftest
+        run: uv run --active octowright selftest

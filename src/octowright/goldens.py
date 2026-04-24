@@ -9,9 +9,7 @@ from typing import Any
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-GOLDENS_DIR: Path = Path(
-    os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(Path.home() / ".config" / "undef" / "goldens"))
-)
+GOLDENS_DIR: Path = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(Path.home() / ".config" / "undef" / "goldens")))
 
 
 def _slug(name: str) -> str:
@@ -75,14 +73,16 @@ def list_goldens() -> list[dict[str, Any]]:
             data = json.loads(entry.read_text(encoding="utf-8"))
         except Exception:
             continue
-        out.append({
-            "name": data.get("name", entry.stem),
-            "description": data.get("description"),
-            "path": str(entry),
-            "created_at": data.get("created_at"),
-            "updated_at": data.get("updated_at"),
-            "url": data.get("url"),
-        })
+        out.append(
+            {
+                "name": data.get("name", entry.stem),
+                "description": data.get("description"),
+                "path": str(entry),
+                "created_at": data.get("created_at"),
+                "updated_at": data.get("updated_at"),
+                "url": data.get("url"),
+            }
+        )
     out.sort(key=lambda g: g.get("updated_at") or "", reverse=True)
     return out
 

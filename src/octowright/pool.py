@@ -27,8 +27,9 @@ log = get_logger(__name__)
 # Auto-migrate legacy profile layout on first module import. Idempotent.
 try:
     from . import personas as _personas
+
     _personas.migrate_legacy_layout()
-except Exception as _e:  # noqa: BLE001 — migration must never block import
+except Exception as _e:
     log.warning("pool.migration_on_import_failed", error=repr(_e))
 
 
@@ -78,7 +79,7 @@ def _title_prefix_for(profile: str | None, label: str | None) -> str | None:
     return f"[{tag}] " if tag else None
 
 
-def _wire_listeners(session: "BrowserSession", page: Any) -> None:
+def _wire_listeners(session: BrowserSession, page: Any) -> None:
     """Attach per-page listeners (dialog, download) to a page.
     Called for both the initial page at launch AND any popup page opened mid-session.
     """
@@ -313,7 +314,7 @@ class BrowserPool:
 
         launched: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
-        for spec, result in zip(specs, results):
+        for spec, result in zip(specs, results, strict=True):
             if isinstance(result, BaseException):
                 errors.append({"spec": spec, "error": str(result)})
             else:

@@ -9,7 +9,6 @@ import pytest
 
 from octowright.session import BrowserSession
 
-
 # ---------------------------------------------------------------------------
 # Fake Locator
 # ---------------------------------------------------------------------------
@@ -201,6 +200,7 @@ async def test_click_by_calls_locator_click(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_click_by_uses_default_timeout(tmp_path: Path) -> None:
     from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
+
     page = FakePage()
     session = _make_session(page, tmp_path)
     await session.click_by(text="Click me")

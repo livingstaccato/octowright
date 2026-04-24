@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers — reload macros module with patched env (same pattern as test_macros)
 # ---------------------------------------------------------------------------
@@ -16,6 +15,7 @@ def _import_macros(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
     import octowright.macros as _m
+
     importlib.reload(_m)
     return _m
 
@@ -44,15 +44,15 @@ class FakePage:
         self._wait_for_selector_result = wait_for_selector_result
         self._wait_for_selector_raises = wait_for_selector_raises
 
-    async def evaluate(self, expression: str) -> Any:  # noqa: ARG002
+    async def evaluate(self, expression: str) -> Any:
         return self._evaluate_result
 
-    async def wait_for_selector(self, selector: str, timeout: int = 5000) -> Any:  # noqa: ARG002
+    async def wait_for_selector(self, selector: str, timeout: int = 5000) -> Any:
         if self._wait_for_selector_raises is not None:
             raise self._wait_for_selector_raises
         return self._wait_for_selector_result
 
-    async def query_selector(self, selector: str) -> Any:  # noqa: ARG002
+    async def query_selector(self, selector: str) -> Any:
         return self._query_selector_result
 
     async def inner_text(self) -> str:

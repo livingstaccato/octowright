@@ -11,10 +11,13 @@ import yaml
 def fresh_personas(tmp_path, monkeypatch):
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path))
     from octowright import defaults
+
     importlib.reload(defaults)
     from octowright import personas
+
     importlib.reload(personas)
     from octowright import profiles
+
     importlib.reload(profiles)
     return personas
 
@@ -27,14 +30,18 @@ def _write_persona(root: Path, name: str, doc: dict) -> None:
 
 def test_load_persona_round_trip(tmp_path, fresh_personas):
     personas = fresh_personas
-    _write_persona(tmp_path, "dante", {
-        "name": "dante",
-        "display_name": "Dante",
-        "default_url": "https://example.com",
-        "default_macros": ["login"],
-        "credentials": {"email_env": "DANTE_EMAIL"},
-        "app": {"discord_user_id": "1234", "role": "player"},
-    })
+    _write_persona(
+        tmp_path,
+        "dante",
+        {
+            "name": "dante",
+            "display_name": "Dante",
+            "default_url": "https://example.com",
+            "default_macros": ["login"],
+            "credentials": {"email_env": "DANTE_EMAIL"},
+            "app": {"discord_user_id": "1234", "role": "player"},
+        },
+    )
     p = personas.load_persona("dante")
     assert p.name == "dante"
     assert p.display_name == "Dante"
@@ -61,20 +68,28 @@ def test_load_persona_minimal(tmp_path, fresh_personas):
 
 
 def test_resolve_env_credential(tmp_path, fresh_personas, monkeypatch):
-    _write_persona(tmp_path, "u", {
-        "name": "u",
-        "credentials": {"email_env": "TEST_EMAIL"},
-    })
+    _write_persona(
+        tmp_path,
+        "u",
+        {
+            "name": "u",
+            "credentials": {"email_env": "TEST_EMAIL"},
+        },
+    )
     monkeypatch.setenv("TEST_EMAIL", "me@example.com")
     p = fresh_personas.load_persona("u")
     assert fresh_personas.resolve_credential(p, "email") == "me@example.com"
 
 
 def test_resolve_env_missing_raises(tmp_path, fresh_personas, monkeypatch):
-    _write_persona(tmp_path, "u", {
-        "name": "u",
-        "credentials": {"email_env": "TEST_EMAIL"},
-    })
+    _write_persona(
+        tmp_path,
+        "u",
+        {
+            "name": "u",
+            "credentials": {"email_env": "TEST_EMAIL"},
+        },
+    )
     monkeypatch.delenv("TEST_EMAIL", raising=False)
     p = fresh_personas.load_persona("u")
     with pytest.raises(fresh_personas.MissingCredential, match="TEST_EMAIL is unset"):
@@ -82,10 +97,14 @@ def test_resolve_env_missing_raises(tmp_path, fresh_personas, monkeypatch):
 
 
 def test_resolve_cmd_credential(tmp_path, fresh_personas):
-    _write_persona(tmp_path, "u", {
-        "name": "u",
-        "credentials": {"token_cmd": "printf hunter2"},
-    })
+    _write_persona(
+        tmp_path,
+        "u",
+        {
+            "name": "u",
+            "credentials": {"token_cmd": "printf hunter2"},
+        },
+    )
     p = fresh_personas.load_persona("u")
     assert fresh_personas.resolve_credential(p, "token") == "hunter2"
 
@@ -98,25 +117,35 @@ def test_resolve_no_references_raises(tmp_path, fresh_personas):
 
 
 def test_resolve_cmd_nonzero_exit_raises(tmp_path, fresh_personas):
-    _write_persona(tmp_path, "u", {
-        "name": "u",
-        "credentials": {"token_cmd": "false"},  # `false` always exits nonzero
-    })
+    _write_persona(
+        tmp_path,
+        "u",
+        {
+            "name": "u",
+            "credentials": {"token_cmd": "false"},  # `false` always exits nonzero
+        },
+    )
     p = fresh_personas.load_persona("u")
     with pytest.raises(fresh_personas.MissingCredential, match="cmd exited"):
         fresh_personas.resolve_credential(p, "token")
 
 
 def test_resolve_cmd_timeout_raises(tmp_path, fresh_personas, monkeypatch):
-    _write_persona(tmp_path, "u", {
-        "name": "u",
-        "credentials": {"token_cmd": "sleep 60"},
-    })
+    _write_persona(
+        tmp_path,
+        "u",
+        {
+            "name": "u",
+            "credentials": {"token_cmd": "sleep 60"},
+        },
+    )
     p = fresh_personas.load_persona("u")
     # Patch subprocess.run to raise TimeoutExpired without actually sleeping.
     import subprocess
+
     def _fake_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 30))
+
     monkeypatch.setattr(subprocess, "run", _fake_run)
     with pytest.raises(fresh_personas.MissingCredential, match="cmd timed out"):
         fresh_personas.resolve_credential(p, "token")

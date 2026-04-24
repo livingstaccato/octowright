@@ -12,7 +12,7 @@ def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-async def save_download(session: "BrowserSession", download: Any) -> dict[str, Any]:
+async def save_download(session: BrowserSession, download: Any) -> dict[str, Any]:
     """Save a Playwright Download to disk under RECORDINGS_DIR/downloads/<instance_id>/.
     Appends the record to session.downloads and signals any pending waiters.
     Records download_save_error on failure."""
@@ -41,7 +41,7 @@ async def save_download(session: "BrowserSession", download: Any) -> dict[str, A
     return {}
 
 
-async def wait_for_download_impl(session: "BrowserSession", timeout_ms: int) -> dict[str, Any]:
+async def wait_for_download_impl(session: BrowserSession, timeout_ms: int) -> dict[str, Any]:
     """Block until the next download completes. Raise TimeoutError on timeout.
     Returns immediately if a download has already been recorded."""
     if session.downloads:
@@ -50,7 +50,7 @@ async def wait_for_download_impl(session: "BrowserSession", timeout_ms: int) -> 
     session._pending_download_events.append(event)
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout_ms / 1000)
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         try:
             session._pending_download_events.remove(event)
         except ValueError:
