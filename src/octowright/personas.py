@@ -97,6 +97,49 @@ def list_personas() -> list[dict[str, Any]]:
     return out
 
 
+def migrate_legacy_layout() -> dict[str, Any]:
+    """One-shot migration from profiles/<kind>/<name>/ to profiles/<name>/<kind>/.
+    Idempotent. Returns {moved: N, personas: M}."""
+    if not PROFILES_DIR.exists():
+        return {"moved": 0, "personas": 0}
+
+    moved = 0
+    touched_personas: set[str] = set()
+
+    for kind_dir in list(PROFILES_DIR.iterdir()):
+        if not kind_dir.is_dir() or kind_dir.name not in SUPPORTED_KINDS:
+            continue
+        # Every subdir of a kind-dir is a legacy (kind, name) tuple.
+        for legacy_engine in list(kind_dir.iterdir()):
+            if not legacy_engine.is_dir():
+                continue
+            name = legacy_engine.name
+            new_engine = PROFILES_DIR / name / kind_dir.name
+            new_engine.parent.mkdir(parents=True, exist_ok=True)
+            if new_engine.exists():
+                log.warning("migrate.target_exists_skipping",
+                            source=str(legacy_engine), target=str(new_engine))
+                continue
+            legacy_engine.rename(new_engine)
+            moved += 1
+            touched_personas.add(name)
+
+        # Remove the now-empty kind directory (if it is empty).
+        try:
+            kind_dir.rmdir()
+        except OSError:
+            pass  # non-empty (shouldn't happen) — leave it
+
+    # Create stub profile.yaml for each touched persona if missing.
+    for name in touched_personas:
+        yaml_path = PROFILES_DIR / name / "profile.yaml"
+        if not yaml_path.exists():
+            yaml_path.write_text(yaml.safe_dump({"name": name}))
+
+    log.info("personas.migrated", moved=moved, personas=len(touched_personas))
+    return {"moved": moved, "personas": len(touched_personas)}
+
+
 class MissingCredential(RuntimeError):
     pass
 
