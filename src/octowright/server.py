@@ -623,19 +623,13 @@ def persona_create(
     display_name: str | None = None,
     default_url: str | None = None,
 ) -> dict[str, Any]:
-    import yaml as _yaml
-    p_dir = persona_mod.persona_dir(name)
-    p_dir.mkdir(parents=True, exist_ok=True)
-    yaml_path = p_dir / "profile.yaml"
-    if yaml_path.exists():
-        raise RuntimeError(f"persona {name!r} already has a profile.yaml at {yaml_path}")
-    doc: dict[str, Any] = {"name": persona_mod._slug(name)}
-    if display_name:
-        doc["display_name"] = display_name
-    if default_url:
-        doc["default_url"] = default_url
-    yaml_path.write_text(_yaml.safe_dump(doc))
-    return {"created": True, "name": name, "path": str(p_dir)}
+    try:
+        pdir = persona_mod.create_persona(
+            name, display_name=display_name, default_url=default_url,
+        )
+    except FileExistsError as e:
+        raise RuntimeError(str(e)) from e
+    return {"created": True, "name": name, "path": str(pdir)}
 
 
 @mcp.tool(structured_output=False, description=(
