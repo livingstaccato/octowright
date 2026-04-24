@@ -262,30 +262,8 @@ class BrowserSession:
         """Registered as page.on('download', ...). Schedules an async save, appends a
         record to self.downloads once the file lands on disk."""
         import asyncio
-
-        async def _save() -> None:
-            from .defaults import RECORDINGS_DIR
-            target_dir = RECORDINGS_DIR / "downloads" / self.instance_id
-            target_dir.mkdir(parents=True, exist_ok=True)
-            suggested = download.suggested_filename
-            target = target_dir / f"{len(self.downloads):03d}-{suggested}"
-            try:
-                await download.save_as(str(target))
-                record = {
-                    "url": download.url,
-                    "suggested_filename": suggested,
-                    "path": str(target),
-                    "timestamp": _timestamp(),
-                }
-                self.downloads.append(record)
-                self.recorder.record("download_saved", **record)
-                for event in self._pending_download_events:
-                    event.set()
-                self._pending_download_events.clear()
-            except Exception as e:
-                self.recorder.record("download_save_error", error=repr(e), url=download.url)
-
-        asyncio.create_task(_save())
+        from . import session_downloads
+        asyncio.create_task(session_downloads.save_download(self, download))
 
     def list_downloads(self) -> list[dict[str, Any]]:
         return list(self.downloads)
@@ -293,20 +271,8 @@ class BrowserSession:
     async def wait_for_download(self, timeout_ms: int = 15000) -> dict[str, Any]:
         """Block until the next download completes (save-to-disk). Raises TimeoutError
         if no download arrives within timeout_ms. Returns the new download record."""
-        import asyncio
-        if self.downloads:
-            return self.downloads[-1]
-        event = asyncio.Event()
-        self._pending_download_events.append(event)
-        try:
-            await asyncio.wait_for(event.wait(), timeout=timeout_ms / 1000)
-        except asyncio.TimeoutError:
-            try:
-                self._pending_download_events.remove(event)
-            except ValueError:
-                pass
-            raise TimeoutError(f"no download within {timeout_ms}ms")
-        return self.downloads[-1]
+        from . import session_downloads
+        return await session_downloads.wait_for_download_impl(self, timeout_ms)
 
     def _handle_dialog(self, dialog: Any) -> None:
         """Registered as page.on('dialog', ...). Consults self._dialog_policy and acts
