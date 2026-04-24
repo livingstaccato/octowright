@@ -231,37 +231,21 @@ class BrowserSession:
         url_pattern: str | None = None,
     ) -> dict[str, Any]:
         """Switch the active target to an iframe. Exactly one of selector/name/url_pattern must be given."""
-        import re
-        given = [x for x in (selector, name, url_pattern) if x is not None]
-        if len(given) != 1:
-            raise ValueError("Exactly one of selector, name, or url_pattern must be provided")
-        if selector is not None:
-            handle = await self.page.frame_locator(selector).owner().element_handle()
-            frame = await handle.content_frame()
-            if frame is None:
-                raise RuntimeError(f"no frame found for selector {selector!r}")
-        elif name is not None:
-            frame = self.page.frame(name=name)
-            if frame is None:
-                raise RuntimeError(f"no frame with name={name!r}")
-        else:
-            assert url_pattern is not None
-            frame = self.page.frame(url=re.compile(url_pattern))
-            if frame is None:
-                raise RuntimeError(f"no frame matching url_pattern={url_pattern!r}")
+        from . import session_frames
+        frame, info = await session_frames.switch_frame_impl(
+            self.page, selector=selector, name=name, url_pattern=url_pattern,
+        )
         self.active_frame = frame
-        frames = self.page.frames
-        index = frames.index(frame) if frame in frames else -1
         self.recorder.record(
             "switch_frame",
             selector=selector,
             name=name,
             url_pattern=url_pattern,
-            index=index,
-            frame_url=frame.url,
-            frame_name=frame.name,
+            index=info["index"],
+            frame_url=info["url"],
+            frame_name=info["name"],
         )
-        return {"index": index, "url": frame.url, "name": frame.name}
+        return info
 
     async def reset_frame(self) -> dict[str, Any]:
         """Clear active_frame so tools target the top-level page again."""
@@ -271,15 +255,8 @@ class BrowserSession:
 
     def list_frames(self) -> list[dict[str, Any]]:
         """Return [{index, name, url, is_active}, ...] for every frame on the active page."""
-        return [
-            {
-                "index": i,
-                "name": f.name,
-                "url": f.url,
-                "is_active": f is self.active_frame,
-            }
-            for i, f in enumerate(self.page.frames)
-        ]
+        from . import session_frames
+        return session_frames.list_frames_impl(self.page, self.active_frame)
 
     def _handle_download(self, download: Any) -> None:
         """Registered as page.on('download', ...). Schedules an async save, appends a
