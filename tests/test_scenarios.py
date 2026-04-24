@@ -15,6 +15,8 @@ def fresh_scenarios(tmp_path, monkeypatch):
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
     from octowright import defaults
     importlib.reload(defaults)
+    from octowright import personas
+    importlib.reload(personas)
     from octowright import scenarios
     importlib.reload(scenarios)
     return scenarios, scen_dir
@@ -64,3 +66,73 @@ def test_list_scenarios_sorted(fresh_scenarios):
     rows = scenarios.list_scenarios()
     names = sorted(r["name"] for r in rows)
     assert names == ["a", "b"]
+
+
+def test_load_python_scenario(fresh_scenarios):
+    scenarios, scen_dir = fresh_scenarios
+    (scen_dir / "dyn.py").write_text(
+        "from octowright.scenarios import Scenario, Participant\n"
+        "def build():\n"
+        "    return Scenario(name='dyn', participants=[\n"
+        "        Participant(persona='p', kind='webkit', role='player'),\n"
+        "    ])\n"
+    )
+    s = scenarios.load_scenario("dyn")
+    assert s.name == "dyn"
+    assert len(s.participants) == 1
+
+
+def test_py_wins_over_yaml(fresh_scenarios):
+    scenarios, scen_dir = fresh_scenarios
+    (scen_dir / "both.yaml").write_text("name: both\nparticipants: []\n")
+    (scen_dir / "both.py").write_text(
+        "from octowright.scenarios import Scenario\n"
+        "def build():\n"
+        "    return Scenario(name='both-py', participants=[])\n"
+    )
+    s = scenarios.load_scenario("both")
+    assert s.name == "both-py"
+
+
+def test_duplicate_persona_kind_rejected(fresh_scenarios):
+    scenarios, scen_dir = fresh_scenarios
+    (scen_dir / "dup.yaml").write_text(yaml.safe_dump({
+        "name": "dup",
+        "participants": [
+            {"persona": "a", "kind": "webkit", "role": "x"},
+            {"persona": "a", "kind": "webkit", "role": "y"},
+        ],
+    }))
+    with pytest.raises(ValueError, match="duplicate"):
+        scenarios.load_scenario("dup")
+
+
+def test_resolve_launch_kwargs_defaults(fresh_scenarios, tmp_path):
+    scenarios, _ = fresh_scenarios
+    from octowright import personas as _p
+    # Create a persona with defaults
+    pdir = _p.persona_dir("alice")
+    pdir.mkdir(parents=True)
+    (pdir / "profile.yaml").write_text(yaml.safe_dump({
+        "name": "alice",
+        "default_url": "https://alice-home.example",
+        "default_macros": ["login"],
+    }))
+    pov = scenarios.Participant(persona="alice", kind="webkit", role="player",
+                                url="https://override.example")
+    kwargs = scenarios.resolve_launch_kwargs(pov)
+    assert kwargs["url"] == "https://override.example"
+    assert kwargs["profile"] == "alice"
+    assert kwargs["kind"] == "webkit"
+    assert "role" not in kwargs
+    assert "startup_macros" not in kwargs
+    assert scenarios.resolve_startup_macros(pov) == ["login"]
+
+
+def test_resolve_launch_kwargs_no_persona(fresh_scenarios):
+    scenarios, _ = fresh_scenarios
+    p = scenarios.Participant(persona="ghost", kind="webkit", role="player")
+    kwargs = scenarios.resolve_launch_kwargs(p)
+    assert kwargs["profile"] == "ghost"
+    assert kwargs["url"] is None
+    assert scenarios.resolve_startup_macros(p) == []

@@ -83,14 +83,37 @@ def load_yaml_scenario(path: Path) -> Scenario:
     return scenario
 
 
+def load_python_scenario(path: Path) -> Scenario:
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location(
+        f"octowright._scenario_{path.stem}", path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load Python scenario from {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    if not hasattr(mod, "build"):
+        raise RuntimeError(
+            f"Python scenario {path} must define a top-level build() -> Scenario"
+        )
+    s = mod.build()
+    if not isinstance(s, Scenario):
+        raise TypeError(
+            f"{path}:build() returned {type(s).__name__}, expected Scenario"
+        )
+    _validate_scenario(s)
+    return s
+
+
 def load_scenario(name: str) -> Scenario:
     yaml_path = SCENARIOS_DIR / f"{name}.yaml"
     py_path = SCENARIOS_DIR / f"{name}.py"
     if py_path.exists():
-        raise NotImplementedError(
-            "Python scenario loader is added in the next task (C3); "
-            "only YAML scenarios are supported in this commit."
-        )
+        if yaml_path.exists():
+            log.warning("scenarios.both_forms_present_py_wins", name=name)
+        return load_python_scenario(py_path)
     if yaml_path.exists():
         return load_yaml_scenario(yaml_path)
     raise FileNotFoundError(f"no scenario named {name!r} in {SCENARIOS_DIR}")
@@ -115,3 +138,43 @@ def list_scenarios() -> list[dict[str, Any]]:
             "mtime": entry.stat().st_mtime,
         })
     return out
+
+
+def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
+    """Return kwargs suitable for pool.launch(**kwargs) from a Participant,
+    applying the participant override → persona default → fallback resolution
+    order for each field."""
+    from . import personas as _p
+    try:
+        persona = _p.load_persona(p.persona)
+    except FileNotFoundError:
+        persona = None
+
+    def _from_persona(attr: str, default: Any = None) -> Any:
+        if persona is None:
+            return default
+        return getattr(persona, attr, None) or default
+
+    return {
+        "kind": p.kind,
+        "profile": p.persona,
+        "url": p.url if p.url is not None else _from_persona("default_url"),
+        "label": None,
+        "viewport_w": p.viewport_w,
+        "viewport_h": p.viewport_h,
+        "stabilize": p.stabilize if p.stabilize is not None else False,
+        "record_video": p.record_video if p.record_video is not None else False,
+        "trace": p.trace if p.trace is not None else False,
+    }
+
+
+def resolve_startup_macros(p: Participant) -> list[str]:
+    """participant override → persona default_macros → []."""
+    from . import personas as _p
+    if p.startup_macros is not None:
+        return list(p.startup_macros)
+    try:
+        persona = _p.load_persona(p.persona)
+    except FileNotFoundError:
+        return []
+    return list(persona.default_macros or [])
