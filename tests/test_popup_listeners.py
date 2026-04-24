@@ -13,6 +13,7 @@ async def test_popup_page_dialog_listener_fires(tmp_path, monkeypatch):
     from octowright import defaults as _defaults
     importlib.reload(_defaults)
 
+    # Import after reload so RECORDINGS_DIR / PROFILES_DIR pick up the monkeypatched env.
     from octowright.pool import BrowserPool
 
     pool = BrowserPool()
@@ -47,7 +48,11 @@ async def test_popup_page_dialog_listener_fires(tmp_path, monkeypatch):
     # Click the button in the popup. Our dialog handler on the popup should accept
     # the confirm() — window._ok (in the opener) should become True.
     await popup.click("#b")
-    await asyncio.sleep(0.3)  # let the dialog handler + script propagate
+    # Wait for the dialog handler to accept + the onclick script to propagate
+    # window._ok into the opener, instead of a fixed sleep.
+    await s.page.wait_for_function(
+        "() => typeof window._ok !== 'undefined'", timeout=5000
+    )
 
     result = await s.evaluate("window._ok")
     assert result is True, f"expected popup's confirm to be accepted; got {result!r}"
