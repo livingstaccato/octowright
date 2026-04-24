@@ -8,23 +8,20 @@ if TYPE_CHECKING:
 
 
 async def switch_frame_impl(
-    page: "Page",
+    page: Page,
     *,
     selector: str | None,
     name: str | None,
     url_pattern: str | None,
-) -> tuple["Frame", dict[str, Any]]:
+) -> tuple[Frame, dict[str, Any]]:
     """Resolve an iframe and return (frame, info_dict).
     Exactly one of selector / name / url_pattern must be given.
     """
-    provided = [k for k, v in (("selector", selector), ("name", name),
-                               ("url_pattern", url_pattern)) if v is not None]
+    provided = [k for k, v in (("selector", selector), ("name", name), ("url_pattern", url_pattern)) if v is not None]
     if len(provided) != 1:
-        raise ValueError(
-            f"exactly one of selector/name/url_pattern must be set; got: {provided}"
-        )
+        raise ValueError(f"exactly one of selector/name/url_pattern must be set; got: {provided}")
 
-    frame: "Frame | None" = None
+    frame: Frame | None = None
     if selector is not None:
         handle = await page.frame_locator(selector).owner().element_handle()
         if handle is None:
@@ -47,7 +44,7 @@ async def switch_frame_impl(
     return frame, {"index": index, "url": frame.url, "name": frame.name}
 
 
-def list_frames_impl(page: "Page", active_frame: "Frame | None") -> list[dict[str, Any]]:
+def list_frames_impl(page: Page, active_frame: Frame | None) -> list[dict[str, Any]]:
     return [
         {
             "index": i,

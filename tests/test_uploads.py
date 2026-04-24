@@ -8,7 +8,6 @@ import pytest
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
 
-
 # ---------------------------------------------------------------------------
 # Minimal fake page for upload tests
 # ---------------------------------------------------------------------------
@@ -19,7 +18,7 @@ class FakePage:
         self.set_input_files_calls: list[tuple[str, list[str]]] = []
         self._routes: dict = {}
 
-    def on(self, event: str, handler: object) -> None:  # noqa: ARG002
+    def on(self, event: str, handler: object) -> None:
         pass
 
     async def route(self, pattern: str, handler: object) -> None:

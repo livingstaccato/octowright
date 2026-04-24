@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -17,6 +16,7 @@ def _import_goldens(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Reload goldens with a patched OCTOWRIGHT_GOLDENS_DIR pointing at tmp_path."""
     monkeypatch.setenv("OCTOWRIGHT_GOLDENS_DIR", str(tmp_path / "goldens"))
     import octowright.goldens as _g
+
     importlib.reload(_g)
     return _g
 

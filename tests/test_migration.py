@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 
 import pytest
 import yaml
@@ -13,10 +12,13 @@ def legacy_profiles(tmp_path, monkeypatch):
     root = tmp_path
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(root))
     from octowright import defaults
+
     importlib.reload(defaults)
     from octowright import personas
+
     importlib.reload(personas)
     from octowright import profiles
+
     importlib.reload(profiles)
 
     # Legacy: PROFILES_DIR/<kind>/<name>/
@@ -48,7 +50,7 @@ def test_migrate_legacy_to_persona_first(legacy_profiles):
 
 
 def test_migrate_idempotent(legacy_profiles):
-    root, personas = legacy_profiles
+    _root, personas = legacy_profiles
     personas.migrate_legacy_layout()
     summary = personas.migrate_legacy_layout()
     assert summary["moved"] == 0
@@ -58,8 +60,10 @@ def test_migrate_idempotent(legacy_profiles):
 def test_migrate_empty_dir_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path))
     from octowright import defaults
+
     importlib.reload(defaults)
     from octowright import personas
+
     importlib.reload(personas)
     summary = personas.migrate_legacy_layout()
     assert summary == {"moved": 0, "personas": 0}

@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
-
 
 # ---------------------------------------------------------------------------
 # Fake helpers
@@ -52,12 +51,13 @@ class FakePage:
             if url is not None:
                 # url may be a compiled regex
                 import re
+
                 pattern = url if isinstance(url, re.Pattern) else re.compile(url)
                 if pattern.search(f.url):
                     return f
         return None
 
-    def frame_locator(self, selector: str) -> Any:  # noqa: ARG002
+    def frame_locator(self, selector: str) -> Any:
         locator = MagicMock()
         handle = AsyncMock()
         frame = self.frames[0] if self.frames else None

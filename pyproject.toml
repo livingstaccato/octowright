@@ -33,7 +33,44 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = [
+    "-q",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+]
 
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+extend-exclude = ["recordings", "profiles", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ARG", "RUF"]
+ignore = [
+    "E501",   # line-too-long — rely on line-length above
+    "SIM105", # contextlib.suppress vs try/except pass — stylistic
+    "B008",   # function-call-in-default-argument — Playwright handles this
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ARG", "RUF012", "B017"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+no_implicit_optional = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["mcp.*", "provide.telemetry.*", "yaml"]
+ignore_missing_imports = true
+
+[tool.codespell]
+skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock"
+ignore-words-list = "nd,strat"

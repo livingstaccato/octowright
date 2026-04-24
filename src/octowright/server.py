@@ -12,7 +12,7 @@ from . import personas as persona_mod
 from . import profiles as profile_mod
 from . import scenarios as scenario_mod
 from . import video as video_mod
-from .defaults import DEFAULT_ACTION_TIMEOUT_MS, RECORDINGS_DIR
+from .defaults import RECORDINGS_DIR
 from .export import export_script
 from .pool import BrowserPool
 
@@ -31,22 +31,25 @@ mcp = FastMCP(
 )
 
 
-@mcp.tool(structured_output=False, description=(
-    "Launch a browser. kind = 'chromium' | 'firefox' | 'webkit'. "
-    "DEFAULT IS HEADED — leave headed=True unless you have a specific "
-    "background-verification reason (automated health check, scripted parity "
-    "run, CI). If a human will look at the window, stay headed. "
-    "If profile is given, uses a persistent on-disk user-data-dir so cookies, "
-    "localStorage, and IndexedDB survive close/relaunch (recommended for Discord, "
-    "Slack, etc.). Profiles are scoped per-kind: (kind, profile) is the identity. "
-    "The window title is prefixed with [profile] (or [label] if no profile) so "
-    "parallel instances can be told apart in cmd-\\` and the Window menu. "
-    "Pass stabilize=True to freeze Date.now, kill CSS animations, and make "
-    "requestAnimationFrame synchronous — recommended for reproducible test runs. "
-    "Pass trace=True to record a full Playwright trace (screenshots + snapshots + sources) "
-    "for post-mortem debugging. Resulting .zip can be viewed with `npx playwright show-trace`. "
-    "Returns instance_id."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Launch a browser. kind = 'chromium' | 'firefox' | 'webkit'. "
+        "DEFAULT IS HEADED — leave headed=True unless you have a specific "
+        "background-verification reason (automated health check, scripted parity "
+        "run, CI). If a human will look at the window, stay headed. "
+        "If profile is given, uses a persistent on-disk user-data-dir so cookies, "
+        "localStorage, and IndexedDB survive close/relaunch (recommended for Discord, "
+        "Slack, etc.). Profiles are scoped per-kind: (kind, profile) is the identity. "
+        "The window title is prefixed with [profile] (or [label] if no profile) so "
+        "parallel instances can be told apart in cmd-\\` and the Window menu. "
+        "Pass stabilize=True to freeze Date.now, kill CSS animations, and make "
+        "requestAnimationFrame synchronous — recommended for reproducible test runs. "
+        "Pass trace=True to record a full Playwright trace (screenshots + snapshots + sources) "
+        "for post-mortem debugging. Resulting .zip can be viewed with `npx playwright show-trace`. "
+        "Returns instance_id."
+    ),
+)
 async def browser_launch(
     kind: str = "chromium",
     url: str | None = None,
@@ -100,9 +103,7 @@ async def browser_click(instance_id: str, selector: str) -> dict[str, Any]:
 
 
 @mcp.tool(structured_output=False, description="Type text into a selector on an instance.")
-async def browser_type(
-    instance_id: str, selector: str, text: str, delay_ms: int | None = None
-) -> dict[str, Any]:
+async def browser_type(instance_id: str, selector: str, text: str, delay_ms: int | None = None) -> dict[str, Any]:
     await pool.get(instance_id).type_text(selector, text, delay_ms)
     return {"ok": True}
 
@@ -119,7 +120,10 @@ async def browser_press_key(instance_id: str, key: str) -> dict[str, Any]:
     return {"ok": True}
 
 
-@mcp.tool(structured_output=False, description="Screenshot an instance to disk. If path omitted, writes next to the recording.")
+@mcp.tool(
+    structured_output=False,
+    description="Screenshot an instance to disk. If path omitted, writes next to the recording.",
+)
 async def browser_screenshot(instance_id: str, path: str | None = None) -> dict[str, Any]:
     session = pool.get(instance_id)
     target = Path(path) if path else session.log_path.with_suffix(".png")
@@ -143,7 +147,10 @@ def browser_console_messages(instance_id: str) -> list[dict[str, Any]]:
     return list(pool.get(instance_id).console)
 
 
-@mcp.tool(structured_output=False, description="Wait for a selector, text, or network-idle. Provide one of selector / text, or neither for network-idle.")
+@mcp.tool(
+    structured_output=False,
+    description="Wait for a selector, text, or network-idle. Provide one of selector / text, or neither for network-idle.",
+)
 async def browser_wait_for(
     instance_id: str,
     selector: str | None = None,
@@ -159,7 +166,10 @@ def browser_recording_path(instance_id: str) -> dict[str, Any]:
     return {"path": str(pool.get(instance_id).log_path)}
 
 
-@mcp.tool(structured_output=False, description="Export a replayable Playwright script (python | ts) from an instance's recording.")
+@mcp.tool(
+    structured_output=False,
+    description="Export a replayable Playwright script (python | ts) from an instance's recording.",
+)
 def browser_export_script(
     instance_id: str,
     format: str = "python",
@@ -177,10 +187,13 @@ def profile_list(kind: str | None = None) -> list[dict[str, Any]]:
     return profile_mod.list_profiles(kind)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Delete a saved browser profile (wipes all cookies, localStorage, IndexedDB, and "
-    "saved logins for that profile). Refuses if a live instance is using it."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Delete a saved browser profile (wipes all cookies, localStorage, IndexedDB, and "
+        "saved logins for that profile). Refuses if a live instance is using it."
+    ),
+)
 def profile_delete(kind: str, name: str) -> dict[str, Any]:
     if pool.profile_in_use(kind, name):
         log.warning("octowright.profile.delete_refused", kind=kind, profile=name, reason="in_use")
@@ -190,13 +203,16 @@ def profile_delete(kind: str, name: str) -> dict[str, Any]:
     return {"deleted": True, "path": str(path)}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Save the current recording of a live instance as a named, reusable macro. "
-    "`parameters` is a dict mapping parameter NAME to its literal VALUE in this "
-    "recording — those values get replaced by {{name}} placeholders in the saved "
-    "macro. Example: parameters={\"email\":\"me@example.com\",\"password\":\"hunter2\"}. "
-    "Drops launch/close/snapshot entries by default. Returns the saved macro path."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Save the current recording of a live instance as a named, reusable macro. "
+        "`parameters` is a dict mapping parameter NAME to its literal VALUE in this "
+        "recording — those values get replaced by {{name}} placeholders in the saved "
+        'macro. Example: parameters={"email":"me@example.com","password":"hunter2"}. '
+        "Drops launch/close/snapshot entries by default. Returns the saved macro path."
+    ),
+)
 def macro_save(
     instance_id: str,
     name: str,
@@ -220,11 +236,14 @@ def macro_list() -> list[dict[str, Any]]:
     return macro_mod.list_macros()
 
 
-@mcp.tool(structured_output=False, description=(
-    "Replay a saved macro against a live browser instance. `args` supplies values "
-    "for any {{placeholders}} the macro declares. Lifecycle actions (launch, close, "
-    "snapshot) are skipped. Returns {macro, executed, skipped, args_used}."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Replay a saved macro against a live browser instance. `args` supplies values "
+        "for any {{placeholders}} the macro declares. Lifecycle actions (launch, close, "
+        "snapshot) are skipped. Returns {macro, executed, skipped, args_used}."
+    ),
+)
 async def macro_run(
     instance_id: str,
     name: str,
@@ -240,12 +259,15 @@ def macro_delete(name: str) -> dict[str, Any]:
     return {"deleted": True, "name": name, "path": str(path)}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Replay several saved macros in order against one live instance. "
-    "`names` is the list of macro names; `args_list[i]` supplies args for `names[i]`. "
-    "By default a failing step aborts the chain (stop_on_failure=True); pass False "
-    "to keep going and collect per-step outcomes."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Replay several saved macros in order against one live instance. "
+        "`names` is the list of macro names; `args_list[i]` supplies args for `names[i]`. "
+        "By default a failing step aborts the chain (stop_on_failure=True); pass False "
+        "to keep going and collect per-step outcomes."
+    ),
+)
 async def macro_run_sequence(
     instance_id: str,
     names: list[str],
@@ -261,12 +283,17 @@ async def macro_run_sequence(
     )
 
 
-@mcp.tool(structured_output=False, description=(
-    "Assert the page URL matches `pattern`. `pattern` is a regex by default; "
-    "pass mode='equals' for exact match or mode='contains' for substring."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Assert the page URL matches `pattern`. `pattern` is a regex by default; "
+        "pass mode='equals' for exact match or mode='contains' for substring."
+    ),
+)
 async def browser_expect_url(
-    instance_id: str, pattern: str, mode: str = "regex",
+    instance_id: str,
+    pattern: str,
+    mode: str = "regex",
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     actual = await macro_mod._check_url(session.page, pattern, mode)
@@ -274,14 +301,20 @@ async def browser_expect_url(
     return {"ok": True, "url": actual}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Assert an element matching `selector` contains `text`. "
-    "mode: 'contains' (default), 'equals', or 'regex'. `timeout_ms` controls how long "
-    "to poll while waiting for the element (default 5000)."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Assert an element matching `selector` contains `text`. "
+        "mode: 'contains' (default), 'equals', or 'regex'. `timeout_ms` controls how long "
+        "to poll while waiting for the element (default 5000)."
+    ),
+)
 async def browser_expect_text(
-    instance_id: str, selector: str, text: str,
-    mode: str = "contains", timeout_ms: int | None = None,
+    instance_id: str,
+    selector: str,
+    text: str,
+    mode: str = "contains",
+    timeout_ms: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     actual = await macro_mod._check_text(session.page, selector, text, mode, timeout_ms)
@@ -289,12 +322,17 @@ async def browser_expect_text(
     return {"ok": True, "text": actual}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Assert that at least one element matching `selector` exists (or not, if present=False). "
-    "Waits up to `timeout_ms` for the condition."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Assert that at least one element matching `selector` exists (or not, if present=False). "
+        "Waits up to `timeout_ms` for the condition."
+    ),
+)
 async def browser_expect_selector(
-    instance_id: str, selector: str, present: bool = True,
+    instance_id: str,
+    selector: str,
+    present: bool = True,
     timeout_ms: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
@@ -303,12 +341,17 @@ async def browser_expect_selector(
     return {"ok": True, "selector": selector, "present": present}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Assert a JavaScript expression evaluates to a truthy value (or equals `equals` "
-    "if supplied). The expression runs in the page, like browser_evaluate."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Assert a JavaScript expression evaluates to a truthy value (or equals `equals` "
+        "if supplied). The expression runs in the page, like browser_evaluate."
+    ),
+)
 async def browser_expect_js(
-    instance_id: str, expression: str, equals: Any = None,
+    instance_id: str,
+    expression: str,
+    equals: Any = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     result = await macro_mod._check_js(session.page, expression, equals)
@@ -316,12 +359,17 @@ async def browser_expect_js(
     return {"ok": True, "result": result}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Save the current page's accessibility tree as a named golden snapshot. "
-    "Later calls to golden_assert will compare the live tree against this one."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Save the current page's accessibility tree as a named golden snapshot. "
+        "Later calls to golden_assert will compare the live tree against this one."
+    ),
+)
 async def golden_save(
-    instance_id: str, name: str, description: str | None = None,
+    instance_id: str,
+    name: str,
+    description: str | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     tree = await session.snapshot()
@@ -330,10 +378,13 @@ async def golden_save(
     return {"saved": True, "name": name, "path": str(path)}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Compare the current page's accessibility tree against a saved golden. "
-    "Raises RuntimeError with a diff summary on mismatch."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Compare the current page's accessibility tree against a saved golden. "
+        "Raises RuntimeError with a diff summary on mismatch."
+    ),
+)
 async def golden_assert(instance_id: str, name: str) -> dict[str, Any]:
     session = pool.get(instance_id)
     actual = await session.snapshot()
@@ -355,19 +406,25 @@ def golden_delete(name: str) -> dict[str, Any]:
     return {"deleted": True, "name": name, "path": str(path)}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Return the path to the video file recorded for an instance. "
-    "Only populated after the instance is closed (Playwright finalises the file on close)."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Return the path to the video file recorded for an instance. "
+        "Only populated after the instance is closed (Playwright finalises the file on close)."
+    ),
+)
 def browser_video_path(instance_id: str) -> dict[str, Any]:
     session = pool.get(instance_id)
     return {"video_path": str(session.video_path) if session.video_path else None}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Extract frames from a recorded video via ffmpeg. Supply exactly one of fps (frames/second) "
-    "or at_times (list of second-timestamps). Frames land in out_dir (default: next to the video)."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Extract frames from a recorded video via ffmpeg. Supply exactly one of fps (frames/second) "
+        "or at_times (list of second-timestamps). Frames land in out_dir (default: next to the video)."
+    ),
+)
 def browser_extract_frames(
     video_path: str,
     out_dir: str | None = None,
@@ -375,63 +432,84 @@ def browser_extract_frames(
     at_times: list[float] | None = None,
 ) -> dict[str, Any]:
     from pathlib import Path
+
     vp = Path(video_path)
     odir = Path(out_dir) if out_dir else vp.with_suffix(".frames")
     frames = video_mod.extract_frames(vp, odir, fps=fps, at_times=at_times)
     return {"video": str(vp), "out_dir": str(odir), "frames": [str(f) for f in frames]}
 
 
-@mcp.tool(structured_output=False, description=(
-    "List all pages/tabs for an instance. The active page (the one every other "
-    "per-instance tool targets) has is_active=True. Popups opened by the browser "
-    "are tracked automatically and appear here."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "List all pages/tabs for an instance. The active page (the one every other "
+        "per-instance tool targets) has is_active=True. Popups opened by the browser "
+        "are tracked automatically and appear here."
+    ),
+)
 def page_list(instance_id: str) -> list[dict[str, Any]]:
     return pool.get(instance_id).list_pages()
 
 
-@mcp.tool(structured_output=False, description=(
-    "Switch the active page for an instance. Subsequent tool calls (click, fill, "
-    "evaluate, etc.) target the newly-active page."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Switch the active page for an instance. Subsequent tool calls (click, fill, "
+        "evaluate, etc.) target the newly-active page."
+    ),
+)
 async def page_switch(instance_id: str, index: int) -> dict[str, Any]:
     return await pool.get(instance_id).switch_page(index)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Close one page/tab for an instance. Refuses if it's the only remaining page "
-    "(use browser_close to shut the whole instance instead)."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Close one page/tab for an instance. Refuses if it's the only remaining page "
+        "(use browser_close to shut the whole instance instead)."
+    ),
+)
 async def page_close(instance_id: str, index: int) -> dict[str, Any]:
     return await pool.get(instance_id).close_page(index)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Launch several browsers in parallel from a list of launch specs. Each spec is "
-    "a dict accepting any subset of: kind, url, headed, label, profile, viewport_w, "
-    "viewport_h, stabilize, record_video. Returns {launched: [...], errors: [...]}."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Launch several browsers in parallel from a list of launch specs. Each spec is "
+        "a dict accepting any subset of: kind, url, headed, label, profile, viewport_w, "
+        "viewport_h, stabilize, record_video. Returns {launched: [...], errors: [...]}."
+    ),
+)
 async def browser_spawn_roster(specs: list[dict[str, Any]]) -> dict[str, Any]:
     return await pool.spawn_roster(specs)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Set the dialog-handling policy for an instance. `policy` is 'accept', 'dismiss', "
-    "or 'manual'. When 'accept' is used with a prompt dialog, `prompt_text` supplies "
-    "the response string. Default policy is 'dismiss'."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Set the dialog-handling policy for an instance. `policy` is 'accept', 'dismiss', "
+        "or 'manual'. When 'accept' is used with a prompt dialog, `prompt_text` supplies "
+        "the response string. Default policy is 'dismiss'."
+    ),
+)
 def browser_set_dialog_policy(
-    instance_id: str, policy: str, prompt_text: str | None = None,
+    instance_id: str,
+    policy: str,
+    prompt_text: str | None = None,
 ) -> dict[str, Any]:
     return pool.get(instance_id).set_dialog_policy(policy, prompt_text)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Intercept requests matching `url_pattern` and fulfill them with a stubbed response. "
-    "Useful for making tests deterministic when the target app calls external services. "
-    "url_pattern is a glob (e.g. '**/api/users') or regex (Playwright auto-detects). "
-    "Body defaults to empty. content_type defaults to application/json."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Intercept requests matching `url_pattern` and fulfill them with a stubbed response. "
+        "Useful for making tests deterministic when the target app calls external services. "
+        "url_pattern is a glob (e.g. '**/api/users') or regex (Playwright auto-detects). "
+        "Body defaults to empty. content_type defaults to application/json."
+    ),
+)
 async def browser_mock_route(
     instance_id: str,
     url_pattern: str,
@@ -441,34 +519,46 @@ async def browser_mock_route(
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return await pool.get(instance_id).mock_route(
-        url_pattern, status=status, body=body,
-        content_type=content_type, headers=headers,
+        url_pattern,
+        status=status,
+        body=body,
+        content_type=content_type,
+        headers=headers,
     )
 
 
-@mcp.tool(structured_output=False, description=(
-    "Remove a previously-installed mock for `url_pattern`. Raises if no mock was active."
-))
+@mcp.tool(
+    structured_output=False,
+    description=("Remove a previously-installed mock for `url_pattern`. Raises if no mock was active."),
+)
 async def browser_unmock_route(instance_id: str, url_pattern: str) -> dict[str, Any]:
     return await pool.get(instance_id).unmock_route(url_pattern)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Upload one or more files into an <input type=file> element. `paths` is a list "
-    "of absolute file paths on this machine."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Upload one or more files into an <input type=file> element. `paths` is a list "
+        "of absolute file paths on this machine."
+    ),
+)
 async def browser_set_input_files(
-    instance_id: str, selector: str, paths: list[str],
+    instance_id: str,
+    selector: str,
+    paths: list[str],
 ) -> dict[str, Any]:
     return await pool.get(instance_id).set_input_files(selector, paths)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Run all test macros in a directory, producing a JUnit XML report. A macro is "
-    "considered a test if its description starts with [test]. Spawns one ephemeral "
-    "browser per test (kind defaults to 'webkit'). Returns {passed, failed, total, "
-    "report_path, results: [per-test summary]}."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Run all test macros in a directory, producing a JUnit XML report. A macro is "
+        "considered a test if its description starts with [test]. Spawns one ephemeral "
+        "browser per test (kind defaults to 'webkit'). Returns {passed, failed, total, "
+        "report_path, results: [per-test summary]}."
+    ),
+)
 async def run_test_suite(
     macros_dir: str | None = None,
     kind: str = "webkit",
@@ -476,6 +566,7 @@ async def run_test_suite(
     out_path: str | None = None,
 ) -> dict[str, Any]:
     from . import runner
+
     return await runner.run_suite(
         macros_dir=macros_dir,
         kind=kind,
@@ -485,11 +576,14 @@ async def run_test_suite(
     )
 
 
-@mcp.tool(structured_output=False, description=(
-    "Switch the active target to an iframe. Subsequent click/fill/type/evaluate/wait_for "
-    "calls target the frame instead of the top-level page. Exactly one of selector, name, "
-    "or url_pattern. Use browser_reset_frame to switch back."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Switch the active target to an iframe. Subsequent click/fill/type/evaluate/wait_for "
+        "calls target the frame instead of the top-level page. Exactly one of selector, name, "
+        "or url_pattern. Use browser_reset_frame to switch back."
+    ),
+)
 async def browser_switch_frame(
     instance_id: str,
     selector: str | None = None,
@@ -497,7 +591,9 @@ async def browser_switch_frame(
     url_pattern: str | None = None,
 ) -> dict[str, Any]:
     return await pool.get(instance_id).switch_frame(
-        selector=selector, name=name, url_pattern=url_pattern,
+        selector=selector,
+        name=name,
+        url_pattern=url_pattern,
     )
 
 
@@ -511,29 +607,38 @@ def browser_list_frames(instance_id: str) -> list[dict[str, Any]]:
     return pool.get(instance_id).list_frames()
 
 
-@mcp.tool(structured_output=False, description=(
-    "List downloads that have been saved for an instance. Each entry has url, "
-    "suggested_filename, path, timestamp."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "List downloads that have been saved for an instance. Each entry has url, suggested_filename, path, timestamp."
+    ),
+)
 def browser_downloads(instance_id: str) -> list[dict[str, Any]]:
     return pool.get(instance_id).list_downloads()
 
 
-@mcp.tool(structured_output=False, description=(
-    "Block until the next download completes for an instance, or raise if timeout exceeded. "
-    "Returns the new download record."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Block until the next download completes for an instance, or raise if timeout exceeded. "
+        "Returns the new download record."
+    ),
+)
 async def browser_wait_for_download(
-    instance_id: str, timeout_ms: int = 15000,
+    instance_id: str,
+    timeout_ms: int = 15000,
 ) -> dict[str, Any]:
     return await pool.get(instance_id).wait_for_download(timeout_ms=timeout_ms)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Click an element matched by an ARIA role, label, visible text, or data-testid. "
-    "More resilient than CSS selectors. Provide exactly one of role/label/text/test_id. "
-    "When role is used, role_name narrows to an accessible name (e.g. 'Submit')."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Click an element matched by an ARIA role, label, visible text, or data-testid. "
+        "More resilient than CSS selectors. Provide exactly one of role/label/text/test_id. "
+        "When role is used, role_name narrows to an accessible name (e.g. 'Submit')."
+    ),
+)
 async def browser_click_by(
     instance_id: str,
     role: str | None = None,
@@ -545,15 +650,23 @@ async def browser_click_by(
     timeout_ms: int | None = None,
 ) -> dict[str, Any]:
     return await pool.get(instance_id).click_by(
-        role=role, role_name=role_name, role_exact=role_exact,
-        label=label, text=text, test_id=test_id, timeout_ms=timeout_ms,
+        role=role,
+        role_name=role_name,
+        role_exact=role_exact,
+        label=label,
+        text=text,
+        test_id=test_id,
+        timeout_ms=timeout_ms,
     )
 
 
-@mcp.tool(structured_output=False, description=(
-    "Fill an input matched by ARIA role, label, or data-testid. Provide value plus "
-    "exactly one of role/label/test_id."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Fill an input matched by ARIA role, label, or data-testid. Provide value plus "
+        "exactly one of role/label/test_id."
+    ),
+)
 async def browser_fill_by(
     instance_id: str,
     value: str,
@@ -564,15 +677,22 @@ async def browser_fill_by(
     timeout_ms: int | None = None,
 ) -> dict[str, Any]:
     return await pool.get(instance_id).fill_by(
-        value, role=role, role_name=role_name,
-        label=label, test_id=test_id, timeout_ms=timeout_ms,
+        value,
+        role=role,
+        role_name=role_name,
+        label=label,
+        test_id=test_id,
+        timeout_ms=timeout_ms,
     )
 
 
-@mcp.tool(structured_output=False, description=(
-    "Read the inner text of an element matched by role, label, text, or data-testid. "
-    "Useful for assertions that need a value rather than just a boolean match."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Read the inner text of an element matched by role, label, text, or data-testid. "
+        "Useful for assertions that need a value rather than just a boolean match."
+    ),
+)
 async def browser_get_text_by(
     instance_id: str,
     role: str | None = None,
@@ -584,24 +704,35 @@ async def browser_get_text_by(
     timeout_ms: int | None = None,
 ) -> dict[str, Any]:
     return await pool.get(instance_id).get_text_by(
-        role=role, role_name=role_name, role_exact=role_exact,
-        label=label, text=text, test_id=test_id, timeout_ms=timeout_ms,
+        role=role,
+        role_name=role_name,
+        role_exact=role_exact,
+        label=label,
+        text=text,
+        test_id=test_id,
+        timeout_ms=timeout_ms,
     )
 
 
-@mcp.tool(structured_output=False, description=(
-    "List all personas, each with their known engines, display name, and last-used timestamp. "
-    "A persona is a named identity (e.g. 'dante') that owns engine-specific browser profiles."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "List all personas, each with their known engines, display name, and last-used timestamp. "
+        "A persona is a named identity (e.g. 'dante') that owns engine-specific browser profiles."
+    ),
+)
 def persona_list() -> list[dict[str, Any]]:
     return persona_mod.list_personas()
 
 
-@mcp.tool(structured_output=False, description=(
-    "Return the full profile.yaml for a persona. Credentials are returned as their "
-    "reference entries (e.g. {'email_env': 'DANTE_EMAIL'}), not resolved secrets. "
-    "Raises if the persona doesn't exist."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Return the full profile.yaml for a persona. Credentials are returned as their "
+        "reference entries (e.g. {'email_env': 'DANTE_EMAIL'}), not resolved secrets. "
+        "Raises if the persona doesn't exist."
+    ),
+)
 def persona_get(name: str) -> dict[str, Any]:
     p = persona_mod.load_persona(name)
     return {
@@ -614,10 +745,13 @@ def persona_get(name: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool(structured_output=False, description=(
-    "Scaffold a new persona directory with a stub profile.yaml. Does nothing engine-specific; "
-    "browser profiles are created on first browser_launch with this persona."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Scaffold a new persona directory with a stub profile.yaml. Does nothing engine-specific; "
+        "browser profiles are created on first browser_launch with this persona."
+    ),
+)
 def persona_create(
     name: str,
     display_name: str | None = None,
@@ -625,32 +759,37 @@ def persona_create(
 ) -> dict[str, Any]:
     try:
         pdir = persona_mod.create_persona(
-            name, display_name=display_name, default_url=default_url,
+            name,
+            display_name=display_name,
+            default_url=default_url,
         )
     except FileExistsError as e:
         raise RuntimeError(str(e)) from e
     return {"created": True, "name": name, "path": str(pdir)}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Delete an entire persona (metadata + all engine profiles). Refuses if any engine "
-    "profile is currently in use by a live browser."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Delete an entire persona (metadata + all engine profiles). Refuses if any engine "
+        "profile is currently in use by a live browser."
+    ),
+)
 def persona_delete(name: str) -> dict[str, Any]:
     from .profiles import delete_persona
+
     for s in pool.list():
         if s["profile"] == name:
-            raise RuntimeError(
-                f"persona {name!r} is in use by live instance {s['instance_id']}; close it first"
-            )
+            raise RuntimeError(f"persona {name!r} is in use by live instance {s['instance_id']}; close it first")
     path = delete_persona(name)
     log.info("octowright.persona.deleted", name=name, path=str(path))
     return {"deleted": True, "name": name, "path": str(path)}
 
 
-@mcp.tool(structured_output=False, description=(
-    "Run the one-shot legacy profile-layout migration. Idempotent. Returns counts."
-))
+@mcp.tool(
+    structured_output=False,
+    description=("Run the one-shot legacy profile-layout migration. Idempotent. Returns counts."),
+)
 def migrate_profiles() -> dict[str, Any]:
     return persona_mod.migrate_legacy_layout()
 
@@ -660,10 +799,13 @@ def scenario_list() -> list[dict[str, Any]]:
     return scenario_mod.list_scenarios()
 
 
-@mcp.tool(structured_output=False, description=(
-    "Start a scenario. Launches every participant in parallel, applies shared fixtures, "
-    "runs startup_macros per-participant. Browsers stay open; returns the participant table."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Start a scenario. Launches every participant in parallel, applies shared fixtures, "
+        "runs startup_macros per-participant. Browsers stay open; returns the participant table."
+    ),
+)
 async def scenario_start(name: str) -> dict[str, Any]:
     live = await scenario_pool.start(name=name, browser_pool=pool)
     return {
@@ -678,49 +820,63 @@ def scenario_status() -> list[dict[str, Any]]:
     return scenario_pool.list()
 
 
-@mcp.tool(structured_output=False, description=(
-    "Stop a live scenario: run teardown_macro per participant (if any), close every "
-    "participant browser. Returns close + teardown error summary."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Stop a live scenario: run teardown_macro per participant (if any), close every "
+        "participant browser. Returns close + teardown error summary."
+    ),
+)
 async def scenario_stop(scenario_id: str) -> dict[str, Any]:
     return await scenario_pool.stop(scenario_id=scenario_id, browser_pool=pool)
 
 
-@mcp.tool(structured_output=False, description=(
-    "Broadcast a macro across participants of a live scenario. Optionally role-filter. "
-    "Returns per-participant results."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Broadcast a macro across participants of a live scenario. Optionally role-filter. "
+        "Returns per-participant results."
+    ),
+)
 async def scenario_run_macro(
-    scenario_id: str, macro: str, role: str | None = None,
+    scenario_id: str,
+    macro: str,
+    role: str | None = None,
     args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return await scenario_pool.run_macro(
-        scenario_id=scenario_id, macro=macro, browser_pool=pool,
-        role=role, args=args,
+        scenario_id=scenario_id,
+        macro=macro,
+        browser_pool=pool,
+        role=role,
+        args=args,
     )
 
 
-@mcp.tool(structured_output=False, description=(
-    "List participants of a live scenario, optionally filtered by role."
-))
+@mcp.tool(structured_output=False, description=("List participants of a live scenario, optionally filtered by role."))
 def scenario_participants(scenario_id: str, role: str | None = None) -> list[dict[str, Any]]:
     live = scenario_pool.get(scenario_id)
     return [p for p in live.participants if role is None or p["role"] == role]
 
 
-@mcp.tool(structured_output=False, description=(
-    "Run the scenario's verify macros as a test suite and return pass/fail. "
-    "Requires the scenario spec to declare `verify: {role: macro_name}`. "
-    "Writes JUnit XML to out_path if supplied."
-))
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Run the scenario's verify macros as a test suite and return pass/fail. "
+        "Requires the scenario spec to declare `verify: {role: macro_name}`. "
+        "Writes JUnit XML to out_path if supplied."
+    ),
+)
 async def scenario_run_as_test(
-    scenario_id: str, out_path: str | None = None,
+    scenario_id: str,
+    out_path: str | None = None,
 ) -> dict[str, Any]:
-    from . import runner as _runner
     import asyncio as _asyncio
-    from . import macros as _macros
     from datetime import UTC, datetime
     from pathlib import Path
+
+    from . import macros as _macros
+    from . import runner as _runner
 
     live = scenario_pool.get(scenario_id)
     if not live.spec.verify:
@@ -731,34 +887,44 @@ async def scenario_run_as_test(
     async def _run(p: dict[str, Any]) -> None:
         macro = live.spec.verify.get(p["role"])
         if not macro:
-            results.append({
-                "name": f"{p['role']}:{p['persona']}",
-                "ok": False,
-                "error": f"no verify macro for role {p['role']!r}",
-                "duration": 0.0,
-            })
+            results.append(
+                {
+                    "name": f"{p['role']}:{p['persona']}",
+                    "ok": False,
+                    "error": f"no verify macro for role {p['role']!r}",
+                    "duration": 0.0,
+                }
+            )
             return
         start = datetime.now(UTC)
         try:
             session = pool.get(p["instance_id"])
             await _macros.run_macro(session=session, name=macro, args={})
             ok, err = True, None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             ok, err = False, repr(e)
         duration = (datetime.now(UTC) - start).total_seconds()
-        results.append({
-            "name": f"{p['role']}:{p['persona']}",
-            "ok": ok, "error": err, "duration": duration,
-        })
+        results.append(
+            {
+                "name": f"{p['role']}:{p['persona']}",
+                "ok": ok,
+                "error": err,
+                "duration": duration,
+            }
+        )
 
     await _asyncio.gather(*(_run(p) for p in live.participants))
     passed = sum(1 for r in results if r["ok"])
     report_path = Path(out_path) if out_path else _runner._default_report_path()
     _runner._write_junit(results, report_path, kind="scenario")
     return {
-        "scenario_id": scenario_id, "name": live.name,
-        "total": len(results), "passed": passed, "failed": len(results) - passed,
-        "report_path": str(report_path), "results": results,
+        "scenario_id": scenario_id,
+        "name": live.name,
+        "total": len(results),
+        "passed": passed,
+        "failed": len(results) - passed,
+        "report_path": str(report_path),
+        "results": results,
     }
 
 

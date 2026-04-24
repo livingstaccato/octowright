@@ -37,16 +37,18 @@ async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
         pdir.mkdir(parents=True, exist_ok=True)
         (pdir / "profile.yaml").write_text(yaml.safe_dump({"name": name}))
 
-    (root / "scn" / "mini.yaml").write_text(yaml.safe_dump({
-        "name": "mini",
-        "participants": [
-            {"persona": "p1", "kind": "webkit", "role": "player",
-             "url": "https://example.com"},
-            {"persona": "p2", "kind": "webkit", "role": "monitor",
-             "url": "https://example.com"},
-        ],
-        "fixtures": {"dialog_policy": "dismiss"},
-    }))
+    (root / "scn" / "mini.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "mini",
+                "participants": [
+                    {"persona": "p1", "kind": "webkit", "role": "player", "url": "https://example.com"},
+                    {"persona": "p2", "kind": "webkit", "role": "monitor", "url": "https://example.com"},
+                ],
+                "fixtures": {"dialog_policy": "dismiss"},
+            }
+        )
+    )
 
     # Force headless globally via env — reload defaults and pool so HEADLESS_DEFAULT
     # is picked up. Also patch spawn_roster to inject headed=False into every spec
@@ -56,8 +58,8 @@ async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
         if m in sys.modules:
             importlib.reload(sys.modules[m])
 
-    from octowright.pool import BrowserPool
     from octowright import scenarios as _s
+    from octowright.pool import BrowserPool
 
     # Reload scenarios so it picks up the freshly-reloaded defaults.
     importlib.reload(_s)

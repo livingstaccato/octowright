@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 
 def build_locator(
-    target: "Page | Frame",
+    target: Page | Frame,
     *,
     role: str | None = None,
     role_name: str | None = None,
@@ -15,13 +15,10 @@ def build_locator(
     label: str | None = None,
     text: str | None = None,
     test_id: str | None = None,
-) -> "Locator":
-    provided = [k for k, v in (("role", role), ("label", label),
-                               ("text", text), ("test_id", test_id)) if v is not None]
+) -> Locator:
+    provided = [k for k, v in (("role", role), ("label", label), ("text", text), ("test_id", test_id)) if v is not None]
     if len(provided) != 1:
-        raise ValueError(
-            f"exactly one of role/label/text/test_id must be set; got: {provided}"
-        )
+        raise ValueError(f"exactly one of role/label/text/test_id must be set; got: {provided}")
     if role is not None:
         kwargs: dict[str, Any] = {}
         if role_name is not None:

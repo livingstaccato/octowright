@@ -41,14 +41,10 @@ def _validate_scenario(s: Scenario) -> None:
     seen: set[tuple[str, str]] = set()
     for p in s.participants:
         if p.kind not in SUPPORTED_KINDS:
-            raise ValueError(
-                f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}"
-            )
+            raise ValueError(f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}")
         key = (p.persona, p.kind)
         if key in seen:
-            raise ValueError(
-                f"scenario {s.name!r}: duplicate (persona, kind) pair {key}"
-            )
+            raise ValueError(f"scenario {s.name!r}: duplicate (persona, kind) pair {key}")
         seen.add(key)
 
 
@@ -87,8 +83,10 @@ def load_yaml_scenario(path: Path) -> Scenario:
 def load_python_scenario(path: Path) -> Scenario:
     import importlib.util
     import sys
+
     spec = importlib.util.spec_from_file_location(
-        f"octowright._scenario_{path.stem}", path,
+        f"octowright._scenario_{path.stem}",
+        path,
     )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not load Python scenario from {path}")
@@ -96,14 +94,10 @@ def load_python_scenario(path: Path) -> Scenario:
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     if not hasattr(mod, "build"):
-        raise RuntimeError(
-            f"Python scenario {path} must define a top-level build() -> Scenario"
-        )
+        raise RuntimeError(f"Python scenario {path} must define a top-level build() -> Scenario")
     s = mod.build()
     if not isinstance(s, Scenario):
-        raise TypeError(
-            f"{path}:build() returned {type(s).__name__}, expected Scenario"
-        )
+        raise TypeError(f"{path}:build() returned {type(s).__name__}, expected Scenario")
     _validate_scenario(s)
     return s
 
@@ -132,12 +126,14 @@ def list_scenarios() -> list[dict[str, Any]]:
         if name in seen:
             continue
         seen.add(name)
-        out.append({
-            "name": name,
-            "path": str(entry),
-            "form": "python" if entry.suffix == ".py" else "yaml",
-            "mtime": entry.stat().st_mtime,
-        })
+        out.append(
+            {
+                "name": name,
+                "path": str(entry),
+                "form": "python" if entry.suffix == ".py" else "yaml",
+                "mtime": entry.stat().st_mtime,
+            }
+        )
     return out
 
 
@@ -146,6 +142,7 @@ def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
     applying the participant override → persona default → fallback resolution
     order for each field."""
     from . import personas as _p
+
     try:
         persona = _p.load_persona(p.persona)
     except FileNotFoundError:
@@ -172,6 +169,7 @@ def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
 def resolve_startup_macros(p: Participant) -> list[str]:
     """participant override → persona default_macros → []."""
     from . import personas as _p
+
     if p.startup_macros is not None:
         return list(p.startup_macros)
     try:
@@ -197,9 +195,7 @@ class ScenarioPool:
 
     def get(self, scenario_id: str) -> LiveScenario:
         if scenario_id not in self._live:
-            raise KeyError(
-                f"no live scenario with id={scenario_id!r}; known: {list(self._live)}"
-            )
+            raise KeyError(f"no live scenario with id={scenario_id!r}; known: {list(self._live)}")
         return self._live[scenario_id]
 
     def list(self) -> list[dict[str, Any]]:
@@ -225,16 +221,17 @@ class ScenarioPool:
             for launched in result["launched"]:
                 try:
                     await browser_pool.close(launched["instance_id"])
-                except Exception:  # noqa: BLE001 — best-effort
+                except Exception:
                     pass
             raise RuntimeError(
-                f"scenario {name!r}: {len(result['errors'])} participant(s) failed to launch: "
-                f"{result['errors']}"
+                f"scenario {name!r}: {len(result['errors'])} participant(s) failed to launch: {result['errors']}"
             )
 
         participants: list[dict[str, Any]] = []
         for participant_spec, launched in zip(
-            spec.participants, result["launched"], strict=True,
+            spec.participants,
+            result["launched"],
+            strict=True,
         ):
             entry = dict(launched)
             entry["persona"] = participant_spec.persona
@@ -242,7 +239,10 @@ class ScenarioPool:
             participants.append(entry)
 
         live = LiveScenario(
-            scenario_id=scenario_id, name=name, spec=spec, participants=participants,
+            scenario_id=scenario_id,
+            name=name,
+            spec=spec,
+            participants=participants,
         )
         self._live[scenario_id] = live
 
@@ -253,7 +253,8 @@ class ScenarioPool:
 
         log.info(
             "octowright.scenario.started",
-            scenario_id=scenario_id, name=name,
+            scenario_id=scenario_id,
+            name=name,
             participants=[p["persona"] for p in participants],
         )
         return live
@@ -268,13 +269,16 @@ class ScenarioPool:
         # Teardown macro per participant.
         if live.spec.teardown_macro:
             from . import macros as _macros
+
             for p in live.participants:
                 try:
                     session = browser_pool.get(p["instance_id"])
                     await _macros.run_macro(
-                        session=session, name=live.spec.teardown_macro, args={},
+                        session=session,
+                        name=live.spec.teardown_macro,
+                        args={},
                     )
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     summary["teardown_errors"].append(
                         {"instance_id": p["instance_id"], "error": repr(e)},
                     )
@@ -283,23 +287,31 @@ class ScenarioPool:
             try:
                 await browser_pool.close(p["instance_id"])
                 summary["closed"].append(p["instance_id"])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 summary["teardown_errors"].append(
                     {"instance_id": p["instance_id"], "error": repr(e)},
                 )
         del self._live[scenario_id]
         log.info(
             "octowright.scenario.stopped",
-            scenario_id=scenario_id, errors=len(summary["teardown_errors"]),
+            scenario_id=scenario_id,
+            errors=len(summary["teardown_errors"]),
         )
         return summary
 
     async def run_macro(
-        self, *, scenario_id: str, macro: str, browser_pool: Any,
-        role: str | None = None, args: dict[str, Any] | None = None,
+        self,
+        *,
+        scenario_id: str,
+        macro: str,
+        browser_pool: Any,
+        role: str | None = None,
+        args: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         import asyncio as _asyncio
+
         from . import macros as _macros
+
         live = self.get(scenario_id)
         targets = [p for p in live.participants if role is None or p["role"] == role]
 
@@ -308,18 +320,23 @@ class ScenarioPool:
             try:
                 await _macros.run_macro(session=session, name=macro, args=args or {})
                 return {"instance_id": p["instance_id"], "ok": True}
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
 
         results = await _asyncio.gather(*(_run(p) for p in targets))
         return {
-            "scenario_id": scenario_id, "macro": macro, "role": role,
-            "targeted": len(targets), "results": list(results),
+            "scenario_id": scenario_id,
+            "macro": macro,
+            "role": role,
+            "targeted": len(targets),
+            "results": list(results),
         }
 
 
 async def _apply_fixtures(
-    browser_pool: Any, live: LiveScenario, fixtures: dict[str, Any],
+    browser_pool: Any,
+    live: LiveScenario,
+    fixtures: dict[str, Any],
 ) -> None:
     dialog_policy = fixtures.get("dialog_policy")
     mock_routes = fixtures.get("mock_routes") or []
@@ -339,17 +356,21 @@ async def _apply_fixtures(
 
 async def _run_startup_macros(browser_pool: Any, live: LiveScenario) -> None:
     from . import macros as _macros
+
     for participant_dict, participant_spec in zip(
-        live.participants, live.spec.participants, strict=True,
+        live.participants,
+        live.spec.participants,
+        strict=True,
     ):
         for macro_name in resolve_startup_macros(participant_spec):
             session = browser_pool.get(participant_dict["instance_id"])
             try:
                 await _macros.run_macro(session=session, name=macro_name, args={})
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.warning(
                     "scenario.startup_macro_failed",
                     scenario_id=live.scenario_id,
-                    persona=participant_dict["persona"], macro=macro_name,
+                    persona=participant_dict["persona"],
+                    macro=macro_name,
                     error=repr(e),
                 )

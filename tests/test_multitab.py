@@ -8,7 +8,6 @@ import pytest
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -72,6 +71,7 @@ def test_register_popup_records_event(tmp_path: Path) -> None:
     log = (tmp_path / "test.jsonl").read_text().splitlines()
     # last recorded line should be the popup_opened event
     import json
+
     last = json.loads(log[-1])
     assert last["action"] == "popup_opened"
     assert last["page_index"] == 1
