@@ -1,0 +1,14 @@
+{
+  "name": "test-assert-arithmetic",
+  "description": "[test] Trivial smoke test: 2 + 2 evaluates to 4 in the page context.",
+  "parameters": [],
+  "created_at": "2026-04-24T00:00:00Z",
+  "updated_at": "2026-04-24T00:00:00Z",
+  "actions": [
+    {
+      "action": "expect_js",
+      "expression": "2 + 2",
+      "equals": 4
+    }
+  ]
+}

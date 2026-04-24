@@ -1,0 +1,17 @@
+{
+  "name": "test-smoke-page-ready",
+  "description": "[test:smoke] Tagged-smoke test: window and document objects exist (i.e. the page rendered).",
+  "parameters": [],
+  "created_at": "2026-04-24T00:00:00Z",
+  "updated_at": "2026-04-24T00:00:00Z",
+  "actions": [
+    {
+      "action": "expect_js",
+      "expression": "typeof window === 'object' && typeof document === 'object'"
+    },
+    {
+      "action": "expect_js",
+      "expression": "typeof document.body === 'object'"
+    }
+  ]
+}

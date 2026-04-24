@@ -1,0 +1,13 @@
+name: duo
+description: |
+  Two WebKit instances, role-tagged player + monitor. Demonstrates per-participant
+  roles for filtering with scenario_run_macro role=...
+participants:
+  - persona: duo-player
+    kind: webkit
+    role: player
+    url: about:blank
+  - persona: duo-monitor
+    kind: webkit
+    role: monitor
+    url: about:blank

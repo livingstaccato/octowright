@@ -1,0 +1,9 @@
+name: solo
+description: |
+  Single WebKit instance pointed at about:blank. Smallest possible scenario;
+  good for verifying that scenario_start works on a fresh setup.
+participants:
+  - persona: solo-player
+    kind: webkit
+    role: player
+    url: about:blank
