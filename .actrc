@@ -1,8 +1,8 @@
 # act configuration for octowright
 # https://github.com/nektos/act
 
-# Runner images (smaller than GitHub's stock images; bundle common tools)
--P ubuntu-latest=catthehacker/ubuntu:act-latest
+# Runner images — use act-24.04 (includes node in PATH; act-latest doesn't).
+-P ubuntu-latest=catthehacker/ubuntu:act-24.04
 -P ubuntu-24.04=catthehacker/ubuntu:act-24.04
 -P ubuntu-22.04=catthehacker/ubuntu:act-22.04
 
