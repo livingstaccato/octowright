@@ -304,6 +304,80 @@ class ScenarioPool:
         )
         return summary
 
+    def tail(
+        self,
+        *,
+        scenario_id: str,
+        since_cursors: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """Return JSONL events appended to each participant's log since the
+        cursors in ``since_cursors`` (keyed by instance_id, value = byte offset).
+
+        Missing instance_ids in ``since_cursors`` default to offset 0 (read
+        from the beginning).
+
+        Returns:
+            {
+              "scenario_id": ...,
+              "events": [
+                  {"instance_id": ..., "persona": ..., "role": ..., "ts": ..., "action": ..., ...attrs},
+                  ...  # ordered by (instance_id, file order)
+              ],
+              "cursors": {instance_id: new_byte_offset, ...},
+            }
+        """
+        import json
+
+        live = self.get(scenario_id)
+        cursors = dict(since_cursors or {})
+        events: list[dict[str, Any]] = []
+        new_cursors: dict[str, int] = {}
+        for p in live.participants:
+            iid = p["instance_id"]
+            log_path = Path(p["log_path"])
+            prev = cursors.get(iid, 0)
+            if not log_path.exists():
+                new_cursors[iid] = prev
+                continue
+            with log_path.open("rb") as fh:
+                fh.seek(prev)
+                data = fh.read()
+            # Only advance cursor past complete lines (those ending with \n).
+            # If the last line is partial (no trailing newline), leave the cursor
+            # at the start of that partial line so it will be re-read next poll.
+            text = data.decode("utf-8", errors="replace")
+            lines = text.split("\n")
+            # If text ends with \n, split produces an empty string at the end;
+            # all non-empty items are complete lines.  If not, the last item is
+            # a partial line fragment that has not been flushed yet.
+            if text.endswith("\n"):
+                complete_lines = [ln for ln in lines if ln.strip()]
+                partial_bytes = 0
+            else:
+                # Last element is the partial fragment; exclude it from parsing
+                # and do not advance the cursor past it.
+                complete_lines = [ln for ln in lines[:-1] if ln.strip()]
+                partial = lines[-1].encode("utf-8")
+                partial_bytes = len(partial)
+            new_cursors[iid] = prev + len(data) - partial_bytes
+            for raw in complete_lines:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                entry["instance_id"] = iid
+                entry["persona"] = p["persona"]
+                entry["role"] = p["role"]
+                events.append(entry)
+        return {
+            "scenario_id": scenario_id,
+            "events": events,
+            "cursors": new_cursors,
+        }
+
     async def run_macro(
         self,
         *,
