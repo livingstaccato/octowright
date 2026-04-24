@@ -359,86 +359,38 @@ class BrowserSession:
     # Role / label / text / test-id locator methods
     # ------------------------------------------------------------------
 
-    def _locator(
-        self,
-        *,
-        role: str | None = None,
-        role_name: str | None = None,
-        role_exact: bool = False,
-        label: str | None = None,
-        text: str | None = None,
-        test_id: str | None = None,
-    ) -> Any:
-        """Return a Playwright Locator for the given finder.
+    def _locator(self, **finders: Any) -> Any:
+        """Return a Playwright Locator for the given finder kwargs.
 
         Exactly one of role / label / text / test_id must be supplied. Routes
         through _target() so this also works inside iframes when one is active.
         """
         from . import session_locators
-        return session_locators.build_locator(
-            self._target(),
-            role=role, role_name=role_name, role_exact=role_exact,
-            label=label, text=text, test_id=test_id,
-        )
+        return session_locators.build_locator(self._target(), **finders)
 
-    async def click_by(
-        self,
-        *,
-        role: str | None = None,
-        role_name: str | None = None,
-        role_exact: bool = False,
-        label: str | None = None,
-        text: str | None = None,
-        test_id: str | None = None,
-        timeout_ms: int | None = None,
-    ) -> dict[str, Any]:
+    async def click_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Click an element matched by role, label, text, or data-testid."""
-        locator = self._locator(role=role, role_name=role_name, role_exact=role_exact,
-                                label=label, text=text, test_id=test_id)
+        locator = self._locator(**finders)
         await locator.click(timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("click_by", role=role, role_name=role_name, label=label,
-                             text=text, test_id=test_id)
+        self.recorder.record("click_by", **finders)
         return {"ok": True}
 
-    async def fill_by(
-        self,
-        value: str,
-        *,
-        role: str | None = None,
-        role_name: str | None = None,
-        label: str | None = None,
-        test_id: str | None = None,
-        timeout_ms: int | None = None,
-    ) -> dict[str, Any]:
+    async def fill_by(self, value: str, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Fill an input matched by role, label, or data-testid."""
-        locator = self._locator(role=role, role_name=role_name,
-                                label=label, test_id=test_id)
+        locator = self._locator(**finders)
         await locator.fill(value, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("fill_by", role=role, role_name=role_name, label=label,
-                             test_id=test_id, value=value)
+        self.recorder.record("fill_by", value=value, **finders)
         return {"ok": True}
 
-    async def get_text_by(
-        self,
-        *,
-        role: str | None = None,
-        role_name: str | None = None,
-        role_exact: bool = False,
-        label: str | None = None,
-        text: str | None = None,
-        test_id: str | None = None,
-        timeout_ms: int | None = None,
-    ) -> dict[str, Any]:
+    async def get_text_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Return the inner text of the matched element.
 
         Useful for assertions that need a value rather than just a boolean match.
         """
-        locator = self._locator(role=role, role_name=role_name, role_exact=role_exact,
-                                label=label, text=text, test_id=test_id)
+        locator = self._locator(**finders)
         await locator.wait_for(timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
         result = await locator.inner_text()
-        self.recorder.record("get_text_by", role=role, role_name=role_name, label=label,
-                             text=text, test_id=test_id, result=result)
+        self.recorder.record("get_text_by", result=result, **finders)
         return {"ok": True, "text": result}
 
     async def close(self) -> None:
