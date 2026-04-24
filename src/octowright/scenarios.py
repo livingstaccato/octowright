@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid as _uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -178,9 +179,6 @@ def resolve_startup_macros(p: Participant) -> list[str]:
     except FileNotFoundError:
         return []
     return list(persona.default_macros or [])
-
-
-import uuid as _uuid
 
 
 @dataclass
