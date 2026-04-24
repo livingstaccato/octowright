@@ -266,12 +266,12 @@ async def test_switch_frame_by_selector(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_switch_frame_raises_on_no_args(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
-    with pytest.raises(ValueError, match="Exactly one"):
+    with pytest.raises(ValueError, match="exactly one"):
         await s.switch_frame()
 
 
 @pytest.mark.anyio
 async def test_switch_frame_raises_on_multiple_args(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
-    with pytest.raises(ValueError, match="Exactly one"):
+    with pytest.raises(ValueError, match="exactly one"):
         await s.switch_frame(name="a", url_pattern="b")

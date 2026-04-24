@@ -17,13 +17,18 @@ async def switch_frame_impl(
     """Resolve an iframe and return (frame, info_dict).
     Exactly one of selector / name / url_pattern must be given.
     """
-    provided = [x for x in (selector, name, url_pattern) if x is not None]
+    provided = [k for k, v in (("selector", selector), ("name", name),
+                               ("url_pattern", url_pattern)) if v is not None]
     if len(provided) != 1:
-        raise ValueError("Exactly one of selector, name, or url_pattern must be provided")
+        raise ValueError(
+            f"exactly one of selector/name/url_pattern must be set; got: {provided}"
+        )
 
     frame: "Frame | None" = None
     if selector is not None:
         handle = await page.frame_locator(selector).owner().element_handle()
+        if handle is None:
+            raise RuntimeError(f"no element matches iframe selector {selector!r}")
         frame = await handle.content_frame()
         if frame is None:
             raise RuntimeError(f"no frame found for selector {selector!r}")
