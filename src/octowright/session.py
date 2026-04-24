@@ -15,6 +15,9 @@ from playwright.async_api import Browser, BrowserContext, ConsoleMessage, Page, 
 from .defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from .recorder import Recorder
 
+# Cap on inline string-payload returns; opt-in full=True overrides.
+DEFAULT_PREVIEW_CHARS = 4000
+
 
 def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -189,19 +192,30 @@ class BrowserSession:
         *,
         screenshot_dir: Path | None = None,
         console_tail: int = 25,
+        html_full: bool = False,
     ) -> dict[str, Any]:
-        """Capture a screenshot + the last N console messages + current HTML + URL.
+        """Capture a screenshot + last N console messages + page HTML metadata.
 
-        Intended for post-failure diagnostics. Errors in capture are swallowed (we're
-        already in an error path — don't compound it).
+        HTML is always written to disk (next to the screenshot) so callers can
+        fetch it on demand without dragging it through the MCP response. Inline
+        fields: html_path, html_size, html_sha256, html_preview (first
+        DEFAULT_PREVIEW_CHARS chars). Pass html_full=True to also include the
+        full HTML inline (rarely needed; mostly for tests).
         """
+        import hashlib
+
         bundle: dict[str, Any] = {
             "console_tail": self.console[-console_tail:],
             "url": None,
             "title": None,
-            "html": None,
+            "html_path": None,
+            "html_size": None,
+            "html_sha256": None,
+            "html_preview": None,
             "screenshot": None,
         }
+        if html_full:
+            bundle["html"] = None
         try:
             bundle["url"] = self.page.url
         except Exception:
@@ -211,7 +225,17 @@ class BrowserSession:
         except Exception:
             pass
         try:
-            bundle["html"] = await self.page.content()
+            html = await self.page.content()
+            h_dir = screenshot_dir or self.log_path.parent
+            h_dir.mkdir(parents=True, exist_ok=True)
+            h_path = h_dir / f"{self.instance_id}-fail-{_timestamp()}.html"
+            h_path.write_text(html, encoding="utf-8")
+            bundle["html_path"] = str(h_path)
+            bundle["html_size"] = len(html)
+            bundle["html_sha256"] = hashlib.sha256(html.encode("utf-8")).hexdigest()
+            bundle["html_preview"] = html[:DEFAULT_PREVIEW_CHARS]
+            if html_full:
+                bundle["html"] = html
         except Exception as e:
             bundle["html_error"] = repr(e)
         try:
