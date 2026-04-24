@@ -24,6 +24,13 @@ from .stabilize import render_stabilize_script
 
 log = get_logger(__name__)
 
+# Auto-migrate legacy profile layout on first module import. Idempotent.
+try:
+    from . import personas as _personas
+    _personas.migrate_legacy_layout()
+except Exception as _e:  # noqa: BLE001 — migration must never block import
+    log.warning("pool.migration_on_import_failed", error=repr(_e))
+
 
 _TITLE_PREFIX_SCRIPT = r"""
 (() => {
