@@ -112,22 +112,16 @@ def persona_show_cmd(name: str) -> None:
 def persona_create_cmd(name: str, display_name: str | None, default_url: str | None) -> None:
     """Scaffold a new persona dir + stub profile.yaml."""
     from . import personas as _p
-    import yaml as _yaml
     setup_telemetry()
     try:
-        p_dir = _p.persona_dir(name)
-        p_dir.mkdir(parents=True, exist_ok=True)
-        yaml_path = p_dir / "profile.yaml"
-        if yaml_path.exists():
-            click.echo(f"refusing to overwrite {yaml_path}", err=True)
+        try:
+            pdir = _p.create_persona(
+                name, display_name=display_name, default_url=default_url,
+            )
+        except FileExistsError as e:
+            click.echo(str(e), err=True)
             raise SystemExit(1)
-        doc: dict[str, object] = {"name": _p._slug(name)}
-        if display_name:
-            doc["display_name"] = display_name
-        if default_url:
-            doc["default_url"] = default_url
-        yaml_path.write_text(_yaml.safe_dump(doc))
-        click.echo(f"created {yaml_path}")
+        click.echo(f"created {pdir}")
     finally:
         shutdown_telemetry()
 

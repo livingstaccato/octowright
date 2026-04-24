@@ -95,3 +95,28 @@ def test_resolve_no_references_raises(tmp_path, fresh_personas):
     p = fresh_personas.load_persona("u")
     with pytest.raises(fresh_personas.MissingCredential, match="no email_env or email_cmd"):
         fresh_personas.resolve_credential(p, "email")
+
+
+def test_resolve_cmd_nonzero_exit_raises(tmp_path, fresh_personas):
+    _write_persona(tmp_path, "u", {
+        "name": "u",
+        "credentials": {"token_cmd": "false"},  # `false` always exits nonzero
+    })
+    p = fresh_personas.load_persona("u")
+    with pytest.raises(fresh_personas.MissingCredential, match="cmd exited"):
+        fresh_personas.resolve_credential(p, "token")
+
+
+def test_resolve_cmd_timeout_raises(tmp_path, fresh_personas, monkeypatch):
+    _write_persona(tmp_path, "u", {
+        "name": "u",
+        "credentials": {"token_cmd": "sleep 60"},
+    })
+    p = fresh_personas.load_persona("u")
+    # Patch subprocess.run to raise TimeoutExpired without actually sleeping.
+    import subprocess
+    def _fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 30))
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    with pytest.raises(fresh_personas.MissingCredential, match="cmd timed out"):
+        fresh_personas.resolve_credential(p, "token")

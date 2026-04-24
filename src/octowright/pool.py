@@ -304,8 +304,9 @@ class BrowserPool:
                 viewport_w=spec.get("viewport_w"),
                 viewport_h=spec.get("viewport_h"),
                 profile=spec.get("profile"),
-                stabilize=spec.get("stabilize", False),
                 record_video=spec.get("record_video", False),
+                stabilize=spec.get("stabilize", False),
+                trace=spec.get("trace", False),
             )
 
         results = await asyncio.gather(*[_launch_one(s) for s in specs], return_exceptions=True)

@@ -140,6 +140,27 @@ def migrate_legacy_layout() -> dict[str, Any]:
     return {"moved": moved, "personas": len(touched_personas)}
 
 
+def create_persona(
+    name: str, *, display_name: str | None = None, default_url: str | None = None,
+) -> Path:
+    """Scaffold a new persona directory + stub profile.yaml.
+    Raises FileExistsError if profile.yaml already exists.
+    Returns the persona directory path.
+    """
+    pdir = persona_dir(name)
+    pdir.mkdir(parents=True, exist_ok=True)
+    yaml_path = pdir / "profile.yaml"
+    if yaml_path.exists():
+        raise FileExistsError(f"persona {name!r} already has profile.yaml at {yaml_path}")
+    doc: dict[str, Any] = {"name": _slug(name)}
+    if display_name:
+        doc["display_name"] = display_name
+    if default_url:
+        doc["default_url"] = default_url
+    yaml_path.write_text(yaml.safe_dump(doc))
+    return pdir
+
+
 class MissingCredential(RuntimeError):
     pass
 
