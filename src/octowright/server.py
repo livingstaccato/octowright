@@ -78,7 +78,7 @@ async def browser_launch(
 
 @mcp.tool(structured_output=False, description="List all live browser instances.")
 def browser_list() -> list[dict[str, Any]]:
-    return pool.list()
+    return pool.list_sessions()
 
 
 @mcp.tool(structured_output=False, description="Close one browser instance by id.")
@@ -778,7 +778,7 @@ def persona_create(
 def persona_delete(name: str) -> dict[str, Any]:
     from .profiles import delete_persona
 
-    for s in pool.list():
+    for s in pool.list_sessions():
         if s["profile"] == name:
             raise RuntimeError(f"persona {name!r} is in use by live instance {s['instance_id']}; close it first")
     path = delete_persona(name)
@@ -817,7 +817,7 @@ async def scenario_start(name: str) -> dict[str, Any]:
 
 @mcp.tool(structured_output=False, description="List live scenarios and their participants.")
 def scenario_status() -> list[dict[str, Any]]:
-    return scenario_pool.list()
+    return scenario_pool.list_live()
 
 
 @mcp.tool(

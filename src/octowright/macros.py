@@ -6,11 +6,14 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
 from .defaults import DEFAULT_ACTION_TIMEOUT_MS, PROFILES_DIR
+
+if TYPE_CHECKING:
+    from .session import BrowserSession
 
 log = get_logger(__name__)
 
@@ -205,7 +208,7 @@ _REPLAY_SKIP = {"launch", "close", "snapshot"}
 
 
 async def run_macro(
-    session: BrowserSession,  # noqa: F821 — forward ref, avoids circular import
+    session: BrowserSession,
     name: str,
     args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

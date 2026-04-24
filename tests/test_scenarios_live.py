@@ -82,13 +82,13 @@ async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
         roles = [p["role"] for p in live.participants]
         assert set(roles) == {"player", "monitor"}
         # scenario_status reports the live scenario
-        status = spool.list()
+        status = spool.list_live()
         assert len(status) == 1
         assert status[0]["name"] == "mini"
         # Stop cleanly
         summary = await spool.stop(scenario_id=live.scenario_id, browser_pool=pool)
         assert len(summary["closed"]) == 2
         assert summary["teardown_errors"] == []
-        assert spool.list() == []
+        assert spool.list_live() == []
     finally:
         await pool.shutdown()

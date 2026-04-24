@@ -245,7 +245,7 @@ class BrowserPool:
             raise KeyError(f"no browser with instance_id={instance_id!r}; known: {list(self._sessions)}")
         return self._sessions[instance_id]
 
-    def list(self) -> list[dict[str, Any]]:
+    def list_sessions(self) -> list[dict[str, Any]]:
         return [
             {
                 "instance_id": s.instance_id,
