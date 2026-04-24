@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from typing import Any
 
 import click
@@ -288,8 +287,9 @@ async def _run_verify_and_report(*, pool: Any, live: Any, out_path: str | None) 
 
 
 def main() -> None:
+    # click handles its own SystemExit when standalone_mode=True; this never returns normally.
     cli.main(standalone_mode=True)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
