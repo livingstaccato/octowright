@@ -11,9 +11,11 @@ DEFAULT_VIEWPORT_H = int(os.environ.get("OCTOWRIGHT_VIEWPORT_H", "800"))
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_RECORDINGS = _REPO_ROOT / "recordings"
 _DEFAULT_PROFILES = Path.home() / ".config" / "undef" / "profiles"
+_DEFAULT_SCENARIOS = Path.home() / ".config" / "undef" / "scenarios"
 
 RECORDINGS_DIR = Path(os.environ.get("OCTOWRIGHT_RECORDINGS", str(_DEFAULT_RECORDINGS)))
 PROFILES_DIR = Path(os.environ.get("OCTOWRIGHT_PROFILES_DIR", str(_DEFAULT_PROFILES)))
+SCENARIOS_DIR = Path(os.environ.get("OCTOWRIGHT_SCENARIOS_DIR", str(_DEFAULT_SCENARIOS)))
 
 # Octowright defaults to HEADED mode. The whole point of this server is giving
 # humans a window they can watch (and sometimes drive by hand), so headless is
