@@ -178,3 +178,180 @@ def resolve_startup_macros(p: Participant) -> list[str]:
     except FileNotFoundError:
         return []
     return list(persona.default_macros or [])
+
+
+import uuid as _uuid
+
+
+@dataclass
+class LiveScenario:
+    scenario_id: str
+    name: str
+    spec: Scenario
+    participants: list[dict[str, Any]]  # [{instance_id, persona, kind, role, ...}]
+
+
+class ScenarioPool:
+    """Tracks scenarios the process has started. Keyed by scenario_id."""
+
+    def __init__(self) -> None:
+        self._live: dict[str, LiveScenario] = {}
+
+    def get(self, scenario_id: str) -> LiveScenario:
+        if scenario_id not in self._live:
+            raise KeyError(
+                f"no live scenario with id={scenario_id!r}; known: {list(self._live)}"
+            )
+        return self._live[scenario_id]
+
+    def list(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "scenario_id": ls.scenario_id,
+                "name": ls.name,
+                "participants": ls.participants,
+            }
+            for ls in self._live.values()
+        ]
+
+    async def start(self, *, name: str, browser_pool: Any) -> LiveScenario:
+        spec = load_scenario(name)
+        if not spec.participants:
+            raise RuntimeError(f"scenario {name!r} has no participants")
+        scenario_id = _uuid.uuid4().hex[:12]
+        # Build launch kwargs from participant resolution.
+        launch_specs = [resolve_launch_kwargs(p) for p in spec.participants]
+        result = await browser_pool.spawn_roster(launch_specs)
+        if result["errors"]:
+            # Partial launch — close any that came up before raising.
+            for launched in result["launched"]:
+                try:
+                    await browser_pool.close(launched["instance_id"])
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+            raise RuntimeError(
+                f"scenario {name!r}: {len(result['errors'])} participant(s) failed to launch: "
+                f"{result['errors']}"
+            )
+
+        participants: list[dict[str, Any]] = []
+        for participant_spec, launched in zip(
+            spec.participants, result["launched"], strict=True,
+        ):
+            entry = dict(launched)
+            entry["persona"] = participant_spec.persona
+            entry["role"] = participant_spec.role
+            participants.append(entry)
+
+        live = LiveScenario(
+            scenario_id=scenario_id, name=name, spec=spec, participants=participants,
+        )
+        self._live[scenario_id] = live
+
+        # Apply fixtures per participant.
+        await _apply_fixtures(browser_pool, live, spec.fixtures)
+        # Run startup_macros per participant.
+        await _run_startup_macros(browser_pool, live)
+
+        log.info(
+            "octowright.scenario.started",
+            scenario_id=scenario_id, name=name,
+            participants=[p["persona"] for p in participants],
+        )
+        return live
+
+    async def stop(self, *, scenario_id: str, browser_pool: Any) -> dict[str, Any]:
+        live = self.get(scenario_id)
+        summary: dict[str, Any] = {
+            "scenario_id": scenario_id,
+            "teardown_errors": [],
+            "closed": [],
+        }
+        # Teardown macro per participant.
+        if live.spec.teardown_macro:
+            from . import macros as _macros
+            for p in live.participants:
+                try:
+                    session = browser_pool.get(p["instance_id"])
+                    await _macros.run_macro(
+                        session=session, name=live.spec.teardown_macro, args={},
+                    )
+                except Exception as e:  # noqa: BLE001
+                    summary["teardown_errors"].append(
+                        {"instance_id": p["instance_id"], "error": repr(e)},
+                    )
+        # Close every participant browser.
+        for p in live.participants:
+            try:
+                await browser_pool.close(p["instance_id"])
+                summary["closed"].append(p["instance_id"])
+            except Exception as e:  # noqa: BLE001
+                summary["teardown_errors"].append(
+                    {"instance_id": p["instance_id"], "error": repr(e)},
+                )
+        del self._live[scenario_id]
+        log.info(
+            "octowright.scenario.stopped",
+            scenario_id=scenario_id, errors=len(summary["teardown_errors"]),
+        )
+        return summary
+
+    async def run_macro(
+        self, *, scenario_id: str, macro: str, browser_pool: Any,
+        role: str | None = None, args: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        import asyncio as _asyncio
+        from . import macros as _macros
+        live = self.get(scenario_id)
+        targets = [p for p in live.participants if role is None or p["role"] == role]
+
+        async def _run(p: dict[str, Any]) -> dict[str, Any]:
+            session = browser_pool.get(p["instance_id"])
+            try:
+                await _macros.run_macro(session=session, name=macro, args=args or {})
+                return {"instance_id": p["instance_id"], "ok": True}
+            except Exception as e:  # noqa: BLE001
+                return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
+
+        results = await _asyncio.gather(*(_run(p) for p in targets))
+        return {
+            "scenario_id": scenario_id, "macro": macro, "role": role,
+            "targeted": len(targets), "results": list(results),
+        }
+
+
+async def _apply_fixtures(
+    browser_pool: Any, live: LiveScenario, fixtures: dict[str, Any],
+) -> None:
+    dialog_policy = fixtures.get("dialog_policy")
+    mock_routes = fixtures.get("mock_routes") or []
+    for p in live.participants:
+        session = browser_pool.get(p["instance_id"])
+        if dialog_policy:
+            session.set_dialog_policy(dialog_policy)
+        for mr in mock_routes:
+            await session.mock_route(
+                mr["pattern"],
+                status=mr.get("status", 200),
+                body=mr.get("body"),
+                content_type=mr.get("content_type", "application/json"),
+                headers=mr.get("headers"),
+            )
+
+
+async def _run_startup_macros(browser_pool: Any, live: LiveScenario) -> None:
+    from . import macros as _macros
+    for participant_dict, participant_spec in zip(
+        live.participants, live.spec.participants, strict=True,
+    ):
+        for macro_name in resolve_startup_macros(participant_spec):
+            session = browser_pool.get(participant_dict["instance_id"])
+            try:
+                await _macros.run_macro(session=session, name=macro_name, args={})
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "scenario.startup_macro_failed",
+                    scenario_id=live.scenario_id,
+                    persona=participant_dict["persona"], macro=macro_name,
+                    error=repr(e),
+                )
