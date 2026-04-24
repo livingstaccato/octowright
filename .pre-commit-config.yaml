@@ -2,8 +2,10 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
+      # Note: end-of-file-fixer + trailing-whitespace are intentionally NOT included.
+      # They strip the trailing blank line of the canonical SPDX block in otherwise-
+      # empty __init__.py files, which then fails the SPDX presence check. ruff format
+      # handles trailing whitespace + final newline normalization on real source files.
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-added-large-files
@@ -37,6 +39,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: spdx-headers
+        name: spdx headers (presence + Apache-2.0 allowlist)
+        entry: uv run --active python scripts/check_spdx_headers.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [python]
+
       - id: pytest-quick
         name: pytest (unit tests, no live browsers)
         entry: uv run --active pytest -q --deselect tests/test_popup_listeners.py --deselect tests/test_scenarios_live.py tests/

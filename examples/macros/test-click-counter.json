@@ -1,0 +1,21 @@
+{
+  "name": "test-click-counter",
+  "description": "[test] Inject a button that increments a data-attr counter on each click; click 3 times; assert counter is 3. Uses addEventListener (CSP-safe — works on pages with strict-script-src CSPs).",
+  "parameters": [],
+  "created_at": "2026-04-24T00:00:00Z",
+  "updated_at": "2026-04-24T00:00:00Z",
+  "actions": [
+    {
+      "action": "evaluate",
+      "expression": "(() => { document.body.innerHTML = ''; const b = document.createElement('button'); b.id = 'btn'; b.textContent = 'click'; b.dataset.n = '0'; b.addEventListener('click', () => { b.dataset.n = String(parseInt(b.dataset.n) + 1); }); document.body.appendChild(b); })()"
+    },
+    {"action": "click", "selector": "#btn"},
+    {"action": "click", "selector": "#btn"},
+    {"action": "click", "selector": "#btn"},
+    {
+      "action": "expect_js",
+      "expression": "document.querySelector('#btn').dataset.n",
+      "equals": "3"
+    }
+  ]
+}

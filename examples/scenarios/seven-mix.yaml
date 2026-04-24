@@ -1,0 +1,44 @@
+name: seven-mix
+description: |
+  Seven players + one monitor + one main-site spectator (the "Discord raid"
+  shape from the docs/design spec). Engines distributed: 3 webkit, 2 firefox,
+  2 chromium for players. About:blank for offline runs; switch URLs to taste.
+participants:
+  - persona: p1
+    kind: webkit
+    role: player
+    url: about:blank
+  - persona: p2
+    kind: webkit
+    role: player
+    url: about:blank
+  - persona: p3
+    kind: webkit
+    role: player
+    url: about:blank
+  - persona: p4
+    kind: firefox
+    role: player
+    url: about:blank
+  - persona: p5
+    kind: firefox
+    role: player
+    url: about:blank
+  - persona: p6
+    kind: chromium
+    role: player
+    url: about:blank
+  - persona: p7
+    kind: chromium
+    role: player
+    url: about:blank
+  - persona: ops
+    kind: webkit
+    role: monitor
+    url: about:blank
+  - persona: spectator
+    kind: webkit
+    role: main-site
+    url: about:blank
+fixtures:
+  dialog_policy: dismiss

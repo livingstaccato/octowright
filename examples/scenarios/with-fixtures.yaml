@@ -1,0 +1,23 @@
+name: with-fixtures
+description: |
+  Two WebKit instances with shared mock_route + dialog_policy fixtures. Every
+  participant gets the same `**/api/time` stub and dismiss-by-default dialogs.
+participants:
+  - persona: fix-a
+    kind: webkit
+    role: player
+    url: about:blank
+  - persona: fix-b
+    kind: webkit
+    role: player
+    url: about:blank
+fixtures:
+  dialog_policy: dismiss
+  mock_routes:
+    - pattern: "**/api/time"
+      status: 200
+      content_type: application/json
+      body: '{"now":"2026-04-24T00:00:00Z","frozen":true}'
+    - pattern: "**/api/health"
+      status: 200
+      body: '{"ok":true}'

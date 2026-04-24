@@ -1,0 +1,19 @@
+name: cross-engine
+description: |
+  One instance per engine — chromium, firefox, webkit — all loading about:blank.
+  Useful for cross-engine smoke tests when paired with `--test` and a verify map.
+participants:
+  - persona: cx-chromium
+    kind: chromium
+    role: player
+    url: about:blank
+  - persona: cx-firefox
+    kind: firefox
+    role: player
+    url: about:blank
+  - persona: cx-webkit
+    kind: webkit
+    role: player
+    url: about:blank
+verify:
+  player: "test-smoke-page-ready"
