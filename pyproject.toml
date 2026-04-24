@@ -29,6 +29,9 @@ dev = [
     "pytest>=8",
     "anyio[trio]>=4.4.0",
     "pytest-anyio>=0.0.0",
+    "ruff>=0.8",
+    "mypy>=1.11",
+    "codespell>=2.3",
 ]
 
 [tool.pytest.ini_options]
