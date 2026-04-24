@@ -64,6 +64,18 @@ appends a record to that instance's JSONL log.
 | `macro_list` | List saved macros. |
 | `macro_run` | Replay a macro against a live instance with args. |
 | `macro_delete` | Delete a saved macro. |
+| `persona_list` | List personas with engines, metadata, last-used. |
+| `persona_get` | Full profile.yaml for a persona (with credential references). |
+| `persona_create` | Scaffold a new persona + stub profile.yaml. |
+| `persona_delete` | Delete a persona (all engines + metadata); refuses if live. |
+| `migrate_profiles` | One-shot: migrate legacy `profiles/<kind>/<name>/` layout. |
+| `scenario_list` | List scenario specs on disk. |
+| `scenario_start` | Start a scenario; browsers stay open. |
+| `scenario_status` | List live scenarios. |
+| `scenario_stop` | Teardown and close. |
+| `scenario_run_macro` | Broadcast a macro across scenario participants. |
+| `scenario_participants` | List participants of a live scenario (role-filter). |
+| `scenario_run_as_test` | Run verify macros; pass/fail + JUnit XML. |
 
 ## Persistent profiles (Discord, Slack, N-login-per-app)
 
@@ -105,6 +117,45 @@ live instance is using it). Exported replay scripts embed the absolute `user_dat
 path, so they work on the same machine but are **not portable across machines** when a
 profile is involved.
 
+## Personas — identity layer over engine profiles
+
+Every browser profile belongs to a **persona**: a named identity with metadata,
+credential references, and optional default URL + startup macros. A persona can
+have browser profiles for multiple engines (WebKit, Firefox, Chromium); each
+engine profile is a child directory.
+
+    ~/.config/undef/profiles/
+    ├── dante/
+    │   ├── profile.yaml     # persona metadata
+    │   ├── webkit/          # dante's WebKit browser state
+    │   └── chromium/        # dante's Chromium browser state
+    └── tim/
+        ├── profile.yaml
+        └── webkit/
+
+`profile.yaml` declares display name, default URL + macros, credential
+references (read from env vars or shell commands at use time; never stored),
+and free-form app metadata:
+
+```yaml
+name: dante
+display_name: Dante Alighieri
+default_url: https://discord.com/app
+default_macros: [discord-login]
+credentials:
+  email_env: DANTE_EMAIL
+  password_cmd: "op read op://Personal/dante/password"
+app:
+  discord_user_id: "1234"
+  role: player
+```
+
+MCP tools: `persona_list` / `persona_get` / `persona_create` / `persona_delete`.
+CLI: `octowright persona list|show|create|delete`.
+
+Legacy `profiles/<kind>/<name>/` layouts are auto-migrated on first use; or run
+`octowright migrate-profiles` to force the migration.
+
 ## Macros — reusable parameterized action sequences
 
 Turn a recorded browser session into a named, reusable macro. Capture a login flow
@@ -137,6 +188,56 @@ are the reusable middle of a flow, not the wrapper. Pass `include_launch=True` o
 rewrites its CSS classes frequently). Treat them as short-term automation, not
 durable scripts — when a macro breaks, re-record rather than hand-patch.
 
+## Scenarios — coordinated multi-browser orchestration
+
+A scenario is a named group of browser instances launched together. Spin up N
+players + a monitoring window + a main-site window with one call; each
+instance is a regular `BrowserSession` you can drive per-participant (via
+`instance_id`) using all the normal `browser_*` tools.
+
+Declare scenarios in `~/.config/undef/scenarios/<name>.yaml`:
+
+```yaml
+name: discord-raid
+description: 7 players + 1 monitor + 1 main-site spectator
+participants:
+  - persona: dante
+    kind: webkit
+    role: player
+  - persona: ops
+    kind: firefox
+    role: monitor
+    url: https://warp.undef.games/monitor
+fixtures:
+  mock_routes:
+    - pattern: "**/api/time"
+      body: '{"now":"2026-04-24T00:00:00Z"}'
+  dialog_policy: dismiss
+teardown:
+  macro: cleanup-session
+verify:
+  player: assert-in-server
+  monitor: assert-monitor-healthy
+```
+
+Or as Python for dynamic participant lists — `<name>.py` exposes `def build() -> Scenario`.
+
+Lifecycle:
+
+- `scenario_start <name>` launches all participants in parallel, applies
+  fixtures, runs per-participant startup macros. Browsers **stay open**.
+- `scenario_run_macro <id> <macro> [role=...]` broadcasts a macro across
+  participants (optionally role-filtered). Per-participant results returned.
+- Any single participant can still be driven by `instance_id` with the regular
+  `browser_*` tools.
+- `scenario_stop <id>` runs the teardown macro per participant, closes every
+  window, returns a summary.
+- `scenario_run_as_test <id>` (or `--test` on the CLI) runs `verify` macros
+  and produces JUnit XML.
+
+CLI: `octowright scenario list|start [--test --out <xml>]`; the `start`
+command blocks until Ctrl-C, then runs teardown and exits.
+
 ## Defaults
 
 Configurable via env vars:
@@ -148,6 +249,7 @@ Configurable via env vars:
 - `OCTOWRIGHT_HEADLESS` — set to `1` to default to headless mode (default is headed).
 - `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` — per-navigation / per-action timeouts.
 - `OCTOWRIGHT_MACROS_DIR` — where saved macros live. Defaults to `~/.config/undef/macros/`.
+- `OCTOWRIGHT_SCENARIOS_DIR` — where scenario specs live. Defaults to `~/.config/undef/scenarios/`.
 
 ## Safari caveat
 
