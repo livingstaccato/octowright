@@ -49,7 +49,9 @@ def load_persona(name: str) -> Persona:
     p = persona_dir(name) / "profile.yaml"
     if not p.exists():
         raise FileNotFoundError(f"no persona at {p}")
-    raw = yaml.safe_load(p.read_text()) or {}
+    raw = yaml.safe_load(p.read_text())
+    if not isinstance(raw, dict):
+        raw = {}
     return Persona(
         name=raw.get("name", _slug(name)),
         display_name=raw.get("display_name"),
@@ -99,21 +101,28 @@ class MissingCredential(RuntimeError):
     pass
 
 
-def resolve_credential(persona: Persona, field: str) -> str:
-    """Resolve a credential field like 'email' via _env or _cmd references in
+def resolve_credential(persona: Persona, cred_name: str) -> str:
+    """Resolve a credential like 'email' via _env or _cmd references in
     persona.credentials. *_cmd wins if both are set."""
     creds = persona.credentials
-    cmd_key = f"{field}_cmd"
-    env_key = f"{field}_env"
+    cmd_key = f"{cred_name}_cmd"
+    env_key = f"{cred_name}_env"
     if cmd_key in creds:
         if env_key in creds:
-            log.warning("persona.cred.both_set", persona=persona.name, field=field)
-        result = subprocess.run(  # noqa: S602 — shell usage is a documented feature
-            creds[cmd_key], shell=True, capture_output=True, text=True, check=False,
-        )
+            log.warning("persona.cred.both_set", persona=persona.name, cred_name=cred_name)
+        try:
+            result = subprocess.run(  # noqa: S602 — shell usage is a documented feature
+                creds[cmd_key], shell=True, capture_output=True, text=True,
+                check=False, timeout=30,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise MissingCredential(
+                f"persona {persona.name!r} field {cred_name!r}: "
+                f"cmd timed out after 30s"
+            ) from e
         if result.returncode != 0:
             raise MissingCredential(
-                f"persona {persona.name!r} field {field!r}: "
+                f"persona {persona.name!r} field {cred_name!r}: "
                 f"cmd exited {result.returncode}; stderr: {result.stderr[:200]}"
             )
         return result.stdout.strip()
@@ -122,11 +131,11 @@ def resolve_credential(persona: Persona, field: str) -> str:
         value = os.environ.get(env_name)
         if value is None:
             raise MissingCredential(
-                f"persona {persona.name!r} field {field!r}: "
+                f"persona {persona.name!r} field {cred_name!r}: "
                 f"env var {env_name} is unset"
             )
         return value
     raise MissingCredential(
-        f"persona {persona.name!r} field {field!r}: "
-        f"no {field}_env or {field}_cmd in credentials"
+        f"persona {persona.name!r} field {cred_name!r}: "
+        f"no {cred_name}_env or {cred_name}_cmd in credentials"
     )
