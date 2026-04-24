@@ -58,3 +58,40 @@ def test_load_persona_minimal(tmp_path, fresh_personas):
     assert p.default_macros == []
     assert p.credentials == {}
     assert p.app == {}
+
+
+def test_resolve_env_credential(tmp_path, fresh_personas, monkeypatch):
+    _write_persona(tmp_path, "u", {
+        "name": "u",
+        "credentials": {"email_env": "TEST_EMAIL"},
+    })
+    monkeypatch.setenv("TEST_EMAIL", "me@example.com")
+    p = fresh_personas.load_persona("u")
+    assert fresh_personas.resolve_credential(p, "email") == "me@example.com"
+
+
+def test_resolve_env_missing_raises(tmp_path, fresh_personas, monkeypatch):
+    _write_persona(tmp_path, "u", {
+        "name": "u",
+        "credentials": {"email_env": "TEST_EMAIL"},
+    })
+    monkeypatch.delenv("TEST_EMAIL", raising=False)
+    p = fresh_personas.load_persona("u")
+    with pytest.raises(fresh_personas.MissingCredential, match="TEST_EMAIL is unset"):
+        fresh_personas.resolve_credential(p, "email")
+
+
+def test_resolve_cmd_credential(tmp_path, fresh_personas):
+    _write_persona(tmp_path, "u", {
+        "name": "u",
+        "credentials": {"token_cmd": "printf hunter2"},
+    })
+    p = fresh_personas.load_persona("u")
+    assert fresh_personas.resolve_credential(p, "token") == "hunter2"
+
+
+def test_resolve_no_references_raises(tmp_path, fresh_personas):
+    _write_persona(tmp_path, "u", {"name": "u"})
+    p = fresh_personas.load_persona("u")
+    with pytest.raises(fresh_personas.MissingCredential, match="no email_env or email_cmd"):
+        fresh_personas.resolve_credential(p, "email")
