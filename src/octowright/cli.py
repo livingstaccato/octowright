@@ -43,19 +43,26 @@ def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | Non
     from . import runner
     from .pool import BrowserPool
 
-    pool = BrowserPool()
     setup_telemetry()
-    try:
-        result = asyncio.run(
-            runner.run_suite(
+
+    async def _run() -> dict[str, Any]:
+        # Pool + suite + shutdown all share one event loop. Calling asyncio.run
+        # twice creates separate loops and the playwright objects on the pool
+        # can't be torn down by a fresh loop ("Event loop is closed").
+        pool = BrowserPool()
+        try:
+            return await runner.run_suite(
                 macros_dir=macros_dir,
                 kind=kind,
                 tag=tag,
                 out_path=out_path,
                 pool=pool,
             )
-        )
-        asyncio.run(pool.shutdown())
+        finally:
+            await pool.shutdown()
+
+    try:
+        result = asyncio.run(_run())
         click.echo(f"{result['passed']}/{result['total']} passed")
         click.echo(f"report: {result['report_path']}")
         raise SystemExit(0 if result["failed"] == 0 else 1)
