@@ -1,0 +1,90 @@
+' SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+' SPDX-License-Identifier: Apache-2.0
+' SPDX-Comment: Part of octowright.
+
+@startuml component
+title octowright — module layout
+
+skinparam backgroundColor #ffffff
+skinparam defaultFontColor #333333
+skinparam componentBorderColor #d1d5db
+skinparam componentBackgroundColor #f3f4f6
+skinparam packageBorderColor #d1d5db
+skinparam packageBackgroundColor #ffffff
+skinparam arrowColor #2563eb
+skinparam noteBorderColor #d1d5db
+skinparam noteBackgroundColor #f9fafb
+
+package "user surfaces" #eff6ff {
+  [server.py\nFastMCP, 63 tools] as SERVER
+  [cli.py\nclick: serve / test / scenario / persona] as CLI
+}
+
+package "live state" #fef3c7 {
+  [BrowserPool\npool.py] as POOL
+  [BrowserSession\nsession.py] as SESSION
+  [ScenarioPool\nscenarios.py (live)] as SPOOL
+}
+
+package "session helpers (split for size)" #fdf4ff {
+  [session_frames.py] as SF
+  [session_downloads.py] as SD
+  [session_locators.py] as SL
+}
+
+package "domain modules" #ecfccb {
+  [personas.py\nPersona, load, migrate, creds] as PERSONAS
+  [profiles.py\nengine-profile path layer] as PROFILES
+  [scenarios.py\nScenario, Participant, loaders] as SCENARIOS
+  [macros.py\nrecord, save, substitute, run] as MACROS
+  [runner.py\ntest-macro discovery + JUnit] as RUNNER
+  [goldens.py\naria-tree snapshots + diff] as GOLDENS
+  [video.py\nffmpeg frame extraction] as VIDEO
+  [stabilize.py\ndeterminism init script] as STABILIZE
+}
+
+package "infrastructure" #f3f4f6 {
+  [defaults.py\nenv vars + paths] as DEFAULTS
+  [recorder.py\nappend-only JSONL] as RECORDER
+  [export.py\nrecording → playwright script] as EXPORT
+}
+
+cloud "Playwright async API" as PW
+
+' user surfaces drive live state
+CLI --> POOL
+CLI --> SPOOL
+SERVER --> POOL
+SERVER --> SPOOL
+
+' live state composition
+POOL "1" *-- "*" SESSION : owns
+SPOOL "1" o-- "*" SESSION : participants
+SESSION ..> SF
+SESSION ..> SD
+SESSION ..> SL
+
+' domain dependencies
+POOL ..> PERSONAS : auto-migrate on import
+POOL ..> PROFILES : engine_profile_dir
+POOL ..> STABILIZE : init script
+SCENARIOS ..> PERSONAS : default URL / macros / creds
+SCENARIOS ..> MACROS : run_macro per participant
+SCENARIOS ..> POOL : spawn_roster
+RUNNER ..> MACROS
+RUNNER ..> POOL : ephemeral browser per [test]
+SERVER ..> RUNNER
+SERVER ..> GOLDENS
+SERVER ..> VIDEO
+SERVER ..> MACROS
+
+' artifacts
+SESSION ..> RECORDER : every action
+SESSION ..> EXPORT : on demand
+PROFILES --> PERSONAS : delegates path resolution
+
+' playwright
+SESSION --> PW
+POOL --> PW
+
+@enduml

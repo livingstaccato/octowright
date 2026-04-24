@@ -1,0 +1,71 @@
+' SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+' SPDX-License-Identifier: Apache-2.0
+' SPDX-Comment: Part of octowright.
+
+@startuml scenario-lifecycle
+title scenario_start → live → stop
+
+skinparam backgroundColor #ffffff
+skinparam sequenceArrowColor #2563eb
+skinparam sequenceParticipantBorderColor #d1d5db
+skinparam sequenceParticipantBackgroundColor #f3f4f6
+skinparam sequenceLifeLineBorderColor #d1d5db
+skinparam noteBackgroundColor #fef3c7
+skinparam noteBorderColor #d1d5db
+
+actor "MCP / CLI" as USER
+participant "ScenarioPool" as SPOOL
+database "scenarios/<name>.yaml\nor <name>.py" as SPEC
+participant "BrowserPool" as POOL
+collections "BrowserSession × N" as SESS
+participant "macros runner" as MACROS
+collections "Recorder × N\n(per-instance JSONL)" as REC
+
+USER -> SPOOL : scenario_start(name)
+SPOOL -> SPEC : load_scenario(name)
+SPEC --> SPOOL : Scenario(participants, fixtures, teardown)
+
+note right of SPOOL
+  resolve_launch_kwargs per participant:
+    participant override → persona default → fallback
+end note
+
+SPOOL -> POOL : spawn_roster([launch_kwargs, ...])
+POOL -> SESS : launch in parallel\n(asyncio.gather)
+SESS -> REC : record("launch", ...)
+SESS --> POOL : {instance_id, log_path, ...}
+POOL --> SPOOL : {launched, errors}
+
+alt errors non-empty
+  SPOOL -> POOL : close(instance_id) for partials
+  SPOOL --> USER : RuntimeError (partial launch)
+end
+
+SPOOL -> SESS : apply_fixtures (mock_route, dialog_policy)
+SPOOL -> MACROS : run startup_macros per participant
+MACROS -> SESS : navigate / fill / click / ...
+SESS -> REC : record(action, ...)
+
+SPOOL --> USER : LiveScenario(scenario_id, participants[])
+
+note over USER, SESS
+  Browsers stay open. Caller may now drive any participant
+  by instance_id with the regular browser_* tools, or
+  scenario_run_macro to broadcast a macro across all/role-filtered
+  participants, or scenario_tail to stream JSONL events.
+end note
+
+== teardown ==
+
+USER -> SPOOL : scenario_stop(scenario_id)
+alt teardown_macro defined
+  SPOOL -> MACROS : run_macro(teardown) per participant
+  MACROS -> SESS : actions...
+  SESS -> REC : record(...)
+end
+SPOOL -> POOL : close(instance_id) per participant
+POOL -> SESS : context.close() + browser.close()
+SESS -> REC : record("close")
+SPOOL --> USER : {closed, teardown_errors}
+
+@enduml

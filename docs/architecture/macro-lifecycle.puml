@@ -1,0 +1,69 @@
+' SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+' SPDX-License-Identifier: Apache-2.0
+' SPDX-Comment: Part of octowright.
+
+@startuml macro-lifecycle
+title Macro lifecycle — record, save, replay, test
+
+skinparam backgroundColor #ffffff
+skinparam defaultFontColor #333333
+skinparam activityBorderColor #d1d5db
+skinparam activityBackgroundColor #f3f4f6
+skinparam activityDiamondBorderColor #d1d5db
+skinparam activityDiamondBackgroundColor #fef3c7
+skinparam arrowColor #2563eb
+skinparam noteBackgroundColor #f9fafb
+skinparam noteBorderColor #d1d5db
+
+|user|
+start
+:browser_launch + drive interactively;
+:every action recorded as JSONL line\n(recorder.record(...) ⟶ <log>.jsonl);
+
+|saving|
+:macro_save(instance_id, name,\nparameters={"email":"me@x", ...});
+note right
+  parameters are literal values to swap
+  for {{name}} placeholders
+end note
+:strip launch / close / snapshot;
+:write JSON to MACROS_DIR/<slug>.json;
+
+|replay|
+:macro_run(instance_id, name,\nargs={"email":"other@x"});
+:load_macro → substitute {{...}} from args;
+:dispatch each action through BrowserSession\n(navigate, click, fill, expect_*, mock_route, ...);
+if (any action raises?) then (yes)
+  :auto-capture diagnostic_bundle\n(html→disk, console_tail, screenshot, url, title);
+  :raise RuntimeError({macro, failed_at_step,\nfailed_action, original, bundle});
+  stop
+else (no)
+  :return {macro, executed, skipped, args_used};
+endif
+
+|test mode|
+:octowright test [--tag <tag>];
+note right
+  Discovers macros whose **description**
+  starts with [test] or [test:<tag>].
+  Launches an ephemeral browser per macro
+  on about:blank.
+end note
+:run_suite per [test] macro;
+if (run_macro raised?) then (yes)
+  :record failure + duration;
+else (no)
+  :record pass + duration;
+endif
+:write JUnit XML report;
+stop
+
+|scenario test mode|
+start
+:scenario_run_as_test(scenario_id);
+:for each live participant:\nlook up verify[role] → run_macro;
+:write JUnit XML;
+:return {total, passed, failed, results};
+stop
+
+@enduml

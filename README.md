@@ -8,6 +8,10 @@ The existing official Playwright MCP plugin only supports one browser context an
 let you pick the engine per launch. octowright fixes both and adds persistent profiles
 so login state survives across runs.
 
+For the full picture of how the pieces fit together — pool, sessions, personas,
+scenarios, macros, the live-event tail and the test runner — see
+[docs/architecture/](docs/architecture/) (PlantUML sources rendered to SVG).
+
 ## Install
 
 ```bash

@@ -1,0 +1,63 @@
+' SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+' SPDX-License-Identifier: Apache-2.0
+' SPDX-Comment: Part of octowright.
+
+@startuml mcp-tool-surface
+title MCP tool inventory by concern (63 tools)
+
+skinparam backgroundColor #ffffff
+skinparam defaultFontColor #333333
+skinparam packageBorderColor #d1d5db
+skinparam packageBackgroundColor #f9fafb
+skinparam noteBackgroundColor #fef3c7
+skinparam noteBorderColor #d1d5db
+
+package "browser lifecycle" #eff6ff {
+  rectangle "browser_launch\nbrowser_list / list_sessions\nbrowser_close / close_all\nbrowser_navigate" as LIFE
+}
+
+package "input" #ecfccb {
+  rectangle "browser_click\nbrowser_type\nbrowser_fill\nbrowser_press_key\nbrowser_set_input_files" as INPUT
+}
+
+package "introspection (truncated by default)" #fef3c7 {
+  rectangle "browser_evaluate (max_chars / full)\nbrowser_snapshot (selector / max_chars)\nbrowser_console_messages (level / since)\nbrowser_screenshot\nbrowser_recording_path" as INTRO
+}
+
+package "wait + assert" #fdf4ff {
+  rectangle "browser_wait_for\nbrowser_expect_url\nbrowser_expect_text\nbrowser_expect_selector\nbrowser_expect_js" as ASSERT
+}
+
+package "locator-by-aria/text" #fef9c3 {
+  rectangle "browser_click_by\nbrowser_fill_by\nbrowser_get_text_by" as LOC
+}
+
+package "frames + tabs + popups" #f0fdf4 {
+  rectangle "browser_switch_frame / reset_frame / list_frames\npage_list / page_switch / page_close" as FRMTAB
+}
+
+package "network + dialogs + downloads" #fee2e2 {
+  rectangle "browser_mock_route / unmock_route\nbrowser_set_dialog_policy\nbrowser_downloads (after cursor)\nbrowser_wait_for_download" as NET
+}
+
+package "macros + replay" #e0f2fe {
+  rectangle "macro_save / list / run / delete\nmacro_run_sequence\nbrowser_export_script" as MAC
+}
+
+package "personas + profiles" #fdf2f8 {
+  rectangle "persona_list / get / create / delete\nprofile_list / delete\nmigrate_profiles" as PERS
+}
+
+package "scenarios" #f3e8ff {
+  rectangle "scenario_list / start / status / stop\nscenario_run_macro / participants\nscenario_run_as_test\nscenario_tail (cursor stream)\nbrowser_spawn_roster" as SCN
+}
+
+package "goldens + video + trace" #ecfdf5 {
+  rectangle "golden_save / assert / list / delete\nbrowser_video_path / extract_frames\n(trace via browser_launch trace=True)" as ART
+}
+
+package "test runner" #fffbeb {
+  rectangle "run_test_suite (CLI: octowright test)" as RUN
+}
+
+@enduml
