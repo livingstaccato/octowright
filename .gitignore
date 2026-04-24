@@ -8,3 +8,9 @@ dist/
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/
+.coverage
+.coverage.*
+.hypothesis/
+.ci/
+node_modules/
+*.actcache

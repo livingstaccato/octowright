@@ -198,7 +198,7 @@ class ScenarioPool:
             raise KeyError(f"no live scenario with id={scenario_id!r}; known: {list(self._live)}")
         return self._live[scenario_id]
 
-    def list(self) -> list[dict[str, Any]]:
+    def list_live(self) -> list[dict[str, Any]]:
         return [
             {
                 "scenario_id": ls.scenario_id,

@@ -23,7 +23,10 @@ async def switch_frame_impl(
 
     frame: Frame | None = None
     if selector is not None:
-        handle = await page.frame_locator(selector).owner().element_handle()
+        # FrameLocator.owner is a property returning the iframe Locator on Playwright 1.50+;
+        # the parens-form keeps backward compat with older versions but mypy's stubs
+        # describe it as a non-callable Locator. Suppress the false-positive operator error.
+        handle = await page.frame_locator(selector).owner().element_handle()  # type: ignore[operator]
         if handle is None:
             raise RuntimeError(f"no element matches iframe selector {selector!r}")
         frame = await handle.content_frame()
