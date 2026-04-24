@@ -25,9 +25,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # act quirk: catthehacker images put node under /opt/acttoolcache but not on
+      # the $PATH seen by raw `docker exec` post-action invocations. Symlink it into
+      # /usr/local/bin so `docker exec cmd=[node ...]` finds it. No-op on real runners.
+      - name: Ensure node on PATH for post-actions (act only)
+        run: |
+          set -x
+          which node || true
+          ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
+          n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1)
+          echo "Found node: $n"
+          if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
+            ln -sf "$n" /usr/local/bin/node
+            echo "Symlinked $n -> /usr/local/bin/node"
+          fi
+          which node
+          ls -la /usr/local/bin/node || true
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.13"
+          enable-cache: false
       - name: Sync dev deps
         run: uv sync --all-groups
       - name: Ruff check
@@ -40,9 +56,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # act quirk: catthehacker images put node under /opt/acttoolcache but not on
+      # the $PATH seen by raw `docker exec` post-action invocations. Symlink it into
+      # /usr/local/bin so `docker exec cmd=[node ...]` finds it. No-op on real runners.
+      - name: Ensure node on PATH for post-actions (act only)
+        run: |
+          set -x
+          which node || true
+          ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
+          n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1)
+          echo "Found node: $n"
+          if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
+            ln -sf "$n" /usr/local/bin/node
+            echo "Symlinked $n -> /usr/local/bin/node"
+          fi
+          which node
+          ls -la /usr/local/bin/node || true
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.13"
+          enable-cache: false
       - name: Sync dev deps
         run: uv sync --all-groups
       - name: Install Playwright browsers
@@ -59,9 +91,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # act quirk: catthehacker images put node under /opt/acttoolcache but not on
+      # the $PATH seen by raw `docker exec` post-action invocations. Symlink it into
+      # /usr/local/bin so `docker exec cmd=[node ...]` finds it. No-op on real runners.
+      - name: Ensure node on PATH for post-actions (act only)
+        run: |
+          set -x
+          which node || true
+          ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
+          n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1)
+          echo "Found node: $n"
+          if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
+            ln -sf "$n" /usr/local/bin/node
+            echo "Symlinked $n -> /usr/local/bin/node"
+          fi
+          which node
+          ls -la /usr/local/bin/node || true
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.13"
+          enable-cache: false
       - name: Sync
         run: uv sync
       - name: Selftest
