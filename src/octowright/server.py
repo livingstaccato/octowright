@@ -694,8 +694,7 @@ def browser_list_frames(instance_id: str) -> list[dict[str, Any]]:
 @mcp.tool(
     structured_output=False,
     description=(
-        "Return downloads captured by an instance. Pass `after` (a cursor from "
-        "a previous call) for incremental reads."
+        "Return downloads captured by an instance. Pass `after` (a cursor from a previous call) for incremental reads."
     ),
 )
 def browser_downloads(
