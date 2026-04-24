@@ -327,7 +327,9 @@ class _FakeSessionForSequence:
     async def wait_for(self, selector: str | None, text: str | None, timeout_ms: int | None) -> None:
         self.calls.append("wait_for")
 
-    async def diagnostic_bundle(self) -> dict[str, Any]:
+    async def diagnostic_bundle(
+        self, *, screenshot_dir: Any = None, console_tail: int = 25, html_full: bool = False
+    ) -> dict[str, Any]:
         return {"screenshot": None, "console": [], "url": "about:blank"}
 
 
@@ -492,14 +494,22 @@ class _FakeSessionWithDiagnostic:
     async def wait_for(self, selector: str | None, text: str | None, timeout_ms: int | None) -> None:
         pass
 
-    async def diagnostic_bundle(self, *, screenshot_dir: Any = None, console_tail: int = 25) -> dict[str, Any]:
-        return {
+    async def diagnostic_bundle(
+        self, *, screenshot_dir: Any = None, console_tail: int = 25, html_full: bool = False
+    ) -> dict[str, Any]:
+        bundle: dict[str, Any] = {
             "console_tail": [],
             "url": "fake://page",
             "title": "fake",
-            "html": "<html/>",
+            "html_path": "/tmp/fake-fail.html",
+            "html_size": 8,
+            "html_sha256": "abc123",
+            "html_preview": "<html/>",
             "screenshot": None,
         }
+        if html_full:
+            bundle["html"] = "<html/>"
+        return bundle
 
 
 @pytest.mark.anyio
@@ -539,7 +549,10 @@ async def test_run_macro_captures_diagnostic_bundle_on_failure(monkeypatch: pyte
     bundle = payload["bundle"]
     assert "console_tail" in bundle
     assert "url" in bundle
-    assert "html" in bundle
+    assert "html_path" in bundle
+    assert "html_size" in bundle
+    assert "html_sha256" in bundle
+    assert "html_preview" in bundle
     assert "screenshot" in bundle
 
 
@@ -569,7 +582,7 @@ async def test_run_macro_bundle_has_expected_keys(monkeypatch: pytest.MonkeyPatc
     payload = exc_info.value.args[0]
     bundle = payload["bundle"]
 
-    for key in ("console_tail", "url", "html", "screenshot"):
+    for key in ("console_tail", "url", "html_path", "html_size", "html_sha256", "html_preview", "screenshot"):
         assert key in bundle, f"missing key {key!r} in bundle"
 
     assert bundle["screenshot"] is None
