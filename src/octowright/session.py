@@ -10,11 +10,6 @@ from playwright.async_api import Browser, BrowserContext, ConsoleMessage, Page, 
 from .defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from .recorder import Recorder
 
-# NOTE: Dialog handling on popup pages (opened via window.open / target=_blank) is
-# not wired automatically. When _register_popup is called by the other agent's context
-# 'page' listener, a dialog listener on the new page would need to be added there too.
-# For now, dialog auto-handling only applies to the initial page of each session.
-
 
 def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -63,6 +58,7 @@ class BrowserSession:
 
     def _register_popup(self, page: Page) -> None:
         """Called by context's 'page' event. Appends new page and records the event."""
+        from . import pool as _pool
         self.pages.append(page)
         page_index = len(self.pages) - 1
         self.recorder.record("popup_opened", page_index=page_index, url=page.url)
@@ -73,6 +69,7 @@ class BrowserSession:
                 {"level": msg.type, "text": msg.text, "page_index": page_index}
             ),
         )
+        _pool._wire_listeners(self, page)
 
     def list_pages(self) -> list[dict[str, Any]]:
         """Return [{index, url, title, is_active}, ...]. title is None for unloaded pages."""

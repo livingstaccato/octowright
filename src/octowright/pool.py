@@ -71,6 +71,14 @@ def _title_prefix_for(profile: str | None, label: str | None) -> str | None:
     return f"[{tag}] " if tag else None
 
 
+def _wire_listeners(session: "BrowserSession", page: Any) -> None:
+    """Attach per-page listeners (dialog, download) to a page.
+    Called for both the initial page at launch AND any popup page opened mid-session.
+    """
+    page.on("dialog", session._handle_dialog)
+    page.on("download", session._handle_download)
+
+
 class BrowserPool:
     """Owns a single Playwright driver and a dict of active BrowserSession objects.
 
@@ -184,8 +192,7 @@ class BrowserPool:
         if record_video and page.video is not None:
             session._video = page.video
         session.attach_console()
-        page.on("dialog", session._handle_dialog)
-        page.on("download", session._handle_download)
+        _wire_listeners(session, page)
         context.on("page", session._register_popup)
 
         title_prefix = _title_prefix_for(profile, label)

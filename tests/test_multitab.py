@@ -84,10 +84,11 @@ def test_register_popup_attaches_console_listener(tmp_path: Path) -> None:
     popup = _make_page("https://popup.example.com")
     session._register_popup(popup)
 
-    # The mock page should have had .on("console", ...) called.
-    popup.on.assert_called_once()
-    call_args = popup.on.call_args
-    assert call_args[0][0] == "console"
+    # _register_popup now registers console + dialog + download listeners.
+    registered_events = [call[0][0] for call in popup.on.call_args_list]
+    assert "console" in registered_events
+    assert "dialog" in registered_events
+    assert "download" in registered_events
 
 
 # ---------------------------------------------------------------------------
