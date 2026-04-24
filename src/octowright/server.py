@@ -8,6 +8,7 @@ from provide.telemetry import get_logger
 
 from . import goldens as goldens_mod
 from . import macros as macro_mod
+from . import personas as persona_mod
 from . import profiles as profile_mod
 from . import video as video_mod
 from .defaults import DEFAULT_ACTION_TIMEOUT_MS, RECORDINGS_DIR
@@ -584,6 +585,78 @@ async def browser_get_text_by(
         role=role, role_name=role_name, role_exact=role_exact,
         label=label, text=text, test_id=test_id, timeout_ms=timeout_ms,
     )
+
+
+@mcp.tool(structured_output=False, description=(
+    "List all personas, each with their known engines, display name, and last-used timestamp. "
+    "A persona is a named identity (e.g. 'dante') that owns engine-specific browser profiles."
+))
+def persona_list() -> list[dict[str, Any]]:
+    return persona_mod.list_personas()
+
+
+@mcp.tool(structured_output=False, description=(
+    "Return the full profile.yaml for a persona. Credentials are returned as their "
+    "reference entries (e.g. {'email_env': 'DANTE_EMAIL'}), not resolved secrets. "
+    "Raises if the persona doesn't exist."
+))
+def persona_get(name: str) -> dict[str, Any]:
+    p = persona_mod.load_persona(name)
+    return {
+        "name": p.name,
+        "display_name": p.display_name,
+        "default_url": p.default_url,
+        "default_macros": p.default_macros,
+        "credentials": p.credentials,
+        "app": p.app,
+    }
+
+
+@mcp.tool(structured_output=False, description=(
+    "Scaffold a new persona directory with a stub profile.yaml. Does nothing engine-specific; "
+    "browser profiles are created on first browser_launch with this persona."
+))
+def persona_create(
+    name: str,
+    display_name: str | None = None,
+    default_url: str | None = None,
+) -> dict[str, Any]:
+    import yaml as _yaml
+    p_dir = persona_mod.persona_dir(name)
+    p_dir.mkdir(parents=True, exist_ok=True)
+    yaml_path = p_dir / "profile.yaml"
+    if yaml_path.exists():
+        raise RuntimeError(f"persona {name!r} already has a profile.yaml at {yaml_path}")
+    doc: dict[str, Any] = {"name": persona_mod._slug(name)}
+    if display_name:
+        doc["display_name"] = display_name
+    if default_url:
+        doc["default_url"] = default_url
+    yaml_path.write_text(_yaml.safe_dump(doc))
+    return {"created": True, "name": name, "path": str(p_dir)}
+
+
+@mcp.tool(structured_output=False, description=(
+    "Delete an entire persona (metadata + all engine profiles). Refuses if any engine "
+    "profile is currently in use by a live browser."
+))
+def persona_delete(name: str) -> dict[str, Any]:
+    from .profiles import delete_persona
+    for s in pool.list():
+        if s["profile"] == name:
+            raise RuntimeError(
+                f"persona {name!r} is in use by live instance {s['instance_id']}; close it first"
+            )
+    path = delete_persona(name)
+    log.info("octowright.persona.deleted", name=name, path=str(path))
+    return {"deleted": True, "name": name, "path": str(path)}
+
+
+@mcp.tool(structured_output=False, description=(
+    "Run the one-shot legacy profile-layout migration. Idempotent. Returns counts."
+))
+def migrate_profiles() -> dict[str, Any]:
+    return persona_mod.migrate_legacy_layout()
 
 
 def registered_tool_names() -> list[str]:
