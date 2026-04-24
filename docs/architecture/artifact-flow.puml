@@ -1,0 +1,81 @@
+' SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+' SPDX-License-Identifier: Apache-2.0
+' SPDX-Comment: Part of octowright.
+
+@startuml artifact-flow
+title Artifacts produced during a session
+
+skinparam backgroundColor #ffffff
+skinparam defaultFontColor #333333
+skinparam componentBorderColor #d1d5db
+skinparam componentBackgroundColor #f3f4f6
+skinparam folderBackgroundColor #ecfccb
+skinparam folderBorderColor #d1d5db
+skinparam fileBackgroundColor #fef3c7
+skinparam fileBorderColor #d1d5db
+skinparam arrowColor #2563eb
+skinparam noteBackgroundColor #f9fafb
+skinparam noteBorderColor #d1d5db
+
+[BrowserSession] as SESSION
+
+folder "RECORDINGS_DIR/" as REC {
+  file "<ts>-<kind>-<id>[-label].jsonl\nappend-only action log" as JSONL
+  folder "videos/<uuid8>/" as VDIR {
+    file "<hash>.webm\n(only if record_video=True)" as WEBM
+  }
+  folder "downloads/<instance_id>/" as DLDIR {
+    file "###-<filename>\n(per page.on('download'))" as DLFILES
+  }
+  file "<id>-fail-<ts>.png\n(diagnostic_bundle screenshot)" as FAILPNG
+  file "<id>-fail-<ts>.html\n(diagnostic_bundle HTML body)" as FAILHTML
+  file "<log>.trace.zip\n(if trace=True;\nshow with `npx playwright show-trace`)" as TRACEZIP
+}
+
+folder "MACROS_DIR/" as MAC {
+  file "<slug>.json\n(macro body + parameters)" as MACFILE
+}
+
+folder "GOLDENS_DIR/" as GOLD {
+  file "<slug>.json\n(aria-tree baseline + url)" as GOLDFILE
+}
+
+folder "SCENARIOS_DIR/" as SCN {
+  file "<name>.yaml or .py\n(declarative or programmatic)" as SCNFILE
+}
+
+cloud "ffmpeg" as FFMPEG
+file "frame-####.png\n(extracted on demand)" as FRAMES
+file "octowright-report-<ts>.xml\n(JUnit XML)" as JUNIT
+
+SESSION --> JSONL : every recorder.record(...)
+SESSION ..> WEBM : Playwright record_video_dir
+SESSION ..> DLFILES : page.on('download')
+SESSION ..> FAILPNG : on macro_run failure
+SESSION ..> FAILHTML : on macro_run failure (≥0.4 KB preview inline)
+SESSION ..> TRACEZIP : on context.tracing.stop()
+
+JSONL ..> MACFILE : macro_save snapshots a recording
+MACFILE ..> SESSION : macro_run replays into a session
+
+SESSION --> GOLDFILE : golden_save (aria_snapshot)
+GOLDFILE ..> SESSION : golden_assert (diff_trees)
+
+SCNFILE ..> SESSION : scenario_start / verify / fixtures
+
+WEBM --> FFMPEG
+FFMPEG --> FRAMES : browser_extract_frames
+
+[runner.py / scenario_run_as_test] ..> JUNIT : pass/fail per [test] or per role
+
+note right of REC
+  Default: ./recordings/ in repo (gitignored).
+  OCTOWRIGHT_RECORDINGS overrides.
+end note
+
+note right of MAC
+  Default: ~/.config/undef/macros/.
+  OCTOWRIGHT_MACROS_DIR overrides.
+end note
+
+@enduml

@@ -19,6 +19,9 @@ lint: ## Ruff lint, ruff format check, mypy, codespell, SPDX headers
 spdx-fix: ## Normalize SPDX headers in source files
 	uv run --active python scripts/normalize_spdx_headers.py
 
+diagrams: ## Render docs/architecture/*.puml to SVG (requires `plantuml`)
+	bash scripts/render_diagrams.sh docs/architecture
+
 format: ## Apply ruff format + ruff --fix
 	uv run --active ruff format .
 	uv run --active ruff check --fix .
