@@ -1,70 +1,62 @@
 from __future__ import annotations
 
-import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import personas as _personas
 from .defaults import PROFILES_DIR, SUPPORTED_KINDS
-
-_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _slug(name: str) -> str:
-    cleaned = _SLUG_RE.sub("-", name.strip())
-    cleaned = cleaned.strip("-.")
-    if not cleaned:
-        raise ValueError(f"profile name {name!r} produced an empty slug")
-    return cleaned
 
 
 def profile_dir(kind: str, name: str) -> Path:
-    if kind not in SUPPORTED_KINDS:
-        raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {kind!r}")
-    return PROFILES_DIR / kind / _slug(name)
-
-
-def _dir_size(path: Path) -> int:
-    total = 0
-    for p in path.rglob("*"):
-        if p.is_file():
-            total += p.stat().st_size
-    return total
+    """Engine-profile directory for (kind, persona). Public name preserved;
+    internally routes through personas.engine_profile_dir."""
+    return _personas.engine_profile_dir(persona=name, kind=kind)
 
 
 def list_profiles(kind: str | None = None) -> list[dict[str, Any]]:
+    """List all engine profiles. Each entry: {kind, name, path, size_bytes, mtime, last_used}.
+    `name` is the persona name."""
     if not PROFILES_DIR.exists():
         return []
     kinds = [kind] if kind else list(SUPPORTED_KINDS)
     out: list[dict[str, Any]] = []
-    for k in kinds:
-        root = PROFILES_DIR / k
-        if not root.is_dir():
+    for persona_entry in PROFILES_DIR.iterdir():
+        if not persona_entry.is_dir():
             continue
-        for entry in root.iterdir():
-            if not entry.is_dir():
+        for k in kinds:
+            engine_dir = persona_entry / k
+            if not engine_dir.is_dir():
                 continue
-            stat = entry.stat()
-            out.append(
-                {
-                    "kind": k,
-                    "name": entry.name,
-                    "path": str(entry),
-                    "size_bytes": _dir_size(entry),
-                    "mtime": stat.st_mtime,
-                    "last_used": datetime.fromtimestamp(stat.st_mtime, UTC)
-                    .isoformat()
-                    .replace("+00:00", "Z"),
-                }
-            )
+            stat = engine_dir.stat()
+            size = sum(f.stat().st_size for f in engine_dir.rglob("*") if f.is_file())
+            out.append({
+                "kind": k,
+                "name": persona_entry.name,
+                "path": str(engine_dir),
+                "size_bytes": size,
+                "mtime": stat.st_mtime,
+                "last_used": datetime.fromtimestamp(stat.st_mtime, UTC)
+                    .isoformat().replace("+00:00", "Z"),
+            })
     out.sort(key=lambda p: p["mtime"], reverse=True)
     return out
 
 
 def delete_profile(kind: str, name: str) -> Path:
+    """Delete a single engine-profile directory. Raises FileNotFoundError."""
     target = profile_dir(kind, name)
     if not target.exists():
-        raise FileNotFoundError(f"no profile at {target}")
+        raise FileNotFoundError(f"no engine profile at {target}")
+    shutil.rmtree(target)
+    return target
+
+
+def delete_persona(name: str) -> Path:
+    """Delete an entire persona directory (all engine profiles + metadata)."""
+    target = _personas.persona_dir(name)
+    if not target.exists():
+        raise FileNotFoundError(f"no persona at {target}")
     shutil.rmtree(target)
     return target
