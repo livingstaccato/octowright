@@ -106,6 +106,9 @@ def make_leader_info(http_host: str, http_port: int) -> LeaderInfo:
         pid=os.getpid(),
         http_host=http_host,
         http_port=http_port,
-        mcp_url=f"http://{http_host}:{http_port}/mcp",
+        # Trailing slash matters: Starlette's Mount strips ``/mcp`` and routes
+        # the remainder. The streamable-http app's inner route is ``/``, so the
+        # client must POST to ``/mcp/`` (a bare ``/mcp`` returns 405).
+        mcp_url=f"http://{http_host}:{http_port}/mcp/",
         started_at=time.time(),
     )
