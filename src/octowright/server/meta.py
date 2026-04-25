@@ -81,7 +81,7 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
     Reports `running: false` with an `error` field when the HTTP sidecar
     failed to bind (e.g., port collision, sidecar not started).
     """
-    from .. import http_server as _http
+    from .. import http as _http
 
     status = _http.runtime_status()
     base_url = _http.runtime_url()
