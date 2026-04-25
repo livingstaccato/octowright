@@ -100,6 +100,24 @@ def is_stale(info: LeaderInfo) -> bool:
     return not pid_is_alive(info.pid)
 
 
+async def probe_http_alive(info: LeaderInfo, timeout: float = 2.0) -> bool:
+    """Return True iff the leader's HTTP debugger answers ``/api/health`` quickly.
+
+    A leader can have a live PID but a wedged event loop — the lockfile alone
+    can't detect that. This is the second half of liveness; callers should
+    combine it with :func:`is_stale` (PID check) to decide whether to take over.
+    """
+    import httpx
+
+    url = f"http://{info.http_host}:{info.http_port}/api/health"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(url)
+            return response.status_code == 200
+    except (httpx.HTTPError, OSError):
+        return False
+
+
 def make_leader_info(http_host: str, http_port: int) -> LeaderInfo:
     """Build the lockfile record for ``this`` process becoming leader."""
     return LeaderInfo(

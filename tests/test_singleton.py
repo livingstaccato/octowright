@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from octowright import singleton
 
 
@@ -80,6 +82,51 @@ def test_is_stale_when_pid_alive() -> None:
         started_at=0.0,
     )
     assert singleton.is_stale(info) is False
+
+
+@pytest.mark.asyncio
+async def test_probe_http_alive_against_running_starlette() -> None:
+    """A running uvicorn answering /api/health is reported as alive."""
+    import asyncio
+
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def health(_request):  # type: ignore[no-untyped-def]
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/api/health", health)])
+    config = uvicorn.Config(app, host="127.0.0.1", port=18768, log_level="warning", loop="asyncio")
+    server = uvicorn.Server(config)
+    server_task = asyncio.create_task(server.serve())
+    await asyncio.sleep(0.5)
+    try:
+        info = singleton.LeaderInfo(
+            pid=os.getpid(),
+            http_host="127.0.0.1",
+            http_port=18768,
+            mcp_url="http://127.0.0.1:18768/mcp/",
+            started_at=0.0,
+        )
+        assert await singleton.probe_http_alive(info, timeout=2.0) is True
+    finally:
+        server.should_exit = True
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_probe_http_alive_against_dead_port() -> None:
+    """A port with nothing listening is reported as dead within the timeout."""
+    info = singleton.LeaderInfo(
+        pid=os.getpid(),
+        http_host="127.0.0.1",
+        http_port=1,  # privileged + nothing listening = guaranteed connect refused
+        mcp_url="http://127.0.0.1:1/mcp/",
+        started_at=0.0,
+    )
+    assert await singleton.probe_http_alive(info, timeout=1.0) is False
 
 
 def test_write_lock_atomically_replaces_existing(tmp_path: Path) -> None:
