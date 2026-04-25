@@ -26,6 +26,7 @@ GET  /api/sessions/{id}/video                  → video bytes (HTTP range suppo
 GET  /api/sessions/{id}/trace                  → application/zip download. 404 if missing.
 GET  /api/sessions/{id}/screenshots            → {"screenshots": [{"path": str, "filename": str, "ts": float, "size_bytes": int}, ...]}
 GET  /api/sessions/{id}/screenshots/{filename} → image/png bytes
+GET  /api/sessions/{id}/screenshot/now?format=png|jpeg&quality=N&full_page=bool → image/png|jpeg bytes (live page only). Defaults: format=png, quality=80 (jpeg only), full_page=false. Cache-Control: no-store. 404 closed/unknown, 503 if page.screenshot() raises.
 GET  /api/scenarios                            → {"live": [LiveScenario, ...]}
 GET  /api/personas                             → [PersonaSummary, ...]
 GET  /api/macros                               → [MacroSummary, ...]

@@ -92,6 +92,45 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
     page.on("download", session._handle_download)
 
 
+def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
+    """When the underlying context is closed externally (OS close button, crash,
+    persistent-context flush, etc.), drop the session from the pool registry so
+    `pool.list_sessions()` and dashboard `/api/sessions` stop reporting it as live.
+
+    Idempotent — safe if the session was already explicitly closed via
+    `pool.close(id)`. In the explicit-close path, ``pool.close`` removes the
+    entry from ``_sessions`` BEFORE the underlying ``context.close()`` fires
+    its event, so the ``pop`` call below returns ``None`` and this handler
+    bails silently (no double-log, no double-close on the recorder).
+    """
+    instance_id = session.instance_id
+
+    def _evict(*_: Any) -> None:
+        existing = pool._sessions.pop(instance_id, None)
+        if existing is None:
+            # Already removed by an explicit pool.close — that path logs
+            # "octowright.browser.closed" itself. Stay silent.
+            return
+        log.info(
+            "octowright.browser.evicted_externally",
+            instance_id=instance_id,
+            kind=session.kind,
+            profile=session.profile,
+            log_path=str(session.log_path),
+        )
+        # Best-effort: record an external-close marker in the recording so
+        # post-mortem inspection shows the session ended unexpectedly. Both
+        # calls may raise if the recorder was already closed by an in-flight
+        # session.close() — swallow it.
+        try:
+            session.recorder.record("close", reason="external")
+            session.recorder.close()
+        except Exception:
+            pass
+
+    session.context.on("close", _evict)
+
+
 class BrowserPool:
     """Owns a single Playwright driver and a dict of active BrowserSession objects.
 
@@ -206,6 +245,7 @@ class BrowserPool:
             session._video = page.video
         session.attach_console()
         _wire_listeners(session, page)
+        _wire_close_evictor(self, session)
         context.on("page", session._register_popup)
 
         title_prefix = _title_prefix_for(profile, label)
@@ -274,8 +314,13 @@ class BrowserPool:
 
     async def close(self, instance_id: str) -> dict[str, Any]:
         session = self.get(instance_id)
-        await session.close()
+        # Remove from the registry BEFORE awaiting session.close() — that call
+        # triggers context.close() which fires the close event our external
+        # evictor listens for. By the time the evictor runs, _sessions.pop()
+        # will return None and the evictor will silently no-op, leaving us as
+        # the sole logger of an explicit close.
         del self._sessions[instance_id]
+        await session.close()
         log.info(
             "octowright.browser.closed",
             instance_id=instance_id,

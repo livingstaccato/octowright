@@ -70,6 +70,21 @@ describe("buildLayout", () => {
     expect(root.querySelector('[data-testid="tab-downloads"]')).not.toBeNull();
     expect(root.querySelector('[data-testid="tab-screenshots"]')).not.toBeNull();
   });
+
+  it("creates a live-preview slot above the timeline", () => {
+    const refs = buildLayout(root);
+    expect(refs.livePreviewSlot).toBeDefined();
+    expect(refs.livePreviewSlot.id).toBe("live-preview-panel");
+    // Slot must come before the timeline within the right column.
+    const right = root.querySelector('[data-testid="session-right"]');
+    expect(right).not.toBeNull();
+    const children = Array.from(right?.children ?? []);
+    const previewIdx = children.indexOf(refs.livePreviewSlot);
+    const timelineIdx = children.indexOf(refs.timeline);
+    expect(previewIdx).toBeGreaterThanOrEqual(0);
+    expect(timelineIdx).toBeGreaterThanOrEqual(0);
+    expect(previewIdx).toBeLessThan(timelineIdx);
+  });
 });
 
 describe("setActiveTab", () => {
