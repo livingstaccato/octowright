@@ -73,6 +73,51 @@ profiles. **Personas** are profiles with metadata (display name, default URL,
 credential references); **scenarios** are pre-declared groups of personas you can
 spin up with one call. Both are covered later.
 
+## Concepts: how the pieces relate
+
+Four layers, each building on the one below:
+
+**1. Browser.** A single live Playwright browser — one engine (chromium /
+firefox / webkit), one window. Identified by an `instance_id`. Every action you
+run against it gets appended to a JSONL recording, and a separate
+`BrowserContext` gives it its own cookie jar (so seven parallel Discord tabs
+never share auth, even when they all run on WebKit).
+
+**2. Profile.** A directory on disk (`~/.config/undef/profiles/<persona>/<kind>/`)
+that stores cookies, localStorage, IndexedDB, and service-worker state
+between browser runs. When you pass `profile=dante` to `browser_launch`, the
+browser uses a **persistent context** pointed at that directory — close the
+browser, re-launch tomorrow, and you're still logged in. Profiles are scoped
+per engine; dante on WebKit and dante on Firefox are two distinct profile
+dirs under the same persona.
+
+**3. Persona.** A *named identity* that owns profiles across one or more
+engines, plus metadata: display name, `default_url`, `default_macros` to run
+at launch, `credentials` (references to env vars or shell commands —
+secrets themselves are never stored on disk), and an `app` dict for
+free-form domain metadata. Think of a persona as "dante — my Discord power
+user across all three engines", and a profile as one engine-specific piece
+of that identity. You launch a persona with `browser_launch persona=dante`;
+the resolver (`browser_suggest_for_url`) works out which persona to reuse
+when the URL is ambiguous. See the [Personas](#personas--identity-layer-over-engine-profiles)
+section for the full `profile.yaml` shape.
+
+**4. Scenario.** A *pre-declared group of personas to launch together*, each
+with a `role` (`player`, `monitor`, `spectator`). Declared in
+`~/.config/undef/scenarios/<name>.yaml` (or a Python `build()` function for
+dynamic rosters). `scenario_start name=discord-raid` launches all seven
+participants in parallel, applies shared fixtures (dialog policy, mock
+routes), runs each participant's startup macros. You can then broadcast a
+macro across all participants (`scenario_run_macro`), role-filter
+(`role=player`), or drive a single participant by its `instance_id`. See
+the [Scenarios](#scenarios--coordinated-multi-browser-orchestration)
+section for the full spec shape.
+
+**When to reach for which.** A single browser for one-shot exploration. A
+named profile when you want login state to survive. A persona when that
+identity is worth metadata and credential references. A scenario when you
+need N coordinated browsers as a single unit.
+
 ## Tools
 
 Every mutating tool takes an `instance_id` returned from `browser_launch`. Each call
@@ -102,6 +147,7 @@ appends a record to that instance's JSONL log.
 | `persona_get` | Full profile.yaml for a persona (with credential references). |
 | `persona_create` | Scaffold a new persona + stub profile.yaml. |
 | `persona_delete` | Delete a persona (all engines + metadata); refuses if live. |
+| `persona_credentials_check` | Pre-flight: resolve every credential reference without launching a browser. |
 | `migrate_profiles` | One-shot: migrate legacy `profiles/<kind>/<name>/` layout. |
 | `scenario_list` | List scenario specs on disk. |
 | `scenario_start` | Start a scenario; browsers stay open. |
@@ -184,8 +230,17 @@ app:
   role: player
 ```
 
-MCP tools: `persona_list` / `persona_get` / `persona_create` / `persona_delete`.
+MCP tools: `persona_list` / `persona_get` / `persona_create` / `persona_delete` /
+`persona_credentials_check`.
 CLI: `octowright persona list|show|create|delete`.
+
+**Credentials pre-flight.** Before launching a scenario whose startup macros
+need logins, call `persona_credentials_check name=dante` to verify every
+`*_env` / `*_cmd` reference actually resolves. The report lists each
+credential, its source (env var or shell command) and the reference itself,
+plus per-field `ok`/`error` — the resolved secret is never included. Use
+this to avoid the classic "logged in 6 of 7 windows, then discovered the
+env var was unset on #7" failure mode.
 
 Legacy `profiles/<kind>/<name>/` layouts are auto-migrated on first use; or run
 `octowright migrate-profiles` to force the migration.
