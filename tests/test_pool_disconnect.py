@@ -12,7 +12,16 @@ crash, etc.), the pool used to never notice — the session stayed in
 been closed".
 
 These tests stub Playwright with the minimum surface needed to exercise the
-new `_wire_close_evictor` hook and the reordered `pool.close()` path.
+new `_wire_close_evictor` hook (which now wires THREE signals: context.close,
+browser.disconnected, and per-page page.close) and the reordered
+`pool.close()` path.
+
+NOTE on real-world coverage: these tests synthesise the close events directly
+through stubs. They CANNOT prove that real Playwright actually fires
+``browser.on("disconnected")`` when the user clicks the OS close button on
+the last window — that requires manual verification by launching a headed
+browser and clicking the red dot. The point of wiring all three signals is
+that whichever Playwright actually fires first wins.
 """
 
 from __future__ import annotations
@@ -60,6 +69,18 @@ class _FakePage(_FakeRequestEvent):
         self.keyboard = MagicMock()
         self.screenshot = AsyncMock(return_value=None)
         self.close = AsyncMock(return_value=None)
+        self._closed = False
+        # Stub frame for framenavigated tests in the dedicated test module.
+        self.main_frame = MagicMock()
+        self.main_frame.url = "about:blank"
+
+    def is_closed(self) -> bool:
+        return self._closed
+
+    def mark_closed(self) -> None:
+        """Test helper: flip the is_closed() return value and fire 'close'."""
+        self._closed = True
+        self.fire("close")
 
 
 class _FakeContext(_FakeRequestEvent):
@@ -78,8 +99,12 @@ class _FakeContext(_FakeRequestEvent):
         return page
 
 
-class _FakeBrowser:
+class _FakeBrowser(_FakeRequestEvent):
+    """Real Playwright Browser objects support ``on('disconnected', ...)`` —
+    the stub mirrors that so the new evictor signal can be exercised."""
+
     def __init__(self) -> None:
+        super().__init__()
         self.close = AsyncMock(return_value=None)
 
     async def new_context(self, **_: Any) -> _FakeContext:
@@ -125,6 +150,18 @@ def _close_handlers(session: Any) -> list[Any]:
     return session.context.handlers.get("close", [])
 
 
+def _disconnect_handlers(session: Any) -> list[Any]:
+    """Return all callbacks registered via browser.on('disconnected', ...)."""
+    if session.browser is None:
+        return []
+    return session.browser.handlers.get("disconnected", [])
+
+
+def _page_close_handlers(page: Any) -> list[Any]:
+    """Return all callbacks registered via page.on('close', ...)."""
+    return page.handlers.get("close", [])
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -160,6 +197,132 @@ async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, ca
     assert iid not in pool._sessions
     messages = [r.getMessage() for r in caplog.records]
     assert any("evicted_externally" in m for m in messages), messages
+
+
+@pytest.mark.anyio
+async def test_browser_disconnected_evicts_session(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When the underlying browser process dies, Playwright fires
+    ``browser.on('disconnected', ...)`` — that signal must also evict."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+
+    result = await pool.launch(
+        kind="chromium",
+        url="https://example.com",
+        headed=False,
+        label="disc",
+        viewport_w=None,
+        viewport_h=None,
+    )
+    iid = result["instance_id"]
+    session = pool._sessions[iid]
+
+    handlers = _disconnect_handlers(session)
+    assert handlers, "expected browser.on('disconnected') handler for ephemeral browser"
+
+    with caplog.at_level(logging.INFO):
+        for cb in handlers:
+            cb()
+
+    assert iid not in pool._sessions
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("evicted_externally" in m for m in messages), messages
+
+
+@pytest.mark.anyio
+async def test_all_pages_closed_evicts_session(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If every page on the session reports is_closed() True, that's a strong
+    signal the user shut everything — evict."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+
+    result = await pool.launch(
+        kind="chromium",
+        url="https://example.com",
+        headed=False,
+        label="pages",
+        viewport_w=None,
+        viewport_h=None,
+    )
+    iid = result["instance_id"]
+    session = pool._sessions[iid]
+
+    page = session.pages[0]
+    handlers = _page_close_handlers(page)
+    assert handlers, "expected page.on('close') handler installed by _wire_listeners"
+
+    with caplog.at_level(logging.INFO):
+        page.mark_closed()  # flips is_closed() True and fires the close event
+
+    assert iid not in pool._sessions
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("evicted_externally" in m for m in messages), messages
+
+
+@pytest.mark.anyio
+async def test_one_page_close_with_survivor_does_not_evict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If a popup closes but the main page stays open, the session must NOT
+    be evicted (otherwise dismissing a popup would nuke the whole instance)."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+
+    result = await pool.launch(
+        kind="chromium",
+        url="https://example.com",
+        headed=False,
+        label="pop",
+        viewport_w=None,
+        viewport_h=None,
+    )
+    iid = result["instance_id"]
+    session = pool._sessions[iid]
+
+    # Simulate a popup being registered.
+    popup = _FakePage()
+    session._register_popup(popup)
+    assert popup in session.pages
+
+    # Close just the popup. The main page is still open.
+    popup.mark_closed()
+
+    assert iid in pool._sessions, "main page is still alive, session must survive"
+
+
+@pytest.mark.anyio
+async def test_multiple_signals_only_evict_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Real Playwright might fire context.close AND browser.disconnected for
+    the same teardown. The eviction log line should appear at most once."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+
+    result = await pool.launch(
+        kind="chromium",
+        url="https://example.com",
+        headed=False,
+        label="dup",
+        viewport_w=None,
+        viewport_h=None,
+    )
+    iid = result["instance_id"]
+    session = pool._sessions[iid]
+
+    with caplog.at_level(logging.INFO):
+        # Fire all three signals, in arbitrary order.
+        for cb in _close_handlers(session):
+            cb()
+        for cb in _disconnect_handlers(session):
+            cb()
+        session.pages[0].mark_closed()
+
+    assert iid not in pool._sessions
+    evictions = [r for r in caplog.records if "evicted_externally" in r.getMessage()]
+    assert len(evictions) == 1, f"expected exactly one eviction log; got {len(evictions)}"
 
 
 @pytest.mark.anyio
@@ -270,3 +433,30 @@ async def test_external_close_one_of_two_keeps_survivor(monkeypatch: pytest.Monk
 
     listed = {row["instance_id"] for row in pool.list_sessions()}
     assert listed == {iid_b}
+
+
+@pytest.mark.anyio
+async def test_persistent_context_has_no_browser_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """For persistent contexts the Browser handle is None — wire only the
+    context.close + page.close signals; do NOT crash trying to reach for
+    ``session.browser.on``."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+
+    result = await pool.launch(
+        kind="chromium",
+        url="https://example.com",
+        headed=False,
+        label="persist",
+        viewport_w=None,
+        viewport_h=None,
+        profile="some-profile",
+    )
+    iid = result["instance_id"]
+    session = pool._sessions[iid]
+
+    assert session.browser is None
+    # Context close still works.
+    for cb in _close_handlers(session):
+        cb()
+    assert iid not in pool._sessions
