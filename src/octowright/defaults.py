@@ -58,3 +58,10 @@ HTTP_HOST = os.environ.get("OCTOWRIGHT_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("OCTOWRIGHT_HTTP_PORT", "8765"))
 # When the configured port is in use, try this many higher ports before giving up.
 HTTP_PORT_RETRIES = 5
+
+# Idle-watchdog: once at least one browser/scenario has existed and the pool then
+# sits empty for this many seconds, `octowright serve` exits on its own. Override
+# with --idle-grace or --keep-alive to disable. The poll interval below controls
+# how often the watchdog samples the pool — keep it short so shutdown is snappy.
+IDLE_GRACE_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_GRACE", "30"))
+IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
