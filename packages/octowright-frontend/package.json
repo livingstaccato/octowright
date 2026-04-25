@@ -1,0 +1,20 @@
+{
+  "name": "octowright-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && cp -r static/* ../../src/octowright/server/frontend/",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint": "biome lint src/",
+    "fix": "biome check --write --unsafe src/"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.12",
+    "@vitest/coverage-v8": "4.1.4",
+    "jsdom": "29.0.2",
+    "typescript": "6.0.2",
+    "vitest": "4.1.4"
+  }
+}
