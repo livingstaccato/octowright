@@ -180,6 +180,7 @@ _BADGE_SCRIPT = r"""
     if (window.top !== window.self) return;
     const TAG = __TAG__;
     const COLOR = __COLOR__;
+    const POS = __POS__;
     const ID = "__octowright_badge__";
     const inject = () => {
         if (!document.body) return;
@@ -187,14 +188,18 @@ _BADGE_SCRIPT = r"""
         const div = document.createElement("div");
         div.id = ID;
         div.textContent = TAG;
-        Object.assign(div.style, {
-            position: "fixed", top: "8px", right: "8px",
+        const styles = {
+            position: "fixed",
             zIndex: "2147483647", padding: "4px 10px",
             background: COLOR, color: "white",
             font: "bold 12px ui-monospace, Menlo, monospace",
-            borderRadius: "4px", boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+            borderRadius: "4px", boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
+            textShadow: "0 0 2px rgba(0,0,0,0.7)",
             pointerEvents: "none", userSelect: "none",
-        });
+        };
+        styles[POS.vertical] = "8px";
+        styles[POS.horizontal] = "8px";
+        Object.assign(div.style, styles);
         document.body.appendChild(div);
     };
     inject();
@@ -208,17 +213,32 @@ _BADGE_SCRIPT = r"""
 """
 
 
-def _badge_color_for(seed: str) -> str:
-    """Return a stable HSL color string for the given seed.
+# Badge corner positions, mapped to (vertical-css-prop, horizontal-css-prop).
+# Used by _BADGE_SCRIPT to decide which two CSS edges to anchor to.
+_BADGE_POSITIONS: dict[str, dict[str, str]] = {
+    "top-left": {"vertical": "top", "horizontal": "left"},
+    "top-right": {"vertical": "top", "horizontal": "right"},
+    "bottom-left": {"vertical": "bottom", "horizontal": "left"},
+    "bottom-right": {"vertical": "bottom", "horizontal": "right"},
+}
+_BADGE_POSITION_DEFAULT = "bottom-right"
 
-    Same seed always produces the same hue, so re-launching `disc-1` always
-    gets the same badge color across sessions — useful as a visual anchor.
+
+_BADGE_ALPHA = 0.7  # translucent so page content shows through; raise for opacity
+
+
+def _badge_color_for(seed: str) -> str:
+    """Return a stable, translucent HSL color string for the given seed.
+
+    Same seed always produces the same hue. Alpha is ``_BADGE_ALPHA`` so the
+    page underneath remains slightly visible; the white text gets a black
+    text-shadow in the JS for legibility against any backdrop.
     """
     import hashlib
 
     digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
     hue = int(digest[:6], 16) % 360
-    return f"hsl({hue}, 70%, 45%)"
+    return f"hsla({hue}, 70%, 45%, {_BADGE_ALPHA})"
 
 
 def _badge_text_for(
@@ -442,10 +462,13 @@ class BrowserPool:
         record_video: bool = False,
         trace: bool = False,
         badge: bool = True,
+        badge_position: str = _BADGE_POSITION_DEFAULT,
         tile: bool = False,
     ) -> dict[str, Any]:
         if kind not in SUPPORTED_KINDS:
             raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {kind!r}")
+        if badge_position not in _BADGE_POSITIONS:
+            raise ValueError(f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {badge_position!r}")
 
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
@@ -563,11 +586,14 @@ class BrowserPool:
             await context.add_init_script(script=script)
         if badge:
             badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji_override, kind=kind)
-            # Color seed uses the bare tag (no emoji) so the hash stays stable
-            # whether or not the user overrides the emoji on the persona.
-            color_seed = (profile or label or instance_id[:6]) + kind
-            badge_script = _BADGE_SCRIPT.replace("__TAG__", json.dumps(badge_text)).replace(
-                "__COLOR__", json.dumps(_badge_color_for(color_seed))
+            # Color seed is persona-stable: identical across engines so the
+            # same persona launched in chromium + firefox + webkit shares one
+            # color. Engine differentiation rests on the engine emoji.
+            color_seed = profile or label or instance_id[:6]
+            badge_script = (
+                _BADGE_SCRIPT.replace("__TAG__", json.dumps(badge_text))
+                .replace("__COLOR__", json.dumps(_badge_color_for(color_seed)))
+                .replace("__POS__", json.dumps(_BADGE_POSITIONS[badge_position]))
             )
             await context.add_init_script(script=badge_script)
         if stabilize:
@@ -683,6 +709,7 @@ class BrowserPool:
                 stabilize=spec.get("stabilize", False),
                 trace=spec.get("trace", False),
                 badge=spec.get("badge", True),
+                badge_position=spec.get("badge_position", _BADGE_POSITION_DEFAULT),
                 tile=spec.get("tile", False),
             )
 
