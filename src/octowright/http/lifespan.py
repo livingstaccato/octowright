@@ -14,6 +14,7 @@ server keeps running and the dashboard tool reports the bind error.
 from __future__ import annotations
 
 import socket
+from collections.abc import Callable
 
 from ..defaults import HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES
 from . import state
@@ -45,12 +46,17 @@ async def serve_app(
     host: str = HTTP_HOST,
     port: int = HTTP_PORT,
     retries: int = HTTP_PORT_RETRIES,
+    mcp_leader: bool = False,
+    on_bound: Callable[[str, int], None] | None = None,
 ) -> None:
     """Run uvicorn in the current event loop until cancelled.
 
     Designed for `asyncio.gather(mcp_task, http_task)` in `cli.py serve`. If
     the preferred port is busy, walks up to ``retries`` ports before giving
     up. On total failure, logs and returns — the MCP server keeps running.
+
+    When ``mcp_leader`` is True, the app also exposes FastMCP's streamable-HTTP
+    transport at ``/mcp`` so follower octowright instances can bridge to it.
     """
     bound = _pick_port(host, port, retries)
     if bound is None:
@@ -61,7 +67,7 @@ async def serve_app(
     import uvicorn
 
     config = uvicorn.Config(
-        app=build_app(),
+        app=build_app(mcp_leader=mcp_leader),
         host=host,
         port=bound,
         log_level="warning",
@@ -74,6 +80,8 @@ async def serve_app(
     state._RUNTIME_PORT = bound
     state._RUNTIME_ERROR = None
     state.log.info("octowright.http.listening", host=host, port=bound)
+    if on_bound is not None:
+        on_bound(host, bound)
     try:
         await server.serve()
     finally:
