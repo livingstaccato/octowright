@@ -112,5 +112,7 @@ module = ["mcp.*", "provide.telemetry.*", "yaml"]
 ignore_missing_imports = true
 
 [tool.codespell]
-skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock"
-ignore-words-list = "nd,strat"
+skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,packages/*/coverage,packages/*/dist"
+# JS variable shorthands that codespell mistakes for typos:
+# `optionel` = HTML <option> elements; `ths` = HTML <th> elements (table headers)
+ignore-words-list = "nd,strat,optionel,ths"

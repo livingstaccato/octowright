@@ -11,7 +11,16 @@
     <a class="topbar__back" href="/">&larr; dashboard</a>
     <h1 class="topbar__title">session debugger</h1>
   </header>
-  <main id="app" class="session-shell"></main>
+  <main id="app" class="session-shell">
+    <!-- session.ts replaces this content; the placeholders below are the static
+         contract for the three side panels (console, downloads, screenshots). -->
+    <noscript>This page requires JavaScript.</noscript>
+    <template id="session-panels-template">
+      <section id="console-panel" data-tab="console"></section>
+      <section id="downloads-panel" data-tab="downloads"></section>
+      <section id="screenshots-panel" data-tab="screenshots"></section>
+    </template>
+  </main>
   <script type="module" src="session.js"></script>
 </body>
 </html>

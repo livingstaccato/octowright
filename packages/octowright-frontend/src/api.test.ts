@@ -3,6 +3,8 @@ import {
   ApiError,
   fetchJson,
   frameUrl,
+  getConsole,
+  getDownloads,
   getEvents,
   getHealth,
   getMacros,
@@ -107,6 +109,26 @@ describe("typed wrappers", () => {
     const calls = installFetch({ screenshots: [] });
     await getScreenshots("s1");
     expect(calls[0]?.url).toBe("/api/sessions/s1/screenshots");
+  });
+  it("getConsole defaults to since=0 and omits level", async () => {
+    const calls = installFetch({ messages: [], cursor: 0, total: 0 });
+    await getConsole("s1");
+    expect(calls[0]?.url).toBe("/api/sessions/s1/console?since=0");
+  });
+  it("getConsole forwards since + level", async () => {
+    const calls = installFetch({ messages: [], cursor: 0, total: 0 });
+    await getConsole("s1", 7, "error");
+    expect(calls[0]?.url).toBe("/api/sessions/s1/console?since=7&level=error");
+  });
+  it("getConsole skips level when 'all'", async () => {
+    const calls = installFetch({ messages: [], cursor: 0, total: 0 });
+    await getConsole("s1", 0, "all");
+    expect(calls[0]?.url).toBe("/api/sessions/s1/console?since=0");
+  });
+  it("getDownloads forwards since", async () => {
+    const calls = installFetch({ downloads: [], cursor: 0, total: 0 });
+    await getDownloads("s1", 3);
+    expect(calls[0]?.url).toBe("/api/sessions/s1/downloads?since=3");
   });
   it("openTrace POSTs", async () => {
     const calls = installFetch({ pid: 1, trace_path: "x" });
