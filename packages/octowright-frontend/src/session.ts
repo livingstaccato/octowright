@@ -13,6 +13,7 @@ import { renderConsolePanel } from "./console-panel.js";
 import { renderDownloadsPanel } from "./downloads-panel.js";
 import { renderScreenshotsPanel } from "./screenshots-panel.js";
 import { formatDateTime } from "./format.js";
+import { mountLivePreview } from "./live-preview.js";
 import { openTail } from "./tail.js";
 import {
   bindContext,
@@ -48,6 +49,7 @@ interface PageRefs {
   header: HTMLElement;
   videoSlot: HTMLElement;
   traceSlot: HTMLElement;
+  livePreviewSlot: HTMLElement;
   timeline: HTMLElement;
   tabs: HTMLElement;
   consolePanel: HTMLElement;
@@ -85,6 +87,13 @@ export function buildLayout(root: HTMLElement): PageRefs {
 
   left.append(header, videoSlot, traceSlot);
 
+  // Live preview sits ABOVE the timeline because when a flow is stuck the
+  // user wants to see the page right now, then check the action history.
+  const livePreviewSlot = document.createElement("section");
+  livePreviewSlot.id = "live-preview-panel";
+  livePreviewSlot.className = "session-live-preview";
+  livePreviewSlot.setAttribute("data-testid", "live-preview-panel");
+
   const timeline = document.createElement("div");
   timeline.className = "session-timeline";
   timeline.setAttribute("data-testid", "session-timeline");
@@ -117,7 +126,7 @@ export function buildLayout(root: HTMLElement): PageRefs {
   screenshotsPanel.setAttribute("role", "tabpanel");
   screenshotsPanel.setAttribute("data-tab", "screenshots");
 
-  right.append(timeline, tabs, consolePanel, downloadsPanel, screenshotsPanel);
+  right.append(livePreviewSlot, timeline, tabs, consolePanel, downloadsPanel, screenshotsPanel);
 
   const footer = document.createElement("footer");
   footer.className = "session-footer";
@@ -128,6 +137,7 @@ export function buildLayout(root: HTMLElement): PageRefs {
     header,
     videoSlot,
     traceSlot,
+    livePreviewSlot,
     timeline,
     tabs,
     consolePanel,
@@ -365,6 +375,15 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   const videoEl = renderVideo(refs.videoSlot, detail);
   renderTraceControls(refs.traceSlot, detail);
   renderFooter(refs.footer, detail);
+
+  // Live preview panel — polls /screenshot/now while session is live; shows a
+  // closed-state placeholder otherwise. Stop on page unload to release the timer.
+  const livePreview = mountLivePreview(refs.livePreviewSlot, {
+    sessionId: detail.id,
+    isLive: detail.live,
+  });
+  livePreview.start();
+  window.addEventListener("beforeunload", () => livePreview.destroy());
 
   const data: PanelData = { console: [], downloads: [], screenshots: [] };
 

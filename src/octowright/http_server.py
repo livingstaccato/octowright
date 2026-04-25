@@ -23,6 +23,7 @@ Endpoints (mirror the API contract in MCP-SHARED-CONTRACT.md):
     GET  /api/sessions/{id}/frame?t=<sec>          → ffmpeg-extracted PNG (cached)
     GET  /api/sessions/{id}/video                  → video bytes (range supported)
     GET  /api/sessions/{id}/trace                  → trace .zip
+    GET  /api/sessions/{id}/screenshot/now         → live screenshot (PNG/JPEG)
     GET  /api/sessions/{id}/screenshots            → list screenshots
     GET  /api/sessions/{id}/screenshots/{file}     → screenshot PNG bytes
     POST /api/sessions/{id}/trace/open             → spawn `npx playwright show-trace`
@@ -689,6 +690,98 @@ def _screenshot_dir_for(session_id: str) -> Path | None:
     return log_path.parent
 
 
+def _parse_bool(raw: str) -> bool | None:
+    """Parse a query-string bool. Accept the usual truthy/falsy spellings."""
+    s = raw.strip().lower()
+    if s in {"1", "true", "yes", "on"}:
+        return True
+    if s in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+async def session_screenshot_now(request: Request) -> Response:
+    """GET /api/sessions/{id}/screenshot/now — live snapshot of the page right now.
+
+    Live session: call ``session.page.screenshot()`` and return the raw bytes.
+    Closed session: 404 (no live page to capture). Unknown id: 404.
+    """
+    sid = request.path_params["id"]
+
+    fmt = request.query_params.get("format", "png").lower()
+    if fmt not in {"png", "jpeg"}:
+        return JSONResponse(
+            {"error": "format must be 'png' or 'jpeg'"},
+            status_code=400,
+        )
+
+    raw_quality = request.query_params.get("quality", "80")
+    try:
+        quality = int(raw_quality)
+    except ValueError:
+        return JSONResponse(
+            {"error": f"invalid quality={raw_quality!r}, must be int 1-100"},
+            status_code=400,
+        )
+    if not 1 <= quality <= 100:
+        return JSONResponse(
+            {"error": "quality must be between 1 and 100"},
+            status_code=400,
+        )
+
+    raw_full = request.query_params.get("full_page", "false")
+    full_page = _parse_bool(raw_full)
+    if full_page is None:
+        return JSONResponse(
+            {"error": f"invalid full_page={raw_full!r}, must be bool"},
+            status_code=400,
+        )
+
+    live = _live_session_or_none(sid)
+    if live is None:
+        # Distinguish "closed session" from "no such session" so the frontend
+        # can render a helpful placeholder for the former.
+        jsonl = _find_recording_for(sid, RECORDINGS_DIR)
+        if jsonl is not None:
+            return JSONResponse(
+                {"error": "session is closed; live screenshot only available while the browser is running"},
+                status_code=404,
+            )
+        return JSONResponse(
+            {"error": f"no session with id {sid!r}"},
+            status_code=404,
+        )
+
+    page = live.page
+    kwargs: dict[str, Any] = {"type": fmt, "full_page": full_page}
+    if fmt == "jpeg":
+        kwargs["quality"] = quality
+    try:
+        result = page.screenshot(**kwargs)
+        # Playwright returns bytes; if a stub returned a coroutine, await it.
+        if asyncio.iscoroutine(result):
+            data = await result
+        else:
+            data = result
+    except Exception as e:
+        log.warning(
+            "octowright.http.live_screenshot_failed",
+            session_id=sid,
+            error=str(e),
+        )
+        return JSONResponse(
+            {"error": f"live screenshot failed: {e}"},
+            status_code=503,
+        )
+
+    media_type = "image/jpeg" if fmt == "jpeg" else "image/png"
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def session_screenshots(request: Request) -> JSONResponse:
     sid = request.path_params["id"]
     sdir = _screenshot_dir_for(sid)
@@ -896,6 +989,7 @@ def build_app() -> Starlette:
         Route("/api/sessions/{id}/video", session_video, methods=["GET"]),
         Route("/api/sessions/{id}/trace", session_trace, methods=["GET"]),
         Route("/api/sessions/{id}/trace/open", trace_open, methods=["POST"]),
+        Route("/api/sessions/{id}/screenshot/now", session_screenshot_now, methods=["GET"]),
         Route("/api/sessions/{id}/screenshots", session_screenshots, methods=["GET"]),
         Route(
             "/api/sessions/{id}/screenshots/{filename}",

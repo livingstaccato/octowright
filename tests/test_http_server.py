@@ -923,6 +923,139 @@ def test_no_frontend_routes_when_bundle_missing(monkeypatch: pytest.MonkeyPatch,
         assert client.get("/sessions/abc").status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# /screenshot/now (live preview)
+# ---------------------------------------------------------------------------
+
+
+class _FakePage:
+    """Minimal stand-in for a Playwright Page that records screenshot kwargs."""
+
+    def __init__(self, *, returns: bytes = _TINY_PNG, raises: Exception | None = None) -> None:
+        self.returns = returns
+        self.raises = raises
+        self.calls: list[dict[str, Any]] = []
+
+    def screenshot(self, **kwargs: Any) -> bytes:
+        self.calls.append(kwargs)
+        if self.raises is not None:
+            raise self.raises
+        return self.returns
+
+
+def _install_live_session_with_page(
+    pool: SimpleNamespace,
+    isolated_recordings: Path,
+    sid: str,
+    page: _FakePage,
+) -> None:
+    log_path = isolated_recordings / f"20260101T000000Z-chromium-{sid}.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    pool._sessions[sid] = SimpleNamespace(
+        instance_id=sid,
+        kind="chromium",
+        label=None,
+        profile=None,
+        url="https://x.test",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[],
+        downloads=[],
+        pages=[None],
+        page=page,
+    )
+
+
+def test_screenshot_now_live_session_returns_png(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    page = _FakePage(returns=_TINY_PNG)
+    _install_live_session_with_page(empty_pool["pool"], isolated_recordings, "snnowlive001", page)
+    r = client.get("/api/sessions/snnowlive001/screenshot/now")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["cache-control"] == "no-store"
+    assert r.content == _TINY_PNG
+    assert page.calls[0]["type"] == "png"
+    assert page.calls[0]["full_page"] is False
+
+
+def test_screenshot_now_closed_session_404(client: TestClient, isolated_recordings: Path) -> None:
+    _write_recording(isolated_recordings, "snnowclosed01")
+    r = client.get("/api/sessions/snnowclosed01/screenshot/now")
+    assert r.status_code == 404
+    assert "session is closed" in r.json()["error"]
+
+
+def test_screenshot_now_unknown_id_404(client: TestClient) -> None:
+    r = client.get("/api/sessions/nopesuchid/screenshot/now")
+    assert r.status_code == 404
+    assert "no session with id" in r.json()["error"]
+
+
+def test_screenshot_now_invalid_format_400(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    page = _FakePage()
+    _install_live_session_with_page(empty_pool["pool"], isolated_recordings, "snnowfmt0001", page)
+    r = client.get("/api/sessions/snnowfmt0001/screenshot/now?format=webp")
+    assert r.status_code == 400
+    assert "format" in r.json()["error"]
+
+
+def test_screenshot_now_jpeg_format_passes_quality(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    page = _FakePage(returns=b"\xff\xd8\xff\xe0fake-jpeg")
+    _install_live_session_with_page(empty_pool["pool"], isolated_recordings, "snnowjpeg001", page)
+    r = client.get("/api/sessions/snnowjpeg001/screenshot/now?format=jpeg&quality=42&full_page=true")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.content.startswith(b"\xff\xd8")
+    assert page.calls[0] == {"type": "jpeg", "quality": 42, "full_page": True}
+
+
+def test_screenshot_now_invalid_quality_400(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    page = _FakePage()
+    _install_live_session_with_page(empty_pool["pool"], isolated_recordings, "snnowqual001", page)
+    r = client.get("/api/sessions/snnowqual001/screenshot/now?quality=999")
+    assert r.status_code == 400
+
+
+def test_screenshot_now_invalid_full_page_400(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    page = _FakePage()
+    _install_live_session_with_page(empty_pool["pool"], isolated_recordings, "snnowfull001", page)
+    r = client.get("/api/sessions/snnowfull001/screenshot/now?full_page=maybe")
+    assert r.status_code == 400
+
+
+def test_screenshot_now_page_screenshot_raises_503(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    page = _FakePage(raises=RuntimeError("page navigated"))
+    _install_live_session_with_page(empty_pool["pool"], isolated_recordings, "snnowfail001", page)
+    r = client.get("/api/sessions/snnowfail001/screenshot/now")
+    assert r.status_code == 503
+    assert "page navigated" in r.json()["error"]
+
+
 def test_session_deep_link_falls_back_to_404_when_session_html_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
