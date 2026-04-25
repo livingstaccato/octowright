@@ -16,7 +16,10 @@ Endpoints (mirror the API contract in MCP-SHARED-CONTRACT.md):
     GET  /api/sessions                             → live + closed session lists
     GET  /api/sessions/{id}                        → SessionDetail
     GET  /api/sessions/{id}/events?since=N         → tail JSONL events
-    WS   /api/sessions/{id}/tail                   → push events ~1Hz
+    GET  /api/sessions/{id}/console?level=&since=N → console messages (paginated)
+    GET  /api/sessions/{id}/downloads?since=N      → downloads (paginated)
+    WS   /api/sessions/{id}/tail                   → push events ~1Hz (LIVE only;
+                                                     closed/unknown → immediate close)
     GET  /api/sessions/{id}/frame?t=<sec>          → ffmpeg-extracted PNG (cached)
     GET  /api/sessions/{id}/video                  → video bytes (range supported)
     GET  /api/sessions/{id}/trace                  → trace .zip
@@ -425,6 +428,180 @@ async def session_events(request: Request) -> JSONResponse:
     return JSONResponse(_tail_jsonl(log_path, since))
 
 
+# ---------------------------------------------------------------------------
+# /console and /downloads — cursor-paginated views over per-session lists
+# ---------------------------------------------------------------------------
+
+
+def _paginate(items: list[dict[str, Any]], since: int) -> tuple[list[dict[str, Any]], int, int]:
+    """Slice ``items[since:]`` and return (slice, next_cursor, total).
+
+    Negative or out-of-range ``since`` is clamped into [0, total].
+    """
+    total = len(items)
+    if since < 0:
+        since = 0
+    if since > total:
+        since = total
+    return items[since:], total, total
+
+
+def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
+    """Reconstruct console messages from a JSONL recording.
+
+    NOTE: as of this writing ``BrowserSession.attach_console`` does NOT persist
+    console messages to the JSONL log — they live only on the in-memory
+    ``session.console`` list. So for closed sessions this returns ``[]``. The
+    scan is left in place so the endpoint Just Works once a future change starts
+    recording an ``action: "console"`` row alongside ``download_saved`` etc.
+    """
+    out: list[dict[str, Any]] = []
+    if not jsonl_path.exists():
+        return out
+    try:
+        with jsonl_path.open(encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("action") != "console":
+                    continue
+                out.append(
+                    {
+                        "level": entry.get("level"),
+                        "text": entry.get("text", ""),
+                        "page_index": entry.get("page_index"),
+                    }
+                )
+    except OSError:
+        return out
+    return out
+
+
+def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
+    """Reconstruct download records from a JSONL recording.
+
+    ``BrowserSession._handle_download`` → ``downloads.save_download`` records an
+    ``action: "download_saved"`` row with the same field shape used in-memory
+    (``url``, ``suggested_filename``, ``path``, ``timestamp``).
+    """
+    out: list[dict[str, Any]] = []
+    if not jsonl_path.exists():
+        return out
+    try:
+        with jsonl_path.open(encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("action") != "download_saved":
+                    continue
+                out.append(
+                    {
+                        "url": entry.get("url"),
+                        "suggested_filename": entry.get("suggested_filename"),
+                        "path": entry.get("path"),
+                        "timestamp": entry.get("timestamp"),
+                    }
+                )
+    except OSError:
+        return out
+    return out
+
+
+def _parse_since(request: Request) -> tuple[int | None, JSONResponse | None]:
+    """Parse the ``since`` query param. Returns (since, error_response_or_None)."""
+    raw = request.query_params.get("since")
+    if raw is None:
+        return 0, None
+    try:
+        return int(raw), None
+    except ValueError:
+        return None, JSONResponse(
+            {"error": f"invalid since={raw!r}, must be int"},
+            status_code=400,
+        )
+
+
+async def session_console(request: Request) -> JSONResponse:
+    """Return paginated console messages for a session.
+
+    Live sessions read straight from ``pool.get(id).console``. Closed sessions
+    scan the JSONL recording for ``action: "console"`` rows (today this yields
+    an empty list because attach_console doesn't persist — see
+    ``_read_console_from_jsonl``). Optional ``level=`` filters by log level
+    (case-sensitive). Optional ``since=`` is a 0-based index; the response's
+    ``cursor`` is always the new total so callers can pass it on the next poll.
+
+    404 when the id is not in the live pool AND no recording is on disk.
+    """
+    sid = request.path_params["id"]
+    since, err = _parse_since(request)
+    if err is not None:
+        return err
+    assert since is not None  # narrow for type-checker
+
+    live = _live_session_or_none(sid)
+    if live is not None:
+        messages: list[dict[str, Any]] = list(live.console)
+    else:
+        jsonl = _find_recording_for(sid, RECORDINGS_DIR)
+        if jsonl is None:
+            return JSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
+        messages = _read_console_from_jsonl(jsonl)
+
+    level = request.query_params.get("level")
+    if level is not None:
+        messages = [m for m in messages if m.get("level") == level]
+
+    sliced, total, cursor = _paginate(messages, since)
+    return JSONResponse({"messages": sliced, "cursor": cursor, "total": total})
+
+
+async def session_downloads(request: Request) -> JSONResponse:
+    """Return paginated downloads for a session.
+
+    Live sessions use ``pool.get(id).list_downloads()``. Closed sessions scan
+    the JSONL recording for ``action: "download_saved"`` rows. Each row gets a
+    boolean ``path_exists`` field reflecting whether the saved file is still
+    present on disk (users sometimes move the artefact post-run).
+
+    404 when the id is not in the live pool AND no recording is on disk.
+    """
+    sid = request.path_params["id"]
+    since, err = _parse_since(request)
+    if err is not None:
+        return err
+    assert since is not None
+
+    live = _live_session_or_none(sid)
+    if live is not None:
+        downloads: list[dict[str, Any]] = list(live.list_downloads())
+    else:
+        jsonl = _find_recording_for(sid, RECORDINGS_DIR)
+        if jsonl is None:
+            return JSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
+        downloads = _read_downloads_from_jsonl(jsonl)
+
+    # Annotate each record with whether the file is still on disk.
+    annotated: list[dict[str, Any]] = []
+    for d in downloads:
+        path = d.get("path")
+        path_exists = isinstance(path, str) and Path(path).exists()
+        annotated.append({**d, "path_exists": path_exists})
+
+    sliced, total, cursor = _paginate(annotated, since)
+    return JSONResponse({"downloads": sliced, "cursor": cursor, "total": total})
+
+
 def _frame_cache_path(session_id: str, t: float) -> Path:
     cache_dir = RECORDINGS_DIR / ".frame-cache" / session_id
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -615,11 +792,20 @@ async def trace_open(request: Request) -> JSONResponse:
 
 
 class TailEndpoint(WebSocketEndpoint):
-    """Push JSONL events as they're appended to a session's log.
+    """Push JSONL events as they're appended to a LIVE session's log.
 
-    Sends one final message + closes when the session transitions from live
-    to closed (or for sessions that were never live, sends one snapshot and
-    closes immediately with `complete: true`).
+    Connection semantics:
+
+    - LIVE session: push ``{events, cursor, complete}`` every ``TAIL_POLL_SECONDS``.
+      When the session transitions live → closed mid-connection, send one final
+      message with ``complete: true`` and close cleanly.
+    - CLOSED session (recording on disk, not in pool): close immediately with
+      WS code 1003 and a "use GET /events instead" reason. No payload sent.
+    - UNKNOWN session (no live, no recording): close immediately with code 1008
+      and a "no session with id" reason.
+
+    The frontend opens this WS only for live sessions; closed/unknown rejection
+    is a hard guarantee for callers that get the URL wrong.
     """
 
     encoding = "json"
@@ -627,27 +813,34 @@ class TailEndpoint(WebSocketEndpoint):
     async def on_connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
         sid = websocket.path_params["id"]
-        log_path = _resolve_log_path(sid)
-        if log_path is None:
-            await websocket.send_json({"error": f"no session with id {sid!r}"})
-            await websocket.close()
+        live_session = _live_session_or_none(sid)
+        if live_session is None:
+            # Either a closed session (recording present) or unknown.
+            jsonl = _find_recording_for(sid, RECORDINGS_DIR)
+            if jsonl is not None:
+                await websocket.close(
+                    code=1003,
+                    reason="closed sessions don't support tail; use GET /api/sessions/{id}/events instead",
+                )
+            else:
+                await websocket.close(code=1008, reason=f"no session with id {sid}")
             return
 
+        log_path = Path(live_session.log_path)
         cursor = 0
         try:
             while True:
                 snapshot = _tail_jsonl(log_path, cursor)
                 cursor = snapshot["cursor"]
-                # Only push when there's actually news (or on the first tick).
-                live = _live_session_or_none(sid) is not None
+                still_live = _live_session_or_none(sid) is not None
                 payload = {
                     "events": snapshot["events"],
                     "cursor": cursor,
-                    "complete": (not live) and snapshot["complete"],
+                    "complete": (not still_live),
                 }
                 await websocket.send_json(payload)
-                if not live:
-                    # Closed-session: one final push and we're done.
+                if not still_live:
+                    # Live → closed mid-connection: one final push then close.
                     await websocket.close()
                     return
                 await asyncio.sleep(TAIL_POLL_SECONDS)
@@ -678,6 +871,8 @@ def build_app() -> Starlette:
         Route("/api/sessions", list_sessions, methods=["GET"]),
         Route("/api/sessions/{id}", session_detail, methods=["GET"]),
         Route("/api/sessions/{id}/events", session_events, methods=["GET"]),
+        Route("/api/sessions/{id}/console", session_console, methods=["GET"]),
+        Route("/api/sessions/{id}/downloads", session_downloads, methods=["GET"]),
         Route("/api/sessions/{id}/frame", session_frame, methods=["GET"]),
         Route("/api/sessions/{id}/video", session_video, methods=["GET"]),
         Route("/api/sessions/{id}/trace", session_trace, methods=["GET"]),

@@ -502,22 +502,28 @@ def test_trace_open_no_npx(
 # ---------------------------------------------------------------------------
 
 
-def test_tail_unknown_session_closes(client: TestClient) -> None:
+def test_tail_unknown_session_closes_with_1008(client: TestClient) -> None:
+    """Unknown session id (no live, no recording) → policy-violation close."""
+    from starlette.websockets import WebSocketDisconnect
+
     with client.websocket_connect("/api/sessions/wsnope0000abc/tail") as ws:
-        msg = ws.receive_json()
-        assert "error" in msg
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            ws.receive_json()
+        assert excinfo.value.code == 1008
+        assert "no session" in (excinfo.value.reason or "")
 
 
-def test_tail_closed_session_one_shot(client: TestClient, isolated_recordings: Path) -> None:
-    """A session that's already closed should get one snapshot then a clean close."""
+def test_tail_closed_session_closes_with_1003(client: TestClient, isolated_recordings: Path) -> None:
+    """A session whose recording exists on disk but is not live → 1003 + redirect note."""
+    from starlette.websockets import WebSocketDisconnect
+
     _write_recording(isolated_recordings, "wsclosed0001")
     with client.websocket_connect("/api/sessions/wsclosed0001/tail") as ws:
-        msg = ws.receive_json()
-        assert msg["complete"] is True
-        assert len(msg["events"]) == 3
-        # Server should close the socket immediately after.
-        with pytest.raises(Exception):
-            ws.receive_json(mode="text")
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            ws.receive_json()
+        assert excinfo.value.code == 1003
+        # Reason must point users at the right endpoint for closed sessions.
+        assert "/events" in (excinfo.value.reason or "")
 
 
 def test_tail_live_session_streams(
@@ -557,6 +563,267 @@ def test_tail_live_session_streams(
             if seen_click:
                 break
         assert seen_click
+
+
+# ---------------------------------------------------------------------------
+# /console
+# ---------------------------------------------------------------------------
+
+
+def test_console_404_unknown_session(client: TestClient) -> None:
+    r = client.get("/api/sessions/nope/console")
+    assert r.status_code == 404
+    assert "no session" in r.json()["error"]
+
+
+def test_console_live_session_returns_messages(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = isolated_recordings / "20260101T000000Z-chromium-conslive00xx.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    fake = SimpleNamespace(
+        instance_id="conslive00xx",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[
+            {"level": "log", "text": "hello", "page_index": None},
+            {"level": "warn", "text": "watch out", "page_index": None},
+            {"level": "error", "text": "boom", "page_index": 1},
+        ],
+        downloads=[],
+        list_downloads=lambda: [],
+    )
+    empty_pool["pool"]._sessions["conslive00xx"] = fake
+    r = client.get("/api/sessions/conslive00xx/console")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 3
+    assert body["cursor"] == 3
+    assert len(body["messages"]) == 3
+    assert body["messages"][0] == {"level": "log", "text": "hello", "page_index": None}
+
+
+def test_console_level_filter(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = isolated_recordings / "20260101T000000Z-chromium-consfilter000.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    empty_pool["pool"]._sessions["consfilter000"] = SimpleNamespace(
+        instance_id="consfilter000",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[
+            {"level": "log", "text": "a", "page_index": None},
+            {"level": "error", "text": "b", "page_index": None},
+            {"level": "log", "text": "c", "page_index": None},
+        ],
+        downloads=[],
+        list_downloads=lambda: [],
+    )
+    r = client.get("/api/sessions/consfilter000/console?level=error")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["messages"][0]["text"] == "b"
+
+
+def test_console_since_cursor(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = isolated_recordings / "20260101T000000Z-chromium-conssince0000.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    empty_pool["pool"]._sessions["conssince0000"] = SimpleNamespace(
+        instance_id="conssince0000",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[
+            {"level": "log", "text": "1", "page_index": None},
+            {"level": "log", "text": "2", "page_index": None},
+            {"level": "log", "text": "3", "page_index": None},
+        ],
+        downloads=[],
+        list_downloads=lambda: [],
+    )
+    r = client.get("/api/sessions/conssince0000/console?since=2")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 3
+    assert body["cursor"] == 3
+    assert [m["text"] for m in body["messages"]] == ["3"]
+
+
+def test_console_closed_session_returns_empty(client: TestClient, isolated_recordings: Path) -> None:
+    """attach_console doesn't persist console events to JSONL today, so the
+    closed-session view is currently always empty. Endpoint must still 200."""
+    _write_recording(isolated_recordings, "consclosed01x")
+    r = client.get("/api/sessions/consclosed01x/console")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"messages": [], "cursor": 0, "total": 0}
+
+
+def test_console_closed_session_reads_persisted_rows(client: TestClient, isolated_recordings: Path) -> None:
+    """Forward-compat: if console events ARE persisted as action='console', the
+    endpoint reconstructs them with the same {level, text, page_index} shape."""
+    name = "20260101T000000Z-chromium-conspersist01"
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {"action": "console", "level": "warn", "text": "deprecated API", "page_index": None},
+        {"action": "console", "level": "error", "text": "oops", "page_index": 1},
+    ]
+    (isolated_recordings / f"{name}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    r = client.get("/api/sessions/conspersist01/console")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert body["messages"][0] == {"level": "warn", "text": "deprecated API", "page_index": None}
+    assert body["messages"][1] == {"level": "error", "text": "oops", "page_index": 1}
+
+
+# ---------------------------------------------------------------------------
+# /downloads
+# ---------------------------------------------------------------------------
+
+
+def test_downloads_404_unknown_session(client: TestClient) -> None:
+    r = client.get("/api/sessions/nope/downloads")
+    assert r.status_code == 404
+
+
+def test_downloads_live_session_with_path_exists(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    log_path = isolated_recordings / "20260101T000000Z-chromium-dllive00abcd.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+
+    real_file = tmp_path / "report.csv"
+    real_file.write_text("col1,col2\n")
+    missing_file = tmp_path / "deleted.csv"  # never created
+
+    rows = [
+        {
+            "url": "https://x.test/report.csv",
+            "suggested_filename": "report.csv",
+            "path": str(real_file),
+            "timestamp": "20260101T000000Z",
+        },
+        {
+            "url": "https://x.test/deleted.csv",
+            "suggested_filename": "deleted.csv",
+            "path": str(missing_file),
+            "timestamp": "20260101T000001Z",
+        },
+    ]
+    empty_pool["pool"]._sessions["dllive00abcd"] = SimpleNamespace(
+        instance_id="dllive00abcd",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[],
+        downloads=rows,
+        list_downloads=lambda: list(rows),
+    )
+    r = client.get("/api/sessions/dllive00abcd/downloads")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert body["cursor"] == 2
+    assert body["downloads"][0]["path_exists"] is True
+    assert body["downloads"][1]["path_exists"] is False
+    assert body["downloads"][0]["suggested_filename"] == "report.csv"
+
+
+def test_downloads_since_cursor(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = isolated_recordings / "20260101T000000Z-chromium-dlsince0000xx.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    rows = [
+        {"url": f"https://x.test/{i}.bin", "suggested_filename": f"{i}.bin", "path": "/nope", "timestamp": "t"}
+        for i in range(3)
+    ]
+    empty_pool["pool"]._sessions["dlsince0000xx"] = SimpleNamespace(
+        instance_id="dlsince0000xx",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[],
+        downloads=rows,
+        list_downloads=lambda: list(rows),
+    )
+    r = client.get("/api/sessions/dlsince0000xx/downloads?since=2")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 3
+    assert body["cursor"] == 3
+    assert [d["suggested_filename"] for d in body["downloads"]] == ["2.bin"]
+
+
+def test_downloads_closed_session_reads_jsonl(client: TestClient, isolated_recordings: Path, tmp_path: Path) -> None:
+    """Closed sessions reconstruct downloads from action='download_saved' rows."""
+    real_file = tmp_path / "doc.pdf"
+    real_file.write_bytes(b"%PDF-1.4")
+    name = "20260101T000000Z-chromium-dlclosed01xy"
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {
+            "action": "download_saved",
+            "url": "https://x.test/doc.pdf",
+            "suggested_filename": "doc.pdf",
+            "path": str(real_file),
+            "timestamp": "20260101T000005Z",
+        },
+        {
+            "action": "download_saved",
+            "url": "https://x.test/old.pdf",
+            "suggested_filename": "old.pdf",
+            "path": str(tmp_path / "vanished.pdf"),
+            "timestamp": "20260101T000006Z",
+        },
+        {"action": "close"},
+    ]
+    (isolated_recordings / f"{name}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    r = client.get("/api/sessions/dlclosed01xy/downloads")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    by_name = {d["suggested_filename"]: d for d in body["downloads"]}
+    assert by_name["doc.pdf"]["path_exists"] is True
+    assert by_name["old.pdf"]["path_exists"] is False
+
+
+def test_downloads_invalid_since(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = isolated_recordings / "20260101T000000Z-chromium-dlbadsince01.jsonl"
+    log_path.write_text(json.dumps({"action": "launch"}) + "\n")
+    empty_pool["pool"]._sessions["dlbadsince01"] = SimpleNamespace(
+        instance_id="dlbadsince01",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[],
+        downloads=[],
+        list_downloads=lambda: [],
+    )
+    r = client.get("/api/sessions/dlbadsince01/downloads?since=notanint")
+    assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------
