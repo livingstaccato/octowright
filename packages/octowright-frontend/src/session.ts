@@ -14,6 +14,13 @@ import { renderDownloadsPanel } from "./downloads-panel.js";
 import { renderScreenshotsPanel } from "./screenshots-panel.js";
 import { formatDateTime } from "./format.js";
 import { openTail } from "./tail.js";
+import {
+  bindContext,
+  getLogger,
+  initTelemetry,
+  tabSwitchesCounter,
+  userActionsCounter,
+} from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
 import type {
   ConsoleMessage,
@@ -22,6 +29,8 @@ import type {
   ScreenshotEntry,
   SessionDetail,
 } from "./types.js";
+
+const log = getLogger("octowright.frontend.session");
 
 export function sessionIdFromPath(pathname: string): string | null {
   const match = /^\/sessions\/([^/?#]+)/.exec(pathname);
@@ -232,14 +241,18 @@ export function renderTraceControls(target: HTMLElement, detail: SessionDetail):
   status.className = "trace-status";
   status.setAttribute("data-testid", "trace-status");
   open.addEventListener("click", () => {
+    log.info({ event: "trace_open_clicked", session_id: detail.id });
+    userActionsCounter.add(1, { action: "trace_open" });
     open.disabled = true;
     status.textContent = "opening…";
     openTrace(detail.id)
       .then((res) => {
         status.textContent = `pid ${res.pid}`;
+        log.info({ event: "trace_open_success", session_id: detail.id, pid: res.pid });
       })
       .catch((err: unknown) => {
         status.textContent = `failed: ${(err as Error).message}`;
+        log.error({ event: "trace_open_failed", session_id: detail.id, error: String(err) });
       })
       .finally(() => {
         open.disabled = false;
@@ -337,8 +350,17 @@ async function refreshPanels(
 }
 
 export async function bootSession(root: HTMLElement, sessionId: string, opts: BootOptions = {}): Promise<void> {
+  log.info({ event: "session_boot_start", session_id: sessionId });
   const refs = buildLayout(root);
   const detail = await getSession(sessionId);
+  log.info({
+    event: "session_detail_loaded",
+    session_id: sessionId,
+    kind: detail.kind,
+    live: detail.live,
+    has_video: Boolean(detail.video_path),
+    has_trace: Boolean(detail.trace_path),
+  });
   renderHeader(refs.header, detail);
   const videoEl = renderVideo(refs.videoSlot, detail);
   renderTraceControls(refs.traceSlot, detail);
@@ -354,12 +376,24 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   setTabCount(refs.downloadsTabBtn, detail.download_count ?? 0);
   setTabCount(refs.screenshotsTabBtn, 0);
 
-  refs.consoleTabBtn.addEventListener("click", () => setActiveTab(refs, "console"));
-  refs.downloadsTabBtn.addEventListener("click", () => setActiveTab(refs, "downloads"));
-  refs.screenshotsTabBtn.addEventListener("click", () => setActiveTab(refs, "screenshots"));
+  let currentTab: PanelTab = "console";
+  const switchTab = (next: PanelTab): void => {
+    const from = currentTab;
+    if (from === next) return;
+    log.info({ event: "tab_switch", from, to: next, session_id: sessionId });
+    tabSwitchesCounter.add(1, { tab: next });
+    userActionsCounter.add(1, { action: "tab_switch" });
+    currentTab = next;
+    setActiveTab(refs, next);
+  };
+  refs.consoleTabBtn.addEventListener("click", () => switchTab("console"));
+  refs.downloadsTabBtn.addEventListener("click", () => switchTab("downloads"));
+  refs.screenshotsTabBtn.addEventListener("click", () => switchTab("screenshots"));
   setActiveTab(refs, "console");
 
   const seek = (seconds: number): void => {
+    log.info({ event: "video_seek", session_id: sessionId, t: seconds });
+    userActionsCounter.add(1, { action: "video_seek" });
     if (videoEl) videoEl.currentTime = seconds;
   };
 
@@ -380,14 +414,15 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
         }
         appendTimelineEvents(refs.timeline, msg.events, baseIso, { onSeek: seek });
         // Cheap refresh: console + downloads counts may have changed.
-        refreshPanels(sessionId, refs, data, ["console", "downloads"]).catch(() => {
-          /* swallow refresh errors */
+        refreshPanels(sessionId, refs, data, ["console", "downloads"]).catch((err: unknown) => {
+          log.warn({ event: "panel_refresh_failed", session_id: sessionId, error: String(err) });
         });
       },
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });
     window.addEventListener("beforeunload", () => tail.close());
   }
+  log.info({ event: "session_boot_complete", session_id: sessionId });
 }
 
 export function appendForTest(events: RecordingEvent[], target: HTMLElement, baseIso: string): void {
@@ -395,15 +430,26 @@ export function appendForTest(events: RecordingEvent[], target: HTMLElement, bas
 }
 
 if (typeof document !== "undefined") {
+  initTelemetry({ pageName: "session" });
   const root = document.getElementById("app");
   if (root) {
     const id = sessionIdFromPath(window.location.pathname);
     if (!id) {
+      log.warn({ event: "session_invalid_url", pathname: window.location.pathname });
       root.textContent = "Invalid session URL";
     } else {
+      // Tag every subsequent log record with this session id.
+      bindContext({ session_id: id });
+      log.info({ event: "page_load", page: "session", session_id: id });
+      window.addEventListener("beforeunload", () => {
+        log.info({ event: "page_unload", page: "session", session_id: id });
+      });
       bootSession(root, id).catch((err: unknown) => {
+        log.error({ event: "session_boot_failed", session_id: id, error: String(err) });
         root.textContent = `Session failed to load: ${(err as Error).message}`;
       });
     }
+  } else {
+    log.warn({ event: "session_root_missing" });
   }
 }

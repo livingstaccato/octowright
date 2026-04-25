@@ -1,5 +1,6 @@
 import { getMacros, getPersonas, getScenarios, getSessions } from "./api.js";
 import { formatDateTime, shortUrl } from "./format.js";
+import { getLogger, initTelemetry } from "./telemetry.js";
 import type {
   LiveScenario,
   MacroSummary,
@@ -10,6 +11,8 @@ import type {
 } from "./types.js";
 
 const REFRESH_MS = 5000;
+
+const log = getLogger("octowright.frontend.dashboard");
 
 interface DashboardState {
   sessions: SessionListResponse;
@@ -207,23 +210,43 @@ function renderMacroList(macros: MacroSummary[]): HTMLElement {
 }
 
 export async function bootDashboard(root: HTMLElement): Promise<void> {
+  log.info({ event: "dashboard_boot_start" });
   const tick = async (): Promise<void> => {
     const state = await loadState();
     renderDashboard(root, state);
+    log.debug({
+      event: "dashboard_refresh",
+      live_count: state.sessions.live.length,
+      closed_count: state.sessions.closed.length,
+      live_scenarios: state.scenarios.live.length,
+      personas: state.personas.length,
+      macros: state.macros.length,
+    });
   };
   await tick();
   window.setInterval(() => {
-    tick().catch(() => {
-      /* swallow refresh errors */
+    tick().catch((err: unknown) => {
+      log.warn({ event: "dashboard_refresh_failed", error: String(err) });
     });
   }, REFRESH_MS);
+  log.info({ event: "dashboard_boot_complete", refresh_ms: REFRESH_MS });
 }
 
 if (typeof document !== "undefined") {
+  initTelemetry({ pageName: "dashboard" });
+  log.info({ event: "page_load", page: "dashboard" });
+  if (typeof window !== "undefined") {
+    window.addEventListener("beforeunload", () => {
+      log.info({ event: "page_unload", page: "dashboard" });
+    });
+  }
   const root = document.getElementById("app");
   if (root) {
     bootDashboard(root).catch((err: unknown) => {
+      log.error({ event: "dashboard_boot_failed", error: String(err) });
       root.textContent = `Dashboard failed: ${(err as Error).message}`;
     });
+  } else {
+    log.warn({ event: "dashboard_root_missing" });
   }
 }
