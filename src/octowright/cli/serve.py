@@ -226,12 +226,34 @@ async def _run_leader(
             name="octowright.idle_watchdog",
         )
 
+    # Discoverable leader: HTTP-MCP at /mcp/ is up AND we wrote the lockfile.
+    # Followers can find and connect to us, so a stdio EOF (e.g. Claude Code
+    # closes) doesn't mean we're useless — keep serving until the watchdog
+    # fires or a sidecar fails.
+    discoverable = not no_http and not no_singleton
+
     wait_for: set[_asyncio.Task[object]] = {mcp_task}
     if watch_task is not None:
         wait_for.add(watch_task)
 
     try:
         await _asyncio.wait(wait_for, return_when=_asyncio.FIRST_COMPLETED)
+
+        # If only the stdio MCP task ended (the typical "client disconnected"
+        # case) and we're discoverable, keep serving via HTTP-MCP. The
+        # watchdog or a sidecar failure will eventually end us; the user
+        # reopening their MCP client will spawn a new follower that bridges
+        # back here without losing browser state.
+        if mcp_task.done() and discoverable and watch_task is not None and not watch_task.done():
+            click.echo(
+                "octowright: stdio client disconnected; leader staying alive for HTTP-MCP "
+                "(reconnect by reopening your MCP client; auto-quit governed by --idle-grace)",
+                err=True,
+            )
+            await _asyncio.wait(
+                {watch_task, *sidecars},
+                return_when=_asyncio.FIRST_COMPLETED,
+            )
     finally:
         for t in (*sidecars, watch_task, mcp_task):
             if t is not None and not t.done():
