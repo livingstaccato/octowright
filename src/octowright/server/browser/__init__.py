@@ -54,7 +54,7 @@ from .lifecycle import (
     browser_spawn_roster,
     browser_suggest_for_url,
 )
-from .media import browser_extract_frames, browser_open_trace, browser_video_path
+from .media import browser_open_trace
 from .network import browser_mock_route, browser_set_dialog_policy, browser_unmock_route
 from .views import (
     browser_downloads,
@@ -80,7 +80,6 @@ __all__ = [
     "browser_expect_text",
     "browser_expect_url",
     "browser_export_script",
-    "browser_extract_frames",
     "browser_fill",
     "browser_fill_by",
     "browser_get_text_by",
@@ -103,7 +102,6 @@ __all__ = [
     "browser_tail_recording",
     "browser_type",
     "browser_unmock_route",
-    "browser_video_path",
     "browser_wait_for",
     "browser_wait_for_download",
     "page_close",

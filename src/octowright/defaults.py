@@ -50,3 +50,11 @@ SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
 DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))
 DEFAULT_ACTION_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_ACTION_TIMEOUT_MS", "15000"))
+
+# HTTP debugger / dashboard sidecar — runs alongside the MCP stdio server when
+# `octowright serve` is invoked. Bind defaults to localhost only because the
+# debugger UI exposes raw recordings, video, and trace data.
+HTTP_HOST = os.environ.get("OCTOWRIGHT_HTTP_HOST", "127.0.0.1")
+HTTP_PORT = int(os.environ.get("OCTOWRIGHT_HTTP_PORT", "8765"))
+# When the configured port is in use, try this many higher ports before giving up.
+HTTP_PORT_RETRIES = 5
