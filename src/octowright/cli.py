@@ -248,18 +248,9 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
                         return
                     cursors = result["cursors"]
                     for ev in result["events"]:
-                        if ev.get("action") == "console":
-                            continue
-                        ts = ev.get("ts", "")[11:19]  # "HH:MM:SS"
-                        persona = ev.get("persona", "?")
-                        role = ev.get("role", "?")
-                        action = ev.get("action", "?")
-                        extras = " ".join(
-                            f"{k}={v!r}"
-                            for k, v in ev.items()
-                            if k not in ("ts", "action", "instance_id", "persona", "role")
-                        )
-                        click.echo(f"[{ts}][{persona}][{role}] {action} {extras}")
+                        line = _format_watch_event(ev)
+                        if line is not None:
+                            click.echo(line)
                     await _asyncio.sleep(1.0)
 
             if watch:
@@ -284,6 +275,47 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
     finally:
         shutdown_telemetry()
     raise SystemExit(exit_code)
+
+
+# Watch event fields that don't add information for the human reader.
+_WATCH_HIDDEN_FIELDS = frozenset(
+    {"ts", "action", "instance_id", "persona", "role", "kind", "label", "profile", "user_data_dir", "viewport"}
+)
+# Field-name salience order: when an event has one of these, that's the "headline" arg.
+_WATCH_HEADLINE_FIELDS = ("url", "selector", "text", "key", "name", "pattern", "expression", "policy", "path")
+
+
+def _format_watch_event(ev: dict[str, Any]) -> str | None:
+    """One-line scenario-watch event format.
+
+    `[HH:MM:SS] persona/role  action  headline   …extras` — or None to skip.
+    """
+    action = ev.get("action", "?")
+    if action == "console":
+        return None
+    ts = ev.get("ts", "")[11:19] or "--:--:--"
+    persona = ev.get("persona", "?")
+    role = ev.get("role", "?")
+
+    headline = ""
+    for field in _WATCH_HEADLINE_FIELDS:
+        if field in ev and ev[field] is not None:
+            val = ev[field]
+            rendered = val if isinstance(val, str) else repr(val)
+            if len(rendered) > 60:
+                rendered = rendered[:57] + "…"
+            headline = rendered
+            break
+
+    extras_pairs = [
+        f"{k}={v!r}"
+        for k, v in ev.items()
+        if k not in _WATCH_HIDDEN_FIELDS and k not in _WATCH_HEADLINE_FIELDS and v is not None
+    ]
+    extras = "  " + " ".join(extras_pairs) if extras_pairs else ""
+
+    tag = f"{persona}/{role}"
+    return f"[{ts}] {tag:<22}  {action:<14} {headline}{extras}"
 
 
 async def _run_verify_and_report(*, pool: Any, live: Any, out_path: str | None) -> int:

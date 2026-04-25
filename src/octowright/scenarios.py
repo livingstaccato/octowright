@@ -116,7 +116,10 @@ def load_scenario(name: str) -> Scenario:
         return load_python_scenario(py_path)
     if yaml_path.exists():
         return load_yaml_scenario(yaml_path)
-    raise FileNotFoundError(f"no scenario named {name!r} in {SCENARIOS_DIR}")
+    raise FileNotFoundError(
+        f"no scenario named {name!r} in {SCENARIOS_DIR}; list available with `scenario_list` "
+        f"or drop a {name}.yaml file in that directory"
+    )
 
 
 def list_scenarios() -> list[dict[str, Any]]:
@@ -200,7 +203,13 @@ class ScenarioPool:
 
     def get(self, scenario_id: str) -> LiveScenario:
         if scenario_id not in self._live:
-            raise KeyError(f"no live scenario with id={scenario_id!r}; known: {list(self._live)}")
+            known = list(self._live)
+            hint = (
+                "no scenarios are running — start one with `scenario_start name=<name>`"
+                if not known
+                else f"call `scenario_status` to see live ids; known: {known}"
+            )
+            raise KeyError(f"no live scenario with id={scenario_id!r}; {hint}")
         return self._live[scenario_id]
 
     def list_live(self) -> list[dict[str, Any]]:

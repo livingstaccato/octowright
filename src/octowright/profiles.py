@@ -54,7 +54,7 @@ def delete_profile(kind: str, name: str) -> Path:
     """Delete a single engine-profile directory. Raises FileNotFoundError."""
     target = profile_dir(kind, name)
     if not target.exists():
-        raise FileNotFoundError(f"no engine profile at {target}")
+        raise FileNotFoundError(f"no engine profile at {target}; list saved profiles with `profile_list`")
     shutil.rmtree(target)
     return target
 
@@ -63,6 +63,6 @@ def delete_persona(name: str) -> Path:
     """Delete an entire persona directory (all engine profiles + metadata)."""
     target = _personas.persona_dir(name)
     if not target.exists():
-        raise FileNotFoundError(f"no persona at {target}")
+        raise FileNotFoundError(f"no persona at {target}; list personas with `persona_list`")
     shutil.rmtree(target)
     return target
