@@ -176,3 +176,51 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, An
         },
         "errors": summary["errors"],
     }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Find persistent profile dirs older than `days` and not in use by any "
+        "live browser session, and optionally delete them. Defaults to "
+        "dry_run=True so the first call is always safe. Pass dry_run=False to "
+        "actually delete. Now that browser_launch(label=X) auto-promotes to a "
+        "persistent profile, casual one-off labels accumulate on disk — call "
+        "this periodically to free space. Returns a per-persona breakdown with "
+        "size + age info so you can see what would be freed before committing."
+    ),
+)
+def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
+    from .. import profile_cleanup as _pc
+    from ..defaults import PROFILES_DIR
+
+    in_use_dirs: list[Any] = []
+    for session in pool._sessions.values():
+        udd = getattr(session, "user_data_dir", None)
+        if udd:
+            from pathlib import Path as _Path
+
+            in_use_dirs.append(_Path(udd))
+
+    stale = _pc.find_stale_profiles(PROFILES_DIR, days, in_use=in_use_dirs)
+    summary = _pc.cleanup_stale(stale, dry_run=dry_run)
+    return {
+        "profiles_dir": str(PROFILES_DIR),
+        "days": days,
+        "dry_run": dry_run,
+        "found": len(stale),
+        "removed": summary["removed_count"] if not dry_run else 0,
+        "would_remove": len(stale) if dry_run else 0,
+        "freed_bytes": summary["removed_bytes"] if not dry_run else sum(s.size_bytes for s in stale),
+        "skipped_in_use": len(in_use_dirs),
+        "details": [
+            {
+                "persona": s.persona,
+                "engine": s.engine,
+                "path": str(s.path),
+                "size_bytes": s.size_bytes,
+                "age_days": round(s.age_days, 1),
+            }
+            for s in stale
+        ],
+    }

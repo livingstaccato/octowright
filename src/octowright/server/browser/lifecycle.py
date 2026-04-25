@@ -47,7 +47,10 @@ from .._state import mcp, pool
         "an on-disk user-data-dir so cookies/localStorage/IndexedDB survive close. "
         "Pass ephemeral=True for a one-off, no-state-saved launch (good for tests, "
         "incognito-style checks, or when the user explicitly asks 'just this time'). "
-        "Returns instance_id."
+        "Pass session=True for a tmpdir profile that lives for the daemon's lifetime "
+        "only — state survives close+relaunch within the same daemon, but is wiped on "
+        "daemon shutdown. Useful for 'this session only' scopes. Mutually exclusive "
+        "with ephemeral=True. Returns instance_id."
     ),
 )
 async def browser_launch(
@@ -65,6 +68,7 @@ async def browser_launch(
     badge_position: str = "bottom-right",
     tile: bool = False,
     ephemeral: bool = False,
+    session: bool = False,
 ) -> dict[str, Any]:
     return await pool.launch(
         kind=kind,
@@ -81,6 +85,7 @@ async def browser_launch(
         badge_position=badge_position,
         tile=tile,
         ephemeral=ephemeral,
+        session=session,
     )
 
 
