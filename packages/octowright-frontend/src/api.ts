@@ -1,4 +1,6 @@
 import type {
+  ConsoleListResponse,
+  DownloadListResponse,
   EventsResponse,
   HealthResponse,
   MacroSummary,
@@ -73,6 +75,17 @@ export function getMacros(): Promise<MacroSummary[]> {
 
 export function getScreenshots(id: string): Promise<ScreenshotListResponse> {
   return fetchJson<ScreenshotListResponse>(`/api/sessions/${encodeURIComponent(id)}/screenshots`);
+}
+
+export function getConsole(id: string, since = 0, level?: string): Promise<ConsoleListResponse> {
+  const qs = new URLSearchParams({ since: String(since) });
+  if (level && level !== "all") qs.set("level", level);
+  return fetchJson<ConsoleListResponse>(`/api/sessions/${encodeURIComponent(id)}/console?${qs.toString()}`);
+}
+
+export function getDownloads(id: string, since = 0): Promise<DownloadListResponse> {
+  const qs = new URLSearchParams({ since: String(since) });
+  return fetchJson<DownloadListResponse>(`/api/sessions/${encodeURIComponent(id)}/downloads?${qs.toString()}`);
 }
 
 export function openTrace(id: string): Promise<TraceOpenResponse> {

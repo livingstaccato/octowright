@@ -1,8 +1,27 @@
-import { getEvents, getSession, openTrace, tailWebSocketUrl, traceDownloadUrl, videoUrl } from "./api.js";
+import {
+  getConsole,
+  getDownloads,
+  getEvents,
+  getScreenshots,
+  getSession,
+  openTrace,
+  tailWebSocketUrl,
+  traceDownloadUrl,
+  videoUrl,
+} from "./api.js";
+import { renderConsolePanel } from "./console-panel.js";
+import { renderDownloadsPanel } from "./downloads-panel.js";
+import { renderScreenshotsPanel } from "./screenshots-panel.js";
 import { formatDateTime } from "./format.js";
 import { openTail } from "./tail.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
-import type { RecordingEvent, SessionDetail } from "./types.js";
+import type {
+  ConsoleMessage,
+  DownloadEntry,
+  RecordingEvent,
+  ScreenshotEntry,
+  SessionDetail,
+} from "./types.js";
 
 export function sessionIdFromPath(pathname: string): string | null {
   const match = /^\/sessions\/([^/?#]+)/.exec(pathname);
@@ -21,8 +40,17 @@ interface PageRefs {
   videoSlot: HTMLElement;
   traceSlot: HTMLElement;
   timeline: HTMLElement;
+  tabs: HTMLElement;
+  consolePanel: HTMLElement;
+  downloadsPanel: HTMLElement;
+  screenshotsPanel: HTMLElement;
+  consoleTabBtn: HTMLButtonElement;
+  downloadsTabBtn: HTMLButtonElement;
+  screenshotsTabBtn: HTMLButtonElement;
   footer: HTMLElement;
 }
+
+export type PanelTab = "console" | "downloads" | "screenshots";
 
 export function buildLayout(root: HTMLElement): PageRefs {
   root.innerHTML = "";
@@ -52,14 +80,87 @@ export function buildLayout(root: HTMLElement): PageRefs {
   timeline.className = "session-timeline";
   timeline.setAttribute("data-testid", "session-timeline");
 
-  right.append(timeline);
+  const tabs = document.createElement("div");
+  tabs.className = "session-tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("data-testid", "session-tabs");
+
+  const consoleTabBtn = makeTabButton("console", "Console");
+  const downloadsTabBtn = makeTabButton("downloads", "Downloads");
+  const screenshotsTabBtn = makeTabButton("screenshots", "Screenshots");
+  tabs.append(consoleTabBtn, downloadsTabBtn, screenshotsTabBtn);
+
+  const consolePanel = document.createElement("div");
+  consolePanel.className = "session-panel session-panel--console";
+  consolePanel.id = "console-panel";
+  consolePanel.setAttribute("role", "tabpanel");
+  consolePanel.setAttribute("data-tab", "console");
+
+  const downloadsPanel = document.createElement("div");
+  downloadsPanel.className = "session-panel session-panel--downloads";
+  downloadsPanel.id = "downloads-panel";
+  downloadsPanel.setAttribute("role", "tabpanel");
+  downloadsPanel.setAttribute("data-tab", "downloads");
+
+  const screenshotsPanel = document.createElement("div");
+  screenshotsPanel.className = "session-panel session-panel--screenshots";
+  screenshotsPanel.id = "screenshots-panel";
+  screenshotsPanel.setAttribute("role", "tabpanel");
+  screenshotsPanel.setAttribute("data-tab", "screenshots");
+
+  right.append(timeline, tabs, consolePanel, downloadsPanel, screenshotsPanel);
 
   const footer = document.createElement("footer");
   footer.className = "session-footer";
   footer.setAttribute("data-testid", "session-footer");
 
   root.append(left, right, footer);
-  return { header, videoSlot, traceSlot, timeline, footer };
+  return {
+    header,
+    videoSlot,
+    traceSlot,
+    timeline,
+    tabs,
+    consolePanel,
+    downloadsPanel,
+    screenshotsPanel,
+    consoleTabBtn,
+    downloadsTabBtn,
+    screenshotsTabBtn,
+    footer,
+  };
+}
+
+function makeTabButton(name: PanelTab, label: string): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "session-tab";
+  btn.setAttribute("role", "tab");
+  btn.setAttribute("data-tab", name);
+  btn.setAttribute("data-testid", `tab-${name}`);
+  btn.dataset.label = label;
+  btn.textContent = label;
+  return btn;
+}
+
+export function setActiveTab(refs: PageRefs, tab: PanelTab): void {
+  const map: Record<PanelTab, { btn: HTMLButtonElement; panel: HTMLElement }> = {
+    console: { btn: refs.consoleTabBtn, panel: refs.consolePanel },
+    downloads: { btn: refs.downloadsTabBtn, panel: refs.downloadsPanel },
+    screenshots: { btn: refs.screenshotsTabBtn, panel: refs.screenshotsPanel },
+  };
+  for (const key of Object.keys(map) as PanelTab[]) {
+    const active = key === tab;
+    map[key].btn.classList.toggle("session-tab--active", active);
+    map[key].btn.setAttribute("aria-selected", String(active));
+    map[key].panel.style.display = active ? "" : "none";
+    map[key].panel.classList.toggle("session-panel--active", active);
+  }
+}
+
+function setTabCount(btn: HTMLButtonElement, count: number): void {
+  const label = btn.dataset.label ?? btn.textContent ?? "";
+  btn.textContent = `${label} (${count})`;
 }
 
 export function renderHeader(target: HTMLElement, detail: SessionDetail): void {
@@ -165,6 +266,76 @@ interface BootOptions {
   webSocketCtor?: typeof WebSocket;
 }
 
+interface PanelData {
+  console: ConsoleMessage[];
+  downloads: DownloadEntry[];
+  screenshots: ScreenshotEntry[];
+}
+
+async function loadConsole(sessionId: string): Promise<ConsoleMessage[]> {
+  try {
+    const res = await getConsole(sessionId);
+    return res.messages;
+  } catch {
+    return [];
+  }
+}
+
+async function loadDownloads(sessionId: string): Promise<DownloadEntry[]> {
+  try {
+    const res = await getDownloads(sessionId);
+    return res.downloads;
+  } catch {
+    return [];
+  }
+}
+
+async function loadScreenshots(sessionId: string): Promise<ScreenshotEntry[]> {
+  try {
+    const res = await getScreenshots(sessionId);
+    return res.screenshots;
+  } catch {
+    return [];
+  }
+}
+
+async function refreshPanels(
+  sessionId: string,
+  refs: PageRefs,
+  data: PanelData,
+  which: Array<keyof PanelData>,
+): Promise<void> {
+  const tasks: Array<Promise<void>> = [];
+  if (which.includes("console")) {
+    tasks.push(
+      loadConsole(sessionId).then((msgs) => {
+        data.console = msgs;
+        renderConsolePanel(refs.consolePanel, msgs);
+        setTabCount(refs.consoleTabBtn, msgs.length);
+      }),
+    );
+  }
+  if (which.includes("downloads")) {
+    tasks.push(
+      loadDownloads(sessionId).then((dls) => {
+        data.downloads = dls;
+        renderDownloadsPanel(refs.downloadsPanel, dls);
+        setTabCount(refs.downloadsTabBtn, dls.length);
+      }),
+    );
+  }
+  if (which.includes("screenshots")) {
+    tasks.push(
+      loadScreenshots(sessionId).then((shots) => {
+        data.screenshots = shots;
+        renderScreenshotsPanel(refs.screenshotsPanel, sessionId, shots);
+        setTabCount(refs.screenshotsTabBtn, shots.length);
+      }),
+    );
+  }
+  await Promise.all(tasks);
+}
+
 export async function bootSession(root: HTMLElement, sessionId: string, opts: BootOptions = {}): Promise<void> {
   const refs = buildLayout(root);
   const detail = await getSession(sessionId);
@@ -173,6 +344,21 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   renderTraceControls(refs.traceSlot, detail);
   renderFooter(refs.footer, detail);
 
+  const data: PanelData = { console: [], downloads: [], screenshots: [] };
+
+  // initial empty renders so counts/labels appear immediately
+  renderConsolePanel(refs.consolePanel, data.console);
+  renderDownloadsPanel(refs.downloadsPanel, data.downloads);
+  renderScreenshotsPanel(refs.screenshotsPanel, sessionId, data.screenshots);
+  setTabCount(refs.consoleTabBtn, detail.console_count ?? 0);
+  setTabCount(refs.downloadsTabBtn, detail.download_count ?? 0);
+  setTabCount(refs.screenshotsTabBtn, 0);
+
+  refs.consoleTabBtn.addEventListener("click", () => setActiveTab(refs, "console"));
+  refs.downloadsTabBtn.addEventListener("click", () => setActiveTab(refs, "downloads"));
+  refs.screenshotsTabBtn.addEventListener("click", () => setActiveTab(refs, "screenshots"));
+  setActiveTab(refs, "console");
+
   const seek = (seconds: number): void => {
     if (videoEl) videoEl.currentTime = seconds;
   };
@@ -180,6 +366,9 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   const initial = await getEvents(sessionId, 0);
   let baseIso = initial.events[0]?.ts ?? new Date().toISOString();
   renderTimeline(refs.timeline, initial.events, { onSeek: seek });
+
+  // Fetch all three panels once on initial load (live + closed alike).
+  await refreshPanels(sessionId, refs, data, ["console", "downloads", "screenshots"]);
 
   if (detail.live) {
     const tail = openTail(tailWebSocketUrl(sessionId), {
@@ -190,6 +379,10 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
           if (first) baseIso = first.ts;
         }
         appendTimelineEvents(refs.timeline, msg.events, baseIso, { onSeek: seek });
+        // Cheap refresh: console + downloads counts may have changed.
+        refreshPanels(sessionId, refs, data, ["console", "downloads"]).catch(() => {
+          /* swallow refresh errors */
+        });
       },
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });
