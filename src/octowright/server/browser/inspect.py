@@ -240,3 +240,55 @@ async def browser_expect_js(
     result = await macro_mod._check_js(session.page, expression, equals)
     session.recorder.record("expect_js", expression=expression, equals=equals)
     return {"ok": True, "result": result}
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Read JSONL events appended to an instance's recording since byte offset `since`. "
+        "Use this to STREAM events as they happen; use browser_recording_path if you just "
+        "need the file path on disk. Pass the returned `cursor` back as `since` on the next "
+        "call to read only new events (cursor pattern). When the file ends mid-line, the "
+        "cursor stops at the start of the partial fragment so it will be re-read once "
+        "completed; `complete` is True iff cursor == total_bytes."
+    ),
+)
+def browser_tail_recording(
+    instance_id: str,
+    since: int | None = None,
+) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    log_path = Path(session.log_path)
+    prev = since or 0
+    if not log_path.exists():
+        return {"events": [], "cursor": prev, "total_bytes": 0, "complete": True}
+    with log_path.open("rb") as fh:
+        fh.seek(prev)
+        data = fh.read()
+    total_bytes = log_path.stat().st_size
+    text = data.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    # If text ends with \n, all non-empty items are complete lines.  If not, the
+    # last item is a partial fragment; exclude it and leave the cursor at its start.
+    if text.endswith("\n"):
+        complete_lines = [ln for ln in lines if ln.strip()]
+        partial_bytes = 0
+    else:
+        complete_lines = [ln for ln in lines[:-1] if ln.strip()]
+        partial_bytes = len(lines[-1].encode("utf-8"))
+    new_cursor = prev + len(data) - partial_bytes
+    events: list[dict[str, Any]] = []
+    for raw in complete_lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            events.append(_json.loads(raw))
+        except _json.JSONDecodeError:
+            continue
+    return {
+        "events": events,
+        "cursor": new_cursor,
+        "total_bytes": total_bytes,
+        "complete": new_cursor == total_bytes,
+    }
