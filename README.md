@@ -43,6 +43,36 @@ Add to `.mcp.json` in the repo you want to use it from (or `~/.claude.json` glob
 
 Reload Claude; tools appear as `mcp__octowright__browser_launch`, etc.
 
+## Your first 5 minutes
+
+Once installed and registered, ask Claude to walk through these in order. Each step
+builds on the previous one and shows you what octowright actually does.
+
+**1. Open a browser.** Ask Claude: *"launch a webkit browser at example.com"*. Claude
+calls `browser_launch kind=webkit url=https://example.com`. A real WebKit window opens
+on your desktop. The result includes the `instance_id` — Claude tracks it for you.
+
+**2. Drive it.** Ask: *"click the 'More information' link"*. Claude calls
+`browser_click_by text="More information"`. The window navigates. Every action lands
+in a JSONL recording on disk.
+
+**3. List what's open.** Ask: *"what browsers are running?"*. `browser_list` returns a
+one-line summary like `1 browser: 8a3f.../webkit @ iana.org/help/example-domains`.
+
+**4. Save the session as a macro.** Ask: *"save the last few clicks as a macro called
+example-tour"*. Claude calls `macro_save`. Now `macro_run name=example-tour` replays it.
+
+**5. Close the browser, then launch a *named* one.** Ask: *"close that browser, then
+launch a chromium browser with profile=demo at github.com"*. The window opens, you log
+in (or whatever). When you close it, the cookies/localStorage flush to
+`~/.config/undef/profiles/demo/chromium/`. Re-launch with the same profile and you're
+already logged in.
+
+That's the whole tool: parallel browsers, recordings, named macros, persistent
+profiles. **Personas** are profiles with metadata (display name, default URL,
+credential references); **scenarios** are pre-declared groups of personas you can
+spin up with one call. Both are covered later.
+
 ## Tools
 
 Every mutating tool takes an `instance_id` returned from `browser_launch`. Each call

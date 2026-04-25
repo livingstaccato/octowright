@@ -247,7 +247,13 @@ class BrowserPool:
 
     def get(self, instance_id: str) -> BrowserSession:
         if instance_id not in self._sessions:
-            raise KeyError(f"no browser with instance_id={instance_id!r}; known: {list(self._sessions)}")
+            known = list(self._sessions)
+            hint = (
+                "no browsers are live — call browser_launch first"
+                if not known
+                else f"call browser_list to see live ids; known: {known}"
+            )
+            raise KeyError(f"no browser with instance_id={instance_id!r}; {hint}")
         return self._sessions[instance_id]
 
     def list_sessions(self) -> list[dict[str, Any]]:

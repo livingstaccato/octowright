@@ -53,7 +53,10 @@ def engine_profile_dir(persona: str, kind: str) -> Path:
 def load_persona(name: str) -> Persona:
     p = persona_dir(name) / "profile.yaml"
     if not p.exists():
-        raise FileNotFoundError(f"no persona at {p}")
+        raise FileNotFoundError(
+            f"no persona named {name!r} at {p}; "
+            f"list with `persona_list` or create with `persona_create name={name!r}`"
+        )
     raw = yaml.safe_load(p.read_text())
     if not isinstance(raw, dict):
         raw = {}
@@ -203,5 +206,7 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
             raise MissingCredential(f"persona {persona.name!r} field {cred_name!r}: env var {env_name} is unset")
         return value
     raise MissingCredential(
-        f"persona {persona.name!r} field {cred_name!r}: no {cred_name}_env or {cred_name}_cmd in credentials"
+        f"persona {persona.name!r} field {cred_name!r}: no {cred_name}_env or {cred_name}_cmd in credentials. "
+        f"Add one to {persona_dir(persona.name) / 'profile.yaml'} under `credentials:` "
+        f"(e.g. {cred_name}_env: {cred_name.upper()}_VAR or {cred_name}_cmd: 'op read op://…')."
     )

@@ -167,7 +167,10 @@ def load_macro(name: str) -> dict[str, Any]:
     """Load a macro by name.  Raises ``FileNotFoundError`` if not found."""
     p = _macro_path(name)
     if not p.exists():
-        raise FileNotFoundError(f"no macro named {name!r} at {p}")
+        raise FileNotFoundError(
+            f"no macro named {name!r} at {p}; list saved macros with `macro_list` or "
+            f"record one with `macro_save instance_id=<id> name={name!r}`"
+        )
     return json.loads(p.read_text(encoding="utf-8"))
 
 
@@ -175,7 +178,7 @@ def delete_macro(name: str) -> Path:
     """Delete a macro file.  Raises ``FileNotFoundError`` if not found."""
     p = _macro_path(name)
     if not p.exists():
-        raise FileNotFoundError(f"no macro named {name!r} at {p}")
+        raise FileNotFoundError(f"no macro named {name!r} at {p}; list saved macros with `macro_list`")
     p.unlink()
     log.info("octowright.macro.deleted", name=name, path=str(p))
     return p
