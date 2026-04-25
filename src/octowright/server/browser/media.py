@@ -3,7 +3,16 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Video, trace, and frame-extraction tools."""
+"""Trace-viewer MCP tool.
+
+NOTE: ``browser_extract_frames`` and ``browser_video_path`` were retired when
+the HTTP debugger UI shipped — those one-shot lookups are now strictly worse
+than opening the dashboard, which gives you the video, frame extraction at any
+timestamp, the trace, and the action timeline in one URL. Their implementations
+(`video.extract_frames`, `BrowserSession.video_path`) are still used internally
+by `octowright.http_server`. Use ``octowright_dashboard_url`` from MCP to get
+the URL.
+"""
 
 from __future__ import annotations
 
@@ -12,20 +21,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ... import video as video_mod
 from .._state import log, mcp, pool
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Return the path to the video file recorded for an instance. "
-        "Only populated after the instance is closed (Playwright finalises the file on close)."
-    ),
-)
-def browser_video_path(instance_id: str) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    return {"video_path": str(session.video_path) if session.video_path else None}
 
 
 @mcp.tool(
@@ -71,22 +67,3 @@ def browser_open_trace(
     )
     log.info("octowright.trace.opened", path=str(target), pid=proc.pid)
     return {"path": str(target), "pid": proc.pid}
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Extract frames from a recorded video via ffmpeg. Supply exactly one of fps (frames/second) "
-        "or at_times (list of second-timestamps). Frames land in out_dir (default: next to the video)."
-    ),
-)
-def browser_extract_frames(
-    video_path: str,
-    out_dir: str | None = None,
-    fps: float | None = None,
-    at_times: list[float] | None = None,
-) -> dict[str, Any]:
-    vp = Path(video_path)
-    odir = Path(out_dir) if out_dir else vp.with_suffix(".frames")
-    frames = video_mod.extract_frames(vp, odir, fps=fps, at_times=at_times)
-    return {"video": str(vp), "out_dir": str(odir), "frames": [str(f) for f in frames]}
