@@ -49,6 +49,10 @@ class BrowserSession:
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)
     _bg_tasks: set[Any] = field(default_factory=set, repr=False)
+    # Tracks the most-recent URL passed to MCP-initiated ``navigate(url)`` so
+    # that the framenavigated listener (installed by pool._wire_listeners)
+    # can de-dup user_navigation events against our own goto calls.
+    _last_mcp_navigation: str | None = None
 
     def __post_init__(self) -> None:
         # Ensure the initial page is always index 0.
@@ -130,6 +134,9 @@ class BrowserSession:
         }
 
     async def navigate(self, url: str) -> dict[str, Any]:
+        # Tag the upcoming framenavigated event so pool's user_navigation
+        # listener skips it (we already record "navigate" below).
+        self._last_mcp_navigation = url
         await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
         title = await self.page.title()
         self.url = url
