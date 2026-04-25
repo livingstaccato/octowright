@@ -53,7 +53,7 @@ from provide.telemetry import get_logger
 from starlette.applications import Starlette
 from starlette.endpoints import WebSocketEndpoint
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -853,15 +853,34 @@ class TailEndpoint(WebSocketEndpoint):
 # ---------------------------------------------------------------------------
 
 
-def _frontend_routes() -> list[Mount]:
-    """Mount the bundled SPA at `/` if the frontend bundle is present.
+async def _serve_session_html(_: Request) -> Response:
+    """SPA fallback for /sessions/<id> deep-links — serves session.html.
 
-    The bundle is produced by the sibling TS subagent. When it isn't there
-    yet (first-run, dev), the API still works — the dashboard is just blank.
+    The frontend reads the id from window.location.pathname. Without this
+    fallback, StaticFiles 404s because there's no `sessions/<id>` file.
     """
-    if FRONTEND_DIR.exists() and FRONTEND_DIR.is_dir():
-        return [Mount("/", app=StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")]
-    return []
+    target = FRONTEND_DIR / "session.html"
+    if not target.exists():
+        return PlainTextResponse("session.html not bundled (run npm run build)", status_code=404)
+    return FileResponse(str(target), media_type="text/html")
+
+
+def _frontend_routes() -> list[Any]:
+    """Routes that serve the bundled SPA at `/`.
+
+    Adds an explicit `/sessions/{id}` route so deep-links resolve to
+    session.html (the StaticFiles mount alone can't do SPA-style routing).
+    The catchall mount at `/` handles index.html and every static asset.
+
+    When the bundle isn't there yet (first-run, dev), the API still works —
+    the dashboard is just blank.
+    """
+    if not (FRONTEND_DIR.exists() and FRONTEND_DIR.is_dir()):
+        return []
+    return [
+        Route("/sessions/{id:path}", _serve_session_html, methods=["GET"]),
+        Mount("/", app=StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend"),
+    ]
 
 
 def build_app() -> Starlette:
