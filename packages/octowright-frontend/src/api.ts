@@ -51,6 +51,7 @@ export function pathTemplate(path: string): string {
   return bare
     .replace(/^(\/api\/sessions\/)[^/]+/, "$1{id}")
     .replace(/(\/screenshots\/)[^/]+$/, "$1{file}")
+    .replace(/(\/screenshot\/now)$/, "$1")
     .replace(/(\/frame)$/, "$1");
 }
 
@@ -179,6 +180,34 @@ export function traceDownloadUrl(id: string): string {
 
 export function frameUrl(id: string, t: number): string {
   return `/api/sessions/${encodeURIComponent(id)}/frame?t=${encodeURIComponent(String(t))}`;
+}
+
+export interface LiveScreenshotOptions {
+  format?: "png" | "jpeg";
+  quality?: number;
+  fullPage?: boolean;
+  /** Cache-bust value, normally Date.now(). */
+  cacheBust?: number;
+}
+
+/**
+ * Build a URL for the live screenshot endpoint. Returns a path the browser
+ * can hand straight to an `<img>` element; cache-busting via `_=<ts>` forces
+ * a fresh fetch on every poll tick.
+ */
+export function liveScreenshotUrl(id: string, opts: LiveScreenshotOptions = {}): string {
+  const qs = new URLSearchParams();
+  qs.set("format", opts.format ?? "png");
+  if ((opts.format ?? "png") === "jpeg" && opts.quality !== undefined) {
+    qs.set("quality", String(opts.quality));
+  }
+  if (opts.fullPage !== undefined) {
+    qs.set("full_page", String(opts.fullPage));
+  }
+  if (opts.cacheBust !== undefined) {
+    qs.set("_", String(opts.cacheBust));
+  }
+  return `/api/sessions/${encodeURIComponent(id)}/screenshot/now?${qs.toString()}`;
 }
 
 export function screenshotUrl(id: string, filename: string): string {
