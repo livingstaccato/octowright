@@ -42,6 +42,7 @@ from .inspect import (
     browser_recording_path,
     browser_screenshot,
     browser_snapshot,
+    browser_tail_recording,
     browser_wait_for,
 )
 from .lifecycle import (
@@ -99,6 +100,7 @@ __all__ = [
     "browser_spawn_roster",
     "browser_suggest_for_url",
     "browser_switch_frame",
+    "browser_tail_recording",
     "browser_type",
     "browser_unmock_route",
     "browser_video_path",
