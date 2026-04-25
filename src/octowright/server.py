@@ -11,6 +11,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from provide.telemetry import get_logger
 
+from . import _format as fmt
 from . import goldens as goldens_mod
 from . import macros as macro_mod
 from . import personas as persona_mod
@@ -81,9 +82,22 @@ async def browser_launch(
     )
 
 
-@mcp.tool(structured_output=False, description="List all live browser instances.")
-def browser_list() -> list[dict[str, Any]]:
-    return pool.list_sessions()
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "List all live browser instances. Returns {summary, count, browsers}: "
+        "`summary` is a one-line human-readable gist (e.g. "
+        "'3 browsers: dante/webkit @ discord.com/app · ops/firefox @ monitor'); "
+        "`browsers` is the structured per-instance data."
+    ),
+)
+def browser_list() -> dict[str, Any]:
+    sessions = pool.list_sessions()
+    return {
+        "summary": fmt.browser_summary(sessions),
+        "count": len(sessions),
+        "browsers": sessions,
+    }
 
 
 @mcp.tool(structured_output=False, description="Close one browser instance by id.")
@@ -96,30 +110,70 @@ async def browser_close_all() -> dict[str, Any]:
     return await pool.close_all()
 
 
-@mcp.tool(structured_output=False, description="Navigate an instance to a URL.")
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Navigate an instance to a URL. Use this to go to a new page; do NOT use for "
+        "in-app routing that the SPA handles via clicks (use browser_click instead). "
+        "Equivalent to typing the URL in the address bar and hitting enter."
+    ),
+)
 async def browser_navigate(instance_id: str, url: str) -> dict[str, Any]:
     return await pool.get(instance_id).navigate(url)
 
 
-@mcp.tool(structured_output=False, description="Click a selector on an instance.")
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Click an element by CSS selector. Use this for buttons, links, checkboxes, "
+        "and any clickable element. Prefer browser_click_by when you have an aria role, "
+        "label, or data-testid (it's more resilient to DOM changes). "
+        "Don't use this to enter text — use browser_fill (instant) or browser_type (per-keystroke)."
+    ),
+)
 async def browser_click(instance_id: str, selector: str) -> dict[str, Any]:
     await pool.get(instance_id).click(selector)
     return {"ok": True}
 
 
-@mcp.tool(structured_output=False, description="Type text into a selector on an instance.")
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Type text into a selector ONE KEYSTROKE AT A TIME (with optional delay_ms). "
+        "Use this when the page reacts to per-keystroke events (autocomplete, masked "
+        "inputs, app-level keystroke handlers). For ordinary form fields prefer "
+        "browser_fill — it's much faster because it sets the value in one shot. "
+        "Don't use this to press a single non-text key like Enter or Escape — use browser_press_key."
+    ),
+)
 async def browser_type(instance_id: str, selector: str, text: str, delay_ms: int | None = None) -> dict[str, Any]:
     await pool.get(instance_id).type_text(selector, text, delay_ms)
     return {"ok": True}
 
 
-@mcp.tool(structured_output=False, description="Fill an input selector with a value (faster than type).")
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Fill an <input> or <textarea> by setting its value in one shot. "
+        "USE THIS BY DEFAULT for form fields — it's ~10x faster than browser_type and "
+        "fires a synthetic input event. Switch to browser_type only when the page needs "
+        "per-keystroke events (autocomplete, masked inputs)."
+    ),
+)
 async def browser_fill(instance_id: str, selector: str, value: str) -> dict[str, Any]:
     await pool.get(instance_id).fill(selector, value)
     return {"ok": True}
 
 
-@mcp.tool(structured_output=False, description="Press a keyboard key on an instance.")
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Press a single keyboard key on an instance. `key` uses Playwright key names: "
+        "'Enter', 'Tab', 'Escape', 'ArrowDown', 'Control+a', 'Meta+v', etc. "
+        "Use this for submit-via-Enter, keyboard shortcuts, modifiers. "
+        "Do NOT use this to enter text — that's browser_fill or browser_type."
+    ),
+)
 async def browser_press_key(instance_id: str, key: str) -> dict[str, Any]:
     await pool.get(instance_id).press_key(key)
     return {"ok": True}
@@ -233,7 +287,14 @@ def browser_console_messages(
 
 @mcp.tool(
     structured_output=False,
-    description="Wait for a selector, text, or network-idle. Provide one of selector / text, or neither for network-idle.",
+    description=(
+        "Block until a selector appears, a text becomes visible, or the network goes idle. "
+        "Use this when you need to PAUSE before the next action (e.g. wait for a "
+        "spinner to disappear, wait for a list to load). For making an ASSERTION "
+        "about page state, use browser_expect_selector / expect_text / expect_url instead — "
+        "those record a check, not a wait. Provide exactly one of selector or text, "
+        "or neither for network-idle."
+    ),
 )
 async def browser_wait_for(
     instance_id: str,
@@ -280,8 +341,12 @@ def profile_list(kind: str | None = None) -> list[dict[str, Any]]:
 )
 def profile_delete(kind: str, name: str) -> dict[str, Any]:
     if pool.profile_in_use(kind, name):
+        live_ids = [s["instance_id"] for s in pool.list_sessions() if s["kind"] == kind and s["profile"] == name]
         log.warning("octowright.profile.delete_refused", kind=kind, profile=name, reason="in_use")
-        raise RuntimeError(f"profile {kind}/{name} is in use by a live browser; close it first")
+        raise RuntimeError(
+            f"profile {kind}/{name} is in use by live browser(s) {live_ids}; "
+            f"close with `browser_close instance_id={live_ids[0]!r}` (or browser_close_all) first"
+        )
     path = profile_mod.delete_profile(kind, name)
     log.info("octowright.profile.deleted", kind=kind, profile=name, path=str(path))
     return {"deleted": True, "path": str(path)}
@@ -370,8 +435,10 @@ async def macro_run_sequence(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Assert the page URL matches `pattern`. `pattern` is a regex by default; "
-        "pass mode='equals' for exact match or mode='contains' for substring."
+        "ASSERT the current page URL matches `pattern`. Raises on mismatch — use this "
+        "to verify navigation reached the right place (e.g. after a successful login). "
+        "`pattern` is a regex by default; pass mode='equals' for exact match or "
+        "mode='contains' for substring. Don't use this just to read the URL — that's `browser_evaluate('location.href')`."
     ),
 )
 async def browser_expect_url(
@@ -388,9 +455,11 @@ async def browser_expect_url(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Assert an element matching `selector` contains `text`. "
-        "mode: 'contains' (default), 'equals', or 'regex'. `timeout_ms` controls how long "
-        "to poll while waiting for the element (default 5000)."
+        "ASSERT an element matching `selector` contains `text`. Polls up to "
+        "`timeout_ms` waiting for the element to appear AND its text to match. "
+        "mode: 'contains' (default), 'equals', or 'regex'. "
+        "Use this to verify rendered output (welcome banner, error message, table cell). "
+        "If you only need 'does this element exist?' use browser_expect_selector."
     ),
 )
 async def browser_expect_text(
@@ -409,8 +478,10 @@ async def browser_expect_text(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Assert that at least one element matching `selector` exists (or not, if present=False). "
-        "Waits up to `timeout_ms` for the condition."
+        "ASSERT at least one element matching `selector` exists (or DOES NOT exist, if "
+        "present=False). Polls up to `timeout_ms` for the condition. "
+        "Use this for existence checks (modal opened, error banner appeared/disappeared). "
+        "If you also need to check the text inside, use browser_expect_text in one call."
     ),
 )
 async def browser_expect_selector(
@@ -588,10 +659,11 @@ def browser_set_dialog_policy(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Intercept requests matching `url_pattern` and fulfill them with a stubbed response. "
-        "Useful for making tests deterministic when the target app calls external services. "
-        "url_pattern is a glob (e.g. '**/api/users') or regex (Playwright auto-detects). "
-        "Body defaults to empty. content_type defaults to application/json."
+        "Stub network responses for requests matching `url_pattern`. The browser will see "
+        "your response instead of hitting the network. Use this to make tests deterministic "
+        "(freeze a /api/time endpoint, return a fixed user list, simulate a 500 error). "
+        "Don't use this to OBSERVE traffic — it short-circuits the request. "
+        "`url_pattern` is a glob ('**/api/users') or regex (Playwright auto-detects)."
     ),
 )
 async def browser_mock_route(
@@ -873,7 +945,10 @@ def persona_delete(name: str) -> dict[str, Any]:
 
     for s in pool.list_sessions():
         if s["profile"] == name:
-            raise RuntimeError(f"persona {name!r} is in use by live instance {s['instance_id']}; close it first")
+            raise RuntimeError(
+                f"persona {name!r} is in use by live instance {s['instance_id']}; "
+                f"close with `browser_close instance_id={s['instance_id']!r}` first"
+            )
     path = delete_persona(name)
     log.info("octowright.persona.deleted", name=name, path=str(path))
     return {"deleted": True, "name": name, "path": str(path)}
@@ -908,9 +983,21 @@ async def scenario_start(name: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool(structured_output=False, description="List live scenarios and their participants.")
-def scenario_status() -> list[dict[str, Any]]:
-    return scenario_pool.list_live()
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "List live scenarios and their participants. Returns {summary, count, scenarios}: "
+        "`summary` is a one-line gist (e.g. 'scenario \\'mini\\' (2 participants): "
+        "player[dante]/webkit · monitor[ops]/firefox'); `scenarios` is the structured data."
+    ),
+)
+def scenario_status() -> dict[str, Any]:
+    live = scenario_pool.list_live()
+    return {
+        "summary": fmt.scenario_summary(live),
+        "count": len(live),
+        "scenarios": live,
+    }
 
 
 @mcp.tool(
@@ -946,10 +1033,20 @@ async def scenario_run_macro(
     )
 
 
-@mcp.tool(structured_output=False, description=("List participants of a live scenario, optionally filtered by role."))
-def scenario_participants(scenario_id: str, role: str | None = None) -> list[dict[str, Any]]:
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "List participants of a live scenario, optionally filtered by role. " "Returns {summary, count, participants}."
+    ),
+)
+def scenario_participants(scenario_id: str, role: str | None = None) -> dict[str, Any]:
     live = scenario_pool.get(scenario_id)
-    return [p for p in live.participants if role is None or p["role"] == role]
+    matched = [p for p in live.participants if role is None or p["role"] == role]
+    return {
+        "summary": fmt.participant_summary(matched) or "0 participants",
+        "count": len(matched),
+        "participants": matched,
+    }
 
 
 @mcp.tool(
