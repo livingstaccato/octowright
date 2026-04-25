@@ -62,6 +62,14 @@ from ._root import cli
     is_flag=True,
     help="Bypass leader-election and lockfile; always serve standalone.",
 )
+@click.option(
+    "--daemon-mode",
+    "daemon_mode",
+    is_flag=True,
+    hidden=True,
+    help="Internal: this process IS the daemonized leader. Skip lock check, "
+    "arm watchdog immediately. Set by spawn_daemon(); never invoke directly.",
+)
 def serve(
     http_port: int | None,
     http_host: str | None,
@@ -69,6 +77,7 @@ def serve(
     keep_alive: bool,
     idle_grace: float | None,
     no_singleton: bool,
+    daemon_mode: bool,
 ) -> None:
     """Run the MCP stdio server plus the HTTP debugger sidecar (default).
 
@@ -90,6 +99,7 @@ def serve(
                 keep_alive=keep_alive,
                 idle_grace=idle_grace,
                 no_singleton=no_singleton,
+                daemon_mode=daemon_mode,
             )
         )
     finally:
@@ -104,14 +114,33 @@ async def _serve_async(
     keep_alive: bool,
     idle_grace: float | None,
     no_singleton: bool,
+    daemon_mode: bool = False,
 ) -> None:
     """Decide leader vs follower; promote follower→leader on bridge failure.
 
-    Capped at one promotion attempt per process so a stuck loop cannot turn
-    into a runaway respawn cycle.
+    With singleton coordination on (the default), a fresh invocation that
+    finds no live leader spawns a **detached daemon** and becomes a follower
+    of it. This way the leader is never a child of Claude Code (or any
+    other MCP launcher), so SIGKILL on the launcher's child can't reach it.
     """
+    from .. import daemonize as _daemon
     from .. import singleton as _sn
 
+    # The daemon itself runs leader code directly — it knows it's the leader,
+    # and it has no parent to follow.
+    if daemon_mode:
+        await _run_leader(
+            http_host=http_host,
+            http_port=http_port,
+            no_http=no_http,
+            keep_alive=keep_alive,
+            idle_grace=idle_grace,
+            no_singleton=False,
+            arm_watchdog_immediately=True,
+        )
+        return
+
+    # --no-singleton: legacy inline-leader mode (no daemon, no follower).
     if no_singleton:
         await _run_leader(
             http_host=http_host,
@@ -126,33 +155,44 @@ async def _serve_async(
     existing = _sn.read_lock()
     leader_alive = existing is not None and not _sn.is_stale(existing) and await _sn.probe_http_alive(existing)
 
-    if leader_alive:
-        assert existing is not None
-        try:
-            await _run_follower(existing.mcp_url)
-        except Exception as exc:
-            click.echo(f"octowright: leader bridge ended ({exc}); attempting promotion", err=True)
-        else:
-            # Clean exit (leader closed our stream cleanly) — also promote if
-            # the leader is now actually gone.
-            click.echo("octowright: leader bridge closed; checking for promotion", err=True)
-
-        # Re-check: did the leader actually go away?
-        recheck = _sn.read_lock()
-        still_alive = recheck is not None and not _sn.is_stale(recheck) and await _sn.probe_http_alive(recheck)
-        if still_alive:
-            click.echo("octowright: leader still healthy, exiting", err=True)
+    # No healthy leader → spawn a daemonized one and follow it.
+    if not leader_alive:
+        click.echo("octowright: no live leader; spawning daemon", err=True)
+        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+        existing = await _daemon.wait_for_daemon()
+        if existing is None:
+            # Daemon didn't come up in time — fall back to running leader inline
+            # so the user at least gets a working server (browsers will die on
+            # this process's exit, but that's better than no service at all).
+            click.echo("octowright: daemon spawn timed out; running leader inline", err=True)
+            await _run_leader(
+                http_host=http_host,
+                http_port=http_port,
+                no_http=no_http,
+                keep_alive=keep_alive,
+                idle_grace=idle_grace,
+                no_singleton=False,
+            )
             return
-        click.echo("octowright: promoting self to leader", err=True)
 
-    await _run_leader(
-        http_host=http_host,
-        http_port=http_port,
-        no_http=no_http,
-        keep_alive=keep_alive,
-        idle_grace=idle_grace,
-        no_singleton=False,
-    )
+    assert existing is not None
+    try:
+        await _run_follower(existing.mcp_url)
+    except Exception as exc:
+        click.echo(f"octowright: leader bridge ended ({exc}); checking daemon", err=True)
+    else:
+        click.echo("octowright: leader bridge closed; checking daemon", err=True)
+
+    # Re-check: did the daemon really go away? If yes, spawn a fresh one and
+    # exit — we don't run leader inline here either (we'd just die with the
+    # parent's next signal). One spawn attempt is enough.
+    recheck = _sn.read_lock()
+    still_alive = recheck is not None and not _sn.is_stale(recheck) and await _sn.probe_http_alive(recheck)
+    if still_alive:
+        click.echo("octowright: leader still healthy, exiting", err=True)
+        return
+    click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
+    _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
 
 
 async def _run_follower(leader_mcp_url: str) -> None:
@@ -171,6 +211,7 @@ async def _run_leader(
     keep_alive: bool,
     idle_grace: float | None,
     no_singleton: bool,
+    arm_watchdog_immediately: bool = False,
 ) -> None:
     """Serve MCP stdio + HTTP debugger + (when not --no-http) HTTP-MCP."""
     import asyncio as _asyncio
@@ -222,6 +263,7 @@ async def _run_leader(
                 scenario_pool,
                 grace_seconds=grace,
                 poll_seconds=IDLE_POLL_SECONDS,
+                arm_immediately=arm_watchdog_immediately,
             ),
             name="octowright.idle_watchdog",
         )

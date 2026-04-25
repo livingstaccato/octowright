@@ -88,6 +88,43 @@ async def test_watchdog_resets_grace_when_new_session_appears() -> None:
 
 
 @pytest.mark.asyncio
+async def test_watchdog_arm_immediately_fires_without_prior_activity() -> None:
+    """When arm_immediately=True, the daemon mode exits even without ever seeing a session."""
+    pool = _stub([], [])
+    scenarios = _stub([], [])
+    await asyncio.wait_for(
+        idle_watchdog(pool, scenarios, grace_seconds=0.05, poll_seconds=0.01, arm_immediately=True),
+        timeout=1.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_watchdog_arm_immediately_resets_on_activity() -> None:
+    """Even with arm_immediately, an active session pushes the timer back."""
+    sessions: list = []
+    pool = _stub(sessions, [])
+    scenarios = _stub([], [])
+
+    async def _add_session_after_short_delay() -> None:
+        await asyncio.sleep(0.02)
+        sessions.append({"instance_id": "a"})
+        await asyncio.sleep(0.10)
+        sessions.clear()
+
+    adder = asyncio.create_task(_add_session_after_short_delay())
+    start = asyncio.get_event_loop().time()
+    await asyncio.wait_for(
+        idle_watchdog(pool, scenarios, grace_seconds=0.05, poll_seconds=0.01, arm_immediately=True),
+        timeout=1.0,
+    )
+    elapsed = asyncio.get_event_loop().time() - start
+    # Without the reset, watchdog would fire ~t=0.05. With the reset (session
+    # appears at t=0.02, leaves at t=0.12), earliest possible fire is ~t=0.17.
+    assert elapsed >= 0.15
+    await adder
+
+
+@pytest.mark.asyncio
 async def test_watchdog_treats_live_scenario_as_active() -> None:
     """A live scenario alone (no browsers) keeps the watchdog quiet."""
     scenarios_list: list = [{"scenario_id": "s"}]
