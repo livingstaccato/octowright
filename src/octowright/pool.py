@@ -464,11 +464,18 @@ class BrowserPool:
         badge: bool = True,
         badge_position: str = _BADGE_POSITION_DEFAULT,
         tile: bool = False,
+        ephemeral: bool = False,
     ) -> dict[str, Any]:
         if kind not in SUPPORTED_KINDS:
             raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {kind!r}")
         if badge_position not in _BADGE_POSITIONS:
             raise ValueError(f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {badge_position!r}")
+
+        # Promote: a named launch (label given, no explicit profile, not ephemeral)
+        # gets a persistent profile by default. The whole reason for naming a
+        # browser is so you can come back to it; ephemeral is the exception.
+        if profile is None and label is not None and not ephemeral:
+            profile = label
 
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
@@ -711,6 +718,7 @@ class BrowserPool:
                 badge=spec.get("badge", True),
                 badge_position=spec.get("badge_position", _BADGE_POSITION_DEFAULT),
                 tile=spec.get("tile", False),
+                ephemeral=spec.get("ephemeral", False),
             )
 
         results = await asyncio.gather(*[_launch_one(s) for s in specs], return_exceptions=True)

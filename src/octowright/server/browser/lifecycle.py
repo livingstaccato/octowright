@@ -43,6 +43,10 @@ from .._state import mcp, pool
         "Pass tile=True for deterministic tiled window positions (chromium only — "
         "firefox/webkit silently let the OS place the window). Useful when launching "
         "many browsers; rely on the badge for visual differentiation otherwise. "
+        "PERSISTENT BY DEFAULT: when you give a label (or profile), the browser uses "
+        "an on-disk user-data-dir so cookies/localStorage/IndexedDB survive close. "
+        "Pass ephemeral=True for a one-off, no-state-saved launch (good for tests, "
+        "incognito-style checks, or when the user explicitly asks 'just this time'). "
         "Returns instance_id."
     ),
 )
@@ -60,6 +64,7 @@ async def browser_launch(
     badge: bool = True,
     badge_position: str = "bottom-right",
     tile: bool = False,
+    ephemeral: bool = False,
 ) -> dict[str, Any]:
     return await pool.launch(
         kind=kind,
@@ -75,6 +80,7 @@ async def browser_launch(
         badge=badge,
         badge_position=badge_position,
         tile=tile,
+        ephemeral=ephemeral,
     )
 
 
