@@ -79,9 +79,97 @@ _TITLE_PREFIX_SCRIPT = r"""
 """
 
 
-def _title_prefix_for(profile: str | None, label: str | None) -> str | None:
+# Curated emoji pool for per-persona/per-label visual identity. 33 picks: mostly
+# animals and food, no people/places. Avoids 🦊/🌐/🧭 (reserved for engines below)
+# and avoids skin-tone modifiers / ZWJ sequences for cross-platform reliability.
+_PERSONA_EMOJI_POOL: tuple[str, ...] = (
+    # animals (15)
+    "🐢",
+    "🐙",
+    "🐧",
+    "🐼",
+    "🐸",
+    "🦉",
+    "🐝",
+    "🦋",
+    "🐬",
+    "🦄",
+    "🐉",
+    "🦔",
+    "🐳",
+    "🦜",
+    "🐌",
+    # food (10)
+    "🍓",
+    "🍋",
+    "🍊",
+    "🥑",
+    "🍄",
+    "🥨",
+    "🍪",
+    "🥐",
+    "🍕",
+    "🍩",
+    # plants / weather (4)
+    "🌵",
+    "🌻",
+    "🌈",
+    "🌙",
+    # misc (4)
+    "🚀",
+    "🛸",
+    "🎨",
+    "🔮",
+)
+
+# Engine emojis are NOT in the persona pool — they're reserved so the (persona,
+# engine) pair never accidentally renders as the same glyph twice.
+_ENGINE_EMOJI: dict[str, str] = {
+    "chromium": "🌐",
+    "firefox": "🦊",
+    "webkit": "🧭",
+}
+
+
+def _persona_emoji_for(seed: str) -> str:
+    """Stable persona emoji from a string seed. Same seed → same emoji."""
+    import hashlib
+
+    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+    idx = int(digest[:8], 16) % len(_PERSONA_EMOJI_POOL)
+    return _PERSONA_EMOJI_POOL[idx]
+
+
+def _emoji_pair_for(persona_emoji_override: str | None, name_seed: str | None, kind: str) -> str:
+    """Render the ``(personEmoji engineEmoji)`` pair shown in title + badge.
+
+    Persona emoji wins if explicitly set on the persona YAML; otherwise
+    hash-pick from the curated pool keyed off the seed (persona name → label
+    → short instance_id).
+    """
+    persona_emoji = persona_emoji_override or _persona_emoji_for(name_seed or "anon")
+    engine_emoji = _ENGINE_EMOJI.get(kind, "")
+    return f"({persona_emoji}{engine_emoji})"
+
+
+def _title_prefix_for(
+    profile: str | None,
+    label: str | None,
+    *,
+    persona_emoji: str | None = None,
+    kind: str | None = None,
+) -> str | None:
+    """Window-title prefix combining the emoji pair and the [tag] label.
+
+    Without an engine kind the emoji pair is skipped — keeps backwards-compat
+    for the few legacy callers that don't know the engine yet.
+    """
     tag = profile or label
-    return f"[{tag}] " if tag else None
+    if not tag:
+        return None
+    if kind:
+        return f"{_emoji_pair_for(persona_emoji, tag, kind)} [{tag}] "
+    return f"[{tag}] "
 
 
 # Corner-badge injection: adds a small fixed-position label in the top-right of
@@ -91,7 +179,6 @@ _BADGE_SCRIPT = r"""
 (() => {
     if (window.top !== window.self) return;
     const TAG = __TAG__;
-    const KIND = __KIND__;
     const COLOR = __COLOR__;
     const ID = "__octowright_badge__";
     const inject = () => {
@@ -99,7 +186,7 @@ _BADGE_SCRIPT = r"""
         if (document.getElementById(ID)) return;
         const div = document.createElement("div");
         div.id = ID;
-        div.textContent = TAG + " · " + KIND;
+        div.textContent = TAG;
         Object.assign(div.style, {
             position: "fixed", top: "8px", right: "8px",
             zIndex: "2147483647", padding: "4px 10px",
@@ -134,9 +221,19 @@ def _badge_color_for(seed: str) -> str:
     return f"hsl({hue}, 70%, 45%)"
 
 
-def _badge_text_for(profile: str | None, label: str | None, instance_id: str) -> str:
-    """Pick the visible badge text. Falls back to a short instance_id if no tag."""
-    return profile or label or instance_id[:6]
+def _badge_text_for(
+    profile: str | None,
+    label: str | None,
+    instance_id: str,
+    *,
+    persona_emoji: str | None = None,
+    kind: str | None = None,
+) -> str:
+    """Visible badge text. Includes the (persona engine) emoji pair when kind is set."""
+    tag = profile or label or instance_id[:6]
+    if kind:
+        return f"{_emoji_pair_for(persona_emoji, tag, kind)} {tag}"
+    return tag
 
 
 def _tile_position(index: int, *, cols: int = 4, win_w: int = 720, win_h: int = 540) -> tuple[int, int, int, int]:
@@ -449,16 +546,28 @@ class BrowserPool:
         _wire_listeners(session, page)
         context.on("page", session._register_popup)
 
-        title_prefix = _title_prefix_for(profile, label)
+        # Look up the persona's emoji override (if any) so title + badge can
+        # show it. Ephemeral / unknown personas just hash-pick from the pool.
+        persona_emoji_override: str | None = None
+        if profile:
+            try:
+                from .personas import load_persona
+
+                persona_emoji_override = load_persona(profile).emoji
+            except FileNotFoundError:
+                pass
+
+        title_prefix = _title_prefix_for(profile, label, persona_emoji=persona_emoji_override, kind=kind)
         if title_prefix:
             script = _TITLE_PREFIX_SCRIPT.replace("__PREFIX__", json.dumps(title_prefix))
             await context.add_init_script(script=script)
         if badge:
-            badge_text = _badge_text_for(profile, label, instance_id)
-            badge_script = (
-                _BADGE_SCRIPT.replace("__TAG__", json.dumps(badge_text))
-                .replace("__KIND__", json.dumps(kind))
-                .replace("__COLOR__", json.dumps(_badge_color_for(badge_text + kind)))
+            badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji_override, kind=kind)
+            # Color seed uses the bare tag (no emoji) so the hash stays stable
+            # whether or not the user overrides the emoji on the persona.
+            color_seed = (profile or label or instance_id[:6]) + kind
+            badge_script = _BADGE_SCRIPT.replace("__TAG__", json.dumps(badge_text)).replace(
+                "__COLOR__", json.dumps(_badge_color_for(color_seed))
             )
             await context.add_init_script(script=badge_script)
         if stabilize:
