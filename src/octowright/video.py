@@ -14,7 +14,11 @@ def ensure_ffmpeg() -> str:
     """Return the absolute path to ffmpeg. Raises RuntimeError if missing."""
     found = shutil.which("ffmpeg")
     if not found:
-        raise RuntimeError("ffmpeg not found on PATH — install it first (e.g. 'brew install ffmpeg')")
+        raise RuntimeError(
+            "ffmpeg not found on PATH; install with `brew install ffmpeg` (macOS) "
+            "or `apt-get install ffmpeg` (Linux). Required by extract_frames to "
+            "decode the recorded video into still frames."
+        )
     return found
 
 
