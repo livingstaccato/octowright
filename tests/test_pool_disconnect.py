@@ -215,6 +215,10 @@ async def test_browser_disconnected_evicts_session(
         label="disc",
         viewport_w=None,
         viewport_h=None,
+        # ephemeral path is the one that has a separate Browser object with
+        # the disconnect signal. Persistent contexts don't expose .browser,
+        # so the disconnect-handler check below would be vacuously empty.
+        ephemeral=True,
     )
     iid = result["instance_id"]
     session = pool._sessions[iid]
