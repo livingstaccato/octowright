@@ -25,6 +25,7 @@ from ..defaults import RECORDINGS_DIR
 from . import browser as _browser  # noqa: F401
 from . import goldens as _goldens  # noqa: F401
 from . import macros as _macros  # noqa: F401
+from . import meta as _meta  # noqa: F401
 from . import personas as _personas  # noqa: F401
 from . import scenarios as _scenarios  # noqa: F401
 from ._state import log, mcp, pool, scenario_pool
@@ -64,6 +65,7 @@ from .browser import (
     browser_spawn_roster,
     browser_suggest_for_url,
     browser_switch_frame,
+    browser_tail_recording,
     browser_type,
     browser_unmock_route,
     browser_video_path,
@@ -74,7 +76,17 @@ from .browser import (
     page_switch,
 )
 from .goldens import golden_assert, golden_delete, golden_list, golden_save
-from .macros import macro_delete, macro_list, macro_run, macro_run_sequence, macro_save, run_test_suite
+from .macros import (
+    macro_delete,
+    macro_lint,
+    macro_list,
+    macro_run,
+    macro_run_sequence,
+    macro_save,
+    recordings_cleanup,
+    run_test_suite,
+)
+from .meta import octowright_check_takeover
 from .personas import (
     migrate_profiles,
     persona_create,
@@ -88,6 +100,7 @@ from .personas import (
 from .scenarios import (
     scenario_list,
     scenario_participants,
+    scenario_plan,
     scenario_run_as_test,
     scenario_run_macro,
     scenario_start,
@@ -139,6 +152,7 @@ __all__ = [
     "browser_spawn_roster",
     "browser_suggest_for_url",
     "browser_switch_frame",
+    "browser_tail_recording",
     "browser_type",
     "browser_unmock_route",
     "browser_video_path",
@@ -150,12 +164,14 @@ __all__ = [
     "golden_save",
     "log",
     "macro_delete",
+    "macro_lint",
     "macro_list",
     "macro_run",
     "macro_run_sequence",
     "macro_save",
     "mcp",
     "migrate_profiles",
+    "octowright_check_takeover",
     "page_close",
     "page_list",
     "page_switch",
@@ -167,11 +183,13 @@ __all__ = [
     "pool",
     "profile_delete",
     "profile_list",
+    "recordings_cleanup",
     "recordings_dir",
     "registered_tool_names",
     "run_test_suite",
     "scenario_list",
     "scenario_participants",
+    "scenario_plan",
     "scenario_pool",
     "scenario_run_as_test",
     "scenario_run_macro",
