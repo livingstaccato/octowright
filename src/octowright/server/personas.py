@@ -114,6 +114,22 @@ def persona_delete(name: str) -> dict[str, Any]:
 
 @mcp.tool(
     structured_output=False,
+    description=(
+        "Pre-flight check that every credential reference in a persona's profile.yaml can "
+        "actually be resolved — before you launch a browser and discover the secret is "
+        "missing mid-flow. Returns {persona, checked, ok, summary}: `checked` is one entry "
+        "per declared credential with {name, source ('env'|'cmd'), reference, ok, error}; "
+        "the resolved secret value is NEVER included. Use this before any scenario whose "
+        "startup_macros need credentials (e.g. a discord-login macro)."
+    ),
+)
+def persona_credentials_check(name: str) -> dict[str, Any]:
+    persona = persona_mod.load_persona(name)
+    return persona_mod.check_credentials(persona)
+
+
+@mcp.tool(
+    structured_output=False,
     description=("Run the one-shot legacy profile-layout migration. Idempotent. Returns counts."),
 )
 def migrate_profiles() -> dict[str, Any]:

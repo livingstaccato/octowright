@@ -210,3 +210,76 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
         f"Add one to {persona_dir(persona.name) / 'profile.yaml'} under `credentials:` "
         f"(e.g. {cred_name}_env: {cred_name.upper()}_VAR or {cred_name}_cmd: 'op read op://…')."
     )
+
+
+def _credential_names(persona: Persona) -> list[str]:
+    """Return the sorted list of credential names declared by a persona.
+
+    A name is any ``<name>_env`` or ``<name>_cmd`` key in credentials — the
+    same inference `resolve_credential` uses. Duplicates (both forms present
+    for one name) collapse to a single entry.
+    """
+    names: set[str] = set()
+    for key in persona.credentials:
+        if key.endswith("_env"):
+            names.add(key[: -len("_env")])
+        elif key.endswith("_cmd"):
+            names.add(key[: -len("_cmd")])
+    return sorted(names)
+
+
+def check_credentials(persona: Persona) -> dict[str, Any]:
+    """Try to resolve every declared credential reference WITHOUT raising.
+
+    Returns a structured report per field — success/failure + the reference
+    type (env or cmd) and its literal reference (env var name or the shell
+    command). Never includes the resolved secret value.
+
+    Shape:
+        {
+          "persona": str,
+          "checked": [
+              {"name": str, "source": "env"|"cmd", "reference": str, "ok": bool,
+               "error": str | None},
+              ...
+          ],
+          "ok": bool,        # True iff every field resolved
+          "summary": str,    # "N/M credentials resolved; ..."
+        }
+
+    Fields with both ``_env`` and ``_cmd`` are checked as ``cmd`` only (matching
+    ``resolve_credential`` precedence) — the ``_env`` value is ignored.
+    """
+    names = _credential_names(persona)
+    checked: list[dict[str, Any]] = []
+    for name in names:
+        cmd_key = f"{name}_cmd"
+        env_key = f"{name}_env"
+        if cmd_key in persona.credentials:
+            source = "cmd"
+            reference = persona.credentials[cmd_key]
+        else:
+            source = "env"
+            reference = persona.credentials[env_key]
+        try:
+            resolve_credential(persona, name)
+            checked.append({"name": name, "source": source, "reference": reference, "ok": True, "error": None})
+        except MissingCredential as e:
+            checked.append({"name": name, "source": source, "reference": reference, "ok": False, "error": str(e)})
+
+    total = len(checked)
+    passed = sum(1 for c in checked if c["ok"])
+    if total == 0:
+        summary = f"persona {persona.name!r} declares no credentials"
+    else:
+        failing = [c["name"] for c in checked if not c["ok"]]
+        if not failing:
+            summary = f"{passed}/{total} credentials resolved"
+        else:
+            summary = f"{passed}/{total} credentials resolved; failing: {', '.join(failing)}"
+    return {
+        "persona": persona.name,
+        "checked": checked,
+        "ok": passed == total and total > 0,
+        "summary": summary,
+    }

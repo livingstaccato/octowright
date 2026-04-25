@@ -78,6 +78,7 @@ from .macros import macro_delete, macro_list, macro_run, macro_run_sequence, mac
 from .personas import (
     migrate_profiles,
     persona_create,
+    persona_credentials_check,
     persona_delete,
     persona_get,
     persona_list,
@@ -159,6 +160,7 @@ __all__ = [
     "page_list",
     "page_switch",
     "persona_create",
+    "persona_credentials_check",
     "persona_delete",
     "persona_get",
     "persona_list",
