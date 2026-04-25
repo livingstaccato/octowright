@@ -27,7 +27,7 @@ def test_round_trip(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.pid == os.getpid()
     assert loaded.http_port == 8765
-    assert loaded.mcp_url == "http://127.0.0.1:8765/mcp"
+    assert loaded.mcp_url == "http://127.0.0.1:8765/mcp/"
 
 
 def test_read_lock_missing_returns_none(tmp_path: Path) -> None:
