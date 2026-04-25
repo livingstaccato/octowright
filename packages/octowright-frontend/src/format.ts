@@ -1,0 +1,64 @@
+export function truncate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  if (max <= 1) return value.slice(0, max);
+  return `${value.slice(0, max - 1)}…`;
+}
+
+export function shortUrl(url: string | null | undefined, max = 60): string {
+  if (!url) return "";
+  let display = url;
+  try {
+    const parsed = new URL(url);
+    const tail = `${parsed.pathname}${parsed.search}`;
+    display = `${parsed.host}${tail === "/" ? "" : tail}`;
+  } catch {
+    // not a URL — display as-is
+  }
+  return truncate(display, max);
+}
+
+export function formatTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const ss = String(d.getUTCSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+export type ActionColorKind = "navigate" | "click" | "fill" | "expect" | "error" | "default";
+
+export function colorForAction(action: string): ActionColorKind {
+  const a = action.toLowerCase();
+  if (a === "navigate" || a === "goto" || a === "navigation") return "navigate";
+  if (a === "click" || a === "dblclick") return "click";
+  if (a === "fill" || a === "type" || a === "press_key") return "fill";
+  if (a.startsWith("expect_") || a.startsWith("expect")) return "expect";
+  if (a === "error" || a === "exception" || a === "failure") return "error";
+  return "default";
+}
+
+const HEADLINE_KEYS = ["selector", "url", "text", "value", "key", "name", "filename", "message"];
+
+export function eventHeadline(event: Record<string, unknown>, max = 60): string {
+  for (const key of HEADLINE_KEYS) {
+    const v = event[key];
+    if (typeof v === "string" && v.length > 0) {
+      return truncate(v, max);
+    }
+  }
+  return "";
+}
+
+export function relativeSeconds(iso: string, baseIso: string): number {
+  const a = Date.parse(iso);
+  const b = Date.parse(baseIso);
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+  return Math.max(0, (a - b) / 1000);
+}
