@@ -84,7 +84,7 @@ from .macros import (
     recordings_cleanup,
     run_test_suite,
 )
-from .meta import octowright_check_takeover, octowright_dashboard_url
+from .meta import octowright_check_takeover, octowright_dashboard_url, octowright_status
 from .personas import (
     migrate_profiles,
     persona_create,
@@ -169,6 +169,7 @@ __all__ = [
     "migrate_profiles",
     "octowright_check_takeover",
     "octowright_dashboard_url",
+    "octowright_status",
     "page_close",
     "page_list",
     "page_switch",
