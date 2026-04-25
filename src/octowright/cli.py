@@ -71,6 +71,27 @@ def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | Non
 
 
 @cli.command()
+@click.option("--force", is_flag=True, help="Overwrite existing sample persona/scenario/macro files.")
+def init(force: bool) -> None:
+    """Scaffold the standard layout: profile/scenario/macro dirs + samples + MCP registration block."""
+    from . import scaffold
+    from .defaults import PROFILES_DIR, SCENARIOS_DIR
+    from .macros import MACROS_DIR
+
+    setup_telemetry()
+    try:
+        report = scaffold.scaffold_all(
+            profiles_dir=PROFILES_DIR,
+            macros_dir=MACROS_DIR,
+            scenarios_dir=SCENARIOS_DIR,
+            force=force,
+        )
+        scaffold.render_report(report)
+    finally:
+        shutdown_telemetry()
+
+
+@cli.command()
 def selftest() -> None:
     """List registered tools and exit."""
     setup_telemetry()
