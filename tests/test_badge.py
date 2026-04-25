@@ -14,10 +14,18 @@ from __future__ import annotations
 
 import pytest
 
-from octowright.pool import _badge_color_for, _badge_text_for
+from octowright.pool import (
+    _ENGINE_EMOJI,
+    _PERSONA_EMOJI_POOL,
+    _badge_color_for,
+    _badge_text_for,
+    _emoji_pair_for,
+    _persona_emoji_for,
+)
 
 
 def test_badge_text_prefers_profile_over_label() -> None:
+    """Without kind, falls back to bare tag (legacy callers)."""
     assert _badge_text_for("disc-1", "ignored", "abcdef123456") == "disc-1"
 
 
@@ -28,6 +36,20 @@ def test_badge_text_falls_back_to_label_when_no_profile() -> None:
 def test_badge_text_falls_back_to_short_id_when_neither_set() -> None:
     """Without persona or label, show a 6-char id slice — better than blank."""
     assert _badge_text_for(None, None, "abcdef123456") == "abcdef"
+
+
+def test_badge_text_with_kind_includes_emoji_pair() -> None:
+    """Modern callers pass kind → text starts with the (persona engine) pair."""
+    text = _badge_text_for("disc-1", None, "abcdef123456", kind="firefox")
+    assert text.endswith(" disc-1")
+    assert _ENGINE_EMOJI["firefox"] in text  # 🦊
+    assert text.startswith("(") and ")" in text
+
+
+def test_badge_text_respects_persona_emoji_override() -> None:
+    text = _badge_text_for("disc-1", None, "abcdef123456", persona_emoji="🦄", kind="chromium")
+    assert text.startswith("(🦄")
+    assert _ENGINE_EMOJI["chromium"] in text
 
 
 def test_badge_color_is_stable_for_same_seed() -> None:
@@ -49,6 +71,51 @@ def test_badge_color_is_well_formed_hsl() -> None:
     # Sanity-check the hue parses as int in [0, 360).
     hue = int(color[len("hsl(") : color.index(",")])
     assert 0 <= hue < 360
+
+
+# ---------------------------------------------------------------------------
+# Emoji pool + pair helpers
+# ---------------------------------------------------------------------------
+
+
+def test_persona_emoji_pool_size() -> None:
+    """The user picked exactly 33; guard against accidental edits."""
+    assert len(_PERSONA_EMOJI_POOL) == 33
+
+
+def test_persona_emoji_pool_no_engine_clashes() -> None:
+    """Engine emojis must not appear in the persona pool — otherwise (X X) collisions."""
+    for engine_emoji in _ENGINE_EMOJI.values():
+        assert engine_emoji not in _PERSONA_EMOJI_POOL
+
+
+def test_persona_emoji_pool_unique() -> None:
+    assert len(set(_PERSONA_EMOJI_POOL)) == len(_PERSONA_EMOJI_POOL)
+
+
+def test_persona_emoji_is_stable() -> None:
+    assert _persona_emoji_for("disc-1") == _persona_emoji_for("disc-1")
+
+
+def test_persona_emoji_distributes_across_pool() -> None:
+    """A random sample of names should hit at least 10 distinct emojis from the pool."""
+    sample = {_persona_emoji_for(f"persona-{i}") for i in range(50)}
+    assert len(sample) >= 10
+
+
+def test_emoji_pair_uses_override_when_set() -> None:
+    assert _emoji_pair_for("🦄", "ignored-seed", "chromium") == "(🦄🌐)"
+
+
+def test_emoji_pair_falls_back_to_hash_pick() -> None:
+    pair = _emoji_pair_for(None, "disc-1", "firefox")
+    assert pair.endswith("🦊)")  # firefox engine emoji
+    assert pair.startswith("(")
+
+
+def test_emoji_pair_for_unknown_engine_drops_engine_emoji() -> None:
+    pair = _emoji_pair_for("🦄", "n/a", "lynx")  # not a real engine
+    assert pair == "(🦄)"
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +160,9 @@ async def test_badge_actually_renders_in_real_browser(tmp_path) -> None:
         assert present is True
 
         text = await session.page.evaluate("document.getElementById('__octowright_badge__').textContent")
+        # New format: "(personaEmoji engineEmoji) tag" — engine name no longer in text.
         assert "probe" in text
-        assert "chromium" in text
+        assert _ENGINE_EMOJI["chromium"] in text  # 🌐 = chromium
 
         # Now confirm badge=False suppresses it.
         result2 = await pool.launch(
