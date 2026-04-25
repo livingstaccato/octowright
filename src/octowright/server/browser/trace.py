@@ -3,16 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Trace-viewer MCP tool.
-
-NOTE: ``browser_extract_frames`` and ``browser_video_path`` were retired when
-the HTTP debugger UI shipped — those one-shot lookups are now strictly worse
-than opening the dashboard, which gives you the video, frame extraction at any
-timestamp, the trace, and the action timeline in one URL. Their implementations
-(`video.extract_frames`, `BrowserSession.video_path`) are still used internally
-by `octowright.http_server`. Use ``octowright_dashboard_url`` from MCP to get
-the URL.
-"""
+"""Open a saved Playwright trace .zip in the trace viewer."""
 
 from __future__ import annotations
 

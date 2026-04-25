@@ -85,9 +85,9 @@ def test_open_trace_with_instance_id_but_no_trace_recorded(monkeypatch: pytest.M
     fake_pool = SimpleNamespace(get=lambda iid: _FakeSession())
     # Patch the submodule's local binding (where the lookup actually happens),
     # not just the top-level re-export.
-    from octowright.server.browser import media as _media
+    from octowright.server.browser import trace as _trace
 
-    monkeypatch.setattr(_media, "pool", fake_pool)
+    monkeypatch.setattr(_trace, "pool", fake_pool)
 
     with pytest.raises(RuntimeError, match="not launched with trace=True"):
         _server.browser_open_trace(instance_id="abc")
