@@ -37,6 +37,9 @@ from .._state import mcp, pool
         "By default a small colored corner badge is injected so 10+ parallel browsers can "
         "be visually told apart — same color across relaunches. Pass badge=False to disable "
         "(recommended for sites that fingerprint DOM additions, like banks). "
+        "Pass tile=True for deterministic tiled window positions (chromium only — "
+        "firefox/webkit silently let the OS place the window). Useful when launching "
+        "many browsers; rely on the badge for visual differentiation otherwise. "
         "Returns instance_id."
     ),
 )
@@ -52,6 +55,7 @@ async def browser_launch(
     record_video: bool = False,
     trace: bool = False,
     badge: bool = True,
+    tile: bool = False,
 ) -> dict[str, Any]:
     return await pool.launch(
         kind=kind,
@@ -65,6 +69,7 @@ async def browser_launch(
         record_video=record_video,
         trace=trace,
         badge=badge,
+        tile=tile,
     )
 
 

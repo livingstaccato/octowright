@@ -139,6 +139,32 @@ def _badge_text_for(profile: str | None, label: str | None, instance_id: str) ->
     return profile or label or instance_id[:6]
 
 
+def _tile_position(index: int, *, cols: int = 4, win_w: int = 720, win_h: int = 540) -> tuple[int, int, int, int]:
+    """Return (x, y, w, h) for the ``index``-th tiled window in a grid.
+
+    Deterministic so launching the same number of browsers in the same order
+    always produces the same layout — useful for muscle memory.
+    """
+    margin_x, margin_y = 40, 60
+    gap = 20
+    col = index % cols
+    row = index // cols
+    x = margin_x + col * (win_w + gap)
+    y = margin_y + row * (win_h + gap)
+    return x, y, win_w, win_h
+
+
+def _tile_args_for_chromium(index: int) -> list[str]:
+    """Build the Chromium CLI flags that pin a window to a tile slot.
+
+    Firefox/WebKit don't have an equivalent CLI hook, so we no-op there and
+    let the OS place those windows wherever — the badge does the heavy lifting
+    for visual differentiation in those engines.
+    """
+    x, y, w, h = _tile_position(index)
+    return [f"--window-position={x},{y}", f"--window-size={w},{h}"]
+
+
 def _wire_listeners(session: BrowserSession, page: Any) -> None:
     """Attach per-page listeners (dialog, download, close, framenavigated) to a page.
     Called for both the initial page at launch AND any popup page opened mid-session.
@@ -314,6 +340,7 @@ class BrowserPool:
         record_video: bool = False,
         trace: bool = False,
         badge: bool = True,
+        tile: bool = False,
     ) -> dict[str, Any]:
         if kind not in SUPPORTED_KINDS:
             raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {kind!r}")
@@ -337,6 +364,13 @@ class BrowserPool:
         if video_dir is not None:
             ctx_video_kwargs["record_video_dir"] = str(video_dir)
 
+        # Chromium-only window tiling: deterministic grid based on current pool
+        # size at launch time. No-op for firefox/webkit (no equivalent CLI hook)
+        # and for headless runs (no window to position).
+        launch_kwargs: dict[str, Any] = {}
+        if tile and kind == "chromium" and not headless:
+            launch_kwargs["args"] = _tile_args_for_chromium(len(self._sessions))
+
         if profile:
             pdir = profile_dir(kind, profile)
             pdir.mkdir(parents=True, exist_ok=True)
@@ -347,11 +381,12 @@ class BrowserPool:
                 viewport={"width": vw, "height": vh},
                 accept_downloads=True,
                 **ctx_video_kwargs,
+                **launch_kwargs,
             )
             browser = None
             page = context.pages[0] if context.pages else await context.new_page()
         else:
-            browser = await browser_type.launch(headless=headless)
+            browser = await browser_type.launch(headless=headless, **launch_kwargs)
             context = await browser.new_context(
                 viewport={"width": vw, "height": vh},
                 accept_downloads=True,
@@ -531,6 +566,8 @@ class BrowserPool:
                 record_video=spec.get("record_video", False),
                 stabilize=spec.get("stabilize", False),
                 trace=spec.get("trace", False),
+                badge=spec.get("badge", True),
+                tile=spec.get("tile", False),
             )
 
         results = await asyncio.gather(*[_launch_one(s) for s in specs], return_exceptions=True)
