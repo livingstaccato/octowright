@@ -27,15 +27,33 @@ build-backend = "hatchling.build"
 packages = ["src/octowright"]
 
 [dependency-groups]
+# Mirrors provide-telemetry's dev toolchain so any contributor across the
+# provide-io ecosystem runs the same checks. Bump in lockstep with that project.
 dev = [
-    "pytest>=8",
     "anyio[trio]>=4.4.0",
-    "pytest-anyio>=0.0.0",
-    "ruff>=0.8",
-    "mypy>=1.11",
-    "codespell>=2.3",
+    "bandit>=1.8.6",
+    "build>=1.2.2",
+    "codespell>=2.4.1",
+    "hypothesis>=6.130.0",
+    "memray>=1.0; sys_platform == 'linux' or sys_platform == 'darwin'",
+    "mutmut>=3.3.1",
+    "mypy>=1.18.0",
+    "pip-audit>=2.7.0",
+    "pip-licenses>=5.0.0",
     "pre-commit>=4.6.0",
+    "pytest>=8.3.0",
+    "pytest-anyio>=0.0.0",
     "pytest-asyncio>=1.0",
+    "pytest-cov>=6.1.1",
+    "pytest-randomly>=3.15.0",
+    "pytest-rerunfailures>=14.0",
+    "pytest-xdist>=3.8.0",
+    "reuse>=6.2.0",
+    "ruff>=0.14.5",
+    "twine>=5.1.1",
+    "ty>=0.0.18",
+    "vulture>=2.14",
+    "xenon>=0.9.3",
 ]
 
 [tool.pytest.ini_options]
@@ -45,7 +63,20 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--tb=short",
+    "--cov=src/octowright",
+    "--cov-branch",
+    "--cov-report=term-missing",
 ]
+
+[tool.coverage.run]
+source = ["src/octowright"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# fail_under will be raised as we backfill tests; set deliberately low for now.
+fail_under = 50
 
 [tool.ruff]
 line-length = 120
