@@ -152,4 +152,31 @@ describe("mountLivePreview — live session", () => {
     expect(playBtn.textContent).toBe("⏸");
     handle.destroy();
   });
+
+  it("markClosed stops polling, swaps to CLOSED badge, and disables play", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live9", isLive: true, intervalMs: 1000 });
+    handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    if (!img || !playBtn || !badge) throw new Error("missing elements");
+
+    handle.markClosed();
+    const srcAfterClose = img.src;
+    // Advance well past several poll intervals — img.src must not change again.
+    vi.advanceTimersByTime(60_000);
+    expect(img.src).toBe(srcAfterClose);
+    expect(badge.textContent).toBe("CLOSED");
+    expect(playBtn.disabled).toBe(true);
+    handle.destroy();
+  });
+
+  it("markClosed is idempotent and a no-op for already-closed sessions", () => {
+    const closedHandle = mountLivePreview(container, { sessionId: "closed1", isLive: false });
+    // Should not throw — closed-mode handle exposes a no-op markClosed.
+    closedHandle.markClosed();
+    closedHandle.markClosed();
+    closedHandle.destroy();
+  });
 });

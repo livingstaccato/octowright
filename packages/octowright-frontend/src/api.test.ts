@@ -161,4 +161,12 @@ describe("url helpers", () => {
     expect(url.startsWith("ws://") || url.startsWith("wss://")).toBe(true);
     expect(url.endsWith("/api/sessions/a/tail")).toBe(true);
   });
+  it("tailWebSocketUrl appends ?since when nonzero", () => {
+    const url = tailWebSocketUrl("a", 42);
+    expect(url.endsWith("/api/sessions/a/tail?since=42")).toBe(true);
+  });
+  it("tailWebSocketUrl omits ?since when zero", () => {
+    const url = tailWebSocketUrl("a", 0);
+    expect(url.includes("?")).toBe(false);
+  });
 });

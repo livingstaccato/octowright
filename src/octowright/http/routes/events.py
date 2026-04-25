@@ -229,7 +229,15 @@ class TailEndpoint(WebSocketEndpoint):
             return
 
         log_path = Path(live_session.log_path)
-        cursor = 0
+        # Start where the caller's history fetch left off, if they pass it.
+        # Without this, the first WS push replays everything from byte 0 and
+        # the dashboard renders the launch event twice (once from the initial
+        # GET /events, once from the tail's first frame).
+        raw_since = websocket.query_params.get("since")
+        try:
+            cursor = int(raw_since) if raw_since is not None else 0
+        except ValueError:
+            cursor = 0
         try:
             while True:
                 snapshot = _tail_jsonl(log_path, cursor)

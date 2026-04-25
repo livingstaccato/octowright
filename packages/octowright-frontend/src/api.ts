@@ -214,8 +214,9 @@ export function screenshotUrl(id: string, filename: string): string {
   return `/api/sessions/${encodeURIComponent(id)}/screenshots/${encodeURIComponent(filename)}`;
 }
 
-export function tailWebSocketUrl(id: string): string {
+export function tailWebSocketUrl(id: string, since = 0): string {
   const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = typeof window !== "undefined" ? window.location.host : "localhost";
-  return `${proto}//${host}/api/sessions/${encodeURIComponent(id)}/tail`;
+  const qs = since > 0 ? `?since=${since}` : "";
+  return `${proto}//${host}/api/sessions/${encodeURIComponent(id)}/tail${qs}`;
 }
