@@ -424,18 +424,28 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   await refreshPanels(sessionId, refs, data, ["console", "downloads", "screenshots"]);
 
   if (detail.live) {
-    const tail = openTail(tailWebSocketUrl(sessionId), {
+    // Pass the history cursor so the tail starts AFTER what we already rendered.
+    // Without this, the first WS frame replays the launch event a second time.
+    const tail = openTail(tailWebSocketUrl(sessionId, initial.cursor), {
       onMessage: (msg) => {
-        if (msg.events.length === 0) return;
-        if (initial.events.length === 0) {
-          const first = msg.events[0];
-          if (first) baseIso = first.ts;
+        if (msg.events.length > 0) {
+          if (initial.events.length === 0) {
+            const first = msg.events[0];
+            if (first) baseIso = first.ts;
+          }
+          appendTimelineEvents(refs.timeline, msg.events, baseIso, { onSeek: seek });
+          // Cheap refresh: console + downloads counts may have changed.
+          refreshPanels(sessionId, refs, data, ["console", "downloads"]).catch((err: unknown) => {
+            log.warn({ event: "panel_refresh_failed", session_id: sessionId, error: String(err) });
+          });
         }
-        appendTimelineEvents(refs.timeline, msg.events, baseIso, { onSeek: seek });
-        // Cheap refresh: console + downloads counts may have changed.
-        refreshPanels(sessionId, refs, data, ["console", "downloads"]).catch((err: unknown) => {
-          log.warn({ event: "panel_refresh_failed", session_id: sessionId, error: String(err) });
-        });
+        // The server flips ``complete: true`` when the live session
+        // transitions to closed mid-connection. Stop polling /screenshot/now
+        // immediately so the user doesn't see a stream of "transient error
+        // (0)" indicators against a dead page.
+        if (msg.complete) {
+          livePreview.markClosed();
+        }
       },
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });

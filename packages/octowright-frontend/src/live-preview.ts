@@ -32,6 +32,10 @@ export interface LivePreviewHandle {
   start: () => void;
   stop: () => void;
   setInterval: (ms: number) => void;
+  /** Transition a previously-live preview to its closed state. Stops polling
+   * and swaps the badge so the user sees "session closed" instead of a
+   * stream of "transient error (0)" indicators. Idempotent. */
+  markClosed: () => void;
   destroy: () => void;
 }
 
@@ -111,6 +115,9 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       },
       setInterval: () => {
         // no-op
+      },
+      markClosed: () => {
+        // already closed
       },
       destroy: () => {
         state.destroyed = true;
@@ -277,6 +284,21 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
         clearInterval(state.timer);
         state.timer = setInterval(tick, ms);
       }
+    },
+    markClosed: () => {
+      if (state.destroyed) return;
+      stopPolling();
+      // Swap the live toolbar's "PAUSED" badge for the closed-session one and
+      // disable the play button so the user can't restart polling against a
+      // dead page. The error indicator is cleared too — it would otherwise
+      // sit on screen showing the last "transient error (0)".
+      const b = badgeForState("closed");
+      badge.className = `live-preview__badge ${b.className}`;
+      badge.textContent = b.text;
+      playBtn.disabled = true;
+      playBtn.setAttribute("aria-label", "Session closed");
+      clearError();
+      log.info({ event: "live_preview_marked_closed", session_id: opts.sessionId });
     },
     destroy: () => {
       if (state.destroyed) return;
