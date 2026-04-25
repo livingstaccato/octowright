@@ -222,6 +222,38 @@ are the reusable middle of a flow, not the wrapper. Pass `include_launch=True` o
 rewrites its CSS classes frequently). Treat them as short-term automation, not
 durable scripts — when a macro breaks, re-record rather than hand-patch.
 
+### Conditional / branching actions
+
+For sites that ship multiple DOM versions of the same flow, three action types
+let one macro cover all of them. Hand-author these by editing the JSON; record
+the linear baseline first, then wrap fragile steps:
+
+- **`if_selector`** — predicate on selector presence; runs `then` or `else`.
+  ```json
+  {"action": "if_selector", "selector": ".cookie-banner", "present": true,
+   "then": [{"action": "click", "selector": ".accept-cookies"}]}
+  ```
+- **`try`** — best-effort sub-sequence that SUPPRESSES errors. Use for
+  optional steps like dismissing a one-off banner that may or may not exist.
+  ```json
+  {"action": "try", "actions": [
+      {"action": "click", "selector": "#optional-popup-close"}
+  ]}
+  ```
+- **`try_each`** — branches in order; succeeds on the first whose every
+  action completes; raises if all fail. The "v1 OR v2 OR v3" hammer.
+  ```json
+  {"action": "try_each", "branches": [
+      [{"action": "click", "selector": "[aria-label='Close']"}],
+      [{"action": "click", "selector": "button.dismiss"}],
+      [{"action": "press_key", "key": "Escape"}]
+  ]}
+  ```
+
+These nest freely — `if_selector` inside `try_each` inside `try` works as you
+would expect. See `examples/macros/conditional-discord-modal-dismiss.json` for
+a real-world pattern.
+
 ## Scenarios — coordinated multi-browser orchestration
 
 A scenario is a named group of browser instances launched together. Spin up N

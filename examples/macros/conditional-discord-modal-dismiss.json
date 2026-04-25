@@ -1,0 +1,25 @@
+{
+  "name": "conditional-discord-modal-dismiss",
+  "description": "Dismiss whichever Discord onboarding/announcement modal happens to be showing — tries v1 close button, then v2 dismiss button, then a final Escape keypress as a catch-all.",
+  "parameters": [],
+  "created_at": "2026-04-25T00:00:00Z",
+  "updated_at": "2026-04-25T00:00:00Z",
+  "actions": [
+    {
+      "action": "try_each",
+      "branches": [
+        [{"action": "click", "selector": "[aria-label='Close'][role='button']"}],
+        [{"action": "click", "selector": "button.dismiss"}],
+        [{"action": "press_key", "key": "Escape"}]
+      ]
+    },
+    {
+      "action": "if_selector",
+      "selector": "[role='dialog']",
+      "present": false,
+      "then": [
+        {"action": "expect_js", "expression": "true"}
+      ]
+    }
+  ]
+}
