@@ -1,0 +1,14 @@
+{
+  "name": "octowright-root",
+  "private": true,
+  "workspaces": [
+    "packages/octowright-frontend"
+  ],
+  "scripts": {
+    "build:frontend": "npm run build --workspace=packages/octowright-frontend",
+    "typecheck:frontend": "npm run typecheck --workspace=packages/octowright-frontend",
+    "lint:frontend": "npm run lint --workspace=packages/octowright-frontend",
+    "fix:frontend": "npm run fix --workspace=packages/octowright-frontend",
+    "test:frontend": "npm run test --workspace=packages/octowright-frontend"
+  }
+}

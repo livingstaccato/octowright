@@ -3,11 +3,11 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Meta tools — octowright-self introspection (takeover detection, etc.).
+"""Meta tools — octowright-self introspection (takeover detection, dashboard URL).
 
 Distinct from the gameplay tools (`browser`, `macros`, `scenarios`, …): these
-tools talk *about* octowright's place in the user's MCP ecosystem rather than
-driving browsers. Currently just `octowright_check_takeover`.
+tools talk *about* octowright (its UI, its MCP ecosystem) rather than driving
+browsers.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import takeover as _takeover
-from ._state import mcp
+from ._state import mcp, pool, scenario_pool
 
 
 @mcp.tool(
@@ -61,3 +61,51 @@ def octowright_check_takeover() -> dict[str, Any]:
         ],
         "next_step": next_step,
     }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Returns the URL of octowright's web debugger dashboard. The URL is a "
+        "localhost web app showing every live browser, every scenario, "
+        "recordings/screenshots/videos/traces, plus a per-session debugger with "
+        "action timeline + embedded video. Use this whenever the user asks "
+        "'show me what's happening' or wants to debug a session — it's far "
+        "better than calling browser_recording_path one at a time. "
+        "Pass `session_id` to get a deep-link to a specific session's debugger page."
+    ),
+)
+def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
+    """Return the dashboard URL (and optional session deep-link).
+
+    Reports `running: false` with an `error` field when the HTTP sidecar
+    failed to bind (e.g., port collision, sidecar not started).
+    """
+    from .. import http_server as _http
+
+    status = _http.runtime_status()
+    base_url = _http.runtime_url()
+    deep = _http.runtime_session_url(session_id) if session_id else None
+    closed_count = 0
+    live_count = len(pool._sessions)
+    try:
+        from ..defaults import RECORDINGS_DIR
+
+        if RECORDINGS_DIR.exists():
+            closed_count = sum(1 for _ in RECORDINGS_DIR.glob("*.jsonl"))
+    except Exception:
+        closed_count = 0
+
+    result: dict[str, Any] = {
+        "url": base_url,
+        "session_url": deep,
+        "live_sessions": live_count,
+        "closed_sessions": closed_count,
+        "running": status["running"],
+        "live_scenarios": len(scenario_pool.list_live()),
+    }
+    if not status["running"] and status.get("error"):
+        result["error"] = status["error"]
+    elif not status["running"]:
+        result["error"] = "HTTP debugger sidecar not running (call `octowright serve` to start it)"
+    return result

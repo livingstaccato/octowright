@@ -45,7 +45,6 @@ from .browser import (
     browser_expect_text,
     browser_expect_url,
     browser_export_script,
-    browser_extract_frames,
     browser_fill,
     browser_fill_by,
     browser_get_text_by,
@@ -68,7 +67,6 @@ from .browser import (
     browser_tail_recording,
     browser_type,
     browser_unmock_route,
-    browser_video_path,
     browser_wait_for,
     browser_wait_for_download,
     page_close,
@@ -86,7 +84,7 @@ from .macros import (
     recordings_cleanup,
     run_test_suite,
 )
-from .meta import octowright_check_takeover
+from .meta import octowright_check_takeover, octowright_dashboard_url
 from .personas import (
     migrate_profiles,
     persona_create,
@@ -132,7 +130,6 @@ __all__ = [
     "browser_expect_text",
     "browser_expect_url",
     "browser_export_script",
-    "browser_extract_frames",
     "browser_fill",
     "browser_fill_by",
     "browser_get_text_by",
@@ -155,7 +152,6 @@ __all__ = [
     "browser_tail_recording",
     "browser_type",
     "browser_unmock_route",
-    "browser_video_path",
     "browser_wait_for",
     "browser_wait_for_download",
     "golden_assert",
@@ -172,6 +168,7 @@ __all__ = [
     "mcp",
     "migrate_profiles",
     "octowright_check_takeover",
+    "octowright_dashboard_url",
     "page_close",
     "page_list",
     "page_switch",
