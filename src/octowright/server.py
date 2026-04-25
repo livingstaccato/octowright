@@ -16,6 +16,7 @@ from . import goldens as goldens_mod
 from . import macros as macro_mod
 from . import personas as persona_mod
 from . import profiles as profile_mod
+from . import resolve as resolve_mod
 from . import scenarios as scenario_mod
 from . import video as video_mod
 from .defaults import RECORDINGS_DIR
@@ -41,6 +42,10 @@ mcp = FastMCP(
     structured_output=False,
     description=(
         "Launch a browser. kind = 'chromium' | 'firefox' | 'webkit'. "
+        "BEFORE CALLING THIS for a vague request like 'open google.com' or 'go to discord.com' "
+        "where the user did NOT name a persona, FIRST call browser_suggest_for_url(url=...) — "
+        "if it reports `ambiguous: true`, ask the user which persona to use instead of guessing. "
+        "If it reports `ephemeral_ok: true`, this call with no profile= is fine. "
         "DEFAULT IS HEADED — leave headed=True unless you have a specific "
         "background-verification reason (automated health check, scripted parity "
         "run, CI). If a human will look at the window, stay headed. "
@@ -80,6 +85,27 @@ async def browser_launch(
         record_video=record_video,
         trace=trace,
     )
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Resolve an ambiguous URL to a ranked list of saved persona/profile candidates "
+        "BEFORE calling browser_launch. Use this whenever the user says 'open <site>', "
+        "'go to <site>', or partially specifies the engine ('open tradewars.com using firefox') "
+        "without naming a persona. "
+        "Pass `kind` when the user named an engine — that narrows the candidate list. "
+        "Returns {url, host, kind_filter, matches, ambiguous, ephemeral_ok, recommendation}: "
+        "`ambiguous=true` means several saved personas have this host as their default — "
+        "ASK THE USER which one to use, don't guess. "
+        "`ephemeral_ok=true` means no saved persona owns this host — calling browser_launch "
+        "with no profile is fine. "
+        "Each match has {persona, kind, score, reasons[], last_used} so you can show the "
+        "user a sensible disambiguation prompt."
+    ),
+)
+def browser_suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]:
+    return resolve_mod.suggest_for_url(url, kind=kind)
 
 
 @mcp.tool(
