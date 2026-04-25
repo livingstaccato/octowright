@@ -27,6 +27,40 @@ def scenario_list() -> list[dict[str, Any]]:
 @mcp.tool(
     structured_output=False,
     description=(
+        "DRY-RUN -- does NOT launch any browsers. Returns the resolved per-participant "
+        "launch_kwargs and startup_macros that scenario_start would use, so you can verify "
+        "a scenario's wiring before committing to N browser windows. Use this whenever you're "
+        "about to call scenario_start for the first time on a new spec."
+    ),
+)
+def scenario_plan(name: str) -> dict[str, Any]:
+    spec = scenario_mod.load_scenario(name)
+    participants: list[dict[str, Any]] = []
+    for p in spec.participants:
+        participants.append(
+            {
+                "persona": p.persona,
+                "kind": p.kind,
+                "role": p.role,
+                "launch_kwargs": scenario_mod.resolve_launch_kwargs(p),
+                "startup_macros": scenario_mod.resolve_startup_macros(p),
+            }
+        )
+    return {
+        "name": spec.name,
+        "description": spec.description,
+        "summary": fmt.participant_summary(participants) or "0 participants",
+        "participants": participants,
+        "fixtures": dict(spec.fixtures),
+        "teardown_macro": spec.teardown_macro,
+        "verify": dict(spec.verify),
+        "would_launch": len(participants),
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Start a scenario. Launches every participant in parallel, applies shared fixtures, "
         "runs startup_macros per-participant. Browsers stay open; returns the participant table."
     ),
