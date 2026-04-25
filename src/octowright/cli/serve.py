@@ -80,24 +80,10 @@ def serve(
     """
     import asyncio as _asyncio
 
-    from .. import singleton as _sn
-
     setup_telemetry()
-
-    # Decide leader vs follower. A live leader claims us as a follower; an
-    # absent or stale lock means we boot as leader.
-    if not no_singleton:
-        existing = _sn.read_lock()
-        if existing is not None and not _sn.is_stale(existing):
-            try:
-                _asyncio.run(_run_follower(existing.mcp_url))
-            finally:
-                shutdown_telemetry()
-            return
-
     try:
         _asyncio.run(
-            _run_leader(
+            _serve_async(
                 http_host=http_host,
                 http_port=http_port,
                 no_http=no_http,
@@ -110,16 +96,71 @@ def serve(
         shutdown_telemetry()
 
 
+async def _serve_async(
+    *,
+    http_host: str | None,
+    http_port: int | None,
+    no_http: bool,
+    keep_alive: bool,
+    idle_grace: float | None,
+    no_singleton: bool,
+) -> None:
+    """Decide leader vs follower; promote follower→leader on bridge failure.
+
+    Capped at one promotion attempt per process so a stuck loop cannot turn
+    into a runaway respawn cycle.
+    """
+    from .. import singleton as _sn
+
+    if no_singleton:
+        await _run_leader(
+            http_host=http_host,
+            http_port=http_port,
+            no_http=no_http,
+            keep_alive=keep_alive,
+            idle_grace=idle_grace,
+            no_singleton=True,
+        )
+        return
+
+    existing = _sn.read_lock()
+    leader_alive = existing is not None and not _sn.is_stale(existing) and await _sn.probe_http_alive(existing)
+
+    if leader_alive:
+        assert existing is not None
+        try:
+            await _run_follower(existing.mcp_url)
+        except Exception as exc:
+            click.echo(f"octowright: leader bridge ended ({exc}); attempting promotion", err=True)
+        else:
+            # Clean exit (leader closed our stream cleanly) — also promote if
+            # the leader is now actually gone.
+            click.echo("octowright: leader bridge closed; checking for promotion", err=True)
+
+        # Re-check: did the leader actually go away?
+        recheck = _sn.read_lock()
+        still_alive = recheck is not None and not _sn.is_stale(recheck) and await _sn.probe_http_alive(recheck)
+        if still_alive:
+            click.echo("octowright: leader still healthy, exiting", err=True)
+            return
+        click.echo("octowright: promoting self to leader", err=True)
+
+    await _run_leader(
+        http_host=http_host,
+        http_port=http_port,
+        no_http=no_http,
+        keep_alive=keep_alive,
+        idle_grace=idle_grace,
+        no_singleton=False,
+    )
+
+
 async def _run_follower(leader_mcp_url: str) -> None:
     """Bridge stdio to the leader's HTTP-MCP endpoint."""
     from ..proxy_bridge import run_proxy
 
     click.echo(f"octowright: connecting to leader at {leader_mcp_url}", err=True)
-    try:
-        await run_proxy(leader_mcp_url)
-    except Exception as exc:
-        click.echo(f"octowright: leader bridge failed: {exc}", err=True)
-        raise
+    await run_proxy(leader_mcp_url)
 
 
 async def _run_leader(
