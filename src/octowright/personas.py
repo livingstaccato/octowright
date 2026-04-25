@@ -38,6 +38,10 @@ class Persona:
     default_macros: list[str] = field(default_factory=list)
     credentials: dict[str, str] = field(default_factory=dict)
     app: dict[str, Any] = field(default_factory=dict)
+    # Optional override for the auto-picked persona emoji shown in window
+    # title prefix and corner badge. When None, the launcher hash-picks from
+    # a curated pool keyed off the persona name (deterministic).
+    emoji: str | None = None
 
 
 def persona_dir(name: str) -> Path:
@@ -67,6 +71,7 @@ def load_persona(name: str) -> Persona:
         default_macros=list(raw.get("default_macros") or []),
         credentials=dict(raw.get("credentials") or {}),
         app=dict(raw.get("app") or {}),
+        emoji=raw.get("emoji"),
     )
 
 
