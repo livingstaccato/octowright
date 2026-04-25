@@ -109,3 +109,68 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
     elif not status["running"]:
         result["error"] = "HTTP debugger sidecar not running (call `octowright serve` to start it)"
     return result
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "First-touch status snapshot for octowright. WHEN TO INVOKE: call this "
+        "ONCE per Claude Code session, the first time octowright comes up — before "
+        "the first browser_launch — and present a brief banner to the user with "
+        "the daemon's identity, current persistence default (persistent vs ephemeral), "
+        "live browser/scenario counts, available personas, and the dashboard URL. "
+        "Returns daemon PID + uptime, defaults block (ephemeral_default, headed_default, "
+        "idle_grace_seconds, badge_position), pool counts, persona names, and dashboard URL. "
+        "Lets the user confirm what mode they're in without surprise."
+    ),
+)
+def octowright_status() -> dict[str, Any]:
+    """Return a one-shot session-startup status snapshot."""
+    import os
+    import time
+
+    from .. import http as _http
+    from .. import personas as _personas
+    from .. import singleton as _singleton
+    from ..defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
+
+    lock = _singleton.read_lock()
+    daemon_pid: int | None = None
+    daemon_uptime: float | None = None
+    if lock is not None:
+        daemon_pid = lock.pid
+        daemon_uptime = max(0.0, time.time() - lock.started_at)
+
+    persona_list = _personas.list_personas()
+    persona_names = [p["name"] for p in persona_list]
+
+    http_status = _http.runtime_status()
+
+    return {
+        "daemon": {
+            "pid": daemon_pid,
+            "this_pid": os.getpid(),
+            "is_daemon_self": daemon_pid == os.getpid(),
+            "uptime_seconds": round(daemon_uptime, 1) if daemon_uptime is not None else None,
+            "lockfile": str(_singleton.LOCK_PATH),
+        },
+        "defaults": {
+            # Persistent profiles are the default for named launches; ephemeral
+            # is the explicit opt-out via ephemeral=True. Phrased this way so a
+            # user who reads the banner can see exactly what mode they're in.
+            "ephemeral_default": False,
+            "headless_default": HEADLESS_DEFAULT,
+            "idle_grace_seconds": IDLE_GRACE_SECONDS,
+            "badge_default": True,
+            "badge_position_default": "bottom-right",
+        },
+        "pool": {
+            "live_browsers": len(pool._sessions),
+            "live_scenarios": len(scenario_pool.list_live()),
+        },
+        "personas": {
+            "count": len(persona_names),
+            "names": persona_names,
+        },
+        "dashboard_url": _http.runtime_url() if http_status["running"] else None,
+    }
