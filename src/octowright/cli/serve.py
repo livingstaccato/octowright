@@ -232,6 +232,26 @@ async def _run_leader(
     # fires or a sidecar fails.
     discoverable = not no_http and not no_singleton
 
+    # Convert SIGTERM/SIGHUP (sent by parent MCP clients on close) into a
+    # graceful "stdio done" signal — cancel mcp_task and let the keep-alive
+    # path below take over. SIGINT keeps default behavior so Ctrl+C still
+    # exits the process for interactive users. Only install on a discoverable
+    # leader; in --no-http / --no-singleton modes the leader is single-purpose
+    # and the default "exit on signal" semantics are correct.
+    import signal as _signal
+
+    loop = _asyncio.get_running_loop()
+    installed_signals: list[_signal.Signals] = []
+    if discoverable:
+        for sig in (_signal.SIGTERM, _signal.SIGHUP):
+            try:
+                loop.add_signal_handler(sig, mcp_task.cancel)
+                installed_signals.append(sig)
+            except (NotImplementedError, ValueError):
+                # Windows / nested loops can't install handlers — fall back to
+                # default behavior, which means SIGTERM still kills us there.
+                pass
+
     wait_for: set[_asyncio.Task[object]] = {mcp_task}
     if watch_task is not None:
         wait_for.add(watch_task)
@@ -255,6 +275,11 @@ async def _run_leader(
                 return_when=_asyncio.FIRST_COMPLETED,
             )
     finally:
+        for sig in installed_signals:
+            try:
+                loop.remove_signal_handler(sig)
+            except (NotImplementedError, ValueError):
+                pass
         for t in (*sidecars, watch_task, mcp_task):
             if t is not None and not t.done():
                 t.cancel()
