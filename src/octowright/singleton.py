@@ -27,7 +27,9 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-LOCK_PATH = Path.home() / ".config" / "undef" / "octowright.lock"
+# Lockfile location. Override via OCTOWRIGHT_LOCK_PATH for hermetic tests
+# (lets a test spawn a real daemon without touching the user's actual lockfile).
+LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(Path.home() / ".config" / "undef" / "octowright.lock")))
 
 
 @dataclass

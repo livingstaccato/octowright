@@ -28,12 +28,22 @@ async def idle_watchdog(
     *,
     grace_seconds: float = 30.0,
     poll_seconds: float = 2.0,
+    arm_immediately: bool = False,
 ) -> None:
     """Return once the pool has been used and then sat empty for ``grace_seconds``.
 
+    With ``arm_immediately=False`` (default, suitable for direct-CLI usage),
+    the watchdog only arms after the pool first becomes non-empty — so a
+    user starting the server in a terminal has time to issue their first
+    launch command without being kicked out.
+
+    With ``arm_immediately=True`` (used by daemonized leaders), the timer
+    starts at t=0. An idle daemon nobody connects to exits after the grace
+    period instead of running forever.
+
     The caller is expected to trigger shutdown when this coroutine returns.
     """
-    armed = False
+    armed = arm_immediately
     idle_since: float | None = None
     while True:
         await asyncio.sleep(poll_seconds)
