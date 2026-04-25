@@ -22,7 +22,9 @@ uv run playwright install webkit firefox chromium
 
 ## Register with Claude Code
 
-Add to `.mcp.json` in the repo you want to use it from (or `~/.claude.json` globally):
+Add to `.mcp.json` in the repo you want to use it from (or `~/.claude.json` globally) —
+replace `<absolute-path-to-octowright>` with the path on YOUR machine
+(e.g. `~/code/octowright` expanded to its absolute form):
 
 ```json
 {
@@ -31,7 +33,7 @@ Add to `.mcp.json` in the repo you want to use it from (or `~/.claude.json` glob
       "command": "uv",
       "args": [
         "--directory",
-        "/Users/tim/code/gh/provide-io/octowright",
+        "<absolute-path-to-octowright>",
         "run",
         "octowright",
         "serve"
@@ -41,7 +43,8 @@ Add to `.mcp.json` in the repo you want to use it from (or `~/.claude.json` glob
 }
 ```
 
-Reload Claude; tools appear as `mcp__octowright__browser_launch`, etc.
+Run `octowright init` to print this same block with the path filled in for
+your install. Reload Claude; tools appear as `mcp__octowright__browser_launch`, etc.
 
 ## Your first 5 minutes
 
