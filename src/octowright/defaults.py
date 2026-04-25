@@ -22,13 +22,29 @@ RECORDINGS_DIR = Path(os.environ.get("OCTOWRIGHT_RECORDINGS", str(_DEFAULT_RECOR
 PROFILES_DIR = Path(os.environ.get("OCTOWRIGHT_PROFILES_DIR", str(_DEFAULT_PROFILES)))
 SCENARIOS_DIR = Path(os.environ.get("OCTOWRIGHT_SCENARIOS_DIR", str(_DEFAULT_SCENARIOS)))
 
+
 # Octowright defaults to HEADED mode. The whole point of this server is giving
 # humans a window they can watch (and sometimes drive by hand), so headless is
 # only correct when the caller has a specific background-verification reason —
-# e.g. scripted health checks, parity runs, or CI. A caller wanting headless
-# must pass headed=False explicitly on each browser_launch call. The env-var
-# override below exists solely for unattended test harnesses.
-HEADLESS_DEFAULT = os.environ.get("OCTOWRIGHT_HEADLESS", "0") == "1"
+# scripted health checks, parity runs, CI.
+#
+# Resolution order for the default headless value (each step short-circuits):
+#   1. OCTOWRIGHT_HEADLESS=1 / =0 — explicit override always wins.
+#   2. CI=true (set by GitHub Actions, GitLab, CircleCI, Travis, etc.) → headless.
+#   3. Linux session with no $DISPLAY and no $WAYLAND_DISPLAY (SSH, no X server,
+#      headless container) → headless.
+#   4. Otherwise → headed.
+def _detect_headless_default() -> bool:
+    explicit = os.environ.get("OCTOWRIGHT_HEADLESS")
+    if explicit is not None:
+        return explicit == "1"
+    if os.environ.get("CI", "").lower() in ("true", "1", "yes"):
+        return True
+    # macOS always has a window server; only Linux can be display-less here.
+    return os.uname().sysname == "Linux" and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY")
+
+
+HEADLESS_DEFAULT = _detect_headless_default()
 
 SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
