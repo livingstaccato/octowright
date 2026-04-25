@@ -96,6 +96,34 @@ async def macro_run_sequence(
 @mcp.tool(
     structured_output=False,
     description=(
+        "Static-analysis pass on a saved macro. Catches missing required fields, unknown "
+        "action types, lifecycle actions that don't belong in macros, empty conditional "
+        "branches, and string literals that look like credentials (email/password patterns) "
+        "but aren't parameterized. Returns errors + warnings with per-action indices. Run "
+        "this whenever you hand-edit a macro JSON file."
+    ),
+)
+def macro_lint(name: str) -> dict[str, Any]:
+    from .. import macro_lint as _lint
+
+    macro = macro_mod.load_macro(name)  # raises FileNotFoundError if missing
+    issues = _lint.lint_macro(macro)
+    errors = [i for i in issues if i.severity == "error"]
+    warnings = [i for i in issues if i.severity == "warning"]
+    return {
+        "macro": name,
+        "issues": [
+            {"severity": i.severity, "code": i.code, "message": i.message, "action_index": i.action_index}
+            for i in issues
+        ],
+        "summary": f"{len(issues)} issues: {len(errors)} errors, {len(warnings)} warnings",
+        "ok": len(errors) == 0,
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Run all test macros in a directory, producing a JUnit XML report. A macro is "
         "considered a test if its description starts with [test]. Spawns one ephemeral "
         "browser per test (kind defaults to 'webkit'). Returns {passed, failed, total, "
@@ -117,3 +145,34 @@ async def run_test_suite(
         out_path=out_path,
         pool=pool,
     )
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Find recording artefacts (JSONL logs, screenshots, videos, traces) older than "
+        "`days` and optionally delete them. Defaults to dry_run=True so the first call "
+        "is always safe. Pass dry_run=False to actually delete. Returns a per-kind "
+        "breakdown so you can see what would be freed before committing."
+    ),
+)
+def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
+    from .. import recording_cleanup as _rc
+    from ..defaults import RECORDINGS_DIR
+
+    stale = _rc.find_stale_files(RECORDINGS_DIR, days)
+    summary = _rc.cleanup_stale(stale, dry_run=dry_run)
+    return {
+        "recordings_dir": str(RECORDINGS_DIR),
+        "days": days,
+        "dry_run": dry_run,
+        "found": len(stale),
+        "removed": summary["removed_count"] if not dry_run else 0,
+        "would_remove": len(stale) if dry_run else 0,
+        "freed_bytes": summary["removed_bytes"] if not dry_run else sum(s.size_bytes for s in stale),
+        "by_kind": {
+            kind: sum(1 for s in stale if s.kind == kind)
+            for kind in ("recording", "screenshot", "video", "trace", "other")
+        },
+        "errors": summary["errors"],
+    }
