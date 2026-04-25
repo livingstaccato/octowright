@@ -1,3 +1,9 @@
+import {
+  apiErrorsCounter,
+  apiLatencyHistogram,
+  apiRequestsCounter,
+  getLogger,
+} from "./telemetry.js";
 import type {
   ConsoleListResponse,
   DownloadListResponse,
@@ -11,6 +17,8 @@ import type {
   SessionListResponse,
   TraceOpenResponse,
 } from "./types.js";
+
+const log = getLogger("octowright.frontend.api");
 
 export class ApiError extends Error {
   override readonly name = "ApiError";
@@ -29,9 +37,35 @@ export interface FetchJsonOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Normalise a path so that variable IDs collapse to a templated form.
+ * Keeps cardinality of metric attributes bounded.
+ *
+ *   /api/sessions/abc/events           → /api/sessions/{id}/events
+ *   /api/sessions/abc/screenshots/x.png → /api/sessions/{id}/screenshots/{file}
+ */
+export function pathTemplate(path: string): string {
+  // Strip query string for the template.
+  const qIndex = path.indexOf("?");
+  const bare = qIndex >= 0 ? path.slice(0, qIndex) : path;
+  return bare
+    .replace(/^(\/api\/sessions\/)[^/]+/, "$1{id}")
+    .replace(/(\/screenshots\/)[^/]+$/, "$1{file}")
+    .replace(/(\/frame)$/, "$1");
+}
+
+function nowMs(): number {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
 export async function fetchJson<T>(path: string, opts: FetchJsonOptions = {}): Promise<T> {
+  const method = opts.method ?? "GET";
+  const tmpl = pathTemplate(path);
   const init: RequestInit = {
-    method: opts.method ?? "GET",
+    method,
     headers: { Accept: "application/json" },
   };
   if (opts.body !== undefined) {
@@ -41,11 +75,50 @@ export async function fetchJson<T>(path: string, opts: FetchJsonOptions = {}): P
   if (opts.signal) {
     init.signal = opts.signal;
   }
-  const res = await fetch(path, init);
-  if (!res.ok) {
-    throw new ApiError(`request failed: ${res.status} ${res.statusText}`, res.status, path);
+
+  const start = nowMs();
+  apiRequestsCounter.add(1, { method, path: tmpl });
+  log.debug({ event: "api_request", method, path, path_template: tmpl });
+  try {
+    const res = await fetch(path, init);
+    const duration = nowMs() - start;
+    const statusStr = String(res.status);
+    apiLatencyHistogram.record(duration, { method, path: tmpl, status: statusStr });
+    if (!res.ok) {
+      apiErrorsCounter.add(1, { method, path: tmpl, status: statusStr });
+      log.warn({
+        event: "api_error",
+        method,
+        path,
+        path_template: tmpl,
+        status: res.status,
+        duration_ms: duration,
+      });
+      throw new ApiError(`request failed: ${res.status} ${res.statusText}`, res.status, path);
+    }
+    log.debug({
+      event: "api_response",
+      method,
+      path,
+      path_template: tmpl,
+      status: res.status,
+      duration_ms: duration,
+    });
+    return (await res.json()) as T;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    const duration = nowMs() - start;
+    apiErrorsCounter.add(1, { method, path: tmpl, status: "exception" });
+    log.error({
+      event: "api_exception",
+      method,
+      path,
+      path_template: tmpl,
+      duration_ms: duration,
+      error: String(err),
+    });
+    throw err;
   }
-  return (await res.json()) as T;
 }
 
 export function getSessions(): Promise<SessionListResponse> {

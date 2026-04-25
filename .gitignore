@@ -18,4 +18,4 @@ node_modules/
 # Compiled debugger frontend (built by packages/octowright-frontend)
 src/octowright/server/frontend/
 packages/octowright-frontend/coverage/
-package-lock.json
+# package-lock.json is committed for reproducible npm installs
