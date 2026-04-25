@@ -14,7 +14,10 @@ Endpoints (mirror the API contract in MCP-SHARED-CONTRACT.md):
     GET  /                                         → static index.html
     GET  /sessions/{id}                            → static session.html
     GET  /api/sessions                             → live + closed session lists
+    POST /api/sessions                             → launch a new browser session
     GET  /api/sessions/{id}                        → SessionDetail
+    DEL  /api/sessions/{id}                        → close a live session
+    POST /api/sessions/{id}/navigate               → drive page to {url}
     GET  /api/sessions/{id}/events?since=N         → tail JSONL events
     GET  /api/sessions/{id}/console?level=&since=N → console messages (paginated)
     GET  /api/sessions/{id}/downloads?since=N      → downloads (paginated)
@@ -28,6 +31,9 @@ Endpoints (mirror the API contract in MCP-SHARED-CONTRACT.md):
     GET  /api/sessions/{id}/screenshots/{file}     → screenshot PNG bytes
     POST /api/sessions/{id}/trace/open             → spawn `npx playwright show-trace`
     GET  /api/scenarios                            → live scenarios
+    POST /api/scenarios/{name}/start               → start a scenario by name
+    DEL  /api/scenarios/{id}                       → stop a live scenario
+    POST /api/scenarios/{id}/run_macro             → broadcast a macro to a scenario
     GET  /api/personas                             → persona summaries
     GET  /api/macros                               → macro summaries
     GET  /api/health                               → liveness probe
@@ -62,7 +68,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from . import macros as _macros
 from . import personas as _personas
 from . import video as _video
-from .defaults import HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES, RECORDINGS_DIR
+from .defaults import DEFAULT_URL, HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES, RECORDINGS_DIR, SUPPORTED_KINDS
 from .server import _state
 
 log = get_logger(__name__)
@@ -880,6 +886,278 @@ async def trace_open(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Write endpoints — sessions (launch / close / navigate)
+# ---------------------------------------------------------------------------
+
+
+async def _read_json_body(request: Request) -> tuple[Any, JSONResponse | None]:
+    """Read and JSON-decode the request body. An empty body decodes to ``{}``.
+
+    Returns ``(payload, None)`` on success or ``(None, error_response)`` on
+    decode failure. Empty bodies are treated as ``{}`` so callers that have no
+    parameters (e.g. ``POST /api/scenarios/foo/start``) need not send anything.
+    """
+    raw = await request.body()
+    if not raw:
+        return {}, None
+    try:
+        return json.loads(raw), None
+    except json.JSONDecodeError as e:
+        return None, JSONResponse(
+            {"error": f"invalid JSON body: {e}"},
+            status_code=400,
+        )
+
+
+def _live_summary_from_launch(result: dict[str, Any]) -> dict[str, Any]:
+    """Build a SessionSummary-shaped dict for the response of POST /api/sessions.
+
+    The shape mirrors ``_live_summary()`` so dashboard code that consumes
+    ``GET /api/sessions``'s ``live[]`` entries can reuse the same parser for
+    the launch response.
+    """
+    log_path = Path(result["log_path"])
+    started_at = _iso(log_path.stat().st_ctime) if log_path.exists() else _iso(time.time())
+    return {
+        "id": result["instance_id"],
+        "kind": result["kind"],
+        "label": result.get("label"),
+        "profile": result.get("profile"),
+        "url": result.get("url"),
+        "started_at": started_at,
+        "live": True,
+        "log_path": str(log_path),
+    }
+
+
+async def session_launch(request: Request) -> JSONResponse:
+    """POST /api/sessions — launch a new browser session via ``pool.launch(...)``.
+
+    Returns a 201 with the SessionSummary shape used by ``GET /api/sessions``.
+    """
+    payload, err = await _read_json_body(request)
+    if err is not None:
+        return err
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+    kind = payload.get("kind")
+    if not kind:
+        return JSONResponse(
+            {"error": "kind is required (one of chromium/firefox/webkit)"},
+            status_code=400,
+        )
+    if kind not in SUPPORTED_KINDS:
+        return JSONResponse(
+            {"error": f"kind must be one of {list(SUPPORTED_KINDS)}, got {kind!r}"},
+            status_code=400,
+        )
+
+    launch_kwargs: dict[str, Any] = {
+        "kind": kind,
+        "url": payload.get("url") or DEFAULT_URL,
+        "label": payload.get("label"),
+        "profile": payload.get("profile"),
+        "viewport_w": payload.get("viewport_w"),
+        "viewport_h": payload.get("viewport_h"),
+        "headed": payload.get("headed", True),
+        "stabilize": payload.get("stabilize", False),
+        "record_video": payload.get("record_video", False),
+        "trace": payload.get("trace", False),
+    }
+
+    pool = _state.pool
+    try:
+        result = await pool.launch(**launch_kwargs)
+    except ValueError as e:
+        # pool.launch validates `kind`; surface that as 400 even though we
+        # already pre-checked, so we stay safe if SUPPORTED_KINDS drifts.
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        log.exception(
+            "octowright.http.session_launch_failed",
+            kind=kind,
+            url=launch_kwargs["url"],
+        )
+        return JSONResponse({"error": f"launch failed: {e}"}, status_code=500)
+
+    summary = _live_summary_from_launch(result)
+    log.info(
+        "octowright.http.session_launched",
+        instance_id=result["instance_id"],
+        kind=result["kind"],
+        url=result.get("url"),
+        record_video=launch_kwargs["record_video"],
+        trace=launch_kwargs["trace"],
+    )
+    return JSONResponse(summary, status_code=201)
+
+
+async def session_close(request: Request) -> JSONResponse:
+    """DELETE /api/sessions/{id} — close a live session.
+
+    Closed sessions on disk cannot be re-closed; returns 404 in that case so
+    callers can distinguish "I closed something" from "nothing to do".
+    """
+    sid = request.path_params["id"]
+    pool = _state.pool
+    if sid not in pool._sessions:
+        return JSONResponse(
+            {"error": f"no live session with id {sid!r}; closed sessions cannot be re-closed"},
+            status_code=404,
+        )
+    try:
+        result = await pool.close(sid)
+    except Exception as e:
+        log.exception("octowright.http.session_close_failed", instance_id=sid)
+        return JSONResponse({"error": f"close failed: {e}"}, status_code=500)
+    body = {"closed": True, "instance_id": sid, **result}
+    log.info("octowright.http.session_closed", instance_id=sid)
+    return JSONResponse(body)
+
+
+async def session_navigate(request: Request) -> JSONResponse:
+    """POST /api/sessions/{id}/navigate — drive the live session's page to ``url``."""
+    sid = request.path_params["id"]
+    payload, err = await _read_json_body(request)
+    if err is not None:
+        return err
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+    url = payload.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return JSONResponse({"error": "url is required and must be a non-empty string"}, status_code=400)
+
+    pool = _state.pool
+    if sid not in pool._sessions:
+        return JSONResponse(
+            {"error": f"no live session with id {sid!r}"},
+            status_code=404,
+        )
+    session = pool._sessions[sid]
+    try:
+        await session.navigate(url)
+    except Exception as e:
+        log.exception("octowright.http.session_navigate_failed", instance_id=sid, url=url)
+        return JSONResponse({"error": f"navigate failed: {e}"}, status_code=500)
+    log.info("octowright.http.session_navigated", instance_id=sid, url=url)
+    return JSONResponse({"ok": True, "url": url})
+
+
+# ---------------------------------------------------------------------------
+# Write endpoints — scenarios (start / stop / run_macro)
+# ---------------------------------------------------------------------------
+
+
+async def scenario_start_endpoint(request: Request) -> JSONResponse:
+    """POST /api/scenarios/{name}/start — launch a scenario by name.
+
+    Mirrors the ``scenario_start`` MCP tool: returns
+    ``{scenario_id, name, participants}`` on success. 404 if the name doesn't
+    map to a scenario file on disk; 400 for validation errors; 500 if any
+    participant browser fails to launch (with the spawn_roster error list).
+    """
+    name = request.path_params["name"]
+    spool = _state.scenario_pool
+    pool = _state.pool
+    try:
+        live = await spool.start(name=name, browser_pool=pool)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except (ValueError, TypeError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except RuntimeError as e:
+        # spawn_roster reports per-participant errors as "scenario X: N
+        # participant(s) failed to launch: [...]" — surface that as 500.
+        return JSONResponse({"error": str(e)}, status_code=500)
+    except Exception as e:
+        log.exception("octowright.http.scenario_start_failed", name=name)
+        return JSONResponse({"error": f"scenario start failed: {e}"}, status_code=500)
+
+    body = {
+        "scenario_id": live.scenario_id,
+        "name": live.name,
+        "participants": live.participants,
+    }
+    log.info(
+        "octowright.http.scenario_started",
+        scenario_id=live.scenario_id,
+        name=live.name,
+        participants=len(live.participants),
+    )
+    return JSONResponse(body, status_code=201)
+
+
+async def scenario_stop_endpoint(request: Request) -> JSONResponse:
+    """DELETE /api/scenarios/{id} — stop a live scenario."""
+    sid = request.path_params["id"]
+    spool = _state.scenario_pool
+    pool = _state.pool
+    if sid not in spool._live:
+        return JSONResponse(
+            {"error": f"no live scenario with id {sid!r}"},
+            status_code=404,
+        )
+    try:
+        result = await spool.stop(scenario_id=sid, browser_pool=pool)
+    except Exception as e:
+        log.exception("octowright.http.scenario_stop_failed", scenario_id=sid)
+        return JSONResponse({"error": f"scenario stop failed: {e}"}, status_code=500)
+    log.info("octowright.http.scenario_stopped", scenario_id=sid)
+    return JSONResponse(result)
+
+
+async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
+    """POST /api/scenarios/{id}/run_macro — broadcast a macro to a scenario."""
+    sid = request.path_params["id"]
+    payload, err = await _read_json_body(request)
+    if err is not None:
+        return err
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+    macro = payload.get("macro")
+    if not isinstance(macro, str) or not macro.strip():
+        return JSONResponse({"error": "macro is required and must be a non-empty string"}, status_code=400)
+
+    role = payload.get("role")
+    args = payload.get("args") or {}
+    if not isinstance(args, dict):
+        return JSONResponse({"error": "args must be a JSON object"}, status_code=400)
+
+    spool = _state.scenario_pool
+    pool = _state.pool
+    if sid not in spool._live:
+        return JSONResponse(
+            {"error": f"no live scenario with id {sid!r}"},
+            status_code=404,
+        )
+    try:
+        result = await spool.run_macro(
+            scenario_id=sid,
+            macro=macro,
+            browser_pool=pool,
+            role=role,
+            args=args,
+        )
+    except Exception as e:
+        log.exception(
+            "octowright.http.scenario_run_macro_failed",
+            scenario_id=sid,
+            macro=macro,
+        )
+        return JSONResponse({"error": f"run_macro failed: {e}"}, status_code=500)
+    log.info(
+        "octowright.http.scenario_macro_dispatched",
+        scenario_id=sid,
+        macro=macro,
+        role=role,
+    )
+    return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket: live tail
 # ---------------------------------------------------------------------------
 
@@ -981,7 +1259,10 @@ def build_app() -> Starlette:
     routes: list[Any] = [
         Route("/api/health", health_endpoint, methods=["GET"]),
         Route("/api/sessions", list_sessions, methods=["GET"]),
+        Route("/api/sessions", session_launch, methods=["POST"]),
         Route("/api/sessions/{id}", session_detail, methods=["GET"]),
+        Route("/api/sessions/{id}", session_close, methods=["DELETE"]),
+        Route("/api/sessions/{id}/navigate", session_navigate, methods=["POST"]),
         Route("/api/sessions/{id}/events", session_events, methods=["GET"]),
         Route("/api/sessions/{id}/console", session_console, methods=["GET"]),
         Route("/api/sessions/{id}/downloads", session_downloads, methods=["GET"]),
@@ -997,6 +1278,9 @@ def build_app() -> Starlette:
             methods=["GET"],
         ),
         Route("/api/scenarios", list_scenarios, methods=["GET"]),
+        Route("/api/scenarios/{name}/start", scenario_start_endpoint, methods=["POST"]),
+        Route("/api/scenarios/{id}", scenario_stop_endpoint, methods=["DELETE"]),
+        Route("/api/scenarios/{id}/run_macro", scenario_run_macro_endpoint, methods=["POST"]),
         Route("/api/personas", list_personas_endpoint, methods=["GET"]),
         Route("/api/macros", list_macros_endpoint, methods=["GET"]),
         WebSocketRoute("/api/sessions/{id}/tail", TailEndpoint),

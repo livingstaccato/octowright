@@ -13,26 +13,69 @@ format here in lockstep.
 ## Endpoints
 
 ```
-GET  /                                         → static index.html (dashboard)
-GET  /sessions/{id}                            → static session.html (rewritten by frontend router)
-GET  /api/sessions                             → {"live": [SessionSummary, ...], "closed": [SessionSummary, ...]}
-GET  /api/sessions/{id}                        → SessionDetail
-GET  /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
-GET  /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
-GET  /api/sessions/{id}/downloads?since=N      → {"downloads": [DownloadRecord, ...], "cursor": int, "total": int}
-WS   /api/sessions/{id}/tail                   → server pushes {"events": [...], "cursor": int, "complete": bool} every ~1s for LIVE sessions; closed/unknown sessions are rejected at connect time (see WS semantics below)
-GET  /api/sessions/{id}/frame?t=<seconds>      → image/png bytes (extracted at the requested timestamp). 404 if no video for this session.
-GET  /api/sessions/{id}/video                  → video bytes (HTTP range supported via FileResponse). 404 if missing.
-GET  /api/sessions/{id}/trace                  → application/zip download. 404 if missing.
-GET  /api/sessions/{id}/screenshots            → {"screenshots": [{"path": str, "filename": str, "ts": float, "size_bytes": int}, ...]}
-GET  /api/sessions/{id}/screenshots/{filename} → image/png bytes
-GET  /api/sessions/{id}/screenshot/now?format=png|jpeg&quality=N&full_page=bool → image/png|jpeg bytes (live page only). Defaults: format=png, quality=80 (jpeg only), full_page=false. Cache-Control: no-store. 404 closed/unknown, 503 if page.screenshot() raises.
-GET  /api/scenarios                            → {"live": [LiveScenario, ...]}
-GET  /api/personas                             → [PersonaSummary, ...]
-GET  /api/macros                               → [MacroSummary, ...]
-POST /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
-GET  /api/health                               → {"ok": true, "version": str}
+GET    /                                         → static index.html (dashboard)
+GET    /sessions/{id}                            → static session.html (rewritten by frontend router)
+GET    /api/sessions                             → {"live": [SessionSummary, ...], "closed": [SessionSummary, ...]}
+POST   /api/sessions                             → SessionSummary (201) — launch a new browser session
+GET    /api/sessions/{id}                        → SessionDetail
+DELETE /api/sessions/{id}                        → {"closed": true, "instance_id": str, "log_path": str, "video_path": str|null, "trace_path": str|null} (200); 404 if not in live pool
+POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live
+GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
+GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
+GET    /api/sessions/{id}/downloads?since=N      → {"downloads": [DownloadRecord, ...], "cursor": int, "total": int}
+WS     /api/sessions/{id}/tail                   → server pushes {"events": [...], "cursor": int, "complete": bool} every ~1s for LIVE sessions; closed/unknown sessions are rejected at connect time (see WS semantics below)
+GET    /api/sessions/{id}/frame?t=<seconds>      → image/png bytes (extracted at the requested timestamp). 404 if no video for this session.
+GET    /api/sessions/{id}/video                  → video bytes (HTTP range supported via FileResponse). 404 if missing.
+GET    /api/sessions/{id}/trace                  → application/zip download. 404 if missing.
+GET    /api/sessions/{id}/screenshots            → {"screenshots": [{"path": str, "filename": str, "ts": float, "size_bytes": int}, ...]}
+GET    /api/sessions/{id}/screenshots/{filename} → image/png bytes
+GET    /api/sessions/{id}/screenshot/now?format=png|jpeg&quality=N&full_page=bool → image/png|jpeg bytes (live page only). Defaults: format=png, quality=80 (jpeg only), full_page=false. Cache-Control: no-store. 404 closed/unknown, 503 if page.screenshot() raises.
+GET    /api/scenarios                            → {"live": [LiveScenario, ...]}
+POST   /api/scenarios/{name}/start               → {"scenario_id": str, "name": str, "participants": [...]} (201). 404 if scenario not on disk; 400 validation; 500 if any participant fails to launch.
+DELETE /api/scenarios/{id}                       → {"scenario_id": str, "teardown_errors": [...], "closed": [...]} (200). 404 if no live scenario with that id.
+POST   /api/scenarios/{id}/run_macro             → {"scenario_id": str, "macro": str, "role": str|null, "targeted": int, "results": [...]} (200). 400 if macro missing; 404 if no live scenario.
+GET    /api/personas                             → [PersonaSummary, ...]
+GET    /api/macros                               → [MacroSummary, ...]
+POST   /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
+GET    /api/health                               → {"ok": true, "version": str}
 ```
+
+## Write-endpoint request bodies
+
+```
+POST /api/sessions
+  Content-Type: application/json
+  {
+    "kind": "chromium" | "firefox" | "webkit",  // required
+    "url": str | null,                           // default: DEFAULT_URL
+    "label": str | null,
+    "profile": str | null,
+    "viewport_w": int | null,
+    "viewport_h": int | null,
+    "headed": bool,                              // default: true
+    "stabilize": bool,                           // default: false
+    "record_video": bool,                        // default: false
+    "trace": bool                                // default: false
+  }
+  → 201 + SessionSummary (identical shape to GET /api/sessions live[] entries)
+  → 400 if `kind` is missing/invalid or body is unparsable JSON
+  → 500 if `pool.launch()` raises an unexpected error
+
+POST /api/sessions/{id}/navigate
+  { "url": str }                                  // required, non-empty
+  → 200 {"ok": true, "url": str}
+
+POST /api/scenarios/{name}/start
+  (no body required)
+  → 201 {"scenario_id": str, "name": str, "participants": [...]}
+
+POST /api/scenarios/{id}/run_macro
+  { "macro": str, "role": str | null, "args": object | null }
+  → 200 with the per-participant results dict from `scenario_pool.run_macro`
+```
+
+All write endpoints accept an empty body as `{}`. Malformed JSON is rejected
+with a 400 + `{"error": "invalid JSON body: ..."}`.
 
 ## Type shapes
 
