@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-Comment: Part of octowright.
+#
+
+"""Persona + profile + migration tools."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import personas as persona_mod
+from .. import profiles as profile_mod
+from ._state import log, mcp, pool
+
+
+@mcp.tool(structured_output=False, description="List saved browser profiles. Pass kind to filter to one engine.")
+def profile_list(kind: str | None = None) -> list[dict[str, Any]]:
+    return profile_mod.list_profiles(kind)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Delete a saved browser profile (wipes all cookies, localStorage, IndexedDB, and "
+        "saved logins for that profile). Refuses if a live instance is using it."
+    ),
+)
+def profile_delete(kind: str, name: str) -> dict[str, Any]:
+    if pool.profile_in_use(kind, name):
+        live_ids = [s["instance_id"] for s in pool.list_sessions() if s["kind"] == kind and s["profile"] == name]
+        log.warning("octowright.profile.delete_refused", kind=kind, profile=name, reason="in_use")
+        raise RuntimeError(
+            f"profile {kind}/{name} is in use by live browser(s) {live_ids}; "
+            f"close with `browser_close instance_id={live_ids[0]!r}` (or browser_close_all) first"
+        )
+    path = profile_mod.delete_profile(kind, name)
+    log.info("octowright.profile.deleted", kind=kind, profile=name, path=str(path))
+    return {"deleted": True, "path": str(path)}
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "List all personas, each with their known engines, display name, and last-used timestamp. "
+        "A persona is a named identity (e.g. 'dante') that owns engine-specific browser profiles."
+    ),
+)
+def persona_list() -> list[dict[str, Any]]:
+    return persona_mod.list_personas()
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Return the full profile.yaml for a persona. Credentials are returned as their "
+        "reference entries (e.g. {'email_env': 'DANTE_EMAIL'}), not resolved secrets. "
+        "Raises if the persona doesn't exist."
+    ),
+)
+def persona_get(name: str) -> dict[str, Any]:
+    p = persona_mod.load_persona(name)
+    return {
+        "name": p.name,
+        "display_name": p.display_name,
+        "default_url": p.default_url,
+        "default_macros": p.default_macros,
+        "credentials": p.credentials,
+        "app": p.app,
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Scaffold a new persona directory with a stub profile.yaml. Does nothing engine-specific; "
+        "browser profiles are created on first browser_launch with this persona."
+    ),
+)
+def persona_create(
+    name: str,
+    display_name: str | None = None,
+    default_url: str | None = None,
+) -> dict[str, Any]:
+    try:
+        pdir = persona_mod.create_persona(
+            name,
+            display_name=display_name,
+            default_url=default_url,
+        )
+    except FileExistsError as e:
+        raise RuntimeError(str(e)) from e
+    return {"created": True, "name": name, "path": str(pdir)}
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Delete an entire persona (metadata + all engine profiles). Refuses if any engine "
+        "profile is currently in use by a live browser."
+    ),
+)
+def persona_delete(name: str) -> dict[str, Any]:
+    for s in pool.list_sessions():
+        if s["profile"] == name:
+            raise RuntimeError(
+                f"persona {name!r} is in use by live instance {s['instance_id']}; "
+                f"close with `browser_close instance_id={s['instance_id']!r}` first"
+            )
+    path = profile_mod.delete_persona(name)
+    log.info("octowright.persona.deleted", name=name, path=str(path))
+    return {"deleted": True, "name": name, "path": str(path)}
+
+
+@mcp.tool(
+    structured_output=False,
+    description=("Run the one-shot legacy profile-layout migration. Idempotent. Returns counts."),
+)
+def migrate_profiles() -> dict[str, Any]:
+    return persona_mod.migrate_legacy_layout()

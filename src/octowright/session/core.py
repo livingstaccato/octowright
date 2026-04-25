@@ -12,8 +12,8 @@ from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, ConsoleMessage, Page, Video
 
-from .defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
-from .recorder import Recorder
+from ..defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from ..recorder import Recorder
 
 # Cap on inline string-payload returns; opt-in full=True overrides.
 DEFAULT_PREVIEW_CHARS = 4000
@@ -67,7 +67,7 @@ class BrowserSession:
 
     def _register_popup(self, page: Page) -> None:
         """Called by context's 'page' event. Appends new page and records the event."""
-        from . import pool as _pool
+        from .. import pool as _pool
 
         self.pages.append(page)
         page_index = len(self.pages) - 1
@@ -255,9 +255,9 @@ class BrowserSession:
         url_pattern: str | None = None,
     ) -> dict[str, Any]:
         """Switch the active target to an iframe. Exactly one of selector/name/url_pattern must be given."""
-        from . import session_frames
+        from . import frames as _frames
 
-        frame, info = await session_frames.switch_frame_impl(
+        frame, info = await _frames.switch_frame_impl(
             self.page,
             selector=selector,
             name=name,
@@ -283,20 +283,20 @@ class BrowserSession:
 
     def list_frames(self) -> list[dict[str, Any]]:
         """Return [{index, name, url, is_active}, ...] for every frame on the active page."""
-        from . import session_frames
+        from . import frames as _frames
 
-        return session_frames.list_frames_impl(self.page, self.active_frame)
+        return _frames.list_frames_impl(self.page, self.active_frame)
 
     def _handle_download(self, download: Any) -> None:
         """Registered as page.on('download', ...). Schedules an async save, appends a
         record to self.downloads once the file lands on disk."""
         import asyncio
 
-        from . import session_downloads
+        from . import downloads as _downloads
 
         # Fire-and-forget: Playwright dispatches downloads synchronously but saving is async.
         # Task reference is kept on the session to prevent GC collecting it mid-flight (RUF006).
-        task = asyncio.create_task(session_downloads.save_download(self, download))
+        task = asyncio.create_task(_downloads.save_download(self, download))
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
@@ -306,9 +306,9 @@ class BrowserSession:
     async def wait_for_download(self, timeout_ms: int = 15000) -> dict[str, Any]:
         """Block until the next download completes (save-to-disk). Raises TimeoutError
         if no download arrives within timeout_ms. Returns the new download record."""
-        from . import session_downloads
+        from . import downloads as _downloads
 
-        return await session_downloads.wait_for_download_impl(self, timeout_ms)
+        return await _downloads.wait_for_download_impl(self, timeout_ms)
 
     def _handle_dialog(self, dialog: Any) -> None:
         """Registered as page.on('dialog', ...). Consults self._dialog_policy and acts
@@ -404,9 +404,9 @@ class BrowserSession:
         Exactly one of role / label / text / test_id must be supplied. Routes
         through _target() so this also works inside iframes when one is active.
         """
-        from . import session_locators
+        from . import locators as _locators
 
-        return session_locators.build_locator(self._target(), **finders)
+        return _locators.build_locator(self._target(), **finders)
 
     async def click_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Click an element matched by role, label, text, or data-testid."""
