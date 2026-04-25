@@ -44,7 +44,9 @@ replace `<absolute-path-to-octowright>` with the path on YOUR machine
 ```
 
 Run `octowright init` to print this same block with the path filled in for
-your install. Reload Claude; tools appear as `mcp__octowright__browser_launch`, etc.
+your install — and to scaffold a sample persona, scenario, and macro under
+`~/.config/undef/`. Reload Claude; tools appear as
+`mcp__octowright__browser_launch`, etc.
 
 ## Your first 5 minutes
 
@@ -74,11 +76,53 @@ already logged in.
 That's the whole tool: parallel browsers, recordings, named macros, persistent
 profiles. **Personas** are profiles with metadata (display name, default URL,
 credential references); **scenarios** are pre-declared groups of personas you can
-spin up with one call. Both are covered later.
+spin up with one call. Both are covered later. **The dashboard** ties every
+piece together visually — see the next section.
+
+## Dashboard
+
+`octowright serve` boots two things in one process: the MCP stdio server (what
+Claude talks to) and a Starlette HTTP server on `http://127.0.0.1:8765/` (what
+*you* look at). One stable URL, pinned in your browser, replaces the old dance
+of copying log paths and shelling out to `npx playwright show-trace` by hand.
+
+Ask Claude `"give me the octowright dashboard URL"` (it'll call the
+`octowright_dashboard_url` MCP tool), or just open the URL directly. You get:
+
+- **Top-level dashboard** — every live browser, every live scenario, recent
+  closed sessions, all your personas, all your saved macros. Auto-refreshes
+  every 5 seconds.
+- **Per-session debugger** — click any session for a two-column page with the
+  embedded session video on the left, action timeline on the right. Click any
+  action in the timeline to seek the video to that moment. Tabs underneath
+  the timeline switch between **console messages** (filtered by level),
+  **downloads** (with a "missing" badge if the file was moved), and
+  **screenshots** (lazy-loaded thumbnail grid).
+- **Live updates** — for currently-running sessions, the page opens a
+  WebSocket to `/api/sessions/{id}/tail` and appends new events as they
+  arrive (no manual refresh).
+- **Trace deep-dive** — a button on each session page spawns
+  `npx playwright show-trace` against that session's `.zip` trace, opening
+  the official Playwright trace viewer for full per-action inspection
+  (network, snapshots, source links). Requires `npx` on PATH.
+
+The dashboard is a TypeScript SPA built into `packages/octowright-frontend/`
+(strict tsc + Biome + vitest). It uses `@provide-io/telemetry` for structured
+logging so frontend log lines are correlated with the Python server's
+`provide.telemetry` calls. The compiled bundle ships inside the wheel; the
+frontend has zero runtime dependency on Node — Node is only needed at build
+time and for the optional `npx playwright show-trace` deep-dive.
+
+If port 8765 is taken, the server walks up to 5 higher ports and picks the
+first free one (or logs a warning and continues without the HTTP layer if all
+are busy — MCP keeps running). Override the default with `OCTOWRIGHT_HTTP_PORT`
+or bind to a different host with `OCTOWRIGHT_HTTP_HOST` (default `127.0.0.1`;
+use `0.0.0.0` if you want the dashboard reachable from another machine on
+your network).
 
 ## Concepts: how the pieces relate
 
-Four layers, each building on the one below:
+Five layers, each building on the one below:
 
 **1. Browser.** A single live Playwright browser — one engine (chromium /
 firefox / webkit), one window. Identified by an `instance_id`. Every action you
@@ -116,10 +160,20 @@ macro across all participants (`scenario_run_macro`), role-filter
 the [Scenarios](#scenarios--coordinated-multi-browser-orchestration)
 section for the full spec shape.
 
+**5. Dashboard.** The web UI bundled with `octowright serve` is the visual
+projection of everything above. The dashboard page lists every live browser,
+every live scenario, recent closed sessions, every persona, every macro;
+each session links to a debugger page with embedded video, click-to-seek
+action timeline, console messages, downloads, and screenshots. The Playwright
+trace viewer is one button away. See the [Dashboard](#dashboard) section
+above for what it shows; this layer doesn't add new state — it just makes
+the other four layers observable.
+
 **When to reach for which.** A single browser for one-shot exploration. A
 named profile when you want login state to survive. A persona when that
 identity is worth metadata and credential references. A scenario when you
-need N coordinated browsers as a single unit.
+need N coordinated browsers as a single unit. The dashboard whenever you
+want to *see* what's happening rather than ask Claude.
 
 ## Tools
 
@@ -128,37 +182,82 @@ appends a record to that instance's JSONL log.
 
 | Tool | What |
 |---|---|
+**Browser lifecycle**
+
+| Tool | What |
+|---|---|
 | `browser_launch` | Launch a new headed browser. `kind` = `chromium` / `firefox` / `webkit`. Returns `instance_id`. |
+| `browser_suggest_for_url` | Pre-launch: which saved persona owns this URL? Disambiguates `"open discord.com"` requests. |
 | `browser_list` | List all live instances. |
 | `browser_close` / `browser_close_all` | Close one / all. |
+| `browser_spawn_roster` | Launch N browsers in parallel from a list of launch specs. |
 | `browser_navigate` | Navigate a specific instance. |
-| `browser_click` / `browser_type` / `browser_fill` / `browser_press_key` | Input. |
+
+**Input**
+
+| Tool | What |
+|---|---|
+| `browser_click` / `browser_type` / `browser_fill` / `browser_press_key` | CSS-selector input. |
+| `browser_click_by` / `browser_fill_by` / `browser_get_text_by` | ARIA-locator input (role / label / text / data-testid). |
+| `browser_set_input_files` | Upload files into an `<input type=file>`. |
+
+**Inspection**
+
+| Tool | What |
+|---|---|
 | `browser_screenshot` | PNG to disk. |
 | `browser_snapshot` | Accessibility tree. |
 | `browser_evaluate` | Run JS in the page. |
-| `browser_console_messages` | Collected console output since launch. |
-| `browser_wait_for` | Wait for selector / text. |
+| `browser_console_messages` | Collected console output since launch (cursor pagination). |
+| `browser_wait_for` | Wait for selector / text / network-idle. |
 | `browser_recording_path` | Path to the JSONL action log for this instance. |
+| `browser_tail_recording` | Stream new JSONL events appended since a byte cursor — for live monitoring without `tail -f`. |
 | `browser_export_script` | Emit a Playwright Python (or TS) script that replays the log. |
-| `profile_list` | List saved persistent profiles. |
-| `profile_delete` | Wipe a saved profile (refuses if a live browser is using it). |
-| `macro_save` | Save current recording as a named macro, with parameter substitution. |
-| `macro_list` | List saved macros. |
-| `macro_run` | Replay a macro against a live instance with args. |
-| `macro_delete` | Delete a saved macro. |
-| `persona_list` | List personas with engines, metadata, last-used. |
-| `persona_get` | Full profile.yaml for a persona (with credential references). |
-| `persona_create` | Scaffold a new persona + stub profile.yaml. |
-| `persona_delete` | Delete a persona (all engines + metadata); refuses if live. |
+| `browser_open_trace` | Open the Playwright trace viewer (`npx playwright show-trace`) on this session's `.zip`. |
+
+**Assertions**
+
+| Tool | What |
+|---|---|
+| `browser_expect_url` / `browser_expect_text` / `browser_expect_selector` / `browser_expect_js` | Recording-aware assertions (raise on mismatch, append to JSONL). |
+
+**Network & dialogs**
+
+| Tool | What |
+|---|---|
+| `browser_set_dialog_policy` | accept / dismiss / manual for `confirm()` / `alert()` / `prompt()`. Default: dismiss. |
+| `browser_mock_route` / `browser_unmock_route` | Stub network responses for deterministic tests. |
+
+**Pages, frames, downloads**
+
+| Tool | What |
+|---|---|
+| `page_list` / `page_switch` / `page_close` | Manage tabs + popups. |
+| `browser_switch_frame` / `browser_reset_frame` / `browser_list_frames` | Drive an iframe. |
+| `browser_downloads` / `browser_wait_for_download` | Captured downloads (cursor pagination). |
+
+**Profiles, personas, scenarios, macros, goldens**
+
+| Tool | What |
+|---|---|
+| `profile_list` / `profile_delete` | Saved per-engine profile dirs. |
+| `persona_list` / `persona_get` / `persona_create` / `persona_delete` | Identity-layer over profiles. |
 | `persona_credentials_check` | Pre-flight: resolve every credential reference without launching a browser. |
 | `migrate_profiles` | One-shot: migrate legacy `profiles/<kind>/<name>/` layout. |
-| `scenario_list` | List scenario specs on disk. |
-| `scenario_start` | Start a scenario; browsers stay open. |
-| `scenario_status` | List live scenarios. |
-| `scenario_stop` | Teardown and close. |
-| `scenario_run_macro` | Broadcast a macro across scenario participants. |
-| `scenario_participants` | List participants of a live scenario (role-filter). |
-| `scenario_run_as_test` | Run verify macros; pass/fail + JUnit XML. |
+| `scenario_list` / `scenario_start` / `scenario_status` / `scenario_stop` / `scenario_run_macro` / `scenario_participants` / `scenario_run_as_test` / `scenario_tail` | Multi-browser orchestration + verify-as-test. |
+| `scenario_plan` | Dry-run: show resolved per-participant launch_kwargs without launching anything. |
+| `macro_save` / `macro_list` / `macro_run` / `macro_run_sequence` / `macro_delete` | Named, parameterised action sequences. |
+| `macro_lint` | Static-analysis pass on a saved macro: missing required fields, unknown actions, unparameterized credential-shaped strings, empty conditional branches. |
+| `golden_save` / `golden_assert` / `golden_list` / `golden_delete` | Accessibility-tree snapshot diffs. |
+| `run_test_suite` | Run every `[test]`-tagged macro in a directory; emit JUnit XML. |
+
+**Octowright self / housekeeping**
+
+| Tool | What |
+|---|---|
+| `octowright_dashboard_url` | Returns the localhost dashboard URL (with optional `session_id` deep-link). |
+| `octowright_check_takeover` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json`; report scope + suggested actions. |
+| `recordings_cleanup` | Prune old recording artefacts older than N days. Dry-run by default. |
 
 ## Persistent profiles (Discord, Slack, N-login-per-app)
 
@@ -369,11 +468,49 @@ Configurable via env vars:
 - `OCTOWRIGHT_DEFAULT_URL` — fallback `url` when `browser_launch` omits it. Defaults to `https://warp.undef.games`.
 - `OCTOWRIGHT_RECORDINGS` — where JSONL logs land. Defaults to `./recordings/` in this repo.
 - `OCTOWRIGHT_PROFILES_DIR` — where persistent profiles live. Defaults to `~/.config/undef/profiles/`.
-- `OCTOWRIGHT_VIEWPORT_W` / `OCTOWRIGHT_VIEWPORT_H` — default window size (1280×800).
-- `OCTOWRIGHT_HEADLESS` — set to `1` to default to headless mode (default is headed).
-- `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` — per-navigation / per-action timeouts.
 - `OCTOWRIGHT_MACROS_DIR` — where saved macros live. Defaults to `~/.config/undef/macros/`.
 - `OCTOWRIGHT_SCENARIOS_DIR` — where scenario specs live. Defaults to `~/.config/undef/scenarios/`.
+- `OCTOWRIGHT_VIEWPORT_W` / `OCTOWRIGHT_VIEWPORT_H` — default window size (1280×800).
+- `OCTOWRIGHT_HEADLESS` — explicit `0` / `1` overrides headless mode. Default is auto-detected: headed on macOS or Linux+display, headless on CI (`CI=true`) or Linux without `$DISPLAY` / `$WAYLAND_DISPLAY`.
+- `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` — per-navigation / per-action timeouts.
+- `OCTOWRIGHT_HTTP_HOST` / `OCTOWRIGHT_HTTP_PORT` — dashboard HTTP server bind address. Default `127.0.0.1:8765`. Use `0.0.0.0` for the host to make the dashboard reachable from another machine on your network. If the port is in use, the server walks up 5 higher ports automatically.
+
+## CLI commands
+
+`octowright` itself is a click-based CLI; subcommands let you do the
+common housekeeping without going through Claude:
+
+| Command | What |
+|---|---|
+| `octowright serve` | Run the MCP stdio server + the dashboard HTTP server. This is the default when you invoke `octowright` with no subcommand. |
+| `octowright init [--force]` | First-run scaffolding: create the standard dirs (`~/.config/undef/{profiles,macros,scenarios}/`), drop a sample persona / scenario / macro, and print the `.mcp.json` registration block with your install path filled in. |
+| `octowright selftest` | Print the list of registered MCP tools without needing a live MCP client. Sanity check after install. |
+| `octowright test [<dir>] [--kind <engine>] [--tag <tag>] [--out <xml>]` | Run every `[test]`-tagged macro in a directory, emit JUnit XML. |
+| `octowright cleanup [--days N] [--apply]` | Prune old recording artefacts (JSONL logs, screenshots, videos, traces). Dry-run by default; `--apply` actually deletes. |
+| `octowright takeover [--apply --scope=session\|project\|global --name=<n>]` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json` and offer to disable them in favour of octowright. Default is read-only report; `--apply` rewrites the config (with timestamped backup) by renaming the matched key to `_<name>_disabled_by_octowright`. Reversible — rename back to re-enable. |
+| `octowright migrate-profiles` | One-shot: migrate legacy `profiles/<kind>/<name>/` layout to the persona-first form. Idempotent. |
+| `octowright persona list\|show\|create\|delete` | Manage personas from the terminal. |
+| `octowright scenario list\|start [--test --out <xml>] [--watch]` | Start a scenario; `--watch` streams participant events to stdout in real-time; the command blocks until Ctrl-C. |
+
+## Telemetry
+
+Both halves of octowright use the `provide.telemetry` family for structured
+logging:
+
+- **Python server** uses `provide-telemetry>=0.3` (structlog under the hood).
+  `setup_telemetry()` is called by `octowright serve`; every module gets a
+  logger via `get_logger(__name__)`. Logs land on stderr in development,
+  JSON in production (auto-detected).
+- **TypeScript dashboard** uses `@provide-io/telemetry@^0.3.0` (pino under
+  the hood). `setupTelemetry()` runs at the top of each entrypoint;
+  `getLogger('octowright.frontend.{api,tail,dashboard,session,global}')` per
+  module. Logger names mirror the Python convention so log lines are easy
+  to correlate across the stack.
+
+Optional OTEL exporters (traces / metrics / logs to an OTLP endpoint) are
+available on both sides — opt in by setting the appropriate env vars / config
+flags. Off by default; the libraries degrade gracefully to no-op providers
+when peer deps aren't installed.
 
 ## Safari caveat
 
