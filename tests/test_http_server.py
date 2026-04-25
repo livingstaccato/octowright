@@ -860,3 +860,78 @@ def test_runtime_status_when_not_started() -> None:
     assert status["running"] is False
     assert _http.runtime_url() is None
     assert _http.runtime_session_url("xyz") is None
+
+
+# ---------------------------------------------------------------------------
+# Frontend bundle mount + SPA deep-link fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def stub_frontend_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Drop a fake bundled frontend at FRONTEND_DIR so static-mount routes resolve."""
+    bundle = tmp_path / "frontend"
+    bundle.mkdir()
+    (bundle / "index.html").write_text("<!DOCTYPE html><html><body>dashboard</body></html>")
+    (bundle / "session.html").write_text("<!DOCTYPE html><html><body>session debugger</body></html>")
+    (bundle / "styles.css").write_text("body { color: red; }")
+    monkeypatch.setattr(_http, "FRONTEND_DIR", bundle)
+    return bundle
+
+
+def test_index_html_served_at_root(stub_frontend_bundle: Path) -> None:
+    with TestClient(_http.build_app()) as client:
+        r = client.get("/")
+        assert r.status_code == 200
+        assert "dashboard" in r.text
+        assert r.headers["content-type"].startswith("text/html")
+
+
+def test_static_asset_served(stub_frontend_bundle: Path) -> None:
+    with TestClient(_http.build_app()) as client:
+        r = client.get("/styles.css")
+        assert r.status_code == 200
+        assert "color: red" in r.text
+
+
+def test_session_deep_link_serves_session_html(stub_frontend_bundle: Path) -> None:
+    """SPA fallback: /sessions/<id> must serve session.html (frontend reads id from URL)."""
+    with TestClient(_http.build_app()) as client:
+        r = client.get("/sessions/abc123")
+        assert r.status_code == 200
+        assert "session debugger" in r.text
+        assert r.headers["content-type"].startswith("text/html")
+
+
+def test_session_deep_link_with_complex_id(stub_frontend_bundle: Path) -> None:
+    """The path catchall handles ids with arbitrary characters."""
+    with TestClient(_http.build_app()) as client:
+        for sid in ["abc-123", "ABC123def456", "id_with_underscores", "0123456789ab"]:
+            r = client.get(f"/sessions/{sid}")
+            assert r.status_code == 200, f"failed for id={sid}"
+            assert "session debugger" in r.text
+
+
+def test_no_frontend_routes_when_bundle_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """If the frontend hasn't been built yet, the API still works — the dashboard is just 404."""
+    monkeypatch.setattr(_http, "FRONTEND_DIR", tmp_path / "does-not-exist")
+    with TestClient(_http.build_app()) as client:
+        # API still works.
+        assert client.get("/api/health").status_code == 200
+        # Static routes are absent; / is unhandled by Starlette and 404s.
+        assert client.get("/").status_code == 404
+        assert client.get("/sessions/abc").status_code == 404
+
+
+def test_session_deep_link_falls_back_to_404_when_session_html_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If FRONTEND_DIR exists but session.html somehow isn't there, return a clear 404."""
+    bundle = tmp_path / "frontend"
+    bundle.mkdir()
+    (bundle / "index.html").write_text("<html>only index</html>")
+    monkeypatch.setattr(_http, "FRONTEND_DIR", bundle)
+    with TestClient(_http.build_app()) as client:
+        r = client.get("/sessions/abc")
+        assert r.status_code == 404
+        assert "session.html" in r.text
