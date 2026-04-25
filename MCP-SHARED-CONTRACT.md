@@ -18,7 +18,9 @@ GET  /sessions/{id}                            → static session.html (rewritte
 GET  /api/sessions                             → {"live": [SessionSummary, ...], "closed": [SessionSummary, ...]}
 GET  /api/sessions/{id}                        → SessionDetail
 GET  /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
-WS   /api/sessions/{id}/tail                   → server pushes {"events": [...], "cursor": int, "complete": bool} every ~1s for live sessions; sends one final message + closes for closed sessions
+GET  /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
+GET  /api/sessions/{id}/downloads?since=N      → {"downloads": [DownloadRecord, ...], "cursor": int, "total": int}
+WS   /api/sessions/{id}/tail                   → server pushes {"events": [...], "cursor": int, "complete": bool} every ~1s for LIVE sessions; closed/unknown sessions are rejected at connect time (see WS semantics below)
 GET  /api/sessions/{id}/frame?t=<seconds>      → image/png bytes (extracted at the requested timestamp). 404 if no video for this session.
 GET  /api/sessions/{id}/video                  → video bytes (HTTP range supported via FileResponse). 404 if missing.
 GET  /api/sessions/{id}/trace                  → application/zip download. 404 if missing.
@@ -74,7 +76,43 @@ MacroSummary = {
     "parameters": [str, ...],
     "updated_at": str | None,
 }
+
+ConsoleMessage = {
+    "level": str,           # "log" | "warn" | "error" | "info" | "debug" | …
+    "text": str,
+    "page_index": int | None,  # set on popup pages, None for the main page
+}
+
+DownloadRecord = {
+    "url": str,
+    "suggested_filename": str,
+    "path": str,            # absolute path the file was saved to
+    "timestamp": str,       # compact UTC stamp e.g. "20260101T000000Z"
+    "path_exists": bool,    # server-checked at request time
+}
 ```
+
+## `/console` and `/downloads` cursor semantics
+
+Both endpoints share the same shape: ``{<plural>: [...], "cursor": int, "total": int}``.
+
+- ``since`` is an optional 0-based index into the messages/downloads list.
+  Items at index ``>= since`` are returned. Out-of-range values are clamped
+  into ``[0, total]``.
+- ``cursor`` returned is always the new ``total`` so callers can pass it back
+  on the next poll without tracking offsets manually.
+- ``/console`` accepts an optional ``level=`` filter (case-sensitive match
+  against ``ConsoleMessage.level``) — the filter applies BEFORE the ``since``
+  slice, so the ``cursor``/``total`` values reflect only the filtered view.
+- For LIVE sessions the data is read directly off the in-memory session
+  (``BrowserSession.console`` and ``BrowserSession.list_downloads()``).
+- For CLOSED sessions the data is reconstructed by scanning the JSONL
+  recording. Today the JSONL log captures ``download_saved`` rows but NOT
+  console events — so a closed session's ``/console`` always returns an empty
+  list. The endpoint reads ``action: "console"`` rows defensively, so adding
+  console persistence later requires no API change.
+- 404 is returned when the id matches neither a live session nor a recording
+  on disk.
 
 ## Closed sessions
 
@@ -87,13 +125,20 @@ The first `launch` event in the recording supplies `started_at` / `kind` /
 
 ## WebSocket `/tail` semantics
 
-- Live session: `_tail_jsonl(log_path, cursor)` is polled every ~1s; server
-  pushes `{"events": [...], "cursor": int, "complete": false}` on each tick
-  (even when `events` is empty) so the frontend can show liveness.
-- Session goes from live to closed mid-connection: send one final message with
-  `complete: true` and close the socket.
-- Session was never live (or already closed) at connect time: send one snapshot
-  `{"events": [...], "cursor": int, "complete": true}` and close.
+`/tail` is for LIVE sessions only.
+
+- **Live session**: `_tail_jsonl(log_path, cursor)` is polled every ~1s; the
+  server pushes `{"events": [...], "cursor": int, "complete": false}` on each
+  tick (even when `events` is empty) so the frontend can show liveness.
+- **Live → closed mid-connection**: send one final message with
+  `complete: true` and close the socket cleanly.
+- **Closed at connect time** (the recording exists on disk but the session is
+  not in `pool._sessions`): the WebSocket is closed IMMEDIATELY with code
+  `1003` (unsupported) and reason
+  `"closed sessions don't support tail; use GET /api/sessions/{id}/events instead"`.
+  No payload is sent — clients should fall back to the REST `/events` endpoint.
+- **Unknown at connect time** (no live session, no recording): close with code
+  `1008` (policy violation) and reason `"no session with id <id>"`.
 
 ## `/api/sessions/{id}/frame` caching
 
