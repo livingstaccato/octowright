@@ -318,7 +318,7 @@ def test_mcp_tool_no_detections(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 
 def _patch_cli_paths(monkeypatch: pytest.MonkeyPatch, *, project: Path, glob: Path) -> None:
-    from octowright import cli as cli_mod
+    from octowright.cli import takeover as cli_mod
 
     monkeypatch.setattr(cli_mod, "_takeover_default_project_config", lambda: project)
     monkeypatch.setattr(cli_mod, "_takeover_default_global_config", lambda: glob)

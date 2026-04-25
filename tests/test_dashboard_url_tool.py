@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from octowright import http_server as _http
+from octowright.http import state as _http_state
 from octowright.server import _state
 from octowright.server.meta import octowright_dashboard_url
 
@@ -24,9 +24,9 @@ def reset_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     Recordings dir is redirected to a tmp path so the closed-session count
     is deterministic.
     """
-    monkeypatch.setattr(_http, "_RUNTIME_HOST", None)
-    monkeypatch.setattr(_http, "_RUNTIME_PORT", None)
-    monkeypatch.setattr(_http, "_RUNTIME_ERROR", None)
+    monkeypatch.setattr(_http_state, "_RUNTIME_HOST", None)
+    monkeypatch.setattr(_http_state, "_RUNTIME_PORT", None)
+    monkeypatch.setattr(_http_state, "_RUNTIME_ERROR", None)
 
     rec = tmp_path / "rec"
     rec.mkdir()
@@ -56,8 +56,8 @@ def test_running_is_false_when_http_not_started() -> None:
 
 
 def test_running_is_true_with_runtime_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_http, "_RUNTIME_HOST", "127.0.0.1")
-    monkeypatch.setattr(_http, "_RUNTIME_PORT", 8765)
+    monkeypatch.setattr(_http_state, "_RUNTIME_HOST", "127.0.0.1")
+    monkeypatch.setattr(_http_state, "_RUNTIME_PORT", 8765)
     result = octowright_dashboard_url()
     assert result["running"] is True
     assert result["url"] == "http://127.0.0.1:8765/"
@@ -66,8 +66,8 @@ def test_running_is_true_with_runtime_host(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_session_deep_link(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_http, "_RUNTIME_HOST", "127.0.0.1")
-    monkeypatch.setattr(_http, "_RUNTIME_PORT", 8765)
+    monkeypatch.setattr(_http_state, "_RUNTIME_HOST", "127.0.0.1")
+    monkeypatch.setattr(_http_state, "_RUNTIME_PORT", 8765)
     result = octowright_dashboard_url(session_id="abc123")
     assert result["session_url"] == "http://127.0.0.1:8765/sessions/abc123"
 
@@ -85,8 +85,8 @@ def test_counts_reflect_pool_and_recordings(
 
     _meta.pool._sessions["live01"] = fake_session
 
-    monkeypatch.setattr(_http, "_RUNTIME_HOST", "127.0.0.1")
-    monkeypatch.setattr(_http, "_RUNTIME_PORT", 8765)
+    monkeypatch.setattr(_http_state, "_RUNTIME_HOST", "127.0.0.1")
+    monkeypatch.setattr(_http_state, "_RUNTIME_PORT", 8765)
     result = octowright_dashboard_url()
     assert result["live_sessions"] == 1
     assert result["closed_sessions"] == 2
@@ -94,9 +94,9 @@ def test_counts_reflect_pool_and_recordings(
 
 
 def test_error_propagates_from_runtime_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_http, "_RUNTIME_HOST", None)
-    monkeypatch.setattr(_http, "_RUNTIME_PORT", None)
-    monkeypatch.setattr(_http, "_RUNTIME_ERROR", "port 8765 is in use")
+    monkeypatch.setattr(_http_state, "_RUNTIME_HOST", None)
+    monkeypatch.setattr(_http_state, "_RUNTIME_PORT", None)
+    monkeypatch.setattr(_http_state, "_RUNTIME_ERROR", "port 8765 is in use")
     result = octowright_dashboard_url()
     assert result["running"] is False
     assert result["error"] == "port 8765 is in use"

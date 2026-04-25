@@ -15,8 +15,8 @@ from __future__ import annotations
 from . import input as _input  # noqa: F401
 from . import inspect as _inspect  # noqa: F401
 from . import lifecycle as _lifecycle  # noqa: F401
-from . import media as _media  # noqa: F401
 from . import network as _network  # noqa: F401
+from . import trace as _trace  # noqa: F401
 from . import views as _views  # noqa: F401
 
 # Re-export selected tool functions for direct test access (`from octowright import server;
@@ -54,8 +54,8 @@ from .lifecycle import (
     browser_spawn_roster,
     browser_suggest_for_url,
 )
-from .media import browser_open_trace
 from .network import browser_mock_route, browser_set_dialog_policy, browser_unmock_route
+from .trace import browser_open_trace
 from .views import (
     browser_downloads,
     browser_list_frames,

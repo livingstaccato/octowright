@@ -25,7 +25,8 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
-from octowright import http_server as _http
+from octowright import http as _http
+from octowright.http import state as _http_state
 from octowright.server import _state
 
 # ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ def isolated_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path
     """Point every RECORDINGS_DIR consumer in ``http_server`` at a fresh tmp dir."""
     rec = tmp_path / "recordings"
     rec.mkdir()
-    monkeypatch.setattr(_http, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
     return rec
 
 

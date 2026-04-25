@@ -22,7 +22,9 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
-from octowright import http_server as _http
+from octowright import http as _http
+from octowright.http import lifespan as _http_lifespan
+from octowright.http import state as _http_state
 from octowright.server import _state
 
 # ---------------------------------------------------------------------------
@@ -35,7 +37,7 @@ def isolated_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path
     """Point every RECORDINGS_DIR consumer in `http_server` at a fresh tmp dir."""
     rec = tmp_path / "recordings"
     rec.mkdir()
-    monkeypatch.setattr(_http, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
     return rec
 
 
@@ -293,14 +295,14 @@ def test_session_frame_extracts_via_video_module(
         produced.write_bytes(_TINY_PNG)
         return [produced]
 
-    monkeypatch.setattr(_http._video, "extract_frames", fake_extract)
+    monkeypatch.setattr(_http_state._video, "extract_frames", fake_extract)
     r = client.get("/api/sessions/framewithv01/frame?t=1.5")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "image/png"
     assert r.content == _TINY_PNG
 
     # Second request hits the cache (extract_frames must NOT be called again).
-    monkeypatch.setattr(_http._video, "extract_frames", lambda *a, **kw: pytest.fail("cache miss!"))
+    monkeypatch.setattr(_http_state._video, "extract_frames", lambda *a, **kw: pytest.fail("cache miss!"))
     r2 = client.get("/api/sessions/framewithv01/frame?t=1.5")
     assert r2.status_code == 200
     assert r2.content == _TINY_PNG
@@ -410,7 +412,7 @@ def test_scenarios_with_one_live(client: TestClient, empty_pool: dict[str, Any])
 
 
 def test_personas_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_http._personas, "list_personas", lambda: [])
+    monkeypatch.setattr(_http_state._personas, "list_personas", lambda: [])
     r = client.get("/api/personas")
     assert r.status_code == 200
     assert r.json() == []
@@ -418,7 +420,7 @@ def test_personas_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_personas_listing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        _http._personas,
+        _http_state._personas,
         "list_personas",
         lambda: [{"name": "alice", "display_name": "Alice", "engines": ["chromium"], "last_used": "2026-01-01"}],
     )
@@ -430,7 +432,7 @@ def test_personas_listing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_macros_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_http._macros, "list_macros", lambda: [])
+    monkeypatch.setattr(_http_state._macros, "list_macros", lambda: [])
     r = client.get("/api/macros")
     assert r.status_code == 200
     assert r.json() == []
@@ -438,7 +440,7 @@ def test_macros_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_macros_listing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        _http._macros,
+        _http_state._macros,
         "list_macros",
         lambda: [{"name": "login", "description": "do login", "parameters": ["email"], "updated_at": "2026-01-01"}],
     )
@@ -473,8 +475,8 @@ def test_trace_open_spawns(
         captured["args"] = list(args)
         return SimpleNamespace(pid=9999)
 
-    monkeypatch.setattr(_http.shutil, "which", lambda name: "/fake/npx")
-    monkeypatch.setattr(_http.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(_http_state.shutil, "which", lambda name: "/fake/npx")
+    monkeypatch.setattr(_http_state.subprocess, "Popen", fake_popen)
 
     r = client.post("/api/sessions/toopenok0123/trace/open")
     assert r.status_code == 200
@@ -492,7 +494,7 @@ def test_trace_open_no_npx(
     name = "20260101T000000Z-chromium-tonpxgone001"
     (isolated_recordings / f"{name}.jsonl").write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
     (isolated_recordings / f"{name}.trace.zip").write_bytes(b"PK\x03\x04")
-    monkeypatch.setattr(_http.shutil, "which", lambda name: None)
+    monkeypatch.setattr(_http_state.shutil, "which", lambda name: None)
     r = client.post("/api/sessions/tonpxgone001/trace/open")
     assert r.status_code == 500
 
@@ -543,7 +545,7 @@ def test_tail_live_session_streams(
     )
 
     # Speed the loop up so the test isn't waiting a full second.
-    monkeypatch.setattr(_http, "TAIL_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(_http_state, "TAIL_POLL_SECONDS", 0.01)
 
     with client.websocket_connect("/api/sessions/wslive00abcd/tail") as ws:
         msg = ws.receive_json()
@@ -841,9 +843,9 @@ def test_port_is_free_and_pick_port(monkeypatch: pytest.MonkeyPatch) -> None:
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         busy = s.getsockname()[1]
-        assert _http._port_is_free("127.0.0.1", busy) is False
+        assert _http_lifespan._port_is_free("127.0.0.1", busy) is False
         # Pick should walk past busy.
-        chosen = _http._pick_port("127.0.0.1", busy, retries=20)
+        chosen = _http_lifespan._pick_port("127.0.0.1", busy, retries=20)
         assert chosen is not None
         assert chosen != busy
     finally:
@@ -853,9 +855,9 @@ def test_port_is_free_and_pick_port(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_runtime_status_when_not_started() -> None:
     # Module-level globals are reset by `serve_app` on shutdown; out of band
     # this should report not-running.
-    _http._RUNTIME_HOST = None
-    _http._RUNTIME_PORT = None
-    _http._RUNTIME_ERROR = None
+    _http_state._RUNTIME_HOST = None
+    _http_state._RUNTIME_PORT = None
+    _http_state._RUNTIME_ERROR = None
     status = _http.runtime_status()
     assert status["running"] is False
     assert _http.runtime_url() is None
@@ -875,7 +877,7 @@ def stub_frontend_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     (bundle / "index.html").write_text("<!DOCTYPE html><html><body>dashboard</body></html>")
     (bundle / "session.html").write_text("<!DOCTYPE html><html><body>session debugger</body></html>")
     (bundle / "styles.css").write_text("body { color: red; }")
-    monkeypatch.setattr(_http, "FRONTEND_DIR", bundle)
+    monkeypatch.setattr(_http_state, "FRONTEND_DIR", bundle)
     return bundle
 
 
@@ -914,7 +916,7 @@ def test_session_deep_link_with_complex_id(stub_frontend_bundle: Path) -> None:
 
 def test_no_frontend_routes_when_bundle_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """If the frontend hasn't been built yet, the API still works — the dashboard is just 404."""
-    monkeypatch.setattr(_http, "FRONTEND_DIR", tmp_path / "does-not-exist")
+    monkeypatch.setattr(_http_state, "FRONTEND_DIR", tmp_path / "does-not-exist")
     with TestClient(_http.build_app()) as client:
         # API still works.
         assert client.get("/api/health").status_code == 200
@@ -1063,7 +1065,7 @@ def test_session_deep_link_falls_back_to_404_when_session_html_missing(
     bundle = tmp_path / "frontend"
     bundle.mkdir()
     (bundle / "index.html").write_text("<html>only index</html>")
-    monkeypatch.setattr(_http, "FRONTEND_DIR", bundle)
+    monkeypatch.setattr(_http_state, "FRONTEND_DIR", bundle)
     with TestClient(_http.build_app()) as client:
         r = client.get("/sessions/abc")
         assert r.status_code == 404
