@@ -157,3 +157,32 @@ async def test_leader_exits_when_watchdog_fires_first(stubs: _Stubs, isolated_lo
     await asyncio.wait_for(stubs.watchdog_started.wait(), timeout=2.0)
     stubs.watchdog_done.set()
     await asyncio.wait_for(leader_task, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_sigterm_translates_to_graceful_stdio_close(stubs: _Stubs, isolated_lockfile: Any) -> None:
+    """SIGTERM on a discoverable leader must NOT exit; treat as stdio EOF.
+
+    Claude Code (and similar MCP clients) send SIGTERM to their child stdio
+    processes on close. Without the signal handler, the asyncio loop dies
+    instantly and takes all the browsers down with it.
+    """
+    import os
+    import signal
+
+    leader_task = asyncio.create_task(_serve._run_leader(**_kwargs()))
+    await asyncio.wait_for(stubs.http_started.wait(), timeout=2.0)
+    await asyncio.wait_for(stubs.watchdog_started.wait(), timeout=2.0)
+
+    # Fire SIGTERM at this very process — the leader's signal handler should
+    # convert it into a graceful mcp_task.cancel() and the keep-alive path
+    # below should kick in.
+    os.kill(os.getpid(), signal.SIGTERM)
+    await asyncio.sleep(0.2)
+
+    # If signal handling is wired correctly, the leader is still waiting on
+    # the watchdog (mcp_task is cancelled, but the keep-alive logic took over).
+    assert not leader_task.done(), "leader should survive SIGTERM when discoverable"
+
+    stubs.watchdog_done.set()
+    await asyncio.wait_for(leader_task, timeout=2.0)
