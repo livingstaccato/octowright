@@ -215,6 +215,80 @@ def substitute(actions: list[dict[str, Any]], args: dict[str, Any]) -> list[dict
 _REPLAY_SKIP = {"launch", "close", "snapshot"}
 
 
+async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
+    """Run one non-conditional action. Returns (executed, skipped). Raises on action failure.
+
+    `executed` and `skipped` are 0/1 — never both. Conditional actions (if_selector,
+    try, try_each) are dispatched in `_dispatch_one`, not here.
+    """
+    kind = action.get("action", "")
+    if kind in _REPLAY_SKIP:
+        return 0, 1
+    if kind == "navigate":
+        await session.navigate(action["url"])
+    elif kind == "click":
+        await session.click(action["selector"])
+    elif kind == "type":
+        await session.type_text(action["selector"], action.get("text", ""), action.get("delay_ms"))
+    elif kind == "fill":
+        await session.fill(action["selector"], action.get("value", ""))
+    elif kind == "press_key":
+        await session.press_key(action["key"])
+    elif kind == "screenshot":
+        path_str = action.get("path")
+        if not path_str:
+            return 0, 1
+        await session.screenshot(Path(path_str))
+    elif kind == "evaluate":
+        await session.evaluate(action["expression"])
+    elif kind == "wait_for":
+        await session.wait_for(action.get("selector"), action.get("text"), action.get("timeout_ms"))
+    elif kind == "expect_url":
+        await _check_url(session.page, action["pattern"], action.get("mode", "regex"))
+    elif kind == "expect_text":
+        await _check_text(
+            session.page,
+            action["selector"],
+            action["text"],
+            action.get("mode", "contains"),
+            action.get("timeout_ms"),
+        )
+    elif kind == "expect_selector":
+        await _check_selector(session.page, action["selector"], action.get("present", True), action.get("timeout_ms"))
+    elif kind == "expect_js":
+        await _check_js(session.page, action["expression"], action.get("equals"))
+    elif kind == "mock_route":
+        await session.mock_route(
+            action["pattern"],
+            status=action.get("status", 200),
+            body=action.get("body"),
+            content_type=action.get("content_type", "application/json"),
+            headers=action.get("headers"),
+        )
+    elif kind == "unmock_route":
+        await session.unmock_route(action["pattern"])
+    elif kind == "set_dialog_policy":
+        session.set_dialog_policy(action["policy"], action.get("prompt_text"))
+    elif kind == "set_input_files":
+        await session.set_input_files(action["selector"], action.get("paths", []))
+    else:
+        return 0, 1
+    return 1, 0
+
+
+async def _dispatch_one(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
+    """Run one action of any type. Returns (executed, skipped). Raises on failure.
+
+    Conditional actions (if_selector / try / try_each) recursively call back here
+    for their child actions, so arbitrary nesting works.
+    """
+    from . import conditional as _cond
+
+    if action.get("action") in _cond.CONDITIONAL_ACTIONS:
+        return await _cond.dispatch_conditional(session, action, _dispatch_one)
+    return await _dispatch_simple(session, action)
+
+
 async def run_macro(
     session: BrowserSession,
     name: str,
@@ -223,8 +297,9 @@ async def run_macro(
     """Load *name*, substitute *args*, and execute each supported action.
 
     Returns ``{"macro": name, "executed": N, "skipped": M, "args_used": {...}}``.
+    Conditional action types (if_selector / try / try_each) are recognised — see
+    `octowright.conditional` for their JSON shapes.
     """
-
     macro = load_macro(name)
     effective_args = args or {}
     actions = substitute(macro.get("actions", []), effective_args)
@@ -233,78 +308,8 @@ async def run_macro(
     skipped = 0
 
     for i, action in enumerate(actions):
-        kind = action.get("action", "")
-
-        if kind in _REPLAY_SKIP:
-            skipped += 1
-            continue
-
         try:
-            if kind == "navigate":
-                await session.navigate(action["url"])
-            elif kind == "click":
-                await session.click(action["selector"])
-            elif kind == "type":
-                await session.type_text(
-                    action["selector"],
-                    action.get("text", ""),
-                    action.get("delay_ms"),
-                )
-            elif kind == "fill":
-                await session.fill(action["selector"], action.get("value", ""))
-            elif kind == "press_key":
-                await session.press_key(action["key"])
-            elif kind == "screenshot":
-                path_str = action.get("path")
-                if path_str:
-                    await session.screenshot(Path(path_str))
-                else:
-                    skipped += 1
-                    continue
-            elif kind == "evaluate":
-                await session.evaluate(action["expression"])
-            elif kind == "wait_for":
-                await session.wait_for(
-                    action.get("selector"),
-                    action.get("text"),
-                    action.get("timeout_ms"),
-                )
-            elif kind == "expect_url":
-                await _check_url(session.page, action["pattern"], action.get("mode", "regex"))
-            elif kind == "expect_text":
-                await _check_text(
-                    session.page,
-                    action["selector"],
-                    action["text"],
-                    action.get("mode", "contains"),
-                    action.get("timeout_ms"),
-                )
-            elif kind == "expect_selector":
-                await _check_selector(
-                    session.page,
-                    action["selector"],
-                    action.get("present", True),
-                    action.get("timeout_ms"),
-                )
-            elif kind == "expect_js":
-                await _check_js(session.page, action["expression"], action.get("equals"))
-            elif kind == "mock_route":
-                await session.mock_route(
-                    action["pattern"],
-                    status=action.get("status", 200),
-                    body=action.get("body"),
-                    content_type=action.get("content_type", "application/json"),
-                    headers=action.get("headers"),
-                )
-            elif kind == "unmock_route":
-                await session.unmock_route(action["pattern"])
-            elif kind == "set_dialog_policy":
-                session.set_dialog_policy(action["policy"], action.get("prompt_text"))
-            elif kind == "set_input_files":
-                await session.set_input_files(action["selector"], action.get("paths", []))
-            else:
-                skipped += 1
-                continue
+            e, s = await _dispatch_one(session, action)
         except Exception as exc:
             bundle = await session.diagnostic_bundle()
             payload: dict[str, Any] = {
@@ -315,8 +320,8 @@ async def run_macro(
                 "bundle": bundle,
             }
             raise RuntimeError(payload) from exc
-
-        executed += 1
+        executed += e
+        skipped += s
 
     log.info(
         "octowright.macro.run",
