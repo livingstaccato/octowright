@@ -320,6 +320,11 @@ class BrowserPool:
     def __init__(self) -> None:
         self._pw: Playwright | None = None
         self._sessions: dict[str, BrowserSession] = {}
+        # Monotonic counter for window-tile slot assignment. Reading
+        # len(_sessions) at launch time would race when N launches run in
+        # parallel — they'd all see the same count and grab the same slot.
+        # The counter is incremented synchronously at the start of launch().
+        self._tile_counter: int = 0
 
     async def _ensure_pw(self) -> Playwright:
         if self._pw is None:
@@ -364,12 +369,14 @@ class BrowserPool:
         if video_dir is not None:
             ctx_video_kwargs["record_video_dir"] = str(video_dir)
 
-        # Chromium-only window tiling: deterministic grid based on current pool
-        # size at launch time. No-op for firefox/webkit (no equivalent CLI hook)
-        # and for headless runs (no window to position).
+        # Chromium-only window tiling: deterministic grid based on a monotonic
+        # counter incremented before any await — safe under parallel launches.
+        # No-op for firefox/webkit (no equivalent CLI hook) and headless runs.
         launch_kwargs: dict[str, Any] = {}
         if tile and kind == "chromium" and not headless:
-            launch_kwargs["args"] = _tile_args_for_chromium(len(self._sessions))
+            tile_index = self._tile_counter
+            self._tile_counter += 1
+            launch_kwargs["args"] = _tile_args_for_chromium(tile_index)
 
         if profile:
             pdir = profile_dir(kind, profile)
