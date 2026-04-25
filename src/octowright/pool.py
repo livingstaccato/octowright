@@ -84,6 +84,61 @@ def _title_prefix_for(profile: str | None, label: str | None) -> str | None:
     return f"[{tag}] " if tag else None
 
 
+# Corner-badge injection: adds a small fixed-position label in the top-right of
+# every page so 10+ parallel browsers can be told apart visually. Survives
+# navigation via addInitScript + a MutationObserver re-injection guard.
+_BADGE_SCRIPT = r"""
+(() => {
+    if (window.top !== window.self) return;
+    const TAG = __TAG__;
+    const KIND = __KIND__;
+    const COLOR = __COLOR__;
+    const ID = "__octowright_badge__";
+    const inject = () => {
+        if (!document.body) return;
+        if (document.getElementById(ID)) return;
+        const div = document.createElement("div");
+        div.id = ID;
+        div.textContent = TAG + " · " + KIND;
+        Object.assign(div.style, {
+            position: "fixed", top: "8px", right: "8px",
+            zIndex: "2147483647", padding: "4px 10px",
+            background: COLOR, color: "white",
+            font: "bold 12px ui-monospace, Menlo, monospace",
+            borderRadius: "4px", boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+            pointerEvents: "none", userSelect: "none",
+        });
+        document.body.appendChild(div);
+    };
+    inject();
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", inject, { once: true });
+    }
+    new MutationObserver(() => {
+        if (document.body && !document.getElementById(ID)) inject();
+    }).observe(document.documentElement || document, { childList: true, subtree: true });
+})();
+"""
+
+
+def _badge_color_for(seed: str) -> str:
+    """Return a stable HSL color string for the given seed.
+
+    Same seed always produces the same hue, so re-launching `disc-1` always
+    gets the same badge color across sessions — useful as a visual anchor.
+    """
+    import hashlib
+
+    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+    hue = int(digest[:6], 16) % 360
+    return f"hsl({hue}, 70%, 45%)"
+
+
+def _badge_text_for(profile: str | None, label: str | None, instance_id: str) -> str:
+    """Pick the visible badge text. Falls back to a short instance_id if no tag."""
+    return profile or label or instance_id[:6]
+
+
 def _wire_listeners(session: BrowserSession, page: Any) -> None:
     """Attach per-page listeners (dialog, download, close, framenavigated) to a page.
     Called for both the initial page at launch AND any popup page opened mid-session.
@@ -258,6 +313,7 @@ class BrowserPool:
         stabilize: bool = False,
         record_video: bool = False,
         trace: bool = False,
+        badge: bool = True,
     ) -> dict[str, Any]:
         if kind not in SUPPORTED_KINDS:
             raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {kind!r}")
@@ -355,6 +411,14 @@ class BrowserPool:
         if title_prefix:
             script = _TITLE_PREFIX_SCRIPT.replace("__PREFIX__", json.dumps(title_prefix))
             await context.add_init_script(script=script)
+        if badge:
+            badge_text = _badge_text_for(profile, label, instance_id)
+            badge_script = (
+                _BADGE_SCRIPT.replace("__TAG__", json.dumps(badge_text))
+                .replace("__KIND__", json.dumps(kind))
+                .replace("__COLOR__", json.dumps(_badge_color_for(badge_text + kind)))
+            )
+            await context.add_init_script(script=badge_script)
         if stabilize:
             await context.add_init_script(script=render_stabilize_script())
 

@@ -34,6 +34,9 @@ from .._state import mcp, pool
         "requestAnimationFrame synchronous — recommended for reproducible test runs. "
         "Pass trace=True to record a full Playwright trace (screenshots + snapshots + sources) "
         "for post-mortem debugging. Resulting .zip can be viewed with `npx playwright show-trace`. "
+        "By default a small colored corner badge is injected so 10+ parallel browsers can "
+        "be visually told apart — same color across relaunches. Pass badge=False to disable "
+        "(recommended for sites that fingerprint DOM additions, like banks). "
         "Returns instance_id."
     ),
 )
@@ -48,6 +51,7 @@ async def browser_launch(
     stabilize: bool = False,
     record_video: bool = False,
     trace: bool = False,
+    badge: bool = True,
 ) -> dict[str, Any]:
     return await pool.launch(
         kind=kind,
@@ -60,6 +64,7 @@ async def browser_launch(
         stabilize=stabilize,
         record_video=record_video,
         trace=trace,
+        badge=badge,
     )
 
 
