@@ -68,6 +68,35 @@ export interface ScreenshotEntry {
   size_bytes: number;
 }
 
+export type ConsoleLevel = "log" | "warn" | "error" | "info" | "debug" | string;
+
+export interface ConsoleMessage {
+  level: ConsoleLevel;
+  text: string;
+  page_index: number | null;
+}
+
+export interface ConsoleListResponse {
+  messages: ConsoleMessage[];
+  cursor: number;
+  total: number;
+}
+
+export interface DownloadEntry {
+  url: string;
+  suggested_filename: string;
+  path: string;
+  timestamp: string;
+  path_exists?: boolean;
+  size_bytes?: number;
+}
+
+export interface DownloadListResponse {
+  downloads: DownloadEntry[];
+  cursor: number;
+  total: number;
+}
+
 export interface SessionListResponse {
   live: SessionSummary[];
   closed: SessionSummary[];

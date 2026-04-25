@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildLayout, renderFooter, renderHeader, renderTraceControls, renderVideo, sessionIdFromPath } from "./session.js";
+import {
+  buildLayout,
+  renderFooter,
+  renderHeader,
+  renderTraceControls,
+  renderVideo,
+  sessionIdFromPath,
+  setActiveTab,
+} from "./session.js";
 import type { SessionDetail } from "./types.js";
 
 function makeDetail(overrides: Partial<SessionDetail> = {}): SessionDetail {
@@ -50,6 +58,36 @@ describe("buildLayout", () => {
     expect(refs.timeline).toBeDefined();
     expect(root.querySelector('[data-testid="session-left"]')).not.toBeNull();
     expect(root.querySelector('[data-testid="session-right"]')).not.toBeNull();
+  });
+
+  it("creates tab strip + three side panels", () => {
+    const refs = buildLayout(root);
+    expect(refs.tabs).toBeDefined();
+    expect(refs.consolePanel.id).toBe("console-panel");
+    expect(refs.downloadsPanel.id).toBe("downloads-panel");
+    expect(refs.screenshotsPanel.id).toBe("screenshots-panel");
+    expect(root.querySelector('[data-testid="tab-console"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="tab-downloads"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="tab-screenshots"]')).not.toBeNull();
+  });
+});
+
+describe("setActiveTab", () => {
+  it("toggles active class + visibility across the three panels", () => {
+    const refs = buildLayout(root);
+    setActiveTab(refs, "console");
+    expect(refs.consoleTabBtn.classList.contains("session-tab--active")).toBe(true);
+    expect(refs.downloadsTabBtn.classList.contains("session-tab--active")).toBe(false);
+    expect(refs.consolePanel.style.display).toBe("");
+    expect(refs.downloadsPanel.style.display).toBe("none");
+    expect(refs.screenshotsPanel.style.display).toBe("none");
+
+    setActiveTab(refs, "screenshots");
+    expect(refs.screenshotsTabBtn.classList.contains("session-tab--active")).toBe(true);
+    expect(refs.consolePanel.style.display).toBe("none");
+    expect(refs.screenshotsPanel.style.display).toBe("");
+    expect(refs.screenshotsTabBtn.getAttribute("aria-selected")).toBe("true");
+    expect(refs.consoleTabBtn.getAttribute("aria-selected")).toBe("false");
   });
 });
 
