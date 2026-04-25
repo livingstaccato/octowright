@@ -41,9 +41,15 @@ except Exception as _e:
 _TITLE_PREFIX_SCRIPT = r"""
 (() => {
     const PREFIX = __PREFIX__;
+    // Browsers strip trailing whitespace from title strings on read, so
+    // PREFIX="(...) [acct] " (trailing space) becomes "(...) [acct]" by the
+    // time we read it back. Without trimming the comparison anchor, the
+    // re-injection check thinks the title is "fresh content" and prepends
+    // PREFIX a second time → "(...) [acct] (...) [acct]" doubling.
+    const PREFIX_BASE = PREFIX.replace(/\s+$/, "");
     const ensure = (v) => {
         const s = String(v == null ? "" : v);
-        return s.startsWith(PREFIX) ? s : PREFIX + s;
+        return s.startsWith(PREFIX_BASE) ? s : PREFIX + s;
     };
     const desc = Object.getOwnPropertyDescriptor(Document.prototype, "title");
     if (desc && desc.get && desc.set) {
@@ -442,6 +448,10 @@ class BrowserPool:
         # parallel — they'd all see the same count and grab the same slot.
         # The counter is incremented synchronously at the start of launch().
         self._tile_counter: int = 0
+        # session=True profile dirs: tmpdirs that live for the daemon's
+        # lifetime. Keyed by (session_key, kind) so the same label across
+        # engines gets independent jars (matching real persistent semantics).
+        self._session_profile_dirs: dict[tuple[str, str], Path] = {}
 
     async def _ensure_pw(self) -> Playwright:
         if self._pw is None:
@@ -465,17 +475,37 @@ class BrowserPool:
         badge_position: str = _BADGE_POSITION_DEFAULT,
         tile: bool = False,
         ephemeral: bool = False,
+        session: bool = False,
     ) -> dict[str, Any]:
         if kind not in SUPPORTED_KINDS:
             raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {kind!r}")
         if badge_position not in _BADGE_POSITIONS:
             raise ValueError(f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {badge_position!r}")
+        if ephemeral and session:
+            raise ValueError("ephemeral and session are mutually exclusive")
 
-        # Promote: a named launch (label given, no explicit profile, not ephemeral)
-        # gets a persistent profile by default. The whole reason for naming a
-        # browser is so you can come back to it; ephemeral is the exception.
-        if profile is None and label is not None and not ephemeral:
+        # Promote: a named launch (label given, no explicit profile, not ephemeral
+        # and not session-scoped) gets a persistent profile by default. The whole
+        # reason for naming a browser is so you can come back to it; ephemeral
+        # and session are the explicit exceptions.
+        if profile is None and label is not None and not ephemeral and not session:
             profile = label
+
+        # Session-scoped: tmpdir profile that lives for the daemon's lifetime.
+        # Reused across launches with the same (session_key, kind) — so closing
+        # and reopening keeps state, but daemon shutdown wipes everything.
+        # Keyed off label (or "anon" if neither label nor profile given).
+        session_user_data_dir: str | None = None
+        if session:
+            import tempfile
+
+            session_key = (label or profile or "anon", kind)
+            existing = self._session_profile_dirs.get(session_key)
+            if existing is None or not existing.exists():
+                tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_key[0]}-{kind}-"))
+                self._session_profile_dirs[session_key] = tmp
+                existing = tmp
+            session_user_data_dir = str(existing)
 
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
@@ -505,10 +535,16 @@ class BrowserPool:
             self._tile_counter += 1
             launch_kwargs["args"] = _tile_args_for_chromium(tile_index)
 
-        if profile:
-            pdir = profile_dir(kind, profile)
-            pdir.mkdir(parents=True, exist_ok=True)
-            user_data_dir = str(pdir)
+        if profile or session_user_data_dir:
+            if profile:
+                pdir = profile_dir(kind, profile)
+                pdir.mkdir(parents=True, exist_ok=True)
+                user_data_dir = str(pdir)
+            else:
+                # Session-scoped tmpdir branch — same launch_persistent_context
+                # mechanism as a real persona profile, but the dir lives only
+                # for the daemon's lifetime.
+                user_data_dir = session_user_data_dir
             context = await browser_type.launch_persistent_context(
                 user_data_dir,
                 headless=headless,
@@ -549,7 +585,10 @@ class BrowserPool:
             trace=trace,
         )
 
-        session = BrowserSession(
+        # NOTE: this local was named ``session`` for years, but ``session`` is
+        # now the public name of the launch flag (session=True for tmpdir
+        # profiles). Renamed to ``new_session`` to avoid shadowing the bool.
+        new_session = BrowserSession(
             instance_id=instance_id,
             kind=kind,
             label=label,
@@ -565,16 +604,16 @@ class BrowserPool:
         )
         # Wire up video tracking — page.video is only non-None when record_video_dir was set.
         if record_video and page.video is not None:
-            session._video = page.video
-        session.attach_console()
+            new_session._video = page.video
+        new_session.attach_console()
         # Order matters: the close-evictor and user-nav logger publish handler
         # factories on the session so that subsequent _wire_listeners calls
         # (for popup pages) pick them up automatically. Install them BEFORE
         # the initial _wire_listeners call so the initial page also gets them.
-        _wire_close_evictor(self, session)
-        _wire_user_navigation_logger(session)
-        _wire_listeners(session, page)
-        context.on("page", session._register_popup)
+        _wire_close_evictor(self, new_session)
+        _wire_user_navigation_logger(new_session)
+        _wire_listeners(new_session, page)
+        context.on("page", new_session._register_popup)
 
         # Look up the persona's emoji override (if any) so title + badge can
         # show it. Ephemeral / unknown personas just hash-pick from the pool.
@@ -611,7 +650,7 @@ class BrowserPool:
 
         await page.goto(target_url)
 
-        self._sessions[instance_id] = session
+        self._sessions[instance_id] = new_session
         log.info(
             "octowright.browser.launched",
             instance_id=instance_id,
@@ -719,6 +758,7 @@ class BrowserPool:
                 badge_position=spec.get("badge_position", _BADGE_POSITION_DEFAULT),
                 tile=spec.get("tile", False),
                 ephemeral=spec.get("ephemeral", False),
+                session=spec.get("session", False),
             )
 
         results = await asyncio.gather(*[_launch_one(s) for s in specs], return_exceptions=True)
@@ -733,7 +773,17 @@ class BrowserPool:
         return {"launched": launched, "errors": errors}
 
     async def shutdown(self) -> None:
+        import shutil as _shutil
+
         await self.close_all()
         if self._pw is not None:
             await self._pw.stop()
             self._pw = None
+        # Wipe session=True tmpdirs — they only exist for this daemon's lifetime.
+        # Best-effort: ignore failures (file in use, race with browser teardown).
+        for tmpdir in self._session_profile_dirs.values():
+            try:
+                _shutil.rmtree(tmpdir, ignore_errors=True)
+            except OSError:
+                pass
+        self._session_profile_dirs.clear()

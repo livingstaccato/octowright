@@ -81,6 +81,7 @@ from .macros import (
     macro_run,
     macro_run_sequence,
     macro_save,
+    profile_cleanup,
     recordings_cleanup,
     run_test_suite,
 )
@@ -179,6 +180,7 @@ __all__ = [
     "persona_get",
     "persona_list",
     "pool",
+    "profile_cleanup",
     "profile_delete",
     "profile_list",
     "recordings_cleanup",
