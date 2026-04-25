@@ -528,6 +528,37 @@ def test_tail_closed_session_closes_with_1003(client: TestClient, isolated_recor
         assert "/events" in (excinfo.value.reason or "")
 
 
+def test_tail_respects_since_query_param(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``?since=N`` makes the tail start AFTER cursor N, not from byte 0.
+
+    Without this, the dashboard would render the launch event twice (once from
+    the initial GET /events, once from the first WS push).
+    """
+    log_path = isolated_recordings / "20260101T000000Z-chromium-wssince0001.jsonl"
+    line1 = json.dumps({"action": "launch", "kind": "chromium"}) + "\n"
+    line2 = json.dumps({"action": "navigate", "url": "https://x"}) + "\n"
+    log_path.write_text(line1 + line2)
+    empty_pool["pool"]._sessions["wssince0001"] = SimpleNamespace(
+        instance_id="wssince0001",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+    )
+    monkeypatch.setattr(_http_state, "TAIL_POLL_SECONDS", 0.01)
+
+    # Pass since = byte length of line1 — first WS frame should ONLY contain line2.
+    since = len(line1.encode())
+    with client.websocket_connect(f"/api/sessions/wssince0001/tail?since={since}") as ws:
+        msg = ws.receive_json()
+        assert len(msg["events"]) == 1
+        assert msg["events"][0]["action"] == "navigate"
+
+
 def test_tail_live_session_streams(
     client: TestClient,
     isolated_recordings: Path,
