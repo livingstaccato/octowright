@@ -127,7 +127,7 @@ async def scenario_run_macro(
 @mcp.tool(
     structured_output=False,
     description=(
-        "List participants of a live scenario, optionally filtered by role. " "Returns {summary, count, participants}."
+        "List participants of a live scenario, optionally filtered by role. Returns {summary, count, participants}."
     ),
 )
 def scenario_participants(scenario_id: str, role: str | None = None) -> dict[str, Any]:
