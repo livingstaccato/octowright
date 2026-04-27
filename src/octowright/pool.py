@@ -38,18 +38,17 @@ except Exception as _e:
     log.warning("pool.migration_on_import_failed", error=repr(_e))
 
 
-_TITLE_PREFIX_SCRIPT = r"""
+_TITLE_TAG_SCRIPT = r"""
 (() => {
-    const PREFIX = __PREFIX__;
-    // Browsers strip trailing whitespace from title strings on read, so
-    // PREFIX="(...) [acct] " (trailing space) becomes "(...) [acct]" by the
-    // time we read it back. Without trimming the comparison anchor, the
-    // re-injection check thinks the title is "fresh content" and prepends
-    // PREFIX a second time → "(...) [acct] (...) [acct]" doubling.
-    const PREFIX_BASE = PREFIX.replace(/\s+$/, "");
+    const SUFFIX = __SUFFIX__;
+    // SUFFIX is " (emoji) [tag]" with a leading space. Browsers strip trailing
+    // whitespace from titles on read, but a leading space inside the actual
+    // value survives. We compare on a trimmed anchor so any double-injection
+    // (e.g. "Yahoo (🐬🦊) [acct] (🐬🦊) [acct]") collapses back to a single tag.
+    const SUFFIX_BASE = SUFFIX.replace(/^\s+/, "");
     const ensure = (v) => {
         const s = String(v == null ? "" : v);
-        return s.startsWith(PREFIX_BASE) ? s : PREFIX + s;
+        return s.endsWith(SUFFIX_BASE) ? s : s + SUFFIX;
     };
     const desc = Object.getOwnPropertyDescriptor(Document.prototype, "title");
     if (desc && desc.get && desc.set) {
@@ -158,24 +157,26 @@ def _emoji_pair_for(persona_emoji_override: str | None, name_seed: str | None, k
     return f"({persona_emoji}{engine_emoji})"
 
 
-def _title_prefix_for(
+def _title_tag_for(
     profile: str | None,
     label: str | None,
     *,
     persona_emoji: str | None = None,
     kind: str | None = None,
 ) -> str | None:
-    """Window-title prefix combining the emoji pair and the [tag] label.
+    """Window-title suffix combining the emoji pair and the [tag] label.
 
-    Without an engine kind the emoji pair is skipped — keeps backwards-compat
-    for the few legacy callers that don't know the engine yet.
+    Returned with a leading space so it appends cleanly after the page's own
+    title (e.g. ``"Yahoo (🐬🦊) [microdosing]"``). Without an engine kind the
+    emoji pair is skipped — keeps backwards-compat for the few legacy callers
+    that don't know the engine yet.
     """
     tag = profile or label
     if not tag:
         return None
     if kind:
-        return f"{_emoji_pair_for(persona_emoji, tag, kind)} [{tag}] "
-    return f"[{tag}] "
+        return f" {_emoji_pair_for(persona_emoji, tag, kind)} [{tag}]"
+    return f" [{tag}]"
 
 
 # Corner-badge injection: adds a small fixed-position label in the top-right of
@@ -640,9 +641,9 @@ class BrowserPool:
             except FileNotFoundError:
                 pass
 
-        title_prefix = _title_prefix_for(profile, label, persona_emoji=persona_emoji_override, kind=kind)
-        if title_prefix:
-            script = _TITLE_PREFIX_SCRIPT.replace("__PREFIX__", json.dumps(title_prefix))
+        title_tag = _title_tag_for(profile, label, persona_emoji=persona_emoji_override, kind=kind)
+        if title_tag:
+            script = _TITLE_TAG_SCRIPT.replace("__SUFFIX__", json.dumps(title_tag))
             await context.add_init_script(script=script)
         if badge:
             badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji_override, kind=kind)
