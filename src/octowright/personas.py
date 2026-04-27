@@ -58,8 +58,7 @@ def load_persona(name: str) -> Persona:
     p = persona_dir(name) / "profile.yaml"
     if not p.exists():
         raise FileNotFoundError(
-            f"no persona named {name!r} at {p}; "
-            f"list with `persona_list` or create with `persona_create name={name!r}`"
+            f"no persona named {name!r} at {p}; list with `persona_list` or create with `persona_create name={name!r}`"
         )
     raw = yaml.safe_load(p.read_text())
     if not isinstance(raw, dict):

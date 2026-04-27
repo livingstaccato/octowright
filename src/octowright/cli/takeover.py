@@ -51,8 +51,7 @@ def _takeover_apply_one(detection: Any, *, backup: bool) -> None:
         )
         return
     click.echo(
-        f"  disabled [{detection.scope}] {detection.server_name} -> {result['new_key_name']} "
-        f"in {result['config_path']}"
+        f"  disabled [{detection.scope}] {detection.server_name} -> {result['new_key_name']} in {result['config_path']}"
     )
     if result.get("backup_path"):
         click.echo(f"             backup: {result['backup_path']}")
