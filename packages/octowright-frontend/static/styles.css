@@ -325,6 +325,22 @@ code, .mono { font-family: var(--mono); }
   margin-bottom: 6px;
 }
 
+.saved-scenario {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.saved-scenario__main { flex: 1; min-width: 0; }
+.saved-scenario .scenario-list__title { margin-bottom: 2px; }
+
+.saved-scenario__meta {
+  color: var(--fg-3);
+  font-size: 11px;
+  font-family: var(--mono);
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;

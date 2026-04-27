@@ -6,6 +6,8 @@ import {
   getPersonaSizes,
   getScenarios,
   getSessions,
+  relaunchSession,
+  startScenario,
   updatePersonaYaml,
 } from "./api.js";
 import { formatDateTime, shortUrl } from "./format.js";
@@ -14,6 +16,7 @@ import type {
   LiveScenario,
   MacroSummary,
   PersonaSummary,
+  SavedScenario,
   ScenarioListResponse,
   SessionListResponse,
   SessionSummary,
@@ -197,6 +200,11 @@ export function renderDashboard(root: HTMLElement, state: DashboardState): void 
     section("Live scenarios", "live-scenarios", renderScenarioList(state.scenarios.live)),
     section("Personas", "personas", renderPersonaGrid(state.personas)),
     section(
+      "Saved scenarios",
+      "saved-scenarios",
+      renderSavedScenarios(state.scenarios.saved ?? []),
+    ),
+    section(
       "Recent closed sessions",
       "closed-sessions",
       renderSessionTable(state.sessions.closed.slice(0, 20), false),
@@ -262,6 +270,16 @@ function renderSessionTable(rows: SessionSummary[], live: boolean): HTMLElement 
     if (!live) {
       const actionTd = document.createElement("td");
       actionTd.className = "col-actions";
+      const relaunchBtn = document.createElement("button");
+      relaunchBtn.className = "row-action icon-btn";
+      relaunchBtn.setAttribute("aria-label", "Relaunch with same params");
+      relaunchBtn.setAttribute("title", "Relaunch like this — same kind/profile/url");
+      relaunchBtn.textContent = "↻";
+      relaunchBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        relaunchClosedSession(row.id);
+      });
       const delBtn = document.createElement("button");
       delBtn.className = "row-action icon-btn--danger";
       delBtn.setAttribute("aria-label", "Delete recording");
@@ -272,7 +290,7 @@ function renderSessionTable(rows: SessionSummary[], live: boolean): HTMLElement 
         e.stopPropagation();
         deleteSessionRecording(row.id);
       });
-      actionTd.append(delBtn);
+      actionTd.append(relaunchBtn, delBtn);
       tr.append(actionTd);
     }
     tbody.append(tr);
@@ -296,6 +314,32 @@ async function deleteSessionRecording(id: string): Promise<void> {
     }
   } catch (err: unknown) {
     showSnackbar(`Delete failed: ${String(err)}`, true);
+  }
+}
+
+async function relaunchClosedSession(id: string): Promise<void> {
+  try {
+    const result = await relaunchSession(id);
+    showSnackbar(`Relaunched as ${result.id.slice(0, 8)}… (${result.kind})`);
+    if (dashboardRoot) {
+      const state = await loadState();
+      renderDashboard(dashboardRoot, state);
+    }
+  } catch (err: unknown) {
+    showSnackbar(`Relaunch failed: ${String(err)}`, true);
+  }
+}
+
+async function startSavedScenario(name: string): Promise<void> {
+  try {
+    const result = await startScenario(name);
+    showSnackbar(`Started '${name}' (${result.participants.length} participants)`);
+    if (dashboardRoot) {
+      const state = await loadState();
+      renderDashboard(dashboardRoot, state);
+    }
+  } catch (err: unknown) {
+    showSnackbar(`Start failed: ${String(err)}`, true);
   }
 }
 
@@ -342,6 +386,46 @@ function renderScenarioList(scenarios: LiveScenario[]): HTMLElement {
       chips.append(chip);
     }
     li.append(title, chips);
+    ul.append(li);
+  }
+  return ul;
+}
+
+function renderSavedScenarios(scenarios: SavedScenario[]): HTMLElement {
+  if (scenarios.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "No saved scenarios on disk.";
+    return empty;
+  }
+  const ul = document.createElement("ul");
+  ul.className = "scenario-list";
+  for (const s of [...scenarios].sort((a, b) => b.mtime - a.mtime)) {
+    const li = document.createElement("li");
+    li.className = "scenario-list__item saved-scenario";
+    li.setAttribute("data-scenario-name", s.name);
+
+    const main = document.createElement("div");
+    main.className = "saved-scenario__main";
+    const title = document.createElement("div");
+    title.className = "scenario-list__title";
+    title.textContent = s.name;
+    const meta = document.createElement("div");
+    meta.className = "saved-scenario__meta";
+    meta.textContent = `${s.form} · ${formatDateTime(new Date(s.mtime * 1000).toISOString())}`;
+    main.append(title, meta);
+
+    const btn = document.createElement("button");
+    btn.className = "btn btn--primary";
+    btn.setAttribute("aria-label", `Start scenario ${s.name}`);
+    btn.textContent = "▶ Start";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startSavedScenario(s.name);
+    });
+
+    li.append(main, btn);
     ul.append(li);
   }
   return ul;
