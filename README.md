@@ -192,6 +192,9 @@ appends a record to that instance's JSONL log.
 | `browser_close` / `browser_close_all` | Close one / all. |
 | `browser_spawn_roster` | Launch N browsers in parallel from a list of launch specs. |
 | `browser_navigate` | Navigate a specific instance. |
+| `browser_navigate_back` | Go back one entry in the browser's history. Returns `{ok, url, title}`; `ok=False` when there's no previous page. |
+| `browser_open_url` | Open a URL on an existing instance. `target='tab'` (default) appends a new page; `target='window'` calls `window.open(...,'popup',width=W,height=H)` so the OS opens a new window (defaults 1024×768). Returns `{ok, target, page_index, url}`. |
+| `browser_resize` | Resize the page viewport to `width × height` CSS pixels (does not resize the OS window). |
 
 **Input**
 
@@ -199,6 +202,9 @@ appends a record to that instance's JSONL log.
 |---|---|
 | `browser_click` / `browser_type` / `browser_fill` / `browser_press_key` | CSS-selector input. |
 | `browser_click_by` / `browser_fill_by` / `browser_get_text_by` | ARIA-locator input (role / label / text / data-testid). |
+| `browser_hover` | Hover the cursor over a CSS selector (triggers `:hover` / hover-reveal menus / tooltips). |
+| `browser_select_option` | Select one option in a native `<select>` by `value`, `label`, or 0-based `index`. |
+| `browser_drag` | Drag-and-drop from `source_selector` onto `target_selector` (Playwright `drag_and_drop`). |
 | `browser_set_input_files` | Upload files into an `<input type=file>`. |
 
 **Inspection**
@@ -227,6 +233,7 @@ appends a record to that instance's JSONL log.
 |---|---|
 | `browser_set_dialog_policy` | accept / dismiss / manual for `confirm()` / `alert()` / `prompt()`. Default: dismiss. |
 | `browser_mock_route` / `browser_unmock_route` | Stub network responses for deterministic tests. |
+| `browser_network_requests` | List captured HTTP/HTTPS requests for an instance. Optional substring `url` / `method` / `resource_type` filters; pass `since` cursor for incremental polling. |
 
 **Pages, frames, downloads**
 
@@ -470,7 +477,7 @@ Configurable via env vars:
 - `OCTOWRIGHT_PROFILES_DIR` — where persistent profiles live. Defaults to `~/.config/undef/profiles/`.
 - `OCTOWRIGHT_MACROS_DIR` — where saved macros live. Defaults to `~/.config/undef/macros/`.
 - `OCTOWRIGHT_SCENARIOS_DIR` — where scenario specs live. Defaults to `~/.config/undef/scenarios/`.
-- `OCTOWRIGHT_VIEWPORT_W` / `OCTOWRIGHT_VIEWPORT_H` — default window size (1280×800).
+- `OCTOWRIGHT_VIEWPORT_W` / `OCTOWRIGHT_VIEWPORT_H` — default viewport size (1280×800). Used in **headless** mode and whenever `viewport_w` / `viewport_h` are explicitly passed to `browser_launch`. In **headed** mode with neither dimension set, the context launches with `no_viewport=True` so the page tracks the OS window as it's resized; the recorded `viewport` field is `null` in that case.
 - `OCTOWRIGHT_HEADLESS` — explicit `0` / `1` overrides headless mode. Default is auto-detected: headed on macOS or Linux+display, headless on CI (`CI=true`) or Linux without `$DISPLAY` / `$WAYLAND_DISPLAY`.
 - `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` — per-navigation / per-action timeouts.
 - `OCTOWRIGHT_HTTP_HOST` / `OCTOWRIGHT_HTTP_PORT` — dashboard HTTP server bind address. Default `127.0.0.1:8765`. Use `0.0.0.0` for the host to make the dashboard reachable from another machine on your network. If the port is in use, the server walks up 5 higher ports automatically.
