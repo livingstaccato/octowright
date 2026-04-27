@@ -13,9 +13,11 @@ import type {
   PersonaDetail,
   PersonaSummary,
   ScenarioListResponse,
+  ScenarioParticipant,
   ScreenshotListResponse,
   SessionDetail,
   SessionListResponse,
+  SessionSummary,
   TraceOpenResponse,
 } from "./types.js";
 
@@ -189,6 +191,24 @@ export function deleteRecording(
     `/api/sessions/${encodeURIComponent(id)}/recording`,
     { method: "DELETE" },
   );
+}
+
+export function relaunchSession(id: string): Promise<SessionSummary> {
+  return fetchJson<SessionSummary>(`/api/sessions/${encodeURIComponent(id)}/relaunch`, {
+    method: "POST",
+  });
+}
+
+export function startScenario(name: string): Promise<{
+  scenario_id: string;
+  name: string;
+  participants: ScenarioParticipant[];
+}> {
+  return fetchJson<{
+    scenario_id: string;
+    name: string;
+    participants: ScenarioParticipant[];
+  }>(`/api/scenarios/${encodeURIComponent(name)}/start`, { method: "POST" });
 }
 
 export function getPersonaSizes(): Promise<Record<string, number | null>> {

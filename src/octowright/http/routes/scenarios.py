@@ -17,8 +17,16 @@ from ._common import _read_json_body
 
 
 async def list_scenarios(_request: Request) -> JSONResponse:
+    """GET /api/scenarios — return ``{live, saved}``.
+
+    ``saved`` is the catalogue of YAML / Python scenario files on disk so the
+    dashboard can offer a "start scenario" button per row. ``live`` is the
+    set currently running.
+    """
+    from ...scenarios import list_scenarios as _list_disk
+
     spool = _state.scenario_pool
-    return JSONResponse({"live": spool.list_live()})
+    return JSONResponse({"live": spool.list_live(), "saved": _list_disk()})
 
 
 async def scenario_start_endpoint(request: Request) -> JSONResponse:

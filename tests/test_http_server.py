@@ -399,7 +399,9 @@ def test_screenshot_path_traversal_rejected(client: TestClient, isolated_recordi
 def test_scenarios_empty(client: TestClient, empty_pool: dict[str, Any]) -> None:
     r = client.get("/api/scenarios")
     assert r.status_code == 200
-    assert r.json() == {"live": []}
+    body = r.json()
+    assert body["live"] == []
+    assert "saved" in body
 
 
 def test_scenarios_with_one_live(client: TestClient, empty_pool: dict[str, Any]) -> None:

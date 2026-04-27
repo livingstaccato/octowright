@@ -102,8 +102,16 @@ export interface SessionListResponse {
   closed: SessionSummary[];
 }
 
+export interface SavedScenario {
+  name: string;
+  path: string;
+  form: "yaml" | "python";
+  mtime: number;
+}
+
 export interface ScenarioListResponse {
   live: LiveScenario[];
+  saved?: SavedScenario[];
 }
 
 export interface ScreenshotListResponse {

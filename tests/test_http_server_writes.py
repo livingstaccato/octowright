@@ -120,6 +120,9 @@ class _FakeScenarioPool:
         self.stop_result: dict[str, Any] | None = None
         self.run_macro_result: dict[str, Any] | None = None
 
+    def list_live(self) -> list[dict[str, Any]]:
+        return []
+
     async def start(self, *, name: str, browser_pool: Any) -> SimpleNamespace:
         self.start_calls.append(name)
         if self.start_raises is not None:
@@ -594,3 +597,133 @@ def test_post_scenario_run_macro_args_must_be_object_400(
     )
     assert r.status_code == 400
     assert "args" in r.json()["error"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/sessions/{id}/relaunch
+# ---------------------------------------------------------------------------
+
+
+def _write_recording(rec_dir: Path, instance_id: str, launch_record: dict[str, Any]) -> Path:
+    """Create a minimal JSONL whose first line is the supplied launch record."""
+    path = rec_dir / f"20260101T000000Z-{launch_record['kind']}-{instance_id}.jsonl"
+    path.write_text(json.dumps({"action": "launch", **launch_record}) + "\n")
+    return path
+
+
+def test_post_session_relaunch_happy_path(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    _write_recording(
+        isolated_recordings,
+        "abc123abc123",
+        {
+            "kind": "firefox",
+            "url": "https://example.com",
+            "profile": "microdosing",
+            "label": None,
+            "viewport": {"w": 1280, "h": 800},
+            "stabilize": False,
+            "trace": False,
+            "video_dir": None,
+        },
+    )
+    r = client.post("/api/sessions/abc123abc123/relaunch")
+    assert r.status_code == 201
+    body = r.json()
+    assert body["kind"] == "firefox"
+    assert body["profile"] == "microdosing"
+    assert pool.launch_calls[0]["kind"] == "firefox"
+    assert pool.launch_calls[0]["profile"] == "microdosing"
+    assert pool.launch_calls[0]["viewport_w"] == 1280
+    assert pool.launch_calls[0]["viewport_h"] == 800
+
+
+def test_post_session_relaunch_409_when_live(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    pool._sessions["liveinst0001"] = SimpleNamespace(instance_id="liveinst0001")
+    r = client.post("/api/sessions/liveinst0001/relaunch")
+    assert r.status_code == 409
+    assert "still live" in r.json()["error"]
+
+
+def test_post_session_relaunch_404_when_no_recording(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+) -> None:
+    r = client.post("/api/sessions/missingsid01/relaunch")
+    assert r.status_code == 404
+
+
+def test_post_session_relaunch_422_when_no_launch_record(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+) -> None:
+    # JSONL with no `launch` action — only a stray click record.
+    path = isolated_recordings / "20260101T000000Z-chromium-noLaunch01ab.jsonl"
+    path.write_text(json.dumps({"action": "click", "selector": "a"}) + "\n")
+    r = client.post("/api/sessions/noLaunch01ab/relaunch")
+    assert r.status_code == 422
+
+
+def test_post_session_relaunch_passes_video_flag(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    _write_recording(
+        isolated_recordings,
+        "video12absdf",
+        {
+            "kind": "chromium",
+            "url": "https://example.com",
+            "profile": None,
+            "label": "rec",
+            "viewport": None,
+            "stabilize": False,
+            "trace": False,
+            "video_dir": "/tmp/some/video/dir",
+        },
+    )
+    r = client.post("/api/sessions/video12absdf/relaunch")
+    assert r.status_code == 201
+    assert pool.launch_calls[0]["record_video"] is True
+
+
+# ---------------------------------------------------------------------------
+# GET /api/scenarios — saved field
+# ---------------------------------------------------------------------------
+
+
+def test_get_scenarios_includes_saved_on_disk(
+    client: TestClient,
+    fakes: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """saved[] is the on-disk YAML/Python catalogue, decoupled from live[]."""
+    from octowright import scenarios as _scenarios
+
+    sdir = tmp_path / "scenarios"
+    sdir.mkdir()
+    (sdir / "alpha.yaml").write_text("name: alpha\nparticipants: []\n")
+    (sdir / "beta.yaml").write_text("name: beta\nparticipants: []\n")
+    monkeypatch.setattr(_scenarios, "SCENARIOS_DIR", sdir)
+
+    r = client.get("/api/scenarios")
+    assert r.status_code == 200
+    body = r.json()
+    assert "live" in body
+    assert "saved" in body
+    saved_names = sorted(s["name"] for s in body["saved"])
+    assert saved_names == ["alpha", "beta"]
