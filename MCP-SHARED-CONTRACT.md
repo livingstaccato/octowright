@@ -19,6 +19,7 @@ GET    /api/sessions                             → {"live": [SessionSummary, .
 POST   /api/sessions                             → SessionSummary (201) — launch a new browser session
 GET    /api/sessions/{id}                        → SessionDetail
 DELETE /api/sessions/{id}                        → {"closed": true, "instance_id": str, "log_path": str, "video_path": str|null, "trace_path": str|null} (200); 404 if not in live pool
+DELETE /api/sessions/{id}/recording              → {"deleted": true, "session_id": str, "files_removed": int} (200); 404 if no recording on disk; 409 if the session is still live
 POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live
 GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
 GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
@@ -35,6 +36,9 @@ POST   /api/scenarios/{name}/start               → {"scenario_id": str, "name"
 DELETE /api/scenarios/{id}                       → {"scenario_id": str, "teardown_errors": [...], "closed": [...]} (200). 404 if no live scenario with that id.
 POST   /api/scenarios/{id}/run_macro             → {"scenario_id": str, "macro": str, "role": str|null, "targeted": int, "results": [...]} (200). 400 if macro missing; 404 if no live scenario.
 GET    /api/personas                             → [PersonaSummary, ...]
+GET    /api/personas/sizes                       → {<persona_name>: <bytes>, ...} — bulk `du -sk` over PROFILES_DIR/*; missing entries / scan failures yield `{}`
+GET    /api/personas/{name}                      → PersonaDetail; 404 if no `profile.yaml` for that persona
+PUT    /api/personas/{name}                      → {"ok": true, "name": str} (200); 400 if `yaml` field missing/non-string or fails `yaml.safe_load`; 404 if persona not found
 GET    /api/macros                               → [MacroSummary, ...]
 POST   /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
 GET    /api/health                               → {"ok": true, "version": str}
@@ -72,6 +76,13 @@ POST /api/scenarios/{name}/start
 POST /api/scenarios/{id}/run_macro
   { "macro": str, "role": str | null, "args": object | null }
   → 200 with the per-participant results dict from `scenario_pool.run_macro`
+
+PUT /api/personas/{name}
+  Content-Type: application/json
+  { "yaml": str }                                  // required; full new contents of profile.yaml
+  → 200 {"ok": true, "name": str}
+  → 400 if "yaml" missing / not a string / not parsable by yaml.safe_load
+  → 404 if no profile.yaml exists for that persona
 ```
 
 All write endpoints accept an empty body as `{}`. Malformed JSON is rejected
@@ -112,6 +123,14 @@ PersonaSummary = {
     "display_name": str | None,
     "engines": [str, ...],
     "last_used": str,
+}
+
+PersonaDetail = {
+    "name": str,
+    "yaml": str,                # raw profile.yaml contents
+    "path": str,                # absolute path to profile.yaml
+    "disk_bytes": int,          # profile.yaml + sum(engine_bytes)
+    "engine_bytes": {str: int}, # per-engine on-disk byte count (only engines that exist on disk)
 }
 
 MacroSummary = {
