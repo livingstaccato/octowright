@@ -49,6 +49,7 @@ class BrowserSession:
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)
     _bg_tasks: set[Any] = field(default_factory=set, repr=False)
+    _network_requests: list[dict[str, Any]] = field(default_factory=list)
     # Tracks the most-recent URL passed to MCP-initiated ``navigate(url)`` so
     # that the framenavigated listener (installed by pool._wire_listeners)
     # can de-dup user_navigation events against our own goto calls.
@@ -400,6 +401,88 @@ class BrowserSession:
         await self.page.set_input_files(selector, paths)
         self.recorder.record("set_input_files", selector=selector, paths=paths)
         return {"ok": True, "selector": selector, "paths": paths}
+
+    async def hover(self, selector: str) -> None:
+        await self._target().hover(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        self.recorder.record("hover", selector=selector)
+
+    async def select_option(
+        self,
+        selector: str,
+        value: str | None = None,
+        label: str | None = None,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        if value is not None:
+            kwargs["value"] = value
+        if label is not None:
+            kwargs["label"] = label
+        if index is not None:
+            kwargs["index"] = index
+        selected = await self._target().select_option(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS, **kwargs)
+        self.recorder.record("select_option", selector=selector, value=value, label=label, index=index)
+        return {"ok": True, "selected": selected}
+
+    async def drag(self, source_selector: str, target_selector: str) -> None:
+        await self._target().drag_and_drop(source_selector, target_selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        self.recorder.record("drag", source=source_selector, target=target_selector)
+
+    async def navigate_back(self) -> dict[str, Any]:
+        response = await self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
+        url = self.page.url
+        title = await self.page.title()
+        self.recorder.record("navigate_back", url=url)
+        return {"ok": response is not None, "url": url, "title": title}
+
+    async def resize(self, width: int, height: int) -> dict[str, Any]:
+        await self.page.set_viewport_size({"width": width, "height": height})
+        self.recorder.record("resize", width=width, height=height)
+        return {"ok": True, "width": width, "height": height}
+
+    def _handle_response(self, response: Any) -> None:
+        request = response.request
+        self._network_requests.append(
+            {
+                "url": request.url,
+                "method": request.method,
+                "resource_type": request.resource_type,
+                "status": response.status,
+                "status_text": response.status_text,
+            }
+        )
+
+    def _handle_request_failed(self, request: Any) -> None:
+        self._network_requests.append(
+            {
+                "url": request.url,
+                "method": request.method,
+                "resource_type": request.resource_type,
+                "status": None,
+                "failure": request.failure,
+            }
+        )
+
+    def get_network_requests(
+        self,
+        url_filter: str | None = None,
+        method_filter: str | None = None,
+        resource_type_filter: str | None = None,
+        since: int | None = None,
+    ) -> dict[str, Any]:
+        start = since or 0
+        sliced = list(self._network_requests[start:])
+        if url_filter:
+            sliced = [r for r in sliced if url_filter in r.get("url", "")]
+        if method_filter:
+            sliced = [r for r in sliced if r.get("method", "").upper() == method_filter.upper()]
+        if resource_type_filter:
+            sliced = [r for r in sliced if r.get("resource_type") == resource_type_filter]
+        return {
+            "requests": sliced,
+            "next_cursor": len(self._network_requests),
+            "total": len(self._network_requests),
+        }
 
     # ------------------------------------------------------------------
     # Role / label / text / test-id locator methods

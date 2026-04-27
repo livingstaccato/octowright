@@ -61,3 +61,31 @@ async def browser_mock_route(
 )
 async def browser_unmock_route(instance_id: str, url_pattern: str) -> dict[str, Any]:
     return await pool.get(instance_id).unmock_route(url_pattern)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Return network requests captured by this browser instance. All HTTP/HTTPS requests "
+        "are recorded automatically — no setup needed. Each entry has {url, method, "
+        "resource_type, status, status_text} (status is None for failed requests). "
+        "Filter results with: url (substring match), method ('GET'/'POST'/…), "
+        "resource_type ('fetch'/'xhr'/'document'/'script'/'image'/…). "
+        "Pass `since` (a cursor from a prior call's next_cursor) to read only new requests — "
+        "use this for incremental polling during a test. "
+        "To INTERCEPT and rewrite responses, use browser_mock_route instead."
+    ),
+)
+def browser_network_requests(
+    instance_id: str,
+    url: str | None = None,
+    method: str | None = None,
+    resource_type: str | None = None,
+    since: int | None = None,
+) -> dict[str, Any]:
+    return pool.get(instance_id).get_network_requests(
+        url_filter=url,
+        method_filter=method,
+        resource_type_filter=resource_type,
+        since=since,
+    )
