@@ -92,6 +92,16 @@ Ask Claude `"give me the octowright dashboard URL"` (it'll call the
 - **Top-level dashboard** — every live browser, every live scenario, recent
   closed sessions, all your personas, all your saved macros. Auto-refreshes
   every 5 seconds.
+- **Persona management** — each persona card shows engine list, last-used
+  time, and on-disk size (chromium + firefox + webkit + yaml). Hover the
+  card and click the edit (✎) icon to open an in-page YAML editor; save
+  writes back to `<persona>/profile.yaml` via `PUT /api/personas/{name}`.
+  Disk sizes are loaded lazily after first paint via
+  `GET /api/personas/sizes` (a single `du -sk` over `~/.config/undef/profiles/`).
+- **Closed-session cleanup** — closed-session rows expose an `⊗` delete
+  button on hover; clicking removes the JSONL recording, video, trace, and
+  screenshots from disk via `DELETE /api/sessions/{id}/recording`. Live
+  sessions reject the call with 409 (close them first).
 - **Per-session debugger** — click any session for a two-column page with the
   embedded session video on the left, action timeline on the right. Click any
   action in the timeline to seek the video to that moment. Tabs underneath
@@ -283,6 +293,19 @@ Slack / etc. treat it as a returning session).
 **Cookie isolation:** each live browser has its own `BrowserContext`, so seven logged-in
 Discord tabs you run in parallel never share cookies, localStorage, or IndexedDB — even
 if they're all `kind=webkit`.
+
+**Window title format.** Every page's `document.title` is rewritten on the fly to
+end with ` (<persona-emoji><engine-emoji>) [<profile>]` — so the page's own title
+leads and the badge tails. Example: `Yahoo | Mail, Weather, … (🐬🦊) [microdosing]`
+in firefox, or `Yahoo | Mail, Weather, … (🐬🧭) [microdosing]` in webkit. The
+persona emoji is hash-picked from a curated 33-pick pool keyed off the persona
+name (deterministic, same emoji every time); the engine emoji is fixed
+(🌐 chromium · 🦊 firefox · 🧭 webkit). When parallel windows pile up in cmd-` /
+the Window menu / a tab strip, the suffix lets you tell them apart at a
+glance even after deep navigation. Override the emoji by setting `emoji:` in
+the persona's `profile.yaml`, or disable the corner badge entirely with
+`badge=False` on `browser_launch` (the title injection has no off-switch
+short of editing the launch — it's purely a string rewrite, no DOM nodes).
 
 Example — seven Discord accounts on seven WebKit windows, reusable later:
 
