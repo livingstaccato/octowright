@@ -99,7 +99,10 @@ function renderSessionTable(rows: SessionSummary[], live: boolean): HTMLElement 
     tbody.append(tr);
   }
   table.append(thead, tbody);
-  return table;
+  const scroll = document.createElement("div");
+  scroll.className = "table-scroll";
+  scroll.append(table);
+  return scroll;
 }
 
 function cell(child: Node): HTMLTableCellElement {
