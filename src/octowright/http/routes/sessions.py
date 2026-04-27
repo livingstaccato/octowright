@@ -229,11 +229,40 @@ async def session_navigate(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "url": url})
 
 
+async def recording_delete(request: Request) -> JSONResponse:
+    """DELETE /api/sessions/{id}/recording — remove a closed session's files from disk."""
+    sid = request.path_params["id"]
+    pool = _state.pool
+    if sid in pool._sessions:
+        return JSONResponse(
+            {"error": f"session {sid!r} is still live; close it first"},
+            status_code=409,
+        )
+
+    jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
+    if jsonl is None:
+        return JSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
+
+    deleted: list[str] = []
+    stem = jsonl.stem
+    for f in jsonl.parent.iterdir():
+        if f.name.startswith(stem):
+            try:
+                f.unlink()
+                deleted.append(f.name)
+            except OSError as e:
+                state.log.warning("recording_delete.unlink_failed", file=str(f), error=str(e))
+
+    state.log.info("recording_deleted", session_id=sid, files=len(deleted))
+    return JSONResponse({"deleted": True, "session_id": sid, "files_removed": len(deleted)})
+
+
 def routes() -> list[Route]:
     return [
         Route("/api/sessions", list_sessions, methods=["GET"]),
         Route("/api/sessions", session_launch, methods=["POST"]),
         Route("/api/sessions/{id}", session_detail, methods=["GET"]),
+        Route("/api/sessions/{id}/recording", recording_delete, methods=["DELETE"]),
         Route("/api/sessions/{id}", session_close, methods=["DELETE"]),
         Route("/api/sessions/{id}/navigate", session_navigate, methods=["POST"]),
     ]
