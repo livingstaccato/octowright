@@ -60,7 +60,7 @@ a:hover { text-decoration: underline; }
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
   gap: var(--gap);
   padding: var(--gap);
 }
@@ -73,6 +73,11 @@ a:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
+}
+
+.table-scroll {
+  overflow-x: auto;
 }
 .panel__title { margin: 0; font-size: 13px; font-weight: 600; text-transform: uppercase; color: var(--fg-mute); letter-spacing: 0.05em; }
 .panel--macros { grid-column: 1 / -1; }
