@@ -199,8 +199,11 @@ async def _run_follower(leader_mcp_url: str) -> None:
     """Bridge stdio to the leader's HTTP-MCP endpoint."""
     from ..proxy_bridge import run_proxy
 
+    # Same host:port serves /api/health — used by the bridge watchdog to
+    # detect a wedged leader (silent SSE) and tear down rather than hang.
+    health_url = leader_mcp_url.rsplit("/mcp", 1)[0] + "/api/health"
     click.echo(f"octowright: connecting to leader at {leader_mcp_url}", err=True)
-    await run_proxy(leader_mcp_url)
+    await run_proxy(leader_mcp_url, health_url=health_url)
 
 
 async def _run_leader(
