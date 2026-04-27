@@ -264,6 +264,7 @@ async def _run_leader(
                 grace_seconds=grace,
                 poll_seconds=IDLE_POLL_SECONDS,
                 arm_immediately=arm_watchdog_immediately,
+                get_extra_active_count=_http.get_mcp_active_session_count if not no_http else None,
             ),
             name="octowright.idle_watchdog",
         )
