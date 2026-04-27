@@ -165,3 +165,53 @@ async def browser_set_input_files(
     paths: list[str],
 ) -> dict[str, Any]:
     return await pool.get(instance_id).set_input_files(selector, paths)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Hover the mouse over an element by CSS selector. Use this to trigger hover-reveal "
+        "menus, tooltips, CSS :hover states, or any interaction that requires the cursor "
+        "to be positioned over an element without clicking. For clicking, use browser_click."
+    ),
+)
+async def browser_hover(instance_id: str, selector: str) -> dict[str, Any]:
+    await pool.get(instance_id).hover(selector)
+    return {"ok": True}
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Select one option in a <select> dropdown by value, visible label text, or 0-based index. "
+        "Provide exactly one of: value (the option's `value` attribute), label (the option's visible "
+        "text), or index (0-based position). Returns the list of selected option values. "
+        "For custom dropdown widgets that are NOT a native <select>, use browser_click instead."
+    ),
+)
+async def browser_select_option(
+    instance_id: str,
+    selector: str,
+    value: str | None = None,
+    label: str | None = None,
+    index: int | None = None,
+) -> dict[str, Any]:
+    return await pool.get(instance_id).select_option(selector, value=value, label=label, index=index)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Drag an element from source_selector and drop it onto target_selector. "
+        "Uses Playwright's drag_and_drop which handles the full mouse-down → move → up sequence. "
+        "Works for sortable lists, Kanban boards, file managers, and other drag-and-drop UIs. "
+        "Both selectors must match exactly one visible element."
+    ),
+)
+async def browser_drag(
+    instance_id: str,
+    source_selector: str,
+    target_selector: str,
+) -> dict[str, Any]:
+    await pool.get(instance_id).drag(source_selector, target_selector)
+    return {"ok": True}

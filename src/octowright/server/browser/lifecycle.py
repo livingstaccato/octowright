@@ -153,6 +153,32 @@ async def browser_navigate(instance_id: str, url: str) -> dict[str, Any]:
 @mcp.tool(
     structured_output=False,
     description=(
+        "Navigate back in the browser's history (equivalent to clicking the Back button). "
+        "Returns {ok, url, title} — ok is False when there is no previous page in history. "
+        "Use this after a browser_navigate or link-click to return to the prior page. "
+        "Do NOT use for in-app routing where the SPA manages its own history stack."
+    ),
+)
+async def browser_navigate_back(instance_id: str) -> dict[str, Any]:
+    return await pool.get(instance_id).navigate_back()
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Resize the browser viewport to the given width x height in CSS pixels. "
+        "Use this to test responsive layouts, simulate mobile screen sizes, or ensure "
+        "elements are visible at a specific viewport dimension. Does not resize the OS window "
+        "— only the page's viewport."
+    ),
+)
+async def browser_resize(instance_id: str, width: int, height: int) -> dict[str, Any]:
+    return await pool.get(instance_id).resize(width, height)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Launch several browsers in parallel from a list of launch specs. Each spec is "
         "a dict accepting any subset of: kind, url, headed, label, profile, viewport_w, "
         "viewport_h, stabilize, record_video. Returns {launched: [...], errors: [...]}."

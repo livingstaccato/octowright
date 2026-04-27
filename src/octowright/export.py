@@ -100,6 +100,23 @@ def _py_line(entry: dict) -> str | None:
                 f"'t => document.body && document.body.innerText.includes(t)', arg={text!r})"
             )
         return "        await page.wait_for_load_state('networkidle')"
+    if action == "hover":
+        return f"        await page.hover({entry['selector']!r})"
+    if action == "select_option":
+        sel = entry["selector"]
+        if entry.get("value") is not None:
+            return f"        await page.select_option({sel!r}, value={entry['value']!r})"
+        if entry.get("label") is not None:
+            return f"        await page.select_option({sel!r}, label={entry['label']!r})"
+        if entry.get("index") is not None:
+            return f"        await page.select_option({sel!r}, index={entry['index']!r})"
+        return f"        await page.select_option({sel!r})"
+    if action == "drag":
+        return f"        await page.drag_and_drop({entry['source']!r}, {entry['target']!r})"
+    if action == "navigate_back":
+        return "        await page.go_back()"
+    if action == "resize":
+        return f"        await page.set_viewport_size({{'width': {entry['width']}, 'height': {entry['height']}}})"
     return None
 
 
@@ -151,6 +168,23 @@ def _ts_line(entry: dict) -> str | None:
                 f"{json.dumps(entry['text'])});"
             )
         return "  await page.waitForLoadState('networkidle');"
+    if action == "hover":
+        return f"  await page.hover({json.dumps(entry['selector'])});"
+    if action == "select_option":
+        sel = json.dumps(entry["selector"])
+        if entry.get("value") is not None:
+            return f"  await page.selectOption({sel}, {{ value: {json.dumps(entry['value'])} }});"
+        if entry.get("label") is not None:
+            return f"  await page.selectOption({sel}, {{ label: {json.dumps(entry['label'])} }});"
+        if entry.get("index") is not None:
+            return f"  await page.selectOption({sel}, {{ index: {entry['index']} }});"
+        return f"  await page.selectOption({sel});"
+    if action == "drag":
+        return f"  await page.dragAndDrop({json.dumps(entry['source'])}, {json.dumps(entry['target'])});"
+    if action == "navigate_back":
+        return "  await page.goBack();"
+    if action == "resize":
+        return f"  await page.setViewportSize({{ width: {entry['width']}, height: {entry['height']} }});"
     return None
 
 

@@ -300,6 +300,8 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
     """
     page.on("dialog", session._handle_dialog)
     page.on("download", session._handle_download)
+    page.on("response", session._handle_response)
+    page.on("requestfailed", session._handle_request_failed)
     # If the close evictor has already attached its per-page handler, wire it
     # on this page too. For the initial launch page this is a no-op (the
     # attribute hasn't been set yet); _wire_close_evictor will install the
