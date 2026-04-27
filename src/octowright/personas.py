@@ -77,7 +77,13 @@ def load_persona(name: str) -> Persona:
 
 def list_personas() -> list[dict[str, Any]]:
     """Return [{name, display_name, engines, path, mtime, last_used}, ...]
-    sorted most-recent-mtime first. Empty list if PROFILES_DIR missing."""
+    sorted most-recent-mtime first. Empty list if PROFILES_DIR missing.
+
+    Only directories with a ``profile.yaml`` are reported — orphan profile
+    folders left behind by tests or interrupted launches are skipped, since
+    every consumer (dashboard editor, resolve.suggest_for_url) needs the
+    yaml to function.
+    """
     if not PROFILES_DIR.exists():
         return []
     out: list[dict[str, Any]] = []
@@ -85,13 +91,14 @@ def list_personas() -> list[dict[str, Any]]:
         if not entry.is_dir():
             continue
         yaml_path = entry / "profile.yaml"
+        if not yaml_path.exists():
+            continue
         display_name = None
-        if yaml_path.exists():
-            try:
-                raw = yaml.safe_load(yaml_path.read_text()) or {}
-                display_name = raw.get("display_name")
-            except Exception:
-                log.warning("persona.yaml_parse_failed", path=str(yaml_path))
+        try:
+            raw = yaml.safe_load(yaml_path.read_text()) or {}
+            display_name = raw.get("display_name")
+        except Exception:
+            log.warning("persona.yaml_parse_failed", path=str(yaml_path))
         engines = sorted(sub.name for sub in entry.iterdir() if sub.is_dir() and sub.name in SUPPORTED_KINDS)
         stat = entry.stat()
         out.append(
