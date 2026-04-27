@@ -10,6 +10,7 @@ import type {
   EventsResponse,
   HealthResponse,
   MacroSummary,
+  PersonaDetail,
   PersonaSummary,
   ScenarioListResponse,
   ScreenshotListResponse,
@@ -168,6 +169,30 @@ export function openTrace(id: string): Promise<TraceOpenResponse> {
 
 export function getHealth(): Promise<HealthResponse> {
   return fetchJson<HealthResponse>("/api/health");
+}
+
+export function getPersonaDetail(name: string): Promise<PersonaDetail> {
+  return fetchJson<PersonaDetail>(`/api/personas/${encodeURIComponent(name)}`);
+}
+
+export function updatePersonaYaml(name: string, yaml: string): Promise<{ ok: boolean; name: string }> {
+  return fetchJson<{ ok: boolean; name: string }>(`/api/personas/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: { yaml },
+  });
+}
+
+export function deleteRecording(
+  id: string,
+): Promise<{ deleted: boolean; session_id: string; files_removed: number }> {
+  return fetchJson<{ deleted: boolean; session_id: string; files_removed: number }>(
+    `/api/sessions/${encodeURIComponent(id)}/recording`,
+    { method: "DELETE" },
+  );
+}
+
+export function getPersonaSizes(): Promise<Record<string, number | null>> {
+  return fetchJson<Record<string, number | null>>("/api/personas/sizes");
 }
 
 export function videoUrl(id: string): string {

@@ -119,3 +119,11 @@ export interface HealthResponse {
   ok: boolean;
   version: string;
 }
+
+export interface PersonaDetail {
+  name: string;
+  yaml: string;
+  path: string;
+  disk_bytes: number;
+  engine_bytes: Record<string, number>;
+}
