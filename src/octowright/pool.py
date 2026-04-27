@@ -513,8 +513,20 @@ class BrowserPool:
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
 
-        vw = viewport_w or DEFAULT_VIEWPORT_W
-        vh = viewport_h or DEFAULT_VIEWPORT_H
+        # Headed: when neither viewport_w nor viewport_h is given, let Playwright
+        # adopt the OS window size (no_viewport=True) so the page can resize
+        # naturally with the window. Caller can still pin a size by passing one
+        # or both. Headless still needs a fixed viewport — that's the rendering
+        # target — so we keep the defaults there.
+        explicit_size = viewport_w is not None or viewport_h is not None
+        if headless or explicit_size:
+            vw = viewport_w or DEFAULT_VIEWPORT_W
+            vh = viewport_h or DEFAULT_VIEWPORT_H
+            viewport_kwargs: dict[str, Any] = {"viewport": {"width": vw, "height": vh}}
+            log_viewport: dict[str, Any] | None = {"w": vw, "h": vh}
+        else:
+            viewport_kwargs = {"no_viewport": True}
+            log_viewport = None
 
         user_data_dir: str | None = None
         video_dir: Path | None = None
@@ -550,8 +562,8 @@ class BrowserPool:
             context = await browser_type.launch_persistent_context(
                 user_data_dir,
                 headless=headless,
-                viewport={"width": vw, "height": vh},
                 accept_downloads=True,
+                **viewport_kwargs,
                 **ctx_video_kwargs,
                 **launch_kwargs,
             )
@@ -560,8 +572,8 @@ class BrowserPool:
         else:
             browser = await browser_type.launch(headless=headless, **launch_kwargs)
             context = await browser.new_context(
-                viewport={"width": vw, "height": vh},
                 accept_downloads=True,
+                **viewport_kwargs,
                 **ctx_video_kwargs,
             )
             page = await context.new_page()
@@ -580,7 +592,7 @@ class BrowserPool:
             user_data_dir=user_data_dir,
             url=target_url,
             headed=not headless,
-            viewport={"w": vw, "h": vh},
+            viewport=log_viewport,
             stabilize=stabilize,
             record_video=record_video,
             video_dir=str(video_dir) if video_dir else None,
