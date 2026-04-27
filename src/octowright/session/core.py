@@ -440,6 +440,55 @@ class BrowserSession:
         self.recorder.record("resize", width=width, height=height)
         return {"ok": True, "width": width, "height": height}
 
+    async def open_url(
+        self,
+        url: str,
+        target: str = "tab",
+        width: int = 1024,
+        height: int = 768,
+    ) -> dict[str, Any]:
+        """Open ``url`` in a new tab or window of this instance.
+
+        target='tab' creates a new page in the same context (a regular tab).
+        target='window' uses ``window.open`` with popup features so chromium and
+        firefox open it in a separate OS window. Both are tracked in
+        ``self.pages`` via the context-level page listener.
+        """
+        if target not in ("tab", "window"):
+            raise ValueError(f"target must be 'tab' or 'window', got {target!r}")
+
+        if target == "tab":
+            new_page = await self.context.new_page()
+            try:
+                await new_page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+            except Exception:
+                # Surface what we have even if the navigation timed out.
+                pass
+        else:
+            async with self.page.expect_popup(timeout=DEFAULT_NAV_TIMEOUT_MS) as popup_info:
+                await self.page.evaluate(
+                    "({u, w, h}) => window.open(u, '_blank', `popup,width=${w},height=${h}`)",
+                    {"u": url, "w": width, "h": height},
+                )
+            new_page = await popup_info.value
+            try:
+                await new_page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_NAV_TIMEOUT_MS)
+            except Exception:
+                pass
+
+        # _register_popup adds the page to self.pages on the context "page"
+        # event; if a race left it absent, append it ourselves.
+        if new_page not in self.pages:
+            self.pages.append(new_page)
+        page_index = self.pages.index(new_page)
+        self.recorder.record("open_url", url=url, target=target, page_index=page_index)
+        return {
+            "ok": True,
+            "target": target,
+            "page_index": page_index,
+            "url": new_page.url,
+        }
+
     def _handle_response(self, response: Any) -> None:
         request = response.request
         self._network_requests.append(

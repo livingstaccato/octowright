@@ -179,6 +179,29 @@ async def browser_resize(instance_id: str, width: int, height: int) -> dict[str,
 @mcp.tool(
     structured_output=False,
     description=(
+        "Open a URL in a new tab or new window of an existing instance. "
+        "target='tab' (default) opens a new page in the same browser context — "
+        "behaves like cmd-T then typing a URL. target='window' opens it in a "
+        "separate OS window via window.open(...,'popup',...) — useful when the "
+        "user explicitly says 'in a new window'. For 'window', width and height "
+        "set the popup window size (defaults 1024x768). Returns {ok, target, "
+        "page_index, url}; the new page is appended to the instance's page list "
+        "and is the same shape page_switch / page_close use."
+    ),
+)
+async def browser_open_url(
+    instance_id: str,
+    url: str,
+    target: str = "tab",
+    width: int = 1024,
+    height: int = 768,
+) -> dict[str, Any]:
+    return await pool.get(instance_id).open_url(url, target=target, width=width, height=height)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Launch several browsers in parallel from a list of launch specs. Each spec is "
         "a dict accepting any subset of: kind, url, headed, label, profile, viewport_w, "
         "viewport_h, stabilize, record_video. Returns {launched: [...], errors: [...]}."
