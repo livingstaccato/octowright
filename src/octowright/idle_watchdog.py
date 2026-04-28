@@ -18,9 +18,13 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from provide.telemetry import get_logger
+
 if TYPE_CHECKING:
     from .pool import BrowserPool
     from .scenarios import ScenarioPool
+
+log = get_logger(__name__)
 
 
 async def idle_watchdog(
@@ -52,19 +56,55 @@ async def idle_watchdog(
     """
     armed = arm_immediately
     idle_since: float | None = None
+    log.info(
+        "octowright.watchdog.start",
+        grace_seconds=grace_seconds,
+        poll_seconds=poll_seconds,
+        armed=armed,
+    )
     while True:
         await asyncio.sleep(poll_seconds)
+        browsers = len(pool.list_sessions())
+        scenarios = len(scenario_pool.list_live())
         extra = get_extra_active_count() if get_extra_active_count is not None else 0
-        active = bool(pool.list_sessions()) or bool(scenario_pool.list_live()) or extra > 0
+        active = browsers > 0 or scenarios > 0 or extra > 0
+        idle_for = None if idle_since is None else time.monotonic() - idle_since
+        log.debug(
+            "octowright.watchdog.tick",
+            browsers=browsers,
+            scenarios=scenarios,
+            extra_mcp_sessions=extra,
+            active=active,
+            armed=armed,
+            idle_for_seconds=idle_for,
+        )
         if active:
+            if not armed:
+                log.info("octowright.watchdog.armed", browsers=browsers, scenarios=scenarios, extra=extra)
             armed = True
+            if idle_since is not None:
+                log.info(
+                    "octowright.watchdog.idle_cleared",
+                    browsers=browsers,
+                    scenarios=scenarios,
+                    extra=extra,
+                )
             idle_since = None
             continue
         if not armed:
             continue
         now = time.monotonic()
         if idle_since is None:
+            log.info("octowright.watchdog.idle_started", grace_seconds=grace_seconds)
             idle_since = now
             continue
         if now - idle_since >= grace_seconds:
+            log.info(
+                "octowright.watchdog.fired",
+                idle_seconds=now - idle_since,
+                grace_seconds=grace_seconds,
+                browsers=browsers,
+                scenarios=scenarios,
+                extra=extra,
+            )
             return

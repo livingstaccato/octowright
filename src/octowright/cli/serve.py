@@ -16,11 +16,45 @@ bridge stdin/stdout to its HTTP-MCP endpoint instead of spawning a pool. Pass
 
 from __future__ import annotations
 
+import asyncio as _asyncio_mod
+from typing import Any
+
 import click
-from provide.telemetry import setup_telemetry, shutdown_telemetry
+from provide.telemetry import get_logger, setup_telemetry, shutdown_telemetry
 
 from ..server import mcp
 from ._root import cli
+
+_log = get_logger(__name__)
+
+
+def _log_first_done(
+    event: str,
+    mcp_task: _asyncio_mod.Task[Any],
+    watch_task: _asyncio_mod.Task[Any] | None,
+    sidecars: list[_asyncio_mod.Task[Any]],
+) -> None:
+    """Log which task ended first so a daemon shutdown is attributable.
+
+    Logged at INFO so it shows up in the default daemon log without needing
+    --log-level=DEBUG. Includes the task that ended first plus a snapshot of
+    the others' done/cancelled state so the user can tell whether shutdown
+    came from the idle watchdog, a crashed sidecar, or stdio EOF.
+    """
+    finished: list[str] = []
+    pending: list[str] = []
+    for label, task in [("mcp", mcp_task), ("watchdog", watch_task)] + [
+        (f"sidecar[{i}]", t) for i, t in enumerate(sidecars)
+    ]:
+        if task is None:
+            continue
+        if task.done():
+            exc = task.exception() if not task.cancelled() else None
+            tag = "cancelled" if task.cancelled() else ("error" if exc else "ok")
+            finished.append(f"{label}={tag}")
+        else:
+            pending.append(label)
+    _log.info(event, finished=finished, pending=pending)
 
 
 @cli.command()
@@ -70,6 +104,15 @@ from ._root import cli
     help="Internal: this process IS the daemonized leader. Skip lock check, "
     "arm watchdog immediately. Set by spawn_daemon(); never invoke directly.",
 )
+@click.option(
+    "--log-level",
+    "log_level",
+    type=click.Choice(["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
+    default=None,
+    help="Set PROVIDE_LOG_LEVEL for this process and any spawned daemon. "
+    "Use DEBUG when investigating watchdog/shutdown behavior; daemon output "
+    "lands in ~/.config/undef/octowright-daemon.log.",
+)
 def serve(
     http_port: int | None,
     http_host: str | None,
@@ -78,6 +121,7 @@ def serve(
     idle_grace: float | None,
     no_singleton: bool,
     daemon_mode: bool,
+    log_level: str | None,
 ) -> None:
     """Run the MCP stdio server plus the HTTP debugger sidecar (default).
 
@@ -88,6 +132,13 @@ def serve(
     coordination — useful for tests, but means no shared pool with peers.
     """
     import asyncio as _asyncio
+    import os as _os
+
+    # Set the env var BEFORE setup_telemetry so the logger picks it up.
+    # Also export it so spawned daemons inherit it (daemonize uses
+    # os.environ.copy()).
+    if log_level is not None:
+        _os.environ["PROVIDE_LOG_LEVEL"] = log_level.upper()
 
     setup_telemetry()
     try:
@@ -304,6 +355,7 @@ async def _run_leader(
 
     try:
         await _asyncio.wait(wait_for, return_when=_asyncio.FIRST_COMPLETED)
+        _log_first_done("octowright.leader.first_phase_ended", mcp_task, watch_task, sidecars)
 
         # If only the stdio MCP task ended (the typical "client disconnected"
         # case) and we're discoverable, keep serving via HTTP-MCP. The
@@ -320,6 +372,7 @@ async def _run_leader(
                 {watch_task, *sidecars},
                 return_when=_asyncio.FIRST_COMPLETED,
             )
+            _log_first_done("octowright.leader.second_phase_ended", mcp_task, watch_task, sidecars)
     finally:
         for sig in installed_signals:
             try:
