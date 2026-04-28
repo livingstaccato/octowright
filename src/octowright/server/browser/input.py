@@ -203,9 +203,16 @@ async def browser_select_option(
     structured_output=False,
     description=(
         "Drag an element from source_selector and drop it onto target_selector. "
-        "Uses Playwright's drag_and_drop which handles the full mouse-down → move → up sequence. "
-        "Works for sortable lists, Kanban boards, file managers, and other drag-and-drop UIs. "
-        "Both selectors must match exactly one visible element."
+        "Uses Playwright's drag_and_drop, which drives a synthetic mouse-down → move → up "
+        "sequence. Works for most drag-and-drop UIs that respond to mouse events — sortable "
+        "lists, Kanban boards backed by mouse handlers, custom resize handles, etc. "
+        "DOES NOT fire HTML5 native drag events (dragstart / dragover / drop) on "
+        'draggable="true" elements — that\'s a Playwright limitation that affects '
+        "headed and headless equally, not an octowright one. If the target relies on "
+        "the HTML5 DnD API (e.g. Trello, react-dnd default backend, native-DnD demos), "
+        "this tool will appear to succeed but no drop will register. Workaround: use "
+        "browser_evaluate to dispatch DragEvent('dragstart'/'dragover'/'drop') manually "
+        "with a synthetic DataTransfer. Both selectors must match exactly one visible element."
     ),
 )
 async def browser_drag(
