@@ -9,6 +9,7 @@ import click
 
 from ..skill_distribution import (
     SKILL_NAME,
+    doctor_distributed_assets,
     install_distributed_assets,
     render_json,
     render_table,
@@ -57,4 +58,12 @@ def skill_status(name: str, target: str, as_json: bool) -> None:
     if name != SKILL_NAME:
         raise click.ClickException(f"unknown skill {name!r}; expected {SKILL_NAME!r}")
     results = status_distributed_assets(target=target)
+    click.echo(render_json(results) if as_json else render_table(results))
+
+
+@skill.command("doctor")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON output.")
+def skill_doctor(as_json: bool) -> None:
+    """Run a quick diagnostics pass for distributed skill assets."""
+    results = doctor_distributed_assets()
     click.echo(render_json(results) if as_json else render_table(results))
