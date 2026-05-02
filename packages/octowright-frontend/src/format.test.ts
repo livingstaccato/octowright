@@ -81,6 +81,16 @@ describe("eventHeadline", () => {
   it("truncates", () => {
     expect(eventHeadline({ ts: "x", action: "fill", value: "x".repeat(100) }, 10)).toHaveLength(10);
   });
+  it("prefers payload preview for websocket events", () => {
+    expect(
+      eventHeadline({ ts: "x", action: "websocket_framereceived", is_binary: true, payload_preview: "[binary payload hidden: 6 bytes]" }),
+    ).toBe("[binary payload hidden: 6 bytes]");
+  });
+  it("normalizes old raw binary payload preview format", () => {
+    expect(
+      eventHeadline({ ts: "x", action: "websocket_framereceived", is_binary: true, payload_preview: "b'hello'" }),
+    ).toBe("[binary payload hidden]");
+  });
 });
 
 describe("relativeSeconds", () => {

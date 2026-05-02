@@ -60,7 +60,7 @@ def isolated_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str,
 def test_help_lists_subcommands() -> None:
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
-    for sub in ("serve", "selftest", "test", "persona", "scenario", "migrate-profiles"):
+    for sub in ("serve", "selftest", "test", "persona", "scenario"):
         assert sub in result.output
 
 
@@ -139,8 +139,9 @@ def test_persona_show_missing_persona_includes_next_step_hint(isolated_paths: di
 def test_scenario_list_empty(isolated_paths: dict[str, Path]) -> None:
     r = CliRunner().invoke(cli, ["scenario", "list"])
     assert r.exit_code == 0
-    # No scenarios on disk → blank output is fine.
-    assert r.output.strip() == ""
+    # No scenarios on disk → blank output (ignoring OTEL noise) is fine.
+    clean_out = "\n".join(ln for ln in r.output.strip().splitlines() if "Provider is not allowed" not in ln)
+    assert clean_out == ""
 
 
 def test_scenario_list_shows_yaml_specs(isolated_paths: dict[str, Path]) -> None:
@@ -160,33 +161,6 @@ def test_scenario_list_shows_yaml_specs(isolated_paths: dict[str, Path]) -> None
     assert r.exit_code == 0
     assert "mini" in r.output
     assert "yaml" in r.output
-
-
-# ---------------------------------------------------------------------------
-# migrate-profiles
-# ---------------------------------------------------------------------------
-
-
-def test_migrate_profiles_reports_count(isolated_paths: dict[str, Path]) -> None:
-    # Build a legacy layout: profiles/<kind>/<name>/...
-    legacy = isolated_paths["profiles"] / "webkit" / "dante"
-    legacy.mkdir(parents=True)
-    (legacy / "Cookies").write_bytes(b"x")
-
-    r = CliRunner().invoke(cli, ["migrate-profiles"])
-    assert r.exit_code == 0
-    assert "moved 1" in r.output
-    # New layout exists.
-    assert (isolated_paths["profiles"] / "dante" / "webkit" / "Cookies").exists()
-
-
-def test_migrate_profiles_idempotent(isolated_paths: dict[str, Path]) -> None:
-    """Running migrate on an already-migrated tree is a no-op."""
-    (isolated_paths["profiles"] / "dante" / "webkit").mkdir(parents=True)
-    (isolated_paths["profiles"] / "dante" / "profile.yaml").write_text("name: dante\n")
-    r = CliRunner().invoke(cli, ["migrate-profiles"])
-    assert r.exit_code == 0
-    assert "moved 0" in r.output
 
 
 # ---------------------------------------------------------------------------

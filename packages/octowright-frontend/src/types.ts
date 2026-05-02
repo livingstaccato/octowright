@@ -11,14 +11,47 @@ export interface SessionSummary {
   log_path: string;
 }
 
+export interface CacheComponent {
+  size_bytes: number;
+  size_human: string;
+  path: string | null;
+  exists: boolean;
+}
+
+export interface CacheComponentList {
+  size_bytes: number;
+  size_human: string;
+  count: number;
+  paths: string[];
+}
+
+export interface CacheReport {
+  total_bytes: number;
+  total_human: string;
+  components: {
+    jsonl: CacheComponent;
+    markdown: CacheComponent;
+    trace: CacheComponent;
+    video: CacheComponent;
+    websocket: CacheComponent;
+    screenshots: CacheComponentList;
+  };
+  recommendations: string[];
+}
+
 export interface SessionDetail extends SessionSummary {
   video_path: string | null;
   trace_path: string | null;
+  markdown_path: string | null;
+  websocket_path: string | null;
   action_count: number;
   console_count: number;
   download_count: number;
   page_count: number;
+  cache: CacheReport;
   title: string | null;
+  aria?: string;
+  macro_intent?: string;
 }
 
 export interface RecordingEvent {

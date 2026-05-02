@@ -19,7 +19,6 @@ from __future__ import annotations
 # decorator side effects. Order does not matter; F401 ignored intentionally.
 from . import cleanup as _cleanup  # noqa: F401
 from . import init_cmd as _init_cmd  # noqa: F401
-from . import migrate as _migrate  # noqa: F401
 from . import persona as _persona  # noqa: F401
 from . import scenario as _scenario  # noqa: F401
 from . import selftest as _selftest  # noqa: F401

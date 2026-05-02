@@ -20,12 +20,15 @@ from ...defaults import DEFAULT_URL, SUPPORTED_KINDS
 from ...server import _state
 from .. import state
 from ..discovery import (
+    _build_cache_components,
+    _cache_report_for_recording,
     _closed_sessions,
     _find_recording_for,
     _iso,
     _live_session_or_none,
     _live_summary,
     _read_first_launch,
+    _resolve_markdown_path,
     _scan_recording_artefacts,
     _summarise_recording,
 )
@@ -50,21 +53,54 @@ async def session_detail(request: Request) -> JSONResponse:
             # without blocking. The frontend can call browser_evaluate for live
             # title via MCP if it really wants up-to-date.
             title = None
+        markdown_path: str | None = None
+        live_markdown_path = _resolve_markdown_path(live.instance_id)
+        if live.markdown_path is not None:
+            markdown_path = str(live.markdown_path)
+        elif live_markdown_path is not None:
+            markdown_path = str(live_markdown_path)
         detail = {
             **_live_summary(live),
             "video_path": str(live.video_path) if live.video_path else None,
             "trace_path": str(live.trace_path) if live.trace_path else None,
+            "markdown_path": markdown_path,
+            "websocket_path": str(live.websocket_path) if getattr(live, "websocket_path", None) else None,
             "action_count": -1,  # unknown without re-reading the file
             "console_count": len(live.console),
             "download_count": len(live.downloads),
             "page_count": len(live.pages),
             "title": title,
+            "cache": _build_cache_components(
+                session_id=live.instance_id,
+                jsonl_path=Path(live.log_path),
+                markdown_path=Path(markdown_path)
+                if markdown_path
+                else (live.markdown_path if live.markdown_path else None),
+                trace_path=Path(live.trace_path) if live.trace_path else None,
+                video_path=Path(live.video_path) if live.video_path else None,
+                websocket_path=live.websocket_path if getattr(live, "websocket_path", None) else None,
+            ),
         }
         # Action count is cheap to derive from the JSONL on disk; do it once.
         log_path = Path(live.log_path)
         if log_path.exists():
             artefacts = _scan_recording_artefacts(log_path)
             detail["action_count"] = artefacts["action_count"]
+
+        # ARIA tree snapshot
+        with contextlib.suppress(Exception):
+            aria = await live.page.locator("html").aria_snapshot()
+            detail["aria"] = aria
+
+        # Macro Intent (if log exists)
+        if log_path.exists():
+            from ...macros import load_macro_from_recording
+            from ...server.macro_semantic import get_semantic_intent
+
+            with contextlib.suppress(Exception):
+                actions = load_macro_from_recording(log_path)
+                detail["macro_intent"] = get_semantic_intent(actions)
+
         return JSONResponse(detail)
 
     jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
@@ -78,14 +114,26 @@ async def session_detail(request: Request) -> JSONResponse:
         **summary,
         "video_path": artefacts["video_path"],
         "trace_path": artefacts["trace_path"],
+        "markdown_path": artefacts["markdown_path"],
+        "websocket_path": artefacts["websocket_path"],
         "action_count": artefacts["action_count"],
         "console_count": artefacts["console_count"],
         "download_count": artefacts["download_count"],
         "page_count": artefacts["page_count"],
         "title": artefacts["title"],
+        "cache": _cache_report_for_recording(jsonl),
     }
     if artefacts["url"]:
         detail["url"] = artefacts["url"]
+
+    # For closed sessions, we can still try to get the macro intent from disk
+    from ...macros import load_macro_from_recording
+    from ...server.macro_semantic import get_semantic_intent
+
+    with contextlib.suppress(Exception):
+        actions = load_macro_from_recording(jsonl)
+        detail["macro_intent"] = get_semantic_intent(actions)
+
     return JSONResponse(detail)
 
 

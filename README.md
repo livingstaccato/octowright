@@ -106,15 +106,21 @@ Ask Claude `"give me the octowright dashboard URL"` (it'll call the
   embedded session video on the left, action timeline on the right. Click any
   action in the timeline to seek the video to that moment. Tabs underneath
   the timeline switch between **console messages** (filtered by level),
-  **downloads** (with a "missing" badge if the file was moved), and
-  **screenshots** (lazy-loaded thumbnail grid).
+  **downloads** (with a "missing" badge if the file was moved),
+  **markdown export**, and **screenshots** (lazy-loaded thumbnail grid).
 - **Live updates** — for currently-running sessions, the page opens a
   WebSocket to `/api/sessions/{id}/tail` and appends new events as they
-  arrive (no manual refresh).
+  arrive (no manual refresh). WebSocket frame payloads that are binary are
+  intentionally hidden in both storage and UI preview (`[binary payload hidden]`)
+  so logs cannot leak binary blobs.
 - **Trace deep-dive** — a button on each session page spawns
   `npx playwright show-trace` against that session's `.zip` trace, opening
   the official Playwright trace viewer for full per-action inspection
   (network, snapshots, source links). Requires `npx` on PATH.
+
+The markdown tab uses the new `GET /api/sessions/{id}/markdown` endpoint; the
+server captures cached markdown on page load and user navigation, and generates
+it on demand if a live session hasn't populated the cache yet.
 
 The dashboard is a TypeScript SPA built into `packages/octowright-frontend/`
 (strict tsc + Biome + vitest). It uses `@provide-io/telemetry` for structured
@@ -260,8 +266,8 @@ appends a record to that instance's JSONL log.
 | `profile_list` / `profile_delete` | Saved per-engine profile dirs. |
 | `persona_list` / `persona_get` / `persona_create` / `persona_delete` | Identity-layer over profiles. |
 | `persona_credentials_check` | Pre-flight: resolve every credential reference without launching a browser. |
-| `migrate_profiles` | One-shot: migrate legacy `profiles/<kind>/<name>/` layout. |
 | `scenario_list` / `scenario_start` / `scenario_status` / `scenario_stop` / `scenario_run_macro` / `scenario_participants` / `scenario_run_as_test` / `scenario_tail` | Multi-browser orchestration + verify-as-test. |
+
 | `scenario_plan` | Dry-run: show resolved per-participant launch_kwargs without launching anything. |
 | `macro_save` / `macro_list` / `macro_run` / `macro_run_sequence` / `macro_delete` | Named, parameterised action sequences. |
 | `macro_lint` | Static-analysis pass on a saved macro: missing required fields, unknown actions, unparameterized credential-shaped strings, empty conditional branches. |
@@ -373,9 +379,6 @@ credential, its source (env var or shell command) and the reference itself,
 plus per-field `ok`/`error` — the resolved secret is never included. Use
 this to avoid the classic "logged in 6 of 7 windows, then discovered the
 env var was unset on #7" failure mode.
-
-Legacy `profiles/<kind>/<name>/` layouts are auto-migrated on first use; or run
-`octowright migrate-profiles` to force the migration.
 
 ## Macros — reusable parameterized action sequences
 
@@ -518,7 +521,6 @@ common housekeeping without going through Claude:
 | `octowright test [<dir>] [--kind <engine>] [--tag <tag>] [--out <xml>]` | Run every `[test]`-tagged macro in a directory, emit JUnit XML. |
 | `octowright cleanup [--days N] [--apply]` | Prune old recording artefacts (JSONL logs, screenshots, videos, traces). Dry-run by default; `--apply` actually deletes. |
 | `octowright takeover [--apply --scope=session\|project\|global --name=<n>]` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json` and offer to disable them in favour of octowright. Default is read-only report; `--apply` rewrites the config (with timestamped backup) by renaming the matched key to `_<name>_disabled_by_octowright`. Reversible — rename back to re-enable. |
-| `octowright migrate-profiles` | One-shot: migrate legacy `profiles/<kind>/<name>/` layout to the persona-first form. Idempotent. |
 | `octowright persona list\|show\|create\|delete` | Manage personas from the terminal. |
 | `octowright scenario list\|start [--test --out <xml>] [--watch]` | Start a scenario; `--watch` streams participant events to stdout in real-time; the command blocks until Ctrl-C. |
 

@@ -14,6 +14,7 @@ import {
   getSession,
   getSessions,
   openTrace,
+  markdownUrl,
   screenshotUrl,
   tailWebSocketUrl,
   traceDownloadUrl,
@@ -149,6 +150,9 @@ describe("url helpers", () => {
   });
   it("traceDownloadUrl", () => {
     expect(traceDownloadUrl("a")).toBe("/api/sessions/a/trace");
+  });
+  it("markdownUrl", () => {
+    expect(markdownUrl("a")).toBe("/api/sessions/a/markdown");
   });
   it("frameUrl includes timestamp", () => {
     expect(frameUrl("a", 12.5)).toBe("/api/sessions/a/frame?t=12.5");

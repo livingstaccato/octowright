@@ -14,10 +14,12 @@ recordings dir and pointing ``RECORDINGS_DIR`` at it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from starlette.testclient import TestClient
@@ -165,8 +167,55 @@ def test_session_detail_closed(client: TestClient, isolated_recordings: Path) ->
     body = r.json()
     assert body["id"] == "closeddata00"
     assert body["live"] is False
+    assert body["markdown_path"] is None
     assert body["action_count"] == 3
     assert body["video_path"] is None
+
+
+def test_session_detail_closed_includes_markdown_path(client: TestClient, isolated_recordings: Path) -> None:
+    jsonl = _write_recording(isolated_recordings, "mdcheck00")
+    md_path = jsonl.with_suffix(".markdown.md")
+    md_path.write_text("# cached markdown", encoding="utf-8")
+
+    r = client.get("/api/sessions/mdcheck00")
+    assert r.status_code == 200
+    assert r.json()["markdown_path"] == str(md_path)
+
+
+def test_session_detail_closed_includes_cache_report(client: TestClient, isolated_recordings: Path) -> None:
+    jsonl = _write_recording(
+        isolated_recordings,
+        "cachedata00",
+        kind="chromium",
+    )
+    md_path = jsonl.with_suffix(".markdown.md")
+    md_path.write_text("# cached markdown", encoding="utf-8")
+    ws_path = jsonl.with_suffix(".websocket.jsonl")
+    ws_path.write_text("binary", encoding="utf-8")
+    trace_path = jsonl.with_suffix(".trace.zip")
+    trace_path.write_bytes(b"zip")
+    video_path = isolated_recordings / "cachedata00.webm"
+    video_path.write_bytes(b"video")
+    (isolated_recordings / "cachedata00-shot.png").write_bytes(b"pngdata")
+
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {"action": "close", "video_path": str(video_path), "trace_path": str(trace_path)},
+        {"action": "close", "markdown_path": str(md_path)},
+    ]
+    jsonl.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    r = client.get("/api/sessions/cachedata00")
+    assert r.status_code == 200
+    body = r.json()
+    cache = body["cache"]
+    assert cache["total_bytes"] > 0
+    assert cache["components"]["markdown"]["size_bytes"] == md_path.stat().st_size
+    assert cache["components"]["websocket"]["size_bytes"] == ws_path.stat().st_size
+    assert cache["components"]["trace"]["size_bytes"] == trace_path.stat().st_size
+    assert cache["components"]["video"]["size_bytes"] == video_path.stat().st_size
+    assert cache["components"]["screenshots"]["count"] == 1
+    assert cache["components"]["jsonl"]["path"] == str(jsonl)
 
 
 def test_session_detail_live(
@@ -176,6 +225,8 @@ def test_session_detail_live(
 ) -> None:
     log_path = isolated_recordings / "20260101T000000Z-chromium-detaillive00.jsonl"
     log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    page = MagicMock()
+    page.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value=None)))
     fake = SimpleNamespace(
         instance_id="detaillive00",
         kind="chromium",
@@ -185,9 +236,11 @@ def test_session_detail_live(
         log_path=log_path,
         video_path=None,
         trace_path=None,
+        markdown_path=None,
         console=[{"level": "log", "text": "hi"}],
         downloads=[],
         pages=[None, None],
+        page=page,
     )
     empty_pool["pool"]._sessions["detaillive00"] = fake
     r = client.get("/api/sessions/detaillive00")
@@ -196,6 +249,48 @@ def test_session_detail_live(
     assert body["live"] is True
     assert body["console_count"] == 1
     assert body["page_count"] == 2
+
+
+def test_session_detail_live_includes_cache_report(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = isolated_recordings / "20260101T000000Z-chromium-livecache01.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    md_path = log_path.with_suffix(".markdown.md")
+    md_path.write_text("# live markdown", encoding="utf-8")
+    ws_path = log_path.with_suffix(".websocket.jsonl")
+    ws_path.write_text("abc", encoding="utf-8")
+    shot_path = isolated_recordings / "livecache01-shot.png"
+    shot_path.write_bytes(b"img")
+    page = MagicMock()
+    page.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value=None)))
+    fake = SimpleNamespace(
+        instance_id="livecache01",
+        kind="chromium",
+        label=None,
+        profile=None,
+        url="https://x.y",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        websocket_path=ws_path,
+        markdown_path=md_path,
+        console=[],
+        downloads=[],
+        pages=[None, None],
+        page=page,
+    )
+    empty_pool["pool"]._sessions["livecache01"] = fake
+
+    r = client.get("/api/sessions/livecache01")
+    assert r.status_code == 200
+    body = r.json()
+    cache = body["cache"]
+    assert cache["components"]["markdown"]["size_bytes"] == md_path.stat().st_size
+    assert cache["components"]["websocket"]["size_bytes"] == ws_path.stat().st_size
+    assert cache["components"]["screenshots"]["count"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +341,50 @@ def test_session_events_with_since_offset(client: TestClient, isolated_recording
     body = r.json()
     assert body["events"] == []
     assert body["cursor"] == full_size
+
+
+def test_session_events_sanitizes_binary_websocket_preview(client: TestClient, isolated_recordings: Path) -> None:
+    name = "20260101T000000Z-chromium-evwsraw001.jsonl"
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {
+            "action": "websocket_framereceived",
+            "is_binary": True,
+            "payload_preview": "b'secret'",
+            "payload_size": 6,
+        },
+        {"action": "close"},
+    ]
+    (isolated_recordings / name).write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    r = client.get("/api/sessions/evwsraw001/events")
+    assert r.status_code == 200
+    body = r.json()
+    websocket_event = body["events"][1]
+    assert websocket_event["payload_preview"] == "[binary payload hidden: 6 bytes]"
+
+
+def test_session_events_sanitizes_binary_websocket_preview_without_is_binary_flag(
+    client: TestClient, isolated_recordings: Path
+) -> None:
+    name = "20260101T000000Z-chromium-evwsraw002.jsonl"
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {
+            "action": "websocket_framereceived",
+            "payload_preview": "b'secret'",
+            "payload_size": 6,
+        },
+        {"action": "close"},
+    ]
+    (isolated_recordings / name).write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    r = client.get("/api/sessions/evwsraw002/events")
+    assert r.status_code == 200
+    body = r.json()
+    websocket_event = body["events"][1]
+    assert websocket_event["payload_preview"] == "[binary payload hidden: 6 bytes]"
+    assert websocket_event["is_binary"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +477,123 @@ def test_session_video_returns_file(client: TestClient, isolated_recordings: Pat
     r = client.get("/api/sessions/videxists01/video")
     assert r.status_code == 200
     assert r.content == b"WEBMDATA"
+
+
+def test_session_markdown_returns_file(client: TestClient, isolated_recordings: Path) -> None:
+    name = "20260101T000000Z-chromium-markdownexists01"
+    jsonl = isolated_recordings / f"{name}.jsonl"
+    jsonl.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    md_path = jsonl.with_suffix(".markdown.md")
+    md_path.write_text("# cached markdown", encoding="utf-8")
+
+    r = client.get("/api/sessions/markdownexists01/markdown")
+    assert r.status_code == 200
+    assert r.text == "# cached markdown"
+
+
+def test_session_markdown_404_when_file_missing(client: TestClient, isolated_recordings: Path) -> None:
+    name = "20260101T000000Z-chromium-markdownmissing01"
+    jsonl = isolated_recordings / f"{name}.jsonl"
+    md_path = isolated_recordings / f"{name}.markdown.md"
+    md_path.write_text("", encoding="utf-8")
+    md_path.unlink()
+    jsonl.write_text(
+        json.dumps({"action": "launch", "kind": "chromium"})
+        + "\n"
+        + json.dumps({"action": "close", "markdown_path": str(md_path)})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    r = client.get("/api/sessions/markdownmissing01/markdown")
+    assert r.status_code == 404
+    assert r.json()["error"] == "no markdown cache available for this session"
+
+
+@pytest.mark.asyncio
+async def test_markdown_endpoint_roundtrip_live_and_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("playwright")
+    from octowright import defaults as _defaults
+    from octowright import http as _http
+    from octowright import personas as _personas
+    from octowright import pool as _pool
+    from octowright import profiles as _profiles
+    from octowright.http import state as _http_state
+    from octowright.pool import BrowserPool
+    from octowright.server import _state
+
+    rec = tmp_path / "recordings"
+    profiles = tmp_path / "profiles"
+    rec.mkdir()
+    profiles.mkdir()
+
+    monkeypatch.setenv("OCTOWRIGHT_HEADLESS", "1")
+    monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(_pool, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(_defaults, "PROFILES_DIR", profiles)
+    monkeypatch.setattr(_personas, "PROFILES_DIR", profiles)
+    monkeypatch.setattr(_profiles, "PROFILES_DIR", profiles)
+
+    class _NoScenarios:
+        @staticmethod
+        def list_live() -> list[dict[str, Any]]:
+            return []
+
+    pool = BrowserPool()
+    monkeypatch.setattr(_state, "pool", pool)
+    monkeypatch.setattr(_state, "scenario_pool", _NoScenarios())
+
+    app = _http.build_app()
+    client = TestClient(app)
+
+    try:
+        try:
+            result = await pool.launch(
+                kind="chromium",
+                url="data:text/html,<html><body><h1>Integration</h1></body></html>",
+                headed=False,
+                label="e2e-markdown",
+                session=True,
+                viewport_w=640,
+                viewport_h=480,
+            )
+        except Exception as exc:
+            pytest.skip(f"browser launch unavailable in this environment: {exc!r}")
+
+        sid = result["instance_id"]
+        session = pool.get(sid)
+        # Markdown capture is now scheduled automatically on launch + navigation.
+        for _ in range(20):
+            if session.markdown_path is not None and session.markdown_path.exists():
+                break
+            await asyncio.sleep(0.05)
+        assert session.markdown_path is not None
+        assert session.markdown_path.exists()
+
+        live_resp = client.get(f"/api/sessions/{sid}/markdown")
+        assert live_resp.status_code == 200
+        assert "Integration" in live_resp.text
+
+        await session.navigate("data:text/html,<html><body><h1>Integration Two</h1></body></html>")
+        for _ in range(20):
+            if session.markdown_path is not None and "Integration Two" in session.markdown_path.read_text(
+                encoding="utf-8"
+            ):
+                break
+            await asyncio.sleep(0.05)
+        live_resp_two = client.get(f"/api/sessions/{sid}/markdown")
+        assert live_resp_two.status_code == 200
+        assert "Integration Two" in live_resp_two.text
+
+        await pool.close(sid)
+        await asyncio.sleep(0)
+
+        closed_resp = client.get(f"/api/sessions/{sid}/markdown")
+        assert closed_resp.status_code == 200
+        assert "Integration" in closed_resp.text
+    finally:
+        await pool.shutdown()
 
 
 def test_session_trace_404(client: TestClient, isolated_recordings: Path) -> None:
@@ -881,6 +1137,8 @@ def test_port_is_free_and_pick_port(monkeypatch: pytest.MonkeyPatch) -> None:
         chosen = _http_lifespan._pick_port("127.0.0.1", busy, retries=20)
         assert chosen is not None
         assert chosen != busy
+    except PermissionError as exc:
+        pytest.skip(f"port binding unavailable in this environment: {exc!r}")
     finally:
         s.close()
 

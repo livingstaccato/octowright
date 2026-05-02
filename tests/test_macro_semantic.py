@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-from octowright.server.macro_semantic import summarize_action
+from octowright.server.macro_semantic import get_semantic_intent, macro_explain, summarize_action
 
 
 def test_summarize_navigate():
@@ -56,3 +56,27 @@ def test_summarize_try_each():
     assert "    - Click '.v1'" in summary
     assert "  Branch 2:" in summary
     assert "    - Click '.v2'" in summary
+
+
+def test_get_semantic_intent():
+    actions = [
+        {"action": "navigate", "url": "https://example.com/login"},
+        {"action": "fill", "selector": "#user", "value": "bob"},
+        {"action": "fill", "selector": "#pass", "value": "secret"},
+        {"action": "click", "selector": "button#submit"},
+    ]
+    intent = get_semantic_intent(actions)
+    assert "login" in intent.lower()
+    assert "bob" in intent
+
+
+async def test_macro_explain():
+    actions = [
+        {"action": "navigate", "url": "https://example.com"},
+        {"action": "click", "selector": "button#ok"},
+    ]
+    result = await macro_explain(actions)
+    assert "summary" in result
+    assert "intent" in result
+    assert "Navigate to https://example.com" in result["summary"]
+    assert "Click 'button#ok'" in result["summary"]
