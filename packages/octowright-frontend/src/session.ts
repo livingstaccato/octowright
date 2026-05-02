@@ -4,6 +4,7 @@ import {
   getEvents,
   getScreenshots,
   getSession,
+  markdownUrl,
   openTrace,
   tailWebSocketUrl,
   traceDownloadUrl,
@@ -53,15 +54,20 @@ interface PageRefs {
   timeline: HTMLElement;
   tabs: HTMLElement;
   consolePanel: HTMLElement;
+  ariaPanel: HTMLElement;
+  markdownPanel: HTMLElement;
   downloadsPanel: HTMLElement;
   screenshotsPanel: HTMLElement;
+  cachePanel: HTMLElement;
   consoleTabBtn: HTMLButtonElement;
+  ariaTabBtn: HTMLButtonElement;
+  markdownTabBtn: HTMLButtonElement;
   downloadsTabBtn: HTMLButtonElement;
   screenshotsTabBtn: HTMLButtonElement;
   footer: HTMLElement;
 }
 
-export type PanelTab = "console" | "downloads" | "screenshots";
+export type PanelTab = "console" | "aria" | "markdown" | "downloads" | "screenshots";
 
 export function buildLayout(root: HTMLElement): PageRefs {
   root.innerHTML = "";
@@ -104,15 +110,29 @@ export function buildLayout(root: HTMLElement): PageRefs {
   tabs.setAttribute("data-testid", "session-tabs");
 
   const consoleTabBtn = makeTabButton("console", "Console");
+  const ariaTabBtn = makeTabButton("aria", "A11y Tree");
+  const markdownTabBtn = makeTabButton("markdown", "Markdown");
   const downloadsTabBtn = makeTabButton("downloads", "Downloads");
   const screenshotsTabBtn = makeTabButton("screenshots", "Screenshots");
-  tabs.append(consoleTabBtn, downloadsTabBtn, screenshotsTabBtn);
+  tabs.append(consoleTabBtn, ariaTabBtn, markdownTabBtn, downloadsTabBtn, screenshotsTabBtn);
 
   const consolePanel = document.createElement("div");
   consolePanel.className = "session-panel session-panel--console";
   consolePanel.id = "console-panel";
   consolePanel.setAttribute("role", "tabpanel");
   consolePanel.setAttribute("data-tab", "console");
+
+  const ariaPanel = document.createElement("div");
+  ariaPanel.className = "session-panel session-panel--aria";
+  ariaPanel.id = "aria-panel";
+  ariaPanel.setAttribute("role", "tabpanel");
+  ariaPanel.setAttribute("data-tab", "aria");
+
+  const markdownPanel = document.createElement("div");
+  markdownPanel.className = "session-panel session-panel--markdown";
+  markdownPanel.id = "markdown-panel";
+  markdownPanel.setAttribute("role", "tabpanel");
+  markdownPanel.setAttribute("data-tab", "markdown");
 
   const downloadsPanel = document.createElement("div");
   downloadsPanel.className = "session-panel session-panel--downloads";
@@ -126,7 +146,21 @@ export function buildLayout(root: HTMLElement): PageRefs {
   screenshotsPanel.setAttribute("role", "tabpanel");
   screenshotsPanel.setAttribute("data-tab", "screenshots");
 
-  right.append(livePreviewSlot, timeline, tabs, consolePanel, downloadsPanel, screenshotsPanel);
+  const cachePanel = document.createElement("div");
+  cachePanel.className = "session-cache-summary";
+  cachePanel.id = "cache-summary-panel";
+
+  right.append(
+    livePreviewSlot,
+    timeline,
+    tabs,
+    consolePanel,
+    ariaPanel,
+    markdownPanel,
+    downloadsPanel,
+    screenshotsPanel,
+    cachePanel,
+  );
 
   const footer = document.createElement("footer");
   footer.className = "session-footer";
@@ -141,9 +175,14 @@ export function buildLayout(root: HTMLElement): PageRefs {
     timeline,
     tabs,
     consolePanel,
+    ariaPanel,
+    markdownPanel,
     downloadsPanel,
     screenshotsPanel,
+    cachePanel,
     consoleTabBtn,
+    ariaTabBtn,
+    markdownTabBtn,
     downloadsTabBtn,
     screenshotsTabBtn,
     footer,
@@ -165,6 +204,8 @@ function makeTabButton(name: PanelTab, label: string): HTMLButtonElement {
 export function setActiveTab(refs: PageRefs, tab: PanelTab): void {
   const map: Record<PanelTab, { btn: HTMLButtonElement; panel: HTMLElement }> = {
     console: { btn: refs.consoleTabBtn, panel: refs.consolePanel },
+    aria: { btn: refs.ariaTabBtn, panel: refs.ariaPanel },
+    markdown: { btn: refs.markdownTabBtn, panel: refs.markdownPanel },
     downloads: { btn: refs.downloadsTabBtn, panel: refs.downloadsPanel },
     screenshots: { btn: refs.screenshotsTabBtn, panel: refs.screenshotsPanel },
   };
@@ -180,6 +221,105 @@ export function setActiveTab(refs: PageRefs, tab: PanelTab): void {
 function setTabCount(btn: HTMLButtonElement, count: number): void {
   const label = btn.dataset.label ?? btn.textContent ?? "";
   btn.textContent = `${label} (${count})`;
+}
+
+export function renderAriaPanel(target: HTMLElement, detail: SessionDetail): void {
+  target.innerHTML = "";
+  if (!detail.aria) {
+    const empty = document.createElement("div");
+    empty.className = "session-panel__empty";
+    empty.textContent = "No accessibility tree snapshot available for this session.";
+    target.append(empty);
+    return;
+  }
+
+  const pre = document.createElement("pre");
+  pre.className = "aria-tree";
+  pre.textContent = detail.aria;
+  target.append(pre);
+}
+
+export function renderMarkdownPanel(target: HTMLElement, detail: SessionDetail): void {
+  target.innerHTML = "";
+  const details = document.createElement("details");
+  details.className = "session-markdown-details";
+  const summary = document.createElement("summary");
+  summary.textContent = "Markdown snapshot";
+  details.append(summary);
+  target.append(details);
+
+  if (!detail.markdown_path) {
+    const empty = document.createElement("div");
+    empty.className = "session-panel__empty";
+    empty.textContent = "No markdown snapshot captured for this session yet.";
+    details.append(empty);
+    return;
+  }
+
+  const link = document.createElement("a");
+  link.href = markdownUrl(detail.id);
+  link.className = "btn btn--secondary";
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = "Open markdown export";
+  details.append(link);
+}
+
+export function renderCachePanel(target: HTMLElement, detail: SessionDetail): void {
+  target.innerHTML = "";
+  const details = document.createElement("details");
+  details.className = "session-cache-details";
+  details.open = false;
+
+  const summary = document.createElement("summary");
+  summary.textContent = `Cache summary (${detail.cache.total_human})`;
+  details.append(summary);
+
+  const body = document.createElement("div");
+  body.className = "session-cache-details__body";
+  const components = document.createElement("div");
+  components.className = "session-cache-components";
+  const rows = [
+    ["JSONL", detail.cache.components.jsonl],
+    ["Markdown", detail.cache.components.markdown],
+    ["Trace", detail.cache.components.trace],
+    ["Video", detail.cache.components.video],
+    ["WebSocket", detail.cache.components.websocket],
+    ["Screenshots", detail.cache.components.screenshots],
+  ];
+
+  rows.forEach(([label, component]) => {
+    const row = document.createElement("p");
+    row.className = "session-cache-row";
+    if (label === "Screenshots") {
+      row.textContent = `${label}: ${component.count} files, ${component.size_human}`;
+    } else {
+      row.textContent = `${label}: ${component.exists ? component.size_human : "missing"}`;
+      if (!component.exists) {
+        row.classList.add("session-cache-row--missing");
+      }
+    }
+    components.append(row);
+  });
+
+  body.append(components);
+  if (detail.cache.recommendations.length > 0) {
+    const recWrap = document.createElement("div");
+    recWrap.className = "session-cache-recommendations";
+    const title = document.createElement("strong");
+    title.textContent = "Recommendations:";
+    const list = document.createElement("ul");
+    for (const rec of detail.cache.recommendations) {
+      const li = document.createElement("li");
+      li.textContent = rec;
+      list.append(li);
+    }
+    recWrap.append(title, list);
+    body.append(recWrap);
+  }
+
+  details.append(body);
+  target.append(details);
 }
 
 export function renderHeader(target: HTMLElement, detail: SessionDetail): void {
@@ -199,7 +339,15 @@ export function renderHeader(target: HTMLElement, detail: SessionDetail): void {
   const when = document.createElement("div");
   when.className = "session-header__when";
   when.textContent = `started ${formatDateTime(detail.started_at)}`;
-  meta.append(title, sub, when);
+
+  if (detail.macro_intent) {
+    const intent = document.createElement("div");
+    intent.className = "session-header__intent";
+    intent.innerHTML = `<strong>Intent:</strong> ${detail.macro_intent}`;
+    meta.append(title, sub, when, intent);
+  } else {
+    meta.append(title, sub, when);
+  }
 
   const status = document.createElement("span");
   status.className = `status status--${detail.live ? "live" : "closed"}`;
@@ -391,7 +539,12 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   renderConsolePanel(refs.consolePanel, data.console);
   renderDownloadsPanel(refs.downloadsPanel, data.downloads);
   renderScreenshotsPanel(refs.screenshotsPanel, sessionId, data.screenshots);
+  renderAriaPanel(refs.ariaPanel, detail);
+  renderMarkdownPanel(refs.markdownPanel, detail);
+  renderCachePanel(refs.cachePanel, detail);
   setTabCount(refs.consoleTabBtn, detail.console_count ?? 0);
+  setTabCount(refs.ariaTabBtn, detail.aria ? 1 : 0);
+  setTabCount(refs.markdownTabBtn, detail.markdown_path ? 1 : 0);
   setTabCount(refs.downloadsTabBtn, detail.download_count ?? 0);
   setTabCount(refs.screenshotsTabBtn, 0);
 
@@ -406,6 +559,8 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     setActiveTab(refs, next);
   };
   refs.consoleTabBtn.addEventListener("click", () => switchTab("console"));
+  refs.ariaTabBtn.addEventListener("click", () => switchTab("aria"));
+  refs.markdownTabBtn.addEventListener("click", () => switchTab("markdown"));
   refs.downloadsTabBtn.addEventListener("click", () => switchTab("downloads"));
   refs.screenshotsTabBtn.addEventListener("click", () => switchTab("screenshots"));
   setActiveTab(refs, "console");

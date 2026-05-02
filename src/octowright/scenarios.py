@@ -475,9 +475,12 @@ async def _apply_fixtures(
     live: LiveScenario,
     fixtures: dict[str, Any],
 ) -> None:
+    import asyncio as _asyncio
+
     dialog_policy = fixtures.get("dialog_policy")
     mock_routes = fixtures.get("mock_routes") or []
-    for p in live.participants:
+
+    async def _apply(p: dict[str, Any]) -> None:
         session = browser_pool.get(p["instance_id"])
         if dialog_policy:
             session.set_dialog_policy(dialog_policy)
@@ -490,15 +493,18 @@ async def _apply_fixtures(
                 headers=mr.get("headers"),
             )
 
+    await _asyncio.gather(*(_apply(p) for p in live.participants))
+
 
 async def _run_startup_macros(browser_pool: Any, live: LiveScenario) -> None:
+    import asyncio as _asyncio
+
     from . import macros as _macros
 
-    for participant_dict, participant_spec in zip(
-        live.participants,
-        live.spec.participants,
-        strict=True,
-    ):
+    async def _run_for_participant(
+        participant_dict: dict[str, Any],
+        participant_spec: Participant,
+    ) -> None:
         for macro_name in resolve_startup_macros(participant_spec):
             session = browser_pool.get(participant_dict["instance_id"])
             try:
@@ -511,3 +517,7 @@ async def _run_startup_macros(browser_pool: Any, live: LiveScenario) -> None:
                     macro=macro_name,
                     error=repr(e),
                 )
+
+    await _asyncio.gather(
+        *(_run_for_participant(pd, ps) for pd, ps in zip(live.participants, live.spec.participants, strict=True))
+    )

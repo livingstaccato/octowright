@@ -231,6 +231,9 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
     class FakeSession:
+        async def diagnostic_bundle(self) -> dict[str, Any]:
+            return {}
+
         async def navigate(self, url: str) -> dict[str, Any]:
             calls.append(("navigate", (url,), {}))
             return {"url": url, "title": ""}
@@ -456,6 +459,14 @@ async def test_run_macro_dispatches_expect_text(monkeypatch: pytest.MonkeyPatch,
 
     class FakeSessionWithPage:
         page = FakePage()
+
+        async def diagnostic_bundle(self) -> dict[str, Any]:
+            return {}
+
+        async def expect_text(
+            self, selector: str, text: str, mode: str = "contains", timeout_ms: int | None = None
+        ) -> str:
+            return "hi"
 
     result = await m.run_macro(FakeSessionWithPage(), "assert-macro")  # type: ignore[arg-type]
     assert result["executed"] == 1

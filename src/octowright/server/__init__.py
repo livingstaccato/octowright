@@ -24,6 +24,7 @@ from ..defaults import RECORDINGS_DIR
 # Order does not matter; F401 ignored intentionally.
 from . import browser as _browser  # noqa: F401
 from . import goldens as _goldens  # noqa: F401
+from . import macro_semantic as _macro_semantic  # noqa: F401
 from . import macros as _macros  # noqa: F401
 from . import meta as _meta  # noqa: F401
 from . import personas as _personas  # noqa: F401
@@ -74,6 +75,7 @@ from .browser import (
     page_switch,
 )
 from .goldens import golden_assert, golden_delete, golden_list, golden_save
+from .macro_semantic import macro_explain
 from .macros import (
     macro_delete,
     macro_lint,
@@ -87,7 +89,6 @@ from .macros import (
 )
 from .meta import octowright_check_takeover, octowright_dashboard_url, octowright_status
 from .personas import (
-    migrate_profiles,
     persona_create,
     persona_credentials_check,
     persona_delete,
@@ -161,13 +162,13 @@ __all__ = [
     "golden_save",
     "log",
     "macro_delete",
+    "macro_explain",
     "macro_lint",
     "macro_list",
     "macro_run",
     "macro_run_sequence",
     "macro_save",
     "mcp",
-    "migrate_profiles",
     "octowright_check_takeover",
     "octowright_dashboard_url",
     "octowright_status",

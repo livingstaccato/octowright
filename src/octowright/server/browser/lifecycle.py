@@ -7,10 +7,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Unpack
 
 from ... import _format as fmt
 from ... import resolve as resolve_mod
+from ...types import LaunchOptions
 from .._state import mcp, pool
 
 
@@ -22,9 +23,10 @@ from .._state import mcp, pool
         "where the user did NOT name a persona, FIRST call browser_suggest_for_url(url=...) — "
         "if it reports `ambiguous: true`, ask the user which persona to use instead of guessing. "
         "If it reports `ephemeral_ok: true`, this call with no profile= is fine. "
-        "DEFAULT IS HEADED — leave headed=True unless you have a specific "
-        "background-verification reason (automated health check, scripted parity "
-        "run, CI). If a human will look at the window, stay headed. "
+        "DEFAULT IS HEADED — auto-detected based on OS/environment if headed=None. "
+        "Leave headed=None unless you have a specific background-verification reason "
+        "(automated health check, scripted parity run, CI). If a human will look at "
+        "the window, stay headed. "
         "If profile is given, uses a persistent on-disk user-data-dir so cookies, "
         "localStorage, and IndexedDB survive close/relaunch (recommended for Discord, "
         "Slack, etc.). Profiles are scoped per-kind: (kind, profile) is the identity. "
@@ -54,39 +56,9 @@ from .._state import mcp, pool
     ),
 )
 async def browser_launch(
-    kind: str = "chromium",
-    url: str | None = None,
-    headed: bool = True,
-    label: str | None = None,
-    viewport_w: int | None = None,
-    viewport_h: int | None = None,
-    profile: str | None = None,
-    stabilize: bool = False,
-    record_video: bool = False,
-    trace: bool = False,
-    badge: bool = True,
-    badge_position: str = "bottom-right",
-    tile: bool = False,
-    ephemeral: bool = False,
-    session: bool = False,
+    **options: Unpack[LaunchOptions],
 ) -> dict[str, Any]:
-    return await pool.launch(
-        kind=kind,
-        url=url,
-        headed=headed,
-        label=label,
-        viewport_w=viewport_w,
-        viewport_h=viewport_h,
-        profile=profile,
-        stabilize=stabilize,
-        record_video=record_video,
-        trace=trace,
-        badge=badge,
-        badge_position=badge_position,
-        tile=tile,
-        ephemeral=ephemeral,
-        session=session,
-    )
+    return await pool.launch(**options)
 
 
 @mcp.tool(
@@ -108,6 +80,56 @@ async def browser_launch(
 )
 def browser_suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]:
     return resolve_mod.suggest_for_url(url, kind=kind)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "ONE-SHOT LAUNCH: Resolves the best persona for a URL and launches it in one call. "
+        "Use this for most 'open <url>' tasks to save turns. "
+        "Logic: "
+        "1. If profile is given, launches directly. "
+        "2. If not, calls suggest_for_url internally. "
+        "3. If suggest finds a clear high-score persona, uses it. "
+        "4. If suggest finds multiple ambiguous options, RETURNS the list and "
+        "requires you to pick one via browser_launch. "
+        "5. If suggest says ephemeral_ok, launches with no profile. "
+        "Returns {instance_id, url, profile_used} on success, or {ambiguous: true, matches: [...]} "
+        "if you need to ask the user."
+    ),
+)
+async def browser_quick_launch(
+    url: str,
+    **options: Unpack[LaunchOptions],
+) -> dict[str, Any]:
+    profile = options.get("profile")
+    kind = options.get("kind", "chromium")
+
+    if profile:
+        res = await pool.launch(url=url, **options)
+        return {**res, "profile_used": profile}
+
+    # Internal suggest
+    suggest = resolve_mod.suggest_for_url(url, kind=kind)
+    if suggest.get("ambiguous"):
+        return {"ambiguous": True, "matches": suggest["matches"], "url": url}
+
+    # Use recommendation if available
+    profile_to_use = None
+    if suggest.get("recommendation"):
+        profile_to_use = suggest["recommendation"]["persona"]
+    elif not suggest.get("ephemeral_ok") and suggest["matches"]:
+        # Pick the top match if it's high enough score
+        top = suggest["matches"][0]
+        if top["score"] >= 80:
+            profile_to_use = top["persona"]
+
+    res = await pool.launch(
+        url=url,
+        profile=profile_to_use,
+        **options,
+    )
+    return {**res, "profile_used": profile_to_use}
 
 
 @mcp.tool(

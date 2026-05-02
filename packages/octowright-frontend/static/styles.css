@@ -890,6 +890,58 @@ code, .mono { font-family: var(--mono); }
   overflow: auto;
 }
 
+.session-cache-summary {
+  padding: 10px 12px;
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.session-cache-details {
+  border: 1px solid transparent;
+  font-size: 12px;
+}
+
+.session-cache-details__body,
+.session-markdown-details {
+  font-size: 12px;
+}
+
+.session-cache-row {
+  margin: 0 0 6px;
+}
+
+.session-cache-row--missing {
+  color: var(--err);
+}
+
+.session-cache-components p:last-child {
+  margin-bottom: 0;
+}
+
+.session-cache-recommendations {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.session-cache-recommendations ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.session-cache-recommendations li {
+  margin-bottom: 4px;
+}
+
+.session-markdown-details {
+  margin: 0;
+  border: 1px solid transparent;
+}
+
+.session-markdown-details .session-panel__empty {
+  margin-top: 8px;
+}
+
 /* Console panel */
 
 .console-panel__toolbar {

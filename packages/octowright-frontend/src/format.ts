@@ -44,9 +44,17 @@ export function colorForAction(action: string): ActionColorKind {
   return "default";
 }
 
-const HEADLINE_KEYS = ["selector", "url", "text", "value", "key", "name", "filename", "message"];
+const HEADLINE_KEYS = ["selector", "url", "text", "value", "key", "name", "filename", "message", "payload_preview"];
+
+function isLikelyBinaryPreview(value: unknown): boolean {
+  return typeof value === "string" && ((value.startsWith("b\"") && value.endsWith("\"")) || (value.startsWith("b'") && value.endsWith("'")));
+}
 
 export function eventHeadline(event: Record<string, unknown>, max = 60): string {
+  if (typeof event.action === "string" && event.action.startsWith("websocket_") && isLikelyBinaryPreview(event.payload_preview)) {
+    return "[binary payload hidden]";
+  }
+
   for (const key of HEADLINE_KEYS) {
     const v = event[key];
     if (typeof v === "string" && v.length > 0) {

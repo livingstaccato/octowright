@@ -9,7 +9,7 @@ import asyncio
 import json
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Unpack
 
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
@@ -26,17 +26,9 @@ from .profiles import profile_dir
 from .recorder import Recorder, new_log_path
 from .session import BrowserSession
 from .stabilize import render_stabilize_script
+from .types import LaunchOptions
 
 log = get_logger(__name__)
-
-# Auto-migrate legacy profile layout on first module import. Idempotent.
-try:
-    from . import personas as _personas
-
-    _personas.migrate_legacy_layout()
-except Exception as _e:
-    log.warning("pool.migration_on_import_failed", error=repr(_e))
-
 
 _TITLE_TAG_SCRIPT = r"""
 (() => {
@@ -303,6 +295,8 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
     page.on("download", session._handle_download)
     page.on("response", session._handle_response)
     page.on("requestfailed", session._handle_request_failed)
+    page.on("websocket", session._handle_websocket)
+    page.on("load", lambda: session._schedule_markdown_capture(page=page, force=True))
     # If the close evictor has already attached its per-page handler, wire it
     # on this page too. For the initial launch page this is a no-op (the
     # attribute hasn't been set yet); _wire_close_evictor will install the
@@ -426,6 +420,10 @@ def _wire_user_navigation_logger(session: BrowserSession) -> None:
                 except ValueError:
                     page_index = None
                 session.recorder.record("user_navigation", url=url, page_index=page_index)
+                # Capture a markdown snapshot for the new destination so cache
+                # stays aligned with navigation history (for the currently
+                # new destination.
+                session._schedule_markdown_capture(page=target_page)
             except Exception as e:  # pragma: no cover - defensive
                 log.debug("octowright.framenavigated.swallowed", error=repr(e))
 
@@ -463,23 +461,24 @@ class BrowserPool:
 
     async def launch(
         self,
-        *,
-        kind: str,
-        url: str | None,
-        headed: bool,
-        label: str | None,
-        viewport_w: int | None,
-        viewport_h: int | None,
-        profile: str | None = None,
-        stabilize: bool = False,
-        record_video: bool = False,
-        trace: bool = False,
-        badge: bool = True,
-        badge_position: str = _BADGE_POSITION_DEFAULT,
-        tile: bool = False,
-        ephemeral: bool = False,
-        session: bool = False,
+        **options: Unpack[LaunchOptions],
     ) -> dict[str, Any]:
+        kind = options.get("kind", "chromium")
+        url = options.get("url")
+        headed = options.get("headed")
+        label = options.get("label")
+        viewport_w = options.get("viewport_w")
+        viewport_h = options.get("viewport_h")
+        profile = options.get("profile")
+        stabilize = options.get("stabilize", False)
+        record_video = options.get("record_video", False)
+        trace = options.get("trace", False)
+        badge = options.get("badge", True)
+        badge_position = options.get("badge_position", _BADGE_POSITION_DEFAULT)
+        tile = options.get("tile", False)
+        ephemeral = options.get("ephemeral", False)
+        session = options.get("session", False)
+
         if kind not in SUPPORTED_KINDS:
             raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {kind!r}")
         if badge_position not in _BADGE_POSITIONS:
@@ -664,6 +663,7 @@ class BrowserPool:
             await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
         await page.goto(target_url)
+        new_session._schedule_markdown_capture()
 
         self._sessions[instance_id] = new_session
         log.info(

@@ -24,6 +24,8 @@ Playwright event surface. Verifying that real chromium fires
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -129,6 +131,10 @@ def _framenav_handlers(page: Any) -> list[Any]:
     return page.handlers.get("framenavigated", [])
 
 
+def _load_handlers(page: Any) -> list[Any]:
+    return page.handlers.get("load", [])
+
+
 def _read_recorder(session: Any) -> list[dict[str, Any]]:
     """Read the JSONL recorder log and return the parsed entries."""
     import json
@@ -137,6 +143,53 @@ def _read_recorder(session: Any) -> list[dict[str, Any]]:
     # flushes after every line, so just read.
     text = session.log_path.read_text(encoding="utf-8")
     return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+@pytest.mark.anyio
+async def test_load_event_schedules_markdown_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A page 'load' event should schedule markdown capture for that page."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+    result = await pool.launch(
+        kind="chromium",
+        url="https://example.com",
+        headed=False,
+        label="load",
+        ephemeral=True,
+        viewport_w=None,
+        viewport_h=None,
+    )
+    session = pool._sessions[result["instance_id"]]
+    page = session.pages[0]
+
+    # The launch path schedules an initial capture; wait for it to settle so the
+    # popup page's explicit load handler can run in isolation.
+    for _ in range(10):
+        pending = getattr(session, "_pending_markdown_capture", None)
+        if pending is None or pending.done():
+            break
+        await asyncio.sleep(0)
+
+    session.capture_markdown = AsyncMock(return_value=Path("/tmp/fake.md"))
+    if (
+        getattr(session, "_pending_markdown_capture", None) is not None
+        and not getattr(session, "_pending_markdown_capture", None).done()
+    ):
+        await asyncio.sleep(0)
+    handlers = _load_handlers(page)
+    assert handlers, "expected page.on('load') handler installed by _wire_listeners"
+
+    for cb in handlers:
+        cb()
+    await asyncio.sleep(0)
+
+    assert session.capture_markdown.await_count >= 1
+    load_calls = [call for call in session.capture_markdown.await_args_list if call.kwargs.get("page") is page]
+    assert (
+        load_calls
+    ), f"expected load handler capture call with page={page!r}; got {session.capture_markdown.await_args_list!r}"
+    called_kwargs = load_calls[-1].kwargs
+    assert called_kwargs.get("force") is True
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +208,7 @@ async def test_main_frame_navigation_is_recorded(monkeypatch: pytest.MonkeyPatch
         url="https://example.com",
         headed=False,
         label="nav",
+        ephemeral=True,
         viewport_w=None,
         viewport_h=None,
     )
@@ -186,6 +240,7 @@ async def test_subframe_navigation_ignored(monkeypatch: pytest.MonkeyPatch) -> N
         url="https://example.com",
         headed=False,
         label="iframe",
+        ephemeral=True,
         viewport_w=None,
         viewport_h=None,
     )
@@ -212,6 +267,7 @@ async def test_about_blank_navigation_ignored(monkeypatch: pytest.MonkeyPatch) -
         url="https://example.com",
         headed=False,
         label="blank",
+        ephemeral=True,
         viewport_w=None,
         viewport_h=None,
     )
@@ -239,6 +295,7 @@ async def test_dedup_against_mcp_navigate(monkeypatch: pytest.MonkeyPatch) -> No
         url="https://example.com",
         headed=False,
         label="dedup",
+        ephemeral=True,
         viewport_w=None,
         viewport_h=None,
     )
@@ -268,6 +325,7 @@ async def test_user_nav_after_mcp_nav_to_different_url_records(monkeypatch: pyte
         url="https://example.com",
         headed=False,
         label="diverge",
+        ephemeral=True,
         viewport_w=None,
         viewport_h=None,
     )
@@ -297,6 +355,7 @@ async def test_session_navigate_sets_dedup_marker(monkeypatch: pytest.MonkeyPatc
         url="https://example.com",
         headed=False,
         label="marker",
+        ephemeral=True,
         viewport_w=None,
         viewport_h=None,
     )
@@ -318,6 +377,7 @@ async def test_popup_page_also_gets_framenavigated_handler(monkeypatch: pytest.M
         url="https://example.com",
         headed=False,
         label="popup",
+        ephemeral=True,
         viewport_w=None,
         viewport_h=None,
     )
@@ -338,3 +398,26 @@ async def test_popup_page_also_gets_framenavigated_handler(monkeypatch: pytest.M
     assert len(nav_entries) == 1
     assert nav_entries[0]["url"] == "https://popup.example.com/landing"
     assert nav_entries[0]["page_index"] == 1
+
+
+@pytest.mark.anyio
+async def test_popup_page_also_gets_load_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Load listeners used for markdown capture must also be attached to popup pages."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+    result = await pool.launch(
+        kind="chromium",
+        url="https://example.com",
+        headed=False,
+        label="popup",
+        ephemeral=True,
+        viewport_w=None,
+        viewport_h=None,
+    )
+    session = pool._sessions[result["instance_id"]]
+
+    popup = _FakePage()
+    session._register_popup(popup)
+
+    handlers = _load_handlers(popup)
+    assert handlers, "popup page must get load handler too"
