@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 from provide.telemetry import get_logger
 
-from .defaults import SCENARIOS_DIR, SUPPORTED_KINDS
+from .defaults import SCENARIO_TEMPLATES_DIR, SCENARIOS_DIR, SUPPORTED_KINDS
 
 log = get_logger(__name__)
 
@@ -53,8 +53,8 @@ def _validate_scenario(s: Scenario) -> None:
         seen.add(key)
 
 
-def load_yaml_scenario(path: Path) -> Scenario:
-    raw = yaml.safe_load(path.read_text())
+def load_yaml_scenario(content: str, name: str) -> Scenario:
+    raw = yaml.safe_load(content)
     if not isinstance(raw, dict):
         raw = {}
     participants = [
@@ -74,7 +74,7 @@ def load_yaml_scenario(path: Path) -> Scenario:
     ]
     teardown_raw = raw.get("teardown") or {}
     scenario = Scenario(
-        name=raw.get("name", path.stem),
+        name=raw.get("name", name),
         participants=participants,
         description=raw.get("description"),
         fixtures=dict(raw.get("fixtures") or {}),
@@ -115,11 +115,22 @@ def load_scenario(name: str) -> Scenario:
             log.warning("scenarios.both_forms_present_py_wins", name=name)
         return load_python_scenario(py_path)
     if yaml_path.exists():
-        return load_yaml_scenario(yaml_path)
+        return load_yaml_scenario(yaml_path.read_text(), name)
     raise FileNotFoundError(
         f"no scenario named {name!r} in {SCENARIOS_DIR}; list available with `scenario_list` "
         f"or drop a {name}.yaml file in that directory"
     )
+
+
+def load_scenario_template(name: str, args: dict[str, Any]) -> Scenario:
+    path = SCENARIO_TEMPLATES_DIR / f"{name}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"no scenario template named {name!r} in {SCENARIO_TEMPLATES_DIR}")
+    content = path.read_text()
+    # Simple jinja-style substitution if args are provided.
+    for k, v in args.items():
+        content = content.replace(f"{{{{{k}}}}}", str(v))
+    return load_yaml_scenario(content, name)
 
 
 def list_scenarios() -> list[dict[str, Any]]:
@@ -222,10 +233,21 @@ class ScenarioPool:
             for ls in self._live.values()
         ]
 
-    async def start(self, *, name: str, browser_pool: Any) -> LiveScenario:
-        spec = load_scenario(name)
+    async def start(
+        self,
+        *,
+        name: str | None = None,
+        browser_pool: Any,
+        spec: Scenario | None = None,
+    ) -> LiveScenario:
+        if spec is None:
+            if name is None:
+                raise ValueError("either 'name' or 'spec' must be provided to start a scenario")
+            spec = load_scenario(name)
+
+        effective_name = name or spec.name
         if not spec.participants:
-            raise RuntimeError(f"scenario {name!r} has no participants")
+            raise RuntimeError(f"scenario {effective_name!r} has no participants")
         scenario_id = _uuid.uuid4().hex[:12]
         # Build launch kwargs from participant resolution.
         launch_specs = [resolve_launch_kwargs(p) for p in spec.participants]
@@ -238,7 +260,7 @@ class ScenarioPool:
                 except Exception:
                     pass
             raise RuntimeError(
-                f"scenario {name!r}: {len(result['errors'])} participant(s) failed to launch: {result['errors']}"
+                f"scenario {effective_name!r}: {len(result['errors'])} participant(s) failed to launch: {result['errors']}"
             )
 
         participants: list[dict[str, Any]] = []
@@ -254,7 +276,7 @@ class ScenarioPool:
 
         live = LiveScenario(
             scenario_id=scenario_id,
-            name=name,
+            name=effective_name,
             spec=spec,
             participants=participants,
         )
@@ -268,7 +290,7 @@ class ScenarioPool:
         log.info(
             "octowright.scenario.started",
             scenario_id=scenario_id,
-            name=name,
+            name=effective_name,
             participants=[p["persona"] for p in participants],
         )
         return live
@@ -416,6 +438,59 @@ class ScenarioPool:
             "scenario_id": scenario_id,
             "macro": macro,
             "role": role,
+            "targeted": len(targets),
+            "results": list(results),
+        }
+
+    async def wait_for_sync(
+        self,
+        *,
+        scenario_id: str,
+        browser_pool: Any,
+        role: str | None = None,
+        selector: str | None = None,
+        text: str | None = None,
+        url: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Block until all participants matching `role` satisfy the condition.
+
+        Condition options:
+        - selector: all targets must see this selector.
+        - text: all targets must see this text.
+        - url: all targets must be at this URL (regex).
+
+        If multiple are given, they are checked in priority: selector > text > url.
+        If none are given, it waits for 'networkidle' on all targets.
+        """
+        import asyncio as _asyncio
+
+        live = self.get(scenario_id)
+        targets = [p for p in live.participants if role is None or p["role"] == role]
+
+        async def _wait(p: dict[str, Any]) -> dict[str, Any]:
+            session = browser_pool.get(p["instance_id"])
+            try:
+                if selector or text:
+                    await session.wait_for(selector=selector, text=text, timeout_ms=timeout_ms)
+                elif url:
+                    import re as _re
+
+                    if not _re.search(url, session.page.url):
+                        await session.page.wait_for_url(url, timeout=timeout_ms or 30000)
+                else:
+                    await session.wait_for(selector=None, text=None, timeout_ms=timeout_ms)
+                return {"instance_id": p["instance_id"], "ok": True}
+            except Exception as e:
+                return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
+
+        results = await _asyncio.gather(*(_wait(p) for p in targets))
+        return {
+            "scenario_id": scenario_id,
+            "role": role,
+            "selector": selector,
+            "text": text,
+            "url": url,
             "targeted": len(targets),
             "results": list(results),
         }

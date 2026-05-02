@@ -77,6 +77,23 @@ async def scenario_start(name: str) -> dict[str, Any]:
 @mcp.tool(
     structured_output=False,
     description=(
+        "Start a scenario from a template. Templates support simple {{key}} substitution "
+        "using the provided `args`. Returns the participant table."
+    ),
+)
+async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+    spec = scenario_mod.load_scenario_template(name, args or {})
+    live = await scenario_pool.start(spec=spec, browser_pool=pool)
+    return {
+        "scenario_id": live.scenario_id,
+        "name": live.name,
+        "participants": live.participants,
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "List live scenarios and their participants. Returns {summary, count, scenarios}: "
         "`summary` is a one-line gist (e.g. 'scenario \\'mini\\' (2 participants): "
         "player[dante]/webkit · monitor[ops]/firefox'); `scenarios` is the structured data."
@@ -121,6 +138,33 @@ async def scenario_run_macro(
         browser_pool=pool,
         role=role,
         args=args,
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Block until all participants (optionally filtered by role) satisfy a condition. "
+        "Condition options: `selector` (all must see selector), `text` (all must see text), "
+        "or `url` (all must be at this URL regex). If none supplied, waits for 'networkidle'."
+    ),
+)
+async def scenario_wait_for_sync(
+    scenario_id: str,
+    role: str | None = None,
+    selector: str | None = None,
+    text: str | None = None,
+    url: str | None = None,
+    timeout_ms: int | None = None,
+) -> dict[str, Any]:
+    return await scenario_pool.wait_for_sync(
+        scenario_id=scenario_id,
+        browser_pool=pool,
+        role=role,
+        selector=selector,
+        text=text,
+        url=url,
+        timeout_ms=timeout_ms,
     )
 
 
