@@ -24,3 +24,35 @@ def test_summarize_type():
 def test_summarize_fill():
     action = {"action": "fill", "selector": "input#password", "value": "hunter2"}
     assert summarize_action(action) == "Fill 'input#password' with 'hunter2'"
+
+
+def test_summarize_wait_for():
+    action = {"action": "wait_for", "selector": ".ready"}
+    assert summarize_action(action) == "Wait for '.ready' to appear"
+
+
+def test_summarize_if_selector():
+    action = {"action": "if_selector", "selector": ".modal", "then": [{"action": "click", "selector": ".close"}]}
+    summary = summarize_action(action)
+    assert "If '.modal' is present:" in summary
+    assert "  - Click '.close'" in summary
+
+
+def test_summarize_try():
+    action = {"action": "try", "actions": [{"action": "click", "selector": "#cookie-banner"}]}
+    summary = summarize_action(action)
+    assert "Try (ignore errors):" in summary
+    assert "  - Click '#cookie-banner'" in summary
+
+
+def test_summarize_try_each():
+    action = {
+        "action": "try_each",
+        "branches": [[{"action": "click", "selector": ".v1"}], [{"action": "click", "selector": ".v2"}]],
+    }
+    summary = summarize_action(action)
+    assert "Try each branch until success:" in summary
+    assert "  Branch 1:" in summary
+    assert "    - Click '.v1'" in summary
+    assert "  Branch 2:" in summary
+    assert "    - Click '.v2'" in summary
