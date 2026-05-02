@@ -12,6 +12,14 @@ For the full picture of how the pieces fit together — pool, sessions, personas
 scenarios, macros, the live-event tail and the test runner — see
 [docs/architecture/](docs/architecture/) (PlantUML sources rendered to SVG).
 
+## Docs Map
+
+- [README.md](README.md): user workflows, setup, CLI usage, and operating guidance.
+- [MCP-SHARED-CONTRACT.md](MCP-SHARED-CONTRACT.md): API/wire contract between Python server and frontend.
+- [docs/architecture/](docs/architecture/): system diagrams and architecture references.
+- [CHANGELOG.md](CHANGELOG.md): release summaries.
+- [docs/archive/](docs/archive/): historical plans, specs, and design notes (non-canonical for current behavior).
+
 ## Install
 
 ```bash
