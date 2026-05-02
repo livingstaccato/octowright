@@ -5,63 +5,16 @@
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
-from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Helpers — reload macros module with patched env (same pattern as test_macros)
-# ---------------------------------------------------------------------------
-
-
-def _import_macros(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
-    monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
-    import octowright.macros as _m
-
-    importlib.reload(_m)
-    return _m
-
+from octowright.session.core import BrowserSession
 
 # ---------------------------------------------------------------------------
-# Fake Page — in-process stub; no real browser launched.
+# Fake Element — stub for Playwright ElementHandle.
 # ---------------------------------------------------------------------------
-
-
-class FakePage:
-    """Minimal stub satisfying the async interface expected by the helpers."""
-
-    def __init__(
-        self,
-        url: str = "https://example.com/path",
-        evaluate_result: Any = True,
-        inner_text_value: str = "hello world",
-        query_selector_result: Any = None,
-        wait_for_selector_result: Any = None,
-        wait_for_selector_raises: Exception | None = None,
-    ) -> None:
-        self.url = url
-        self._evaluate_result = evaluate_result
-        self._inner_text_value = inner_text_value
-        self._query_selector_result = query_selector_result
-        self._wait_for_selector_result = wait_for_selector_result
-        self._wait_for_selector_raises = wait_for_selector_raises
-
-    async def evaluate(self, expression: str) -> Any:
-        return self._evaluate_result
-
-    async def wait_for_selector(self, selector: str, timeout: int = 5000) -> Any:
-        if self._wait_for_selector_raises is not None:
-            raise self._wait_for_selector_raises
-        return self._wait_for_selector_result
-
-    async def query_selector(self, selector: str) -> Any:
-        return self._query_selector_result
-
-    async def inner_text(self) -> str:
-        return self._inner_text_value
 
 
 class FakeElement:
@@ -74,214 +27,211 @@ class FakeElement:
         return self._text
 
 
+@pytest.fixture
+def mock_session(tmp_path: Path) -> BrowserSession:
+    # Build a BrowserSession around an AsyncMock page
+    page = AsyncMock()
+    # default behavior for tests that don't override
+    page.url = "https://example.com/path"
+
+    session = BrowserSession(
+        instance_id="test",
+        kind="chromium",
+        label="test-label",
+        url="https://example.com",
+        page=page,
+        context=MagicMock(),
+        browser=MagicMock(),
+        log_path=tmp_path / "test.jsonl",
+        recorder=MagicMock(),
+    )
+    return session
+
+
 # ---------------------------------------------------------------------------
-# _check_url tests
+# expect_url tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_check_url_regex_match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(url="https://example.com/dashboard")
-    actual = await m._check_url(page, r"example\.com/dash", "regex")
+async def test_check_url_regex_match(mock_session: BrowserSession) -> None:
+    mock_session.page.url = "https://example.com/dashboard"
+    actual = await mock_session.expect_url(r"example\.com/dash", "regex")
     assert actual == "https://example.com/dashboard"
 
 
 @pytest.mark.anyio
-async def test_check_url_regex_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(url="https://example.com/other")
+async def test_check_url_regex_mismatch(mock_session: BrowserSession) -> None:
+    mock_session.page.url = "https://example.com/other"
     with pytest.raises(RuntimeError, match="regex"):
-        await m._check_url(page, r"example\.com/dash", "regex")
+        await mock_session.expect_url(r"example\.com/dash", "regex")
 
 
 @pytest.mark.anyio
-async def test_check_url_equals_match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(url="https://example.com/exact")
-    actual = await m._check_url(page, "https://example.com/exact", "equals")
+async def test_check_url_equals_match(mock_session: BrowserSession) -> None:
+    mock_session.page.url = "https://example.com/exact"
+    actual = await mock_session.expect_url("https://example.com/exact", "equals")
     assert actual == "https://example.com/exact"
 
 
 @pytest.mark.anyio
-async def test_check_url_equals_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(url="https://example.com/other")
+async def test_check_url_equals_mismatch(mock_session: BrowserSession) -> None:
+    mock_session.page.url = "https://example.com/other"
     with pytest.raises(RuntimeError, match="equals"):
-        await m._check_url(page, "https://example.com/exact", "equals")
+        await mock_session.expect_url("https://example.com/exact", "equals")
 
 
 @pytest.mark.anyio
-async def test_check_url_contains_match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(url="https://example.com/path?q=1")
-    actual = await m._check_url(page, "/path", "contains")
+async def test_check_url_contains_match(mock_session: BrowserSession) -> None:
+    mock_session.page.url = "https://example.com/path?q=1"
+    actual = await mock_session.expect_url("/path", "contains")
     assert "/path" in actual
 
 
 @pytest.mark.anyio
-async def test_check_url_contains_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(url="https://example.com/other")
+async def test_check_url_contains_mismatch(mock_session: BrowserSession) -> None:
+    mock_session.page.url = "https://example.com/other"
     with pytest.raises(RuntimeError, match="contains"):
-        await m._check_url(page, "/dashboard", "contains")
+        await mock_session.expect_url("/dashboard", "contains")
 
 
 @pytest.mark.anyio
-async def test_check_url_bad_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage()
+async def test_check_url_bad_mode(mock_session: BrowserSession) -> None:
     with pytest.raises(ValueError, match="unknown mode"):
-        await m._check_url(page, "x", "bogus")
+        await mock_session.expect_url("x", "bogus")
 
 
 # ---------------------------------------------------------------------------
-# _check_text tests
+# expect_text tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_check_text_contains_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_text_contains_pass(mock_session: BrowserSession) -> None:
     element = FakeElement("hello world")
-    page = FakePage(wait_for_selector_result=element)
-    actual = await m._check_text(page, "#x", "hello")
+    mock_session.page.wait_for_selector.return_value = element
+    actual = await mock_session.expect_text("#x", "hello")
     assert "hello" in actual
 
 
 @pytest.mark.anyio
-async def test_check_text_contains_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_text_contains_fail(mock_session: BrowserSession) -> None:
     element = FakeElement("goodbye")
-    page = FakePage(wait_for_selector_result=element)
+    mock_session.page.wait_for_selector.return_value = element
     with pytest.raises(RuntimeError, match="#x"):
-        await m._check_text(page, "#x", "hello")
+        await mock_session.expect_text("#x", "hello")
 
 
 @pytest.mark.anyio
-async def test_check_text_equals_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_text_equals_pass(mock_session: BrowserSession) -> None:
     element = FakeElement("exact text")
-    page = FakePage(wait_for_selector_result=element)
-    actual = await m._check_text(page, "#x", "exact text", mode="equals")
+    mock_session.page.wait_for_selector.return_value = element
+    actual = await mock_session.expect_text("#x", "exact text", mode="equals")
     assert actual == "exact text"
 
 
 @pytest.mark.anyio
-async def test_check_text_equals_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_text_equals_fail(mock_session: BrowserSession) -> None:
     element = FakeElement("other text")
-    page = FakePage(wait_for_selector_result=element)
+    mock_session.page.wait_for_selector.return_value = element
     with pytest.raises(RuntimeError, match="equals"):
-        await m._check_text(page, "#x", "exact text", mode="equals")
+        await mock_session.expect_text("#x", "exact text", mode="equals")
 
 
 @pytest.mark.anyio
-async def test_check_text_regex_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_text_regex_pass(mock_session: BrowserSession) -> None:
     element = FakeElement("Error code 42")
-    page = FakePage(wait_for_selector_result=element)
-    actual = await m._check_text(page, "#x", r"code \d+", mode="regex")
+    mock_session.page.wait_for_selector.return_value = element
+    actual = await mock_session.expect_text("#x", r"code \d+", mode="regex")
     assert "42" in actual
 
 
 @pytest.mark.anyio
-async def test_check_text_regex_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_text_regex_fail(mock_session: BrowserSession) -> None:
     element = FakeElement("no digits here")
-    page = FakePage(wait_for_selector_result=element)
+    mock_session.page.wait_for_selector.return_value = element
     with pytest.raises(RuntimeError, match="regex"):
-        await m._check_text(page, "#x", r"code \d+", mode="regex")
+        await mock_session.expect_text("#x", r"code \d+", mode="regex")
 
 
 @pytest.mark.anyio
-async def test_check_text_timeout_raises_runtime_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(wait_for_selector_raises=Exception("Timeout 500ms exceeded"))
+async def test_check_text_timeout_raises_runtime_error(mock_session: BrowserSession) -> None:
+    mock_session.page.wait_for_selector.side_effect = Exception("Timeout 500ms exceeded")
     with pytest.raises(RuntimeError, match="never appeared"):
-        await m._check_text(page, "#missing", "hi", timeout_ms=500)
+        await mock_session.expect_text("#missing", "hi", timeout_ms=500)
 
 
 # ---------------------------------------------------------------------------
-# _check_selector tests
+# expect_selector tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_check_selector_present_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_selector_present_pass(mock_session: BrowserSession) -> None:
     element = FakeElement("content")
-    page = FakePage(wait_for_selector_result=element)
+    mock_session.page.wait_for_selector.return_value = element
     # Should not raise
-    await m._check_selector(page, "#exists", present=True)
+    await mock_session.expect_selector("#exists", present=True)
 
 
 @pytest.mark.anyio
-async def test_check_selector_present_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(wait_for_selector_raises=Exception("Timeout"))
+async def test_check_selector_present_fail(mock_session: BrowserSession) -> None:
+    mock_session.page.wait_for_selector.side_effect = Exception("Timeout")
     with pytest.raises(RuntimeError, match="never appeared"):
-        await m._check_selector(page, "#missing", present=True, timeout_ms=100)
+        await mock_session.expect_selector("#missing", present=True, timeout_ms=100)
 
 
 @pytest.mark.anyio
-async def test_check_selector_absent_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_selector_absent_pass(mock_session: BrowserSession) -> None:
     # query_selector returns None → element absent → assertion passes
-    page = FakePage(query_selector_result=None)
-    await m._check_selector(page, "#gone", present=False)
+    mock_session.page.query_selector.return_value = None
+    await mock_session.expect_selector("#gone", present=False)
 
 
 @pytest.mark.anyio
-async def test_check_selector_absent_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
+async def test_check_selector_absent_fail(mock_session: BrowserSession) -> None:
     # query_selector returns a non-None object → element still there
-    page = FakePage(query_selector_result=FakeElement("oops"))
+    mock_session.page.query_selector.return_value = FakeElement("oops")
     with pytest.raises(RuntimeError, match="absent"):
-        await m._check_selector(page, "#still-here", present=False)
+        await mock_session.expect_selector("#still-here", present=False)
 
 
 # ---------------------------------------------------------------------------
-# _check_js tests
+# expect_js tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_check_js_truthy_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(evaluate_result=True)
-    result = await m._check_js(page, "1 === 1")
+async def test_check_js_truthy_pass(mock_session: BrowserSession) -> None:
+    mock_session.page.evaluate.return_value = True
+    result = await mock_session.expect_js("1 === 1")
     assert result is True
 
 
 @pytest.mark.anyio
-async def test_check_js_truthy_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(evaluate_result=False)
+async def test_check_js_truthy_fail(mock_session: BrowserSession) -> None:
+    mock_session.page.evaluate.return_value = False
     with pytest.raises(RuntimeError, match="not truthy"):
-        await m._check_js(page, "false")
+        await mock_session.expect_js("false")
 
 
 @pytest.mark.anyio
-async def test_check_js_equals_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(evaluate_result=42)
-    result = await m._check_js(page, "40 + 2", equals=42)
+async def test_check_js_equals_pass(mock_session: BrowserSession) -> None:
+    mock_session.page.evaluate.return_value = 42
+    result = await mock_session.expect_js("40 + 2", equals=42)
     assert result == 42
 
 
 @pytest.mark.anyio
-async def test_check_js_equals_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(evaluate_result=99)
+async def test_check_js_equals_fail(mock_session: BrowserSession) -> None:
+    mock_session.page.evaluate.return_value = 99
     with pytest.raises(RuntimeError, match="expected=42"):
-        await m._check_js(page, "something", equals=42)
+        await mock_session.expect_js("something", equals=42)
 
 
 @pytest.mark.anyio
-async def test_check_js_falsy_none_equals_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_check_js_falsy_none_equals_raises(mock_session: BrowserSession) -> None:
     """evaluate returns 0 (falsy, no equals) → RuntimeError."""
-    m = _import_macros(monkeypatch, tmp_path)
-    page = FakePage(evaluate_result=0)
+    mock_session.page.evaluate.return_value = 0
     with pytest.raises(RuntimeError, match="not truthy"):
-        await m._check_js(page, "0")
+        await mock_session.expect_js("0")

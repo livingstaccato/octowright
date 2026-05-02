@@ -126,11 +126,3 @@ def persona_delete(name: str) -> dict[str, Any]:
 def persona_credentials_check(name: str) -> dict[str, Any]:
     persona = persona_mod.load_persona(name)
     return persona_mod.check_credentials(persona)
-
-
-@mcp.tool(
-    structured_output=False,
-    description=("Run the one-shot legacy profile-layout migration. Idempotent. Returns counts."),
-)
-def migrate_profiles() -> dict[str, Any]:
-    return persona_mod.migrate_legacy_layout()

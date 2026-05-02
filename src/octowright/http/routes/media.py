@@ -20,6 +20,7 @@ from ..discovery import (
     _find_recording_for,
     _live_session_or_none,
     _resolve_log_path,
+    _resolve_markdown_path,
     _resolve_trace_path,
     _resolve_video_path,
 )
@@ -235,6 +236,34 @@ async def session_screenshot_file(request: Request) -> Response:
     return FileResponse(path=str(target), media_type="image/png", filename=filename)
 
 
+async def session_markdown(request: Request) -> Response:
+    sid = request.path_params["id"]
+    live = _live_session_or_none(sid)
+
+    if live is not None:
+        markdown_path = _resolve_markdown_path(sid)
+        if markdown_path is None:
+            # Opportunistically create the cache for live sessions if it hasn't
+            # been generated yet (for first request after launch).
+            try:
+                await live.capture_markdown()
+            except Exception as exc:
+                return JSONResponse(
+                    {"error": f"could not generate markdown: {exc!r}"},
+                    status_code=500,
+                )
+            markdown_path = _resolve_markdown_path(sid)
+    else:
+        markdown_path = _resolve_markdown_path(sid)
+
+    if markdown_path is None or not markdown_path.exists():
+        return JSONResponse(
+            {"error": "no markdown cache available for this session"},
+            status_code=404,
+        )
+    return Response(content=markdown_path.read_text(encoding="utf-8"), media_type="text/markdown")
+
+
 async def trace_open(request: Request) -> JSONResponse:
     """POST /api/sessions/{id}/trace/open — same payload as ``browser_open_trace``."""
     sid = request.path_params["id"]
@@ -264,6 +293,7 @@ def routes() -> list[Route]:
         Route("/api/sessions/{id}/frame", session_frame, methods=["GET"]),
         Route("/api/sessions/{id}/video", session_video, methods=["GET"]),
         Route("/api/sessions/{id}/trace", session_trace, methods=["GET"]),
+        Route("/api/sessions/{id}/markdown", session_markdown, methods=["GET"]),
         Route("/api/sessions/{id}/trace/open", trace_open, methods=["POST"]),
         Route("/api/sessions/{id}/screenshot/now", session_screenshot_now, methods=["GET"]),
         Route("/api/sessions/{id}/screenshots", session_screenshots, methods=["GET"]),

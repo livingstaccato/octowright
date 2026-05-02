@@ -83,6 +83,95 @@ def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
     }
 
 
+def _human_bytes(size_bytes: int) -> str:
+    """Compact human-readable byte size."""
+    if size_bytes < 0:
+        size_bytes = 0
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(size_bytes)
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+
+
+def _path_size(path: Path | None) -> int:
+    if path is None:
+        return 0
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _build_component(path: Path | None) -> dict[str, Any]:
+    exists = bool(path is not None and path.exists())
+    size_bytes = _path_size(path) if exists else 0
+    return {
+        "size_bytes": size_bytes,
+        "size_human": _human_bytes(size_bytes),
+        "path": str(path) if path else None,
+        "exists": exists,
+    }
+
+
+def _find_screenshot_entries(recording_dir: Path, session_id: str | None) -> tuple[list[str], int]:
+    if session_id is None:
+        return [], 0
+    total = 0
+    entries: list[str] = []
+    for path in sorted(recording_dir.glob(f"*{session_id}*.png")):
+        if not path.is_file():
+            continue
+        entries.append(str(path))
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    return entries, total
+
+
+def _build_cache_components(
+    *,
+    session_id: str | None,
+    jsonl_path: Path,
+    markdown_path: Path | None = None,
+    trace_path: Path | None = None,
+    video_path: Path | None = None,
+    websocket_path: Path | None = None,
+) -> dict[str, Any]:
+    screenshot_paths, screenshot_size = _find_screenshot_entries(jsonl_path.parent, session_id)
+    components: dict[str, Any] = {
+        "jsonl": _build_component(jsonl_path),
+        "markdown": _build_component(markdown_path),
+        "trace": _build_component(trace_path),
+        "video": _build_component(video_path),
+        "websocket": _build_component(websocket_path),
+        "screenshots": {
+            "size_bytes": screenshot_size,
+            "size_human": _human_bytes(screenshot_size),
+            "count": len(screenshot_paths),
+            "paths": screenshot_paths,
+        },
+    }
+    total_bytes = sum(component["size_bytes"] for component in components.values() if isinstance(component, dict))
+    recommendations: list[str] = []
+    if total_bytes > 300 * 1024 * 1024:
+        recommendations.append("Session cache is large. Consider recordings_cleanup to free storage.")
+    if components["websocket"]["size_bytes"] > 50 * 1024 * 1024:
+        recommendations.append("Websocket cache is large. Disable websocket capture when not needed.")
+    if components["video"]["size_bytes"] > 200 * 1024 * 1024:
+        recommendations.append("Video capture dominates cache size. Shorten recording length if possible.")
+    return {
+        "total_bytes": total_bytes,
+        "total_human": _human_bytes(total_bytes),
+        "components": components,
+        "recommendations": recommendations,
+    }
+
+
 def _live_summary(session: Any) -> dict[str, Any]:
     return {
         "id": session.instance_id,
@@ -119,6 +208,8 @@ def _scan_recording_artefacts(jsonl_path: Path) -> dict[str, Any]:
     last_url: str | None = None
     video_path: str | None = None
     trace_path: str | None = None
+    markdown_path: str | None = None
+    websocket_path: str | None = None
 
     try:
         with jsonl_path.open(encoding="utf-8") as fh:
@@ -145,6 +236,10 @@ def _scan_recording_artefacts(jsonl_path: Path) -> dict[str, Any]:
                         video_path = entry["video_path"]
                     if entry.get("trace_path"):
                         trace_path = entry["trace_path"]
+                    if entry.get("markdown_path"):
+                        markdown_path = entry["markdown_path"]
+                    if entry.get("websocket_path"):
+                        websocket_path = entry["websocket_path"]
     except OSError:
         pass
 
@@ -152,13 +247,36 @@ def _scan_recording_artefacts(jsonl_path: Path) -> dict[str, Any]:
     candidate_trace = jsonl_path.with_suffix(".trace.zip")
     if trace_path is None and candidate_trace.exists():
         trace_path = str(candidate_trace)
+
+    candidate_markdown = jsonl_path.with_suffix(".markdown.md")
+    if markdown_path is None and candidate_markdown.exists():
+        markdown_path = str(candidate_markdown)
+    candidate_websocket = jsonl_path.with_suffix(".websocket.jsonl")
+    if websocket_path is None and candidate_websocket.exists():
+        websocket_path = str(candidate_websocket)
     return {
         **counts,
         "title": title,
         "video_path": video_path,
         "trace_path": trace_path,
+        "markdown_path": markdown_path,
+        "websocket_path": websocket_path,
         "url": last_url,
     }
+
+
+def _cache_report_for_recording(jsonl_path: Path) -> dict[str, Any]:
+    """Build a simple cache summary for a recording's artifacts."""
+    instance_id = _instance_id_from_recording_name(jsonl_path.stem)
+    artefacts = _scan_recording_artefacts(jsonl_path)
+    return _build_cache_components(
+        session_id=instance_id,
+        jsonl_path=jsonl_path,
+        markdown_path=Path(artefacts["markdown_path"]) if artefacts["markdown_path"] else None,
+        trace_path=Path(artefacts["trace_path"]) if artefacts["trace_path"] else None,
+        video_path=Path(artefacts["video_path"]) if artefacts["video_path"] else None,
+        websocket_path=Path(artefacts["websocket_path"]) if artefacts["websocket_path"] else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +332,19 @@ def _resolve_trace_path(session_id: str) -> Path | None:
     return None
 
 
+def _resolve_markdown_path(session_id: str) -> Path | None:
+    live = _live_session_or_none(session_id)
+    if live is not None and live.markdown_path is not None:
+        return Path(live.markdown_path)
+    jsonl = _find_recording_for(session_id, state.RECORDINGS_DIR)
+    if jsonl is None:
+        return None
+    artefacts = _scan_recording_artefacts(jsonl)
+    if artefacts["markdown_path"]:
+        return Path(artefacts["markdown_path"])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # JSONL tail (matches `browser_tail_recording` semantics so the WS payloads
 # look identical to the existing MCP tool — the frontend can speak one shape).
@@ -236,10 +367,34 @@ def _tail_jsonl(log_path: Path, since: int) -> dict[str, Any]:
         complete_lines = [ln for ln in lines[:-1] if ln.strip()]
         partial_bytes = len(lines[-1].encode("utf-8"))
     new_cursor = since + len(data) - partial_bytes
+
+    def _looks_like_binary_preview(value: object) -> bool:
+        return isinstance(value, str) and (
+            (value.startswith('b"') and value.endswith('"')) or (value.startswith("b'") and value.endswith("'"))
+        )
+
+    def _sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
+        action = event.get("action", "")
+        if not (isinstance(action, str) and action.startswith("websocket_")):
+            return event
+        preview = event.get("payload_preview")
+        is_binary = event.get("is_binary") is True or _looks_like_binary_preview(preview)
+        if not (isinstance(preview, str) and (is_binary or _looks_like_binary_preview(preview))):
+            return event
+        size = event.get("payload_size")
+        event["payload_preview"] = (
+            f"[binary payload hidden: {size} bytes]" if isinstance(size, int) else "[binary payload hidden]"
+        )
+        if event.get("is_binary") is not True:
+            event["is_binary"] = True
+        return event
+
     events: list[dict[str, Any]] = []
     for raw in complete_lines:
         try:
-            events.append(json.loads(raw.strip()))
+            event = json.loads(raw.strip())
+            if isinstance(event, dict):
+                events.append(_sanitize_event(event))
         except json.JSONDecodeError:
             continue
     return {

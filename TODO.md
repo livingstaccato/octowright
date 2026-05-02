@@ -9,5 +9,12 @@
 - [x] Task 2.2: Parallel Head Orchestration
 
 ## Phase 3: LLM-Augmented Macros
-- [ ] Task 3.1: Macro Explanation Tool
-- [ ] Task 3.2: Semantic Replay (Intent-based Recovery)
+- [x] Task 3.1: Macro Explanation Tool
+- [x] Task 3.2: Semantic Replay (Intent-based Recovery)
+
+## Phase 4: Modernization & Refactoring
+- [ ] Task 4.1: Unify JSONL Tailing Logic
+- [ ] Task 4.2: Scenario Parallelization
+- [ ] Task 4.3: Type Safety & Argument Unification
+- [ ] Task 4.4: Registry-based Macro Dispatch
+- [ ] Task 4.5: Console Buffer Management

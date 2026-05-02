@@ -223,6 +223,10 @@ export function traceDownloadUrl(id: string): string {
   return `/api/sessions/${encodeURIComponent(id)}/trace`;
 }
 
+export function markdownUrl(id: string): string {
+  return `/api/sessions/${encodeURIComponent(id)}/markdown`;
+}
+
 export function frameUrl(id: string, t: number): string {
   return `/api/sessions/${encodeURIComponent(id)}/frame?t=${encodeURIComponent(String(t))}`;
 }

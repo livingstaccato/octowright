@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+import ast
+import json
+import re
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +27,18 @@ def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _looks_like_binary_text(payload: Any) -> bool:
+    """Return True for string payloads that look like ``b'...'`` or ``b\"...\"``.
+
+    This is used as a fallback signal for frameworks that expose binary frames
+    as text markers instead of ``bytes``.
+    """
+
+    return isinstance(payload, str) and (
+        (payload.startswith('b"') and payload.endswith('"')) or (payload.startswith("b'") and payload.endswith("'"))
+    )
+
+
 @dataclass
 class BrowserSession:
     instance_id: str
@@ -37,7 +53,7 @@ class BrowserSession:
     profile: str | None = None
     stabilize: bool = False
     trace: bool = False
-    console: list[dict[str, Any]] = field(default_factory=list)
+    console: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=1000))
     video_path: Path | None = None
     trace_path: Path | None = None
     _video: Video | None = field(default=None, repr=False)
@@ -49,6 +65,11 @@ class BrowserSession:
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)
     _bg_tasks: set[Any] = field(default_factory=set, repr=False)
+    markdown_path: Path | None = None
+    _last_markdown_capture_url: str | None = None
+    _last_markdown_capture_key: str | None = None
+    _pending_markdown_capture: Any | None = None
+    websocket_path: Path | None = None
     _network_requests: list[dict[str, Any]] = field(default_factory=list)
     # Tracks the most-recent URL passed to MCP-initiated ``navigate(url)`` so
     # that the framenavigated listener (installed by pool._wire_listeners)
@@ -64,9 +85,182 @@ class BrowserSession:
         """Return the current action target: active frame if set, else the page."""
         return self.active_frame if self.active_frame is not None else self.page
 
+    def _markdown_cache_path(self) -> Path:
+        """Path for the markdown cache file for this session."""
+        return self.log_path.with_suffix(".markdown.md")
+
+    def _websocket_cache_path(self) -> Path:
+        """Path for the websocket payload cache file for this session."""
+        return self.log_path.with_suffix(".websocket.jsonl")
+
+    def _append_websocket_cache(
+        self,
+        *,
+        direction: str,
+        id_: Any,
+        url: Any,
+        payload_preview: str | None = None,
+        payload: Any = None,
+        payload_size: int | None = None,
+    ) -> None:
+        """Persist websocket frames in a dedicated cache file."""
+        entry: dict[str, Any] = {
+            "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "action": f"websocket_{direction}",
+            "id": id_,
+            "url": url,
+        }
+        if payload is not None:
+            entry["payload_preview"] = payload_preview or ""
+            normalized_size = payload_size
+            payload_b64 = None
+
+            if isinstance(payload, bytes | bytearray | memoryview):
+                payload_bytes = bytes(payload)
+                payload_b64 = __import__("base64").b64encode(payload_bytes).decode("ascii")
+                if normalized_size is None:
+                    normalized_size = len(payload_bytes)
+            elif isinstance(payload, str) and _looks_like_binary_text(payload):
+                try:
+                    decoded = ast.literal_eval(payload)
+                except Exception:
+                    decoded = None
+                if isinstance(decoded, bytes | bytearray | memoryview):
+                    decoded_bytes = bytes(decoded)
+                    payload_b64 = __import__("base64").b64encode(decoded_bytes).decode("ascii")
+                    if normalized_size is None:
+                        normalized_size = len(decoded_bytes)
+                else:
+                    entry["payload_text"] = payload
+            else:
+                entry["payload_text"] = payload
+            entry["payload_size"] = (
+                normalized_size
+                if normalized_size is not None
+                else (len(payload) if hasattr(payload, "__len__") else None)
+            )
+            if payload_b64 is not None:
+                entry["payload_b64"] = payload_b64
+        self.websocket_path = self._websocket_cache_path()
+        cache_path = self.websocket_path
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with cache_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    async def _extract_markdown(self, html: str) -> str:
+        """Convert HTML to markdown using MarkItDown if available."""
+        try:
+            import inspect
+
+            from markitdown import MarkItDown
+
+            converter = MarkItDown()
+            rendered = converter.convert(html)
+            if inspect.isawaitable(rendered):
+                rendered = await rendered
+            if isinstance(rendered, str):
+                return rendered
+            if rendered is None:
+                raise ValueError("markitdown conversion returned empty result")
+            for field in ("text", "markdown", "text_content"):
+                candidate = getattr(rendered, field, None)
+                if candidate:
+                    if callable(candidate):
+                        candidate = candidate()
+                    text = str(candidate)
+                    if text.strip():
+                        return text
+            return str(rendered)
+        except Exception:
+            pass
+
+        # Fallback: strip tags for non-structured content rather than returning
+        # nothing when optional dependency is missing.
+        clean = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", html)
+        clean = re.sub(r"<[^>]+>", " ", clean)
+        clean = re.sub(r"\n{3,}", "\n\n", clean)
+        return clean.strip()
+
+    async def capture_markdown(self, *, page: Page | None = None, force: bool = False) -> Path | None:
+        """Render and persist markdown for the current page.
+
+        Args:
+            page: Optional page to capture. Defaults to ``self.page``.
+            force: Set to ``True`` to force a refresh even when the URL/key
+                   matches the last cached capture.
+        """
+        import contextlib
+
+        path = self._markdown_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix(".markdown.md.tmp")
+        target = page or self._target()
+
+        try:
+            current_url = target.url
+        except Exception:
+            current_url = None
+        key = None if current_url is None else f"{id(target)}:{current_url}"
+
+        if (
+            not force
+            and current_url is not None
+            and current_url == self._last_markdown_capture_url
+            and key == self._last_markdown_capture_key
+            and path.exists()
+        ):
+            self.markdown_path = path
+            return path
+
+        try:
+            html = await target.content()
+            markdown = await self._extract_markdown(html)
+            temp_path.write_text(markdown, encoding="utf-8")
+            temp_path.replace(path)
+            self.markdown_path = path
+            self._last_markdown_capture_url = current_url
+            self._last_markdown_capture_key = key
+            self.recorder.record("markdown_cached", path=str(path), url=current_url)
+            return path
+        except Exception as exc:
+            self.recorder.record("markdown_cache_error", error=repr(exc), url=current_url)
+            with contextlib.suppress(Exception):
+                temp_path.unlink(missing_ok=True)
+            return None
+
+    def _schedule_markdown_capture(self, page: Page | None = None, force: bool = False) -> None:
+        """Queue a non-blocking markdown-cache refresh."""
+        existing = self._pending_markdown_capture
+        try:
+            if existing is not None and not existing.done():
+                return
+        except Exception:
+            pass
+
+        import asyncio
+        import contextlib
+
+        async def _run() -> None:
+            await self.capture_markdown(page=page, force=force)
+
+        task = asyncio.create_task(_run())
+        self._pending_markdown_capture = task
+        self._bg_tasks.add(task)
+
+        def _cleanup(done: Any) -> None:
+            if self._pending_markdown_capture is done:
+                self._pending_markdown_capture = None
+            self._bg_tasks.discard(done)
+            with contextlib.suppress(Exception):
+                done.result()
+
+        task.add_done_callback(_cleanup)
+
     def attach_console(self) -> None:
         def _on_console(msg: ConsoleMessage) -> None:
-            self.console.append({"level": msg.type, "text": msg.text})
+            entry = {"level": msg.type, "text": msg.text}
+            self.console.append(entry)
+            self.recorder.record("console", **entry)
 
         self.page.on("console", _on_console)
 
@@ -77,12 +271,132 @@ class BrowserSession:
         self.pages.append(page)
         page_index = len(self.pages) - 1
         self.recorder.record("popup_opened", page_index=page_index, url=page.url)
+
         # Attach console listener so logs from the new tab are collected.
-        page.on(
-            "console",
-            lambda msg: self.console.append({"level": msg.type, "text": msg.text, "page_index": page_index}),
-        )
+        def _on_console(msg: ConsoleMessage) -> None:
+            entry = {"level": msg.type, "text": msg.text, "page_index": page_index}
+            self.console.append(entry)
+            self.recorder.record("console", **entry)
+
+        page.on("console", _on_console)
         _pool._wire_listeners(self, page)
+
+    def _handle_websocket(self, websocket: Any) -> None:
+        """Attach frame handlers to a Playwright websocket and record lifecycle events."""
+        url = getattr(websocket, "url", None)
+        socket_id = getattr(websocket, "id", None)
+        if socket_id is None:
+            socket_id = id(websocket)
+
+        self.recorder.record("websocket_opened", id=socket_id, url=url)
+
+        def _binary_preview(payload: Any) -> str:
+            if isinstance(payload, str) and _looks_like_binary_text(payload):
+                # "b'...'" and `b\"...\"` text markers from playwright / logs
+                # are rendered as the true byte length when possible.
+                try:
+                    parsed = ast.literal_eval(payload)
+                except Exception:
+                    parsed = None
+                if isinstance(parsed, bytes | bytearray | memoryview):
+                    return f"[binary payload hidden: {len(parsed)} bytes]"
+
+            size = len(payload) if hasattr(payload, "__len__") else None
+            if size is None:
+                return "[binary payload hidden]"
+            return f"[binary payload hidden: {size} bytes]"
+
+        def _preview_payload(payload: Any, *, is_binary: bool = False, max_chars: int = 1024) -> str:
+            if payload is None:
+                return ""
+            if is_binary or isinstance(payload, bytes | bytearray | memoryview):
+                return _binary_preview(payload)
+
+            text = payload if isinstance(payload, str) else str(payload)
+            if len(text) > max_chars:
+                return text[:max_chars] + "…"
+            return text
+
+        def _serialise_binary_payload(payload: Any) -> str | None:
+            if isinstance(payload, bytes | bytearray | memoryview):
+                return __import__("base64").b64encode(bytes(payload)).decode("ascii")
+            if isinstance(payload, str) and _looks_like_binary_text(payload):
+                try:
+                    decoded = ast.literal_eval(payload)
+                except Exception:
+                    return None
+                if isinstance(decoded, bytes | bytearray | memoryview):
+                    return __import__("base64").b64encode(bytes(decoded)).decode("ascii")
+            return None
+
+        if not hasattr(websocket, "on"):
+            return
+
+        def _on_frame(direction: str) -> Any:
+            def _handler(frame: Any) -> None:
+                payload = getattr(frame, "payload", None)
+                is_binary = (
+                    bool(getattr(frame, "is_binary", False))
+                    or isinstance(payload, bytes | bytearray | memoryview)
+                    or _looks_like_binary_text(payload)
+                )
+                self.recorder.record(
+                    f"websocket_{direction}",
+                    id=socket_id,
+                    url=url,
+                    is_binary=is_binary,
+                    payload_preview=_preview_payload(payload, is_binary=is_binary),
+                    payload_size=len(payload) if hasattr(payload, "__len__") else None,
+                )
+                payload_b64 = _serialise_binary_payload(payload)
+                cache_entry_payload = payload_b64 if payload_b64 is not None else payload
+                cache_payload_size = None
+                if isinstance(payload, bytes | bytearray | memoryview):
+                    cache_payload_size = len(payload)
+                elif isinstance(payload, str) and _looks_like_binary_text(payload):
+                    try:
+                        decoded = ast.literal_eval(payload)
+                    except Exception:
+                        cache_payload_size = len(payload)
+                    else:
+                        if isinstance(decoded, bytes | bytearray | memoryview):
+                            cache_payload_size = len(decoded)
+                        else:
+                            cache_payload_size = len(payload)
+                else:
+                    cache_payload_size = len(payload) if hasattr(payload, "__len__") else None
+                try:
+                    self._append_websocket_cache(
+                        direction=direction,
+                        id_=socket_id,
+                        url=url,
+                        payload_preview=_preview_payload(payload, is_binary=is_binary),
+                        payload=cache_entry_payload,
+                        payload_size=cache_payload_size,
+                    )
+                except Exception:
+                    self.recorder.record("websocket_cache_error", id=socket_id, url=url)
+
+            return _handler
+
+        def _on_close() -> None:
+            self.recorder.record("websocket_closed", id=socket_id, url=url)
+
+        def _on_error(error: Any) -> None:
+            self.recorder.record(
+                "websocket_error",
+                id=socket_id,
+                url=url,
+                error=str(error),
+            )
+
+        try:
+            websocket.on("framesent", _on_frame("framesent"))
+            websocket.on("framereceived", _on_frame("framereceived"))
+            websocket.on("close", _on_close)
+            websocket.on("socketerror", _on_error)
+        except Exception:
+            return
 
     def list_pages(self) -> list[dict[str, Any]]:
         """Return [{index, url, title, is_active}, ...]. title is None for unloaded pages."""
@@ -141,20 +455,42 @@ class BrowserSession:
         await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
         title = await self.page.title()
         self.url = url
+        self._schedule_markdown_capture()
         self.recorder.record("navigate", url=url)
         return {"url": url, "title": title}
 
+    async def _resolve_semantic_metadata(self, selector: str) -> dict[str, str]:
+        """Attempt to resolve the role and role_name of the element at selector."""
+        try:
+            # Playwright 1.50+ aria_snapshot() returns a YAML-like string for the locator.
+            # Example: '- button "Confirm Order"'
+            loc = self._target().locator(selector)
+            snapshot = await loc.aria_snapshot()
+            if snapshot and snapshot.startswith("- "):
+                line = snapshot[2:].strip()
+                # line is e.g. 'button "Confirm Order"'
+                parts = line.split(' "', 1)
+                role = parts[0]
+                role_name = parts[1].rstrip('"') if len(parts) > 1 else ""
+                return {"role": role, "role_name": role_name}
+        except Exception:
+            pass
+        return {}
+
     async def click(self, selector: str) -> None:
+        meta = await self._resolve_semantic_metadata(selector)
         await self._target().click(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("click", selector=selector)
+        self.recorder.record("click", selector=selector, **meta)
 
     async def type_text(self, selector: str, text: str, delay_ms: int | None) -> None:
+        meta = await self._resolve_semantic_metadata(selector)
         await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("type", selector=selector, text=text, delay_ms=delay_ms)
+        self.recorder.record("type", selector=selector, text=text, delay_ms=delay_ms, **meta)
 
     async def fill(self, selector: str, value: str) -> None:
+        meta = await self._resolve_semantic_metadata(selector)
         await self._target().fill(selector, value, timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("fill", selector=selector, value=value)
+        self.recorder.record("fill", selector=selector, value=value, **meta)
 
     async def press_key(self, key: str) -> None:
         await self.page.keyboard.press(key)
@@ -195,6 +531,87 @@ class BrowserSession:
             await self.page.wait_for_load_state("networkidle", timeout=timeout)
             self.recorder.record("wait_for", timeout_ms=timeout)
 
+    async def expect_url(self, pattern: str, mode: str = "regex") -> str:
+        """Check the page URL against *pattern*. Returns the actual URL on success."""
+        actual: str = self.page.url
+        if mode == "equals":
+            if actual != pattern:
+                raise RuntimeError(f'URL mismatch: expected "{pattern}" (equals), got "{actual}"')
+        elif mode == "contains":
+            if pattern not in actual:
+                raise RuntimeError(f'URL mismatch: expected substring "{pattern}" (contains), got "{actual}"')
+        elif mode == "regex":
+            if not re.search(pattern, actual):
+                raise RuntimeError(f'URL mismatch: expected pattern "{pattern}" (regex), got "{actual}"')
+        else:
+            raise ValueError(f"unknown mode {mode!r}; expected 'regex', 'equals', or 'contains'")
+        self.recorder.record("expect_url", pattern=pattern, mode=mode)
+        return actual
+
+    async def expect_text(
+        self,
+        selector: str,
+        text: str,
+        mode: str = "contains",
+        timeout_ms: int | None = None,
+    ) -> str:
+        """Wait for *selector* and assert its inner text matches *text*. Returns actual text."""
+        timeout = timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS
+        try:
+            element = await self._target().wait_for_selector(selector, timeout=timeout)
+        except Exception as exc:
+            raise RuntimeError(f'element never appeared within {timeout}ms: selector="{selector}"') from exc
+        if element is None:
+            raise RuntimeError(f'element never appeared within {timeout}ms: selector="{selector}"')
+        actual: str = await element.inner_text()
+        if mode == "contains":
+            if text not in actual:
+                raise RuntimeError(f'text mismatch on "{selector}": expected to contain "{text}", got "{actual}"')
+        elif mode == "equals":
+            if actual != text:
+                raise RuntimeError(f'text mismatch on "{selector}": expected "{text}" (equals), got "{actual}"')
+        elif mode == "regex":
+            if not re.search(text, actual):
+                raise RuntimeError(f'text mismatch on "{selector}": expected pattern "{text}" (regex), got "{actual}"')
+        else:
+            raise ValueError(f"unknown mode {mode!r}; expected 'contains', 'equals', or 'regex'")
+        self.recorder.record("expect_text", selector=selector, text=text, mode=mode)
+        return actual
+
+    async def expect_selector(
+        self,
+        selector: str,
+        present: bool = True,
+        timeout_ms: int | None = None,
+    ) -> None:
+        """Assert that *selector* is present (or absent) in the page."""
+        timeout = timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS
+        if present:
+            try:
+                await self._target().wait_for_selector(selector, timeout=timeout)
+            except Exception as exc:
+                raise RuntimeError(f'selector never appeared within {timeout}ms: "{selector}"') from exc
+        else:
+            # Poll once — if the element exists right now, that's the failure.
+            element = await self._target().query_selector(selector)
+            if element is not None:
+                raise RuntimeError(f'selector should be absent but was found: "{selector}"')
+        self.recorder.record("expect_selector", selector=selector, present=present)
+
+    async def expect_js(self, expression: str, equals: Any = None) -> Any:
+        """Evaluate *expression* in the page and assert it is truthy (or equals *equals*)."""
+        result = await self._target().evaluate(expression)
+        if equals is not None:
+            if result != equals:
+                raise RuntimeError(
+                    f"JS assertion failed: expression={expression!r}, expected={equals!r}, got={result!r}"
+                )
+        else:
+            if not result:
+                raise RuntimeError(f"JS assertion failed (not truthy): expression={expression!r}, got={result!r}")
+        self.recorder.record("expect_js", expression=expression, equals=equals)
+        return result
+
     async def diagnostic_bundle(
         self,
         *,
@@ -213,7 +630,7 @@ class BrowserSession:
         import hashlib
 
         bundle: dict[str, Any] = {
-            "console_tail": self.console[-console_tail:],
+            "console_tail": list(self.console)[-console_tail:],
             "url": None,
             "title": None,
             "html_path": None,
@@ -596,5 +1013,7 @@ class BrowserSession:
                 "close",
                 video_path=str(self.video_path) if self.video_path else None,
                 trace_path=str(self.trace_path) if self.trace_path else None,
+                markdown_path=str(self.markdown_path) if self.markdown_path else None,
+                websocket_path=str(self.websocket_path) if self.websocket_path else None,
             )
             self.recorder.close()

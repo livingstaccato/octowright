@@ -7,8 +7,29 @@ import {
   renderVideo,
   sessionIdFromPath,
   setActiveTab,
+  renderMarkdownPanel,
+  renderCachePanel,
 } from "./session.js";
 import type { SessionDetail } from "./types.js";
+
+const SAMPLE_CACHE = {
+  total_bytes: 1234,
+  total_human: "1.2 KB",
+  components: {
+    jsonl: { size_bytes: 100, size_human: "100 B", path: "/tmp/a.jsonl", exists: true },
+    markdown: { size_bytes: 200, size_human: "200 B", path: "/tmp/a.markdown.md", exists: true },
+    trace: { size_bytes: 0, size_human: "0 B", path: null, exists: false },
+    video: { size_bytes: 0, size_human: "0 B", path: null, exists: false },
+    websocket: { size_bytes: 234, size_human: "234 B", path: "/tmp/a.websocket.jsonl", exists: true },
+    screenshots: {
+      size_bytes: 700,
+      size_human: "700 B",
+      count: 2,
+      paths: ["/tmp/1.png", "/tmp/2.png"],
+    },
+  },
+  recommendations: ["Enable compression on recordings."],
+};
 
 function makeDetail(overrides: Partial<SessionDetail> = {}): SessionDetail {
   return {
@@ -22,10 +43,13 @@ function makeDetail(overrides: Partial<SessionDetail> = {}): SessionDetail {
     log_path: "/tmp/x.jsonl",
     video_path: null,
     trace_path: null,
+    markdown_path: null,
     action_count: 0,
     console_count: 0,
     download_count: 0,
     page_count: 1,
+    websocket_path: null,
+    cache: SAMPLE_CACHE,
     title: null,
     ...overrides,
   };
@@ -66,9 +90,11 @@ describe("buildLayout", () => {
     expect(refs.consolePanel.id).toBe("console-panel");
     expect(refs.downloadsPanel.id).toBe("downloads-panel");
     expect(refs.screenshotsPanel.id).toBe("screenshots-panel");
+    expect(refs.markdownPanel.id).toBe("markdown-panel");
     expect(root.querySelector('[data-testid="tab-console"]')).not.toBeNull();
     expect(root.querySelector('[data-testid="tab-downloads"]')).not.toBeNull();
     expect(root.querySelector('[data-testid="tab-screenshots"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="tab-markdown"]')).not.toBeNull();
   });
 
   it("creates a live-preview slot above the timeline", () => {
@@ -151,6 +177,37 @@ describe("renderTraceControls", () => {
     renderTraceControls(refs.traceSlot, makeDetail({ trace_path: "/x.zip" }));
     expect(refs.traceSlot.querySelector("button[data-testid='btn-open-trace']")).not.toBeNull();
     expect(refs.traceSlot.querySelector("a[download]")).not.toBeNull();
+  });
+});
+
+describe("renderMarkdownPanel", () => {
+  it("shows placeholder when markdown path is missing", () => {
+    const refs = buildLayout(root);
+    renderMarkdownPanel(refs.markdownPanel, makeDetail({ markdown_path: null }));
+    const details = refs.markdownPanel.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(refs.markdownPanel.textContent).toMatch(/No markdown snapshot/);
+  });
+
+  it("shows markdown download link when available", () => {
+    const refs = buildLayout(root);
+    renderMarkdownPanel(refs.markdownPanel, makeDetail({ markdown_path: "/tmp/session.md" }));
+    const link = refs.markdownPanel.querySelector("a[target='_blank']");
+    expect(link?.getAttribute("href")).toBe("/api/sessions/sess-1/markdown");
+  });
+});
+
+describe("renderCachePanel", () => {
+  it("renders a collapsed cache summary", () => {
+    const refs = buildLayout(root);
+    renderCachePanel(refs.cachePanel, makeDetail());
+    expect(refs.cachePanel.querySelector("summary")?.textContent).toBe("Cache summary (1.2 KB)");
+  });
+
+  it("shows recommendations when provided", () => {
+    const refs = buildLayout(root);
+    renderCachePanel(refs.cachePanel, makeDetail());
+    expect(refs.cachePanel.textContent).toContain("Enable compression on recordings.");
   });
 });
 

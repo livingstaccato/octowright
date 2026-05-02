@@ -123,7 +123,7 @@ class TestLoadYamlScenario:
                 }
             )
         )
-        s = load_yaml_scenario(path)
+        s = load_yaml_scenario(path.read_text(), path.stem)
         assert s.name == "mini"
         assert s.description == "two players"
         assert len(s.participants) == 2
@@ -137,7 +137,7 @@ class TestLoadYamlScenario:
         """An empty file (parses as None) defaults to an empty scenario named after the file."""
         path = tmp_path / "blank.yaml"
         path.write_text("")
-        s = load_yaml_scenario(path)
+        s = load_yaml_scenario(path.read_text(), path.stem)
         assert s.name == "blank"
         assert s.participants == []
 
@@ -152,7 +152,7 @@ class TestLoadYamlScenario:
                 }
             )
         )
-        s = load_yaml_scenario(path)
+        s = load_yaml_scenario(path.read_text(), path.stem)
         assert s.teardown_macro is None
 
     def test_validation_runs_on_yaml_load(self, tmp_path: Path) -> None:
@@ -166,7 +166,7 @@ class TestLoadYamlScenario:
             )
         )
         with pytest.raises(ValueError, match="unsupported kind"):
-            load_yaml_scenario(path)
+            load_yaml_scenario(path.read_text(), path.stem)
 
 
 # ---------------------------------------------------------------------------

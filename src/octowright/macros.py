@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
-from .defaults import DEFAULT_ACTION_TIMEOUT_MS, PROFILES_DIR
+from .defaults import PROFILES_DIR
 from .server.macro_semantic import summarize_action
 
 if TYPE_CHECKING:
@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+_SEMANTIC_LOCATOR_KEYS = ("role", "role_name", "label", "text", "test_id")
+_NON_ARIA_NOISE_KEYS = ("role", "role_name", "label", "test_id")
 
 # MACROS_DIR sits next to profiles/ by default; env var overrides.
 MACROS_DIR: Path = Path(os.environ.get("OCTOWRIGHT_MACROS_DIR", str(PROFILES_DIR.parent / "macros")))
@@ -74,6 +77,35 @@ def _substitute_in_action(
         else:
             result[k] = v
     return result
+
+
+def _extract_semantic_locators(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Extract semantic locator kwargs that can be passed to click_by/fill_by."""
+    return {k: kwargs[k] for k in _SEMANTIC_LOCATOR_KEYS if k in kwargs}
+
+
+def load_macro_from_recording(
+    path: Path,
+    include_launch: bool = False,
+) -> list[dict[str, Any]]:
+    """Read a JSONL recording and return its list of actions (stripped/filtered)."""
+    raw_lines = path.read_text(encoding="utf-8").splitlines()
+    actions: list[dict[str, Any]] = []
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        action_type = entry.get("action", "")
+        if action_type in _ALWAYS_STRIP:
+            continue
+        if action_type in _LIFECYCLE and not include_launch:
+            continue
+        actions.append(entry)
+    return actions
 
 
 def save_macro(
@@ -215,6 +247,27 @@ def substitute(actions: list[dict[str, Any]], args: dict[str, Any]) -> list[dict
 # Actions that should never be re-executed during replay.
 _REPLAY_SKIP = {"launch", "close", "snapshot"}
 
+_ACTION_MAP = {
+    "navigate": "navigate",
+    "click": "click",
+    "type": "type_text",
+    "fill": "fill",
+    "press_key": "press_key",
+    "screenshot": "screenshot",
+    "evaluate": "evaluate",
+    "wait_for": "wait_for",
+    "expect_url": "expect_url",
+    "expect_text": "expect_text",
+    "expect_selector": "expect_selector",
+    "expect_js": "expect_js",
+    "mock_route": "mock_route",
+    "unmock_route": "unmock_route",
+    "set_dialog_policy": "set_dialog_policy",
+    "set_input_files": "set_input_files",
+    "click_by": "click_by",
+    "fill_by": "fill_by",
+}
+
 
 async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
     """Run one non-conditional action. Returns (executed, skipped). Raises on action failure.
@@ -225,55 +278,70 @@ async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> t
     kind = action.get("action", "")
     if kind in _REPLAY_SKIP:
         return 0, 1
-    if kind == "navigate":
-        await session.navigate(action["url"])
-    elif kind == "click":
-        await session.click(action["selector"])
-    elif kind == "type":
-        await session.type_text(action["selector"], action.get("text", ""), action.get("delay_ms"))
-    elif kind == "fill":
-        await session.fill(action["selector"], action.get("value", ""))
-    elif kind == "press_key":
-        await session.press_key(action["key"])
-    elif kind == "screenshot":
-        path_str = action.get("path")
+
+    method_name = _ACTION_MAP.get(kind)
+    if not method_name:
+        return 0, 1
+
+    # Filter out recording-only noise fields that methods don't expect.
+    kwargs = {k: v for k, v in action.items() if k not in ("action", "ts", "kind", "profile", "instance_id")}
+
+    # For non-ARIA actions, drop locator-like keys that are irrelevant/noisy.
+    if kind not in {"click", "fill", "click_by", "fill_by"}:
+        for k in _NON_ARIA_NOISE_KEYS:
+            kwargs.pop(k, None)
+
+    # Special handling for actions that don't match 1:1 with method signatures
+    # or need type conversion.
+    if kind == "screenshot":
+        path_str = kwargs.get("path")
         if not path_str:
             return 0, 1
-        await session.screenshot(Path(path_str))
-    elif kind == "evaluate":
-        await session.evaluate(action["expression"])
+        kwargs["path"] = Path(path_str)
+    elif kind == "type":
+        # BrowserSession.type_text expects (selector, text, delay_ms)
+        if "delay_ms" not in kwargs:
+            kwargs["delay_ms"] = 0
     elif kind == "wait_for":
-        await session.wait_for(action.get("selector"), action.get("text"), action.get("timeout_ms"))
-    elif kind == "expect_url":
-        await _check_url(session.page, action["pattern"], action.get("mode", "regex"))
-    elif kind == "expect_text":
-        await _check_text(
-            session.page,
-            action["selector"],
-            action["text"],
-            action.get("mode", "contains"),
-            action.get("timeout_ms"),
-        )
-    elif kind == "expect_selector":
-        await _check_selector(session.page, action["selector"], action.get("present", True), action.get("timeout_ms"))
-    elif kind == "expect_js":
-        await _check_js(session.page, action["expression"], action.get("equals"))
-    elif kind == "mock_route":
-        await session.mock_route(
-            action["pattern"],
-            status=action.get("status", 200),
-            body=action.get("body"),
-            content_type=action.get("content_type", "application/json"),
-            headers=action.get("headers"),
-        )
-    elif kind == "unmock_route":
-        await session.unmock_route(action["pattern"])
-    elif kind == "set_dialog_policy":
-        session.set_dialog_policy(action["policy"], action.get("prompt_text"))
-    elif kind == "set_input_files":
-        await session.set_input_files(action["selector"], action.get("paths", []))
-    else:
-        return 0, 1
+        # BrowserSession.wait_for expects (selector, text, timeout_ms)
+        if "selector" not in kwargs:
+            kwargs["selector"] = None
+        if "text" not in kwargs:
+            kwargs["text"] = None
+        if "timeout_ms" not in kwargs:
+            kwargs["timeout_ms"] = None
+
+    # ARIA-first playback
+    if kind in {"click", "fill", "click_by", "fill_by"}:
+        semantic_finders = _extract_semantic_locators(kwargs)
+        if semantic_finders:
+            semantic_method_name = "click_by" if "click" in kind else "fill_by"
+            semantic_method = getattr(session, semantic_method_name)
+            semantic_kwargs = dict(semantic_finders)
+            if "timeout_ms" in kwargs:
+                semantic_kwargs["timeout_ms"] = kwargs["timeout_ms"]
+
+            if kind in {"fill", "fill_by"} and "value" in kwargs:
+                semantic_kwargs["value"] = kwargs["value"]
+
+            fallback_kind = "click" if "click" in kind else "fill"
+
+            # Try semantic first
+            try:
+                await semantic_method(**semantic_kwargs)
+                return 1, 0
+            except Exception:
+                # Fallback to standard selector if semantic locator fails
+                fallback_kwargs = {k: v for k, v in kwargs.items() if k not in _SEMANTIC_LOCATOR_KEYS}
+                fallback_kwargs.pop("timeout_ms", None)
+                method = getattr(session, fallback_kind)
+                if "selector" not in fallback_kwargs:
+                    raise
+                await method(**fallback_kwargs)
+                return 1, 0
+
+    method = getattr(session, method_name)
+    await method(**kwargs)
     return 1, 0
 
 
@@ -362,105 +430,6 @@ async def run_macro(
         skipped=skipped,
     )
     return {"macro": name, "executed": executed, "skipped": skipped, "args_used": effective_args}
-
-
-# ---------------------------------------------------------------------------
-# Assertion helpers — small coroutines used by both MCP tools and run_macro.
-# ---------------------------------------------------------------------------
-
-
-async def _check_url(page: Any, pattern: str, mode: str) -> str:
-    """Check the page URL against *pattern*. Returns the actual URL on success.
-
-    Raises ``RuntimeError`` with a descriptive message on mismatch.
-    *mode* must be ``'regex'``, ``'equals'``, or ``'contains'``.
-    """
-    actual: str = page.url
-    if mode == "equals":
-        if actual != pattern:
-            raise RuntimeError(f'URL mismatch: expected "{pattern}" (equals), got "{actual}"')
-    elif mode == "contains":
-        if pattern not in actual:
-            raise RuntimeError(f'URL mismatch: expected substring "{pattern}" (contains), got "{actual}"')
-    elif mode == "regex":
-        if not re.search(pattern, actual):
-            raise RuntimeError(f'URL mismatch: expected pattern "{pattern}" (regex), got "{actual}"')
-    else:
-        raise ValueError(f"unknown mode {mode!r}; expected 'regex', 'equals', or 'contains'")
-    return actual
-
-
-async def _check_text(
-    page: Any,
-    selector: str,
-    text: str,
-    mode: str = "contains",
-    timeout_ms: int | None = None,
-) -> str:
-    """Wait for *selector* and assert its inner text matches *text*.
-
-    Returns the actual inner text on success.
-    Raises ``RuntimeError`` on mismatch or timeout.
-    """
-    timeout = timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS
-    try:
-        element = await page.wait_for_selector(selector, timeout=timeout)
-    except Exception as exc:
-        raise RuntimeError(f'element never appeared within {timeout}ms: selector="{selector}"') from exc
-    if element is None:
-        raise RuntimeError(f'element never appeared within {timeout}ms: selector="{selector}"')
-    actual: str = await element.inner_text()
-    if mode == "contains":
-        if text not in actual:
-            raise RuntimeError(f'text mismatch on "{selector}": expected to contain "{text}", got "{actual}"')
-    elif mode == "equals":
-        if actual != text:
-            raise RuntimeError(f'text mismatch on "{selector}": expected "{text}" (equals), got "{actual}"')
-    elif mode == "regex":
-        if not re.search(text, actual):
-            raise RuntimeError(f'text mismatch on "{selector}": expected pattern "{text}" (regex), got "{actual}"')
-    else:
-        raise ValueError(f"unknown mode {mode!r}; expected 'contains', 'equals', or 'regex'")
-    return actual
-
-
-async def _check_selector(
-    page: Any,
-    selector: str,
-    present: bool = True,
-    timeout_ms: int | None = None,
-) -> None:
-    """Assert that *selector* is present (or absent) in the page.
-
-    Raises ``RuntimeError`` if the condition is not met.
-    """
-    timeout = timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS
-    if present:
-        try:
-            await page.wait_for_selector(selector, timeout=timeout)
-        except Exception as exc:
-            raise RuntimeError(f'selector never appeared within {timeout}ms: "{selector}"') from exc
-    else:
-        # Poll once — if the element exists right now, that's the failure.
-        element = await page.query_selector(selector)
-        if element is not None:
-            raise RuntimeError(f'selector should be absent but was found: "{selector}"')
-
-
-async def _check_js(page: Any, expression: str, equals: Any = None) -> Any:
-    """Evaluate *expression* in the page and assert it is truthy (or equals *equals*).
-
-    Returns the evaluated result on success.
-    Raises ``RuntimeError`` on failure.
-    """
-    result = await page.evaluate(expression)
-    if equals is not None:
-        if result != equals:
-            raise RuntimeError(f"JS assertion failed: expression={expression!r}, expected={equals!r}, got={result!r}")
-    else:
-        if not result:
-            raise RuntimeError(f"JS assertion failed (not truthy): expression={expression!r}, got={result!r}")
-    return result
 
 
 # ---------------------------------------------------------------------------
