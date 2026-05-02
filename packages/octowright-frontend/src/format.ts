@@ -44,7 +44,23 @@ export function colorForAction(action: string): ActionColorKind {
   return "default";
 }
 
-const HEADLINE_KEYS = ["selector", "url", "text", "value", "key", "name", "filename", "message", "payload_preview"];
+const HEADLINE_KEYS = [
+  "role",
+  "role_name",
+  "label",
+  "test_id",
+  "data_id",
+  "data-id",
+  "selector",
+  "url",
+  "text",
+  "value",
+  "key",
+  "name",
+  "filename",
+  "message",
+  "payload_preview",
+];
 
 function isLikelyBinaryPreview(value: unknown): boolean {
   return typeof value === "string" && ((value.startsWith("b\"") && value.endsWith("\"")) || (value.startsWith("b'") && value.endsWith("'")));

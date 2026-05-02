@@ -18,7 +18,8 @@ GET    /sessions/{id}                            → static session.html (rewrit
 GET    /api/sessions                             → {"live": [SessionSummary, ...], "closed": [SessionSummary, ...]}
 POST   /api/sessions                             → SessionSummary (201) — launch a new browser session
 GET    /api/sessions/{id}                        → SessionDetail
-DELETE /api/sessions/{id}                        → {"closed": true, "instance_id": str, "log_path": str, "video_path": str|null, "trace_path": str|null} (200); 404 if not in live pool
+DELETE /api/sessions/{id}                        → SessionCloseResponse (200); 404 if not in live pool.  
+  SessionCloseResponse: {"closed": true, "instance_id": str, "log_path": str, "video_path": str|null, "trace_path": str|null, "cache": CacheReport}
 DELETE /api/sessions/{id}/recording              → {"deleted": true, "session_id": str, "files_removed": int} (200); 404 if no recording on disk; 409 if the session is still live
 POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live
 GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
