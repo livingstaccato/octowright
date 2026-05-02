@@ -33,6 +33,51 @@ class Recorder:
             self._fh.close()
 
 
+def tail_log(path: Path, cursor: int) -> tuple[list[dict], int, int]:
+    """
+    Reads new JSONL events from a file since the given byte offset.
+
+    Returns:
+        tuple[events, new_cursor, total_bytes]
+        - events: list of parsed JSON objects
+        - new_cursor: updated byte offset for the next read
+        - total_bytes: total size of the file on disk
+    """
+    if not path.exists():
+        return [], cursor, 0
+
+    total_bytes = path.stat().st_size
+    with path.open("rb") as fh:
+        fh.seek(cursor)
+        data = fh.read()
+
+    if not data:
+        return [], cursor, total_bytes
+
+    text = data.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+
+    if text.endswith("\n"):
+        complete_lines = [ln for ln in lines if ln.strip()]
+        partial_bytes = 0
+    else:
+        complete_lines = [ln for ln in lines[:-1] if ln.strip()]
+        partial_bytes = len(lines[-1].encode("utf-8"))
+
+    new_cursor = cursor + len(data) - partial_bytes
+    events = []
+    for raw in complete_lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            events.append(json.loads(raw))
+        except json.JSONDecodeError:
+            continue
+
+    return events, new_cursor, total_bytes
+
+
 def new_log_path(base_dir: Path, instance_id: str, label: str | None, kind: str) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     suffix = f"-{label}" if label else ""
