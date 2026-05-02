@@ -20,3 +20,13 @@ src/octowright/server/frontend/
 packages/octowright-frontend/coverage/
 # package-lock.json is committed for reproducible npm installs
 .worktrees/
+
+# Local agent/tooling artifacts
+.claude/
+.claude-plugin/
+.codex-plugin/
+docs/superpowers/
+memray.bin
+using-octowright/
+verify_macro_explain.py
+scripts/profile_benchmarks.py
