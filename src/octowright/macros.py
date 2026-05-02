@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from .defaults import DEFAULT_ACTION_TIMEOUT_MS, PROFILES_DIR
+from .server.macro_semantic import summarize_action
 
 if TYPE_CHECKING:
     from .session import BrowserSession
@@ -289,6 +290,31 @@ async def _dispatch_one(session: BrowserSession, action: dict[str, Any]) -> tupl
     return await _dispatch_simple(session, action)
 
 
+async def _suggest_fix(session: BrowserSession, action: dict[str, Any]) -> str | None:
+    """Attempt to find a new selector or locator if an action fails.
+    Returns a suggestion string (e.g. "try click_by(text='Log in') instead") or None.
+    """
+    selector = action.get("selector")
+    if not selector:
+        return None
+
+    # Get A11y tree
+    try:
+        snapshot = await session.snapshot()
+        aria = snapshot["aria"]
+    except Exception:
+        return None
+
+    summary = summarize_action(action)
+    prompt = (
+        f"I was trying to {summary}, but '{selector}' failed.\n\n"
+        f"Current A11y tree:\n---\n{aria}\n---\n\n"
+        "Based on the A11y tree, what should I use instead?"
+    )
+
+    return prompt
+
+
 async def run_macro(
     session: BrowserSession,
     name: str,
@@ -312,6 +338,9 @@ async def run_macro(
             e, s = await _dispatch_one(session, action)
         except Exception as exc:
             bundle = await session.diagnostic_bundle()
+            # HEALING: try to find a suggestion
+            fix_suggestion = await _suggest_fix(session, action)
+
             payload: dict[str, Any] = {
                 "macro": name,
                 "failed_at_step": i,
@@ -319,6 +348,9 @@ async def run_macro(
                 "original": repr(exc),
                 "bundle": bundle,
             }
+            if fix_suggestion:
+                payload["healing_suggestion"] = fix_suggestion
+
             raise RuntimeError(payload) from exc
         executed += e
         skipped += s
