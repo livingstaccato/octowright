@@ -1,0 +1,8 @@
+name: "Collaboration Template"
+participants:
+  - persona: "{{persona_1}}"
+    kind: "chromium"
+    role: "editor"
+  - persona: "{{persona_2}}"
+    kind: "firefox"
+    role: "viewer"
