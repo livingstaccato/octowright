@@ -1,0 +1,83 @@
+---
+name: using-octowright
+description: Use when automating web browsers using the Octowright MCP server, managing multiple personas, or debugging browser actions.
+---
+
+# Using Octowright
+
+## Overview
+Octowright is a high-observability browser orchestrator. It uses a **Leader-Follower** model to manage multiple browsers across different engines (Chromium, Firefox, WebKit) while maintaining persistent identities (Personas) and recording every action to JSONL.
+
+## Core Principle: Resource Discipline & Efficiency
+**Every browser instance is a resource.** You must launch efficiently and close rigorously.
+
+## Workflow: The Octowright Loop
+
+```dot
+graph TD
+    Start[Task Start] --> Suggest[browser_suggest_for_url]
+    Suggest --> Launch[browser_launch with Persona]
+    Launch --> Act[Perform Actions]
+    Act --> Success{Success?}
+    Success -- Yes --> Close[browser_close]
+    Success -- No --> Debug[browser_snapshot / aria-tree]
+    Debug --> Fix[Update Macro / Selector]
+    Fix --> Close
+```
+
+## Rules of Engagement
+
+### 1. The Launch Protocol
+Never "guess" a persona or launch a raw browser without checking for existing state.
+- **REQUIRED**: Call `browser_suggest_for_url` before `browser_launch`.
+- **PREFER**: Use the suggested persona to maintain login state and credentials.
+- **STABILIZE**: Set `stabilize: true` in `browser_launch` for mission-critical tasks (it adds a brief settling delay).
+
+### 2. Mandatory Teardown
+Resource leaks cause system instability.
+- **ALWAYS** call `browser_close` immediately after a task finishes (or fails).
+- **EMERGENCY**: Use `browser_close_all` if you lose track of session IDs.
+
+### 3. Debugging Hierarchy
+When an action fails (e.g., selector not found):
+1.  **Snapshot**: Use `browser_snapshot` to get the `aria-tree`. The accessibility tree is more stable than the raw DOM.
+2.  **Inspect**: Use `browser_list_frames` if you suspect the element is inside an iframe.
+3.  **Goldens**: Use `golden_assert` to compare the current page against a known good state if the failure is visual or structural.
+
+### 4. Macro Management
+- **REUSE**: Check `macro_list` before manually implementing a common flow (like login).
+- **EVOLVE**: If a macro fails, update it using `macro_save` after identifying the correct new selectors. Don't just patch the current session.
+
+## Common Mistakes
+
+| Mistake | Consequence | Fix |
+| :--- | :--- | :--- |
+| Leaving browsers open | Memory exhaustion, "Zombie" processes. | Always `browser_close` in a `finally` block logic. |
+| Manual login repetition | High token usage, fragile scripts. | Use **Personas** to persist session state. |
+| Guessing selectors | Frequent failures due to DOM changes. | Use `browser_snapshot` for the A11y tree. |
+| Overlooking iframes | Tools fail to find elements that are visible. | Use `browser_list_frames` then `browser_switch_frame`. |
+
+## Red Flags - STOP and Start Over
+If you catch yourself doing these, you are violating the Octowright workflow:
+- Launching a browser without calling `browser_suggest_for_url` first.
+- Attempting to "manually" log in when a Persona already exists.
+- Forgetting to call `browser_close` because "I'm not done yet" (Close it! You can always re-launch).
+- Guessing selectors after a failure instead of checking `browser_snapshot`.
+
+## Rationalization Table
+
+| Excuse | Reality |
+| :--- | :--- |
+| "It's just a quick check, I don't need a persona." | Raw browsers are fragile and lack cookies. `suggest_for_url` takes 2 seconds and saves minutes of manual login. |
+| "I'll close the browser at the very end of the session." | If the agent crashes or exceeds its turn limit, the browser becomes a "Zombie". Close it AFTER EACH TASK. |
+| "I know the selector by heart." | Sites change. `browser_snapshot` provides the A11y tree which is more durable than your memory. |
+
+## Quick Reference
+
+| Task | Tool |
+| :--- | :--- |
+| Find best persona | `browser_suggest_for_url` |
+| Start session | `browser_launch(kind, profile, ...)` |
+| Robust interaction | `browser_click(..., wait_for="visible")` |
+| Fix failing macro | `browser_snapshot` -> `macro_save` |
+| Cleanup | `browser_close` |

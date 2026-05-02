@@ -48,6 +48,29 @@ your install — and to scaffold a sample persona, scenario, and macro under
 `~/.config/undef/`. Reload Claude; tools appear as
 `mcp__octowright__browser_launch`, etc.
 
+## Distributed Skill Pack
+
+octowright ships a packaged skill named `using-octowright` for Codex and
+project-local plugin manifests for Claude/Codex runtimes.
+
+Install everything:
+
+```bash
+uv run octowright skill install using-octowright --target all
+```
+
+Check status and drift:
+
+```bash
+uv run octowright skill status using-octowright --target all
+```
+
+Notes:
+- Codex skill install target is `$CODEX_HOME/skills` (defaults to `~/.codex/skills`).
+- Plugin manifests are written in the current project under `.claude-plugin/plugin.json`
+  and `.codex-plugin/plugin.json`.
+- Use `--dry-run` to preview writes and `--force` to overwrite existing installs.
+
 ## Your first 5 minutes
 
 Once installed and registered, ask Claude to walk through these in order. Each step
