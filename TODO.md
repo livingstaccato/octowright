@@ -15,6 +15,6 @@
 ## Phase 4: Modernization & Refactoring
 - [x] Task 4.1: Unify JSONL Tailing Logic
 - [x] Task 4.2: Scenario Parallelization
-- [ ] Task 4.3: Type Safety & Argument Unification
-- [ ] Task 4.4: Registry-based Macro Dispatch
+- [x] Task 4.3: Type Safety & Argument Unification
+- [x] Task 4.4: Registry-based Macro Dispatch
 - [x] Task 4.5: Console Buffer Management

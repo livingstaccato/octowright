@@ -78,8 +78,10 @@ def test_missing_action_field_is_error() -> None:
     [
         ({"action": "navigate"}, "url"),
         ({"action": "click"}, "selector"),
+        ({"action": "click_by"}, "locator"),
         ({"action": "fill", "selector": "#x"}, "value"),
         ({"action": "fill", "value": "v"}, "selector"),
+        ({"action": "fill_by", "value": "v"}, "locator"),
         ({"action": "type", "selector": "#x"}, "text"),
         ({"action": "type", "text": "hi"}, "selector"),
         ({"action": "press_key"}, "key"),
@@ -96,7 +98,26 @@ def test_missing_required_field(action: dict[str, Any], expected_field: str) -> 
     codes = _codes(issues)
     assert "missing_required_field" in codes, f"expected missing_required_field, got {codes}"
     msgs = [i.message for i in issues if i.code == "missing_required_field"]
-    assert any(f"'{expected_field}'" in m for m in msgs), f"expected mention of {expected_field!r} in {msgs}"
+    if expected_field == "locator":
+        assert any("locator field" in m for m in msgs), f"expected locator requirement mention in {msgs}"
+    else:
+        assert any(f"'{expected_field}'" in m for m in msgs), f"expected mention of {expected_field!r} in {msgs}"
+
+
+def test_click_by_rejects_missing_locator() -> None:
+    issues = lint_macro(_macro([{"action": "click_by"}]))
+    codes = [i.code for i in issues]
+    assert "missing_required_field" in codes
+    msg = next(i.message for i in issues if i.code == "missing_required_field")
+    assert "locator" in msg
+
+
+def test_fill_by_requires_value() -> None:
+    issues = lint_macro(_macro([{"action": "fill_by", "role": "textbox"}]))
+    codes = [i.code for i in issues]
+    assert "missing_required_field" in codes
+    msgs = [i.message for i in issues if i.code == "missing_required_field"]
+    assert any("'value'" in msg for msg in msgs)
 
 
 # ---------------------------------------------------------------------------

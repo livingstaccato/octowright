@@ -56,6 +56,7 @@ class _FakePool:
         self.launch_calls: list[dict[str, Any]] = []
         self.close_calls: list[str] = []
         self.launch_result: dict[str, Any] | None = None
+        self.close_result: dict[str, Any] | None = None
         self.launch_raises: BaseException | None = None
         self.next_instance_id: str = "fakeinst0001"
 
@@ -84,6 +85,8 @@ class _FakePool:
     async def close(self, instance_id: str) -> dict[str, Any]:
         self.close_calls.append(instance_id)
         self._sessions.pop(instance_id, None)
+        if self.close_result is not None:
+            return self.close_result
         return {
             "closed": True,
             "log_path": f"/tmp/{instance_id}.jsonl",
@@ -335,6 +338,59 @@ def test_delete_session_happy_path(
     assert body["instance_id"] == "liveiid00001"
     assert "log_path" in body
     assert pool.close_calls == ["liveiid00001"]
+
+
+def test_delete_session_happy_path_with_cache_report(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    sid = "liveiid00002"
+    pool._sessions[sid] = SimpleNamespace(instance_id=sid)
+
+    log_path = isolated_recordings / "20260101T000000Z-chromium-liveiid00002.jsonl"
+    md_path = log_path.with_suffix(".markdown.md")
+    ws_path = log_path.with_suffix(".websocket.jsonl")
+    video_path = isolated_recordings / "liveiid00002.webm"
+
+    log_path.write_text(
+        "".join(
+            [
+                json.dumps({"action": "launch", "kind": "chromium"}),
+                "\n",
+                json.dumps(
+                    {
+                        "action": "close",
+                        "video_path": str(video_path),
+                        "trace_path": None,
+                        "markdown_path": str(md_path),
+                    }
+                ),
+                "\n",
+            ]
+        )
+    )
+    md_path.write_text("markdown cache", encoding="utf-8")
+    ws_path.write_text("hello", encoding="utf-8")
+    video_path.write_bytes(b"\x00\x01")
+    pool.close_result = {
+        "closed": True,
+        "log_path": str(log_path),
+        "video_path": str(video_path),
+        "trace_path": None,
+    }
+
+    r = client.delete(f"/api/sessions/{sid}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["closed"] is True
+    assert body["instance_id"] == sid
+    assert body["cache"]["components"]["markdown"]["size_bytes"] == md_path.stat().st_size
+    assert body["cache"]["components"]["websocket"]["size_bytes"] == ws_path.stat().st_size
+    assert body["cache"]["components"]["video"]["size_bytes"] == video_path.stat().st_size
+    assert body["cache"]["components"]["jsonl"]["size_bytes"] == log_path.stat().st_size
+    assert body["cache"]["components"]["jsonl"]["path"] == str(log_path)
 
 
 def test_delete_session_unknown_id_404(

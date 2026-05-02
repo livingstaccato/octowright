@@ -244,7 +244,19 @@ async def session_close(request: Request) -> JSONResponse:
     except Exception as e:
         state.log.exception("octowright.http.session_close_failed", instance_id=sid)
         return JSONResponse({"error": f"close failed: {e}"}, status_code=500)
-    body = {"closed": True, "instance_id": sid, **result}
+
+    body: dict[str, Any] = {"closed": True, "instance_id": sid, **result}
+    log_path = result.get("log_path")
+    if isinstance(log_path, str) and log_path:
+        try:
+            body["cache"] = _cache_report_for_recording(Path(log_path))
+        except Exception:
+            state.log.warning(
+                "octowright.http.session_close_cache_report_failed",
+                instance_id=sid,
+                log_path=log_path,
+            )
+
     state.log.info("octowright.http.session_closed", instance_id=sid)
     return JSONResponse(body)
 

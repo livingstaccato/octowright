@@ -25,8 +25,9 @@ log = get_logger(__name__)
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-_SEMANTIC_LOCATOR_KEYS = ("role", "role_name", "label", "text", "test_id")
-_NON_ARIA_NOISE_KEYS = ("role", "role_name", "label", "test_id")
+_SEMANTIC_LOCATOR_KEYS = ("role", "role_name", "label", "text", "test_id", "role_exact")
+_NON_ARIA_NOISE_KEYS = ("role", "role_name", "test_id", "role_exact")
+_RECORDING_NOISE_KEYS = ("action", "ts", "kind", "profile", "instance_id")
 
 # MACROS_DIR sits next to profiles/ by default; env var overrides.
 MACROS_DIR: Path = Path(os.environ.get("OCTOWRIGHT_MACROS_DIR", str(PROFILES_DIR.parent / "macros")))
@@ -79,9 +80,20 @@ def _substitute_in_action(
     return result
 
 
-def _extract_semantic_locators(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Extract semantic locator kwargs that can be passed to click_by/fill_by."""
-    return {k: kwargs[k] for k in _SEMANTIC_LOCATOR_KEYS if k in kwargs}
+def _action_kwargs(action: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``action`` without session-tracking/meta keys."""
+    return {k: v for k, v in action.items() if k not in _RECORDING_NOISE_KEYS}
+
+
+def _strip_non_aria_noise(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop semantic metadata for methods that don't understand it."""
+    if kind in {"click", "fill", "click_by", "fill_by"}:
+        return dict(kwargs)
+
+    cleaned = dict(kwargs)
+    for k in _NON_ARIA_NOISE_KEYS:
+        cleaned.pop(k, None)
+    return cleaned
 
 
 def load_macro_from_recording(
@@ -269,6 +281,101 @@ _ACTION_MAP = {
 }
 
 
+async def _dispatch_standard(
+    session: BrowserSession,
+    kind: str,
+    kwargs: dict[str, Any],
+    method_name: str,
+) -> tuple[int, int]:
+    if kind == "screenshot":
+        path_value = kwargs.get("path")
+        if not path_value:
+            return 0, 1
+        kwargs = dict(kwargs)
+        kwargs["path"] = Path(path_value)
+        await getattr(session, method_name)(kwargs["path"])
+        return 1, 0
+
+    if kind == "type" and "delay_ms" not in kwargs:
+        # BrowserSession.type_text expects (selector, text, delay_ms)
+        kwargs = dict(kwargs)
+        kwargs["delay_ms"] = 0
+
+    if kind == "wait_for":
+        # BrowserSession.wait_for accepts None when selector or text is omitted.
+        kwargs = dict(kwargs)
+        kwargs.setdefault("selector", None)
+        kwargs.setdefault("text", None)
+        kwargs.setdefault("timeout_ms", None)
+
+    method = getattr(session, method_name)
+    await method(**kwargs)
+    return 1, 0
+
+
+async def _dispatch_click_or_fill(
+    session: BrowserSession,
+    kind: str,
+    kwargs: dict[str, Any],
+) -> tuple[int, int]:
+    is_fill = kind in {"fill", "fill_by"}
+    if is_fill:
+        fallback_method = session.fill
+        semantic_method = getattr(session, "fill_by", None)
+    else:
+        fallback_method = session.click
+        semantic_method = getattr(session, "click_by", None)
+
+    semantic_kwargs = {k: v for k, v in kwargs.items() if k in _SEMANTIC_LOCATOR_KEYS}
+    if semantic_method is None:
+        semantic_kwargs = {}
+
+    else:
+        if "timeout_ms" in kwargs:
+            semantic_kwargs["timeout_ms"] = kwargs["timeout_ms"]
+        if is_fill and "value" in kwargs:
+            semantic_kwargs["value"] = kwargs["value"]
+
+    tried_semantic = bool(semantic_kwargs) and semantic_method is not None
+    if tried_semantic:
+        try:
+            assert semantic_method is not None
+            await semantic_method(**semantic_kwargs)
+            return 1, 0
+        except Exception:
+            # Intentional fallback: keep CSS selector path as a recovery option
+            # if semantic resolution was best-effort and a selector exists.
+            if "selector" not in kwargs:
+                raise
+
+    fallback_kwargs = {k: v for k, v in kwargs.items() if k not in _SEMANTIC_LOCATOR_KEYS}
+    fallback_kwargs.pop("timeout_ms", None)
+    await fallback_method(**fallback_kwargs)
+    return 1, 0
+
+
+_ACTION_DISPATCHERS = {
+    "navigate": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "navigate"),
+    "click": _dispatch_click_or_fill,
+    "fill": _dispatch_click_or_fill,
+    "type": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "type_text"),
+    "press_key": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "press_key"),
+    "screenshot": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "screenshot"),
+    "evaluate": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "evaluate"),
+    "wait_for": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "wait_for"),
+    "expect_url": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "expect_url"),
+    "expect_text": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "expect_text"),
+    "expect_selector": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "expect_selector"),
+    "expect_js": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "expect_js"),
+    "mock_route": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "mock_route"),
+    "unmock_route": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "unmock_route"),
+    "set_dialog_policy": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "set_dialog_policy"),
+    "set_input_files": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "set_input_files"),
+    "click_by": _dispatch_click_or_fill,
+    "fill_by": _dispatch_click_or_fill,
+}
+
+
 async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
     """Run one non-conditional action. Returns (executed, skipped). Raises on action failure.
 
@@ -279,70 +386,14 @@ async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> t
     if kind in _REPLAY_SKIP:
         return 0, 1
 
-    method_name = _ACTION_MAP.get(kind)
-    if not method_name:
+    if kind not in _ACTION_MAP:
+        return 0, 1
+    dispatcher = _ACTION_DISPATCHERS.get(kind)
+    if not dispatcher:
         return 0, 1
 
-    # Filter out recording-only noise fields that methods don't expect.
-    kwargs = {k: v for k, v in action.items() if k not in ("action", "ts", "kind", "profile", "instance_id")}
-
-    # For non-ARIA actions, drop locator-like keys that are irrelevant/noisy.
-    if kind not in {"click", "fill", "click_by", "fill_by"}:
-        for k in _NON_ARIA_NOISE_KEYS:
-            kwargs.pop(k, None)
-
-    # Special handling for actions that don't match 1:1 with method signatures
-    # or need type conversion.
-    if kind == "screenshot":
-        path_str = kwargs.get("path")
-        if not path_str:
-            return 0, 1
-        kwargs["path"] = Path(path_str)
-    elif kind == "type":
-        # BrowserSession.type_text expects (selector, text, delay_ms)
-        if "delay_ms" not in kwargs:
-            kwargs["delay_ms"] = 0
-    elif kind == "wait_for":
-        # BrowserSession.wait_for expects (selector, text, timeout_ms)
-        if "selector" not in kwargs:
-            kwargs["selector"] = None
-        if "text" not in kwargs:
-            kwargs["text"] = None
-        if "timeout_ms" not in kwargs:
-            kwargs["timeout_ms"] = None
-
-    # ARIA-first playback
-    if kind in {"click", "fill", "click_by", "fill_by"}:
-        semantic_finders = _extract_semantic_locators(kwargs)
-        if semantic_finders:
-            semantic_method_name = "click_by" if "click" in kind else "fill_by"
-            semantic_method = getattr(session, semantic_method_name)
-            semantic_kwargs = dict(semantic_finders)
-            if "timeout_ms" in kwargs:
-                semantic_kwargs["timeout_ms"] = kwargs["timeout_ms"]
-
-            if kind in {"fill", "fill_by"} and "value" in kwargs:
-                semantic_kwargs["value"] = kwargs["value"]
-
-            fallback_kind = "click" if "click" in kind else "fill"
-
-            # Try semantic first
-            try:
-                await semantic_method(**semantic_kwargs)
-                return 1, 0
-            except Exception:
-                # Fallback to standard selector if semantic locator fails
-                fallback_kwargs = {k: v for k, v in kwargs.items() if k not in _SEMANTIC_LOCATOR_KEYS}
-                fallback_kwargs.pop("timeout_ms", None)
-                method = getattr(session, fallback_kind)
-                if "selector" not in fallback_kwargs:
-                    raise
-                await method(**fallback_kwargs)
-                return 1, 0
-
-    method = getattr(session, method_name)
-    await method(**kwargs)
-    return 1, 0
+    kwargs = _strip_non_aria_noise(kind, _action_kwargs(action))
+    return await dispatcher(session, kind, kwargs)
 
 
 async def _dispatch_one(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:

@@ -32,8 +32,10 @@ from typing import Any
 _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "navigate": ("url",),
     "click": ("selector",),
+    "click_by": (),
     "type": ("selector", "text"),
     "fill": ("selector", "value"),
+    "fill_by": ("value",),
     "press_key": ("key",),
     "screenshot": (),  # path is optional (skipped if missing)
     "evaluate": ("expression",),
@@ -74,6 +76,7 @@ _HAS_SPECIAL = re.compile(r"[^A-Za-z0-9]")
 _CREDENTIAL_CANDIDATE_KEYS: frozenset[str] = frozenset(
     {"value", "text", "url", "expression", "pattern", "body", "key", "prompt_text"}
 )
+_ARIA_LOCATOR_KEYS: frozenset[str] = frozenset({"role", "role_name", "label", "text", "test_id"})
 
 
 def _looks_like_password(s: str) -> bool:
@@ -134,6 +137,18 @@ def _check_credentials(action: dict[str, Any], outer_index: int, issues: list[Is
 
 def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
     """Validate a known simple action's required fields."""
+    if kind in {"click_by", "fill_by"} and not any(action.get(k) for k in _ARIA_LOCATOR_KEYS):
+        issues.append(
+            Issue(
+                severity="error",
+                code="missing_required_field",
+                message=(
+                    f"action {kind!r} is missing required locator field " "(one of role, label, text, or test_id)"
+                ),
+                action_index=outer_index,
+            )
+        )
+
     required = _SIMPLE_REQUIRED[kind]
     for field in required:
         if field not in action or action.get(field) in (None, ""):
