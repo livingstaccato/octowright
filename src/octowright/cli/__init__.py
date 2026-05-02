@@ -23,6 +23,7 @@ from . import persona as _persona  # noqa: F401
 from . import scenario as _scenario  # noqa: F401
 from . import selftest as _selftest  # noqa: F401
 from . import serve as _serve  # noqa: F401
+from . import skill as _skill  # noqa: F401
 from . import takeover as _takeover_cmd  # noqa: F401
 from . import test_cmd as _test_cmd  # noqa: F401
 from ._root import cli, main

@@ -27,6 +27,6 @@ packages/octowright-frontend/coverage/
 .codex-plugin/
 docs/superpowers/
 memray.bin
-using-octowright/
+/using-octowright/
 verify_macro_explain.py
 scripts/profile_benchmarks.py
