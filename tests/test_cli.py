@@ -60,7 +60,7 @@ def isolated_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str,
 def test_help_lists_subcommands() -> None:
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
-    for sub in ("serve", "selftest", "test", "persona", "scenario"):
+    for sub in ("serve", "selftest", "test", "persona", "scenario", "skill"):
         assert sub in result.output
 
 

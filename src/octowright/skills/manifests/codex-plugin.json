@@ -1,0 +1,30 @@
+{
+  "name": "octowright",
+  "version": "{version}",
+  "description": "Playwright automation toolkit for Codex workflows.",
+  "author": {
+    "name": "Provide IO",
+    "url": "https://github.com/provide-io/octowright"
+  },
+  "homepage": "https://github.com/provide-io/octowright",
+  "repository": "https://github.com/provide-io/octowright",
+  "license": "Apache-2.0",
+  "keywords": [
+    "playwright",
+    "browser",
+    "automation",
+    "testing"
+  ],
+  "interface": {
+    "displayName": "Octowright",
+    "shortDescription": "Browser automation tools",
+    "longDescription": "Use Octowright to run Playwright-based browser automation and testing workflows.",
+    "developerName": "Provide IO",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/provide-io/octowright"
+  }
+}
