@@ -132,6 +132,35 @@ async def test_aria_first_click_by_action_fallback(mock_session: MagicMock) -> N
     mock_session.click.assert_awaited_once_with(selector="#legacy-id")
 
 
+@pytest.mark.anyio
+async def test_aria_forward_semantic_role_exact(mock_session: MagicMock) -> None:
+    action = {
+        "action": "click",
+        "selector": "#signup",
+        "role": "button",
+        "role_name": "Submit",
+        "role_exact": True,
+    }
+
+    await macros._dispatch_simple(mock_session, action)
+
+    mock_session.click_by.assert_awaited_once_with(role="button", role_name="Submit", role_exact=True)
+    mock_session.click.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_aria_first_click_by_action_fallback_without_selector_still_no_fallback(
+    mock_session: MagicMock,
+) -> None:
+    action = {"action": "click_by", "role": "button", "role_name": "No selector"}
+    mock_session.click_by.side_effect = Exception("not found")
+
+    with pytest.raises(Exception, match="not found"):
+        await macros._dispatch_simple(mock_session, action)
+
+    mock_session.click.assert_not_called()
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
