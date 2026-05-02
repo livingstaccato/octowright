@@ -49,6 +49,28 @@ async def golden_assert(instance_id: str, name: str) -> dict[str, Any]:
     return {"ok": True, "diffs": 0}
 
 
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Compare the current page's accessibility tree against a saved golden. "
+        "Returns a dict with 'ok' and 'diffs' instead of raising. "
+        "Useful for loops that need to wait for a specific state."
+    ),
+)
+async def golden_verify_loop(instance_id: str, name: str) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    actual = await session.snapshot()
+    expected = goldens_mod.load_golden(name)["tree"]
+    diffs = goldens_mod.diff_trees(expected, actual)
+    if not diffs:
+        return {"ok": True, "diffs": 0}
+    return {
+        "ok": False,
+        "diff_count": len(diffs),
+        "diffs": diffs[:10],
+    }
+
+
 @mcp.tool(structured_output=False, description="List saved goldens.")
 def golden_list() -> list[dict[str, Any]]:
     return goldens_mod.list_goldens()
