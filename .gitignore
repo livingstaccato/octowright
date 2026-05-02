@@ -25,7 +25,6 @@ packages/octowright-frontend/coverage/
 .claude/
 .claude-plugin/
 .codex-plugin/
-docs/superpowers/
 memray.bin
 /using-octowright/
 verify_macro_explain.py
