@@ -111,8 +111,9 @@ Ask Claude `"give me the octowright dashboard URL"` (it'll call the
 - **Live updates** — for currently-running sessions, the page opens a
   WebSocket to `/api/sessions/{id}/tail` and appends new events as they
   arrive (no manual refresh). WebSocket frame payloads that are binary are
-  intentionally hidden in both storage and UI preview (`[binary payload hidden]`)
-  so logs cannot leak binary blobs.
+  intentionally hidden in the UI preview as `[binary payload hidden]`. Full frames
+  are still cached to the websocket cache using base64 for safe replay and
+  debugging.
 - **Trace deep-dive** — a button on each session page spawns
   `npx playwright show-trace` against that session's `.zip` trace, opening
   the official Playwright trace viewer for full per-action inspection

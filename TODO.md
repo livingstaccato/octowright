@@ -13,8 +13,8 @@
 - [x] Task 3.2: Semantic Replay (Intent-based Recovery)
 
 ## Phase 4: Modernization & Refactoring
-- [ ] Task 4.1: Unify JSONL Tailing Logic
-- [ ] Task 4.2: Scenario Parallelization
+- [x] Task 4.1: Unify JSONL Tailing Logic
+- [x] Task 4.2: Scenario Parallelization
 - [ ] Task 4.3: Type Safety & Argument Unification
 - [ ] Task 4.4: Registry-based Macro Dispatch
-- [ ] Task 4.5: Console Buffer Management
+- [x] Task 4.5: Console Buffer Management
