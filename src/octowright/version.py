@@ -3,6 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-from .version import VERSION, __version__
+"""Package version constants."""
 
-__all__ = ["VERSION", "__version__"]
+VERSION = "0.1.0"
+__version__ = VERSION

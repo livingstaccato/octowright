@@ -10,9 +10,10 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
-from importlib import metadata
 from importlib.resources import as_file, files
 from pathlib import Path
+
+from .version import VERSION
 
 SKILL_NAME = "using-octowright"
 
@@ -29,10 +30,7 @@ class InstallResult:
 
 
 def _version() -> str:
-    try:
-        return metadata.version("octowright")
-    except metadata.PackageNotFoundError:
-        return "0.1.0"
+    return VERSION
 
 
 def _sha256(path: Path) -> str:
@@ -264,3 +262,49 @@ def render_table(results: list[InstallResult]) -> str:
 def render_json(results: list[InstallResult]) -> str:
     payload = [result_as_jsonable(r) for r in results]
     return json.dumps(payload, indent=2)
+
+
+def doctor_distributed_assets(*, cwd: Path | None = None) -> list[InstallResult]:
+    checks: list[InstallResult] = []
+    for target, path in (
+        ("packaged_skill", _packaged_skill_path() / "SKILL.md"),
+        ("packaged_manifest_claude", files("octowright.skills").joinpath("manifests", "claude-plugin.json")),
+        ("packaged_manifest_codex", files("octowright.skills").joinpath("manifests", "codex-plugin.json")),
+    ):
+        exists = False
+        try:
+            with as_file(path) as p:
+                exists = p.exists()
+        except Exception:
+            exists = False
+        checks.append(
+            InstallResult(
+                target=target,
+                destination=str(path),
+                installed=exists,
+                updated=False,
+                reason="ok" if exists else "missing",
+                version=_version(),
+                hash_match=exists,
+            )
+        )
+
+    root = cwd or Path.cwd()
+    for target, path in (
+        ("repo_claude_plugin_dir", root / ".claude-plugin"),
+        ("repo_codex_plugin_dir", root / ".codex-plugin"),
+    ):
+        parent_exists = path.parent.exists()
+        exists = path.exists()
+        checks.append(
+            InstallResult(
+                target=target,
+                destination=str(path),
+                installed=exists,
+                updated=False,
+                reason="ok" if parent_exists else "missing_parent",
+                version=_version(),
+                hash_match=parent_exists,
+            )
+        )
+    return checks

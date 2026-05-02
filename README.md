@@ -65,11 +65,18 @@ Check status and drift:
 uv run octowright skill status using-octowright --target all
 ```
 
+Run diagnostics:
+
+```bash
+uv run octowright skill doctor --json
+```
+
 Notes:
 - Codex skill install target is `$CODEX_HOME/skills` (defaults to `~/.codex/skills`).
 - Plugin manifests are written in the current project under `.claude-plugin/plugin.json`
   and `.codex-plugin/plugin.json`.
 - Use `--dry-run` to preview writes and `--force` to overwrite existing installs.
+- Distributed skill/plugin metadata versions are sourced from `octowright.VERSION`.
 
 ## Your first 5 minutes
 
