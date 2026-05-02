@@ -87,6 +87,34 @@ jobs:
         run: uv run --active pytest -q tests/
       - name: Selftest — verify tool registration
         run: uv run --active octowright selftest
+      - name: Build wheel + sdist
+        run: uv run --active python -m build --wheel --sdist
+      - name: Verify packaged skill assets in wheel
+        run: |
+          python - <<'PY'
+          import glob
+          import zipfile
+          whl = glob.glob("dist/*.whl")
+          assert whl, "missing wheel artifact"
+          required = {
+              "octowright/skills/using-octowright/SKILL.md",
+              "octowright/skills/using-octowright/skill.json",
+              "octowright/skills/manifests/claude-plugin.json",
+              "octowright/skills/manifests/codex-plugin.json",
+          }
+          with zipfile.ZipFile(whl[0]) as zf:
+              names = set(zf.namelist())
+          missing = sorted(required - names)
+          assert not missing, f"wheel missing required files: {missing}"
+          PY
+      - name: Skill CLI smoke
+        env:
+          CODEX_HOME: ${{ github.workspace }}/.ci/codex-home
+        run: |
+          uv run --active octowright skill install using-octowright --target all --dry-run
+          uv run --active octowright skill install using-octowright --target all
+          uv run --active octowright skill status using-octowright --target all --json
+          uv run --active octowright skill doctor --json
 
   selftest:
     name: 🔧 Selftest — quick smoke

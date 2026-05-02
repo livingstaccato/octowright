@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from octowright.cli import cli
 from octowright.skill_distribution import SKILL_NAME, install_distributed_assets, status_distributed_assets
+from octowright.version import VERSION
 
 
 def test_install_distributed_assets_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -58,6 +59,7 @@ def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_
         payload = json.loads(install_result.output)
         assert len(payload) == 3
         assert all(item["installed"] for item in payload)
+        assert all(item["version"] == VERSION for item in payload)
 
         status_result = runner.invoke(
             cli,
@@ -67,3 +69,14 @@ def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_
         status_payload = json.loads(status_result.output)
         assert len(status_payload) == 3
         assert all(item["installed"] for item in status_payload)
+        assert all(item["version"] == VERSION for item in status_payload)
+
+
+def test_cli_skill_doctor_json(tmp_path: Path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=str(tmp_path)):
+        result = runner.invoke(cli, ["skill", "doctor", "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert len(payload) >= 3
+        assert all(item["version"] == VERSION for item in payload)
