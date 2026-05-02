@@ -19,3 +19,4 @@ node_modules/
 src/octowright/server/frontend/
 packages/octowright-frontend/coverage/
 # package-lock.json is committed for reproducible npm installs
+.worktrees/
