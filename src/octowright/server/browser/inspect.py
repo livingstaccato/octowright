@@ -14,6 +14,7 @@ from typing import Any
 
 from ... import macros as macro_mod
 from ...export import export_script as _export_script
+from ...recorder import tail_log
 from ...session import DEFAULT_PREVIEW_CHARS
 from .._state import mcp, pool
 
@@ -146,6 +147,48 @@ def browser_recording_path(instance_id: str) -> dict[str, Any]:
 
 @mcp.tool(
     structured_output=False,
+    description=(
+        "ONE-SHOT TEARDOWN: Captures a screenshot and page title, then closes the browser. "
+        "Use this as the final step of a task to ensure resources are freed. "
+        "If snapshot=True, also includes an aria-tree snapshot. "
+        "Returns {title, url, screenshot_path, aria (optional), closed: true}."
+    ),
+)
+async def browser_capture_and_close(
+    instance_id: str,
+    screenshot_path: str | None = None,
+    snapshot: bool = True,
+) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    title = await session.page.title()
+    url = session.page.url
+
+    # Screenshot
+    target = Path(screenshot_path) if screenshot_path else session.log_path.with_suffix(".png")
+    await session.screenshot(target)
+
+    # Optional Snapshot
+    aria = None
+    if snapshot:
+        aria_full = await session.page.locator("html").aria_snapshot()
+        aria = aria_full[:DEFAULT_PREVIEW_CHARS]
+
+    # Close
+    await pool.close(instance_id)
+
+    res = {
+        "title": title,
+        "url": url,
+        "screenshot_path": str(target),
+        "closed": True,
+    }
+    if aria:
+        res["aria"] = aria
+    return res
+
+
+@mcp.tool(
+    structured_output=False,
     description="Export a replayable Playwright script (python | ts) from an instance's recording.",
 )
 def browser_export_script(
@@ -260,35 +303,12 @@ def browser_tail_recording(
     session = pool.get(instance_id)
     log_path = Path(session.log_path)
     prev = since or 0
-    if not log_path.exists():
-        return {"events": [], "cursor": prev, "total_bytes": 0, "complete": True}
-    with log_path.open("rb") as fh:
-        fh.seek(prev)
-        data = fh.read()
-    total_bytes = log_path.stat().st_size
-    text = data.decode("utf-8", errors="replace")
-    lines = text.split("\n")
-    # If text ends with \n, all non-empty items are complete lines.  If not, the
-    # last item is a partial fragment; exclude it and leave the cursor at its start.
-    if text.endswith("\n"):
-        complete_lines = [ln for ln in lines if ln.strip()]
-        partial_bytes = 0
-    else:
-        complete_lines = [ln for ln in lines[:-1] if ln.strip()]
-        partial_bytes = len(lines[-1].encode("utf-8"))
-    new_cursor = prev + len(data) - partial_bytes
-    events: list[dict[str, Any]] = []
-    for raw in complete_lines:
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            events.append(_json.loads(raw))
-        except _json.JSONDecodeError:
-            continue
+
+    events, new_cursor, total_bytes = tail_log(log_path, prev)
+
     return {
         "events": events,
         "cursor": new_cursor,
         "total_bytes": total_bytes,
-        "complete": new_cursor == total_bytes,
+        "complete": new_cursor >= total_bytes,
     }
