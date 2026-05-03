@@ -41,7 +41,13 @@ jobs:
           fi
           which node
           ls -la /usr/local/bin/node || true
+      - name: Install uv (act fallback)
+        if: ${{ env.ACT == 'true' }}
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: astral-sh/setup-uv@v5
+        if: ${{ env.ACT != 'true' }}
         with:
           enable-cache: false
       - name: Sync dev deps
@@ -74,7 +80,13 @@ jobs:
           fi
           which node
           ls -la /usr/local/bin/node || true
+      - name: Install uv (act fallback)
+        if: ${{ env.ACT == 'true' }}
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: astral-sh/setup-uv@v5
+        if: ${{ env.ACT != 'true' }}
         with:
           enable-cache: false
       - name: Sync dev deps
@@ -137,7 +149,13 @@ jobs:
           fi
           which node
           ls -la /usr/local/bin/node || true
+      - name: Install uv (act fallback)
+        if: ${{ env.ACT == 'true' }}
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: astral-sh/setup-uv@v5
+        if: ${{ env.ACT != 'true' }}
         with:
           enable-cache: false
       - name: Sync

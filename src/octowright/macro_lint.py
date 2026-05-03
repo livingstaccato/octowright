@@ -142,9 +142,7 @@ def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: l
             Issue(
                 severity="error",
                 code="missing_required_field",
-                message=(
-                    f"action {kind!r} is missing required locator field " "(one of role, label, text, or test_id)"
-                ),
+                message=(f"action {kind!r} is missing required locator field (one of role, label, text, or test_id)"),
                 action_index=outer_index,
             )
         )

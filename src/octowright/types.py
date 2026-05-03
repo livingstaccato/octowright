@@ -19,6 +19,11 @@ class LaunchOptions(TypedDict, total=False):
     stabilize: bool
     record_video: bool
     trace: bool
+    har: bool
+    har_path: str | None
+    har_mode: str
+    har_url_filter: str | None
+    har_content: str | None
     badge: bool
     badge_position: str
     tile: bool

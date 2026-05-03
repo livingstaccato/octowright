@@ -473,6 +473,11 @@ class BrowserPool:
         stabilize = options.get("stabilize", False)
         record_video = options.get("record_video", False)
         trace = options.get("trace", False)
+        har = options.get("har", False)
+        har_path_opt = options.get("har_path")
+        har_mode = options.get("har_mode", "minimal")
+        har_url_filter = options.get("har_url_filter")
+        har_content = options.get("har_content")
         badge = options.get("badge", True)
         badge_position = options.get("badge_position", _BADGE_POSITION_DEFAULT)
         tile = options.get("tile", False)
@@ -485,6 +490,10 @@ class BrowserPool:
             raise ValueError(f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {badge_position!r}")
         if ephemeral and session:
             raise ValueError("ephemeral and session are mutually exclusive")
+        if har_mode not in {"full", "minimal"}:
+            raise ValueError("har_mode must be one of ['full', 'minimal']")
+        if har_content is not None and har_content not in {"omit", "embed", "attach"}:
+            raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
 
         # Promote: a named launch (label given, no explicit profile, not ephemeral
         # and not session-scoped) gets a persistent profile by default. The whole
@@ -512,6 +521,9 @@ class BrowserPool:
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
+        target_url = url or DEFAULT_URL
+        instance_id = uuid.uuid4().hex[:12]
+        log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
 
         # Headed: when neither viewport_w nor viewport_h is given, let Playwright
         # adopt the OS window size (no_viewport=True) so the page can resize
@@ -540,6 +552,22 @@ class BrowserPool:
         if video_dir is not None:
             ctx_video_kwargs["record_video_dir"] = str(video_dir)
 
+        har_path: Path | None = None
+        if har or har_path_opt:
+            har_path = Path(har_path_opt) if har_path_opt else log_path.with_suffix(".har")
+            if not har_path.is_absolute():
+                har_path = (RECORDINGS_DIR / har_path).resolve()
+            har_path.parent.mkdir(parents=True, exist_ok=True)
+
+        ctx_har_kwargs: dict[str, Any] = {}
+        if har_path is not None:
+            ctx_har_kwargs["record_har_path"] = str(har_path)
+            ctx_har_kwargs["record_har_mode"] = har_mode
+            if har_url_filter:
+                ctx_har_kwargs["record_har_url_filter"] = har_url_filter
+            if har_content:
+                ctx_har_kwargs["record_har_content"] = har_content
+
         # Chromium-only window tiling: deterministic grid based on a monotonic
         # counter incremented before any await — safe under parallel launches.
         # No-op for firefox/webkit (no equivalent CLI hook) and headless runs.
@@ -565,6 +593,7 @@ class BrowserPool:
                 accept_downloads=True,
                 **viewport_kwargs,
                 **ctx_video_kwargs,
+                **ctx_har_kwargs,
                 **launch_kwargs,
             )
             browser = None
@@ -575,13 +604,10 @@ class BrowserPool:
                 accept_downloads=True,
                 **viewport_kwargs,
                 **ctx_video_kwargs,
+                **ctx_har_kwargs,
             )
             page = await context.new_page()
 
-        target_url = url or DEFAULT_URL
-        instance_id = uuid.uuid4().hex[:12]
-
-        log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
         recorder = Recorder(log_path)
         recorder.record(
             "launch",
@@ -597,6 +623,11 @@ class BrowserPool:
             record_video=record_video,
             video_dir=str(video_dir) if video_dir else None,
             trace=trace,
+            har=bool(har_path),
+            har_path=str(har_path) if har_path else None,
+            har_mode=har_mode if har_path else None,
+            har_url_filter=har_url_filter if har_path else None,
+            har_content=har_content if har_path else None,
         )
 
         # NOTE: this local was named ``session`` for years, but ``session`` is
@@ -615,6 +646,7 @@ class BrowserPool:
             profile=profile,
             stabilize=stabilize,
             trace=trace,
+            har_path=har_path,
         )
         # Wire up video tracking — page.video is only non-None when record_video_dir was set.
         if record_video and page.video is not None:
@@ -685,9 +717,17 @@ class BrowserPool:
             "log_path": str(log_path),
             "record_video": record_video,
             "trace": trace,
+            "har": bool(har_path),
         }
         if video_dir is not None:
             result["video_dir"] = str(video_dir)
+        if har_path is not None:
+            result["har_path"] = str(har_path)
+            result["har_mode"] = har_mode
+            if har_url_filter:
+                result["har_url_filter"] = har_url_filter
+            if har_content:
+                result["har_content"] = har_content
         return result
 
     def get(self, instance_id: str) -> BrowserSession:
@@ -710,6 +750,7 @@ class BrowserPool:
                 "profile": s.profile,
                 "url": s.url,
                 "log_path": str(s.log_path),
+                "har_path": str(s.har_path) if s.har_path else None,
             }
             for s in self._sessions.values()
         ]
@@ -738,6 +779,7 @@ class BrowserPool:
             "log_path": str(session.log_path),
             "video_path": str(session.video_path) if session.video_path else None,
             "trace_path": str(session.trace_path) if session.trace_path else None,
+            "har_path": str(session.har_path) if session.har_path else None,
         }
 
     async def close_all(self) -> dict[str, Any]:
@@ -745,6 +787,52 @@ class BrowserPool:
         for iid in ids:
             await self.close(iid)
         return {"closed": ids}
+
+    async def handoff(
+        self,
+        old_instance_id: str,
+        *,
+        headed: bool | None = None,
+        close_original: bool = True,
+        accept_stateless: bool = False,
+    ) -> dict[str, Any]:
+        source = self.get(old_instance_id)
+        source_profile = source.profile
+        source_user_data_dir = getattr(source, "user_data_dir", None)
+        if source_profile is None and source_user_data_dir is None and not accept_stateless:
+            raise ValueError(
+                "handoff would be stateless: source has no profile/user_data_dir; pass accept_stateless=True to proceed"
+            )
+        if not close_original and source_profile is not None:
+            raise ValueError("persistent handoff requires close_original=True so the profile can be safely reused")
+
+        target_url = getattr(source.page, "url", None) or source.url
+        close_result: dict[str, Any] | None = None
+        if close_original:
+            close_result = await self.close(old_instance_id)
+
+        launch = await self.launch(
+            kind=source.kind,
+            url=target_url,
+            headed=headed,
+            label=source.label,
+            profile=source_profile,
+            stabilize=getattr(source, "stabilize", False),
+            trace=getattr(source, "trace", False),
+            har=bool(getattr(source, "har_path", None)),
+            har_path=str(source.har_path) if getattr(source, "har_path", None) else None,
+        )
+
+        return {
+            "ok": True,
+            "old_instance_id": old_instance_id,
+            "new_instance_id": launch["instance_id"],
+            "old_closed": bool(close_result and close_result.get("closed")),
+            "profile": source_profile,
+            "kind": source.kind,
+            "url": target_url,
+            "har_path": launch.get("har_path"),
+        }
 
     async def spawn_roster(self, specs: list[dict[str, Any]]) -> dict[str, Any]:
         """Launch N browsers concurrently from a list of launch spec dicts.
@@ -769,6 +857,11 @@ class BrowserPool:
                 record_video=spec.get("record_video", False),
                 stabilize=spec.get("stabilize", False),
                 trace=spec.get("trace", False),
+                har=spec.get("har", False),
+                har_path=spec.get("har_path"),
+                har_mode=spec.get("har_mode", "minimal"),
+                har_url_filter=spec.get("har_url_filter"),
+                har_content=spec.get("har_content"),
                 badge=spec.get("badge", True),
                 badge_position=spec.get("badge_position", _BADGE_POSITION_DEFAULT),
                 tile=spec.get("tile", False),
