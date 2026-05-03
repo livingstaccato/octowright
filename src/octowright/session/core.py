@@ -53,6 +53,7 @@ class BrowserSession:
     profile: str | None = None
     stabilize: bool = False
     trace: bool = False
+    har_path: Path | None = None
     console: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=1000))
     video_path: Path | None = None
     trace_path: Path | None = None

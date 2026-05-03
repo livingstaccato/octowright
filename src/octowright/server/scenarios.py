@@ -187,6 +187,17 @@ def scenario_participants(scenario_id: str, role: str | None = None) -> dict[str
 @mcp.tool(
     structured_output=False,
     description=(
+        "Remap scenario participants from old instance ids to new ones. "
+        "Useful after browser handoff or relaunch. Optional `role` enforces role match."
+    ),
+)
+def scenario_remap_participants(scenario_id: str, remaps: list[dict[str, Any]]) -> dict[str, Any]:
+    return scenario_pool.remap_participants(scenario_id=scenario_id, remaps=remaps)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Run the scenario's verify macros as a test suite and return pass/fail. "
         "Requires the scenario spec to declare `verify: {role: macro_name}`. "
         "Writes JUnit XML to out_path if supplied."

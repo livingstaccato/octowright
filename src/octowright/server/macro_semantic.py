@@ -50,7 +50,7 @@ def summarize_action(action: dict[str, Any], indent: int = 0) -> str:
     elif kind == "try_each":
         summary = [f"{prefix}Try each branch until success:"]
         for i, branch in enumerate(action.get("branches", [])):
-            summary.append(f"{prefix}  Branch {i+1}:")
+            summary.append(f"{prefix}  Branch {i + 1}:")
             for sub in branch:
                 summary.append(f"{prefix}    - " + summarize_action(sub, 0))
         return "\n".join(summary)

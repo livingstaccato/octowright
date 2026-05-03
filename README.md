@@ -14,11 +14,20 @@ scenarios, macros, the live-event tail and the test runner — see
 
 ## Docs Map
 
+- [docs/README.md](docs/README.md): canonical user and contributor documentation index.
 - [README.md](README.md): user workflows, setup, CLI usage, and operating guidance.
 - [MCP-SHARED-CONTRACT.md](MCP-SHARED-CONTRACT.md): API/wire contract between Python server and frontend.
+- [docs/getting-started.md](docs/getting-started.md): install, registration, and first successful run.
+- [docs/engines.md](docs/engines.md): engine install/status/reinstall and launch-mode behavior.
+- [docs/personas.md](docs/personas.md): persona/profile lifecycle and credential preflight.
+- [docs/macros.md](docs/macros.md): macro record/replay, linting, and test execution.
+- [docs/scenarios.md](docs/scenarios.md): multi-browser orchestration lifecycle.
+- [docs/goldens.md](docs/goldens.md): baseline capture vs verify policy.
+- [docs/ci-quality.md](docs/ci-quality.md): quality gates and local CI parity commands.
+- [docs/troubleshooting.md](docs/troubleshooting.md): fast diagnosis for common failures.
 - [docs/architecture/](docs/architecture/): system diagrams and architecture references.
+- [docs/images/README.md](docs/images/README.md): canonical branding/image asset workflow.
 - [CHANGELOG.md](CHANGELOG.md): release summaries.
-- [docs/archive/](docs/archive/): historical plans, specs, and design notes (non-canonical for current behavior).
 
 ## Install
 
