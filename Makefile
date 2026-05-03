@@ -13,7 +13,7 @@ lint: ## Ruff lint, ruff format check, mypy, codespell, SPDX headers
 	uv run --active ruff check .
 	uv run --active ruff format --check .
 	uv run --active mypy src/octowright
-	uv run --active codespell
+	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
 	uv run --active python scripts/check_spdx_headers.py
 
 spdx-fix: ## Normalize SPDX headers in source files

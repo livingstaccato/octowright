@@ -233,6 +233,53 @@ class ScenarioPool:
             for ls in self._live.values()
         ]
 
+    def remap_participant(
+        self,
+        *,
+        scenario_id: str,
+        old_instance_id: str,
+        new_instance_id: str,
+        role: str | None = None,
+    ) -> dict[str, Any]:
+        live = self.get(scenario_id)
+        for participant in live.participants:
+            if participant.get("instance_id") != old_instance_id:
+                continue
+            if role is not None and participant.get("role") != role:
+                continue
+            participant["instance_id"] = new_instance_id
+            return {
+                "scenario_id": scenario_id,
+                "old_instance_id": old_instance_id,
+                "new_instance_id": new_instance_id,
+                "participant": participant,
+            }
+        raise KeyError(
+            f"no participant with instance_id={old_instance_id!r}" + ("" if role is None else f" and role={role!r}")
+        )
+
+    def remap_participants(self, *, scenario_id: str, remaps: list[dict[str, Any]]) -> dict[str, Any]:
+        applied: list[dict[str, Any]] = []
+        for item in remaps:
+            old_instance_id = item.get("old_instance_id")
+            new_instance_id = item.get("new_instance_id")
+            role = item.get("role")
+            if not isinstance(old_instance_id, str) or not old_instance_id:
+                raise ValueError("each remap requires non-empty old_instance_id")
+            if not isinstance(new_instance_id, str) or not new_instance_id:
+                raise ValueError("each remap requires non-empty new_instance_id")
+            if role is not None and not isinstance(role, str):
+                raise ValueError("remap role must be a string when provided")
+            applied.append(
+                self.remap_participant(
+                    scenario_id=scenario_id,
+                    old_instance_id=old_instance_id,
+                    new_instance_id=new_instance_id,
+                    role=role,
+                )
+            )
+        return {"scenario_id": scenario_id, "count": len(applied), "applied": applied}
+
     async def start(
         self,
         *,
