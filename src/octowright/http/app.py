@@ -64,7 +64,8 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
         # Capture for get_mcp_active_session_count() — path verified against
         # mcp SDK 1.27.0: routes[0].app is StreamableHTTPASGIApp.
         try:
-            _mcp_session_manager = mcp_app.routes[0].app.session_manager
+            first_route: Any = mcp_app.routes[0]
+            _mcp_session_manager = first_route.app.session_manager
         except (AttributeError, IndexError):
             pass
 

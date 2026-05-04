@@ -1,6 +1,6 @@
 [project]
 name = "octowright"
-version = "0.1.0"
+version = "0.3.0"
 description = "MCP server that drives multiple headed Playwright browsers (chromium/firefox/webkit) in parallel with per-instance action recording and persistent profiles."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -27,9 +27,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/octowright"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/octowright/skills/using-octowright" = "octowright/skills/using-octowright"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -78,6 +75,14 @@ addopts = [
     "--cov-branch",
     "--cov-report=term-missing",
 ]
+markers = [
+    "live_browser: tests that require real browser engines installed",
+    "engine_matrix: tests that exercise chromium/firefox/webkit matrices",
+]
+filterwarnings = [
+    "ignore:websockets\\.legacy is deprecated;.*:DeprecationWarning:websockets\\.legacy",
+    "ignore:websockets\\.server\\.WebSocketServerProtocol is deprecated:DeprecationWarning:uvicorn\\.protocols\\.websockets\\.websockets_impl",
+]
 
 [tool.coverage.run]
 source = ["src/octowright"]
@@ -86,8 +91,8 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-# fail_under will be raised as we backfill tests; set deliberately low for now.
-fail_under = 50
+# Raised after backfilling scenario/macro coverage.
+fail_under = 70
 
 [tool.ruff]
 line-length = 120

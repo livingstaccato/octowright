@@ -12,7 +12,6 @@ import json as _json
 from pathlib import Path
 from typing import Any
 
-from ... import macros as macro_mod
 from ...export import export_script as _export_script
 from ...recorder import tail_log
 from ...session import DEFAULT_PREVIEW_CHARS
@@ -218,8 +217,7 @@ async def browser_expect_url(
     mode: str = "regex",
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
-    actual = await macro_mod._check_url(session.page, pattern, mode)
-    session.recorder.record("expect_url", pattern=pattern, mode=mode)
+    actual = await session.expect_url(pattern, mode)
     return {"ok": True, "url": actual}
 
 
@@ -241,8 +239,7 @@ async def browser_expect_text(
     timeout_ms: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
-    actual = await macro_mod._check_text(session.page, selector, text, mode, timeout_ms)
-    session.recorder.record("expect_text", selector=selector, text=text, mode=mode, timeout_ms=timeout_ms)
+    actual = await session.expect_text(selector, text, mode, timeout_ms)
     return {"ok": True, "text": actual}
 
 
@@ -262,8 +259,7 @@ async def browser_expect_selector(
     timeout_ms: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
-    await macro_mod._check_selector(session.page, selector, present, timeout_ms)
-    session.recorder.record("expect_selector", selector=selector, present=present, timeout_ms=timeout_ms)
+    await session.expect_selector(selector, present, timeout_ms)
     return {"ok": True, "selector": selector, "present": present}
 
 
@@ -280,8 +276,7 @@ async def browser_expect_js(
     equals: Any = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
-    result = await macro_mod._check_js(session.page, expression, equals)
-    session.recorder.record("expect_js", expression=expression, equals=equals)
+    result = await session.expect_js(expression, equals)
     return {"ok": True, "result": result}
 
 

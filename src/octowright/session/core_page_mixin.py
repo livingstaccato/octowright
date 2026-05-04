@@ -10,9 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from ..defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from ._protocols import SessionLike
 
 
-class SessionPageMixin:
+class SessionPageMixin(SessionLike):
+    _last_mcp_navigation: str | None
+
     def list_pages(self) -> list[dict[str, Any]]:
         """Return [{index, url, title, is_active}, ...]. title is None for unloaded pages."""
         result = []

@@ -9,8 +9,13 @@
 # Apple Silicon: force amd64 emulation so images pulled for x86_64 work.
 --container-architecture linux/amd64
 
-# Reuse containers between runs for faster local iteration.
---reuse
+# Colima compatibility: don't bind-mount the host daemon socket path.
+--container-daemon-socket -
+
+# Avoid non-loopback bind selection issues in some local environments.
+--artifact-server-addr 127.0.0.1
+--cache-server-addr 127.0.0.1
+--no-cache-server
 
 # Pull images if needed (first run).
 --pull

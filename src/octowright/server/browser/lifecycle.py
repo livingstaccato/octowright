@@ -7,11 +7,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Unpack
+from typing import Any
 
 from ... import _format as fmt
 from ... import resolve as resolve_mod
-from ...types import LaunchOptions
 from .._state import mcp, pool
 
 
@@ -56,7 +55,7 @@ from .._state import mcp, pool
     ),
 )
 async def browser_launch(
-    **options: Unpack[LaunchOptions],
+    **options: Any,
 ) -> dict[str, Any]:
     return await pool.launch(**options)
 
@@ -99,14 +98,18 @@ def browser_suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]
     ),
 )
 async def browser_quick_launch(
-    url: str,
-    **options: Unpack[LaunchOptions],
+    **options: Any,
 ) -> dict[str, Any]:
-    profile = options.get("profile")
-    kind = options.get("kind", "chromium")
+    url = options.get("url")
+    if not isinstance(url, str) or not url:
+        raise ValueError("url is required")
+    launch_options: dict[str, Any] = dict(options)
+    launch_options.pop("url", None)
+    profile = launch_options.pop("profile", None)
+    kind = launch_options.get("kind", "chromium")
 
     if profile:
-        res = await pool.launch(url=url, **options)
+        res = await pool.launch(url=url, profile=profile, **launch_options)
         return {**res, "profile_used": profile}
 
     # Internal suggest
@@ -127,7 +130,7 @@ async def browser_quick_launch(
     res = await pool.launch(
         url=url,
         profile=profile_to_use,
-        **options,
+        **launch_options,
     )
     return {**res, "profile_used": profile_to_use}
 
