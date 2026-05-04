@@ -26,6 +26,7 @@ from starlette.testclient import TestClient
 
 from octowright import http as _http
 from octowright.http import lifespan as _http_lifespan
+from octowright.http import metrics as _http_metrics
 from octowright.http import state as _http_state
 from octowright.server import _state
 
@@ -97,6 +98,23 @@ def test_health(client: TestClient) -> None:
     body = r.json()
     assert body["ok"] is True
     assert isinstance(body["version"], str)
+
+
+def test_metrics_endpoint_and_counters(client: TestClient) -> None:
+    _http_metrics.HTTP_METRICS = _http_metrics.HttpMetrics()
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/api/sessions").status_code == 200
+    r = client.get("/api/metrics")
+    assert r.status_code == 200
+    text = r.text
+    assert "octowright_http_requests_total" in text
+    assert "octowright_http_requests_by_status" in text
+
+
+def test_metrics_endpoint_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_HTTP_METRICS", "0")
+    with TestClient(_http.build_app()) as local_client:
+        assert local_client.get("/api/metrics").status_code == 404
 
 
 def test_list_sessions_empty(client: TestClient) -> None:

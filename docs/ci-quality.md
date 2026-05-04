@@ -5,23 +5,30 @@ Use these commands as the release gate for this repository.
 ## Local Quality Gate
 
 ```bash
-make quality
+make lint
 make test
 ```
 
-`make quality` runs linting, typing, security checks, license checks, complexity checks, and coverage baseline validation.
+`make lint` runs ruff lint/format checks, `mypy`, scoped `ty` checks for `src/octowright/http`,
+`bandit` security checks, codespell, and SPDX header validation.
+
+`ty` is intentionally scoped to `src/octowright/http` in CI while broader-package baseline diagnostics
+outside changed modules are being worked down. Use this non-gating probe command to assess expansion:
+
+```bash
+make typecheck-ty-probe
+```
 
 ## CI Parity with `act`
 
 ```bash
-make act-all
+make act-lint
+make act-test
 ```
 
 Additional targets:
 
-- `make act-smoke`
-- `make act-quality`
-- `make act-tests`
+- `make ci`
 
 Notes:
 

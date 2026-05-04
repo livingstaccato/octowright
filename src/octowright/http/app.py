@@ -23,6 +23,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 
 from .frontend import _frontend_routes
+from .metrics import HttpMetricsMiddleware, metrics_enabled
 from .routes import all_routes
 
 # Set by build_app(mcp_leader=True); used by idle_watchdog to count active
@@ -65,9 +66,13 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
         # mcp SDK 1.27.0: routes[0].app is StreamableHTTPASGIApp.
         try:
             first_route: Any = mcp_app.routes[0]
-            _mcp_session_manager = first_route.app.session_manager
+            route_app: Any = getattr(first_route, "app", None)
+            _mcp_session_manager = route_app.session_manager if route_app is not None else None
         except (AttributeError, IndexError):
             pass
 
     routes.extend(_frontend_routes())
-    return Starlette(routes=routes, lifespan=lifespan)
+    app = Starlette(routes=routes, lifespan=lifespan)
+    if metrics_enabled():
+        app.add_middleware(HttpMetricsMiddleware)
+    return app

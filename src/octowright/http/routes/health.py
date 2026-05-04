@@ -8,8 +8,10 @@
 from __future__ import annotations
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
+
+from ..metrics import HTTP_METRICS, metrics_enabled
 
 
 async def health_endpoint(_request: Request) -> JSONResponse:
@@ -25,4 +27,14 @@ async def health_endpoint(_request: Request) -> JSONResponse:
 
 
 def routes() -> list[Route]:
-    return [Route("/api/health", health_endpoint, methods=["GET"])]
+    out: list[Route] = [Route("/api/health", health_endpoint, methods=["GET"])]
+    if metrics_enabled():
+        out.append(Route("/api/metrics", metrics_endpoint, methods=["GET"]))
+    return out
+
+
+async def metrics_endpoint(_request: Request) -> PlainTextResponse:
+    return PlainTextResponse(
+        HTTP_METRICS.render_prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
