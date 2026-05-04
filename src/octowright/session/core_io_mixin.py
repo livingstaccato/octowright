@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 import re
 from datetime import UTC, datetime
@@ -92,9 +93,8 @@ class SessionIOMixin(SessionLike):
         try:
             import inspect
 
-            from markitdown import MarkItDown  # type: ignore[import-not-found]
-
-            converter = MarkItDown()
+            markitdown_mod = importlib.import_module("markitdown")
+            converter = markitdown_mod.MarkItDown()
             rendered = converter.convert(html)
             if inspect.isawaitable(rendered):
                 rendered = await rendered

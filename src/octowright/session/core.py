@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,8 @@ class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin):
     websocket_path: Path | None = None
     _network_requests: list[dict[str, Any]] = field(default_factory=list)
     _last_mcp_navigation: str | None = None
+    _on_page_close: Callable[..., None] | None = field(default=None, repr=False)
+    _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.page not in self.pages:

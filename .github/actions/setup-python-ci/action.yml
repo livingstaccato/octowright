@@ -3,7 +3,7 @@ description: Standard checkout + act-safe node path + uv setup for octowright CI
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
     - name: Ensure node on PATH for post-actions (act only)
       shell: bash
       run: |

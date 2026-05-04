@@ -27,15 +27,14 @@ jobs:
     name: 🎨 Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: ./.github/actions/bootstrap-uv
       - name: Ruff check
         run: uv run --active ruff check .
       - name: Ruff format check
         run: uv run --active ruff format --check .
-      # Keep strict ty gating to the HTTP slice we are actively hardening.
-      - name: ty check (http scope)
-        run: uv run --active ty check src/octowright/http
+      - name: ty check
+        run: uv run --active ty check src/octowright
       - name: Bandit
         run: uv run --active bandit -q -r src/octowright -s B101,B110,B112,B324,B404,B405,B602,B603,B607
       - name: SPDX headers
@@ -45,7 +44,7 @@ jobs:
     name: 🧪 Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: ./.github/actions/bootstrap-uv
       - name: Install Playwright browsers
         run: uv run --active playwright install --with-deps webkit firefox chromium
@@ -99,7 +98,7 @@ jobs:
     name: 🔧 Selftest — quick smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: ./.github/actions/bootstrap-uv
         with:
           sync-args: "--python \"$(command -v python3)\""

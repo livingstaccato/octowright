@@ -366,7 +366,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
     # Expose the per-page close handler so ``_wire_listeners`` can attach it
     # to the initial page AND any popup page registered later via
     # ``context.on("page", session._register_popup)``.
-    session._on_page_close = _on_page_close  # type: ignore[attr-defined]
+    session._on_page_close = _on_page_close
 
     session.context.on("close", _evict)
     # Ephemeral browsers fire 'disconnected' on the Browser when the underlying
@@ -417,4 +417,4 @@ def _wire_user_navigation_logger(session: BrowserSession) -> None:
 
     # Expose the factory so ``_wire_listeners`` can install the handler on
     # the initial page AND any later popup page.
-    session._make_framenavigated_handler = _make  # type: ignore[attr-defined]
+    session._make_framenavigated_handler = _make

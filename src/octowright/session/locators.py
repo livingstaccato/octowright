@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from playwright.async_api import Frame, Locator, Page
@@ -29,7 +29,7 @@ def build_locator(
         if role_name is not None:
             kwargs["name"] = role_name
             kwargs["exact"] = role_exact
-        return target.get_by_role(role, **kwargs)  # type: ignore[arg-type]
+        return target.get_by_role(cast(Any, role), **kwargs)
     if label is not None:
         return target.get_by_label(label)
     if text is not None:

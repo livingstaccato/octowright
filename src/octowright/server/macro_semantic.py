@@ -34,26 +34,26 @@ def summarize_action(action: dict[str, Any], indent: int = 0) -> str:
         selector = action["selector"]
         present = action.get("present", True)
         cond = "present" if present else "absent"
-        summary = [f"{prefix}If '{selector}' is {cond}:"]
+        if_summary: list[str] = [f"{prefix}If '{selector}' is {cond}:"]
         for sub in action.get("then", []):
-            summary.append(f"{prefix}  - " + summarize_action(sub, 0))
+            if_summary.append(f"{prefix}  - " + summarize_action(sub, 0))
         if action.get("else"):
-            summary.append(f"{prefix}Else:")
+            if_summary.append(f"{prefix}Else:")
             for sub in action["else"]:
-                summary.append(f"{prefix}  - " + summarize_action(sub, 0))
-        return "\n".join(summary)
+                if_summary.append(f"{prefix}  - " + summarize_action(sub, 0))
+        return "\n".join(if_summary)
     elif kind == "try":
-        summary = [f"{prefix}Try (ignore errors):"]
+        try_summary: list[str] = [f"{prefix}Try (ignore errors):"]
         for sub in action.get("actions", []):
-            summary.append(f"{prefix}  - " + summarize_action(sub, 0))
-        return "\n".join(summary)
+            try_summary.append(f"{prefix}  - " + summarize_action(sub, 0))
+        return "\n".join(try_summary)
     elif kind == "try_each":
-        summary = [f"{prefix}Try each branch until success:"]
+        try_each_summary: list[str] = [f"{prefix}Try each branch until success:"]
         for i, branch in enumerate(action.get("branches", [])):
-            summary.append(f"{prefix}  Branch {i + 1}:")
+            try_each_summary.append(f"{prefix}  Branch {i + 1}:")
             for sub in branch:
-                summary.append(f"{prefix}    - " + summarize_action(sub, 0))
-        return "\n".join(summary)
+                try_each_summary.append(f"{prefix}    - " + summarize_action(sub, 0))
+        return "\n".join(try_each_summary)
 
     return f"{prefix}Perform {kind} action"
 
