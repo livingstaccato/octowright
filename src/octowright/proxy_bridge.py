@@ -21,6 +21,8 @@ stream.
 
 from __future__ import annotations
 
+from typing import Any
+
 import anyio
 import httpx
 from mcp.client.streamable_http import streamablehttp_client
@@ -61,7 +63,7 @@ async def run_proxy(
             )
 
 
-async def _pump(source: anyio.abc.ObjectReceiveStream, sink: anyio.abc.ObjectSendStream) -> None:
+async def _pump(source: Any, sink: Any) -> None:
     """Forward every message from ``source`` to ``sink`` until either closes."""
     try:
         async for message in source:

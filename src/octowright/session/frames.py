@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from playwright.async_api import Frame, Page
@@ -28,10 +29,9 @@ async def switch_frame_impl(
 
     frame: Frame | None = None
     if selector is not None:
-        # FrameLocator.owner is a property returning the iframe Locator on Playwright 1.50+;
-        # the parens-form keeps backward compat with older versions but mypy's stubs
-        # describe it as a non-callable Locator. Suppress the false-positive operator error.
-        handle = await page.frame_locator(selector).owner().element_handle()  # type: ignore[operator]
+        owner_attr = page.frame_locator(selector).owner
+        owner = cast(Callable[[], Any], owner_attr)() if callable(owner_attr) else owner_attr
+        handle = await owner.element_handle()
         if handle is None:
             raise RuntimeError(f"no element matches iframe selector {selector!r}")
         frame = await handle.content_frame()
