@@ -59,12 +59,10 @@ class _StubSession:
         self.records.append((action, fields))
 
 
-def _capturing_dispatch() -> (
-    tuple[
-        Callable[[_StubSession, dict[str, Any]], Awaitable[tuple[int, int]]],
-        list[dict[str, Any]],
-    ]
-):
+def _capturing_dispatch() -> tuple[
+    Callable[[_StubSession, dict[str, Any]], Awaitable[tuple[int, int]]],
+    list[dict[str, Any]],
+]:
     """Returns (dispatch_callable, captured_actions_list).
 
     Default behaviour: every dispatched action returns (1, 0). Tests that need
