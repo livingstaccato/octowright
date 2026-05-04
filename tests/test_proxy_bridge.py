@@ -18,7 +18,7 @@ import anyio
 import httpx
 import pytest
 
-from octowright.proxy_bridge import _heartbeat
+from octowright.proxy_bridge import _heartbeat, _pump
 
 
 @pytest.mark.anyio
@@ -86,3 +86,42 @@ async def test_heartbeat_resets_on_recovery() -> None:
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_pump_forwards_messages_until_source_closes() -> None:
+    source_send, source_recv = anyio.create_memory_object_stream[object](10)
+    sink_send, sink_recv = anyio.create_memory_object_stream[object](10)
+    await source_send.send({"hello": "world"})
+    await source_send.send("done")
+    await source_send.aclose()
+
+    await _pump(source_recv, sink_send)
+    await sink_send.aclose()
+
+    got = [await sink_recv.receive(), await sink_recv.receive()]
+    assert got == [{"hello": "world"}, "done"]
+
+
+@pytest.mark.anyio
+async def test_pump_raises_when_source_yields_exception_value() -> None:
+    source_send, source_recv = anyio.create_memory_object_stream[object](10)
+    sink_send, _sink_recv = anyio.create_memory_object_stream[object](10)
+    await source_send.send(RuntimeError("boom"))
+    await source_send.aclose()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await _pump(source_recv, sink_send)
+
+
+@pytest.mark.anyio
+async def test_pump_swallows_closed_resource_error() -> None:
+    class ClosedSource:
+        def __aiter__(self) -> ClosedSource:
+            return self
+
+        async def __anext__(self) -> object:
+            raise anyio.ClosedResourceError
+
+    sink_send, _sink_recv = anyio.create_memory_object_stream[object](1)
+    await _pump(ClosedSource(), sink_send)
