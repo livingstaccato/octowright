@@ -153,8 +153,7 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
             log.warning("persona.cred.both_set", persona=persona.name, cred_name=cred_name)
         try:
             result = subprocess.run(
-                creds[cmd_key],
-                shell=True,
+                ["/bin/sh", "-lc", creds[cmd_key]],
                 capture_output=True,
                 text=True,
                 check=False,
