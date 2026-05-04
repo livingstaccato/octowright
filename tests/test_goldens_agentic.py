@@ -82,3 +82,27 @@ async def test_golden_verify_loop_ok_on_match(mock_pool, temp_goldens):
 
     assert result["ok"] is True
     assert result["diffs"] == 0
+
+
+@pytest.mark.anyio
+async def test_golden_assert_and_list_delete(mock_pool, temp_goldens):
+    from octowright.server.goldens import golden_assert, golden_delete, golden_list, golden_save
+
+    await golden_save("inst-1", name="to-delete")
+    ok = await golden_assert("inst-1", "to-delete")
+    assert ok["ok"] is True
+    listed = golden_list()
+    assert any(item["name"] == "to-delete" for item in listed)
+    deleted = golden_delete("to-delete")
+    assert deleted["deleted"] is True
+
+
+@pytest.mark.anyio
+async def test_golden_assert_raises_on_diff(mock_pool, temp_goldens):
+    from octowright.server.goldens import golden_assert, golden_save
+
+    await golden_save("inst-1", name="mismatch")
+    mock_session = mock_pool.get.return_value
+    mock_session.snapshot.return_value = {"role": "Root", "children": [{"role": "button"}]}
+    with pytest.raises(RuntimeError):
+        await golden_assert("inst-1", "mismatch")

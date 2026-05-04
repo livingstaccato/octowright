@@ -118,7 +118,7 @@ def _persona_emoji_for(seed: str) -> str:
     """Stable persona emoji from a string seed. Same seed → same emoji."""
     import hashlib
 
-    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+    digest = hashlib.sha1(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
     idx = int(digest[:8], 16) % len(_PERSONA_EMOJI_POOL)
     return _PERSONA_EMOJI_POOL[idx]
 
@@ -221,7 +221,7 @@ def _badge_color_for(seed: str) -> str:
     """
     import hashlib
 
-    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+    digest = hashlib.sha1(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
     hue = int(digest[:6], 16) % 360
     return f"hsla({hue}, 70%, 45%, {_BADGE_ALPHA})"
 
