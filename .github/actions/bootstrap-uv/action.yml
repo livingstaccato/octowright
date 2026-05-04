@@ -28,7 +28,7 @@ runs:
       run: |
         curl -LsSf https://astral.sh/uv/install.sh | sh
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-    - uses: astral-sh/setup-uv@v5
+    - uses: astral-sh/setup-uv@v8
       if: ${{ env.ACT != 'true' }}
       with:
         enable-cache: false
