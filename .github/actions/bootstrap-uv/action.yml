@@ -14,7 +14,7 @@ runs:
         set -x
         which node || true
         ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
-        n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1)
+        n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1 || true)
         echo "Found node: $n"
         if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
           ln -sf "$n" /usr/local/bin/node
