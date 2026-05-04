@@ -9,7 +9,7 @@ import asyncio
 import json
 import uuid
 from pathlib import Path
-from typing import Any, Unpack
+from typing import Any
 
 from playwright.async_api import Playwright
 from provide.telemetry import get_logger
@@ -25,7 +25,6 @@ from ..profiles import profile_dir
 from ..recorder import Recorder, new_log_path
 from ..session import BrowserSession
 from ..stabilize import render_stabilize_script
-from ..types import LaunchOptions
 from .errors import maybe_wrap_playwright_error
 from .listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
 from .visuals import (
@@ -64,7 +63,7 @@ class BrowserPool:
 
     async def launch(
         self,
-        **options: Unpack[LaunchOptions],
+        **options: Any,
     ) -> dict[str, Any]:
         kind = options.get("kind", "chromium")
         url = options.get("url")
@@ -134,7 +133,7 @@ class BrowserPool:
         recordings_dir = _pool.RECORDINGS_DIR
         log_path = new_log_path(recordings_dir, instance_id, label, kind)
 
-        user_data_dir: str | None = None
+        user_data_dir: Path | None = None
         video_dir: Path | None = None
         if record_video:
             video_dir = recordings_dir / "videos" / uuid.uuid4().hex[:8]
@@ -171,11 +170,11 @@ class BrowserPool:
                 if profile:
                     pdir = profile_dir(kind, profile)
                     pdir.mkdir(parents=True, exist_ok=True)
-                    user_data_dir = str(pdir)
+                    user_data_dir = pdir
                 else:
-                    user_data_dir = session_user_data_dir
+                    user_data_dir = Path(session_user_data_dir) if session_user_data_dir else None
                 context = await browser_type.launch_persistent_context(
-                    user_data_dir,
+                    str(user_data_dir),
                     headless=headless,
                     accept_downloads=True,
                     **viewport_kwargs,
@@ -204,7 +203,7 @@ class BrowserPool:
             kind=kind,
             label=label,
             profile=profile,
-            user_data_dir=user_data_dir,
+            user_data_dir=str(user_data_dir) if user_data_dir else None,
             url=target_url,
             headed=not headless,
             viewport=log_viewport,

@@ -10,9 +10,14 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from playwright.async_api import ConsoleMessage, Page
+
+from ._protocols import SessionLike
+
+if TYPE_CHECKING:
+    from .core import BrowserSession
 
 
 def _looks_like_binary_text(payload: Any) -> bool:
@@ -21,7 +26,13 @@ def _looks_like_binary_text(payload: Any) -> bool:
     )
 
 
-class SessionIOMixin:
+class SessionIOMixin(SessionLike):
+    markdown_path: Path | None
+    websocket_path: Path | None
+    _last_markdown_capture_url: str | None
+    _last_markdown_capture_key: str | None
+    _pending_markdown_capture: Any | None
+
     def _append_websocket_cache(
         self,
         *,
@@ -81,7 +92,7 @@ class SessionIOMixin:
         try:
             import inspect
 
-            from markitdown import MarkItDown
+            from markitdown import MarkItDown  # type: ignore[import-not-found]
 
             converter = MarkItDown()
             rendered = converter.convert(html)
@@ -208,7 +219,7 @@ class SessionIOMixin:
             self.recorder.record("console", **entry)
 
         page.on("console", _on_console)
-        _pool._wire_listeners(self, page)
+        _pool._wire_listeners(cast("BrowserSession", self), page)
 
     def _handle_websocket(self, websocket: Any) -> None:
         """Attach frame handlers to a Playwright websocket and record lifecycle events."""
@@ -275,7 +286,7 @@ class SessionIOMixin:
                     url=url,
                     is_binary=is_binary,
                     payload_preview=_preview_payload(payload, is_binary=is_binary),
-                    payload_size=len(payload) if hasattr(payload, "__len__") else None,
+                    payload_size=(len(payload) if payload is not None and hasattr(payload, "__len__") else None),
                 )
                 payload_b64 = _serialise_binary_payload(payload)
                 cache_entry_payload = payload_b64 if payload_b64 is not None else payload
@@ -293,7 +304,7 @@ class SessionIOMixin:
                         else:
                             cache_payload_size = len(payload)
                 else:
-                    cache_payload_size = len(payload) if hasattr(payload, "__len__") else None
+                    cache_payload_size = len(payload) if payload is not None and hasattr(payload, "__len__") else None
                 try:
                     self._append_websocket_cache(
                         direction=direction,
