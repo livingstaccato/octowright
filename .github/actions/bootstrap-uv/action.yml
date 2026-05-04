@@ -1,0 +1,38 @@
+name: "Bootstrap uv"
+description: "Normalize act Node path, setup uv, and sync dependencies"
+inputs:
+  sync-args:
+    description: "Arguments passed to `uv sync`"
+    required: false
+    default: "--all-groups --python \"$(command -v python3)\""
+runs:
+  using: "composite"
+  steps:
+    - name: Ensure node on PATH for post-actions (act only)
+      shell: bash
+      run: |
+        set -x
+        which node || true
+        ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
+        n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1)
+        echo "Found node: $n"
+        if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
+          ln -sf "$n" /usr/local/bin/node
+          echo "Symlinked $n -> /usr/local/bin/node"
+        fi
+        which node
+        ls -la /usr/local/bin/node || true
+    - name: Install uv (act fallback)
+      if: ${{ env.ACT == 'true' }}
+      shell: bash
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - uses: astral-sh/setup-uv@v5
+      if: ${{ env.ACT != 'true' }}
+      with:
+        enable-cache: false
+    - name: Sync deps
+      shell: bash
+      run: |
+        eval "uv sync ${{ inputs.sync-args }}"

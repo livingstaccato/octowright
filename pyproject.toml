@@ -91,8 +91,8 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-# Raised after backfilling scenario/macro coverage.
-fail_under = 70
+# Raised as part of pre-release hardening.
+fail_under = 78
 
 [tool.ruff]
 line-length = 120
