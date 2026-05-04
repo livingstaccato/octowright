@@ -46,7 +46,11 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: ./.github/actions/bootstrap-uv
-      - name: Install Playwright browsers
+      - name: Install Playwright browsers (act)
+        if: ${{ env.ACT == 'true' }}
+        run: uv run --active playwright install webkit firefox chromium
+      - name: Install Playwright browsers (github)
+        if: ${{ env.ACT != 'true' }}
         run: uv run --active playwright install --with-deps webkit firefox chromium
       - name: Run unit tests (headless, act-safe subset)
         if: ${{ env.ACT == 'true' }}
@@ -54,7 +58,12 @@ jobs:
           OCTOWRIGHT_HEADLESS: "1"
         run: |
           uv run --active pytest -q tests/ \
+            --no-cov \
+            --ignore=tests/test_engine_matrix_live.py \
             --ignore=tests/test_badge.py \
+            --ignore=tests/test_popup_listeners.py \
+            --ignore=tests/test_scenario_sync.py \
+            --ignore=tests/test_scenarios_live.py \
             --ignore=tests/test_session_mode.py \
             --ignore=tests/test_title_prefix.py \
             --ignore=tests/test_label_promotion.py
