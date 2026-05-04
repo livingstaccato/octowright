@@ -92,7 +92,7 @@ branch = true
 show_missing = true
 skip_covered = false
 # Raised as part of pre-release hardening.
-fail_under = 80
+fail_under = 83
 
 [tool.ruff]
 line-length = 120
