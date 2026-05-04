@@ -587,10 +587,67 @@ logging:
   module. Logger names mirror the Python convention so log lines are easy
   to correlate across the stack.
 
-Optional OTEL exporters (traces / metrics / logs to an OTLP endpoint) are
-available on both sides — opt in by setting the appropriate env vars / config
-flags. Off by default; the libraries degrade gracefully to no-op providers
-when peer deps aren't installed.
+### Configure log level and format
+
+Use `PROVIDE_LOG_LEVEL` and `PROVIDE_LOG_FORMAT` to control verbosity and
+renderer:
+
+```bash
+# Human-readable local debugging
+export PROVIDE_LOG_LEVEL=DEBUG
+export PROVIDE_LOG_FORMAT=pretty
+uv run octowright serve
+```
+
+```bash
+# Machine-friendly production logs
+export PROVIDE_LOG_LEVEL=INFO
+export PROVIDE_LOG_FORMAT=json
+uv run octowright serve
+```
+
+`octowright serve --log-level DEBUG` is a convenience wrapper that sets
+`PROVIDE_LOG_LEVEL` for the process and spawned daemon.
+
+### Configure OTLP export (telemetry traces/metrics/logs)
+
+Telemetry export is opt-in. To send OpenTelemetry signals to an OTLP collector:
+
+```bash
+export PROVIDE_TRACE_ENABLED=1
+export PROVIDE_METRICS_ENABLED=1
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+# optional auth/tenant headers
+export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer%20TOKEN,x-tenant-id=dev"
+uv run octowright serve
+```
+
+Signals are no-op if telemetry exporters are not configured/available.
+
+### Playwright traces vs telemetry traces
+
+- **Playwright trace**: per-session browser artifact (`*.trace.zip`) produced
+  by Playwright when session tracing is enabled; inspect with
+  `npx playwright show-trace`.
+- **Telemetry trace**: OpenTelemetry spans emitted by `provide.telemetry`
+  (when `PROVIDE_TRACE_ENABLED=1`) and exported to OTLP.
+
+These are separate systems and can be enabled independently.
+
+### Metrics endpoint
+
+octowright exposes a lightweight Prometheus-text endpoint at:
+
+- `GET /api/metrics`
+
+It includes request totals, per-status counts, per-route counts, and per-route
+duration sum/count for the debugger/API server process. Disable it with:
+
+```bash
+export OCTOWRIGHT_HTTP_METRICS=0
+```
+
+This endpoint is process-local and complements (not replaces) OTLP export.
 
 ## Safari caveat
 

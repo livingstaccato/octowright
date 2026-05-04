@@ -9,10 +9,13 @@ install: ## uv sync --all-groups (deps + dev tools)
 test: ## Run unit + integration tests (no live browsers)
 	uv run --active pytest -q tests/
 
-lint: ## Ruff lint, ruff format check, mypy, codespell, SPDX headers
+lint: ## Ruff lint/format, mypy, ty (http scope), bandit, codespell, SPDX headers
 	uv run --active ruff check .
-	uv run --active ruff format --check --exclude "tests/test_conditional.py,tests/test_pool_framenavigated.py" .
+	uv run --active ruff format --check .
 	uv run --active mypy src/octowright
+	# Keep ty scoped to changed HTTP modules until non-HTTP baseline diagnostics are resolved.
+	uv run --active ty check src/octowright/http
+	uv run --active bandit -q -r src/octowright -s B101,B110,B112,B324,B404,B405,B602,B603,B607
 	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
 	uv run --active python scripts/check_spdx_headers.py
 
@@ -28,6 +31,9 @@ format: ## Apply ruff format + ruff --fix
 
 typecheck: ## mypy only
 	uv run --active mypy src/octowright
+
+typecheck-ty-probe: ## Non-gating: probe broader ty coverage and collect remaining baseline errors
+	uv run --active ty check src/octowright
 
 precommit: ## Run pre-commit on all files
 	uv run --active pre-commit run --all-files

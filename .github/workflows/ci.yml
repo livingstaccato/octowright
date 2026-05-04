@@ -12,6 +12,7 @@ permissions:
 
 env:
   FORCE_COLOR: "1"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   # Prefer runner Python and avoid uv-managed interpreter bootstrap.
   UV_PYTHON: python3
   UV_PYTHON_DOWNLOADS: never
@@ -27,38 +28,17 @@ jobs:
     name: 🎨 Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # act quirk: catthehacker images put node under /opt/acttoolcache but not on
-      # the $PATH seen by raw `docker exec` post-action invocations. Symlink it into
-      # /usr/local/bin so `docker exec cmd=[node ...]` finds it. No-op on real runners.
-      - name: Ensure node on PATH for post-actions (act only)
-        run: |
-          set -x
-          which node || true
-          ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
-          n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1)
-          echo "Found node: $n"
-          if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
-            ln -sf "$n" /usr/local/bin/node
-            echo "Symlinked $n -> /usr/local/bin/node"
-          fi
-          which node
-          ls -la /usr/local/bin/node || true
-      - name: Install uv (act fallback)
-        if: ${{ env.ACT == 'true' }}
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - uses: astral-sh/setup-uv@v5
-        if: ${{ env.ACT != 'true' }}
-        with:
-          enable-cache: false
-      - name: Sync dev deps
-        run: uv sync --all-groups --python "$(command -v python3)"
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/bootstrap-uv
       - name: Ruff check
         run: uv run --active ruff check .
       - name: Ruff format check
-        run: uv run --active ruff format --check --exclude "tests/test_conditional.py,tests/test_pool_framenavigated.py" .
+        run: uv run --active ruff format --check .
+      # Keep strict ty gating to the HTTP slice we are actively hardening.
+      - name: ty check (http scope)
+        run: uv run --active ty check src/octowright/http
+      - name: Bandit
+        run: uv run --active bandit -q -r src/octowright -s B101,B110,B112,B324,B404,B405,B602,B603,B607
       - name: SPDX headers
         run: uv run --active python scripts/check_spdx_headers.py
 
@@ -66,34 +46,8 @@ jobs:
     name: 🧪 Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # act quirk: catthehacker images put node under /opt/acttoolcache but not on
-      # the $PATH seen by raw `docker exec` post-action invocations. Symlink it into
-      # /usr/local/bin so `docker exec cmd=[node ...]` finds it. No-op on real runners.
-      - name: Ensure node on PATH for post-actions (act only)
-        run: |
-          set -x
-          which node || true
-          ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
-          n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1)
-          echo "Found node: $n"
-          if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
-            ln -sf "$n" /usr/local/bin/node
-            echo "Symlinked $n -> /usr/local/bin/node"
-          fi
-          which node
-          ls -la /usr/local/bin/node || true
-      - name: Install uv (act fallback)
-        if: ${{ env.ACT == 'true' }}
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - uses: astral-sh/setup-uv@v5
-        if: ${{ env.ACT != 'true' }}
-        with:
-          enable-cache: false
-      - name: Sync dev deps
-        run: uv sync --all-groups --python "$(command -v python3)"
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/bootstrap-uv
       - name: Install Playwright browsers
         run: uv run --active playwright install --with-deps webkit firefox chromium
       - name: Run unit tests (headless, act-safe subset)
@@ -146,33 +100,9 @@ jobs:
     name: 🔧 Selftest — quick smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # act quirk: catthehacker images put node under /opt/acttoolcache but not on
-      # the $PATH seen by raw `docker exec` post-action invocations. Symlink it into
-      # /usr/local/bin so `docker exec cmd=[node ...]` finds it. No-op on real runners.
-      - name: Ensure node on PATH for post-actions (act only)
-        run: |
-          set -x
-          which node || true
-          ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
-          n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1)
-          echo "Found node: $n"
-          if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
-            ln -sf "$n" /usr/local/bin/node
-            echo "Symlinked $n -> /usr/local/bin/node"
-          fi
-          which node
-          ls -la /usr/local/bin/node || true
-      - name: Install uv (act fallback)
-        if: ${{ env.ACT == 'true' }}
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - uses: astral-sh/setup-uv@v5
-        if: ${{ env.ACT != 'true' }}
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/bootstrap-uv
         with:
-          enable-cache: false
-      - name: Sync
-        run: uv sync --python "$(command -v python3)"
+          sync-args: "--python \"$(command -v python3)\""
       - name: Selftest
         run: uv run --active octowright selftest

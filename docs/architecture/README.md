@@ -30,3 +30,12 @@ needs Java 8+).
 - SPDX header at the top using PlantUML comment syntax (`'`).
 - Repo-wide skinparam palette: blue arrows (`#2563eb`), grey component
   borders (`#d1d5db`), pastel package backgrounds for grouping.
+
+## Tracing and metrics notes
+
+- `artifact-flow.puml` documents **Playwright trace artifacts** (`*.trace.zip`)
+  written into recordings and viewed with `npx playwright show-trace`.
+- This is distinct from **telemetry traces** (OpenTelemetry spans exported via
+  OTLP when telemetry tracing is enabled).
+- The Starlette app also exposes `GET /api/metrics` (Prometheus text) with
+  process-local request and latency counters; this complements OTLP export.
