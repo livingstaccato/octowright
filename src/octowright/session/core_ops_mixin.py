@@ -7,9 +7,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from ._protocols import SessionLike
+
+if TYPE_CHECKING:
+    from .core import BrowserSession
 
 DEFAULT_PREVIEW_CHARS = 4000
 
@@ -18,7 +22,11 @@ def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-class SessionOpsMixin:
+class SessionOpsMixin(SessionLike):
+    active_frame: Any | None
+    video_path: Path | None
+    trace_path: Path | None
+
     async def diagnostic_bundle(
         self,
         *,
@@ -128,7 +136,7 @@ class SessionOpsMixin:
 
         # Fire-and-forget: Playwright dispatches downloads synchronously but saving is async.
         # Task reference is kept on the session to prevent GC collecting it mid-flight (RUF006).
-        task = asyncio.create_task(_downloads.save_download(self, download))
+        task = asyncio.create_task(_downloads.save_download(cast("BrowserSession", self), download))
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
@@ -140,7 +148,7 @@ class SessionOpsMixin:
         if no download arrives within timeout_ms. Returns the new download record."""
         from . import downloads as _downloads
 
-        return await _downloads.wait_for_download_impl(self, timeout_ms)
+        return await _downloads.wait_for_download_impl(cast("BrowserSession", self), timeout_ms)
 
     def _handle_dialog(self, dialog: Any) -> None:
         """Registered as page.on('dialog', ...). Consults self._dialog_policy and acts

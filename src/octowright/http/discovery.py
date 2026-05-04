@@ -95,6 +95,7 @@ def _human_bytes(size_bytes: int) -> str:
                 return f"{int(value)} {unit}"
             return f"{value:.1f} {unit}"
         value /= 1024.0
+    return "0 B"
 
 
 def _path_size(path: Path | None) -> int:

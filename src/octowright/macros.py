@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from .defaults import PROFILES_DIR
+from .macros_runtime import dispatch_one as _runtime_dispatch_one
+from .macros_runtime import dispatch_simple as _runtime_dispatch_simple
 from .server.macro_semantic import summarize_action
 
 if TYPE_CHECKING:
@@ -256,157 +258,24 @@ def substitute(actions: list[dict[str, Any]], args: dict[str, Any]) -> list[dict
     return [_substitute_value(copy.deepcopy(action), args) for action in actions]
 
 
-# Actions that should never be re-executed during replay.
-_REPLAY_SKIP = {"launch", "close", "snapshot"}
-
-_ACTION_MAP = {
-    "navigate": "navigate",
-    "click": "click",
-    "type": "type_text",
-    "fill": "fill",
-    "press_key": "press_key",
-    "screenshot": "screenshot",
-    "evaluate": "evaluate",
-    "wait_for": "wait_for",
-    "expect_url": "expect_url",
-    "expect_text": "expect_text",
-    "expect_selector": "expect_selector",
-    "expect_js": "expect_js",
-    "mock_route": "mock_route",
-    "unmock_route": "unmock_route",
-    "set_dialog_policy": "set_dialog_policy",
-    "set_input_files": "set_input_files",
-    "click_by": "click_by",
-    "fill_by": "fill_by",
-}
-
-
-async def _dispatch_standard(
-    session: BrowserSession,
-    kind: str,
-    kwargs: dict[str, Any],
-    method_name: str,
-) -> tuple[int, int]:
-    if kind == "screenshot":
-        path_value = kwargs.get("path")
-        if not path_value:
-            return 0, 1
-        kwargs = dict(kwargs)
-        kwargs["path"] = Path(path_value)
-        await getattr(session, method_name)(kwargs["path"])
-        return 1, 0
-
-    if kind == "type" and "delay_ms" not in kwargs:
-        # BrowserSession.type_text expects (selector, text, delay_ms)
-        kwargs = dict(kwargs)
-        kwargs["delay_ms"] = 0
-
-    if kind == "wait_for":
-        # BrowserSession.wait_for accepts None when selector or text is omitted.
-        kwargs = dict(kwargs)
-        kwargs.setdefault("selector", None)
-        kwargs.setdefault("text", None)
-        kwargs.setdefault("timeout_ms", None)
-
-    method = getattr(session, method_name)
-    await method(**kwargs)
-    return 1, 0
-
-
-async def _dispatch_click_or_fill(
-    session: BrowserSession,
-    kind: str,
-    kwargs: dict[str, Any],
-) -> tuple[int, int]:
-    is_fill = kind in {"fill", "fill_by"}
-    if is_fill:
-        fallback_method = session.fill
-        semantic_method = getattr(session, "fill_by", None)
-    else:
-        fallback_method = session.click
-        semantic_method = getattr(session, "click_by", None)
-
-    semantic_kwargs = {k: v for k, v in kwargs.items() if k in _SEMANTIC_LOCATOR_KEYS}
-    if semantic_method is None:
-        semantic_kwargs = {}
-
-    else:
-        if "timeout_ms" in kwargs:
-            semantic_kwargs["timeout_ms"] = kwargs["timeout_ms"]
-        if is_fill and "value" in kwargs:
-            semantic_kwargs["value"] = kwargs["value"]
-
-    tried_semantic = bool(semantic_kwargs) and semantic_method is not None
-    if tried_semantic:
-        try:
-            assert semantic_method is not None
-            await semantic_method(**semantic_kwargs)
-            return 1, 0
-        except Exception:
-            # Intentional fallback: keep CSS selector path as a recovery option
-            # if semantic resolution was best-effort and a selector exists.
-            if "selector" not in kwargs:
-                raise
-
-    fallback_kwargs = {k: v for k, v in kwargs.items() if k not in _SEMANTIC_LOCATOR_KEYS}
-    fallback_kwargs.pop("timeout_ms", None)
-    await fallback_method(**fallback_kwargs)
-    return 1, 0
-
-
-_ACTION_DISPATCHERS = {
-    "navigate": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "navigate"),
-    "click": _dispatch_click_or_fill,
-    "fill": _dispatch_click_or_fill,
-    "type": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "type_text"),
-    "press_key": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "press_key"),
-    "screenshot": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "screenshot"),
-    "evaluate": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "evaluate"),
-    "wait_for": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "wait_for"),
-    "expect_url": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "expect_url"),
-    "expect_text": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "expect_text"),
-    "expect_selector": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "expect_selector"),
-    "expect_js": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "expect_js"),
-    "mock_route": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "mock_route"),
-    "unmock_route": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "unmock_route"),
-    "set_dialog_policy": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "set_dialog_policy"),
-    "set_input_files": lambda session, kind, kwargs: _dispatch_standard(session, kind, kwargs, "set_input_files"),
-    "click_by": _dispatch_click_or_fill,
-    "fill_by": _dispatch_click_or_fill,
-}
+async def _dispatch_one(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
+    return await _runtime_dispatch_one(
+        session,
+        action,
+        semantic_keys=_SEMANTIC_LOCATOR_KEYS,
+        strip_non_aria_noise=_strip_non_aria_noise,
+        action_kwargs=_action_kwargs,
+    )
 
 
 async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
-    """Run one non-conditional action. Returns (executed, skipped). Raises on action failure.
-
-    `executed` and `skipped` are 0/1 — never both. Conditional actions (if_selector,
-    try, try_each) are dispatched in `_dispatch_one`, not here.
-    """
-    kind = action.get("action", "")
-    if kind in _REPLAY_SKIP:
-        return 0, 1
-
-    if kind not in _ACTION_MAP:
-        return 0, 1
-    dispatcher = _ACTION_DISPATCHERS.get(kind)
-    if not dispatcher:
-        return 0, 1
-
-    kwargs = _strip_non_aria_noise(kind, _action_kwargs(action))
-    return await dispatcher(session, kind, kwargs)
-
-
-async def _dispatch_one(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
-    """Run one action of any type. Returns (executed, skipped). Raises on failure.
-
-    Conditional actions (if_selector / try / try_each) recursively call back here
-    for their child actions, so arbitrary nesting works.
-    """
-    from . import conditional as _cond
-
-    if action.get("action") in _cond.CONDITIONAL_ACTIONS:
-        return await _cond.dispatch_conditional(session, action, _dispatch_one)
-    return await _dispatch_simple(session, action)
+    return await _runtime_dispatch_simple(
+        session,
+        action,
+        semantic_keys=_SEMANTIC_LOCATOR_KEYS,
+        strip_non_aria_noise=_strip_non_aria_noise,
+        action_kwargs=_action_kwargs,
+    )
 
 
 async def _suggest_fix(session: BrowserSession, action: dict[str, Any]) -> str | None:

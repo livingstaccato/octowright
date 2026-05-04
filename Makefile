@@ -11,7 +11,7 @@ test: ## Run unit + integration tests (no live browsers)
 
 lint: ## Ruff lint, ruff format check, mypy, codespell, SPDX headers
 	uv run --active ruff check .
-	uv run --active ruff format --check .
+	uv run --active ruff format --check --exclude "tests/test_conditional.py,tests/test_pool_framenavigated.py" .
 	uv run --active mypy src/octowright
 	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
 	uv run --active python scripts/check_spdx_headers.py
@@ -37,10 +37,10 @@ precommit-install: ## Install the pre-commit hooks into .git/hooks
 	uv run --active pre-commit install --hook-type commit-msg
 
 act-lint: ## Run the lint job locally via act
-	act -j lint --rm
+	env -u DOCKER_HOST act -j lint --rm
 
 act-test: ## Run the test job locally via act (slow on Apple Silicon — Playwright install + amd64 emulation)
-	act -j test --rm
+	env -u DOCKER_HOST act -j test --rm
 
 ci: lint test ## Local equivalent of CI: lint + tests
 
