@@ -33,6 +33,7 @@ class FakePage:
 
     def __init__(self) -> None:
         self.main_frame = SimpleNamespace(url="about:blank")
+        self.events: dict[str, Any] = {}
 
     async def goto(self, url: str) -> None:
         self.url = url
@@ -42,7 +43,8 @@ class FakePage:
         return False
 
     def on(self, *_args: object) -> None:
-        return None
+        event, handler = _args
+        self.events[str(event)] = handler
 
 
 class FakeContext:
@@ -51,6 +53,7 @@ class FakeContext:
         self.pages: list[Any] = []
         self.closed = False
         self.tracing = SimpleNamespace(start=self._tracing_start)
+        self.events: dict[str, Any] = {}
 
     async def new_page(self) -> FakePage:
         return self.page
@@ -65,13 +68,15 @@ class FakeContext:
         return None
 
     def on(self, *_args: object) -> None:
-        return None
+        event, handler = _args
+        self.events[str(event)] = handler
 
 
 class FakeBrowser:
     def __init__(self, context: FakeContext) -> None:
         self.context = context
         self.closed = False
+        self.events: dict[str, Any] = {}
 
     async def new_context(self, **_kwargs: object) -> FakeContext:
         return self.context
@@ -80,7 +85,8 @@ class FakeBrowser:
         self.closed = True
 
     def on(self, *_args: object) -> None:
-        return None
+        event, handler = _args
+        self.events[str(event)] = handler
 
 
 class FakeBrowserType:
@@ -148,6 +154,19 @@ async def test_close_clears_session_manifest(isolated_pool: tuple[BrowserPool, P
 
     body = json.loads(manifest_path.read_text())
     assert body["sessions"] == {}
+
+
+@pytest.mark.asyncio
+async def test_external_context_close_clears_session_manifest(isolated_pool: tuple[BrowserPool, Path]) -> None:
+    pool, manifest_path = isolated_pool
+    result = await pool.launch(kind="chromium", url="https://example.test", headed=False, ephemeral=True)
+    session = pool.get(result["instance_id"])
+
+    session.context.events["close"]()
+
+    body = json.loads(manifest_path.read_text())
+    assert body["sessions"] == {}
+    assert not pool.has_session(result["instance_id"])
 
 
 def test_stale_manifest_entries_can_be_diagnosed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
