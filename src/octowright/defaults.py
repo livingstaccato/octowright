@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://warp.undef.games")
+DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://example.com")
 
 DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
 DEFAULT_VIEWPORT_H = int(os.environ.get("OCTOWRIGHT_VIEWPORT_H", "800"))

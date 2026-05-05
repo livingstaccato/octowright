@@ -1,27 +1,41 @@
 ![octowright](https://raw.githubusercontent.com/livingstaccato/octowright/main/docs/images/octowright-banner.png)
 
-# octowright
+# Octowright
 
 An MCP server that lets Claude Code drive **many headed Playwright browsers in parallel**
 with a **mix of engines** (Chromium, Firefox, WebKit), recording every action to a JSONL
 log so a session can later be exported as a standalone Playwright script.
 
 The existing official Playwright MCP plugin only supports one browser context and doesn't
-let you pick the engine per launch. octowright fixes both and adds persistent profiles
+let you pick the engine per launch. Octowright fixes both and adds persistent profiles
 so login state survives across runs.
 
-## Install
+## Get started
+
+Octowright isn't on PyPI yet, so you install from source. Octowright uses
+[`uv`](https://docs.astral.sh/uv/) for dependency management — there is no
+`pip install` path. If you don't have `uv` yet:
 
 ```bash
-uv sync
-uv run playwright install webkit firefox chromium
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-## Register with Claude Code
+Then, from any directory you'd like Octowright to live under (e.g. `~/code/`):
 
-Add to `.mcp.json` in the repo you want to use it from (or `~/.claude.json` globally) —
-replace `<absolute-path-to-octowright>` with the path on YOUR machine
-(e.g. `~/code/octowright` expanded to its absolute form):
+```bash
+git clone https://github.com/livingstaccato/octowright.git
+cd octowright
+uv sync                                              # install Python deps
+uv run playwright install webkit firefox chromium    # install browser binaries
+uv run octowright init                               # print Claude registration block + scaffold config
+```
+
+The last command prints a JSON block to paste into `.mcp.json` (project-scoped)
+or `~/.claude.json` (global). It also creates `~/.config/octowright/` with a
+sample persona, scenario, and macro so you have something to play with.
+
+The block it prints looks like this — `init` substitutes your install path
+into `<absolute-path-to-octowright>`:
 
 ```json
 {
@@ -40,15 +54,16 @@ replace `<absolute-path-to-octowright>` with the path on YOUR machine
 }
 ```
 
-Run `octowright init` to print this same block with the path filled in for
-your install — and to scaffold a sample persona, scenario, and macro under
-`~/.config/octowright/`. Reload Claude; tools appear as
-`mcp__octowright__browser_launch`, etc.
+Reload Claude. The tools appear as `mcp__octowright__browser_launch`, etc.
+
+Verify in 30 seconds: ask Claude to launch a webkit browser at `example.com`,
+click a link, list browsers, then close. The next section walks through that
+same flow as a tour of what Octowright actually does.
 
 ## Your first 5 minutes
 
 Once installed and registered, ask Claude to walk through these in order. Each step
-builds on the previous one and shows you what octowright actually does.
+builds on the previous one and shows you what Octowright actually does.
 
 **1. Open a browser.** Ask Claude: *"launch a webkit browser at example.com"*. Claude
 calls `browser_launch kind=webkit url=https://example.com`. A real WebKit window opens
@@ -78,7 +93,7 @@ piece together visually — see the next section.
 
 ## Distributed Skill Pack
 
-octowright ships a packaged skill named `using-octowright` for Codex and
+Octowright ships a packaged skill named `using-octowright` for Codex and
 project-local plugin manifests for Claude/Codex runtimes.
 
 Install everything:
@@ -418,7 +433,7 @@ once, replay it with different credentials later. Example workflow:
 browser_launch kind=webkit profile=disc-1 url=https://discord.com/login label=acct-1
 # ... fill email, password, submit ...
 
-# 2. Snapshot those actions as a macro, telling octowright which literal values
+# 2. Snapshot those actions as a macro, telling Octowright which literal values
 #    to treat as parameters:
 macro_save instance_id=<id> name=discord-login \
            parameters={"email":"me@example.com","password":"hunter2"}
@@ -493,7 +508,7 @@ participants:
   - persona: ops
     kind: firefox
     role: monitor
-    url: https://warp.undef.games/monitor
+    url: https://example.com/monitor
 fixtures:
   mock_routes:
     - pattern: "**/api/time"
@@ -528,11 +543,12 @@ Full reference: [docs/scenarios.md](https://github.com/livingstaccato/octowright
 
 ## Configuration
 
-All defaults live in `src/octowright/defaults.py` and can be overridden via environment variables:
+All defaults live in `src/octowright/defaults.py` and can be overridden via environment
+variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `OCTOWRIGHT_DEFAULT_URL` | `https://warp.undef.games` | Fallback `url` when `browser_launch` omits it. |
+| `OCTOWRIGHT_DEFAULT_URL` | `https://example.com` | Fallback `url` when `browser_launch` omits it. |
 | `OCTOWRIGHT_RECORDINGS` | `./recordings/` | Where JSONL logs land. |
 | `OCTOWRIGHT_PROFILES_DIR` | `~/.config/octowright/profiles/` | Where persistent profiles live. |
 | `OCTOWRIGHT_MACROS_DIR` | `~/.config/octowright/macros/` | Where saved macros live. |
@@ -561,7 +577,7 @@ without going through Claude:
 
 ## Telemetry
 
-Both halves of octowright use the `provide.telemetry` family for structured
+Both halves of Octowright use the `provide.telemetry` family for structured
 logging:
 
 - **Python server** uses `provide-telemetry>=0.3` (structlog under the hood).
@@ -620,7 +636,7 @@ These are separate systems and can be enabled independently.
 
 ### Metrics endpoint
 
-octowright exposes a lightweight Prometheus-text endpoint at `GET /api/metrics`.
+Octowright exposes a lightweight Prometheus-text endpoint at `GET /api/metrics`.
 It includes request totals, per-status counts, per-route counts, and per-route
 duration sum/count for the debugger/API server process. Disable with:
 

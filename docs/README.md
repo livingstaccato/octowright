@@ -1,6 +1,6 @@
 # Octowright Docs
 
-Reference documentation for octowright users and contributors. For a quick introduction
+Reference documentation for Octowright users and contributors. For a quick introduction
 see the [top-level README](../README.md); come here for deep-dives on specific features.
 
 ## Start Here

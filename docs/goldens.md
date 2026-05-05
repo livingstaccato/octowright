@@ -1,35 +1,59 @@
 # Goldens
 
-Goldens are saved accessibility-tree baselines.
+A **golden** is a saved accessibility-tree baseline for a page or component.
+Subsequent runs diff their accessibility tree against the golden and fail when
+they drift, giving you visual-regression-style coverage without the brittleness
+of pixel-diff screenshots.
 
-## Core Tools
+Goldens live under `~/.config/octowright/goldens/` (override with
+`OCTOWRIGHT_GOLDENS_DIR`).
 
-- `golden_save`
-- `golden_assert`
-- `golden_verify_loop`
-- `golden_list`
-- `golden_delete`
+## Capture vs verify policy
 
-## Capture vs Verify Policy
+Goldens are operated in one of two modes — **never both at once**:
 
-Use one of these modes intentionally:
+- **Capture mode** — `golden_save` writes (or overwrites) the baseline.
+- **Verify mode** — `golden_assert` and `golden_verify_loop` diff the live page
+  against the saved baseline and raise on mismatch.
 
-- Capture mode: call `golden_save` when you want to write/update baseline.
-- Verify mode: call `golden_verify_loop` or `golden_assert` when you want drift checks.
+The split exists so production CI never silently mints new baselines when a
+page subtly changes — that would defeat the entire point of a regression check.
 
-`golden_verify_loop` supports:
+## `golden_verify_loop`
 
-- `save_if_missing=False` (default): verify-only behavior.
-- `save_if_missing=True`: if missing, writes a new baseline and returns `saved: true`.
+The convenience tool with two relevant knobs:
 
-CI safety:
+| Argument | Behavior |
+|---|---|
+| `save_if_missing=False` (default) | Pure verify. If no baseline exists, raise. |
+| `save_if_missing=True` | If no baseline exists, save and return `saved: true`. **Refused under `CI=true`.** |
 
-- If `CI=true`, `save_if_missing=true` is refused by design.
+The CI guard is intentional: in CI, "no baseline" must mean "test fails," not
+"oh, I'll just write one and pass."
 
-## Response Semantics
+## Response semantics
 
-From `golden_verify_loop`:
+`golden_verify_loop` returns:
 
-- `saved: true` when a new golden was created.
-- `saved: false` when no write occurred.
-- `missing: true` when golden does not exist and save was not requested.
+| Field | Meaning |
+|---|---|
+| `saved: true` | A new golden was created (only possible with `save_if_missing=True`). |
+| `saved: false` | No write occurred. |
+| `missing: true` | No golden existed and writing was not requested — verify failed. |
+
+## Tools
+
+| Tool | Purpose |
+|---|---|
+| `golden_save` | Write or overwrite a baseline. |
+| `golden_assert` | Compare live page to baseline; raise on mismatch. |
+| `golden_verify_loop` | Verify with an optional retry/wait loop for flake. |
+| `golden_list` | Enumerate all saved goldens. |
+| `golden_delete` | Remove a saved golden. |
+
+## Related
+
+- [macros.md](macros.md) — pair `golden_assert` with a `[test]`-tagged macro for
+  regression coverage in the test suite.
+- [troubleshooting.md](troubleshooting.md#golden-verification-mismatches) —
+  diagnosis flow for verify failures.
