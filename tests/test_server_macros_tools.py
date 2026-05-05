@@ -104,7 +104,7 @@ def test_macro_compile_can_write_compiled_macro(
     out = _macros.macro_compile("name: demo\nactions: []\n", write=True)
 
     assert out["written"] is True
-    assert out["path"] == "/tmp/demo.json"
+    assert out["path"] == str(Path("/tmp/demo.json"))
     _patch_deps["macros"].write_macro.assert_called_once_with(name="demo", macro=compiled)
 
 
