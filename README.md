@@ -266,6 +266,10 @@ appends a record to that instance's JSONL log.
 | `browser_drag` | Drag-and-drop from `source_selector` onto `target_selector` (Playwright `drag_and_drop`). |
 | `browser_set_input_files` | Upload files into an `<input type=file>`. |
 
+Recorded CSS `click` and `fill` actions also capture semantic metadata when
+Playwright can resolve it. Macro playback and exported replay scripts try that
+ARIA locator first, then fall back to the original CSS selector.
+
 ### Inspection
 
 | Tool | What |
@@ -455,8 +459,10 @@ are the reusable middle of a flow, not the wrapper. Pass `include_launch=True` o
 `macro_save` if you need the initial navigation baked in.
 
 **Caveat:** JSONL macros break when the target site changes its DOM (Discord
-rewrites its CSS classes frequently). Treat them as short-term automation, not
-durable scripts — when a macro breaks, re-record rather than hand-patch.
+rewrites its CSS classes frequently). Recorded `click` and `fill` actions use
+captured ARIA metadata first when available, then fall back to CSS, but macros
+are still short-term automation — when a macro breaks, re-record rather than
+hand-patch.
 
 ### Conditional / branching actions
 

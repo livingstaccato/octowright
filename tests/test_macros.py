@@ -102,6 +102,35 @@ def test_save_macro_strips_lifecycle_actions(monkeypatch: pytest.MonkeyPatch, tm
     assert "snapshot" not in action_types2
 
 
+def test_save_macro_preserves_semantic_metadata_on_css_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    m = _import_macros(monkeypatch, tmp_path)
+    rec = _write_recording(
+        tmp_path,
+        [
+            {
+                "action": "click",
+                "selector": "#login",
+                "role": "button",
+                "role_name": "Log in",
+            },
+            {
+                "action": "fill",
+                "selector": "#email",
+                "value": "me@example.com",
+                "label": "Email",
+            },
+        ],
+    )
+
+    path = m.save_macro(recording_path=rec, name="semantic-css")
+    actions = json.loads(path.read_text())["actions"]
+
+    assert actions == [
+        {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
+        {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+    ]
+
+
 def test_save_macro_preserves_created_at_on_overwrite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     m = _import_macros(monkeypatch, tmp_path)
     rec = _write_recording(tmp_path)
