@@ -26,6 +26,7 @@ class SessionOpsMixin(SessionLike):
     active_frame: Any | None
     video_path: Path | None
     trace_path: Path | None
+    _BG_TASK_DRAIN_TIMEOUT_SECONDS = 1.0
 
     async def diagnostic_bundle(
         self,
@@ -323,7 +324,7 @@ class SessionOpsMixin(SessionLike):
 
     def _handle_response(self, response: Any) -> None:
         request = response.request
-        self._network_requests.append(
+        self._append_network_request(
             {
                 "url": request.url,
                 "method": request.method,
@@ -334,7 +335,7 @@ class SessionOpsMixin(SessionLike):
         )
 
     def _handle_request_failed(self, request: Any) -> None:
-        self._network_requests.append(
+        self._append_network_request(
             {
                 "url": request.url,
                 "method": request.method,
@@ -344,6 +345,11 @@ class SessionOpsMixin(SessionLike):
             }
         )
 
+    def _append_network_request(self, request: dict[str, Any]) -> None:
+        if self._network_requests.maxlen is not None and len(self._network_requests) == self._network_requests.maxlen:
+            self._network_requests_dropped += 1
+        self._network_requests.append(request)
+
     def get_network_requests(
         self,
         url_filter: str | None = None,
@@ -352,7 +358,8 @@ class SessionOpsMixin(SessionLike):
         since: int | None = None,
     ) -> dict[str, Any]:
         start = since or 0
-        sliced = list(self._network_requests[start:])
+        retained = list(self._network_requests)
+        sliced = retained[start:]
         if url_filter:
             sliced = [r for r in sliced if url_filter in r.get("url", "")]
         if method_filter:
@@ -361,8 +368,10 @@ class SessionOpsMixin(SessionLike):
             sliced = [r for r in sliced if r.get("resource_type") == resource_type_filter]
         return {
             "requests": sliced,
-            "next_cursor": len(self._network_requests),
-            "total": len(self._network_requests),
+            "next_cursor": len(retained),
+            "total": len(retained),
+            "total_retained": len(retained),
+            "dropped": self._network_requests_dropped,
         }
 
     # ------------------------------------------------------------------
@@ -404,6 +413,30 @@ class SessionOpsMixin(SessionLike):
         self.recorder.record("get_text_by", result=result, **finders)
         return {"ok": True, "text": result}
 
+    async def _drain_background_tasks(self) -> None:
+        import asyncio
+        import contextlib
+
+        current = asyncio.current_task()
+        tasks = {task for task in list(self._bg_tasks) if task is not current}
+        if not tasks:
+            return
+
+        done, pending = await asyncio.wait(tasks, timeout=self._BG_TASK_DRAIN_TIMEOUT_SECONDS)
+        for task in done:
+            if task.cancelled():
+                continue
+            with contextlib.suppress(Exception):
+                task.result()
+
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        for task in tasks:
+            self._bg_tasks.discard(task)
+
     async def close(self) -> None:
         try:
             if self.trace:
@@ -424,6 +457,7 @@ class SessionOpsMixin(SessionLike):
         finally:
             if self.browser is not None:
                 await self.browser.close()
+            await self._drain_background_tasks()
             self.recorder.record(
                 "close",
                 video_path=str(self.video_path) if self.video_path else None,
