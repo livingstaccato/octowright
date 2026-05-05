@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from octowright.pool import _tile_args_for_chromium, _tile_position
+from octowright.browser_pool.visuals import _tile_args_for_chromium, _tile_position
 
 
 def test_tile_position_index_zero_is_top_left() -> None:

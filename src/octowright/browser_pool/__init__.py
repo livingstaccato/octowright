@@ -3,8 +3,8 @@
 # SPDX-Comment: Part of octowright.
 #
 
+from .errors import maybe_wrap_playwright_error
 from .listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
-from .runtime import BrowserPool
 from .visuals import (
     _BADGE_POSITION_DEFAULT,
     _BADGE_POSITIONS,
@@ -24,7 +24,6 @@ __all__ = [
     "_BADGE_POSITION_DEFAULT",
     "_ENGINE_EMOJI",
     "_PERSONA_EMOJI_POOL",
-    "BrowserPool",
     "_badge_color_for",
     "_badge_text_for",
     "_emoji_pair_for",
@@ -35,4 +34,5 @@ __all__ = [
     "_wire_close_evictor",
     "_wire_listeners",
     "_wire_user_navigation_logger",
+    "maybe_wrap_playwright_error",
 ]
