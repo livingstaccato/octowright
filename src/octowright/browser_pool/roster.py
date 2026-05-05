@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from .pool_support import _BADGE_POSITION_DEFAULT
+from .visuals import _BADGE_POSITION_DEFAULT
 
 if TYPE_CHECKING:
     from .pool import BrowserPool

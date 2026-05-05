@@ -13,7 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from provide.telemetry import get_logger
 
 from .. import scenarios as _scenarios
-from ..pool import BrowserPool
+from ..browser_pool import BrowserPool
 
 log = get_logger("octowright.server")
 

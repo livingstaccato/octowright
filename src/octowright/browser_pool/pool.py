@@ -15,8 +15,7 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
-from .browser_pool.errors import maybe_wrap_playwright_error
-from .defaults import (
+from ..defaults import (
     DEFAULT_URL,
     DEFAULT_VIEWPORT_H,
     DEFAULT_VIEWPORT_W,
@@ -24,9 +23,17 @@ from .defaults import (
     RECORDINGS_DIR,
     SUPPORTED_KINDS,
 )
-from .pool_roster import close_all as _close_all
-from .pool_roster import spawn_roster as _spawn_roster
-from .pool_support import (
+from ..profiles import profile_dir
+from ..recorder import Recorder, new_log_path
+from ..session import BrowserSession
+from ..session_manifest import record_launch as _manifest_record_launch
+from ..stabilize import render_stabilize_script
+from .errors import maybe_wrap_playwright_error
+from .lifecycle import close_browser, handoff_browser, shutdown_pool
+from .listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
+from .roster import close_all as _close_all
+from .roster import spawn_roster as _spawn_roster
+from .visuals import (
     _BADGE_POSITION_DEFAULT,
     _BADGE_POSITIONS,
     _BADGE_SCRIPT,
@@ -35,16 +42,7 @@ from .pool_support import (
     _badge_text_for,
     _tile_args_for_chromium,
     _title_tag_for,
-    _wire_close_evictor,
-    _wire_listeners,
-    _wire_user_navigation_logger,
 )
-from .profiles import profile_dir
-from .recorder import Recorder, new_log_path
-from .session import BrowserSession
-from .session_manifest import record_launch as _manifest_record_launch
-from .session_manifest import remove_session as _manifest_remove_session
-from .stabilize import render_stabilize_script
 
 log = get_logger(__name__)
 
@@ -60,6 +58,7 @@ class BrowserPool:
         self._pw: Playwright | None = None
         self._pw_lock = asyncio.Lock()
         self._sessions: dict[str, BrowserSession] = {}
+        self._sessions_lock = asyncio.Lock()
         # Monotonic counter for window-tile slot assignment. Reading
         # len(_sessions) at launch time would race when N launches run in
         # parallel — they'd all see the same count and grab the same slot.
@@ -307,7 +306,7 @@ class BrowserPool:
             persona_emoji_override: str | None = None
             if profile:
                 try:
-                    from .personas import load_persona
+                    from ..personas import load_persona
 
                     persona_emoji_override = load_persona(profile).emoji
                 except FileNotFoundError:
@@ -341,7 +340,8 @@ class BrowserPool:
 
             new_session._schedule_markdown_capture()
 
-            self._sessions[instance_id] = new_session
+            async with self._sessions_lock:
+                self._sessions[instance_id] = new_session
             try:
                 _manifest_record_launch(
                     session_id=instance_id,
@@ -409,14 +409,17 @@ class BrowserPool:
 
     def get(self, instance_id: str) -> BrowserSession:
         if instance_id not in self._sessions:
-            known = list(self._sessions)
-            hint = (
-                "no browsers are live — call browser_launch first"
-                if not known
-                else f"call browser_list to see live ids; known: {known}"
-            )
-            raise KeyError(f"no browser with instance_id={instance_id!r}; {hint}")
+            raise KeyError(self._missing_session_message(instance_id))
         return self._sessions[instance_id]
+
+    def _missing_session_message(self, instance_id: str) -> str:
+        known = list(self._sessions)
+        hint = (
+            "no browsers are live — call browser_launch first"
+            if not known
+            else f"call browser_list to see live ids; known: {known}"
+        )
+        return f"no browser with instance_id={instance_id!r}; {hint}"
 
     def maybe_get(self, instance_id: str) -> BrowserSession | None:
         return self._sessions.get(instance_id)
@@ -447,33 +450,11 @@ class BrowserPool:
     def profile_in_use(self, kind: str, profile: str) -> bool:
         return any(s.kind == kind and s.profile == profile for s in self._sessions.values())
 
+    def _evict_session_nowait(self, instance_id: str) -> BrowserSession | None:
+        return self._sessions.pop(instance_id, None)
+
     async def close(self, instance_id: str) -> dict[str, Any]:
-        session = self.get(instance_id)
-        # Remove from the registry BEFORE awaiting session.close() — that call
-        # triggers context.close() which fires the close event our external
-        # evictor listens for. By the time the evictor runs, _sessions.pop()
-        # will return None and the evictor will silently no-op, leaving us as
-        # the sole logger of an explicit close.
-        del self._sessions[instance_id]
-        await session.close()
-        try:
-            _manifest_remove_session(instance_id)
-        except Exception as exc:
-            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
-        log.info(
-            "octowright.browser.closed",
-            instance_id=instance_id,
-            kind=session.kind,
-            profile=session.profile,
-            log_path=str(session.log_path),
-        )
-        return {
-            "closed": True,
-            "log_path": str(session.log_path),
-            "video_path": str(session.video_path) if session.video_path else None,
-            "trace_path": str(session.trace_path) if session.trace_path else None,
-            "har_path": str(session.har_path) if session.har_path else None,
-        }
+        return await close_browser(self, instance_id)
 
     async def close_all(self) -> dict[str, Any]:
         return await _close_all(self)
@@ -486,47 +467,13 @@ class BrowserPool:
         close_original: bool = True,
         accept_stateless: bool = False,
     ) -> dict[str, Any]:
-        source = self.get(old_instance_id)
-        source_profile = source.profile
-        source_user_data_dir = getattr(source, "user_data_dir", None)
-        if source_profile is None and source_user_data_dir is None and not accept_stateless:
-            raise ValueError(
-                "handoff would be stateless: source has no profile/user_data_dir; pass accept_stateless=True to proceed"
-            )
-        if not close_original and (source_profile is not None or source_user_data_dir is not None):
-            raise ValueError(
-                "persistent handoff requires close_original=True so the state directory can be safely reused"
-            )
-
-        target_url = getattr(source.page, "url", None) or source.url
-        session_scoped = source_profile is None and source_user_data_dir is not None
-        close_result: dict[str, Any] | None = None
-        if close_original:
-            close_result = await self.close(old_instance_id)
-
-        launch = await self.launch(
-            kind=source.kind,
-            url=target_url,
+        return await handoff_browser(
+            self,
+            old_instance_id,
             headed=headed,
-            label=source.label,
-            profile=source_profile,
-            stabilize=getattr(source, "stabilize", False),
-            trace=getattr(source, "trace", False),
-            har=bool(getattr(source, "har_path", None)),
-            har_path=str(source.har_path) if getattr(source, "har_path", None) else None,
-            session=session_scoped,
+            close_original=close_original,
+            accept_stateless=accept_stateless,
         )
-
-        return {
-            "ok": True,
-            "old_instance_id": old_instance_id,
-            "new_instance_id": launch["instance_id"],
-            "old_closed": bool(close_result and close_result.get("closed")),
-            "profile": source_profile,
-            "kind": source.kind,
-            "url": target_url,
-            "har_path": launch.get("har_path"),
-        }
 
     async def spawn_roster(self, specs: list[dict[str, Any]]) -> dict[str, Any]:
         """Launch N browsers concurrently from a list of launch spec dicts.
@@ -542,17 +489,4 @@ class BrowserPool:
         return await _spawn_roster(self, specs)
 
     async def shutdown(self) -> None:
-        import shutil as _shutil
-
-        await self.close_all()
-        if self._pw is not None:
-            await self._pw.stop()
-            self._pw = None
-        # Wipe session=True tmpdirs — they only exist for this daemon's lifetime.
-        # Best-effort: ignore failures (file in use, race with browser teardown).
-        for tmpdir in self._session_profile_dirs.values():
-            try:
-                _shutil.rmtree(tmpdir, ignore_errors=True)
-            except OSError:
-                pass
-        self._session_profile_dirs.clear()
+        await shutdown_pool(self)
