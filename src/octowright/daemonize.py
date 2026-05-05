@@ -37,7 +37,7 @@ from . import singleton as _sn
 # Daemon stderr goes here so we have something to investigate when the daemon
 # misbehaves. Rotated by file size on each spawn (truncated above 1 MB) to
 # avoid unbounded growth on dev machines.
-_DAEMON_LOG = Path.home() / ".config" / "undef" / "octowright-daemon.log"
+_DAEMON_LOG = Path.home() / ".config" / "octowright" / "octowright-daemon.log"
 _DAEMON_LOG_MAX_BYTES = 1_000_000
 
 

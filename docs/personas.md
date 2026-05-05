@@ -5,7 +5,7 @@ A persona is a named identity layer over per-engine browser state.
 Storage layout:
 
 ```text
-~/.config/undef/profiles/
+~/.config/octowright/profiles/
   <persona>/
     profile.yaml
     chromium/
