@@ -473,10 +473,13 @@ class BrowserPool:
             raise ValueError(
                 "handoff would be stateless: source has no profile/user_data_dir; pass accept_stateless=True to proceed"
             )
-        if not close_original and source_profile is not None:
-            raise ValueError("persistent handoff requires close_original=True so the profile can be safely reused")
+        if not close_original and (source_profile is not None or source_user_data_dir is not None):
+            raise ValueError(
+                "persistent handoff requires close_original=True so the state directory can be safely reused"
+            )
 
         target_url = getattr(source.page, "url", None) or source.url
+        session_scoped = source_profile is None and source_user_data_dir is not None
         close_result: dict[str, Any] | None = None
         if close_original:
             close_result = await self.close(old_instance_id)
@@ -491,6 +494,7 @@ class BrowserPool:
             trace=getattr(source, "trace", False),
             har=bool(getattr(source, "har_path", None)),
             har_path=str(source.har_path) if getattr(source, "har_path", None) else None,
+            session=session_scoped,
         )
 
         return {
