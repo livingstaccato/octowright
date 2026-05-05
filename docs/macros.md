@@ -1,39 +1,132 @@
 # Macros
 
-Macros are reusable action sequences derived from recordings.
+A **macro** is a named, parameterizable action sequence derived from a recording.
+Capture a flow once (e.g. a login), replay it later — possibly with different
+arguments, possibly across many participants in a scenario.
 
-## Core Tools
+Macros live as JSON under `~/.config/octowright/macros/` (override with
+`OCTOWRIGHT_MACROS_DIR`).
 
-- `macro_save`
-- `macro_list`
-- `macro_run`
-- `macro_run_sequence`
-- `macro_delete`
-- `macro_lint`
-- `macro_explain`
+## When to use a macro
 
-## Recommended Flow
+- **Login flows** that you want to re-run across multiple personas or sessions.
+- **Setup steps** that put a page into a known state before exploration or testing.
+- **Verification probes** tagged `[test]` that the test runner can execute as a suite.
 
-1. Launch and perform the flow once.
-2. Save it with `macro_save`.
-3. Replay with `macro_run`.
-4. Run `macro_lint` before promoting to shared workflows.
+When NOT to use a macro: durable production automation. Macros break when the
+target site rewrites its DOM (Discord especially loves to rotate CSS classes).
+Treat them as short-term automation — when one breaks, **re-record rather than
+hand-patch**.
 
-## Conditional Actions
+## Recording → save → replay
 
-Supported conditional action families include:
-
-- `if_selector`
-- `try`
-- `try_each`
-
-Use them to reduce brittleness when DOM variants appear.
-
-## Testing
-
-- `run_test_suite` executes `[test]`-tagged macros and emits JUnit XML.
-- CLI equivalent:
+The canonical workflow:
 
 ```bash
-uv run octowright test [path] --out dist/macro-tests.xml
+# 1. Manually perform the flow on a live instance.
+browser_launch kind=webkit profile=disc-1 url=https://discord.com/login
+# ... fill email, password, submit ...
+
+# 2. Snapshot those actions as a macro. Tell Octowright which literal values
+#    should be parameters.
+macro_save instance_id=<id> name=discord-login \
+           parameters={"email":"me@example.com","password":"hunter2"}
+
+# 3. Replay later, against any instance, with any args.
+browser_launch kind=webkit profile=disc-2 url=https://discord.com/login
+macro_run instance_id=<new-id> name=discord-login \
+          args={"email":"other@example.com","password":"correcthorsebatterystaple"}
 ```
+
+Lifecycle actions (`launch`, `close`, `snapshot`) are dropped by default — macros
+are the **reusable middle** of a flow, not the wrapper. Pass `include_launch=True`
+on `macro_save` if you need the initial navigation baked into the macro.
+
+## Conditional / branching actions
+
+For sites that ship multiple DOM versions of the same flow, three action types
+let one macro cover all of them. Hand-author these by editing the JSON directly;
+record the linear baseline first, then wrap the fragile steps.
+
+### `if_selector`
+
+Predicate on selector presence; runs `then` or `else`:
+
+```json
+{"action": "if_selector", "selector": ".cookie-banner", "present": true,
+ "then": [{"action": "click", "selector": ".accept-cookies"}]}
+```
+
+### `try`
+
+Best-effort sub-sequence that **suppresses errors**. Use for optional steps
+like dismissing a one-off banner that may or may not exist:
+
+```json
+{"action": "try", "actions": [
+    {"action": "click", "selector": "#optional-popup-close"}
+]}
+```
+
+### `try_each`
+
+Branches in order; succeeds on the first whose every action completes; raises
+if all fail. The "v1 OR v2 OR v3" hammer:
+
+```json
+{"action": "try_each", "branches": [
+    [{"action": "click", "selector": "[aria-label='Close']"}],
+    [{"action": "click", "selector": "button.dismiss"}],
+    [{"action": "press_key", "key": "Escape"}]
+]}
+```
+
+These nest freely — `if_selector` inside `try_each` inside `try` works as you
+would expect. See `examples/macros/conditional-discord-modal-dismiss.json` for a
+real-world pattern.
+
+## Linting
+
+Before promoting a macro into shared workflows or CI, run:
+
+```bash
+macro_lint name=discord-login
+```
+
+The linter catches:
+
+- Missing required fields on each action.
+- Unknown action types (typos).
+- **Unparameterized credential-shaped strings** (looks like a password or token
+  but isn't a `{{parameter}}`) — the most common security mistake.
+- Empty conditional branches that would silently no-op.
+
+## Test suite mode
+
+Macros tagged `[test]` (in either `name` or `description`) participate in the
+test runner. The runner emits JUnit XML so the result drops cleanly into any CI
+reporting pipeline.
+
+```bash
+uv run octowright test [path] --kind webkit --tag smoke --out dist/macro-tests.xml
+```
+
+Equivalent MCP tool: `run_test_suite`.
+
+## Tools
+
+| Tool | Purpose |
+|---|---|
+| `macro_save` | Snapshot a recording into a named macro JSON. |
+| `macro_list` | Enumerate all saved macros. |
+| `macro_run` | Replay a single macro against a live instance. |
+| `macro_run_sequence` | Replay several macros in order on the same instance. |
+| `macro_delete` | Remove a saved macro file. |
+| `macro_lint` | Static-analysis pass on a saved macro. |
+| `run_test_suite` | Execute every `[test]`-tagged macro in a directory; emit JUnit XML. |
+
+## Related
+
+- [personas.md](personas.md) — `default_macros` runs after launch (typical use: auto-login).
+- [scenarios.md](scenarios.md) — `scenario_run_macro` broadcasts a macro across participants.
+- [troubleshooting.md](troubleshooting.md#scenariomacro-failures) — when a macro stops finding selectors.
