@@ -1,41 +1,81 @@
 # Engines
 
-Octowright supports Playwright engines:
+Octowright drives all three Playwright browser engines, side-by-side, in the
+same session:
 
-- `chromium`
-- `firefox`
-- `webkit`
+- `chromium` — Chrome / Edge engine family.
+- `firefox` — Mozilla's engine.
+- `webkit` — the upstream WebKit engine that ships with Playwright (see the
+  [Safari caveat](#safari-caveat) below).
 
-## Install and Verify
+The engine is chosen per-launch via the `kind` argument to `browser_launch`.
 
-Install browser binaries:
+## Install and verify
+
+Install the engine binaries that match your installed Playwright version:
 
 ```bash
 uv run playwright install webkit firefox chromium
 ```
 
-Tool-level checks:
+When a launch fails immediately, suspect the engine binary first. The
+following MCP tools surface exactly what's installed and let you reinstall
+without leaving Claude:
 
-- `browser_engine_status`
-- `browser_engine_install`
-- `browser_engine_reinstall`
+- `browser_engine_status` — reports installed engines and Playwright version drift.
+- `browser_engine_install` — installs a specific engine.
+- `browser_engine_reinstall` — wipes and reinstalls a specific engine.
 
-Use these before blaming higher-level macro/scenario logic for launch failures.
+Run these *before* blaming higher-level macro or scenario logic for a
+launch failure.
 
-## Launch Mode Semantics
+## Launch mode (headed vs headless)
 
-- Headed/headless default is environment-driven (`OCTOWRIGHT_HEADLESS` override supported).
-- In headed mode with no explicit viewport, sessions use `no_viewport=True` so page size tracks OS window resizing.
-- If viewport dimensions are explicitly set, Playwright uses those dimensions.
+Mode is environment-driven, with one explicit override:
 
-## Handoff and Mixed Flows
+| Condition | Mode |
+|---|---|
+| `OCTOWRIGHT_HEADLESS=1` | headless (forced) |
+| `OCTOWRIGHT_HEADLESS=0` | headed (forced) |
+| `CI=true` | headless |
+| Linux without `$DISPLAY` / `$WAYLAND_DISPLAY` | headless |
+| macOS, or Linux with a display | headed (default) |
 
-`browser_handoff` exists for transitioning from automated flow to human takeover workflows.
+In **headed mode with no explicit viewport**, sessions launch with
+`no_viewport=True` so the page tracks the OS window as it's resized.
+If `viewport_w` / `viewport_h` are explicitly set (or `OCTOWRIGHT_VIEWPORT_W`
+/ `OCTOWRIGHT_VIEWPORT_H` are set in the environment), Playwright honors those
+dimensions instead.
 
-Operationally, when you want "headless prep then headed continue", do it as:
+## Mixed-mode flows (handoff)
 
-1. Run prep macro/session in one launch mode.
-2. Persist state via persona/profile.
-3. Launch a second session in the desired mode with the same persona/profile.
+For "headless prep, then headed continue" workflows, *don't* try to mutate a
+single running browser between modes. Instead:
 
-This preserves practical continuity through profile state rather than mutating one running browser process from headless to headed.
+1. Run prep in one launch mode against a persona/profile.
+2. Close that browser (state flushes to disk).
+3. Launch a second browser against the same persona/profile in the desired mode.
+
+The persona/profile preserves practical continuity (cookies, localStorage,
+service workers) without requiring Octowright to mutate a running Playwright
+process.
+
+The `browser_handoff` tool exists for transitioning from automated flow to
+human takeover specifically — not for mode-switching.
+
+## Safari caveat
+
+Playwright's `webkit` channel is the **bundled upstream WebKit engine**, not
+Apple's Safari.app. The two share an engine family but are separate binaries.
+Driving real Safari.app with your cookies/profile would require Apple's
+`safaridriver`, which Playwright does not support today.
+
+This rarely matters in practice — the upstream WebKit binary tracks Safari
+closely enough for site-compatibility testing.
+
+## Related
+
+- [troubleshooting.md](troubleshooting.md#engine-launch-failures) — diagnosis
+  flow when a launch fails immediately.
+- [personas.md](personas.md) — each persona can hold profiles across all three
+  engines independently.
