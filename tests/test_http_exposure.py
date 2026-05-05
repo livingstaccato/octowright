@@ -5,10 +5,13 @@
 
 from __future__ import annotations
 
+import types
 from pathlib import Path
 from typing import Any
 
 import pytest
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -77,6 +80,11 @@ SENSITIVE_ROUTE_PATTERNS = {
     ("GET", "/api/macros"),
 }
 
+PUBLIC_API_ROUTE_PATTERNS = {
+    ("GET", "/api/health"),
+    ("GET", "/api/metrics"),
+}
+
 REMOTE_DISABLED_BODY = {
     "error": "remote dashboard access is disabled",
     "hint": "Bind the HTTP dashboard to 127.0.0.1 or set OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1.",
@@ -87,6 +95,20 @@ def _remote_app() -> Any:
     app = _http.build_app()
     app.state.octowright_http_host = "0.0.0.0"
     return app
+
+
+def _install_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeMcpSettings:
+        streamable_http_path = "unchanged"
+
+    fake_mcp_app = Starlette(routes=[Route("/", lambda _req: JSONResponse({"mcp": True}))])
+    monkeypatch.setattr(
+        "octowright.server.mcp",
+        types.SimpleNamespace(
+            settings=_FakeMcpSettings(),
+            streamable_http_app=lambda: fake_mcp_app,
+        ),
+    )
 
 
 def test_is_loopback_host_accepts_loopback_names_and_addresses() -> None:
@@ -101,8 +123,10 @@ def test_is_loopback_host_rejects_remote_binds() -> None:
     assert is_loopback_host("192.168.1.20") is False
 
 
-def test_expected_sensitive_http_routes_are_guarded() -> None:
+def test_api_routes_are_explicitly_guarded_or_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_HTTP_METRICS", "1")
     app = _http.build_app()
+    api_routes: set[tuple[str, str]] = set()
     guarded: set[tuple[str, str]] = set()
     for route in app.routes:
         if not isinstance(route, Route):
@@ -110,12 +134,14 @@ def test_expected_sensitive_http_routes_are_guarded() -> None:
         if not route.path.startswith("/api/"):
             continue
         endpoint = route.endpoint
-        if not hasattr(endpoint, "__wrapped__"):
-            continue
         for method in route.methods or ():
             if method != "HEAD":
-                guarded.add((method, route.path))
+                route_key = (method, route.path)
+                api_routes.add(route_key)
+                if hasattr(endpoint, "__wrapped__"):
+                    guarded.add(route_key)
 
+    assert api_routes == SENSITIVE_ROUTE_PATTERNS | PUBLIC_API_ROUTE_PATTERNS
     assert guarded == SENSITIVE_ROUTE_PATTERNS
 
 
@@ -203,3 +229,41 @@ def test_public_static_assets_are_unguarded_on_remote_bind(
     assert "dashboard" in index_response.text
     assert asset_response.status_code == 200
     assert "public asset" in asset_response.text
+
+
+def test_mcp_mount_denied_on_remote_bind_without_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
+    _install_fake_mcp(monkeypatch)
+    app = _http.build_app(mcp_leader=True)
+    app.state.octowright_http_host = "0.0.0.0"
+
+    with TestClient(app) as client:
+        response = client.get("/mcp/")
+
+    assert response.status_code == 403
+    assert response.json() == REMOTE_DISABLED_BODY
+
+
+def test_mcp_mount_allowed_on_remote_bind_with_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", "1")
+    _install_fake_mcp(monkeypatch)
+    app = _http.build_app(mcp_leader=True)
+    app.state.octowright_http_host = "0.0.0.0"
+
+    with TestClient(app) as client:
+        response = client.get("/mcp/")
+
+    assert response.status_code == 200
+    assert response.json() == {"mcp": True}
+
+
+def test_mcp_mount_allowed_on_loopback_without_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
+    _install_fake_mcp(monkeypatch)
+    app = _http.build_app(mcp_leader=True)
+
+    with TestClient(app) as client:
+        response = client.get("/mcp/")
+
+    assert response.status_code == 200
+    assert response.json() == {"mcp": True}
