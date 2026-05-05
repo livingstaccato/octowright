@@ -152,11 +152,13 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
         if env_key in creds:
             log.warning("persona.cred.both_set", persona=persona.name, cred_name=cred_name)
         try:
+            # Credential commands are explicit user configuration.
             result = subprocess.run(
-                ["/bin/sh", "-lc", creds[cmd_key]],
+                creds[cmd_key],
                 capture_output=True,
                 text=True,
                 check=False,
+                shell=True,  # nosec B602
                 timeout=30,
             )
         except subprocess.TimeoutExpired as e:

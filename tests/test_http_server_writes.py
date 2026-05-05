@@ -232,7 +232,7 @@ def test_post_sessions_happy_path(
     assert body["label"] == "qa-1"
     assert body["url"] == "https://example.com"
     assert body["live"] is True
-    assert body["log_path"] == "/tmp/deadbeef0001.jsonl"
+    assert body["log_path"] == str(Path("/tmp/deadbeef0001.jsonl"))
     assert "started_at" in body
     # pool.launch was called once, with the expected kwargs.
     assert len(pool.launch_calls) == 1
