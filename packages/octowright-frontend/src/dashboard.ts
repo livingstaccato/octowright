@@ -1,6 +1,7 @@
 import {
   dashboardEventsUrl,
   deleteRecording,
+  getMacroRepairPreview,
   getMacros,
   getPersonaDetail,
   getPersonas,
@@ -15,6 +16,7 @@ import { formatDateTime, shortUrl } from "./format.js";
 import { getLogger, initTelemetry } from "./telemetry.js";
 import type {
   LiveScenario,
+  MacroRepairPreview,
   MacroSummary,
   PersonaSummary,
   SavedScenario,
@@ -26,6 +28,8 @@ import type {
 const REFRESH_MS = 5000;
 
 const log = getLogger("octowright.frontend.dashboard");
+
+export type DashboardDisposer = () => void;
 
 interface DashboardState {
   sessions: SessionListResponse;
@@ -180,6 +184,105 @@ export function openPersonaEditor(name: string): void {
     });
 }
 
+export function openMacroRepairPreview(name: string): void {
+  const existing = document.querySelector(".modal-backdrop");
+  if (existing) existing.remove();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-label", `Repair preview: ${name}`);
+
+  const header = document.createElement("div");
+  header.className = "modal__header";
+  const title = document.createElement("h3");
+  title.className = "modal__title";
+  title.textContent = `Repair preview: ${name}`;
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "icon-btn";
+  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.textContent = "✕";
+  closeBtn.addEventListener("click", closeModal);
+  header.append(title, closeBtn);
+
+  const body = document.createElement("div");
+  body.className = "modal__body";
+  const loadingMsg = document.createElement("p");
+  loadingMsg.className = "modal__loading";
+  loadingMsg.textContent = "Loading…";
+  body.append(loadingMsg);
+
+  const footer = document.createElement("div");
+  footer.className = "modal__footer";
+  const doneBtn = document.createElement("button");
+  doneBtn.className = "btn";
+  doneBtn.textContent = "Close";
+  doneBtn.addEventListener("click", closeModal);
+  footer.append(doneBtn);
+
+  modal.append(header, body, footer);
+  backdrop.append(modal);
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) closeModal();
+  });
+  document.body.append(backdrop);
+
+  getMacroRepairPreview(name)
+    .then((preview) => {
+      body.innerHTML = "";
+      body.append(renderMacroRepairPreview(preview));
+    })
+    .catch((err: unknown) => {
+      loadingMsg.textContent = `Failed to load repair preview: ${String(err)}`;
+    });
+}
+
+function renderMacroRepairPreview(preview: MacroRepairPreview): HTMLElement {
+  if (preview.suggestions.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "No selector-based repair suggestions.";
+    return empty;
+  }
+
+  const list = document.createElement("ol");
+  list.className = "repair-preview";
+  for (const suggestion of preview.suggestions) {
+    const item = document.createElement("li");
+    item.className = "repair-preview__item";
+
+    const title = document.createElement("div");
+    title.className = "repair-preview__title";
+    title.textContent = `Action ${suggestion.action_index}`;
+
+    const prompt = document.createElement("p");
+    prompt.className = "repair-preview__prompt";
+    prompt.textContent = suggestion.prompt;
+
+    item.append(title);
+    if (suggestion.action_preview) {
+      const previewText = document.createElement("div");
+      previewText.className = "repair-preview__action";
+      previewText.textContent = suggestion.action_preview;
+      item.append(previewText);
+    }
+
+    if (suggestion.replacement_action) {
+      const code = document.createElement("pre");
+      code.className = "repair-preview__json";
+      code.textContent = JSON.stringify(suggestion.replacement_action, null, 2);
+      item.append(code);
+    }
+    item.append(prompt);
+    list.append(item);
+  }
+  return list;
+}
+
 // ─── state loading ────────────────────────────────────────────────────────────
 
 export async function loadState(): Promise<DashboardState> {
@@ -304,6 +407,7 @@ function renderSessionTable(rows: SessionSummary[], live: boolean): HTMLElement 
 }
 
 let dashboardRoot: HTMLElement | null = null;
+let activeDashboardDisposer: DashboardDisposer | null = null;
 
 async function deleteSessionRecording(id: string): Promise<void> {
   try {
@@ -513,6 +617,21 @@ function renderMacroList(macros: MacroSummary[]): HTMLElement {
       params.textContent = `params: ${m.parameters.join(", ")}`;
       li.append(params);
     }
+    const actions = document.createElement("div");
+    actions.className = "macro-list__actions";
+    const previewBtn = document.createElement("button");
+    previewBtn.className = "row-action icon-btn";
+    previewBtn.setAttribute("aria-label", `Preview repair suggestions for ${m.name}`);
+    previewBtn.setAttribute("title", "Repair preview");
+    previewBtn.setAttribute("data-testid", `macro-repair-preview-${m.name}`);
+    previewBtn.textContent = "⚑";
+    previewBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openMacroRepairPreview(m.name);
+    });
+    actions.append(previewBtn);
+    li.append(actions);
     ul.append(li);
   }
   return ul;
@@ -542,12 +661,26 @@ export function formatBytes(n: number): string {
 
 // ─── boot ─────────────────────────────────────────────────────────────────────
 
-export async function bootDashboard(root: HTMLElement): Promise<void> {
+export function disposeDashboard(): void {
+  activeDashboardDisposer?.();
+}
+
+export async function bootDashboard(root: HTMLElement): Promise<DashboardDisposer> {
+  disposeDashboard();
   dashboardRoot = root;
   log.info({ event: "dashboard_boot_start" });
   loadPersonaSizes();
+  let disposed = false;
+  let refreshGeneration = 0;
+  let source: EventSource | null = null;
+  let intervalId: ReturnType<typeof window.setInterval> | null = null;
+
   const tick = async (): Promise<void> => {
+    const generation = ++refreshGeneration;
     const state = await loadState();
+    if (disposed || generation !== refreshGeneration) {
+      return;
+    }
     renderDashboard(root, state);
     log.debug({
       event: "dashboard_refresh",
@@ -560,7 +693,7 @@ export async function bootDashboard(root: HTMLElement): Promise<void> {
   };
   await tick();
   if (typeof EventSource !== "undefined") {
-    const source = new EventSource(dashboardEventsUrl());
+    source = new EventSource(dashboardEventsUrl());
     const refreshFromStream = () => {
       tick().catch((err: unknown) => {
         log.warn({ event: "dashboard_stream_refresh_failed", error: String(err) });
@@ -570,15 +703,35 @@ export async function bootDashboard(root: HTMLElement): Promise<void> {
     source.addEventListener("invalidate", refreshFromStream);
     source.onerror = () => {
       log.warn({ event: "dashboard_stream_error" });
-      source.close();
+      source?.close();
+      source = null;
     };
   }
-  window.setInterval(() => {
+  intervalId = window.setInterval(() => {
     tick().catch((err: unknown) => {
       log.warn({ event: "dashboard_refresh_failed", error: String(err) });
     });
   }, REFRESH_MS);
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    refreshGeneration++;
+    source?.close();
+    source = null;
+    if (intervalId !== null) {
+      window.clearInterval(intervalId);
+      intervalId = null;
+    }
+    if (dashboardRoot === root) {
+      dashboardRoot = null;
+    }
+    if (activeDashboardDisposer === dispose) {
+      activeDashboardDisposer = null;
+    }
+  };
+  activeDashboardDisposer = dispose;
   log.info({ event: "dashboard_boot_complete", refresh_ms: REFRESH_MS });
+  return dispose;
 }
 
 if (typeof document !== "undefined") {
@@ -587,6 +740,7 @@ if (typeof document !== "undefined") {
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", () => {
       log.info({ event: "page_unload", page: "dashboard" });
+      disposeDashboard();
     });
   }
   const root = document.getElementById("app");
