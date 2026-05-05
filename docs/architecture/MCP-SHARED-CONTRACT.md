@@ -171,21 +171,24 @@ Both endpoints share the same shape: ``{<plural>: [...], "cursor": int, "total":
 - For LIVE sessions the data is read directly off the in-memory session
   (``BrowserSession.console`` and ``BrowserSession.list_downloads()``).
 - For CLOSED sessions the data is reconstructed by scanning the JSONL
-  recording. Today the JSONL log captures ``download_saved`` rows but NOT
-  console events — so a closed session's ``/console`` always returns an empty
-  list. The endpoint reads ``action: "console"`` rows defensively, so adding
-  console persistence later requires no API change.
+  recording. Console rows are stored as ``action: "console"`` entries and
+  downloads are stored as ``action: "download_saved"`` entries.
 - 404 is returned when the id matches neither a live session nor a recording
   on disk.
 
 ## Closed sessions
 
-For v1, octowright doesn't persist a session registry — sessions live in
-`pool._sessions` and disappear on close. The HTTP server treats "closed
-sessions" as JSONL files in `RECORDINGS_DIR/` whose `instance_id` is not in
-`pool._sessions`. Filename layout: `<stamp>-<kind>-<instance_id>[-<label>].jsonl`.
-The first `launch` event in the recording supplies `started_at` / `kind` /
-`profile` / `label` / `url`.
+Live handles still live in `pool._sessions` and disappear on close. The HTTP
+server treats "closed sessions" as JSONL files in `RECORDINGS_DIR/` whose
+`instance_id` is not in the live pool. Filename layout:
+`<stamp>-<kind>-<instance_id>[-<label>].jsonl`. The first `launch` event in
+the recording supplies `started_at` / `kind` / `profile` / `label` / `url`.
+
+Octowright also writes a lightweight `session-manifest.json` for crash
+diagnostics. Graceful closes and external browser evictions remove entries.
+If the daemon dies before cleanup, `octowright_status()` reports manifest
+entries that are no longer present in the live pool as `stale_manifest_sessions`.
+The manifest is diagnostic only; it is not a browser reattach registry.
 
 ## WebSocket `/tail` semantics
 
