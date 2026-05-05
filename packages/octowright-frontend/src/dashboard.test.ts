@@ -1,6 +1,27 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderDashboard } from "./dashboard.js";
 import type { LiveScenario, MacroSummary, PersonaSummary, SessionListResponse, ScenarioListResponse } from "./types.js";
+
+vi.mock("./api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api.js")>();
+  return {
+    ...actual,
+    getMacroRepairPreview: vi.fn(async () => ({
+      macro: "login",
+      suggestions: [
+        {
+          macro: "login",
+          action_index: 0,
+          original_action: { action: "click", selector: "#submit" },
+          replacement_action: { action: "click_by", text: "Submit" },
+          action_preview: "Click by text 'Submit'",
+          prompt: "Review selector '#submit'",
+          source: "stored_heuristic",
+        },
+      ],
+    })),
+  };
+});
 
 let root: HTMLDivElement;
 beforeEach(() => {
@@ -87,5 +108,19 @@ describe("renderDashboard", () => {
     });
     const empties = root.querySelectorAll(".empty");
     expect(empties.length).toBeGreaterThanOrEqual(4);
+  });
+  it("opens a non-mutating macro repair preview", async () => {
+    renderDashboard(root, { sessions, scenarios, personas, macros });
+    const button = root.querySelector<HTMLButtonElement>('[data-testid="macro-repair-preview-login"]');
+    expect(button).not.toBeNull();
+
+    button?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("Repair preview: login");
+    expect(dialog?.textContent).toContain("Click by text");
+    expect(dialog?.textContent).toContain("Review selector '#submit'");
+    expect(dialog?.querySelector("button.btn--primary")).toBeNull();
   });
 });

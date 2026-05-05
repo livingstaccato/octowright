@@ -303,6 +303,65 @@ async def _suggest_fix(session: BrowserSession, action: dict[str, Any]) -> str |
     return prompt
 
 
+def _semantic_replacement(action: dict[str, Any]) -> dict[str, Any] | None:
+    kind = action.get("action")
+    if kind not in {"click", "fill"} or not action.get("selector"):
+        return None
+
+    semantic = {k: action[k] for k in _SEMANTIC_LOCATOR_KEYS if k in action and action[k] is not None}
+    if not semantic:
+        return None
+
+    replacement: dict[str, Any] = {"action": f"{kind}_by", **semantic}
+    if kind == "fill" and "value" in action:
+        replacement["value"] = action["value"]
+    if "timeout_ms" in action:
+        replacement["timeout_ms"] = action["timeout_ms"]
+    return replacement
+
+
+def _replacement_preview(action: dict[str, Any]) -> str:
+    kind = action.get("action")
+    if kind == "click_by":
+        target = action.get("role_name") or action.get("label") or action.get("text") or action.get("test_id")
+        return f"Click by {target!r}" if target else "Click by semantic locator"
+    if kind == "fill_by":
+        target = action.get("role_name") or action.get("label") or action.get("text") or action.get("test_id")
+        value = action.get("value", "")
+        return f"Fill by {target!r} with {value!r}" if target else f"Fill by semantic locator with {value!r}"
+    return summarize_action(action)
+
+
+def repair_preview(name: str) -> dict[str, Any]:
+    """Return non-mutating repair suggestions for selector-based macro actions."""
+    macro = load_macro(name)
+    macro_name = macro.get("name") or name
+    suggestions: list[dict[str, Any]] = []
+    for idx, action in enumerate(macro.get("actions", [])):
+        if not isinstance(action, dict) or "selector" not in action:
+            continue
+
+        replacement = _semantic_replacement(action)
+        selector = action.get("selector")
+        prompt = (
+            f"Review selector {selector!r} for action {idx}. "
+            "If it no longer matches, compare the stored semantic fields against the current page."
+        )
+        suggestions.append(
+            {
+                "macro": macro_name,
+                "action_index": idx,
+                "original_action": copy.deepcopy(action),
+                "source": "stored_heuristic",
+                "replacement_action": replacement,
+                "action_preview": _replacement_preview(replacement) if replacement else None,
+                "prompt": prompt,
+            }
+        )
+
+    return {"macro": macro_name, "suggestions": suggestions}
+
+
 async def run_macro(
     session: BrowserSession,
     name: str,

@@ -50,6 +50,15 @@ async def list_macros_endpoint(_request: Request) -> JSONResponse:
     return JSONResponse(out)
 
 
+async def macro_repair_preview_endpoint(request: Request) -> JSONResponse:
+    name = request.path_params["name"]
+    try:
+        preview = state._macros.repair_preview(name)
+    except FileNotFoundError:
+        return JSONResponse({"error": f"macro {name!r} not found"}, status_code=404)
+    return JSONResponse(preview)
+
+
 async def persona_sizes_endpoint(_request: Request) -> JSONResponse:
     """GET /api/personas/sizes — bulk disk-size scan via du."""
     if not PROFILES_DIR.exists():
@@ -147,4 +156,9 @@ def routes() -> list[Route]:
         Route("/api/personas/{name}", guard_sensitive_http(persona_detail_endpoint), methods=["GET"]),
         Route("/api/personas/{name}", guard_sensitive_http(persona_update_endpoint), methods=["PUT"]),
         Route("/api/macros", guard_sensitive_http(list_macros_endpoint), methods=["GET"]),
+        Route(
+            "/api/macros/{name}/repair_preview",
+            guard_sensitive_http(macro_repair_preview_endpoint),
+            methods=["GET"],
+        ),
     ]

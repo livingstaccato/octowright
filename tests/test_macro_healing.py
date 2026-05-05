@@ -80,6 +80,45 @@ async def test_run_macro_includes_healing_on_failure(mock_session: MagicMock, mo
     assert "Email Address" in payload["healing_suggestion"]
 
 
+def test_repair_preview_suggests_structured_semantic_replacement(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    macros_dir = tmp_path / "macros"
+    macros_dir.mkdir()
+    monkeypatch.setattr(macros, "MACROS_DIR", macros_dir)
+    macro_path = macros_dir / "login.json"
+    original_action = {
+        "action": "fill",
+        "selector": "#email",
+        "value": "{{email}}",
+        "role": "textbox",
+        "role_name": "Email Address",
+    }
+    macro_path.write_text(
+        '{"name":"login","actions":['
+        '{"action":"fill","selector":"#email","value":"{{email}}","role":"textbox","role_name":"Email Address"},'
+        '{"action":"click","selector":"#submit"}'
+        "]}",
+        encoding="utf-8",
+    )
+
+    preview = macros.repair_preview("login")
+
+    assert preview["macro"] == "login"
+    assert preview["suggestions"][0]["macro"] == "login"
+    assert preview["suggestions"][0]["action_index"] == 0
+    assert preview["suggestions"][0]["original_action"] == original_action
+    assert preview["suggestions"][0]["source"] == "stored_heuristic"
+    assert preview["suggestions"][0]["replacement_action"] == {
+        "action": "fill_by",
+        "value": "{{email}}",
+        "role": "textbox",
+        "role_name": "Email Address",
+    }
+    assert "Fill by" in preview["suggestions"][0]["action_preview"]
+    assert "Review selector '#email'" in preview["suggestions"][0]["prompt"]
+    assert preview["suggestions"][1]["replacement_action"] is None
+    assert "Review selector '#submit'" in preview["suggestions"][1]["prompt"]
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
