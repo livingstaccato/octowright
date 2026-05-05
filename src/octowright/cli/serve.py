@@ -17,15 +17,19 @@ bridge stdin/stdout to its HTTP-MCP endpoint instead of spawning a pool. Pass
 from __future__ import annotations
 
 import asyncio as _asyncio_mod
+from collections.abc import Callable
+from types import FrameType
 from typing import Any
 
 import click
 from provide.telemetry import get_logger, setup_telemetry, shutdown_telemetry
 
-from ..server import mcp
-from ._root import cli
+from octowright.cli._root import cli
+from octowright.server import mcp
 
 _log = get_logger(__name__)
+
+_SignalHandler = Callable[[int, FrameType | None], Any] | int | None
 
 
 def _log_first_done(
@@ -339,15 +343,22 @@ async def _run_leader(
 
     loop = _asyncio.get_running_loop()
     installed_signals: list[_signal.Signals] = []
+    installed_signal_handlers: list[tuple[_signal.Signals, _SignalHandler]] = []
     if discoverable:
-        for sig in (_signal.SIGTERM, _signal.SIGHUP):
+        signals = [_signal.SIGTERM]
+        if hasattr(_signal, "SIGHUP"):
+            signals.append(_signal.SIGHUP)
+        for sig in signals:
             try:
                 loop.add_signal_handler(sig, mcp_task.cancel)
                 installed_signals.append(sig)
             except (NotImplementedError, ValueError):
-                # Windows / nested loops can't install handlers — fall back to
-                # default behavior, which means SIGTERM still kills us there.
-                pass
+                try:
+                    previous = _signal.getsignal(sig)
+                    _signal.signal(sig, lambda *_args: loop.call_soon_threadsafe(mcp_task.cancel))
+                    installed_signal_handlers.append((sig, previous))
+                except (OSError, RuntimeError, ValueError):
+                    pass
 
     wait_for: set[_asyncio.Task[object]] = {mcp_task}
     if watch_task is not None:
@@ -378,6 +389,11 @@ async def _run_leader(
             try:
                 loop.remove_signal_handler(sig)
             except (NotImplementedError, ValueError):
+                pass
+        for sig, previous in installed_signal_handlers:
+            try:
+                _signal.signal(sig, previous)
+            except (OSError, RuntimeError, ValueError):
                 pass
         for t in (*sidecars, watch_task, mcp_task):
             if t is not None and not t.done():
