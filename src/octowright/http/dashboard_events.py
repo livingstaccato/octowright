@@ -8,18 +8,49 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+import threading
+from contextlib import suppress
+from types import TracebackType
 
 DashboardEvent = dict[str, str]
 
 
+class _Subscriber:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+        self.queue: asyncio.Queue[DashboardEvent] = asyncio.Queue(maxsize=32)
+        self.lock = threading.Lock()
+        self.pending_event: DashboardEvent | None = None
+        self.delivery_scheduled = False
+
+
 class DashboardEventSubscription:
-    def __init__(self, queue: asyncio.Queue[DashboardEvent]) -> None:
-        self._queue = queue
+    def __init__(self, subscriber: _Subscriber) -> None:
+        self._subscriber = subscriber
 
     async def get(self) -> DashboardEvent:
-        return await self._queue.get()
+        return await self._subscriber.queue.get()
+
+
+class DashboardEventSubscriptionContext:
+    def __init__(self, bus: DashboardEventBus) -> None:
+        self._bus = bus
+        self._subscriber: _Subscriber | None = None
+
+    async def __aenter__(self) -> DashboardEventSubscription:
+        subscriber = _Subscriber(asyncio.get_running_loop())
+        self._subscriber = subscriber
+        self._bus._subscribers.add(subscriber)
+        return DashboardEventSubscription(subscriber)
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if self._subscriber is not None:
+            self._bus._subscribers.discard(self._subscriber)
 
 
 class DashboardEventBus:
@@ -30,35 +61,57 @@ class DashboardEventBus:
     """
 
     def __init__(self) -> None:
-        self._subscribers: set[tuple[asyncio.AbstractEventLoop, asyncio.Queue[DashboardEvent]]] = set()
+        self._subscribers: set[_Subscriber] = set()
 
-    @asynccontextmanager
-    async def subscribe(self) -> AsyncIterator[DashboardEventSubscription]:
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[DashboardEvent] = asyncio.Queue(maxsize=32)
-        subscriber = (loop, queue)
-        self._subscribers.add(subscriber)
-        try:
-            yield DashboardEventSubscription(queue)
-        finally:
-            self._subscribers.discard(subscriber)
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._subscribers)
+
+    def subscribe(self) -> DashboardEventSubscriptionContext:
+        return DashboardEventSubscriptionContext(self)
 
     async def publish(self, scope: str) -> None:
         self.publish_nowait(scope)
 
     def publish_nowait(self, scope: str) -> None:
         event = {"scope": scope}
-        for loop, queue in tuple(self._subscribers):
-            with suppress(RuntimeError):
-                loop.call_soon_threadsafe(self._deliver, queue, event)
+        for subscriber in tuple(self._subscribers):
+            if not self._mark_pending(subscriber, event):
+                continue
+            try:
+                subscriber.loop.call_soon_threadsafe(self._deliver, subscriber)
+            except RuntimeError:
+                self._clear_pending(subscriber)
 
     @staticmethod
-    def _deliver(queue: asyncio.Queue[DashboardEvent], event: DashboardEvent) -> None:
+    def _mark_pending(subscriber: _Subscriber, event: DashboardEvent) -> bool:
+        with subscriber.lock:
+            subscriber.pending_event = event
+            if subscriber.delivery_scheduled:
+                return False
+            subscriber.delivery_scheduled = True
+            return True
+
+    @staticmethod
+    def _deliver(subscriber: _Subscriber) -> None:
+        with subscriber.lock:
+            event = subscriber.pending_event
+            subscriber.pending_event = None
+            subscriber.delivery_scheduled = False
+        if event is None:
+            return
+        queue = subscriber.queue
         if queue.full():
             with suppress(asyncio.QueueEmpty):
                 queue.get_nowait()
         with suppress(asyncio.QueueFull):
             queue.put_nowait(event)
+
+    @staticmethod
+    def _clear_pending(subscriber: _Subscriber) -> None:
+        with subscriber.lock:
+            subscriber.pending_event = None
+            subscriber.delivery_scheduled = False
 
 
 dashboard_events = DashboardEventBus()
