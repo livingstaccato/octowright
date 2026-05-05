@@ -39,7 +39,7 @@ def is_loopback_host(host: str | None) -> bool:
         address = ipaddress.ip_address(normalized)
     except ValueError:
         return False
-    if address.version == 6 and address.ipv4_mapped is not None:
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         return address.ipv4_mapped.is_loopback
     return address.is_loopback
 
