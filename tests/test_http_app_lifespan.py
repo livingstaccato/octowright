@@ -97,6 +97,38 @@ def test_port_is_free_supports_ipv6_loopback() -> None:
         s.close()
 
 
+def test_port_is_free_requires_all_resolved_addresses_to_bind(monkeypatch: pytest.MonkeyPatch) -> None:
+    addrinfos = [
+        (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 8765, 0, 0)),
+        (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 8765, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 8765)),
+    ]
+    bind_attempts: list[tuple[object, ...]] = []
+
+    class _FakeSocket:
+        def __init__(self, family: int, socktype: int, proto: int) -> None:
+            self.family = family
+            self.socktype = socktype
+            self.proto = proto
+
+        def bind(self, sockaddr: tuple[object, ...]) -> None:
+            bind_attempts.append(sockaddr)
+            if self.family == socket.AF_INET:
+                raise OSError("IPv4 localhost port is busy")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(_http_lifespan.socket, "getaddrinfo", lambda *_args, **_kwargs: addrinfos)
+    monkeypatch.setattr(_http_lifespan.socket, "socket", _FakeSocket)
+
+    assert _http_lifespan._port_is_free("localhost", 8765) is False
+    assert bind_attempts == [
+        ("::1", 8765, 0, 0),
+        ("127.0.0.1", 8765),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_serve_app_sets_runtime_and_calls_on_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     bound_calls: list[tuple[str, int]] = []

@@ -30,19 +30,25 @@ def _port_is_free(host: str, port: int) -> bool:
     if not addrinfos:
         return False
 
+    seen: set[tuple[int, int, int, object]] = set()
+    checked = False
     for family, socktype, proto, _canonname, sockaddr in addrinfos:
+        key = (family, socktype, proto, sockaddr)
+        if key in seen:
+            continue
+        seen.add(key)
         try:
             s = socket.socket(family, socktype, proto)
         except OSError:
             continue
         try:
             s.bind(sockaddr)
-            return True
+            checked = True
         except OSError:
-            continue
+            return False
         finally:
             s.close()
-    return False
+    return checked
 
 
 def _pick_port(host: str, preferred: int, retries: int) -> int | None:
