@@ -55,6 +55,13 @@ repos:
         always_run: true
         types: [python]
 
+      - id: agent-docs-sync
+        name: agent docs sync
+        entry: uv run --active python scripts/check_agent_docs_sync.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: pytest-quick
         name: pytest (unit tests, no live browsers)
         entry: uv run --active pytest -q --deselect tests/test_popup_listeners.py --deselect tests/test_scenarios_live.py tests/
