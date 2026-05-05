@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,6 +31,7 @@ async def test_suggest_fix_finds_match(mock_session: MagicMock) -> None:
 
     suggestion = await macros._suggest_fix(mock_session, action)
 
+    assert suggestion is not None
     assert "I was trying to Fill '#email' with 'test@example.com'" in suggestion
     assert "but '#email' failed" in suggestion
     assert "Current A11y tree:" in suggestion
@@ -43,6 +45,7 @@ async def test_suggest_fix_no_match(mock_session: MagicMock) -> None:
 
     suggestion = await macros._suggest_fix(mock_session, action)
 
+    assert suggestion is not None
     assert "I was trying to Click '#unknown-button'" in suggestion
     assert "but '#unknown-button' failed" in suggestion
     assert "Current A11y tree:" in suggestion
@@ -57,6 +60,7 @@ async def test_suggest_fix_reflects_dom_change(mock_session: MagicMock) -> None:
 
     suggestion = await macros._suggest_fix(mock_session, action)
 
+    assert suggestion is not None
     assert "Click '#login-btn'" in suggestion
     assert "but '#login-btn' failed" in suggestion
     assert '- button "Login NOW"' in suggestion
@@ -80,7 +84,9 @@ async def test_run_macro_includes_healing_on_failure(mock_session: MagicMock, mo
     assert "Email Address" in payload["healing_suggestion"]
 
 
-def test_repair_preview_suggests_structured_semantic_replacement(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_repair_preview_suggests_structured_semantic_replacement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     macros_dir = tmp_path / "macros"
     macros_dir.mkdir()
     monkeypatch.setattr(macros, "MACROS_DIR", macros_dir)
