@@ -366,7 +366,7 @@ def test_session_events_partial_line(client: TestClient, isolated_recordings: Pa
     assert r.status_code == 200
     body = r.json()
     assert body["events"] == [{"action": "launch", "kind": "chromium"}]
-    assert body["cursor"] == len(first.encode("utf-8"))
+    assert body["cursor"] == p.read_bytes().find(fragment.encode("utf-8"))
     assert body["complete"] is False
 
 
