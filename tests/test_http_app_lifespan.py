@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import socket
 import types
 from typing import Any
 
@@ -80,6 +81,20 @@ def test_health_route_returns_unknown_when_metadata_version_raises(monkeypatch: 
         res = client.get("/api/health")
     assert res.status_code == 200
     assert res.json()["version"] == "unknown"
+
+
+@pytest.mark.skipif(not socket.has_ipv6, reason="IPv6 is not available")
+def test_port_is_free_supports_ipv6_loopback() -> None:
+    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    s.bind(("::1", 0))
+    busy = int(s.getsockname()[1])
+    try:
+        assert _http_lifespan._port_is_free("::1", busy) is False
+        chosen = _http_lifespan._pick_port("::1", busy, retries=20)
+        assert chosen is not None
+        assert chosen > busy
+    finally:
+        s.close()
 
 
 @pytest.mark.asyncio
