@@ -93,6 +93,17 @@ def test_get_list_and_remap_errors() -> None:
         sp.remap_participant(scenario_id="sid", old_instance_id="nope", new_instance_id="x")
 
 
+def test_public_live_lookup_helpers() -> None:
+    sp = ScenarioPool()
+    live = _live()
+    sp._live[live.scenario_id] = live
+
+    assert sp.has_live(live.scenario_id) is True
+    assert sp.maybe_get(live.scenario_id) is live
+    assert sp.has_live("missing") is False
+    assert sp.maybe_get("missing") is None
+
+
 def test_remap_participants_validation() -> None:
     sp = ScenarioPool()
     live = _live()

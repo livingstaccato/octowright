@@ -38,6 +38,12 @@ class ScenarioPool:
             raise KeyError(f"no live scenario with id={scenario_id!r}; {hint}")
         return self._live[scenario_id]
 
+    def maybe_get(self, scenario_id: str) -> LiveScenario | None:
+        return self._live.get(scenario_id)
+
+    def has_live(self, scenario_id: str) -> bool:
+        return scenario_id in self._live
+
     def list_live(self) -> list[dict[str, Any]]:
         return [
             {"scenario_id": ls.scenario_id, "name": ls.name, "participants": ls.participants}

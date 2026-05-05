@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -364,6 +365,18 @@ class BrowserPool:
             )
             raise KeyError(f"no browser with instance_id={instance_id!r}; {hint}")
         return self._sessions[instance_id]
+
+    def maybe_get(self, instance_id: str) -> BrowserSession | None:
+        return self._sessions.get(instance_id)
+
+    def has_session(self, instance_id: str) -> bool:
+        return instance_id in self._sessions
+
+    def iter_sessions(self) -> Iterable[BrowserSession]:
+        return tuple(self._sessions.values())
+
+    def active_count(self) -> int:
+        return len(self._sessions)
 
     def list_sessions(self) -> list[dict[str, Any]]:
         return [
