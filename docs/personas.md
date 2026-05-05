@@ -9,11 +9,12 @@ and a profile as *one engine-specific piece of that identity*.
 
 ## On-disk layout
 
-Personas live under `~/.config/octowright/profiles/` (override with
-`OCTOWRIGHT_PROFILES_DIR`):
+Personas live under the Octowright config dir. POSIX uses the XDG config dir
+`${XDG_CONFIG_HOME:-~/.config}/octowright/profiles/`; Windows uses
+`%APPDATA%\octowright\profiles\`. Override with `OCTOWRIGHT_PROFILES_DIR`:
 
 ```text
-~/.config/octowright/profiles/
+<octowright-config>/profiles/
 ├── dante/
 │   ├── profile.yaml          # persona metadata
 │   ├── webkit/               # dante's WebKit browser state

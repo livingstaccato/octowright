@@ -31,8 +31,8 @@ uv run octowright init                               # print Claude registration
 ```
 
 The last command prints a JSON block to paste into `.mcp.json` (project-scoped)
-or `~/.claude.json` (global). It also creates `~/.config/octowright/` with a
-sample persona, scenario, and macro so you have something to play with.
+or `~/.claude.json` (global). It also creates Octowright's user config directory
+with a sample persona, scenario, and macro so you have something to play with.
 
 The block it prints looks like this — `init` substitutes your install path
 into `<absolute-path-to-octowright>`:
@@ -82,7 +82,7 @@ example-tour"*. Claude calls `macro_save`. Now `macro_run name=example-tour` rep
 **5. Close the browser, then launch a *named* one.** Ask: *"close that browser, then
 launch a chromium browser with profile=demo at github.com"*. The window opens, you log
 in (or whatever). When you close it, the cookies/localStorage flush to
-`~/.config/octowright/profiles/demo/chromium/`. Re-launch with the same profile and you're
+the profile directory in Octowright's config dir. Re-launch with the same profile and you're
 already logged in.
 
 That's the whole tool: parallel browsers, recordings, named macros, persistent
@@ -139,7 +139,8 @@ Ask Claude `"give me the octowright dashboard URL"` (it'll call the
   card and click the edit (✎) icon to open an in-page YAML editor; save
   writes back to `<persona>/profile.yaml` via `PUT /api/personas/{name}`.
   Disk sizes are loaded lazily after first paint via
-  `GET /api/personas/sizes` (a single `du -sk` over `~/.config/octowright/profiles/`).
+  `GET /api/personas/sizes` (a single directory-size scan over Octowright's
+  profile config dir).
 - **Closed-session cleanup** — closed-session rows expose an `⊗` delete
   button on hover; clicking removes the JSONL recording, video, trace, and
   screenshots from disk via `DELETE /api/sessions/{id}/recording`. Live
@@ -192,7 +193,7 @@ run against it gets appended to a JSONL recording, and a separate
 `BrowserContext` gives it its own cookie jar (so seven parallel Discord tabs
 never share auth, even when they all run on WebKit).
 
-**2. Profile.** A directory on disk (`~/.config/octowright/profiles/<persona>/<kind>/`)
+**2. Profile.** A directory on disk (`<octowright-config>/profiles/<persona>/<kind>/`)
 that stores cookies, localStorage, IndexedDB, and service-worker state
 between browser runs. When you pass `profile=dante` to `browser_launch`, the
 browser uses a **persistent context** pointed at that directory — close the
@@ -213,7 +214,7 @@ for the full `profile.yaml` shape.
 
 **4. Scenario.** A *pre-declared group of personas to launch together*, each
 with a `role` (`player`, `monitor`, `spectator`). Declared in
-`~/.config/octowright/scenarios/<name>.yaml` (or a Python `build()` function for
+`<octowright-config>/scenarios/<name>.yaml` (or a Python `build()` function for
 dynamic rosters). `scenario_start name=discord-raid` launches all seven
 participants in parallel, applies shared fixtures (dialog policy, mock
 routes), runs each participant's startup macros. You can then broadcast a
@@ -315,7 +316,8 @@ ARIA locator first, then fall back to the original CSS selector.
 | `persona_credentials_check` | Pre-flight: resolve every credential reference without launching a browser. |
 | `scenario_list` / `scenario_start` / `scenario_status` / `scenario_stop` / `scenario_run_macro` / `scenario_participants` / `scenario_run_as_test` / `scenario_tail` | Multi-browser orchestration + verify-as-test. |
 | `scenario_plan` | Dry-run: show resolved per-participant launch_kwargs without launching anything. |
-| `macro_save` / `macro_list` / `macro_run` / `macro_run_sequence` / `macro_delete` | Named, parameterised action sequences. |
+| `macro_save` / `macro_list` / `macro_run` / `macro_run_sequence` / `macro_delete` | Named, parameterised action sequences. Supports `macro_call` for reusable submacros. |
+| `macro_compile` | Compile the YAML macro DSL to canonical JSON; dry-run by default, save with `write=true`. |
 | `macro_lint` | Static-analysis pass on a saved macro: missing required fields, unknown actions, unparameterized credential-shaped strings, empty conditional branches. |
 | `golden_save` / `golden_assert` / `golden_list` / `golden_delete` | Accessibility-tree snapshot diffs. |
 | `run_test_suite` | Run every `[test]`-tagged macro in a directory; emit JUnit XML. |
@@ -337,7 +339,7 @@ IndexedDB die on close. To **keep login state across runs**, pass a `profile` na
 browser_launch kind=webkit profile=disc-1 url=https://discord.com/login
 ```
 
-Each `(kind, profile)` pair gets its own on-disk user-data-dir under `~/.config/octowright/profiles/<kind>/<name>/`.
+Each `(kind, profile)` pair gets its own on-disk user-data-dir under Octowright's config dir.
 First launch opens a fresh browser; after you log in manually, closing the browser flushes
 state to disk. The next launch with the same `profile` skips the login (Discord /
 Slack / etc. treat it as a returning session).
@@ -389,7 +391,7 @@ have browser profiles for multiple engines (WebKit, Firefox, Chromium); each
 engine profile is a child directory.
 
 ```
-~/.config/octowright/profiles/
+<octowright-config>/profiles/
 ├── dante/
 │   ├── profile.yaml     # persona metadata
 │   ├── webkit/          # dante's WebKit browser state
@@ -452,7 +454,9 @@ macro_run instance_id=<new-id> name=discord-login \
 ```
 
 `macro_list` enumerates saved macros; `macro_delete` removes one. Macros live at
-`~/.config/octowright/macros/<name>.json` (override with `OCTOWRIGHT_MACROS_DIR`).
+`${XDG_CONFIG_HOME:-~/.config}/octowright/macros/<name>.json` on POSIX, or
+`%APPDATA%\octowright\macros\<name>.json` on Windows. Override with
+`OCTOWRIGHT_MACROS_DIR`.
 
 Lifecycle actions (`launch`, `close`, `snapshot`) are dropped by default — macros
 are the reusable middle of a flow, not the wrapper. Pass `include_launch=True` on
@@ -505,7 +509,7 @@ players + a monitoring window + a main-site window with one call; each
 instance is a regular `BrowserSession` you can drive per-participant (via
 `instance_id`) using all the normal `browser_*` tools.
 
-Declare scenarios in `~/.config/octowright/scenarios/<name>.yaml`:
+Declare scenarios in Octowright's config dir:
 
 ```yaml
 name: discord-raid
@@ -555,13 +559,18 @@ Full reference: [docs/scenarios.md](https://github.com/livingstaccato/octowright
 All defaults live in `src/octowright/defaults.py` and can be overridden via environment
 variables:
 
+On POSIX systems, Octowright uses the XDG config dir
+`${XDG_CONFIG_HOME:-~/.config}/octowright/`. On Windows, it uses
+`%APPDATA%\octowright\`, falling back to
+`%USERPROFILE%\AppData\Roaming\octowright\` if `APPDATA` is unset.
+
 | Variable | Default | Description |
 |---|---|---|
 | `OCTOWRIGHT_DEFAULT_URL` | `https://example.com` | Fallback `url` when `browser_launch` omits it. |
 | `OCTOWRIGHT_RECORDINGS` | `./recordings/` | Where JSONL logs land. |
-| `OCTOWRIGHT_PROFILES_DIR` | `~/.config/octowright/profiles/` | Where persistent profiles live. |
-| `OCTOWRIGHT_MACROS_DIR` | `~/.config/octowright/macros/` | Where saved macros live. |
-| `OCTOWRIGHT_SCENARIOS_DIR` | `~/.config/octowright/scenarios/` | Where scenario specs live. |
+| `OCTOWRIGHT_PROFILES_DIR` | POSIX: `${XDG_CONFIG_HOME:-~/.config}/octowright/profiles/`; Windows: `%APPDATA%\octowright\profiles\` | Where persistent profiles live. |
+| `OCTOWRIGHT_MACROS_DIR` | POSIX: `${XDG_CONFIG_HOME:-~/.config}/octowright/macros/`; Windows: `%APPDATA%\octowright\macros\` | Where saved macros live. |
+| `OCTOWRIGHT_SCENARIOS_DIR` | POSIX: `${XDG_CONFIG_HOME:-~/.config}/octowright/scenarios/`; Windows: `%APPDATA%\octowright\scenarios\` | Where scenario specs live. |
 | `OCTOWRIGHT_VIEWPORT_W` / `OCTOWRIGHT_VIEWPORT_H` | `1280` / `800` | Default viewport. Used in headless mode and when dimensions are explicitly passed to `browser_launch`. In headed mode with neither set, context launches with `no_viewport=True` so the page tracks the OS window. |
 | `OCTOWRIGHT_HEADLESS` | auto | Explicit `0` / `1` overrides headless mode. Auto-detected: headed on macOS or Linux+display, headless on CI (`CI=true`) or Linux without `$DISPLAY` / `$WAYLAND_DISPLAY`. |
 | `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` | — | Per-navigation / per-action timeouts. |
@@ -576,7 +585,7 @@ without going through Claude:
 | Command | What |
 |---|---|
 | `octowright serve` | Run the MCP stdio server + the dashboard HTTP server. This is the default when you invoke `octowright` with no subcommand. |
-| `octowright init [--force]` | First-run scaffolding: create the standard dirs (`~/.config/octowright/{profiles,macros,scenarios}/`), drop a sample persona / scenario / macro, and print the `.mcp.json` registration block with your install path filled in. |
+| `octowright init [--force]` | First-run scaffolding: create the standard config dirs, drop a sample persona / scenario / macro, and print the `.mcp.json` registration block with your install path filled in. |
 | `octowright selftest` | Print the list of registered MCP tools without needing a live MCP client. Sanity check after install. |
 | `octowright test [<dir>] [--kind <engine>] [--tag <tag>] [--out <xml>]` | Run every `[test]`-tagged macro in a directory, emit JUnit XML. |
 | `octowright cleanup [--days N] [--apply]` | Prune old recording artefacts (JSONL logs, screenshots, videos, traces). Dry-run by default; `--apply` actually deletes. |

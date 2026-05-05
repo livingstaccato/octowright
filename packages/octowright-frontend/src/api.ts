@@ -9,7 +9,10 @@ import type {
   DownloadListResponse,
   EventsResponse,
   HealthResponse,
+  MacroDetail,
+  MacroUpdateResponse,
   MacroRepairPreview,
+  MacroValidationResponse,
   MacroSummary,
   PersonaDetail,
   PersonaSummary,
@@ -20,6 +23,7 @@ import type {
   SessionListResponse,
   SessionSummary,
   TraceOpenResponse,
+  SelectorValidationResponse,
 } from "./types.js";
 
 const log = getLogger("octowright.frontend.api");
@@ -171,8 +175,36 @@ export function getMacros(): Promise<MacroSummary[]> {
   return fetchJson<MacroSummary[]>("/api/macros");
 }
 
+export function getMacro(name: string): Promise<MacroDetail> {
+  return fetchJson<MacroDetail>(`/api/macros/${encodeURIComponent(name)}`);
+}
+
 export function getMacroRepairPreview(name: string): Promise<MacroRepairPreview> {
   return fetchJson<MacroRepairPreview>(`/api/macros/${encodeURIComponent(name)}/repair_preview`);
+}
+
+export function validateMacro(name: string, macro: unknown): Promise<MacroValidationResponse> {
+  return fetchJson<MacroValidationResponse>(`/api/macros/${encodeURIComponent(name)}/validate`, {
+    method: "POST",
+    body: { macro },
+  });
+}
+
+export function updateMacro(name: string, macro: unknown): Promise<MacroUpdateResponse> {
+  return fetchJson<MacroUpdateResponse>(`/api/macros/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: { macro },
+  });
+}
+
+export function validateSessionSelector(
+  sessionId: string,
+  selector: string,
+): Promise<SelectorValidationResponse> {
+  return fetchJson<SelectorValidationResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/selector/validate`, {
+    method: "POST",
+    body: { selector },
+  });
 }
 
 export function getScreenshots(id: string): Promise<ScreenshotListResponse> {

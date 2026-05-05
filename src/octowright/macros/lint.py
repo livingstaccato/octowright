@@ -57,7 +57,11 @@ _REPLAY_SKIP: frozenset[str] = frozenset({"launch", "close", "snapshot"})
 # Conditional action names. Mirrors `octowright.conditional.CONDITIONAL_ACTIONS`.
 _CONDITIONAL_ACTIONS: frozenset[str] = frozenset({"if_selector", "try", "try_each"})
 
-_KNOWN_ACTIONS: frozenset[str] = frozenset(_SIMPLE_REQUIRED) | _REPLAY_SKIP | _CONDITIONAL_ACTIONS
+_MACRO_CALL_ACTION = "macro_call"
+
+_KNOWN_ACTIONS: frozenset[str] = (
+    frozenset(_SIMPLE_REQUIRED) | _REPLAY_SKIP | _CONDITIONAL_ACTIONS | {_MACRO_CALL_ACTION}
+)
 
 # ---------------------------------------------------------------------------
 # Credential heuristics
@@ -178,6 +182,29 @@ def _check_if_selector(action: dict[str, Any], outer_index: int, issues: list[Is
                 severity="warning",
                 code="if_selector_empty_branches",
                 message="if_selector has no actions in either 'then' or 'else' (no-op condition)",
+                action_index=outer_index,
+            )
+        )
+
+
+def _check_macro_call(action: dict[str, Any], outer_index: int, issues: list[Issue]) -> None:
+    name = action.get("name")
+    if not isinstance(name, str) or not name:
+        issues.append(
+            Issue(
+                severity="error",
+                code="macro_call_invalid_name",
+                message="macro_call is missing required non-empty string field 'name'",
+                action_index=outer_index,
+            )
+        )
+
+    if "args" in action and not isinstance(action["args"], dict):
+        issues.append(
+            Issue(
+                severity="error",
+                code="macro_call_invalid_args",
+                message="macro_call field 'args' must be a dict when provided",
                 action_index=outer_index,
             )
         )
@@ -305,6 +332,10 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
             if isinstance(branch, list):
                 for sub in branch:
                     _lint_action(sub, outer_index, issues)
+        return
+
+    if kind == _MACRO_CALL_ACTION:
+        _check_macro_call(action, outer_index, issues)
         return
 
     # Unknown action — typo or future action type.
