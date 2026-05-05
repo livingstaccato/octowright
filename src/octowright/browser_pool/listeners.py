@@ -12,7 +12,7 @@ from provide.telemetry import get_logger
 from ..session import BrowserSession
 
 if TYPE_CHECKING:
-    from .runtime import BrowserPool
+    from ..pool import BrowserPool
 
 log = get_logger(__name__)
 
