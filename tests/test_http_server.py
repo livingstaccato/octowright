@@ -6,10 +6,10 @@
 """HTTP debugger sidecar tests.
 
 Uses Starlette's TestClient (sync) for endpoint coverage, including the
-WebSocket. Live state is faked by mutating ``_state.pool._sessions`` /
-``_state.scenario_pool._live`` with SimpleNamespace stand-ins; closed
-sessions are exercised by writing synthetic JSONL files to a tmp
-recordings dir and pointing ``RECORDINGS_DIR`` at it.
+WebSocket. Live state is faked with small pool doubles that expose the same
+public lookup/listing methods as the real pools; closed sessions are exercised
+by writing synthetic JSONL files to a tmp recordings dir and pointing
+``RECORDINGS_DIR`` at it.
 """
 
 from __future__ import annotations
@@ -35,6 +35,31 @@ from octowright.server import _state
 # ---------------------------------------------------------------------------
 
 
+class _FakeHttpPool:
+    def __init__(self) -> None:
+        self._sessions: dict[str, Any] = {}
+
+    def maybe_get(self, instance_id: str) -> Any | None:
+        return self._sessions.get(instance_id)
+
+    def has_session(self, instance_id: str) -> bool:
+        return instance_id in self._sessions
+
+    def iter_sessions(self) -> tuple[Any, ...]:
+        return tuple(self._sessions.values())
+
+
+class _FakeHttpScenarioPool:
+    def __init__(self) -> None:
+        self._live: dict[str, Any] = {}
+
+    def has_live(self, scenario_id: str) -> bool:
+        return scenario_id in self._live
+
+    def list_live(self) -> list[dict[str, Any]]:
+        return []
+
+
 @pytest.fixture
 def isolated_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point every RECORDINGS_DIR consumer in `http_server` at a fresh tmp dir."""
@@ -50,8 +75,8 @@ def empty_pool(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     Restored automatically by monkeypatch teardown.
     """
-    fake_pool = SimpleNamespace(_sessions={})
-    fake_spool = SimpleNamespace(list_live=lambda: [])
+    fake_pool = _FakeHttpPool()
+    fake_spool = _FakeHttpScenarioPool()
     monkeypatch.setattr(_state, "pool", fake_pool)
     monkeypatch.setattr(_state, "scenario_pool", fake_spool)
     return {"pool": fake_pool, "scenario_pool": fake_spool}
