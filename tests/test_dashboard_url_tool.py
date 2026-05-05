@@ -17,6 +17,14 @@ from octowright.server import _state
 from octowright.server.meta import octowright_dashboard_url
 
 
+class _FakePool:
+    def __init__(self) -> None:
+        self.live_sessions: dict[str, SimpleNamespace] = {}
+
+    def active_count(self) -> int:
+        return len(self.live_sessions)
+
+
 @pytest.fixture(autouse=True)
 def reset_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Each test starts with a clean runtime state and an empty live pool.
@@ -35,7 +43,7 @@ def reset_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
     monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
 
-    fake_pool = SimpleNamespace(_sessions={})
+    fake_pool = _FakePool()
     fake_spool = SimpleNamespace(list_live=lambda: [])
     monkeypatch.setattr(_state, "pool", fake_pool)
     monkeypatch.setattr(_state, "scenario_pool", fake_spool)
@@ -83,7 +91,7 @@ def test_counts_reflect_pool_and_recordings(
     fake_session = SimpleNamespace(instance_id="live01")
     from octowright.server import meta as _meta
 
-    _meta.pool._sessions["live01"] = fake_session
+    _meta.pool.live_sessions["live01"] = fake_session
 
     monkeypatch.setattr(_http_state, "_RUNTIME_HOST", "127.0.0.1")
     monkeypatch.setattr(_http_state, "_RUNTIME_PORT", 8765)
