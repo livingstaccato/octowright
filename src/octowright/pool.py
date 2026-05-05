@@ -13,6 +13,7 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
+from .browser_pool.errors import maybe_wrap_playwright_error
 from .defaults import (
     DEFAULT_URL,
     DEFAULT_VIEWPORT_H,
@@ -187,36 +188,39 @@ class BrowserPool:
             self._tile_counter += 1
             launch_kwargs["args"] = _tile_args_for_chromium(tile_index)
 
-        if profile or session_user_data_dir:
-            if profile:
-                pdir = profile_dir(kind, profile)
-                pdir.mkdir(parents=True, exist_ok=True)
-                user_data_dir = str(pdir)
+        try:
+            if profile or session_user_data_dir:
+                if profile:
+                    pdir = profile_dir(kind, profile)
+                    pdir.mkdir(parents=True, exist_ok=True)
+                    user_data_dir = str(pdir)
+                else:
+                    # Session-scoped tmpdir branch — same launch_persistent_context
+                    # mechanism as a real persona profile, but the dir lives only
+                    # for the daemon's lifetime.
+                    user_data_dir = session_user_data_dir
+                context = await browser_type.launch_persistent_context(
+                    user_data_dir,
+                    headless=headless,
+                    accept_downloads=True,
+                    **viewport_kwargs,
+                    **ctx_video_kwargs,
+                    **ctx_har_kwargs,
+                    **launch_kwargs,
+                )
+                browser = None
+                page = context.pages[0] if context.pages else await context.new_page()
             else:
-                # Session-scoped tmpdir branch — same launch_persistent_context
-                # mechanism as a real persona profile, but the dir lives only
-                # for the daemon's lifetime.
-                user_data_dir = session_user_data_dir
-            context = await browser_type.launch_persistent_context(
-                user_data_dir,
-                headless=headless,
-                accept_downloads=True,
-                **viewport_kwargs,
-                **ctx_video_kwargs,
-                **ctx_har_kwargs,
-                **launch_kwargs,
-            )
-            browser = None
-            page = context.pages[0] if context.pages else await context.new_page()
-        else:
-            browser = await browser_type.launch(headless=headless, **launch_kwargs)
-            context = await browser.new_context(
-                accept_downloads=True,
-                **viewport_kwargs,
-                **ctx_video_kwargs,
-                **ctx_har_kwargs,
-            )
-            page = await context.new_page()
+                browser = await browser_type.launch(headless=headless, **launch_kwargs)
+                context = await browser.new_context(
+                    accept_downloads=True,
+                    **viewport_kwargs,
+                    **ctx_video_kwargs,
+                    **ctx_har_kwargs,
+                )
+                page = await context.new_page()
+        except Exception as exc:
+            raise maybe_wrap_playwright_error(exc, kind=kind) from exc
 
         recorder = Recorder(log_path)
         recorder.record(
@@ -253,6 +257,7 @@ class BrowserPool:
             page=page,
             recorder=recorder,
             log_path=log_path,
+            user_data_dir=Path(user_data_dir) if user_data_dir is not None else None,
             profile=profile,
             stabilize=stabilize,
             trace=trace,
@@ -304,7 +309,10 @@ class BrowserPool:
         if trace:
             await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
-        await page.goto(target_url)
+        try:
+            await page.goto(target_url)
+        except Exception as exc:
+            raise maybe_wrap_playwright_error(exc, kind=kind) from exc
         new_session._schedule_markdown_capture()
 
         self._sessions[instance_id] = new_session
