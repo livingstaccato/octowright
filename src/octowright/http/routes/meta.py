@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +16,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ...defaults import PROFILES_DIR, SUPPORTED_KINDS
-from .. import state
-from ..dashboard_events import publish_dashboard_invalidation
-from ..exposure import guard_sensitive_http
-from ._common import _read_json_body
+import octowright.http.state as state
+from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
+from octowright.http.dashboard_events import publish_dashboard_invalidation
+from octowright.http.exposure import guard_sensitive_http
+from octowright.http.routes._common import _read_json_body
+from octowright.macros.lint import lint_macro
 
 
 async def list_personas_endpoint(_request: Request) -> JSONResponse:
@@ -57,6 +59,59 @@ async def macro_repair_preview_endpoint(request: Request) -> JSONResponse:
     except FileNotFoundError:
         return JSONResponse({"error": f"macro {name!r} not found"}, status_code=404)
     return JSONResponse(preview)
+
+
+def _issue_payload(macro: dict[str, Any]) -> list[dict[str, Any]]:
+    return [asdict(issue) for issue in lint_macro(macro)]
+
+
+def _validation_body(macro: dict[str, Any]) -> dict[str, Any]:
+    issues = _issue_payload(macro)
+    error_count = sum(1 for issue in issues if issue["severity"] == "error")
+    return {
+        "ok": error_count == 0,
+        "issues": issues,
+        "issue_count": len(issues),
+        "error_count": error_count,
+    }
+
+
+async def macro_detail_endpoint(request: Request) -> JSONResponse:
+    name = request.path_params["name"]
+    try:
+        macro = state._macros.load_macro(name)
+    except FileNotFoundError:
+        return JSONResponse({"error": f"macro {name!r} not found"}, status_code=404)
+    return JSONResponse(macro)
+
+
+async def macro_validate_endpoint(request: Request) -> JSONResponse:
+    payload, err = await _read_json_body(request)
+    if err is not None:
+        return err
+    macro = payload.get("macro") if isinstance(payload, dict) else None
+    if not isinstance(macro, dict):
+        return JSONResponse({"error": "'macro' must be a JSON object"}, status_code=400)
+    return JSONResponse(_validation_body(macro))
+
+
+async def macro_update_endpoint(request: Request) -> JSONResponse:
+    name = request.path_params["name"]
+    payload, err = await _read_json_body(request)
+    if err is not None:
+        return err
+    macro = payload.get("macro") if isinstance(payload, dict) else None
+    if not isinstance(macro, dict):
+        return JSONResponse({"error": "'macro' must be a JSON object"}, status_code=400)
+
+    validation = _validation_body(macro)
+    if validation["error_count"]:
+        return JSONResponse({"error": "macro validation failed", **validation}, status_code=400)
+
+    path = state._macros.write_macro(name=name, macro=macro)
+    saved = state._macros.load_macro(name)
+    await publish_dashboard_invalidation("macros")
+    return JSONResponse({"ok": True, "name": name, "path": str(path), "macro": saved})
 
 
 async def persona_sizes_endpoint(_request: Request) -> JSONResponse:
@@ -161,4 +216,7 @@ def routes() -> list[Route]:
             guard_sensitive_http(macro_repair_preview_endpoint),
             methods=["GET"],
         ),
+        Route("/api/macros/{name:path}/validate", guard_sensitive_http(macro_validate_endpoint), methods=["POST"]),
+        Route("/api/macros/{name:path}", guard_sensitive_http(macro_detail_endpoint), methods=["GET"]),
+        Route("/api/macros/{name:path}", guard_sensitive_http(macro_update_endpoint), methods=["PUT"]),
     ]

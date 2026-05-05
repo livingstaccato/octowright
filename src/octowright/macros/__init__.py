@@ -15,13 +15,15 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
-from .defaults import PROFILES_DIR
-from .macros_runtime import dispatch_one as _runtime_dispatch_one
-from .macros_runtime import dispatch_simple as _runtime_dispatch_simple
-from .server.macro_semantic import summarize_action
+import octowright.conditional as _cond
+from octowright.defaults import PROFILES_DIR
+from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
+from octowright.macros.repair import repair_preview as _repair_preview
+from octowright.macros.repair import suggest_fix as _suggest_fix
+from octowright.macros.runtime import dispatch_simple as _runtime_dispatch_simple
 
 if TYPE_CHECKING:
-    from .session import BrowserSession
+    from octowright.session import BrowserSession
 
 log = get_logger(__name__)
 
@@ -30,6 +32,7 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _SEMANTIC_LOCATOR_KEYS = ("role", "role_name", "label", "text", "test_id", "role_exact")
 _NON_ARIA_NOISE_KEYS = ("role", "role_name", "test_id", "role_exact")
 _RECORDING_NOISE_KEYS = ("action", "ts", "kind", "profile", "instance_id")
+_MAX_MACRO_CALL_DEPTH = MAX_MACRO_CALL_DEPTH
 
 # MACROS_DIR sits next to profiles/ by default; env var overrides.
 MACROS_DIR: Path = Path(os.environ.get("OCTOWRIGHT_MACROS_DIR", str(PROFILES_DIR.parent / "macros")))
@@ -221,6 +224,20 @@ def load_macro(name: str) -> dict[str, Any]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def write_macro(*, name: str, macro: dict[str, Any]) -> Path:
+    """Write a full macro document to the canonical JSON macro path."""
+    now = _now_iso()
+    to_write = copy.deepcopy(macro)
+    to_write["name"] = name
+    to_write.setdefault("created_at", now)
+    to_write["updated_at"] = now
+    dest = _macro_path(name)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(to_write, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.info("octowright.macro.written", name=name, path=str(dest), action_count=len(to_write.get("actions", [])))
+    return dest
+
+
 def delete_macro(name: str) -> Path:
     """Delete a macro file.  Raises ``FileNotFoundError`` if not found."""
     p = _macro_path(name)
@@ -258,8 +275,44 @@ def substitute(actions: list[dict[str, Any]], args: dict[str, Any]) -> list[dict
     return [_substitute_value(copy.deepcopy(action), args) for action in actions]
 
 
-async def _dispatch_one(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
-    return await _runtime_dispatch_one(
+async def _dispatch_one(
+    session: BrowserSession,
+    action: dict[str, Any],
+    *,
+    invocation_stack: list[str] | None = None,
+    max_depth: int | None = None,
+) -> tuple[int, int]:
+    resolved_max_depth = max_depth if max_depth is not None else _MAX_MACRO_CALL_DEPTH
+
+    if action.get("action") == "macro_call":
+        if invocation_stack is None:
+            raise RuntimeError("macro_call can only execute in a macro context with an invocation stack")
+        return await dispatch_macro_call(
+            session,
+            action,
+            invocation_stack=invocation_stack,
+            max_depth=resolved_max_depth,
+            load_macro=load_macro,
+            substitute=substitute,
+            dispatch_one=_dispatch_one,
+        )
+
+    if invocation_stack is None:
+        invocation_stack = []
+
+    if action.get("action") in _cond.CONDITIONAL_ACTIONS:
+
+        async def _recurse(s: Any, a: dict[str, Any]) -> tuple[int, int]:
+            return await _dispatch_one(
+                s,
+                a,
+                invocation_stack=invocation_stack,
+                max_depth=resolved_max_depth,
+            )
+
+        return await _cond.dispatch_conditional(session, action, _recurse)
+
+    return await dispatch_plain_action(
         session,
         action,
         semantic_keys=_SEMANTIC_LOCATOR_KEYS,
@@ -278,88 +331,8 @@ async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> t
     )
 
 
-async def _suggest_fix(session: BrowserSession, action: dict[str, Any]) -> str | None:
-    """Attempt to find a new selector or locator if an action fails.
-    Returns a suggestion string (e.g. "try click_by(text='Log in') instead") or None.
-    """
-    selector = action.get("selector")
-    if not selector:
-        return None
-
-    # Get A11y tree
-    try:
-        snapshot = await session.snapshot()
-        aria = snapshot["aria"]
-    except Exception:
-        return None
-
-    summary = summarize_action(action)
-    prompt = (
-        f"I was trying to {summary}, but '{selector}' failed.\n\n"
-        f"Current A11y tree:\n---\n{aria}\n---\n\n"
-        "Based on the A11y tree, what should I use instead?"
-    )
-
-    return prompt
-
-
-def _semantic_replacement(action: dict[str, Any]) -> dict[str, Any] | None:
-    kind = action.get("action")
-    if kind not in {"click", "fill"} or not action.get("selector"):
-        return None
-
-    semantic = {k: action[k] for k in _SEMANTIC_LOCATOR_KEYS if k in action and action[k] is not None}
-    if not semantic:
-        return None
-
-    replacement: dict[str, Any] = {"action": f"{kind}_by", **semantic}
-    if kind == "fill" and "value" in action:
-        replacement["value"] = action["value"]
-    if "timeout_ms" in action:
-        replacement["timeout_ms"] = action["timeout_ms"]
-    return replacement
-
-
-def _replacement_preview(action: dict[str, Any]) -> str:
-    kind = action.get("action")
-    if kind == "click_by":
-        target = action.get("role_name") or action.get("label") or action.get("text") or action.get("test_id")
-        return f"Click by {target!r}" if target else "Click by semantic locator"
-    if kind == "fill_by":
-        target = action.get("role_name") or action.get("label") or action.get("text") or action.get("test_id")
-        value = action.get("value", "")
-        return f"Fill by {target!r} with {value!r}" if target else f"Fill by semantic locator with {value!r}"
-    return summarize_action(action)
-
-
 def repair_preview(name: str) -> dict[str, Any]:
-    """Return non-mutating repair suggestions for selector-based macro actions."""
-    macro = load_macro(name)
-    macro_name = macro.get("name") or name
-    suggestions: list[dict[str, Any]] = []
-    for idx, action in enumerate(macro.get("actions", [])):
-        if not isinstance(action, dict) or "selector" not in action:
-            continue
-
-        replacement = _semantic_replacement(action)
-        selector = action.get("selector")
-        prompt = (
-            f"Review selector {selector!r} for action {idx}. "
-            "If it no longer matches, compare the stored semantic fields against the current page."
-        )
-        suggestions.append(
-            {
-                "macro": macro_name,
-                "action_index": idx,
-                "original_action": copy.deepcopy(action),
-                "source": "stored_heuristic",
-                "replacement_action": replacement,
-                "action_preview": _replacement_preview(replacement) if replacement else None,
-                "prompt": prompt,
-            }
-        )
-
-    return {"macro": macro_name, "suggestions": suggestions}
+    return _repair_preview(name, load_macro=load_macro, semantic_keys=_SEMANTIC_LOCATOR_KEYS)
 
 
 async def run_macro(
@@ -379,10 +352,15 @@ async def run_macro(
 
     executed = 0
     skipped = 0
+    invocation_stack = [name]
 
     for i, action in enumerate(actions):
         try:
-            e, s = await _dispatch_one(session, action)
+            e, s = await _dispatch_one(
+                session,
+                action,
+                invocation_stack=invocation_stack,
+            )
         except Exception as exc:
             bundle = await session.diagnostic_bundle()
             # HEALING: try to find a suggestion

@@ -7,7 +7,7 @@
 
 The first instance becomes the **leader**: it serves stdio MCP, the HTTP
 debugger, and an HTTP-MCP transport at ``/mcp`` so subsequent instances can
-proxy through it. It records itself in ``~/.config/octowright/octowright.lock``.
+proxy through it. It records itself in Octowright's user config directory.
 
 Subsequent instances become **followers**: they detect the live leader and
 bridge stdin/stdout to its HTTP-MCP endpoint instead of spawning a pool. Pass
@@ -111,7 +111,7 @@ def _log_first_done(
     default=None,
     help="Set PROVIDE_LOG_LEVEL for this process and any spawned daemon. "
     "Use DEBUG when investigating watchdog/shutdown behavior; daemon output "
-    "lands in ~/.config/octowright/octowright-daemon.log.",
+    "lands in Octowright's user config directory.",
 )
 def serve(
     http_port: int | None,

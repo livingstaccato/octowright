@@ -122,7 +122,7 @@ async def dispatch_one(
     strip_non_aria_noise: Callable[[str, dict[str, Any]], dict[str, Any]],
     action_kwargs: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> tuple[int, int]:
-    from . import conditional as _cond
+    import octowright.conditional as _cond
 
     if action.get("action") in _cond.CONDITIONAL_ACTIONS:
 
