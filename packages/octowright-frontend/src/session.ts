@@ -25,6 +25,8 @@ import {
 } from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
 import type {
+  CacheComponent,
+  CacheComponentList,
   ConsoleMessage,
   DownloadEntry,
   RecordingEvent,
@@ -33,6 +35,10 @@ import type {
 } from "./types.js";
 
 const log = getLogger("octowright.frontend.session");
+
+type CacheRow =
+  | { kind: "list"; label: string; component: CacheComponentList }
+  | { kind: "component"; label: string; component: CacheComponent };
 
 export function sessionIdFromPath(pathname: string): string | null {
   const match = /^\/sessions\/([^/?#]+)/.exec(pathname);
@@ -279,19 +285,19 @@ export function renderCachePanel(target: HTMLElement, detail: SessionDetail): vo
   body.className = "session-cache-details__body";
   const components = document.createElement("div");
   components.className = "session-cache-components";
-  const rows = [
-    ["JSONL", detail.cache.components.jsonl],
-    ["Markdown", detail.cache.components.markdown],
-    ["Trace", detail.cache.components.trace],
-    ["Video", detail.cache.components.video],
-    ["WebSocket", detail.cache.components.websocket],
-    ["Screenshots", detail.cache.components.screenshots],
+  const rows: CacheRow[] = [
+    { kind: "component", label: "JSONL", component: detail.cache.components.jsonl },
+    { kind: "component", label: "Markdown", component: detail.cache.components.markdown },
+    { kind: "component", label: "Trace", component: detail.cache.components.trace },
+    { kind: "component", label: "Video", component: detail.cache.components.video },
+    { kind: "component", label: "WebSocket", component: detail.cache.components.websocket },
+    { kind: "list", label: "Screenshots", component: detail.cache.components.screenshots },
   ];
 
-  rows.forEach(([label, component]) => {
+  rows.forEach(({ kind, label, component }) => {
     const row = document.createElement("p");
     row.className = "session-cache-row";
-    if (label === "Screenshots") {
+    if (kind === "list") {
       row.textContent = `${label}: ${component.count} files, ${component.size_human}`;
     } else {
       row.textContent = `${label}: ${component.exists ? component.size_human : "missing"}`;
