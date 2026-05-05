@@ -5,7 +5,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
+from typing import Any
+
+import pytest
 
 from octowright.pool import BrowserPool
 
@@ -38,3 +42,26 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
             "har_path": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_ensure_pw_initializes_playwright_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = BrowserPool()
+    starts = 0
+
+    class FakePlaywrightFactory:
+        async def start(self) -> object:
+            nonlocal starts
+            starts += 1
+            await asyncio.sleep(0)
+            return object()
+
+    def fake_async_playwright() -> Any:
+        return FakePlaywrightFactory()
+
+    monkeypatch.setattr("octowright.pool.async_playwright", fake_async_playwright)
+
+    instances = await asyncio.gather(*(pool._ensure_pw() for _ in range(5)))
+
+    assert starts == 1
+    assert len({id(instance) for instance in instances}) == 1
