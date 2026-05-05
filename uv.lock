@@ -1159,9 +1159,9 @@ name = "memray"
 version = "1.19.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2" },
-    { name = "rich" },
-    { name = "textual" },
+    { name = "jinja2", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "rich", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "textual", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/96/04/5b886a36df947599e0f37cd46e6e44e565299815f044e2303ab2ae9f8870/memray-1.19.3.tar.gz", hash = "sha256:4e0fb29ff0a50c0ec9dc84294d8f2c83419feba561a37628b304c2ae4fe73d03", size = 2417089, upload-time = "2026-04-08T18:49:32.409Z" }
 wheels = [
@@ -1401,7 +1401,7 @@ dev = [
     { name = "build" },
     { name = "codespell" },
     { name = "hypothesis" },
-    { name = "memray" },
+    { name = "memray", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "mutmut" },
     { name = "mypy" },
     { name = "pip-audit" },
@@ -1442,8 +1442,7 @@ dev = [
     { name = "build", specifier = ">=1.2.2" },
     { name = "codespell", specifier = ">=2.4.1" },
     { name = "hypothesis", specifier = ">=6.130.0" },
-    { name = "memray", specifier = ">=1.19.3" },
-    { name = "memray", marker = "sys_platform == 'darwin' or sys_platform == 'linux'", specifier = ">=1.0" },
+    { name = "memray", marker = "sys_platform == 'darwin' or sys_platform == 'linux'", specifier = ">=1.19.3" },
     { name = "mutmut", specifier = ">=3.3.1" },
     { name = "mypy", specifier = ">=1.18.0" },
     { name = "pip-audit", specifier = ">=2.7.0" },
