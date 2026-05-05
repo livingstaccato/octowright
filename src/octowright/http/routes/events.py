@@ -14,11 +14,12 @@ from typing import Any
 
 from starlette.endpoints import WebSocketEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .. import state
+from ..dashboard_events import dashboard_events
 from ..discovery import (
     _find_recording_for,
     _live_session_or_none,
@@ -27,6 +28,31 @@ from ..discovery import (
 )
 from ..exposure import guard_sensitive_http, sensitive_allowed_for_connection
 from ._common import _paginate, _parse_since
+
+
+def _sse_frame(event: str, data: dict[str, Any]) -> bytes:
+    payload = json.dumps(data, separators=(",", ":"))
+    return f"event: {event}\ndata: {payload}\n\n".encode()
+
+
+async def dashboard_events_endpoint(request: Request) -> StreamingResponse:
+    async def stream() -> Any:
+        async with dashboard_events.subscribe() as subscription:
+            yield _sse_frame("hello", {"ok": True})
+            while True:
+                event = await subscription.get()
+                yield _sse_frame("invalidate", event)
+                if await request.is_disconnected():
+                    break
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def session_events(request: Request) -> JSONResponse:
@@ -256,6 +282,7 @@ class TailEndpoint(WebSocketEndpoint):
 
 def routes() -> list[Route | WebSocketRoute]:
     return [
+        Route("/api/dashboard/events", guard_sensitive_http(dashboard_events_endpoint), methods=["GET"]),
         Route("/api/sessions/{id}/events", guard_sensitive_http(session_events), methods=["GET"]),
         Route("/api/sessions/{id}/console", guard_sensitive_http(session_console), methods=["GET"]),
         Route("/api/sessions/{id}/downloads", guard_sensitive_http(session_downloads), methods=["GET"]),

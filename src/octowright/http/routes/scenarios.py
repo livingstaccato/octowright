@@ -13,6 +13,7 @@ from starlette.routing import Route
 
 from ...server import _state
 from .. import state
+from ..dashboard_events import publish_dashboard_invalidation
 from ..exposure import guard_sensitive_http
 from ._common import _read_json_body
 
@@ -66,6 +67,8 @@ async def scenario_start_endpoint(request: Request) -> JSONResponse:
         name=live.name,
         participants=len(live.participants),
     )
+    await publish_dashboard_invalidation("scenarios")
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(body, status_code=201)
 
 
@@ -85,6 +88,8 @@ async def scenario_stop_endpoint(request: Request) -> JSONResponse:
         state.log.exception("octowright.http.scenario_stop_failed", scenario_id=sid)
         return JSONResponse({"error": f"scenario stop failed: {e}"}, status_code=500)
     state.log.info("octowright.http.scenario_stopped", scenario_id=sid)
+    await publish_dashboard_invalidation("scenarios")
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(result)
 
 
@@ -134,6 +139,7 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
         macro=macro,
         role=role,
     )
+    await publish_dashboard_invalidation("scenarios")
     return JSONResponse(result)
 
 
