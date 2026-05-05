@@ -123,4 +123,14 @@ describe("renderDashboard", () => {
     expect(dialog?.textContent).toContain("Review selector '#submit'");
     expect(dialog?.querySelector("button.btn--primary")).toBeNull();
   });
+  it("preserves collapsible macro panel state across refresh renders", () => {
+    renderDashboard(root, { sessions, scenarios, personas, macros });
+    const first = root.querySelector<HTMLDetailsElement>('[data-testid="panel-macros"]');
+    expect(first).not.toBeNull();
+    if (first) first.open = true;
+
+    renderDashboard(root, { sessions, scenarios, personas, macros });
+
+    expect(root.querySelector<HTMLDetailsElement>('[data-testid="panel-macros"]')?.open).toBe(true);
+  });
 });
