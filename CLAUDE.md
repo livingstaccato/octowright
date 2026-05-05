@@ -40,7 +40,7 @@ uv run octowright scenario list  # list loaded scenarios
 ### Five Concepts
 
 1. **Browser** — One Playwright instance (one engine, one window). Has `instance_id`, records to JSONL.
-2. **Profile** — Persistent on-disk state (`~/.config/undef/profiles/<persona>/<kind>/`). Survives close/relaunch.
+2. **Profile** — Persistent on-disk state (`~/.config/octowright/profiles/<persona>/<kind>/`). Survives close/relaunch.
 3. **Persona** — Named identity (display name, default URL, credentials). Owns profiles across engines.
 4. **Scenario** — Pre-declared group of personas launched together with roles (`player`/`monitor`/`spectator`), fixtures, and verify macros for testing.
 5. **Dashboard** — Starlette web UI showing live browsers, recordings, session debugger with embedded video + action timeline.
@@ -80,7 +80,7 @@ CLI (Click)
 | `src/octowright/personas.py` | Persona metadata + credential resolution |
 | `src/octowright/resolve.py` | `suggest_for_url()` — persona ranking by URL |
 | `src/octowright/defaults.py` | All env-var-driven defaults (port, paths, timeouts) |
-| `MCP-SHARED-CONTRACT.md` | HTTP API spec (endpoints, request/response shapes) |
+| `docs/architecture/MCP-SHARED-CONTRACT.md` | HTTP API spec (endpoints, request/response shapes) |
 | `docs/architecture/` | PlantUML diagrams (render with `make diagrams`) |
 
 ### JSONL Recording

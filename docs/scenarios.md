@@ -18,7 +18,7 @@ Scenarios orchestrate multiple participants (persona + engine + role) as a singl
 
 Default location:
 
-- `~/.config/undef/scenarios/`
+- `~/.config/octowright/scenarios/`
 
 Supported forms:
 

@@ -14,7 +14,9 @@ from typing import Any
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-GOLDENS_DIR: Path = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(Path.home() / ".config" / "undef" / "goldens")))
+GOLDENS_DIR: Path = Path(
+    os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(Path.home() / ".config" / "octowright" / "goldens"))
+)
 
 
 def _slug(name: str) -> str:

@@ -17,7 +17,7 @@ skinparam arrowColor #2563eb
 skinparam noteBorderColor #d1d5db
 skinparam noteBackgroundColor #f9fafb
 
-folder "~/.config/undef/profiles/" as ROOT {
+folder "~/.config/octowright/profiles/" as ROOT {
   folder "dante/" as DANTE {
     file "profile.yaml\n  display_name, default_url,\n  default_macros, credentials, app" as DY
     file "avatar.png\n(arbitrary persona files;\noctowright ignores)" as DA
