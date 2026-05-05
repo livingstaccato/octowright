@@ -58,6 +58,18 @@ def test_summarize_try_each():
     assert "    - Click '.v2'" in summary
 
 
+def test_summarize_macro_call():
+    action = {"action": "macro_call", "name": "login", "args": {"email": "alice", "password": "secret"}}
+    summary = summarize_action(action)
+    assert summary == "Call macro 'login' with args { email='alice', password='secret' }"
+
+
+def test_summarize_macro_call_without_args():
+    action = {"action": "macro_call", "name": "cleanup"}
+    summary = summarize_action(action)
+    assert summary == "Call macro 'cleanup'"
+
+
 def test_get_semantic_intent():
     actions = [
         {"action": "navigate", "url": "https://example.com/login"},

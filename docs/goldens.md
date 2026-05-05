@@ -5,8 +5,9 @@ Subsequent runs diff their accessibility tree against the golden and fail when
 they drift, giving you visual-regression-style coverage without the brittleness
 of pixel-diff screenshots.
 
-Goldens live under `~/.config/octowright/goldens/` (override with
-`OCTOWRIGHT_GOLDENS_DIR`).
+Goldens live under the Octowright config dir: POSIX uses the XDG config dir
+`${XDG_CONFIG_HOME:-~/.config}/octowright/goldens/`, and Windows uses
+`%APPDATA%\octowright\goldens\`. Override with `OCTOWRIGHT_GOLDENS_DIR`.
 
 ## Capture vs verify policy
 

@@ -29,15 +29,15 @@ import os
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import IO
 
-from . import singleton as _sn
+import octowright.singleton as _sn
+from octowright.config_paths import user_config_dir
 
 # Daemon stderr goes here so we have something to investigate when the daemon
 # misbehaves. Rotated by file size on each spawn (truncated above 1 MB) to
 # avoid unbounded growth on dev machines.
-_DAEMON_LOG = Path.home() / ".config" / "octowright" / "octowright-daemon.log"
+_DAEMON_LOG = user_config_dir() / "octowright-daemon.log"
 _DAEMON_LOG_MAX_BYTES = 1_000_000
 
 

@@ -74,7 +74,7 @@ note right of REC
 end note
 
 note right of MAC
-  Default: ~/.config/octowright/macros/.
+  Default: <octowright-config>/macros/.
   OCTOWRIGHT_MACROS_DIR overrides.
 end note
 

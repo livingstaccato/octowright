@@ -16,11 +16,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ...defaults import DEFAULT_URL, SUPPORTED_KINDS
-from ...server import _state
-from .. import state
-from ..dashboard_events import publish_dashboard_invalidation
-from ..discovery import (
+import octowright.http.state as state
+import octowright.server._state as _state
+from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
+from octowright.http.dashboard_events import publish_dashboard_invalidation
+from octowright.http.discovery import (
     _build_cache_components,
     _cache_report_for_recording,
     _closed_sessions,
@@ -33,8 +33,8 @@ from ..discovery import (
     _scan_recording_artefacts,
     _summarise_recording,
 )
-from ..exposure import guard_sensitive_http
-from ._common import _read_json_body
+from octowright.http.exposure import guard_sensitive_http
+from octowright.http.routes._common import _read_json_body
 
 
 async def list_sessions(_request: Request) -> JSONResponse:
@@ -96,8 +96,8 @@ async def session_detail(request: Request) -> JSONResponse:
 
         # Macro Intent (if log exists)
         if log_path.exists():
-            from ...macros import load_macro_from_recording
-            from ...server.macro_semantic import get_semantic_intent
+            from octowright.macros import load_macro_from_recording
+            from octowright.server.macro_semantic import get_semantic_intent
 
             with contextlib.suppress(Exception):
                 actions = load_macro_from_recording(log_path)
@@ -129,8 +129,8 @@ async def session_detail(request: Request) -> JSONResponse:
         detail["url"] = artefacts["url"]
 
     # For closed sessions, we can still try to get the macro intent from disk
-    from ...macros import load_macro_from_recording
-    from ...server.macro_semantic import get_semantic_intent
+    from octowright.macros import load_macro_from_recording
+    from octowright.server.macro_semantic import get_semantic_intent
 
     with contextlib.suppress(Exception):
         actions = load_macro_from_recording(jsonl)
@@ -294,6 +294,39 @@ async def session_navigate(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "url": url})
 
 
+async def session_selector_validate(request: Request) -> JSONResponse:
+    """POST /api/sessions/{id}/selector/validate — check a CSS selector against a live page."""
+    sid = request.path_params["id"]
+    payload, err = await _read_json_body(request)
+    if err is not None:
+        return err
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+    selector = payload.get("selector")
+    if not isinstance(selector, str) or not selector.strip():
+        return JSONResponse({"error": "selector is required and must be a non-empty string"}, status_code=400)
+
+    pool = _state.pool
+    if not pool.has_session(sid):
+        return JSONResponse({"error": f"no live session with id {sid!r}"}, status_code=404)
+    session = pool.get(sid)
+    try:
+        count = await session.page.locator(selector).count()
+    except Exception as e:
+        return JSONResponse(
+            {
+                "ok": False,
+                "selector": selector,
+                "found": False,
+                "count": 0,
+                "error": str(e),
+            },
+            status_code=400,
+        )
+    return JSONResponse({"ok": True, "selector": selector, "found": count > 0, "count": count})
+
+
 async def recording_delete(request: Request) -> JSONResponse:
     """DELETE /api/sessions/{id}/recording — remove a closed session's files from disk."""
     sid = request.path_params["id"]
@@ -394,4 +427,9 @@ def routes() -> list[Route]:
         Route("/api/sessions/{id}/relaunch", guard_sensitive_http(session_relaunch), methods=["POST"]),
         Route("/api/sessions/{id}", guard_sensitive_http(session_close), methods=["DELETE"]),
         Route("/api/sessions/{id}/navigate", guard_sensitive_http(session_navigate), methods=["POST"]),
+        Route(
+            "/api/sessions/{id}/selector/validate",
+            guard_sensitive_http(session_selector_validate),
+            methods=["POST"],
+        ),
     ]

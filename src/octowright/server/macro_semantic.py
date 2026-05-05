@@ -54,6 +54,13 @@ def summarize_action(action: dict[str, Any], indent: int = 0) -> str:
             for sub in branch:
                 try_each_summary.append(f"{prefix}    - " + summarize_action(sub, 0))
         return "\n".join(try_each_summary)
+    elif kind == "macro_call":
+        macro_name = action["name"]
+        args = action.get("args") or {}
+        arg_summary = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        if arg_summary:
+            return f"{prefix}Call macro '{macro_name}' with args {{ {arg_summary} }}"
+        return f"{prefix}Call macro '{macro_name}'"
 
     return f"{prefix}Perform {kind} action"
 
