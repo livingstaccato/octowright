@@ -46,7 +46,7 @@ uv run octowright init
 
 This prints a ready-to-paste config snippet with the path filled in for your install,
 and scaffolds sample persona / scenario / macro files under
-`~/.config/octowright/`.
+Octowright's user config directory.
 
 ## 3. Verify the install
 

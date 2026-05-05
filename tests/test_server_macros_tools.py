@@ -55,7 +55,7 @@ async def test_macro_run_and_sequence(_patch_deps: dict[str, MagicMock]) -> None
 
 
 def test_macro_lint_formats_issues(monkeypatch: pytest.MonkeyPatch) -> None:
-    import octowright.macro_lint as lint_module
+    import octowright.macros.lint as lint_module
 
     issue_err = MagicMock(severity="error", code="E1", message="bad", action_index=1)
     issue_warn = MagicMock(severity="warning", code="W1", message="warn", action_index=2)
@@ -76,6 +76,36 @@ def test_macro_repair_preview_forwards_to_core(_patch_deps: dict[str, MagicMock]
 
     assert out == {"macro": "demo", "suggestions": []}
     fake_macros.repair_preview.assert_called_once_with("demo")
+
+
+def test_macro_compile_returns_compiled_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    import octowright.macros.dsl as dsl_mod
+
+    compile_mock = MagicMock(return_value={"name": "demo", "actions": [{"action": "press_key", "key": "Escape"}]})
+    monkeypatch.setattr(dsl_mod, "compile_macro_yaml", compile_mock)
+
+    out = _macros.macro_compile("name: demo\nactions:\n  - press_key: Escape\n", name="demo", write=False)
+
+    assert out["compiled"]["name"] == "demo"
+    assert out["written"] is False
+    compile_mock.assert_called_once_with("name: demo\nactions:\n  - press_key: Escape\n", name="demo", strict=True)
+
+
+def test_macro_compile_can_write_compiled_macro(
+    _patch_deps: dict[str, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import octowright.macros.dsl as dsl_mod
+
+    compiled = {"name": "demo", "actions": [{"action": "press_key", "key": "Escape"}]}
+    monkeypatch.setattr(dsl_mod, "compile_macro_yaml", MagicMock(return_value=compiled))
+    _patch_deps["macros"].write_macro.return_value = Path("/tmp/demo.json")
+
+    out = _macros.macro_compile("name: demo\nactions: []\n", write=True)
+
+    assert out["written"] is True
+    assert out["path"] == "/tmp/demo.json"
+    _patch_deps["macros"].write_macro.assert_called_once_with(name="demo", macro=compiled)
 
 
 @pytest.mark.anyio

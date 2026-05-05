@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from octowright import macro_checks
+from octowright.macros import checks as macro_checks
 
 
 class _Elem:

@@ -1,13 +1,17 @@
 import {
   dashboardEventsUrl,
   deleteRecording,
+  getMacro,
   getMacroRepairPreview,
+  validateMacro,
+  validateSessionSelector,
   getMacros,
   getPersonaDetail,
   getPersonas,
   getPersonaSizes,
   getScenarios,
   getSessions,
+  updateMacro,
   relaunchSession,
   startScenario,
   updatePersonaYaml,
@@ -16,6 +20,8 @@ import { formatDateTime, shortUrl } from "./format.js";
 import { getLogger, initTelemetry } from "./telemetry.js";
 import type {
   LiveScenario,
+  MacroAction,
+  MacroDetail,
   MacroRepairPreview,
   MacroSummary,
   PersonaSummary,
@@ -181,7 +187,146 @@ export function openPersonaEditor(name: string): void {
     })
     .catch((err: unknown) => {
       loadingMsg.textContent = `Failed to load persona: ${String(err)}`;
+  });
+}
+
+function openMacroEditor(name: string, sessions: SessionListResponse): void {
+  const existing = document.querySelector(".modal-backdrop");
+  if (existing) existing.remove();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+
+  const modal = document.createElement("div");
+  modal.className = "modal modal--macro-editor";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-label", `Edit macro: ${name}`);
+
+  const header = document.createElement("div");
+  header.className = "modal__header";
+  const title = document.createElement("h3");
+  title.className = "modal__title";
+  title.textContent = `Edit macro: ${name}`;
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "icon-btn";
+  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.textContent = "✕";
+  closeBtn.addEventListener("click", closeModal);
+  header.append(title, closeBtn);
+
+  const body = document.createElement("div");
+  body.className = "modal__body";
+
+  const loadingMsg = document.createElement("p");
+  loadingMsg.className = "modal__loading";
+  loadingMsg.textContent = "Loading…";
+  body.append(loadingMsg);
+
+  const error = document.createElement("div");
+  error.className = "modal__error";
+  error.setAttribute("data-testid", `macro-editor-error-${name}`);
+
+  const footer = document.createElement("div");
+  footer.className = "modal__footer";
+
+  modal.append(header, body, footer);
+  backdrop.append(modal);
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) closeModal();
+  });
+  document.body.append(backdrop);
+
+  const setError = (message: string): void => {
+    error.textContent = message;
+    if (message) {
+      error.classList.add("modal__error--visible");
+    } else {
+      error.classList.remove("modal__error--visible");
+    }
+  };
+
+  const refreshDashboard = (): void => {
+    if (dashboardRoot) {
+      const root = dashboardRoot;
+      loadState()
+        .then((state) => {
+          renderDashboard(root, state);
+        })
+        .catch(() => {
+          // Ignore refresh errors here; the editor is already closed.
+        });
+    }
+  };
+
+  getMacro(name)
+    .then((detail) => {
+      body.innerHTML = "";
+      error.textContent = "";
+      error.classList.remove("modal__error--visible");
+
+      const summaryTitle = document.createElement("div");
+      summaryTitle.className = "modal__label";
+      summaryTitle.textContent = "Macro structure summary";
+
+      const summary = renderMacroSummary(detail);
+      const textarea = document.createElement("textarea");
+      textarea.className = "yaml-editor";
+      textarea.setAttribute("spellcheck", "false");
+      textarea.value = JSON.stringify(detail, null, 2);
+
+      const selectorTools = renderMacroSelectorTools(sessions, setError);
+
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "btn btn--primary";
+      saveBtn.textContent = "Save";
+      saveBtn.setAttribute("data-testid", `macro-save-${name}`);
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "btn";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.addEventListener("click", closeModal);
+
+      saveBtn.addEventListener("click", () => {
+        let macroJson: unknown;
+        setError("");
+        try {
+          macroJson = JSON.parse(textarea.value);
+        } catch {
+          setError("Macro JSON is invalid.");
+          return;
+        }
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Validating…";
+        validateMacro(name, macroJson)
+          .then((validation) => {
+            if (!validation.ok || !validation.valid) {
+              const reasons = validation.issues.map((issue) => `${issue.code}: ${issue.message}`).join("\n");
+              throw new Error(reasons || "Macro validation failed.");
+            }
+            return updateMacro(name, macroJson);
+          })
+          .then(() => {
+            showSnackbar(`Macro "${name}" updated.`);
+            closeModal();
+            refreshDashboard();
+          })
+          .catch((err: unknown) => {
+            setError(`Save failed: ${String(err)}`);
+            saveBtn.disabled = false;
+            saveBtn.textContent = "Save";
+          });
+      });
+
+      footer.innerHTML = "";
+      footer.append(cancelBtn, saveBtn);
+      body.append(summaryTitle, summary, textarea, selectorTools, error);
+    })
+    .catch((err: unknown) => {
+      loadingMsg.textContent = `Failed to load macro: ${String(err)}`;
     });
+
 }
 
 export function openMacroRepairPreview(name: string): void {
@@ -239,6 +384,166 @@ export function openMacroRepairPreview(name: string): void {
     .catch((err: unknown) => {
       loadingMsg.textContent = `Failed to load repair preview: ${String(err)}`;
     });
+}
+
+function renderMacroSummary(detail: MacroDetail): HTMLElement {
+  const container = document.createElement("div");
+  container.className = "macro-summary";
+  const actions = Array.isArray(detail.actions) ? detail.actions : [];
+  const count = document.createElement("div");
+  count.className = "macro-summary__count";
+  count.textContent = `${actions.length} action(s)`;
+  const summaryList = renderMacroActionSummaryList(actions);
+  container.append(count, summaryList);
+  return container;
+}
+
+function renderMacroActionSummaryList(actions: MacroAction[]): HTMLElement {
+  const ul = document.createElement("ul");
+  ul.className = "macro-summary__list";
+  if (!Array.isArray(actions) || actions.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "macro-summary__item macro-summary__item--empty";
+    empty.textContent = "No actions";
+    ul.append(empty);
+    return ul;
+  }
+  for (const action of actions) {
+    ul.append(renderMacroActionSummaryItem(action));
+  }
+  return ul;
+}
+
+function renderMacroActionSummaryItem(action: MacroAction): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = "macro-summary__item";
+  const title = document.createElement("div");
+  title.className = "macro-summary__action";
+
+  if (action.action === "if_selector") {
+    title.textContent = `if_selector ${String(action.selector ?? "∅")}`;
+    const meta = document.createElement("span");
+    meta.className = "macro-summary__meta";
+    const thenCount = Array.isArray(action.then) ? action.then.length : 0;
+    const elseCount = Array.isArray(action.else) ? action.else.length : 0;
+    meta.textContent = `${thenCount} then · ${elseCount} else`;
+    title.append(" ");
+    title.append(meta);
+    li.append(title);
+
+    const thenWrap = document.createElement("ul");
+    thenWrap.className = "macro-summary__branch";
+    thenWrap.setAttribute("data-branch", "then");
+    thenWrap.append(renderMacroActionSummaryList(action.then ?? []));
+    const elseWrap = document.createElement("ul");
+    elseWrap.className = "macro-summary__branch";
+    elseWrap.setAttribute("data-branch", "else");
+    elseWrap.append(renderMacroActionSummaryList(action.else ?? []));
+    li.append(thenWrap, elseWrap);
+    return li;
+  }
+
+  if (action.action === "try_each") {
+    const branches = Array.isArray(action.branches) ? action.branches : [];
+    title.textContent = `try_each (${branches.length} branch${branches.length === 1 ? "" : "es"})`;
+    li.append(title);
+    for (let i = 0; i < branches.length; i++) {
+      const branchWrap = document.createElement("div");
+      branchWrap.className = "macro-summary__branch";
+      const branchLabel = document.createElement("div");
+      branchLabel.className = "macro-summary__meta";
+      const branch = branches[i] ?? [];
+      branchLabel.textContent = `branch ${i + 1} (${branch.length} action${branch.length === 1 ? "" : "s"})`;
+      branchWrap.append(branchLabel);
+      branchWrap.append(renderMacroActionSummaryList(branch));
+      li.append(branchWrap);
+    }
+    return li;
+  }
+
+  title.textContent = action.action || "(unknown action)";
+  if (typeof action.selector === "string") {
+    const meta = document.createElement("span");
+    meta.className = "macro-summary__meta";
+    meta.textContent = action.selector;
+    title.append(" ");
+    title.append(meta);
+  }
+  li.append(title);
+  return li;
+}
+
+function renderMacroSelectorTools(
+  sessions: SessionListResponse,
+  setError: (message: string) => void,
+): HTMLElement {
+  const wrappers = document.createElement("div");
+  wrappers.className = "macro-selector-tools";
+  const sectionTitle = document.createElement("div");
+  sectionTitle.className = "modal__label";
+  sectionTitle.textContent = "Live selector check";
+
+  const allSessions = [...sessions.live, ...sessions.closed];
+  if (allSessions.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "macro-selector-tools__empty";
+    empty.textContent = "No sessions available for selector check.";
+    wrappers.append(sectionTitle, empty);
+    return wrappers;
+  }
+
+  const controls = document.createElement("div");
+  controls.className = "macro-selector-tools__controls";
+
+  const sessionSelect = document.createElement("select");
+  sessionSelect.className = "macro-selector-tools__session";
+  for (const session of allSessions) {
+    const option = document.createElement("option");
+    option.value = session.id;
+    option.textContent = session.live ? `${session.id} (live)` : `${session.id} (closed)`;
+    sessionSelect.append(option);
+  }
+
+  const selectorInput = document.createElement("input");
+  selectorInput.className = "macro-selector-tools__selector";
+  selectorInput.type = "text";
+  selectorInput.placeholder = "#submit";
+
+  const validateBtn = document.createElement("button");
+  validateBtn.className = "btn";
+  validateBtn.textContent = "Validate selector";
+
+  const validateStatus = document.createElement("div");
+  validateStatus.className = "macro-selector-tools__status";
+
+  validateBtn.addEventListener("click", () => {
+    const selector = selectorInput.value.trim();
+    const sessionId = sessionSelect.value;
+    if (!selector) {
+      setError("Enter a selector to validate.");
+      return;
+    }
+    setError("");
+    validateBtn.disabled = true;
+    validateBtn.textContent = "Checking…";
+    validateStatus.classList.remove("macro-selector-tools__status--error");
+    validateSessionSelector(sessionId, selector)
+      .then((result) => {
+        validateStatus.textContent = `Selector ${result.present ? "found" : "not found"} in session ${sessionId}.`;
+      })
+      .catch((err: unknown) => {
+        validateStatus.textContent = `Validation failed: ${String(err)}`;
+        validateStatus.classList.add("macro-selector-tools__status--error");
+      })
+      .finally(() => {
+        validateBtn.disabled = false;
+        validateBtn.textContent = "Validate selector";
+      });
+  });
+
+  controls.append(sessionSelect, selectorInput, validateBtn);
+  wrappers.append(sectionTitle, controls, validateStatus);
+  return wrappers;
 }
 
 function renderMacroRepairPreview(preview: MacroRepairPreview): HTMLElement {
@@ -319,7 +624,7 @@ export function renderDashboard(root: HTMLElement, state: DashboardState): void 
       "closed-sessions",
       renderSessionTable(state.sessions.closed.slice(0, 20), false),
     ),
-    section("Macros", "macros", renderMacroList(state.macros), {
+    section("Macros", "macros", renderMacroList(state), {
       collapsible: true,
       open: openPanels.get("panel-macros") ?? false,
     }),
@@ -600,7 +905,8 @@ function renderPersonaGrid(personas: PersonaSummary[]): HTMLElement {
   return grid;
 }
 
-function renderMacroList(macros: MacroSummary[]): HTMLElement {
+function renderMacroList(state: DashboardState): HTMLElement {
+  const macros = state.macros;
   if (macros.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty";
@@ -628,6 +934,18 @@ function renderMacroList(macros: MacroSummary[]): HTMLElement {
     }
     const actions = document.createElement("div");
     actions.className = "macro-list__actions";
+    const editBtn = document.createElement("button");
+    editBtn.className = "row-action icon-btn";
+    editBtn.setAttribute("aria-label", `Edit macro ${m.name}`);
+    editBtn.setAttribute("title", "Edit macro");
+    editBtn.setAttribute("data-testid", `macro-edit-${m.name}`);
+    editBtn.textContent = "✎";
+    editBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openMacroEditor(m.name, state.sessions);
+    });
+
     const previewBtn = document.createElement("button");
     previewBtn.className = "row-action icon-btn";
     previewBtn.setAttribute("aria-label", `Preview repair suggestions for ${m.name}`);
@@ -639,7 +957,7 @@ function renderMacroList(macros: MacroSummary[]): HTMLElement {
       e.stopPropagation();
       openMacroRepairPreview(m.name);
     });
-    actions.append(previewBtn);
+    actions.append(editBtn, previewBtn);
     li.append(actions);
     ul.append(li);
   }
