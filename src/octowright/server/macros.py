@@ -126,7 +126,8 @@ def macro_lint(name: str) -> dict[str, Any]:
     description=(
         "Run all test macros in a directory, producing a JUnit XML report. A macro is "
         "considered a test if its description starts with [test]. Spawns one ephemeral "
-        "browser per test (kind defaults to 'webkit'). Returns {passed, failed, total, "
+        "browser per test (kind defaults to 'webkit') and runs up to max_parallel tests "
+        "concurrently. Returns {passed, failed, total, "
         "report_path, results: [per-test summary]}."
     ),
 )
@@ -135,6 +136,7 @@ async def run_test_suite(
     kind: str = "webkit",
     tag: str | None = None,
     out_path: str | None = None,
+    max_parallel: int = 1,
 ) -> dict[str, Any]:
     from .. import runner
 
@@ -144,6 +146,7 @@ async def run_test_suite(
         tag=tag,
         out_path=out_path,
         pool=pool,
+        max_parallel=max_parallel,
     )
 
 
