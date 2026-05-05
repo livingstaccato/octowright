@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -59,7 +61,7 @@ def test_macro_lint_formats_issues(monkeypatch: pytest.MonkeyPatch) -> None:
     issue_warn = MagicMock(severity="warning", code="W1", message="warn", action_index=2)
     monkeypatch.setattr(lint_module, "lint_macro", MagicMock(return_value=[issue_err, issue_warn]))
 
-    _macros.macro_mod.load_macro.return_value = {"name": "demo", "actions": []}
+    cast(Any, _macros.macro_mod).load_macro.return_value = {"name": "demo", "actions": []}
     out = _macros.macro_lint("demo")
     assert out["ok"] is False
     assert "errors" in out["summary"]
@@ -67,19 +69,21 @@ def test_macro_lint_formats_issues(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_macro_repair_preview_forwards_to_core(_patch_deps: dict[str, MagicMock]) -> None:
-    _patch_deps["macros"].repair_preview.return_value = {"macro": "demo", "suggestions": []}
+    fake_macros = _patch_deps["macros"]
+    fake_macros.repair_preview.return_value = {"macro": "demo", "suggestions": []}
 
     out = _macros.macro_repair_preview("demo")
 
     assert out == {"macro": "demo", "suggestions": []}
-    _patch_deps["macros"].repair_preview.assert_called_once_with("demo")
+    fake_macros.repair_preview.assert_called_once_with("demo")
 
 
 @pytest.mark.anyio
 async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.runner as runner_mod
 
-    monkeypatch.setattr(runner_mod, "run_suite", AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1}))
+    run_suite_mock = AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1})
+    monkeypatch.setattr(runner_mod, "run_suite", run_suite_mock)
     out = await _macros.run_test_suite(
         macros_dir="/tmp/m",
         kind="firefox",
@@ -88,7 +92,7 @@ async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
         max_parallel=3,
     )
     assert out["total"] == 1
-    runner_mod.run_suite.assert_awaited_once_with(
+    run_suite_mock.assert_awaited_once_with(
         macros_dir="/tmp/m",
         kind="firefox",
         tag="smoke",
@@ -98,7 +102,7 @@ async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import octowright.defaults as defaults_mod
     import octowright.profile_cleanup as cleanup_mod
 
@@ -109,8 +113,9 @@ def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch,
 
     in_use = MagicMock()
     in_use.user_data_dir = str(tmp_path / "live")
-    _macros.pool._sessions = {"x": in_use}
-    _macros.pool.iter_sessions.return_value = (in_use,)
+    pool_mock = cast(Any, _macros.pool)
+    pool_mock._sessions = {"x": in_use}
+    pool_mock.iter_sessions.return_value = (in_use,)
     out = _macros.profile_cleanup(days=1.0, dry_run=False)
     assert out["removed"] == 1
     assert out["skipped_in_use"] == 1
