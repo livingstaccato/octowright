@@ -54,25 +54,20 @@ def tail_log(path: Path, cursor: int) -> tuple[list[dict], int, int]:
     if not data:
         return [], cursor, total_bytes
 
-    text = data.decode("utf-8", errors="replace")
-    lines = text.split("\n")
+    last_newline = data.rfind(b"\n")
+    if last_newline == -1:
+        return [], cursor, total_bytes
 
-    if text.endswith("\n"):
-        complete_lines = [ln for ln in lines if ln.strip()]
-        partial_bytes = 0
-    else:
-        complete_lines = [ln for ln in lines[:-1] if ln.strip()]
-        partial_bytes = len(lines[-1].encode("utf-8"))
-
-    new_cursor = cursor + len(data) - partial_bytes
+    complete_data = data[:last_newline]
+    new_cursor = cursor + last_newline + 1
     events = []
-    for raw in complete_lines:
-        raw = raw.strip()
+    for raw_bytes in complete_data.splitlines():
+        raw = raw_bytes.strip()
         if not raw:
             continue
         try:
-            events.append(json.loads(raw))
-        except json.JSONDecodeError:
+            events.append(json.loads(raw.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError):
             continue
 
     return events, new_cursor, total_bytes

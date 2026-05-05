@@ -556,13 +556,13 @@ def test_session_markdown_404_when_file_missing(client: TestClient, isolated_rec
 @pytest.mark.asyncio
 async def test_markdown_endpoint_roundtrip_live_and_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("playwright")
+    import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
     from octowright import http as _http
     from octowright import personas as _personas
-    from octowright import pool as _pool
     from octowright import profiles as _profiles
+    from octowright.browser_pool import BrowserPool
     from octowright.http import state as _http_state
-    from octowright.pool import BrowserPool
     from octowright.server import _state
 
     rec = tmp_path / "recordings"

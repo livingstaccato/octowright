@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from provide.telemetry import get_logger
 
 if TYPE_CHECKING:
-    from .pool import BrowserPool
+    from .browser_pool import BrowserPool
     from .scenarios import ScenarioPool
 
 log = get_logger(__name__)

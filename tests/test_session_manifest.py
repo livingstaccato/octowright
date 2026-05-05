@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from octowright.pool import BrowserPool
+from octowright.browser_pool import BrowserPool
 
 
 class FakeRecorder:
@@ -102,8 +102,8 @@ class FakeBrowserType:
 
 @pytest.fixture
 def isolated_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[BrowserPool, Path]:
+    import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
-    from octowright import pool as _pool
     from octowright import session_manifest as _manifest
     from octowright.session.core import BrowserSession
 

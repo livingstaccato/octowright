@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from octowright.pool import BrowserPool
+from octowright.browser_pool import BrowserPool
 
 
 class FakeRecorder:
@@ -101,8 +101,8 @@ async def test_launch_failure_closes_context_browser_and_recorder(
         recorder_holder["recorder"] = recorder
         return recorder
 
-    monkeypatch.setattr("octowright.pool.RECORDINGS_DIR", tmp_path)
-    monkeypatch.setattr("octowright.pool.Recorder", fake_recorder)
+    monkeypatch.setattr("octowright.browser_pool.pool.RECORDINGS_DIR", tmp_path)
+    monkeypatch.setattr("octowright.browser_pool.pool.Recorder", fake_recorder)
 
     with pytest.raises(RuntimeError):
         await pool.launch(kind="chromium", url="https://example.com", headed=False)

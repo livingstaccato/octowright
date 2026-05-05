@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid as _uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,17 +27,21 @@ class LiveScenario:
 class ScenarioPool:
     def __init__(self) -> None:
         self._live: dict[str, LiveScenario] = {}
+        self._live_lock = asyncio.Lock()
 
     def get(self, scenario_id: str) -> LiveScenario:
         if scenario_id not in self._live:
-            known = list(self._live)
-            hint = (
-                "no scenarios are running — start one with `scenario_start name=<name>`"
-                if not known
-                else f"call `scenario_status` to see live ids; known: {known}"
-            )
-            raise KeyError(f"no live scenario with id={scenario_id!r}; {hint}")
+            raise KeyError(self._missing_scenario_message(scenario_id))
         return self._live[scenario_id]
+
+    def _missing_scenario_message(self, scenario_id: str) -> str:
+        known = list(self._live)
+        hint = (
+            "no scenarios are running — start one with `scenario_start name=<name>`"
+            if not known
+            else f"call `scenario_status` to see live ids; known: {known}"
+        )
+        return f"no live scenario with id={scenario_id!r}; {hint}"
 
     def maybe_get(self, scenario_id: str) -> LiveScenario | None:
         return self._live.get(scenario_id)
@@ -123,13 +128,27 @@ class ScenarioPool:
             entry["role"] = participant_spec.role
             participants.append(entry)
         live = LiveScenario(scenario_id=scenario_id, name=effective_name, spec=spec, participants=participants)
-        self._live[scenario_id] = live
-        await _apply_fixtures(browser_pool, live, spec.fixtures)
-        await _run_startup_macros(browser_pool, live)
+        async with self._live_lock:
+            self._live[scenario_id] = live
+        try:
+            await _apply_fixtures(browser_pool, live, spec.fixtures)
+            await _run_startup_macros(browser_pool, live)
+        except Exception:
+            async with self._live_lock:
+                self._live.pop(scenario_id, None)
+            for launched in result["launched"]:
+                try:
+                    await browser_pool.close(launched["instance_id"])
+                except Exception:
+                    pass
+            raise
         return live
 
     async def stop(self, *, scenario_id: str, browser_pool: Any) -> dict[str, Any]:
-        live = self.get(scenario_id)
+        async with self._live_lock:
+            live = self._live.pop(scenario_id, None)
+        if live is None:
+            raise KeyError(self._missing_scenario_message(scenario_id))
         summary: dict[str, Any] = {"scenario_id": scenario_id, "teardown_errors": [], "closed": []}
         if live.spec.teardown_macro:
             from . import macros as _macros
@@ -146,7 +165,6 @@ class ScenarioPool:
                 summary["closed"].append(p["instance_id"])
             except Exception as e:
                 summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
-        del self._live[scenario_id]
         return summary
 
     def tail(self, *, scenario_id: str, since_cursors: dict[str, int] | None = None) -> dict[str, Any]:

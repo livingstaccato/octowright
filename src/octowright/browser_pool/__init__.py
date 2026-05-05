@@ -4,35 +4,12 @@
 #
 
 from .errors import maybe_wrap_playwright_error
-from .listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
-from .visuals import (
-    _BADGE_POSITION_DEFAULT,
-    _BADGE_POSITIONS,
-    _ENGINE_EMOJI,
-    _PERSONA_EMOJI_POOL,
-    _badge_color_for,
-    _badge_text_for,
-    _emoji_pair_for,
-    _persona_emoji_for,
-    _tile_args_for_chromium,
-    _tile_position,
-    _title_tag_for,
-)
+from .pool import BrowserPool
+from .roster import close_all, spawn_roster
 
 __all__ = [
-    "_BADGE_POSITIONS",
-    "_BADGE_POSITION_DEFAULT",
-    "_ENGINE_EMOJI",
-    "_PERSONA_EMOJI_POOL",
-    "_badge_color_for",
-    "_badge_text_for",
-    "_emoji_pair_for",
-    "_persona_emoji_for",
-    "_tile_args_for_chromium",
-    "_tile_position",
-    "_title_tag_for",
-    "_wire_close_evictor",
-    "_wire_listeners",
-    "_wire_user_navigation_logger",
+    "BrowserPool",
+    "close_all",
     "maybe_wrap_playwright_error",
+    "spawn_roster",
 ]

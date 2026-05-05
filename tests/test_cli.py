@@ -75,13 +75,13 @@ def test_selftest_lists_registered_tools(isolated_paths: dict[str, Path]) -> Non
 
 
 def test_test_command_forwards_max_parallel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from octowright import pool as pool_mod
+    import octowright.browser_pool as pool_pkg
     from octowright import runner as runner_mod
 
     fake_pool = MagicMock()
     fake_pool.shutdown = AsyncMock()
     run_suite = AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1, "report_path": str(tmp_path / "j.xml")})
-    monkeypatch.setattr(pool_mod, "BrowserPool", MagicMock(return_value=fake_pool))
+    monkeypatch.setattr(pool_pkg, "BrowserPool", MagicMock(return_value=fake_pool))
     monkeypatch.setattr(runner_mod, "run_suite", run_suite)
 
     result = CliRunner().invoke(
