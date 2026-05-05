@@ -11,6 +11,7 @@ from typing import Any
 
 from .. import personas as persona_mod
 from .. import profiles as profile_mod
+from ..http.dashboard_events import publish_dashboard_invalidation_nowait
 from ._state import log, mcp, pool
 
 
@@ -36,6 +37,7 @@ def profile_delete(kind: str, name: str) -> dict[str, Any]:
         )
     path = profile_mod.delete_profile(kind, name)
     log.info("octowright.profile.deleted", kind=kind, profile=name, path=str(path))
+    publish_dashboard_invalidation_nowait("personas")
     return {"deleted": True, "path": str(path)}
 
 
@@ -90,6 +92,7 @@ def persona_create(
         )
     except FileExistsError as e:
         raise RuntimeError(str(e)) from e
+    publish_dashboard_invalidation_nowait("personas")
     return {"created": True, "name": name, "path": str(pdir)}
 
 
@@ -109,6 +112,7 @@ def persona_delete(name: str) -> dict[str, Any]:
             )
     path = profile_mod.delete_persona(name)
     log.info("octowright.persona.deleted", name=name, path=str(path))
+    publish_dashboard_invalidation_nowait("personas")
     return {"deleted": True, "name": name, "path": str(path)}
 
 

@@ -17,6 +17,7 @@ from starlette.routing import Route
 
 from ...defaults import PROFILES_DIR, SUPPORTED_KINDS
 from .. import state
+from ..dashboard_events import publish_dashboard_invalidation
 from ..exposure import guard_sensitive_http
 from ._common import _read_json_body
 
@@ -135,6 +136,7 @@ async def persona_update_endpoint(request: Request) -> JSONResponse:
         return JSONResponse({"error": f"invalid YAML: {e}"}, status_code=400)
 
     yaml_path.write_text(yaml_text)
+    await publish_dashboard_invalidation("personas")
     return JSONResponse({"ok": True, "name": name})
 
 
