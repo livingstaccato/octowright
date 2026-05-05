@@ -48,14 +48,7 @@ async def session_events(request: Request) -> JSONResponse:
 
 
 def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
-    """Reconstruct console messages from a JSONL recording.
-
-    NOTE: as of this writing ``BrowserSession.attach_console`` does NOT persist
-    console messages to the JSONL log — they live only on the in-memory
-    ``session.console`` list. So for closed sessions this returns ``[]``. The
-    scan is left in place so the endpoint Just Works once a future change starts
-    recording an ``action: "console"`` row alongside ``download_saved`` etc.
-    """
+    """Reconstruct console messages from persisted ``action: "console"`` rows."""
     out: list[dict[str, Any]] = []
     if not jsonl_path.exists():
         return out
@@ -71,13 +64,13 @@ def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
                     continue
                 if entry.get("action") != "console":
                     continue
-                out.append(
-                    {
-                        "level": entry.get("level"),
-                        "text": entry.get("text", ""),
-                        "page_index": entry.get("page_index"),
-                    }
-                )
+                message = {
+                    "level": entry.get("level"),
+                    "text": entry.get("text", ""),
+                }
+                if "page_index" in entry:
+                    message["page_index"] = entry.get("page_index")
+                out.append(message)
     except OSError:
         return out
     return out
@@ -122,11 +115,10 @@ async def session_console(request: Request) -> JSONResponse:
     """Return paginated console messages for a session.
 
     Live sessions read straight from ``pool.get(id).console``. Closed sessions
-    scan the JSONL recording for ``action: "console"`` rows (today this yields
-    an empty list because attach_console doesn't persist — see
-    ``_read_console_from_jsonl``). Optional ``level=`` filters by log level
-    (case-sensitive). Optional ``since=`` is a 0-based index; the response's
-    ``cursor`` is always the new total so callers can pass it on the next poll.
+    scan the JSONL recording for persisted ``action: "console"`` rows. Optional
+    ``level=`` filters by log level (case-sensitive). Optional ``since=`` is a
+    0-based index; the response's ``cursor`` is always the new total so callers
+    can pass it on the next poll.
 
     404 when the id is not in the live pool AND no recording is on disk.
     """
