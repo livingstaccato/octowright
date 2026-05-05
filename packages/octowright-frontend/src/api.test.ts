@@ -65,6 +65,10 @@ describe("fetchJson", () => {
     installFetch({}, 500);
     await expect(fetchJson("/api/x")).rejects.toBeInstanceOf(ApiError);
   });
+  it("includes server error details on non-2xx JSON responses", async () => {
+    installFetch({ error: "invalid YAML: broken" }, 400);
+    await expect(fetchJson("/api/x")).rejects.toThrow("invalid YAML: broken");
+  });
   it("forwards AbortSignal", async () => {
     const calls = installFetch({});
     const ac = new AbortController();
