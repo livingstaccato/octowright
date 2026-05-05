@@ -126,8 +126,13 @@ jobs:
             --ignore=tests/test_session_mode.py \
             --ignore=tests/test_title_prefix.py \
             --ignore=tests/test_label_promotion.py
+      - name: Run unit tests (headless, Windows verbose)
+        if: ${{ env.ACT != 'true' && runner.os == 'Windows' }}
+        env:
+          OCTOWRIGHT_HEADLESS: "1"
+        run: uv run --active pytest -vv tests/ --tb=short -ra --color=no
       - name: Run unit tests (headless)
-        if: ${{ env.ACT != 'true' }}
+        if: ${{ env.ACT != 'true' && runner.os != 'Windows' }}
         env:
           OCTOWRIGHT_HEADLESS: "1"
         run: uv run --active pytest -q tests/
