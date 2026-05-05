@@ -20,7 +20,7 @@ async def test_popup_page_dialog_listener_fires(tmp_path, monkeypatch):
     importlib.reload(_defaults)
 
     # Import after reload so RECORDINGS_DIR / PROFILES_DIR pick up the monkeypatched env.
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     pool = BrowserPool()
     r = await pool.launch(

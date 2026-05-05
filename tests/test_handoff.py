@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from octowright.pool import BrowserPool
+from octowright.browser_pool import BrowserPool
 
 
 @pytest.mark.anyio

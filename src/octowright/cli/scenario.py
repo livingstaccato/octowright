@@ -45,7 +45,7 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
     import signal
 
     from .. import scenarios as _s
-    from ..pool import BrowserPool
+    from ..browser_pool import BrowserPool
 
     setup_telemetry()
 

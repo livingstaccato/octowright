@@ -32,7 +32,7 @@ def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | Non
     import asyncio
 
     from .. import runner
-    from ..pool import BrowserPool
+    from ..browser_pool import BrowserPool
 
     setup_telemetry()
 
