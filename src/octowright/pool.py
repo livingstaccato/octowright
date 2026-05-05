@@ -27,15 +27,10 @@ from .pool_support import (
     _BADGE_POSITION_DEFAULT,
     _BADGE_POSITIONS,
     _BADGE_SCRIPT,
-    _ENGINE_EMOJI,
-    _PERSONA_EMOJI_POOL,
     _TITLE_TAG_SCRIPT,
     _badge_color_for,
     _badge_text_for,
-    _emoji_pair_for,
-    _persona_emoji_for,
     _tile_args_for_chromium,
-    _tile_position,
     _title_tag_for,
     _wire_close_evictor,
     _wire_listeners,
@@ -47,15 +42,6 @@ from .session import BrowserSession
 from .stabilize import render_stabilize_script
 
 log = get_logger(__name__)
-
-# Backwards-compatible test/helper exports (private by convention).
-_COMPAT_EXPORTS = (
-    _ENGINE_EMOJI,
-    _PERSONA_EMOJI_POOL,
-    _emoji_pair_for,
-    _persona_emoji_for,
-    _tile_position,
-)
 
 
 class BrowserPool:
