@@ -21,12 +21,15 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, call
 
 import pytest
 from starlette.testclient import TestClient
 
 from octowright import http as _http
 from octowright.http import state as _http_state
+from octowright.http.routes import scenarios as scenario_routes
+from octowright.http.routes import sessions as session_routes
 from octowright.server import _state
 
 # ---------------------------------------------------------------------------
@@ -239,6 +242,20 @@ def test_post_sessions_happy_path(
     assert call["label"] == "qa-1"
 
 
+def test_post_sessions_publishes_dashboard_invalidation(
+    client: TestClient,
+    fakes: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publish = AsyncMock()
+    monkeypatch.setattr(session_routes, "publish_dashboard_invalidation", publish)
+
+    r = client.post("/api/sessions", json={"kind": "chromium"})
+
+    assert r.status_code == 201, r.text
+    publish.assert_awaited_once_with("sessions")
+
+
 def test_post_sessions_missing_kind_400(client: TestClient) -> None:
     r = client.post("/api/sessions", json={"url": "https://x.test"})
     assert r.status_code == 400
@@ -350,6 +367,22 @@ def test_delete_session_happy_path(
     assert body["instance_id"] == "liveiid00001"
     assert "log_path" in body
     assert pool.close_calls == ["liveiid00001"]
+
+
+def test_delete_session_publishes_dashboard_invalidation(
+    client: TestClient,
+    fakes: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    pool._sessions["liveiid00003"] = SimpleNamespace(instance_id="liveiid00003")
+    publish = AsyncMock()
+    monkeypatch.setattr(session_routes, "publish_dashboard_invalidation", publish)
+
+    r = client.delete("/api/sessions/liveiid00003")
+
+    assert r.status_code == 200, r.text
+    publish.assert_awaited_once_with("sessions")
 
 
 def test_delete_session_happy_path_with_cache_report(
@@ -509,6 +542,20 @@ def test_post_scenario_start_happy_path(
     assert body["name"] == "demo"
     assert len(body["participants"]) == 1
     assert spool.start_calls == ["demo"]
+
+
+def test_post_scenario_start_publishes_dashboard_invalidations(
+    client: TestClient,
+    fakes: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publish = AsyncMock()
+    monkeypatch.setattr(scenario_routes, "publish_dashboard_invalidation", publish)
+
+    r = client.post("/api/scenarios/demo/start")
+
+    assert r.status_code == 201, r.text
+    assert publish.await_args_list == [call("scenarios"), call("sessions")]
 
 
 def test_post_scenario_start_unknown_name_404(

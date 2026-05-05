@@ -11,6 +11,7 @@ from typing import Any
 
 from ... import _format as fmt
 from ... import resolve as resolve_mod
+from ...http.dashboard_events import publish_dashboard_invalidation_nowait
 from .._state import mcp, pool
 
 
@@ -77,7 +78,9 @@ async def browser_launch(
     session: bool = False,
 ) -> dict[str, Any]:
     options = {k: v for k, v in locals().items() if k != "options"}
-    return await pool.launch(**options)
+    result = await pool.launch(**options)
+    publish_dashboard_invalidation_nowait("sessions")
+    return result
 
 
 @mcp.tool(
@@ -146,6 +149,7 @@ async def browser_quick_launch(
 
     if profile:
         res = await pool.launch(url=url, profile=profile, kind=kind, **launch_options)
+        publish_dashboard_invalidation_nowait("sessions")
         return {**res, "profile_used": profile}
 
     # Internal suggest
@@ -169,6 +173,7 @@ async def browser_quick_launch(
         kind=kind,
         **launch_options,
     )
+    publish_dashboard_invalidation_nowait("sessions")
     return {**res, "profile_used": profile_to_use}
 
 
@@ -192,12 +197,16 @@ def browser_list() -> dict[str, Any]:
 
 @mcp.tool(structured_output=False, description="Close one browser instance by id.")
 async def browser_close(instance_id: str) -> dict[str, Any]:
-    return await pool.close(instance_id)
+    result = await pool.close(instance_id)
+    publish_dashboard_invalidation_nowait("sessions")
+    return result
 
 
 @mcp.tool(structured_output=False, description="Close every live browser instance.")
 async def browser_close_all() -> dict[str, Any]:
-    return await pool.close_all()
+    result = await pool.close_all()
+    publish_dashboard_invalidation_nowait("sessions")
+    return result
 
 
 @mcp.tool(
