@@ -3,7 +3,7 @@ name = "octowright"
 version = "0.3.0"
 description = "MCP server that drives multiple headed Playwright browsers (chromium/firefox/webkit) in parallel with per-instance action recording and persistent profiles."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSES/*"]
 authors = [{ name = "Tim", email = "tim@neurotic.org" }]
@@ -97,7 +97,7 @@ fail_under = 83
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py311"
 extend-exclude = ["recordings", "profiles", ".venv"]
 
 [tool.ruff.lint]
@@ -112,7 +112,7 @@ ignore = [
 "tests/**/*.py" = ["ARG", "RUF012", "B017"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
