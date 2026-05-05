@@ -75,10 +75,30 @@ def test_network_capture_is_bounded_and_reports_dropped_count() -> None:
     assert result["dropped"] == 2
     assert result["total_retained"] == NETWORK_EVENT_LIMIT
     assert result["total"] == NETWORK_EVENT_LIMIT
-    assert result["next_cursor"] == NETWORK_EVENT_LIMIT
+    assert result["next_cursor"] == NETWORK_EVENT_LIMIT + 2
     assert len(result["requests"]) == NETWORK_EVENT_LIMIT
     assert result["requests"][0]["url"] == "https://example.test/2"
     assert result["requests"][-1]["url"] == f"https://example.test/{NETWORK_EVENT_LIMIT + 1}"
+
+
+def test_network_cursor_advances_after_retention_rollover() -> None:
+    session = _session()
+
+    for index in range(NETWORK_EVENT_LIMIT):
+        session._handle_response(_Response(index))
+    cursor = session.get_network_requests()["next_cursor"]
+
+    for index in range(NETWORK_EVENT_LIMIT, NETWORK_EVENT_LIMIT + 3):
+        session._handle_response(_Response(index))
+    result = session.get_network_requests(since=cursor)
+
+    assert result["next_cursor"] == NETWORK_EVENT_LIMIT + 3
+    assert result["dropped"] == 3
+    assert [request["url"] for request in result["requests"]] == [
+        f"https://example.test/{NETWORK_EVENT_LIMIT}",
+        f"https://example.test/{NETWORK_EVENT_LIMIT + 1}",
+        f"https://example.test/{NETWORK_EVENT_LIMIT + 2}",
+    ]
 
 
 @pytest.mark.anyio
@@ -95,6 +115,23 @@ async def test_close_waits_for_background_task_before_recorder_close() -> None:
     await session.close()
 
     assert events.index("background:done") < events.index("recorder:close")
+
+
+@pytest.mark.anyio
+async def test_close_drains_background_task_before_context_close_and_recorder_close() -> None:
+    events: list[str] = []
+    session = _session(events)
+
+    async def _background_write() -> None:
+        await asyncio.sleep(0.01)
+        events.append("background:context-open")
+
+    session._bg_tasks.add(asyncio.create_task(_background_write()))
+
+    await session.close()
+
+    assert events.index("background:context-open") < events.index("context:close")
+    assert events.index("background:context-open") < events.index("recorder:close")
 
 
 @pytest.mark.anyio
