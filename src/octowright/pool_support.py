@@ -335,6 +335,12 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             # Already removed by an explicit pool.close — that path logs
             # "octowright.browser.closed" itself. Stay silent.
             return
+        try:
+            from .session_manifest import remove_session as _manifest_remove_session
+
+            _manifest_remove_session(instance_id)
+        except Exception as exc:
+            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
         log.info(
             "octowright.browser.evicted_externally",
             instance_id=instance_id,
