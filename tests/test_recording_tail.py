@@ -59,7 +59,7 @@ def test_all_complete_lines(stub_pool):
 def test_partial_trailing_line(stub_pool):
     first = json.dumps({"action": "click", "n": 1}) + "\n"
     fragment = '{"action": "ty'
-    stub_pool.write_text(first + fragment)
+    stub_pool.write_bytes((first + fragment).encode("utf-8"))
 
     result = _inspect.browser_tail_recording(instance_id="abc", since=0)
     assert result["events"] == [{"action": "click", "n": 1}]
@@ -70,7 +70,7 @@ def test_partial_trailing_line(stub_pool):
 
     # Fragment is now completed; re-poll using returned cursor.
     completed = fragment + 'pe", "n": 2}\n'
-    stub_pool.write_text(first + completed)
+    stub_pool.write_bytes((first + completed).encode("utf-8"))
     result2 = _inspect.browser_tail_recording(instance_id="abc", since=result["cursor"])
     assert result2["events"] == [{"action": "type", "n": 2}]
     assert result2["cursor"] == stub_pool.stat().st_size
@@ -94,7 +94,7 @@ def test_malformed_json_skipped(stub_pool):
 def test_since_offset_skips_earlier_events(stub_pool):
     line1 = json.dumps({"action": "click", "n": 1}) + "\n"
     line2 = json.dumps({"action": "type", "n": 2}) + "\n"
-    stub_pool.write_text(line1 + line2)
+    stub_pool.write_bytes((line1 + line2).encode("utf-8"))
     offset = len(line1.encode("utf-8"))
 
     result = _inspect.browser_tail_recording(instance_id="abc", since=offset)
