@@ -18,8 +18,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..server import _state
-from . import state
+from octowright.http import state
+from octowright.recorder import tail_log
+from octowright.server import _state
 
 
 def _iso(ts: float) -> str:
@@ -354,19 +355,6 @@ def _resolve_markdown_path(session_id: str) -> Path | None:
 def _tail_jsonl(log_path: Path, since: int) -> dict[str, Any]:
     if not log_path.exists():
         return {"events": [], "cursor": since, "total_bytes": 0, "complete": True}
-    with log_path.open("rb") as fh:
-        fh.seek(since)
-        data = fh.read()
-    total_bytes = log_path.stat().st_size
-    text = data.decode("utf-8", errors="replace")
-    lines = text.split("\n")
-    if text.endswith("\n"):
-        complete_lines = [ln for ln in lines if ln.strip()]
-        partial_bytes = 0
-    else:
-        complete_lines = [ln for ln in lines[:-1] if ln.strip()]
-        partial_bytes = len(lines[-1].encode("utf-8"))
-    new_cursor = since + len(data) - partial_bytes
 
     def _looks_like_binary_preview(value: object) -> bool:
         return isinstance(value, str) and (
@@ -389,16 +377,9 @@ def _tail_jsonl(log_path: Path, since: int) -> dict[str, Any]:
             event["is_binary"] = True
         return event
 
-    events: list[dict[str, Any]] = []
-    for raw in complete_lines:
-        try:
-            event = json.loads(raw.strip())
-            if isinstance(event, dict):
-                events.append(_sanitize_event(event))
-        except json.JSONDecodeError:
-            continue
+    events, new_cursor, total_bytes = tail_log(log_path, since)
     return {
-        "events": events,
+        "events": [_sanitize_event(event) for event in events],
         "cursor": new_cursor,
         "total_bytes": total_bytes,
         "complete": new_cursor == total_bytes,
