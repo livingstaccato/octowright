@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from octowright.server.meta import octowright_status
 
@@ -43,6 +44,8 @@ def test_status_pool_counts_are_ints() -> None:
     snap = octowright_status()
     assert isinstance(snap["pool"]["live_browsers"], int)
     assert isinstance(snap["pool"]["live_scenarios"], int)
+    assert isinstance(snap["pool"]["stale_manifest_count"], int)
+    assert isinstance(snap["pool"]["stale_manifest_sessions"], list)
 
 
 def test_status_personas_returns_name_list() -> None:
@@ -50,3 +53,23 @@ def test_status_personas_returns_name_list() -> None:
     assert "names" in snap["personas"]
     assert isinstance(snap["personas"]["names"], list)
     assert snap["personas"]["count"] == len(snap["personas"]["names"])
+
+
+def test_status_reports_stale_manifest_sessions(monkeypatch, tmp_path: Path) -> None:
+    from octowright import session_manifest as _manifest
+
+    manifest_path = tmp_path / "recordings" / "session-manifest.json"
+    monkeypatch.setattr(_manifest, "SESSION_MANIFEST_PATH", manifest_path)
+    _manifest.record_launch(
+        session_id="status-stale",
+        kind="chromium",
+        label="status",
+        profile=None,
+        user_data_dir=None,
+        log_path=tmp_path / "recordings" / "status-stale.jsonl",
+    )
+
+    snap = octowright_status()
+
+    assert snap["pool"]["stale_manifest_count"] == 1
+    assert snap["pool"]["stale_manifest_sessions"][0]["session_id"] == "status-stale"
