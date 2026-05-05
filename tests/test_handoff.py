@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -96,3 +97,48 @@ async def test_handoff_rejects_keep_original_for_persistent() -> None:
 
     with pytest.raises(ValueError, match="close_original=True"):
         await pool.handoff("old03", headed=False, close_original=False)
+
+
+@pytest.mark.asyncio
+async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    pool = BrowserPool()
+    source = SimpleNamespace(
+        instance_id="old-session",
+        kind="chromium",
+        label="scratch",
+        profile=None,
+        user_data_dir=tmp_path / "session-dir",
+        page=SimpleNamespace(url="https://example.com"),
+        url="https://example.com",
+        stabilize=False,
+        trace=False,
+        har_path=None,
+    )
+    pool._sessions["old-session"] = source  # type: ignore[assignment]
+    launched: dict[str, object] = {}
+
+    async def fake_close(instance_id: str) -> dict[str, object]:
+        pool._sessions.pop(instance_id, None)
+        return {"closed": True}
+
+    async def fake_launch(**kwargs: object) -> dict[str, object]:
+        launched.update(kwargs)
+        return {
+            "instance_id": "new-session",
+            "kind": "chromium",
+            "label": kwargs.get("label"),
+            "profile": kwargs.get("profile"),
+            "url": kwargs.get("url"),
+            "log_path": "/tmp/new.jsonl",
+            "record_video": False,
+            "trace": False,
+        }
+
+    monkeypatch.setattr(pool, "close", fake_close)
+    monkeypatch.setattr(pool, "launch", fake_launch)
+
+    result = await BrowserPool.handoff(pool, "old-session", headed=False)
+
+    assert result["new_instance_id"] == "new-session"
+    assert launched["session"] is True
+    assert launched["profile"] is None
