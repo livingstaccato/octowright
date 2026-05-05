@@ -149,6 +149,29 @@ def _py_line(entry: dict) -> str | None:
                     f"await page.fill({entry['selector']!r}, {entry['value']!r})",
                 )
         return f"        await page.fill({entry['selector']!r}, {entry['value']!r})"
+    if action == "click_by":
+        loc = _py_locator(entry)
+        if loc is not None:
+            semantic_call = f"await {loc}.click()"
+            if entry.get("selector"):
+                return _py_semantic_with_fallback(semantic_call, f"await page.click({entry['selector']!r})")
+            return f"        {semantic_call}"
+        if entry.get("selector"):
+            return f"        await page.click({entry['selector']!r})"
+        return None
+    if action == "fill_by":
+        loc = _py_locator(entry)
+        if loc is not None:
+            semantic_call = f"await {loc}.fill({entry['value']!r})"
+            if entry.get("selector"):
+                return _py_semantic_with_fallback(
+                    semantic_call,
+                    f"await page.fill({entry['selector']!r}, {entry['value']!r})",
+                )
+            return f"        {semantic_call}"
+        if entry.get("selector"):
+            return f"        await page.fill({entry['selector']!r}, {entry['value']!r})"
+        return None
     if action == "type":
         delay = entry.get("delay_ms") or 0
         return f"        await page.type({entry['selector']!r}, {entry['text']!r}, delay={delay})"
@@ -231,6 +254,29 @@ def _ts_line(entry: dict) -> str | None:
                     f"await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});",
                 )
         return f"  await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});"
+    if action == "click_by":
+        loc = _ts_locator(entry)
+        if loc is not None:
+            semantic_call = f"await {loc}.click();"
+            if entry.get("selector"):
+                return _ts_semantic_with_fallback(semantic_call, f"await page.click({json.dumps(entry['selector'])});")
+            return f"  {semantic_call}"
+        if entry.get("selector"):
+            return f"  await page.click({json.dumps(entry['selector'])});"
+        return None
+    if action == "fill_by":
+        loc = _ts_locator(entry)
+        if loc is not None:
+            semantic_call = f"await {loc}.fill({json.dumps(entry['value'])});"
+            if entry.get("selector"):
+                return _ts_semantic_with_fallback(
+                    semantic_call,
+                    f"await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});",
+                )
+            return f"  {semantic_call}"
+        if entry.get("selector"):
+            return f"  await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});"
+        return None
     if action == "type":
         delay = entry.get("delay_ms") or 0
         return f"  await page.type({json.dumps(entry['selector'])}, {json.dumps(entry['text'])}, {{ delay: {delay} }});"
