@@ -42,6 +42,12 @@ Lifecycle actions (`launch`, `close`, `snapshot`) are dropped by default — mac
 are the **reusable middle** of a flow, not the wrapper. Pass `include_launch=True`
 on `macro_save` if you need the initial navigation baked into the macro.
 
+Recorded CSS `click` and `fill` actions may include semantic metadata such as
+`role`, `role_name`, `label`, `text`, or `test_id`. Macro replay treats those as
+ARIA-first hints: it tries `click_by` / `fill_by` with the semantic metadata,
+then falls back to the recorded CSS selector if the semantic locator fails.
+Standalone Python and TypeScript exports follow the same order.
+
 ## Conditional / branching actions
 
 For sites that ship multiple DOM versions of the same flow, three action types

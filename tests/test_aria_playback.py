@@ -115,6 +115,20 @@ async def test_aria_first_click_label_only(mock_session: MagicMock) -> None:
 
 
 @pytest.mark.anyio
+async def test_aria_first_click_test_id_only(mock_session: MagicMock) -> None:
+    action = {
+        "action": "click",
+        "selector": "#signup",
+        "test_id": "signup-submit",
+    }
+
+    await macros._dispatch_simple(mock_session, action)
+
+    mock_session.click_by.assert_awaited_once_with(test_id="signup-submit")
+    mock_session.click.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_aria_first_click_by_action_fallback(mock_session: MagicMock) -> None:
     """If click_by action fails, fall back to click(selector) from the same stored action."""
     action = {
