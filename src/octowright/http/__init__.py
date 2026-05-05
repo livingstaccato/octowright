@@ -20,6 +20,7 @@ Endpoints (mirror the API contract in MCP-SHARED-CONTRACT.md):
     DEL  /api/sessions/{id}                        → close a live session
     POST /api/sessions/{id}/navigate               → drive page to {url}
     GET  /api/sessions/{id}/events?since=N         → tail JSONL events
+    GET  /api/dashboard/events                     → SSE dashboard invalidations
     GET  /api/sessions/{id}/console?level=&since=N → console messages (paginated)
     GET  /api/sessions/{id}/downloads?since=N      → downloads (paginated)
     WS   /api/sessions/{id}/tail                   → push events ~1Hz (LIVE only;

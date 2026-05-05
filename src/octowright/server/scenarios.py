@@ -16,6 +16,7 @@ from .. import _format as fmt
 from .. import macros as macro_mod
 from .. import runner as runner_mod
 from .. import scenarios as scenario_mod
+from ..http.dashboard_events import publish_dashboard_invalidation_nowait
 from ._state import mcp, pool, scenario_pool
 
 
@@ -67,6 +68,8 @@ def scenario_plan(name: str) -> dict[str, Any]:
 )
 async def scenario_start(name: str) -> dict[str, Any]:
     live = await scenario_pool.start(name=name, browser_pool=pool)
+    publish_dashboard_invalidation_nowait("scenarios")
+    publish_dashboard_invalidation_nowait("sessions")
     return {
         "scenario_id": live.scenario_id,
         "name": live.name,
@@ -84,6 +87,8 @@ async def scenario_start(name: str) -> dict[str, Any]:
 async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     spec = scenario_mod.load_scenario_template(name, args or {})
     live = await scenario_pool.start(spec=spec, browser_pool=pool)
+    publish_dashboard_invalidation_nowait("scenarios")
+    publish_dashboard_invalidation_nowait("sessions")
     return {
         "scenario_id": live.scenario_id,
         "name": live.name,
@@ -116,7 +121,10 @@ def scenario_status() -> dict[str, Any]:
     ),
 )
 async def scenario_stop(scenario_id: str) -> dict[str, Any]:
-    return await scenario_pool.stop(scenario_id=scenario_id, browser_pool=pool)
+    result = await scenario_pool.stop(scenario_id=scenario_id, browser_pool=pool)
+    publish_dashboard_invalidation_nowait("scenarios")
+    publish_dashboard_invalidation_nowait("sessions")
+    return result
 
 
 @mcp.tool(
@@ -132,13 +140,15 @@ async def scenario_run_macro(
     role: str | None = None,
     args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return await scenario_pool.run_macro(
+    result = await scenario_pool.run_macro(
         scenario_id=scenario_id,
         macro=macro,
         browser_pool=pool,
         role=role,
         args=args,
     )
+    publish_dashboard_invalidation_nowait("scenarios")
+    return result
 
 
 @mcp.tool(
