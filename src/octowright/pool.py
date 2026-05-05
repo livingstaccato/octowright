@@ -107,6 +107,12 @@ class BrowserPool:
         if har_content is not None and har_content not in {"omit", "embed", "attach"}:
             raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
 
+        browser: Any | None = None
+        context: Any | None = None
+        page: Any | None = None
+        recorder: Recorder | None = None
+        registered = False
+
         # Promote: a named launch (label given, no explicit profile, not ephemeral
         # and not session-scoped) gets a persistent profile by default. The whole
         # reason for naming a browser is so you can come back to it; ephemeral
@@ -221,139 +227,169 @@ class BrowserPool:
                 )
                 page = await context.new_page()
         except Exception as exc:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
             wrapped = maybe_wrap_playwright_error(exc, kind=kind)
             if wrapped is exc:
                 raise
             raise wrapped from exc
-
-        recorder = Recorder(log_path)
-        recorder.record(
-            "launch",
-            instance_id=instance_id,
-            kind=kind,
-            label=label,
-            profile=profile,
-            user_data_dir=user_data_dir,
-            url=target_url,
-            headed=not headless,
-            viewport=log_viewport,
-            stabilize=stabilize,
-            record_video=record_video,
-            video_dir=str(video_dir) if video_dir else None,
-            trace=trace,
-            har=bool(har_path),
-            har_path=str(har_path) if har_path else None,
-            har_mode=har_mode if har_path else None,
-            har_url_filter=har_url_filter if har_path else None,
-            har_content=har_content if har_path else None,
-        )
-
-        # NOTE: this local was named ``session`` for years, but ``session`` is
-        # now the public name of the launch flag (session=True for tmpdir
-        # profiles). Renamed to ``new_session`` to avoid shadowing the bool.
-        new_session = BrowserSession(
-            instance_id=instance_id,
-            kind=kind,
-            label=label,
-            url=target_url,
-            browser=browser,
-            context=context,
-            page=page,
-            recorder=recorder,
-            log_path=log_path,
-            user_data_dir=Path(user_data_dir) if user_data_dir is not None else None,
-            profile=profile,
-            stabilize=stabilize,
-            trace=trace,
-            har_path=har_path,
-        )
-        # Wire up video tracking — page.video is only non-None when record_video_dir was set.
-        if record_video and page.video is not None:
-            new_session._video = page.video
-        new_session.attach_console()
-        # Order matters: the close-evictor and user-nav logger publish handler
-        # factories on the session so that subsequent _wire_listeners calls
-        # (for popup pages) pick them up automatically. Install them BEFORE
-        # the initial _wire_listeners call so the initial page also gets them.
-        _wire_close_evictor(self, new_session)
-        _wire_user_navigation_logger(new_session)
-        _wire_listeners(new_session, page)
-        context.on("page", new_session._register_popup)
-
-        # Look up the persona's emoji override (if any) so title + badge can
-        # show it. Ephemeral / unknown personas just hash-pick from the pool.
-        persona_emoji_override: str | None = None
-        if profile:
-            try:
-                from .personas import load_persona
-
-                persona_emoji_override = load_persona(profile).emoji
-            except FileNotFoundError:
-                pass
-
-        title_tag = _title_tag_for(profile, label, persona_emoji=persona_emoji_override, kind=kind)
-        if title_tag:
-            script = _TITLE_TAG_SCRIPT.replace("__SUFFIX__", json.dumps(title_tag))
-            await context.add_init_script(script=script)
-        if badge:
-            badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji_override, kind=kind)
-            # Color seed is persona-stable: identical across engines so the
-            # same persona launched in chromium + firefox + webkit shares one
-            # color. Engine differentiation rests on the engine emoji.
-            color_seed = profile or label or instance_id[:6]
-            badge_script = (
-                _BADGE_SCRIPT.replace("__TAG__", json.dumps(badge_text))
-                .replace("__COLOR__", json.dumps(_badge_color_for(color_seed)))
-                .replace("__POS__", json.dumps(_BADGE_POSITIONS[badge_position]))
-            )
-            await context.add_init_script(script=badge_script)
-        if stabilize:
-            await context.add_init_script(script=render_stabilize_script())
-
-        if trace:
-            await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
         try:
+            recorder = Recorder(log_path)
+            recorder.record(
+                "launch",
+                instance_id=instance_id,
+                kind=kind,
+                label=label,
+                profile=profile,
+                user_data_dir=user_data_dir,
+                url=target_url,
+                headed=not headless,
+                viewport=log_viewport,
+                stabilize=stabilize,
+                record_video=record_video,
+                video_dir=str(video_dir) if video_dir else None,
+                trace=trace,
+                har=bool(har_path),
+                har_path=str(har_path) if har_path else None,
+                har_mode=har_mode if har_path else None,
+                har_url_filter=har_url_filter if har_path else None,
+                har_content=har_content if har_path else None,
+            )
+
+            # NOTE: this local was named ``session`` for years, but ``session`` is
+            # now the public name of the launch flag (session=True for tmpdir
+            # profiles). Renamed to ``new_session`` to avoid shadowing the bool.
+            new_session = BrowserSession(
+                instance_id=instance_id,
+                kind=kind,
+                label=label,
+                url=target_url,
+                browser=browser,
+                context=context,
+                page=page,
+                recorder=recorder,
+                log_path=log_path,
+                user_data_dir=Path(user_data_dir) if user_data_dir is not None else None,
+                profile=profile,
+                stabilize=stabilize,
+                trace=trace,
+                har_path=har_path,
+            )
+            # Wire up video tracking — page.video is only non-None when record_video_dir was set.
+            if record_video and page.video is not None:
+                new_session._video = page.video
+            new_session.attach_console()
+            # Order matters: the close-evictor and user-nav logger publish handler
+            # factories on the session so that subsequent _wire_listeners calls
+            # (for popup pages) pick them up automatically. Install them BEFORE
+            # the initial _wire_listeners call so the initial page also gets them.
+            _wire_close_evictor(self, new_session)
+            _wire_user_navigation_logger(new_session)
+            _wire_listeners(new_session, page)
+            context.on("page", new_session._register_popup)
+
+            # Look up the persona's emoji override (if any) so title + badge can
+            # show it. Ephemeral / unknown personas just hash-pick from the pool.
+            persona_emoji_override: str | None = None
+            if profile:
+                try:
+                    from .personas import load_persona
+
+                    persona_emoji_override = load_persona(profile).emoji
+                except FileNotFoundError:
+                    pass
+
+            title_tag = _title_tag_for(profile, label, persona_emoji=persona_emoji_override, kind=kind)
+            if title_tag:
+                script = _TITLE_TAG_SCRIPT.replace("__SUFFIX__", json.dumps(title_tag))
+                await context.add_init_script(script=script)
+            if badge:
+                badge_text = _badge_text_for(
+                    profile, label, instance_id, persona_emoji=persona_emoji_override, kind=kind
+                )
+                # Color seed is persona-stable: identical across engines so the
+                # same persona launched in chromium + firefox + webkit shares one
+                # color. Engine differentiation rests on the engine emoji.
+                color_seed = profile or label or instance_id[:6]
+                badge_script = (
+                    _BADGE_SCRIPT.replace("__TAG__", json.dumps(badge_text))
+                    .replace("__COLOR__", json.dumps(_badge_color_for(color_seed)))
+                    .replace("__POS__", json.dumps(_BADGE_POSITIONS[badge_position]))
+                )
+                await context.add_init_script(script=badge_script)
+            if stabilize:
+                await context.add_init_script(script=render_stabilize_script())
+
+            if trace:
+                await context.tracing.start(screenshots=True, snapshots=True, sources=True)
+
             await page.goto(target_url)
+
+            new_session._schedule_markdown_capture()
+
+            self._sessions[instance_id] = new_session
+            registered = True
+            log.info(
+                "octowright.browser.launched",
+                instance_id=instance_id,
+                kind=kind,
+                label=label,
+                profile=profile,
+                url=target_url,
+                headed=not headless,
+                log_path=str(log_path),
+            )
+            result: dict[str, Any] = {
+                "instance_id": instance_id,
+                "kind": kind,
+                "label": label,
+                "profile": profile,
+                "url": target_url,
+                "log_path": str(log_path),
+                "record_video": record_video,
+                "trace": trace,
+                "har": bool(har_path),
+            }
+            if video_dir is not None:
+                result["video_dir"] = str(video_dir)
+            if har_path is not None:
+                result["har_path"] = str(har_path)
+                result["har_mode"] = har_mode
+                if har_url_filter:
+                    result["har_url_filter"] = har_url_filter
+                if har_content:
+                    result["har_content"] = har_content
+            return result
         except Exception as exc:
+            if not registered:
+                if context is not None:
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
+                if browser is not None:
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                if recorder is not None:
+                    try:
+                        recorder.close()
+                    except Exception:
+                        pass
             wrapped = maybe_wrap_playwright_error(exc, kind=kind)
             if wrapped is exc:
                 raise
             raise wrapped from exc
-        new_session._schedule_markdown_capture()
-
-        self._sessions[instance_id] = new_session
-        log.info(
-            "octowright.browser.launched",
-            instance_id=instance_id,
-            kind=kind,
-            label=label,
-            profile=profile,
-            url=target_url,
-            headed=not headless,
-            log_path=str(log_path),
-        )
-        result: dict[str, Any] = {
-            "instance_id": instance_id,
-            "kind": kind,
-            "label": label,
-            "profile": profile,
-            "url": target_url,
-            "log_path": str(log_path),
-            "record_video": record_video,
-            "trace": trace,
-            "har": bool(har_path),
-        }
-        if video_dir is not None:
-            result["video_dir"] = str(video_dir)
-        if har_path is not None:
-            result["har_path"] = str(har_path)
-            result["har_mode"] = har_mode
-            if har_url_filter:
-                result["har_url_filter"] = har_url_filter
-            if har_content:
-                result["har_content"] = har_content
-        return result
 
     def get(self, instance_id: str) -> BrowserSession:
         if instance_id not in self._sessions:
