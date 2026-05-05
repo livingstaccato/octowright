@@ -25,6 +25,7 @@ from ..discovery import (
     _resolve_log_path,
     _tail_jsonl,
 )
+from ..exposure import guard_sensitive_http, sensitive_allowed_for_connection
 from ._common import _paginate, _parse_since
 
 
@@ -213,6 +214,9 @@ class TailEndpoint(WebSocketEndpoint):
     encoding = "json"
 
     async def on_connect(self, websocket: WebSocket) -> None:
+        if not sensitive_allowed_for_connection(websocket):
+            await websocket.close(code=1008, reason="remote dashboard access is disabled")
+            return
         await websocket.accept()
         sid = websocket.path_params["id"]
         live_session = _live_session_or_none(sid)
@@ -260,8 +264,8 @@ class TailEndpoint(WebSocketEndpoint):
 
 def routes() -> list[Route | WebSocketRoute]:
     return [
-        Route("/api/sessions/{id}/events", session_events, methods=["GET"]),
-        Route("/api/sessions/{id}/console", session_console, methods=["GET"]),
-        Route("/api/sessions/{id}/downloads", session_downloads, methods=["GET"]),
+        Route("/api/sessions/{id}/events", guard_sensitive_http(session_events), methods=["GET"]),
+        Route("/api/sessions/{id}/console", guard_sensitive_http(session_console), methods=["GET"]),
+        Route("/api/sessions/{id}/downloads", guard_sensitive_http(session_downloads), methods=["GET"]),
         WebSocketRoute("/api/sessions/{id}/tail", TailEndpoint),
     ]
