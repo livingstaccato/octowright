@@ -22,14 +22,27 @@ from .app import build_app
 
 
 def _port_is_free(host: str, port: int) -> bool:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s.bind((host, port))
-        return True
-    except OSError:
+        addrinfos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
         return False
-    finally:
-        s.close()
+
+    if not addrinfos:
+        return False
+
+    for family, socktype, proto, _canonname, sockaddr in addrinfos:
+        try:
+            s = socket.socket(family, socktype, proto)
+        except OSError:
+            continue
+        try:
+            s.bind(sockaddr)
+            return True
+        except OSError:
+            continue
+        finally:
+            s.close()
+    return False
 
 
 def _pick_port(host: str, preferred: int, retries: int) -> int | None:
