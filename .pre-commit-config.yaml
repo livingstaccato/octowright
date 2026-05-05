@@ -47,6 +47,14 @@ repos:
         always_run: true
         types: [python]
 
+      - id: max-loc
+        name: max loc (500 lines)
+        entry: uv run --active python scripts/check_max_loc.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [python]
+
       - id: pytest-quick
         name: pytest (unit tests, no live browsers)
         entry: uv run --active pytest -q --deselect tests/test_popup_listeners.py --deselect tests/test_scenarios_live.py tests/

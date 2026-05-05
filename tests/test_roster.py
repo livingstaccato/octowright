@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from octowright.pool import BrowserPool
+from octowright.browser_pool import BrowserPool
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -20,11 +20,11 @@ import pytest
 def isolated_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Yield a BrowserPool with profiles + recordings dirs redirected to tmp_path."""
     pytest.importorskip("playwright")
+    import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
     from octowright import personas as _personas
-    from octowright import pool as _pool
     from octowright import profiles as _profiles
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     rec = tmp_path / "rec"
     profiles = tmp_path / "profiles"

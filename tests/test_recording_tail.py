@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from octowright.recorder import tail_log
 from octowright.server.browser import inspect as _inspect
 
 
@@ -100,3 +101,34 @@ def test_since_offset_skips_earlier_events(stub_pool):
     assert result["events"] == [{"action": "type", "n": 2}]
     assert result["cursor"] == stub_pool.stat().st_size
     assert result["complete"] is True
+
+
+def test_tail_log_keeps_cursor_before_incomplete_utf8_line(tmp_path):
+    path = tmp_path / "rec.jsonl"
+    full_line = json.dumps({"action": "click"}, ensure_ascii=False).encode("utf-8") + b"\n"
+    partial_line = json.dumps({"action": "type", "text": "snow "}, ensure_ascii=False).encode("utf-8")[:-2]
+    partial_line += "☃".encode()[:2]
+    path.write_bytes(full_line + partial_line)
+
+    events, cursor, total_bytes = tail_log(path, 0)
+
+    assert events == [{"action": "click"}]
+    assert cursor == len(full_line)
+    assert total_bytes == path.stat().st_size
+
+
+def test_tail_log_replays_completed_multibyte_line_from_saved_cursor(tmp_path):
+    path = tmp_path / "rec.jsonl"
+    first = json.dumps({"action": "click"}, ensure_ascii=False).encode("utf-8") + b"\n"
+    second = json.dumps({"action": "type", "text": "snow ☃"}, ensure_ascii=False).encode("utf-8") + b"\n"
+    split_at = len(first) + len(second) - 2
+    path.write_bytes((first + second)[:split_at])
+
+    events, cursor, _ = tail_log(path, 0)
+    assert events == [{"action": "click"}]
+    assert cursor == len(first)
+
+    path.write_bytes(first + second)
+    events2, cursor2, _ = tail_log(path, cursor)
+    assert events2 == [{"action": "type", "text": "snow ☃"}]
+    assert cursor2 == path.stat().st_size

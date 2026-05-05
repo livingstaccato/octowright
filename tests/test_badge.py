@@ -173,7 +173,7 @@ def test_badge_position_values_have_two_axes() -> None:
 async def test_invalid_badge_position_raises(tmp_path) -> None:
     """Bad badge_position string must raise — caught early, not silently fall back."""
     pytest.importorskip("playwright")
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     pool = BrowserPool()
     try:
@@ -201,7 +201,7 @@ async def test_badge_actually_renders_in_real_browser(tmp_path) -> None:
     """Launch a headless browser via the pool, navigate to a data: URL, read DOM."""
     pytest.importorskip("playwright")
     from octowright import defaults as _defaults
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     # Isolate recordings so the test doesn't pollute the global recordings dir.
     monkey_recordings = tmp_path / "rec"
@@ -209,7 +209,7 @@ async def test_badge_actually_renders_in_real_browser(tmp_path) -> None:
     original = _defaults.RECORDINGS_DIR
     _defaults.RECORDINGS_DIR = monkey_recordings
     # Pool reads from module globals at launch time; patch both.
-    import octowright.pool as _pool
+    import octowright.browser_pool.pool as _pool
 
     original_pool = _pool.RECORDINGS_DIR
     _pool.RECORDINGS_DIR = monkey_recordings

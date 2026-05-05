@@ -32,8 +32,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from octowright import pool as pool_module
-from octowright.pool import BrowserPool
+import octowright.browser_pool.pool as pool_module
+from octowright.browser_pool import BrowserPool
 
 # ---------------------------------------------------------------------------
 # Stubs
@@ -137,7 +137,7 @@ class _FakeAsyncPlaywrightCM:
 
 
 def _install_playwright_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace octowright.pool.async_playwright with a minimal in-memory stub."""
+    """Replace browser_pool.pool.async_playwright with a minimal in-memory stub."""
 
     def _factory() -> _FakeAsyncPlaywrightCM:
         return _FakeAsyncPlaywrightCM()
