@@ -37,7 +37,7 @@ from ._common import _read_json_body
 
 async def list_sessions(_request: Request) -> JSONResponse:
     pool = _state.pool
-    live = [_live_summary(s) for s in pool._sessions.values()]
+    live = [_live_summary(s) for s in pool.iter_sessions()]
     live_paths = {s["log_path"] for s in live}
     closed = _closed_sessions(state.RECORDINGS_DIR, live_paths)
     return JSONResponse({"live": live, "closed": closed})
@@ -234,7 +234,7 @@ async def session_close(request: Request) -> JSONResponse:
     """
     sid = request.path_params["id"]
     pool = _state.pool
-    if sid not in pool._sessions:
+    if not pool.has_session(sid):
         return JSONResponse(
             {"error": f"no live session with id {sid!r}; closed sessions cannot be re-closed"},
             status_code=404,
@@ -275,12 +275,12 @@ async def session_navigate(request: Request) -> JSONResponse:
         return JSONResponse({"error": "url is required and must be a non-empty string"}, status_code=400)
 
     pool = _state.pool
-    if sid not in pool._sessions:
+    if not pool.has_session(sid):
         return JSONResponse(
             {"error": f"no live session with id {sid!r}"},
             status_code=404,
         )
-    session = pool._sessions[sid]
+    session = pool.get(sid)
     try:
         await session.navigate(url)
     except Exception as e:
@@ -294,7 +294,7 @@ async def recording_delete(request: Request) -> JSONResponse:
     """DELETE /api/sessions/{id}/recording — remove a closed session's files from disk."""
     sid = request.path_params["id"]
     pool = _state.pool
-    if sid in pool._sessions:
+    if pool.has_session(sid):
         return JSONResponse(
             {"error": f"session {sid!r} is still live; close it first"},
             status_code=409,
@@ -332,7 +332,7 @@ async def session_relaunch(request: Request) -> JSONResponse:
     """
     sid = request.path_params["id"]
     pool = _state.pool
-    if sid in pool._sessions:
+    if pool.has_session(sid):
         return JSONResponse(
             {"error": f"session {sid!r} is still live; relaunch only applies to closed sessions"},
             status_code=409,

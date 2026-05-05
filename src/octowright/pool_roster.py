@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 async def close_all(pool: BrowserPool) -> dict[str, Any]:
-    ids = list(pool._sessions.keys())
+    ids = [session.instance_id for session in pool.iter_sessions()]
     for iid in ids:
         await pool.close(iid)
     return {"closed": ids}

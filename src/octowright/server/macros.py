@@ -195,7 +195,7 @@ def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
     from ..defaults import PROFILES_DIR
 
     in_use_dirs: list[Any] = []
-    for session in pool._sessions.values():
+    for session in pool.iter_sessions():
         udd = getattr(session, "user_data_dir", None)
         if udd:
             from pathlib import Path as _Path
