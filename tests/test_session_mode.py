@@ -111,6 +111,27 @@ async def test_session_and_ephemeral_are_mutually_exclusive(isolated_pool) -> No
 
 
 @pytest.mark.asyncio
+async def test_session_mode_records_user_data_dir(
+    isolated_pool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pool, _ = isolated_pool
+    monkeypatch.setattr("tempfile.mkdtemp", lambda prefix: str(tmp_path / "session-dir"))
+
+    result = await pool.launch(
+        kind="chromium",
+        url="data:text/html,<title>session</title>",
+        headed=False,
+        label="work",
+        session=True,
+    )
+    session = pool.get(result["instance_id"])
+    try:
+        assert session.user_data_dir == tmp_path / "session-dir"
+    finally:
+        await pool.close_all()
+
+
+@pytest.mark.asyncio
 async def test_session_tmpdir_wiped_on_pool_shutdown(isolated_pool) -> None:
     """Daemon shutdown removes session tmpdirs."""
     pool, _ = isolated_pool
