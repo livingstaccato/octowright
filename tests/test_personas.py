@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -102,12 +103,13 @@ def test_resolve_env_missing_raises(tmp_path, fresh_personas, monkeypatch):
 
 
 def test_resolve_cmd_credential(tmp_path, fresh_personas):
+    command = f'"{sys.executable}" -c "print(\\"hunter2\\")"'
     _write_persona(
         tmp_path,
         "u",
         {
             "name": "u",
-            "credentials": {"token_cmd": "printf hunter2"},
+            "credentials": {"token_cmd": command},
         },
     )
     p = fresh_personas.load_persona("u")
@@ -122,12 +124,13 @@ def test_resolve_no_references_raises(tmp_path, fresh_personas):
 
 
 def test_resolve_cmd_nonzero_exit_raises(tmp_path, fresh_personas):
+    command = f'"{sys.executable}" -c "raise SystemExit(7)"'
     _write_persona(
         tmp_path,
         "u",
         {
             "name": "u",
-            "credentials": {"token_cmd": "false"},  # `false` always exits nonzero
+            "credentials": {"token_cmd": command},
         },
     )
     p = fresh_personas.load_persona("u")
