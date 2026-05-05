@@ -22,6 +22,7 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
+from .exposure import guard_sensitive_asgi_app
 from .frontend import _frontend_routes
 from .metrics import HttpMetricsMiddleware, metrics_enabled
 from .routes import all_routes
@@ -59,7 +60,7 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
         # endpoint at "/mcp" exactly (not "/mcp/mcp").
         _mcp.settings.streamable_http_path = "/"
         mcp_app = _mcp.streamable_http_app()
-        routes.append(Mount("/mcp", app=mcp_app))
+        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(mcp_app)))
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
         # Capture for get_mcp_active_session_count() — path verified against
