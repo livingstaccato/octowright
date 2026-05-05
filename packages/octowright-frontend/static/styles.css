@@ -276,11 +276,18 @@ code, .mono { font-family: var(--mono); }
   position: absolute;
   top: 6px;
   right: 6px;
-  display: none;
+  display: flex;
   gap: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
 }
 
-.persona-card:hover .persona-card__actions { display: flex; }
+.persona-card:hover .persona-card__actions,
+.persona-card:focus-within .persona-card__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 /* ── Icon buttons ──────────────────────────────────────── */
 
