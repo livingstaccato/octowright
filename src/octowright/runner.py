@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
@@ -42,12 +43,16 @@ async def run_suite(
     tag: str | None = None,
     out_path: str | None = None,
     pool: Any,
+    max_parallel: int = 1,
 ) -> dict[str, Any]:
     """Discover test macros, run each in an ephemeral browser, collect results, write JUnit XML.
 
     *macros_dir* is accepted for API completeness (future: filter to a subdir).
     Currently discovery always uses the global MACROS_DIR from macros.py.
     """
+    if max_parallel < 1:
+        raise ValueError("max_parallel must be >= 1")
+
     entries = macro_mod.list_macros()
     tests: list[dict[str, Any]] = []
     for entry in entries:
@@ -58,8 +63,7 @@ async def run_suite(
         if _is_test(full, tag):
             tests.append(full)
 
-    results: list[dict[str, Any]] = []
-    for t in tests:
+    async def _run_test(t: dict[str, Any]) -> dict[str, Any]:
         start = datetime.now(UTC)
         # Tests start on about:blank so they don't accidentally depend on the global
         # DEFAULT_URL (which points at the production site and is CSP-locked).
@@ -74,10 +78,10 @@ async def run_suite(
             profile=None,
         )
         iid = launch_result["instance_id"]
-        session = pool.get(iid)
         ok = True
         err: str | None = None
         try:
+            session = pool.get(iid)
             await macro_mod.run_macro(session=session, name=t["name"], args={})
         except Exception as e:
             ok = False
@@ -85,14 +89,20 @@ async def run_suite(
         finally:
             await pool.close(iid)
         duration = (datetime.now(UTC) - start).total_seconds()
-        results.append(
-            {
-                "name": t["name"],
-                "ok": ok,
-                "error": err,
-                "duration": duration,
-            }
-        )
+        return {
+            "name": t["name"],
+            "ok": ok,
+            "error": err,
+            "duration": duration,
+        }
+
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async def _run_bounded(t: dict[str, Any]) -> dict[str, Any]:
+        async with semaphore:
+            return await _run_test(t)
+
+    results = list(await asyncio.gather(*(_run_bounded(t) for t in tests)))
 
     passed = sum(1 for r in results if r["ok"])
     failed = len(results) - passed

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -299,3 +300,136 @@ class TestRunSuite:
         assert report_path.exists()
         tree = ET.parse(report_path)
         assert tree.getroot().tag == "testsuite"
+
+    @pytest.mark.asyncio
+    async def test_max_parallel_one_preserves_sequential_execution(
+        self,
+        fake_pool: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        macros_list = [{"name": "t1"}, {"name": "t2"}]
+
+        def _load(name: str) -> dict[str, Any]:
+            return {"name": name, "description": "[test] flow"}
+
+        active = 0
+        max_active = 0
+
+        async def _run_macro(*, session: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0)
+            active -= 1
+            return {"macro": name, "executed": 1, "skipped": 0, "args_used": args}
+
+        with (
+            patch("octowright.runner.macro_mod.list_macros", return_value=macros_list),
+            patch("octowright.runner.macro_mod.load_macro", side_effect=_load),
+            patch("octowright.runner.macro_mod.run_macro", side_effect=_run_macro),
+        ):
+            result = await run_suite(
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(tmp_path / "out.xml"),
+                pool=fake_pool,
+                max_parallel=1,
+            )
+
+        assert result["total"] == 2
+        assert result["passed"] == 2
+        assert max_active == 1
+        assert [r["name"] for r in result["results"]] == ["t1", "t2"]
+
+    @pytest.mark.asyncio
+    async def test_max_parallel_two_starts_multiple_tests_before_first_finishes(
+        self,
+        fake_pool: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        macros_list = [{"name": "t1"}, {"name": "t2"}, {"name": "t3"}]
+        launched_ids = iter(["i-1", "i-2", "i-3"])
+        fake_pool.launch.side_effect = lambda **_kwargs: {"instance_id": next(launched_ids)}
+        fake_pool.get.side_effect = lambda iid: MagicMock(instance_id=iid)
+        second_started = asyncio.Event()
+        started: list[str] = []
+
+        def _load(name: str) -> dict[str, Any]:
+            return {"name": name, "description": "[test] flow"}
+
+        async def _run_macro(*, session: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
+            started.append(name)
+            if name == "t1":
+                await second_started.wait()
+            if name == "t2":
+                second_started.set()
+            return {"macro": name, "executed": 1, "skipped": 0, "args_used": args}
+
+        with (
+            patch("octowright.runner.macro_mod.list_macros", return_value=macros_list),
+            patch("octowright.runner.macro_mod.load_macro", side_effect=_load),
+            patch("octowright.runner.macro_mod.run_macro", side_effect=_run_macro),
+        ):
+            result = await run_suite(
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(tmp_path / "out.xml"),
+                pool=fake_pool,
+                max_parallel=2,
+            )
+
+        assert result["passed"] == 3
+        assert started[:2] == ["t1", "t2"]
+        assert fake_pool.launch.await_count == 3
+        assert sorted(c.args[0] for c in fake_pool.close.await_args_list) == ["i-1", "i-2", "i-3"]
+
+    @pytest.mark.asyncio
+    async def test_closes_every_launched_browser_when_one_parallel_macro_fails(
+        self,
+        fake_pool: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        macros_list = [{"name": "ok"}, {"name": "bad"}]
+        launched_ids = iter(["i-ok", "i-bad"])
+        fake_pool.launch.side_effect = lambda **_kwargs: {"instance_id": next(launched_ids)}
+        fake_pool.get.side_effect = lambda iid: MagicMock(instance_id=iid)
+
+        def _load(name: str) -> dict[str, Any]:
+            return {"name": name, "description": "[test] flow"}
+
+        async def _run_macro(*, session: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
+            if name == "bad":
+                raise RuntimeError("boom")
+            return {"macro": name, "executed": 1, "skipped": 0, "args_used": args}
+
+        with (
+            patch("octowright.runner.macro_mod.list_macros", return_value=macros_list),
+            patch("octowright.runner.macro_mod.load_macro", side_effect=_load),
+            patch("octowright.runner.macro_mod.run_macro", side_effect=_run_macro),
+        ):
+            result = await run_suite(
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(tmp_path / "out.xml"),
+                pool=fake_pool,
+                max_parallel=2,
+            )
+
+        assert result["passed"] == 1
+        assert result["failed"] == 1
+        assert sorted(c.args[0] for c in fake_pool.close.await_args_list) == ["i-bad", "i-ok"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_max_parallel_less_than_one(self, fake_pool: MagicMock, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="max_parallel"):
+            await run_suite(
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(tmp_path / "out.xml"),
+                pool=fake_pool,
+                max_parallel=0,
+            )

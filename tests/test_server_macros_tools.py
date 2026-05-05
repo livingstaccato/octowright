@@ -71,8 +71,22 @@ async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.runner as runner_mod
 
     monkeypatch.setattr(runner_mod, "run_suite", AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1}))
-    out = await _macros.run_test_suite(macros_dir="/tmp/m", kind="firefox", tag="smoke", out_path="/tmp/j.xml")
+    out = await _macros.run_test_suite(
+        macros_dir="/tmp/m",
+        kind="firefox",
+        tag="smoke",
+        out_path="/tmp/j.xml",
+        max_parallel=3,
+    )
     assert out["total"] == 1
+    runner_mod.run_suite.assert_awaited_once_with(
+        macros_dir="/tmp/m",
+        kind="firefox",
+        tag="smoke",
+        out_path="/tmp/j.xml",
+        pool=_macros.pool,
+        max_parallel=3,
+    )
 
 
 def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
