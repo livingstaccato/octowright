@@ -26,6 +26,7 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any, cast
 
 from octowright.config_paths import user_config_dir
 
@@ -84,6 +85,8 @@ def pid_is_alive(pid: int) -> bool:
     """True if the OS still has a process with this PID."""
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _pid_is_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -93,6 +96,16 @@ def pid_is_alive(pid: int) -> bool:
         # the purposes of "should I take over the lock".
         return True
     return True
+
+
+def _pid_is_alive_windows(pid: int) -> bool:
+    kernel32 = cast(Any, __import__("ctypes")).windll.kernel32
+    process_query_limited_information = 0x1000
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if handle:
+        kernel32.CloseHandle(handle)
+        return True
+    return kernel32.GetLastError() == 5
 
 
 def is_stale(info: LeaderInfo) -> bool:
