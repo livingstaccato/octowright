@@ -6,7 +6,7 @@
 """Lockfile read/write/staleness tests for the singleton module.
 
 Every test funnels the lockfile path through ``tmp_path`` so the suite never
-touches ``~/.config/undef/octowright.lock``.
+touches ``~/.config/octowright/octowright.lock``.
 """
 
 from __future__ import annotations

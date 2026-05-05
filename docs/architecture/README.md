@@ -13,6 +13,10 @@ so GitHub renders the diagrams without needing PlantUML installed by readers.
 | Artifact flow | [`artifact-flow.puml`](artifact-flow.puml) | [`artifact-flow.svg`](artifact-flow.svg) |
 | MCP tool inventory | [`mcp-tool-surface.puml`](mcp-tool-surface.puml) | [`mcp-tool-surface.svg`](mcp-tool-surface.svg) |
 
+## API contract
+
+[MCP-SHARED-CONTRACT.md](MCP-SHARED-CONTRACT.md) — HTTP/WebSocket wire contract between the Python Starlette server and the TypeScript frontend SPA.
+
 ## Regenerating
 
 ```bash

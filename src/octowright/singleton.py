@@ -8,7 +8,7 @@
 Each MCP client (Claude Code, Cursor, etc.) spawns its own ``octowright serve``
 stdio process. Rather than each one running its own browser pool, the first
 instance becomes the **leader**: it writes a lockfile at
-``~/.config/undef/octowright.lock`` describing its PID and HTTP-MCP endpoint,
+``~/.config/octowright/octowright.lock`` describing its PID and HTTP-MCP endpoint,
 and serves both stdio MCP and HTTP MCP. Subsequent instances become
 **followers**: they read the lockfile and bridge stdin/stdout to the leader's
 HTTP MCP endpoint instead of spawning their own pool.
@@ -29,7 +29,9 @@ from pathlib import Path
 
 # Lockfile location. Override via OCTOWRIGHT_LOCK_PATH for hermetic tests
 # (lets a test spawn a real daemon without touching the user's actual lockfile).
-LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(Path.home() / ".config" / "undef" / "octowright.lock")))
+LOCK_PATH = Path(
+    os.environ.get("OCTOWRIGHT_LOCK_PATH", str(Path.home() / ".config" / "octowright" / "octowright.lock"))
+)
 
 
 @dataclass

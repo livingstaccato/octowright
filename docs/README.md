@@ -1,25 +1,27 @@
 # Octowright Docs
 
-This is the canonical documentation set for pre-release users and contributors.
+Reference documentation for Octowright users and contributors. For a quick introduction
+see the [top-level README](../README.md); come here for deep-dives on specific features.
 
 ## Start Here
 
-- [getting-started.md](getting-started.md): install, register with Claude, first successful run.
-- [engines.md](engines.md): browser engine install/status/reinstall and launch-mode behavior.
+- [getting-started.md](getting-started.md) — install, register with Claude, first successful run
+- [engines.md](engines.md) — browser engine install, status, reinstall, and launch-mode behavior
 
-## Core Workflows
+## Core Features
 
-- [personas.md](personas.md): identity model and persona/profile lifecycle.
-- [macros.md](macros.md): record/replay, linting, and conditional actions.
-- [scenarios.md](scenarios.md): coordinated multi-browser orchestration.
-- [goldens.md](goldens.md): accessibility-tree baseline capture and verification policy.
+- [personas.md](personas.md) — named identity model, profile layout, `profile.yaml` spec, credential pre-flight
+- [macros.md](macros.md) — record/replay, parameterization, conditional actions, linting, test runner
+- [scenarios.md](scenarios.md) — YAML spec, participant roles, fixtures, lifecycle, JUnit output
+- [goldens.md](goldens.md) — accessibility-tree baseline capture, verify policy, CI vs local rules
 
-## Operations
+## Operations & Quality
 
-- [ci-quality.md](ci-quality.md): local quality gates and CI/`act` parity commands.
-- [troubleshooting.md](troubleshooting.md): common failure modes and fast diagnosis.
+- [ci-quality.md](ci-quality.md) — local quality gates (`make ci`), coverage floor, `act` subset parity
+- [troubleshooting.md](troubleshooting.md) — common failure modes and fast diagnosis
 
-## Architecture and Assets
+## Architecture & Internals
 
-- [architecture/](architecture/): component and lifecycle diagrams.
-- [images/README.md](images/README.md): canonical image asset workflow.
+- [architecture/](architecture/) — PlantUML component and lifecycle diagrams
+- [architecture/MCP-SHARED-CONTRACT.md](architecture/MCP-SHARED-CONTRACT.md) — HTTP/WebSocket wire contract between Python server and TypeScript frontend
+- [images/README.md](images/README.md) — branding/image asset workflow and regeneration
