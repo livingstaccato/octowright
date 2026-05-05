@@ -45,7 +45,7 @@ jobs:
     name: 🎨 Lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/bootstrap-uv
       - name: Ruff check
         run: uv run --active ruff check .
@@ -77,12 +77,12 @@ jobs:
           target_os = os.environ.get("TARGET_OS") or "all"
           target_arch = os.environ.get("TARGET_ARCH") or "all"
           targets = [
-              {"os": "linux", "arch": "amd64", "runner": "ubuntu-24.04", "python": "python3"},
-              {"os": "linux", "arch": "arm64", "runner": "ubuntu-24.04-arm", "python": "python3"},
-              {"os": "macos", "arch": "amd64", "runner": "macos-15-intel", "python": "python3"},
-              {"os": "macos", "arch": "arm64", "runner": "macos-15", "python": "python3"},
-              {"os": "windows", "arch": "amd64", "runner": "windows-2025", "python": "python"},
-              {"os": "windows", "arch": "arm64", "runner": "windows-11-arm", "python": "python"},
+              {"os": "linux", "arch": "amd64", "runner": "ubuntu-24.04"},
+              {"os": "linux", "arch": "arm64", "runner": "ubuntu-24.04-arm"},
+              {"os": "macos", "arch": "amd64", "runner": "macos-15-intel"},
+              {"os": "macos", "arch": "arm64", "runner": "macos-15"},
+              {"os": "windows", "arch": "amd64", "runner": "windows-2025"},
+              {"os": "windows", "arch": "arm64", "runner": "windows-11-arm"},
           ]
           include = [
               target
@@ -99,10 +99,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-test-matrix.outputs.matrix) }}
-    env:
-      UV_PYTHON: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/bootstrap-uv
       - name: Install Playwright browsers (act)
         if: ${{ env.ACT == 'true' }}
@@ -152,9 +150,9 @@ jobs:
     name: 🔧 Selftest — quick smoke
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/bootstrap-uv
         with:
-          sync-args: "--python python3"
+          sync-args: "--python python"
       - name: Selftest
         run: uv run --active octowright selftest

@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, Response
@@ -19,6 +20,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..defaults import DASHBOARD_REMOTE_ALLOWED_ENV
 
+ResponseT = TypeVar("ResponseT", bound=Response)
 _DEFAULT_HTTP_HOST = "127.0.0.1"
 _REMOTE_DISABLED_BODY = {
     "error": "remote dashboard access is disabled",
@@ -61,7 +63,7 @@ def sensitive_allowed_for_connection(connection: HTTPConnection) -> bool:
     return _sensitive_allowed_for_app(connection.app)
 
 
-def guard_sensitive_http[ResponseT: Response](
+def guard_sensitive_http(
     handler: Callable[[Request], Awaitable[ResponseT]],
 ) -> Callable[[Request], Awaitable[Response]]:
     @functools.wraps(handler)
