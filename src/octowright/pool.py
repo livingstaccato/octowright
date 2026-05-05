@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Iterable
@@ -57,6 +58,7 @@ class BrowserPool:
 
     def __init__(self) -> None:
         self._pw: Playwright | None = None
+        self._pw_lock = asyncio.Lock()
         self._sessions: dict[str, BrowserSession] = {}
         # Monotonic counter for window-tile slot assignment. Reading
         # len(_sessions) at launch time would race when N launches run in
@@ -69,8 +71,9 @@ class BrowserPool:
         self._session_profile_dirs: dict[tuple[str, str], Path] = {}
 
     async def _ensure_pw(self) -> Playwright:
-        if self._pw is None:
-            self._pw = await async_playwright().start()
+        async with self._pw_lock:
+            if self._pw is None:
+                self._pw = await async_playwright().start()
         return self._pw
 
     async def launch(
