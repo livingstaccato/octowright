@@ -7,8 +7,12 @@ import {
   getDownloads,
   getEvents,
   getHealth,
+  getMacro,
   getMacros,
   getMacroRepairPreview,
+  validateMacro,
+  updateMacro,
+  validateSessionSelector,
   getPersonas,
   getScenarios,
   getScreenshots,
@@ -116,6 +120,34 @@ describe("typed wrappers", () => {
     const calls = installFetch({ macro: "login/test", suggestions: [] });
     await getMacroRepairPreview("login/test");
     expect(calls[0]?.url).toBe("/api/macros/login%2Ftest/repair_preview");
+  });
+  it("getMacro encodes slash names", async () => {
+    const calls = installFetch({ name: "login/test" });
+    await getMacro("login/test");
+    expect(calls[0]?.url).toBe("/api/macros/login%2Ftest");
+  });
+  it("validateMacro posts JSON body", async () => {
+    const calls = installFetch({ ok: true, valid: true, issues: [] });
+    const macro = { name: "login", actions: [] };
+    await validateMacro("login", macro);
+    expect(calls[0]?.url).toBe("/api/macros/login/validate");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(calls[0]?.init?.body).toBe(JSON.stringify({ macro }));
+  });
+  it("updateMacro puts payload", async () => {
+    const calls = installFetch({ ok: true, name: "login" });
+    const macro = { name: "login", actions: [] };
+    await updateMacro("login", macro);
+    expect(calls[0]?.url).toBe("/api/macros/login");
+    expect(calls[0]?.init?.method).toBe("PUT");
+    expect(calls[0]?.init?.body).toBe(JSON.stringify({ macro }));
+  });
+  it("validateSessionSelector encodes session id", async () => {
+    const calls = installFetch({ ok: true, present: true, selector: "#x", session_id: "s/1" });
+    await validateSessionSelector("s/1", "#x");
+    expect(calls[0]?.url).toBe("/api/sessions/s%2F1/selector/validate");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(calls[0]?.init?.body).toBe(JSON.stringify({ selector: "#x" }));
   });
   it("getScreenshots", async () => {
     const calls = installFetch({ screenshots: [] });

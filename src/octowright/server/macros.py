@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import macros as macro_mod
-from ..http.dashboard_events import publish_dashboard_invalidation_nowait
-from ._state import mcp, pool
+import octowright.macros as macro_mod
+from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.server._state import mcp, pool
 
 
 @mcp.tool(
@@ -107,7 +107,7 @@ async def macro_run_sequence(
     ),
 )
 def macro_lint(name: str) -> dict[str, Any]:
-    from .. import macro_lint as _lint
+    from octowright.macros import lint as _lint
 
     macro = macro_mod.load_macro(name)  # raises FileNotFoundError if missing
     issues = _lint.lint_macro(macro)
@@ -139,6 +139,31 @@ def macro_repair_preview(name: str) -> dict[str, Any]:
 @mcp.tool(
     structured_output=False,
     description=(
+        "Compile a friendly YAML macro DSL document into canonical macro JSON. "
+        "By default this is a dry-run preview. Pass write=True to save the compiled "
+        "macro to the normal macro JSON location. The runtime still uses JSON macros."
+    ),
+)
+def macro_compile(
+    yaml_text: str,
+    name: str | None = None,
+    write: bool = False,
+    strict: bool = True,
+) -> dict[str, Any]:
+    from octowright.macros import dsl as macro_dsl
+
+    compiled = macro_dsl.compile_macro_yaml(yaml_text, name=name, strict=strict)
+    result: dict[str, Any] = {"compiled": compiled, "written": False}
+    if write:
+        path = macro_mod.write_macro(name=compiled["name"], macro=compiled)
+        publish_dashboard_invalidation_nowait("macros")
+        result.update({"written": True, "path": str(path)})
+    return result
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Run all test macros in a directory, producing a JUnit XML report. A macro is "
         "considered a test if its description starts with [test]. Spawns one ephemeral "
         "browser per test (kind defaults to 'webkit') and runs up to max_parallel tests "
@@ -153,7 +178,7 @@ async def run_test_suite(
     out_path: str | None = None,
     max_parallel: int = 1,
 ) -> dict[str, Any]:
-    from .. import runner
+    import octowright.runner as runner
 
     return await runner.run_suite(
         macros_dir=macros_dir,
@@ -175,8 +200,8 @@ async def run_test_suite(
     ),
 )
 def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
-    from .. import recording_cleanup as _rc
-    from ..defaults import RECORDINGS_DIR
+    import octowright.recording_cleanup as _rc
+    from octowright.defaults import RECORDINGS_DIR
 
     stale = _rc.find_stale_files(RECORDINGS_DIR, days)
     summary = _rc.cleanup_stale(stale, dry_run=dry_run)
@@ -209,8 +234,8 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, An
     ),
 )
 def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
-    from .. import profile_cleanup as _pc
-    from ..defaults import PROFILES_DIR
+    import octowright.profile_cleanup as _pc
+    from octowright.defaults import PROFILES_DIR
 
     in_use_dirs: list[Any] = []
     for session in pool.iter_sessions():

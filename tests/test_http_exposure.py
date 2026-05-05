@@ -49,8 +49,15 @@ SENSITIVE_HTTP_ROUTES = [
     ("GET", "/api/personas/alice"),
     ("PUT", "/api/personas/alice"),
     ("GET", "/api/macros"),
+    ("GET", "/api/macros/login"),
+    ("PUT", "/api/macros/login"),
+    ("POST", "/api/macros/login/validate"),
     ("GET", "/api/macros/login/repair_preview"),
     ("GET", "/api/macros/login%2Ftest/repair_preview"),
+    ("GET", "/api/macros/login%2Ftest"),
+    ("PUT", "/api/macros/login%2Ftest"),
+    ("POST", "/api/macros/login%2Ftest/validate"),
+    ("POST", "/api/sessions/s1/selector/validate"),
 ]
 
 SENSITIVE_ROUTE_PATTERNS = {
@@ -82,7 +89,11 @@ SENSITIVE_ROUTE_PATTERNS = {
     ("GET", "/api/personas/{name}"),
     ("PUT", "/api/personas/{name}"),
     ("GET", "/api/macros"),
+    ("GET", "/api/macros/{name:path}"),
+    ("PUT", "/api/macros/{name:path}"),
+    ("POST", "/api/macros/{name:path}/validate"),
     ("GET", "/api/macros/{name:path}/repair_preview"),
+    ("POST", "/api/sessions/{id}/selector/validate"),
 }
 
 SENSITIVE_WEBSOCKET_ROUTE_PATTERNS = {

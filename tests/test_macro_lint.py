@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from octowright.macro_lint import Issue, lint_macro
+from octowright.macros.lint import Issue, lint_macro
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -129,6 +129,33 @@ def test_unknown_action_is_warning() -> None:
     issues = lint_macro(_macro([{"action": "do_the_thing", "foo": "bar"}]))
     assert _codes(issues) == ["unknown_action"]
     assert issues[0].severity == "warning"
+
+
+def test_macro_call_is_valid() -> None:
+    action = {"action": "macro_call", "name": "other", "args": {"email": "alice"}}
+    issues = lint_macro(_macro([action]))
+    assert issues == []
+
+
+def test_macro_call_requires_name() -> None:
+    action = {"action": "macro_call", "args": {"x": "1"}}
+    issues = lint_macro(_macro([action]))
+    assert _codes(issues) == ["macro_call_invalid_name"]
+    assert issues[0].severity == "error"
+
+
+def test_macro_call_name_must_be_string() -> None:
+    action = {"action": "macro_call", "name": 123}
+    issues = lint_macro(_macro([action]))
+    assert _codes(issues) == ["macro_call_invalid_name"]
+    assert issues[0].severity == "error"
+
+
+def test_macro_call_args_must_be_dict() -> None:
+    action = {"action": "macro_call", "name": "other", "args": []}
+    issues = lint_macro(_macro([action]))
+    assert _codes(issues) == ["macro_call_invalid_args"]
+    assert issues[0].severity == "error"
 
 
 def test_lifecycle_launch_is_warning() -> None:

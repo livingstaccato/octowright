@@ -4,11 +4,12 @@ inputs:
   sync-args:
     description: "Arguments passed to `uv sync`"
     required: false
-    default: "--all-groups --python \"$(command -v python3)\""
+    default: "--all-groups --python \"${UV_PYTHON:-python3}\""
 runs:
   using: "composite"
   steps:
     - name: Ensure node on PATH for post-actions (act only)
+      if: ${{ env.ACT == 'true' }}
       shell: bash
       run: |
         set -x
