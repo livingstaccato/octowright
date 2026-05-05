@@ -73,6 +73,7 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
 
     routes.extend(_frontend_routes())
     app = Starlette(routes=routes, lifespan=lifespan)
+    app.state.octowright_http_host = "127.0.0.1"
     if metrics_enabled():
         app.add_middleware(HttpMetricsMiddleware)
     return app

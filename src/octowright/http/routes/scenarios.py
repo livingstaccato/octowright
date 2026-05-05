@@ -13,6 +13,7 @@ from starlette.routing import Route
 
 from ...server import _state
 from .. import state
+from ..exposure import guard_sensitive_http
 from ._common import _read_json_body
 
 
@@ -138,8 +139,8 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
 
 def routes() -> list[Route]:
     return [
-        Route("/api/scenarios", list_scenarios, methods=["GET"]),
-        Route("/api/scenarios/{name}/start", scenario_start_endpoint, methods=["POST"]),
-        Route("/api/scenarios/{id}", scenario_stop_endpoint, methods=["DELETE"]),
-        Route("/api/scenarios/{id}/run_macro", scenario_run_macro_endpoint, methods=["POST"]),
+        Route("/api/scenarios", guard_sensitive_http(list_scenarios), methods=["GET"]),
+        Route("/api/scenarios/{name}/start", guard_sensitive_http(scenario_start_endpoint), methods=["POST"]),
+        Route("/api/scenarios/{id}", guard_sensitive_http(scenario_stop_endpoint), methods=["DELETE"]),
+        Route("/api/scenarios/{id}/run_macro", guard_sensitive_http(scenario_run_macro_endpoint), methods=["POST"]),
     ]

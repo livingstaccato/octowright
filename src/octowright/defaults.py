@@ -59,6 +59,8 @@ HTTP_HOST = os.environ.get("OCTOWRIGHT_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("OCTOWRIGHT_HTTP_PORT", "8765"))
 # When the configured port is in use, try this many higher ports before giving up.
 HTTP_PORT_RETRIES = 5
+DASHBOARD_REMOTE_ALLOWED = os.environ.get("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD") == "1"
+NETWORK_EVENT_LIMIT = int(os.environ.get("OCTOWRIGHT_NETWORK_EVENT_LIMIT", "5000"))
 
 # Idle-watchdog: once the pool sits empty for this many seconds, `octowright
 # serve` exits on its own. Override with --idle-grace or --keep-alive to disable.

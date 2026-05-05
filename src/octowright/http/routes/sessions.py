@@ -32,6 +32,7 @@ from ..discovery import (
     _scan_recording_artefacts,
     _summarise_recording,
 )
+from ..exposure import guard_sensitive_http
 from ._common import _read_json_body
 
 
@@ -381,11 +382,11 @@ async def session_relaunch(request: Request) -> JSONResponse:
 
 def routes() -> list[Route]:
     return [
-        Route("/api/sessions", list_sessions, methods=["GET"]),
-        Route("/api/sessions", session_launch, methods=["POST"]),
-        Route("/api/sessions/{id}", session_detail, methods=["GET"]),
-        Route("/api/sessions/{id}/recording", recording_delete, methods=["DELETE"]),
-        Route("/api/sessions/{id}/relaunch", session_relaunch, methods=["POST"]),
-        Route("/api/sessions/{id}", session_close, methods=["DELETE"]),
-        Route("/api/sessions/{id}/navigate", session_navigate, methods=["POST"]),
+        Route("/api/sessions", guard_sensitive_http(list_sessions), methods=["GET"]),
+        Route("/api/sessions", guard_sensitive_http(session_launch), methods=["POST"]),
+        Route("/api/sessions/{id}", guard_sensitive_http(session_detail), methods=["GET"]),
+        Route("/api/sessions/{id}/recording", guard_sensitive_http(recording_delete), methods=["DELETE"]),
+        Route("/api/sessions/{id}/relaunch", guard_sensitive_http(session_relaunch), methods=["POST"]),
+        Route("/api/sessions/{id}", guard_sensitive_http(session_close), methods=["DELETE"]),
+        Route("/api/sessions/{id}/navigate", guard_sensitive_http(session_navigate), methods=["POST"]),
     ]
