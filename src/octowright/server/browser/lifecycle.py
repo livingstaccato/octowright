@@ -55,8 +55,28 @@ from .._state import mcp, pool
     ),
 )
 async def browser_launch(
-    **options: Any,
+    kind: str = "chromium",
+    url: str | None = None,
+    headed: bool | None = None,
+    label: str | None = None,
+    profile: str | None = None,
+    viewport_w: int | None = None,
+    viewport_h: int | None = None,
+    stabilize: bool = False,
+    record_video: bool = False,
+    trace: bool = False,
+    har: bool = False,
+    har_path: str | None = None,
+    har_mode: str = "minimal",
+    har_url_filter: str | None = None,
+    har_content: str | None = None,
+    badge: bool = True,
+    badge_position: str = "bottom-right",
+    tile: bool = False,
+    ephemeral: bool = False,
+    session: bool = False,
 ) -> dict[str, Any]:
+    options = {k: v for k, v in locals().items() if k != "options"}
     return await pool.launch(**options)
 
 
@@ -98,18 +118,34 @@ def browser_suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]
     ),
 )
 async def browser_quick_launch(
-    **options: Any,
+    url: str,
+    kind: str = "chromium",
+    headed: bool | None = None,
+    label: str | None = None,
+    profile: str | None = None,
+    viewport_w: int | None = None,
+    viewport_h: int | None = None,
+    stabilize: bool = False,
+    record_video: bool = False,
+    trace: bool = False,
+    har: bool = False,
+    har_path: str | None = None,
+    har_mode: str = "minimal",
+    har_url_filter: str | None = None,
+    har_content: str | None = None,
+    badge: bool = True,
+    badge_position: str = "bottom-right",
+    tile: bool = False,
+    ephemeral: bool = False,
+    session: bool = False,
 ) -> dict[str, Any]:
-    url = options.get("url")
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
-    launch_options: dict[str, Any] = dict(options)
-    launch_options.pop("url", None)
-    profile = launch_options.pop("profile", None)
-    kind = launch_options.get("kind", "chromium")
+
+    launch_options = {k: v for k, v in locals().items() if k not in ("url", "profile", "kind", "options")}
 
     if profile:
-        res = await pool.launch(url=url, profile=profile, **launch_options)
+        res = await pool.launch(url=url, profile=profile, kind=kind, **launch_options)
         return {**res, "profile_used": profile}
 
     # Internal suggest
@@ -130,6 +166,7 @@ async def browser_quick_launch(
     res = await pool.launch(
         url=url,
         profile=profile_to_use,
+        kind=kind,
         **launch_options,
     )
     return {**res, "profile_used": profile_to_use}
