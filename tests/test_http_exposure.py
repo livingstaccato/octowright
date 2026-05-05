@@ -50,6 +50,7 @@ SENSITIVE_HTTP_ROUTES = [
     ("PUT", "/api/personas/alice"),
     ("GET", "/api/macros"),
     ("GET", "/api/macros/login/repair_preview"),
+    ("GET", "/api/macros/login%2Ftest/repair_preview"),
 ]
 
 SENSITIVE_ROUTE_PATTERNS = {
@@ -81,7 +82,7 @@ SENSITIVE_ROUTE_PATTERNS = {
     ("GET", "/api/personas/{name}"),
     ("PUT", "/api/personas/{name}"),
     ("GET", "/api/macros"),
-    ("GET", "/api/macros/{name}/repair_preview"),
+    ("GET", "/api/macros/{name:path}/repair_preview"),
 }
 
 SENSITIVE_WEBSOCKET_ROUTE_PATTERNS = {
