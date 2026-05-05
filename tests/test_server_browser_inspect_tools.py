@@ -112,7 +112,7 @@ async def test_wait_recording_capture_export_and_expects(
     assert waited["ok"] is True
     assert rec_path["path"].endswith("rec.jsonl")
     assert cap["closed"] is True
-    assert exported["path"] == "/tmp/out.py"
+    assert exported["path"] == str(Path("/tmp/out.py"))
     assert url_ok["ok"] and text_ok["ok"] and sel_ok["ok"] and js_ok["ok"]
     assert tail["complete"] is True and tail["cursor"] == 10
 
