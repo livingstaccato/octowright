@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionListResponse, SessionSummary } from "./types.js";
 
 const emptySessions = { live: [], closed: [] };
 const emptyScenarios = { live: [] };
@@ -47,8 +48,31 @@ function resetApiMocks(): void {
 }
 
 async function flushPromises(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 5; i++) {
+    await Promise.resolve();
+  }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+function sessionsWith(id: string): SessionListResponse {
+  const row: SessionSummary = {
+    id,
+    kind: "chromium",
+    label: id,
+    profile: null,
+    url: "https://example.test",
+    started_at: "2026-05-05T00:00:00Z",
+    live: true,
+    log_path: `${id}.jsonl`,
+  };
+  return { live: [row], closed: [] };
 }
 
 describe("bootDashboard dashboard invalidation stream", () => {
@@ -63,6 +87,7 @@ describe("bootDashboard dashboard invalidation stream", () => {
   });
 
   afterEach(() => {
+    dashboard.disposeDashboard();
     root.remove();
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -111,5 +136,54 @@ describe("bootDashboard dashboard invalidation stream", () => {
 
     expect(source?.close).toHaveBeenCalledTimes(1);
     expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns a disposer that closes the stream and clears polling", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    const dispose = await dashboard.bootDashboard(root);
+    expect(typeof dispose).toBe("function");
+    expect(vi.getTimerCount()).toBe(1);
+
+    dispose();
+
+    expect(FakeEventSource.instances[0]?.close).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rebooting closes the previous stream and replaces the poll interval", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    await dashboard.bootDashboard(root);
+    const first = FakeEventSource.instances[0];
+    await dashboard.bootDashboard(root);
+
+    expect(first?.close).toHaveBeenCalledTimes(1);
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it("suppresses stale refresh renders when an older request resolves last", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const slow = deferred<SessionListResponse>();
+    const fast = deferred<SessionListResponse>();
+    apiMocks.getSessions
+      .mockResolvedValueOnce(emptySessions)
+      .mockImplementationOnce(() => slow.promise)
+      .mockImplementationOnce(() => fast.promise);
+
+    await dashboard.bootDashboard(root);
+    const source = FakeEventSource.instances[0];
+
+    source?.listeners.invalidate?.[0]?.(new MessageEvent("invalidate"));
+    source?.listeners.invalidate?.[0]?.(new MessageEvent("invalidate"));
+    fast.resolve(sessionsWith("newer"));
+    await flushPromises();
+    expect(root.textContent).toContain("newer");
+
+    slow.resolve(sessionsWith("older"));
+    await flushPromises();
+    expect(root.textContent).toContain("newer");
+    expect(root.textContent).not.toContain("older");
   });
 });
