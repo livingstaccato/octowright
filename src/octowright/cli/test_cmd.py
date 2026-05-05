@@ -24,7 +24,10 @@ from ._root import cli
 @click.option("--kind", default="webkit", help="Browser engine to use for tests.")
 @click.option("--tag", default=None, help="Only run macros tagged with [tag].")
 @click.option("--out", "out_path", default=None, help="JUnit XML output path.")
-def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | None) -> None:
+@click.option(
+    "--max-parallel", default=1, type=click.IntRange(min=1), show_default=True, help="Maximum tests to run at once."
+)
+def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | None, max_parallel: int) -> None:
     """Run all test macros in a directory. Outputs JUnit XML."""
     import asyncio
 
@@ -45,6 +48,7 @@ def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | Non
                 tag=tag,
                 out_path=out_path,
                 pool=pool,
+                max_parallel=max_parallel,
             )
         finally:
             await pool.shutdown()
