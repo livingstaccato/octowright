@@ -204,6 +204,8 @@ code, .mono { font-family: var(--mono); }
 }
 
 .data-table tr:hover .row-action { opacity: 1; }
+.macro-list__item:hover .row-action,
+.macro-list__item:focus-within .row-action { opacity: 1; }
 
 /* ── Status indicators ─────────────────────────────────── */
 
