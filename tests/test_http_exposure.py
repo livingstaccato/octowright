@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -80,6 +80,10 @@ SENSITIVE_ROUTE_PATTERNS = {
     ("GET", "/api/macros"),
 }
 
+SENSITIVE_WEBSOCKET_ROUTE_PATTERNS = {
+    ("WEBSOCKET", "/api/sessions/{id}/tail"),
+}
+
 PUBLIC_API_ROUTE_PATTERNS = {
     ("GET", "/api/health"),
     ("GET", "/api/metrics"),
@@ -129,9 +133,12 @@ def test_api_routes_are_explicitly_guarded_or_public(monkeypatch: pytest.MonkeyP
     api_routes: set[tuple[str, str]] = set()
     guarded: set[tuple[str, str]] = set()
     for route in app.routes:
-        if not isinstance(route, Route):
+        if not isinstance(route, Route | WebSocketRoute):
             continue
         if not route.path.startswith("/api/"):
+            continue
+        if isinstance(route, WebSocketRoute):
+            api_routes.add(("WEBSOCKET", route.path))
             continue
         endpoint = route.endpoint
         for method in route.methods or ():
@@ -141,7 +148,7 @@ def test_api_routes_are_explicitly_guarded_or_public(monkeypatch: pytest.MonkeyP
                 if hasattr(endpoint, "__wrapped__"):
                     guarded.add(route_key)
 
-    assert api_routes == SENSITIVE_ROUTE_PATTERNS | PUBLIC_API_ROUTE_PATTERNS
+    assert api_routes == SENSITIVE_ROUTE_PATTERNS | SENSITIVE_WEBSOCKET_ROUTE_PATTERNS | PUBLIC_API_ROUTE_PATTERNS
     assert guarded == SENSITIVE_ROUTE_PATTERNS
 
 
