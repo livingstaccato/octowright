@@ -996,8 +996,7 @@ def test_console_since_cursor(
 
 
 def test_console_closed_session_returns_empty(client: TestClient, isolated_recordings: Path) -> None:
-    """attach_console doesn't persist console events to JSONL today, so the
-    closed-session view is currently always empty. Endpoint must still 200."""
+    """Closed-session console view is empty when the recording has no console rows."""
     _write_recording(isolated_recordings, "consclosed01x")
     r = client.get("/api/sessions/consclosed01x/console")
     assert r.status_code == 200
@@ -1006,12 +1005,11 @@ def test_console_closed_session_returns_empty(client: TestClient, isolated_recor
 
 
 def test_console_closed_session_reads_persisted_rows(client: TestClient, isolated_recordings: Path) -> None:
-    """Forward-compat: if console events ARE persisted as action='console', the
-    endpoint reconstructs them with the same {level, text, page_index} shape."""
+    """Closed-session console view reconstructs persisted action='console' rows."""
     name = "20260101T000000Z-chromium-conspersist01"
     rows = [
         {"action": "launch", "kind": "chromium"},
-        {"action": "console", "level": "warn", "text": "deprecated API", "page_index": None},
+        {"action": "console", "level": "warn", "text": "deprecated API"},
         {"action": "console", "level": "error", "text": "oops", "page_index": 1},
     ]
     (isolated_recordings / f"{name}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -1019,8 +1017,12 @@ def test_console_closed_session_reads_persisted_rows(client: TestClient, isolate
     assert r.status_code == 200
     body = r.json()
     assert body["total"] == 2
-    assert body["messages"][0] == {"level": "warn", "text": "deprecated API", "page_index": None}
+    assert body["messages"][0] == {"level": "warn", "text": "deprecated API"}
     assert body["messages"][1] == {"level": "error", "text": "oops", "page_index": 1}
+
+    filtered = client.get("/api/sessions/conspersist01/console?level=error").json()
+    assert filtered["total"] == 1
+    assert filtered["messages"] == [{"level": "error", "text": "oops", "page_index": 1}]
 
 
 # ---------------------------------------------------------------------------
