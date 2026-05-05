@@ -298,6 +298,12 @@ export async function loadState(): Promise<DashboardState> {
 // ─── render ───────────────────────────────────────────────────────────────────
 
 export function renderDashboard(root: HTMLElement, state: DashboardState): void {
+  const openPanels = new Map(
+    Array.from(root.querySelectorAll<HTMLDetailsElement>("details[data-testid]")).map((el) => [
+      el.dataset.testid ?? "",
+      el.open,
+    ]),
+  );
   root.innerHTML = "";
   root.append(
     section("Live browsers", "live-browsers", renderSessionTable(state.sessions.live, true)),
@@ -313,7 +319,10 @@ export function renderDashboard(root: HTMLElement, state: DashboardState): void 
       "closed-sessions",
       renderSessionTable(state.sessions.closed.slice(0, 20), false),
     ),
-    section("Macros", "macros", renderMacroList(state.macros), { collapsible: true }),
+    section("Macros", "macros", renderMacroList(state.macros), {
+      collapsible: true,
+      open: openPanels.get("panel-macros") ?? false,
+    }),
   );
 }
 
@@ -321,13 +330,13 @@ function section(
   title: string,
   testid: string,
   body: HTMLElement,
-  opts: { collapsible?: boolean } = {},
+  opts: { collapsible?: boolean; open?: boolean } = {},
 ): HTMLElement {
   const wrapper = opts.collapsible ? document.createElement("details") : document.createElement("section");
   wrapper.className = `panel panel--${testid}`;
   wrapper.setAttribute("data-testid", `panel-${testid}`);
   if (opts.collapsible && wrapper instanceof HTMLDetailsElement) {
-    wrapper.open = false;
+    wrapper.open = opts.open ?? false;
   }
   const heading = opts.collapsible ? document.createElement("summary") : document.createElement("h2");
   heading.className = "panel__title";
