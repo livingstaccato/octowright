@@ -296,8 +296,7 @@ def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
 
 def _live_session_or_none(session_id: str) -> Any | None:
     pool = _state.pool
-    sessions = pool._sessions
-    return sessions.get(session_id)
+    return pool.maybe_get(session_id)
 
 
 def _resolve_log_path(session_id: str) -> Path | None:

@@ -87,7 +87,7 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
     base_url = _http.runtime_url()
     deep = _http.runtime_session_url(session_id) if session_id else None
     closed_count = 0
-    live_count = len(pool._sessions)
+    live_count = pool.active_count()
     try:
         from ..defaults import RECORDINGS_DIR
 
@@ -165,7 +165,7 @@ def octowright_status() -> dict[str, Any]:
             "badge_position_default": "bottom-right",
         },
         "pool": {
-            "live_browsers": len(pool._sessions),
+            "live_browsers": pool.active_count(),
             "live_scenarios": len(scenario_pool.list_live()),
         },
         "personas": {
