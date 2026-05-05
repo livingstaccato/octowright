@@ -18,6 +18,7 @@ lint: ## Ruff lint/format, mypy, ty, bandit, codespell, SPDX headers, LOC cap
 	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
 	uv run --active python scripts/check_spdx_headers.py
 	uv run --active python scripts/check_max_loc.py
+	uv run --active python scripts/check_agent_docs_sync.py
 
 spdx-fix: ## Normalize SPDX headers in source files
 	uv run --active python scripts/normalize_spdx_headers.py
