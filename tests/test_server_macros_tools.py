@@ -66,6 +66,15 @@ def test_macro_lint_formats_issues(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(out["issues"]) == 2
 
 
+def test_macro_repair_preview_forwards_to_core(_patch_deps: dict[str, MagicMock]) -> None:
+    _patch_deps["macros"].repair_preview.return_value = {"macro": "demo", "suggestions": []}
+
+    out = _macros.macro_repair_preview("demo")
+
+    assert out == {"macro": "demo", "suggestions": []}
+    _patch_deps["macros"].repair_preview.assert_called_once_with("demo")
+
+
 @pytest.mark.anyio
 async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.runner as runner_mod

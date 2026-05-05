@@ -44,3 +44,30 @@ def test_persona_update_rejects_bad_yaml(client: TestClient, tmp_path: Path) -> 
     r = client.put("/api/personas/alice", json={"yaml": "name: [broken"})
     assert r.status_code == 400
     assert "invalid YAML" in r.json()["error"]
+
+
+def test_macro_repair_preview_endpoint_returns_preview(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        _meta_routes.state._macros,
+        "repair_preview",
+        lambda name: {"macro": name, "suggestions": [{"action_index": 0}]},
+    )
+
+    r = client.get("/api/macros/login/repair_preview")
+
+    assert r.status_code == 200
+    assert r.json() == {"macro": "login", "suggestions": [{"action_index": 0}]}
+
+
+def test_macro_repair_preview_endpoint_404_for_unknown_macro(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(_name: str) -> dict:
+        raise FileNotFoundError("missing")
+
+    monkeypatch.setattr(_meta_routes.state._macros, "repair_preview", missing)
+
+    r = client.get("/api/macros/missing/repair_preview")
+
+    assert r.status_code == 404

@@ -9,6 +9,7 @@ import type {
   DownloadListResponse,
   EventsResponse,
   HealthResponse,
+  MacroRepairPreview,
   MacroSummary,
   PersonaDetail,
   PersonaSummary,
@@ -148,6 +149,10 @@ export function getPersonas(): Promise<PersonaSummary[]> {
 
 export function getMacros(): Promise<MacroSummary[]> {
   return fetchJson<MacroSummary[]>("/api/macros");
+}
+
+export function getMacroRepairPreview(name: string): Promise<MacroRepairPreview> {
+  return fetchJson<MacroRepairPreview>(`/api/macros/${encodeURIComponent(name)}/repair_preview`);
 }
 
 export function getScreenshots(id: string): Promise<ScreenshotListResponse> {
