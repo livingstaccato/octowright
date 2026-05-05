@@ -13,6 +13,7 @@ import {
   getScreenshots,
   getSession,
   getSessions,
+  dashboardEventsUrl,
   openTrace,
   markdownUrl,
   screenshotUrl,
@@ -172,5 +173,8 @@ describe("url helpers", () => {
   it("tailWebSocketUrl omits ?since when zero", () => {
     const url = tailWebSocketUrl("a", 0);
     expect(url.includes("?")).toBe(false);
+  });
+  it("dashboardEventsUrl", () => {
+    expect(dashboardEventsUrl()).toBe("/api/dashboard/events");
   });
 });

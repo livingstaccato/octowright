@@ -173,6 +173,10 @@ export function getHealth(): Promise<HealthResponse> {
   return fetchJson<HealthResponse>("/api/health");
 }
 
+export function dashboardEventsUrl(): string {
+  return "/api/dashboard/events";
+}
+
 export function getPersonaDetail(name: string): Promise<PersonaDetail> {
   return fetchJson<PersonaDetail>(`/api/personas/${encodeURIComponent(name)}`);
 }

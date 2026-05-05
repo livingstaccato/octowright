@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import macros as macro_mod
+from ..http.dashboard_events import publish_dashboard_invalidation_nowait
 from ._state import mcp, pool
 
 
@@ -38,6 +39,7 @@ def macro_save(
         parameters=parameters,
         include_launch=include_launch,
     )
+    publish_dashboard_invalidation_nowait("macros")
     return {"saved": True, "name": name, "path": str(path)}
 
 
@@ -66,6 +68,7 @@ async def macro_run(
 @mcp.tool(structured_output=False, description="Delete a saved macro by name. Raises if the macro does not exist.")
 def macro_delete(name: str) -> dict[str, Any]:
     path = macro_mod.delete_macro(name)
+    publish_dashboard_invalidation_nowait("macros")
     return {"deleted": True, "name": name, "path": str(path)}
 
 

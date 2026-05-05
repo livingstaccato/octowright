@@ -1,4 +1,5 @@
 import {
+  dashboardEventsUrl,
   deleteRecording,
   getMacros,
   getPersonaDetail,
@@ -558,6 +559,20 @@ export async function bootDashboard(root: HTMLElement): Promise<void> {
     });
   };
   await tick();
+  if (typeof EventSource !== "undefined") {
+    const source = new EventSource(dashboardEventsUrl());
+    const refreshFromStream = () => {
+      tick().catch((err: unknown) => {
+        log.warn({ event: "dashboard_stream_refresh_failed", error: String(err) });
+      });
+    };
+    source.onmessage = refreshFromStream;
+    source.addEventListener("invalidate", refreshFromStream);
+    source.onerror = () => {
+      log.warn({ event: "dashboard_stream_error" });
+      source.close();
+    };
+  }
   window.setInterval(() => {
     tick().catch((err: unknown) => {
       log.warn({ event: "dashboard_refresh_failed", error: String(err) });

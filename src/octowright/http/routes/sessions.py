@@ -19,6 +19,7 @@ from starlette.routing import Route
 from ...defaults import DEFAULT_URL, SUPPORTED_KINDS
 from ...server import _state
 from .. import state
+from ..dashboard_events import publish_dashboard_invalidation
 from ..discovery import (
     _build_cache_components,
     _cache_report_for_recording,
@@ -224,6 +225,7 @@ async def session_launch(request: Request) -> JSONResponse:
         record_video=launch_kwargs["record_video"],
         trace=launch_kwargs["trace"],
     )
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(summary, status_code=201)
 
 
@@ -259,6 +261,7 @@ async def session_close(request: Request) -> JSONResponse:
             )
 
     state.log.info("octowright.http.session_closed", instance_id=sid)
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(body)
 
 
@@ -316,6 +319,7 @@ async def recording_delete(request: Request) -> JSONResponse:
                 state.log.warning("recording_delete.unlink_failed", file=str(f), error=str(e))
 
     state.log.info("recording_deleted", session_id=sid, files=len(deleted))
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse({"deleted": True, "session_id": sid, "files_removed": len(deleted)})
 
 
@@ -377,6 +381,7 @@ async def session_relaunch(request: Request) -> JSONResponse:
         instance_id=result["instance_id"],
         kind=result["kind"],
     )
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(summary, status_code=201)
 
 
