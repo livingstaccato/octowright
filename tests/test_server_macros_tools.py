@@ -87,6 +87,7 @@ def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch,
     in_use = MagicMock()
     in_use.user_data_dir = str(tmp_path / "live")
     _macros.pool._sessions = {"x": in_use}
+    _macros.pool.iter_sessions.return_value = (in_use,)
     out = _macros.profile_cleanup(days=1.0, dry_run=False)
     assert out["removed"] == 1
     assert out["skipped_in_use"] == 1

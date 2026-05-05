@@ -47,8 +47,8 @@ class _FakePool:
     """Minimal stand-in for ``BrowserPool`` for write-endpoint tests.
 
     Records every call so tests can assert kwargs were forwarded correctly.
-    Sessions are SimpleNamespaces stored under ``_sessions`` to mirror the
-    layout the real pool uses (``_sessions: dict[str, BrowserSession]``).
+    Sessions are SimpleNamespaces stored under ``_sessions`` while public
+    accessors mirror the real pool API.
     """
 
     def __init__(self) -> None:
@@ -94,6 +94,15 @@ class _FakePool:
             "trace_path": None,
         }
 
+    def get(self, instance_id: str) -> SimpleNamespace:
+        return self._sessions[instance_id]
+
+    def has_session(self, instance_id: str) -> bool:
+        return instance_id in self._sessions
+
+    def iter_sessions(self) -> tuple[SimpleNamespace, ...]:
+        return tuple(self._sessions.values())
+
 
 class _FakeSession:
     """Minimal stand-in for ``BrowserSession`` exposing just ``navigate``."""
@@ -125,6 +134,9 @@ class _FakeScenarioPool:
 
     def list_live(self) -> list[dict[str, Any]]:
         return []
+
+    def has_live(self, scenario_id: str) -> bool:
+        return scenario_id in self._live
 
     async def start(self, *, name: str, browser_pool: Any) -> SimpleNamespace:
         self.start_calls.append(name)

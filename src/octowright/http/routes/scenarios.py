@@ -73,7 +73,7 @@ async def scenario_stop_endpoint(request: Request) -> JSONResponse:
     sid = request.path_params["id"]
     spool = _state.scenario_pool
     pool = _state.pool
-    if sid not in spool._live:
+    if not spool.has_live(sid):
         return JSONResponse(
             {"error": f"no live scenario with id {sid!r}"},
             status_code=404,
@@ -107,7 +107,7 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
 
     spool = _state.scenario_pool
     pool = _state.pool
-    if sid not in spool._live:
+    if not spool.has_live(sid):
         return JSONResponse(
             {"error": f"no live scenario with id {sid!r}"},
             status_code=404,
