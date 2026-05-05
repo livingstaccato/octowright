@@ -95,9 +95,7 @@ def _ts_locator(entry: dict) -> str | None:
 
 
 def _py_semantic_with_fallback(semantic_call: str, fallback_call: str) -> str:
-    return (
-        "        try:\n" f"            {semantic_call}\n" "        except Exception:\n" f"            {fallback_call}"
-    )
+    return f"        try:\n            {semantic_call}\n        except Exception:\n            {fallback_call}"
 
 
 def _ts_semantic_with_fallback(semantic_call: str, fallback_call: str) -> str:
