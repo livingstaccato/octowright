@@ -357,8 +357,10 @@ class SessionOpsMixin(SessionLike):
         resource_type_filter: str | None = None,
         since: int | None = None,
     ) -> dict[str, Any]:
-        start = since or 0
         retained = list(self._network_requests)
+        retained_base = self._network_requests_dropped
+        next_cursor = retained_base + len(retained)
+        start = 0 if since is None else max(0, since - retained_base)
         sliced = retained[start:]
         if url_filter:
             sliced = [r for r in sliced if url_filter in r.get("url", "")]
@@ -368,7 +370,7 @@ class SessionOpsMixin(SessionLike):
             sliced = [r for r in sliced if r.get("resource_type") == resource_type_filter]
         return {
             "requests": sliced,
-            "next_cursor": len(retained),
+            "next_cursor": next_cursor,
             "total": len(retained),
             "total_retained": len(retained),
             "dropped": self._network_requests_dropped,
@@ -439,6 +441,7 @@ class SessionOpsMixin(SessionLike):
 
     async def close(self) -> None:
         try:
+            await self._drain_background_tasks()
             if self.trace:
                 self.trace_path = self.log_path.with_suffix(".trace.zip")
                 try:
@@ -457,7 +460,6 @@ class SessionOpsMixin(SessionLike):
         finally:
             if self.browser is not None:
                 await self.browser.close()
-            await self._drain_background_tasks()
             self.recorder.record(
                 "close",
                 video_path=str(self.video_path) if self.video_path else None,
