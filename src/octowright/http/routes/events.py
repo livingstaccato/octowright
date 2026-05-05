@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -29,21 +30,55 @@ from ..discovery import (
 from ..exposure import guard_sensitive_http, sensitive_allowed_for_connection
 from ._common import _paginate, _parse_since
 
+DASHBOARD_DISCONNECT_POLL_SECONDS = 0.05
+DASHBOARD_HEARTBEAT_SECONDS = 15.0
+
 
 def _sse_frame(event: str, data: dict[str, Any]) -> bytes:
     payload = json.dumps(data, separators=(",", ":"))
     return f"event: {event}\ndata: {payload}\n\n".encode()
 
 
+def _sse_comment(comment: str) -> bytes:
+    return f": {comment}\n\n".encode()
+
+
+async def _wait_for_dashboard_disconnect(request: Request) -> None:
+    while True:
+        if await request.is_disconnected():
+            return
+        await asyncio.sleep(DASHBOARD_DISCONNECT_POLL_SECONDS)
+
+
 async def dashboard_events_endpoint(request: Request) -> StreamingResponse:
     async def stream() -> Any:
         async with dashboard_events.subscribe() as subscription:
             yield _sse_frame("hello", {"ok": True})
-            while True:
-                event = await subscription.get()
-                yield _sse_frame("invalidate", event)
-                if await request.is_disconnected():
-                    break
+            disconnect_task = asyncio.create_task(_wait_for_dashboard_disconnect(request))
+            try:
+                while not disconnect_task.done():
+                    event_task = asyncio.create_task(subscription.get())
+                    done, _pending = await asyncio.wait(
+                        {event_task, disconnect_task},
+                        timeout=DASHBOARD_HEARTBEAT_SECONDS,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if disconnect_task in done:
+                        event_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await event_task
+                        break
+                    if event_task in done:
+                        yield _sse_frame("invalidate", event_task.result())
+                        continue
+                    event_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await event_task
+                    yield _sse_comment("heartbeat")
+            finally:
+                disconnect_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await disconnect_task
 
     return StreamingResponse(
         stream(),
