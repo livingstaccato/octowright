@@ -157,7 +157,7 @@ def routes() -> list[Route]:
         Route("/api/personas/{name}", guard_sensitive_http(persona_update_endpoint), methods=["PUT"]),
         Route("/api/macros", guard_sensitive_http(list_macros_endpoint), methods=["GET"]),
         Route(
-            "/api/macros/{name}/repair_preview",
+            "/api/macros/{name:path}/repair_preview",
             guard_sensitive_http(macro_repair_preview_endpoint),
             methods=["GET"],
         ),

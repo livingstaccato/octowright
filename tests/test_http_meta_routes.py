@@ -59,6 +59,22 @@ def test_macro_repair_preview_endpoint_returns_preview(client: TestClient, monke
     assert r.json() == {"macro": "login", "suggestions": [{"action_index": 0}]}
 
 
+def test_macro_repair_preview_endpoint_accepts_slash_names(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _meta_routes.state._macros,
+        "repair_preview",
+        lambda name: {"macro": name, "suggestions": []},
+    )
+
+    r = client.get("/api/macros/login%2Ftest/repair_preview")
+
+    assert r.status_code == 200
+    assert r.json() == {"macro": "login/test", "suggestions": []}
+
+
 def test_macro_repair_preview_endpoint_404_for_unknown_macro(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
