@@ -41,6 +41,8 @@ from .pool_support import (
 from .profiles import profile_dir
 from .recorder import Recorder, new_log_path
 from .session import BrowserSession
+from .session_manifest import record_launch as _manifest_record_launch
+from .session_manifest import remove_session as _manifest_remove_session
 from .stabilize import render_stabilize_script
 
 log = get_logger(__name__)
@@ -337,6 +339,17 @@ class BrowserPool:
             new_session._schedule_markdown_capture()
 
             self._sessions[instance_id] = new_session
+            try:
+                _manifest_record_launch(
+                    session_id=instance_id,
+                    kind=kind,
+                    label=label,
+                    profile=profile,
+                    user_data_dir=user_data_dir,
+                    log_path=log_path,
+                )
+            except Exception as exc:
+                log.warning("octowright.session_manifest.write_failed", instance_id=instance_id, error=repr(exc))
             registered = True
             log.info(
                 "octowright.browser.launched",
@@ -440,6 +453,10 @@ class BrowserPool:
         # the sole logger of an explicit close.
         del self._sessions[instance_id]
         await session.close()
+        try:
+            _manifest_remove_session(instance_id)
+        except Exception as exc:
+            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
         log.info(
             "octowright.browser.closed",
             instance_id=instance_id,

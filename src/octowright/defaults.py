@@ -22,6 +22,9 @@ RECORDINGS_DIR = Path(os.environ.get("OCTOWRIGHT_RECORDINGS", str(_DEFAULT_RECOR
 PROFILES_DIR = Path(os.environ.get("OCTOWRIGHT_PROFILES_DIR", str(_DEFAULT_PROFILES)))
 SCENARIOS_DIR = Path(os.environ.get("OCTOWRIGHT_SCENARIOS_DIR", str(_DEFAULT_SCENARIOS)))
 SCENARIO_TEMPLATES_DIR = SCENARIOS_DIR / "templates"
+SESSION_MANIFEST_PATH = Path(
+    os.environ.get("OCTOWRIGHT_SESSION_MANIFEST", str(RECORDINGS_DIR / "session-manifest.json"))
+)
 
 
 # Octowright defaults to HEADED mode. The whole point of this server is giving

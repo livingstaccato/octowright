@@ -131,6 +131,7 @@ def octowright_status() -> dict[str, Any]:
 
     from .. import http as _http
     from .. import personas as _personas
+    from .. import session_manifest as _session_manifest
     from .. import singleton as _singleton
     from ..defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 
@@ -145,6 +146,9 @@ def octowright_status() -> dict[str, Any]:
     persona_names = [p["name"] for p in persona_list]
 
     http_status = _http.runtime_status()
+    stale_sessions = _session_manifest.stale_entries(
+        live_session_ids={session.instance_id for session in pool.iter_sessions()}
+    )
 
     return {
         "daemon": {
@@ -167,6 +171,8 @@ def octowright_status() -> dict[str, Any]:
         "pool": {
             "live_browsers": pool.active_count(),
             "live_scenarios": len(scenario_pool.list_live()),
+            "stale_manifest_sessions": stale_sessions,
+            "stale_manifest_count": len(stale_sessions),
         },
         "personas": {
             "count": len(persona_names),
