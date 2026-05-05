@@ -1,10 +1,14 @@
 name: "Bootstrap uv"
 description: "Normalize act Node path, setup uv, and sync dependencies"
 inputs:
+  python-version:
+    description: "Python version passed to actions/setup-python"
+    required: false
+    default: "3.11"
   sync-args:
     description: "Arguments passed to `uv sync`"
     required: false
-    default: "--all-groups --python \"${UV_PYTHON:-python3}\""
+    default: "--all-groups --python \"${UV_PYTHON:-python}\""
 runs:
   using: "composite"
   steps:
@@ -33,6 +37,9 @@ runs:
       if: ${{ env.ACT != 'true' }}
       with:
         enable-cache: false
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: ${{ inputs.python-version }}
     - name: Sync deps
       shell: bash
       run: |
