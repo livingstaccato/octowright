@@ -24,6 +24,7 @@ from ..discovery import (
     _resolve_trace_path,
     _resolve_video_path,
 )
+from ..exposure import guard_sensitive_http
 from ._common import _parse_bool
 
 
@@ -290,16 +291,16 @@ async def trace_open(request: Request) -> JSONResponse:
 
 def routes() -> list[Route]:
     return [
-        Route("/api/sessions/{id}/frame", session_frame, methods=["GET"]),
-        Route("/api/sessions/{id}/video", session_video, methods=["GET"]),
-        Route("/api/sessions/{id}/trace", session_trace, methods=["GET"]),
-        Route("/api/sessions/{id}/markdown", session_markdown, methods=["GET"]),
-        Route("/api/sessions/{id}/trace/open", trace_open, methods=["POST"]),
-        Route("/api/sessions/{id}/screenshot/now", session_screenshot_now, methods=["GET"]),
-        Route("/api/sessions/{id}/screenshots", session_screenshots, methods=["GET"]),
+        Route("/api/sessions/{id}/frame", guard_sensitive_http(session_frame), methods=["GET"]),
+        Route("/api/sessions/{id}/video", guard_sensitive_http(session_video), methods=["GET"]),
+        Route("/api/sessions/{id}/trace", guard_sensitive_http(session_trace), methods=["GET"]),
+        Route("/api/sessions/{id}/markdown", guard_sensitive_http(session_markdown), methods=["GET"]),
+        Route("/api/sessions/{id}/trace/open", guard_sensitive_http(trace_open), methods=["POST"]),
+        Route("/api/sessions/{id}/screenshot/now", guard_sensitive_http(session_screenshot_now), methods=["GET"]),
+        Route("/api/sessions/{id}/screenshots", guard_sensitive_http(session_screenshots), methods=["GET"]),
         Route(
             "/api/sessions/{id}/screenshots/{filename}",
-            session_screenshot_file,
+            guard_sensitive_http(session_screenshot_file),
             methods=["GET"],
         ),
     ]

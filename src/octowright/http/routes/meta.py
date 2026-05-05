@@ -17,6 +17,7 @@ from starlette.routing import Route
 
 from ...defaults import PROFILES_DIR, SUPPORTED_KINDS
 from .. import state
+from ..exposure import guard_sensitive_http
 from ._common import _read_json_body
 
 
@@ -139,9 +140,9 @@ async def persona_update_endpoint(request: Request) -> JSONResponse:
 
 def routes() -> list[Route]:
     return [
-        Route("/api/personas", list_personas_endpoint, methods=["GET"]),
-        Route("/api/personas/sizes", persona_sizes_endpoint, methods=["GET"]),
-        Route("/api/personas/{name}", persona_detail_endpoint, methods=["GET"]),
-        Route("/api/personas/{name}", persona_update_endpoint, methods=["PUT"]),
-        Route("/api/macros", list_macros_endpoint, methods=["GET"]),
+        Route("/api/personas", guard_sensitive_http(list_personas_endpoint), methods=["GET"]),
+        Route("/api/personas/sizes", guard_sensitive_http(persona_sizes_endpoint), methods=["GET"]),
+        Route("/api/personas/{name}", guard_sensitive_http(persona_detail_endpoint), methods=["GET"]),
+        Route("/api/personas/{name}", guard_sensitive_http(persona_update_endpoint), methods=["PUT"]),
+        Route("/api/macros", guard_sensitive_http(list_macros_endpoint), methods=["GET"]),
     ]
