@@ -64,12 +64,12 @@ async def test_scenario_wait_for_sync(tmp_octowright, monkeypatch):
     )
 
     monkeypatch.setenv("OCTOWRIGHT_HEADLESS", "1")
-    for m in ("octowright.defaults", "octowright.pool"):
+    for m in ("octowright.defaults", "octowright.browser_pool.pool"):
         if m in sys.modules:
             importlib.reload(sys.modules[m])
 
     from octowright import scenarios as _s
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     importlib.reload(_s)
 

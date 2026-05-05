@@ -24,11 +24,11 @@ async def test_title_does_not_double_when_browser_strips_trailing_space(
 ) -> None:
     """Page with no <title> + injected prefix should yield a single prefix, not double."""
     pytest.importorskip("playwright")
+    import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
     from octowright import personas as _personas
-    from octowright import pool as _pool
     from octowright import profiles as _profiles
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     rec = tmp_path / "rec"
     profiles = tmp_path / "profiles"

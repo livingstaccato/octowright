@@ -13,6 +13,7 @@ lifecycle through every error branch.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -362,11 +363,13 @@ class _StubPool:
         spawn_errors: list[dict[str, Any]] | None = None,
         spawn_launched: list[dict[str, Any]] | None = None,
         close_fails: set[str] | None = None,
+        close_delay: float = 0,
     ) -> None:
         self.spawn_errors = spawn_errors or []
         self._spawn_launched = spawn_launched
         self.closed: list[str] = []
         self.close_fails = close_fails or set()
+        self.close_delay = close_delay
         self.sessions: dict[str, _StubSession] = {}
 
     async def spawn_roster(self, specs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -395,6 +398,8 @@ class _StubPool:
         return self.sessions[instance_id]
 
     async def close(self, instance_id: str) -> dict[str, Any]:
+        if self.close_delay:
+            await asyncio.sleep(self.close_delay)
         if instance_id in self.close_fails:
             raise RuntimeError(f"forced close failure for {instance_id}")
         self.closed.append(instance_id)
@@ -556,6 +561,33 @@ class TestScenarioPoolStop:
         # Close still ran.
         assert "iid-0" in summary["closed"]
 
+    @pytest.mark.asyncio
+    async def test_concurrent_stop_claims_scenario_once(
+        self,
+        scenarios_dir: Path,
+        empty_personas_dir: Path,
+    ) -> None:
+        _write_trivial_scenario(
+            scenarios_dir,
+            "stoppy-once",
+            [{"persona": "a", "kind": "webkit", "role": "r"}],
+        )
+        bp = _StubPool(close_delay=0.01)
+        spool = ScenarioPool()
+        live = await spool.start(name="stoppy-once", browser_pool=bp)
+
+        results = await asyncio.gather(
+            spool.stop(scenario_id=live.scenario_id, browser_pool=bp),
+            spool.stop(scenario_id=live.scenario_id, browser_pool=bp),
+            return_exceptions=True,
+        )
+
+        summaries = [result for result in results if isinstance(result, dict)]
+        errors = [result for result in results if isinstance(result, KeyError)]
+        assert len(summaries) == 1
+        assert len(errors) == 1
+        assert bp.closed == ["iid-0"]
+
 
 class TestScenarioPoolRunMacroAndFixtures:
     @pytest.mark.asyncio
@@ -587,6 +619,32 @@ class TestScenarioPoolRunMacroAndFixtures:
                 "headers": None,
             }
         ]
+
+    @pytest.mark.asyncio
+    async def test_fixture_failure_unregisters_scenario_and_closes_launches(
+        self,
+        scenarios_dir: Path,
+        empty_personas_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_trivial_scenario(
+            scenarios_dir,
+            "fixture-boom",
+            [{"persona": "a", "kind": "webkit", "role": "r"}],
+            fixtures={"mock_routes": [{"pattern": "**/boom"}]},
+        )
+
+        async def _raise_mock_route(self: _StubSession, pattern: str, **kwargs: Any) -> None:
+            raise RuntimeError("route setup failed")
+
+        monkeypatch.setattr(_StubSession, "mock_route", _raise_mock_route)
+
+        bp = _StubPool()
+        spool = ScenarioPool()
+        with pytest.raises(RuntimeError, match="route setup failed"):
+            await spool.start(name="fixture-boom", browser_pool=bp)
+        assert spool.list_live() == []
+        assert bp.closed == ["iid-0"]
 
     @pytest.mark.asyncio
     async def test_run_macro_collects_per_participant_results(

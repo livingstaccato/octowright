@@ -62,12 +62,12 @@ async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
     # is picked up. Also patch spawn_roster to inject headed=False into every spec
     # since spawn_roster defaults headed=True (designed for interactive use).
     monkeypatch.setenv("OCTOWRIGHT_HEADLESS", "1")
-    for m in ("octowright.defaults", "octowright.pool"):
+    for m in ("octowright.defaults", "octowright.browser_pool.pool"):
         if m in sys.modules:
             importlib.reload(sys.modules[m])
 
     from octowright import scenarios as _s
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     # Reload scenarios so it picks up the freshly-reloaded defaults.
     importlib.reload(_s)
