@@ -175,9 +175,12 @@ time and for the optional `npx playwright show-trace` deep-dive.
 If port 8765 is taken, the server walks up to 5 higher ports and picks the
 first free one (or logs a warning and continues without the HTTP layer if all
 are busy — MCP keeps running). Override the default with `OCTOWRIGHT_HTTP_PORT`
-or bind to a different host with `OCTOWRIGHT_HTTP_HOST` (default `127.0.0.1`;
-use `0.0.0.0` if you want the dashboard reachable from another machine on
-your network).
+or bind to a different host with `OCTOWRIGHT_HTTP_HOST` (default `127.0.0.1`).
+Binding to `0.0.0.0` only exposes health/static assets by default; sensitive
+dashboard, API, and MCP access from another machine also requires
+`OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1`. Only enable that opt-in on trusted
+networks because it exposes live browser state, recordings, traces, downloads,
+and the MCP tool surface.
 
 ## Concepts: how the pieces relate
 
@@ -556,7 +559,7 @@ variables:
 | `OCTOWRIGHT_VIEWPORT_W` / `OCTOWRIGHT_VIEWPORT_H` | `1280` / `800` | Default viewport. Used in headless mode and when dimensions are explicitly passed to `browser_launch`. In headed mode with neither set, context launches with `no_viewport=True` so the page tracks the OS window. |
 | `OCTOWRIGHT_HEADLESS` | auto | Explicit `0` / `1` overrides headless mode. Auto-detected: headed on macOS or Linux+display, headless on CI (`CI=true`) or Linux without `$DISPLAY` / `$WAYLAND_DISPLAY`. |
 | `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` | — | Per-navigation / per-action timeouts. |
-| `OCTOWRIGHT_HTTP_HOST` / `OCTOWRIGHT_HTTP_PORT` | `127.0.0.1` / `8765` | Dashboard bind address. Use `0.0.0.0` for the host to expose the dashboard on your network. If the port is in use, the server walks up 5 higher ports automatically. |
+| `OCTOWRIGHT_HTTP_HOST` / `OCTOWRIGHT_HTTP_PORT` | `127.0.0.1` / `8765` | Dashboard bind address. Binding to `0.0.0.0` makes the HTTP sidecar reachable on your network, but sensitive dashboard/API/MCP routes stay blocked unless `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1` is also set. Only enable remote dashboard access on trusted networks because it exposes live browser state and local artifacts. If the port is in use, the server walks up 5 higher ports automatically. |
 | `OCTOWRIGHT_IDLE_GRACE` | `300` | Seconds before auto-exit when the browser pool is empty. Use `--keep-alive` to disable. |
 
 ## CLI
