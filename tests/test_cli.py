@@ -13,6 +13,7 @@ fixture-managed tmp paths so each test is hermetic.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
@@ -71,6 +72,44 @@ def test_selftest_lists_registered_tools(isolated_paths: dict[str, Path]) -> Non
     # A handful of well-known tool names should appear.
     for expected in ("browser_launch", "browser_list", "scenario_start", "persona_list"):
         assert expected in result.output
+
+
+def test_test_command_forwards_max_parallel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from octowright import pool as pool_mod
+    from octowright import runner as runner_mod
+
+    fake_pool = MagicMock()
+    fake_pool.shutdown = AsyncMock()
+    run_suite = AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1, "report_path": str(tmp_path / "j.xml")})
+    monkeypatch.setattr(pool_mod, "BrowserPool", MagicMock(return_value=fake_pool))
+    monkeypatch.setattr(runner_mod, "run_suite", run_suite)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "test",
+            str(tmp_path / "macros"),
+            "--kind",
+            "firefox",
+            "--tag",
+            "smoke",
+            "--out",
+            str(tmp_path / "j.xml"),
+            "--max-parallel",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 0
+    run_suite.assert_awaited_once_with(
+        macros_dir=str(tmp_path / "macros"),
+        kind="firefox",
+        tag="smoke",
+        out_path=str(tmp_path / "j.xml"),
+        pool=fake_pool,
+        max_parallel=4,
+    )
+    fake_pool.shutdown.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
