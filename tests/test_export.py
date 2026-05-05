@@ -163,6 +163,24 @@ def test_python_export_skips_blank_and_unknown_lines(tmp_path: Path) -> None:
     assert "page.click('#a')" in src
 
 
+def test_python_export_prefers_semantic_locator_with_selector_fallback(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
+            {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    src = out.read_text()
+
+    assert _python_compiles(src)
+    assert "await page.get_by_role('button', name='Log in').click()" in src
+    assert "await page.click('#login')" in src
+    assert "await page.get_by_label('Email').fill('me@example.com')" in src
+    assert "await page.fill('#email', 'me@example.com')" in src
+
+
 def test_python_export_creates_parent_dir(tmp_path: Path) -> None:
     log = _write_recording(
         tmp_path / "r.jsonl",
@@ -267,3 +285,20 @@ def test_ts_export_skips_unknown_actions(tmp_path: Path) -> None:
     src = out.read_text()
     assert "totally_unknown" not in src
     assert 'await page.click("#a");' in src
+
+
+def test_ts_export_prefers_semantic_locator_with_selector_fallback(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
+            {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.ts", fmt="ts")
+    src = out.read_text()
+
+    assert 'await page.getByRole("button", { name: "Log in" }).click();' in src
+    assert 'await page.click("#login");' in src
+    assert 'await page.getByLabel("Email").fill("me@example.com");' in src
+    assert 'await page.fill("#email", "me@example.com");' in src
