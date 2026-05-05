@@ -65,29 +65,36 @@ async def run_suite(
 
     async def _run_test(t: dict[str, Any]) -> dict[str, Any]:
         start = datetime.now(UTC)
-        # Tests start on about:blank so they don't accidentally depend on the global
-        # DEFAULT_URL (which points at the production site and is CSP-locked).
-        # Macros that need a specific URL should issue `navigate` as their first action.
-        launch_result = await pool.launch(
-            kind=kind,
-            url="about:blank",
-            headed=False,
-            label=f"test-{t['name']}",
-            viewport_w=1280,
-            viewport_h=800,
-            profile=None,
-        )
-        iid = launch_result["instance_id"]
+        iid: str | None = None
         ok = True
         err: str | None = None
         try:
+            # Tests start on about:blank so they don't accidentally depend on the global
+            # DEFAULT_URL (which points at the production site and is CSP-locked).
+            # Macros that need a specific URL should issue `navigate` as their first action.
+            launch_result = await pool.launch(
+                kind=kind,
+                url="about:blank",
+                headed=False,
+                label=f"test-{t['name']}",
+                viewport_w=1280,
+                viewport_h=800,
+                profile=None,
+            )
+            iid = launch_result["instance_id"]
             session = pool.get(iid)
             await macro_mod.run_macro(session=session, name=t["name"], args={})
         except Exception as e:
             ok = False
             err = repr(e)
         finally:
-            await pool.close(iid)
+            if iid is not None:
+                try:
+                    await pool.close(iid)
+                except Exception as e:
+                    ok = False
+                    close_err = repr(e)
+                    err = f"{err}; close failed: {close_err}" if err else close_err
         duration = (datetime.now(UTC) - start).total_seconds()
         return {
             "name": t["name"],

@@ -423,6 +423,90 @@ class TestRunSuite:
         assert sorted(c.args[0] for c in fake_pool.close.await_args_list) == ["i-bad", "i-ok"]
 
     @pytest.mark.asyncio
+    async def test_launch_failure_returns_failed_result_and_still_writes_report(
+        self,
+        fake_pool: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        report_path = tmp_path / "out.xml"
+        macros_list = [{"name": "bad-launch"}, {"name": "ok"}]
+
+        async def _launch(**kwargs: Any) -> dict[str, str]:
+            if kwargs["label"] == "test-bad-launch":
+                raise RuntimeError("launch failed")
+            return {"instance_id": "i-ok"}
+
+        def _load(name: str) -> dict[str, Any]:
+            return {"name": name, "description": "[test] flow"}
+
+        with (
+            patch("octowright.runner.macro_mod.list_macros", return_value=macros_list),
+            patch("octowright.runner.macro_mod.load_macro", side_effect=_load),
+            patch(
+                "octowright.runner.macro_mod.run_macro",
+                new_callable=AsyncMock,
+                return_value={"macro": "ok", "executed": 1, "skipped": 0, "args_used": {}},
+            ),
+        ):
+            fake_pool.launch.side_effect = _launch
+            result = await run_suite(
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(report_path),
+                pool=fake_pool,
+                max_parallel=2,
+            )
+
+        assert result["passed"] == 1
+        assert result["failed"] == 1
+        failed = next(r for r in result["results"] if r["name"] == "bad-launch")
+        assert failed["ok"] is False
+        assert failed["error"] == "RuntimeError('launch failed')"
+        assert report_path.exists()
+        tree = ET.parse(report_path)
+        assert tree.getroot().attrib["failures"] == "1"
+        fake_pool.close.assert_called_once_with("i-ok")
+
+    @pytest.mark.asyncio
+    async def test_close_failure_returns_failed_result_and_still_writes_report(
+        self,
+        fake_pool: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        report_path = tmp_path / "out.xml"
+        macros_list = [{"name": "close-fails"}]
+        macros_full = {"name": "close-fails", "description": "[test] flow"}
+        fake_pool.close.side_effect = RuntimeError("close failed")
+
+        with (
+            patch("octowright.runner.macro_mod.list_macros", return_value=macros_list),
+            patch("octowright.runner.macro_mod.load_macro", return_value=macros_full),
+            patch(
+                "octowright.runner.macro_mod.run_macro",
+                new_callable=AsyncMock,
+                return_value={"macro": "close-fails", "executed": 1, "skipped": 0, "args_used": {}},
+            ),
+        ):
+            result = await run_suite(
+                macros_dir=None,
+                kind="webkit",
+                tag=None,
+                out_path=str(report_path),
+                pool=fake_pool,
+                max_parallel=1,
+            )
+
+        assert result["passed"] == 0
+        assert result["failed"] == 1
+        assert result["results"][0]["ok"] is False
+        assert result["results"][0]["error"] == "RuntimeError('close failed')"
+        assert report_path.exists()
+        tree = ET.parse(report_path)
+        assert tree.getroot().attrib["failures"] == "1"
+        fake_pool.close.assert_called_once_with("abc123")
+
+    @pytest.mark.asyncio
     async def test_rejects_max_parallel_less_than_one(self, fake_pool: MagicMock, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="max_parallel"):
             await run_suite(
