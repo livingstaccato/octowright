@@ -8,6 +8,7 @@ import {
   getEvents,
   getHealth,
   getMacros,
+  getMacroRepairPreview,
   getPersonas,
   getScenarios,
   getScreenshots,
@@ -106,6 +107,11 @@ describe("typed wrappers", () => {
     const calls = installFetch([]);
     await getMacros();
     expect(calls[0]?.url).toBe("/api/macros");
+  });
+  it("getMacroRepairPreview encodes macro name", async () => {
+    const calls = installFetch({ macro: "login/test", suggestions: [] });
+    await getMacroRepairPreview("login/test");
+    expect(calls[0]?.url).toBe("/api/macros/login%2Ftest/repair_preview");
   });
   it("getScreenshots", async () => {
     const calls = installFetch({ screenshots: [] });

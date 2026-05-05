@@ -94,6 +94,21 @@ export interface MacroSummary {
   updated_at: string | null;
 }
 
+export interface MacroRepairSuggestion {
+  macro: string;
+  action_index: number;
+  original_action: Record<string, unknown>;
+  source: string;
+  replacement_action: Record<string, unknown> | null;
+  action_preview: string | null;
+  prompt: string;
+}
+
+export interface MacroRepairPreview {
+  macro: string;
+  suggestions: MacroRepairSuggestion[];
+}
+
 export interface ScreenshotEntry {
   path: string;
   filename: string;
