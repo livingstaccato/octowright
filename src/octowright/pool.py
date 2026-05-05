@@ -220,7 +220,10 @@ class BrowserPool:
                 )
                 page = await context.new_page()
         except Exception as exc:
-            raise maybe_wrap_playwright_error(exc, kind=kind) from exc
+            wrapped = maybe_wrap_playwright_error(exc, kind=kind)
+            if wrapped is exc:
+                raise
+            raise wrapped from exc
 
         recorder = Recorder(log_path)
         recorder.record(
@@ -312,7 +315,10 @@ class BrowserPool:
         try:
             await page.goto(target_url)
         except Exception as exc:
-            raise maybe_wrap_playwright_error(exc, kind=kind) from exc
+            wrapped = maybe_wrap_playwright_error(exc, kind=kind)
+            if wrapped is exc:
+                raise
+            raise wrapped from exc
         new_session._schedule_markdown_capture()
 
         self._sessions[instance_id] = new_session
