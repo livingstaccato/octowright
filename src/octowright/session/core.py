@@ -13,6 +13,7 @@ from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
+from ..defaults import NETWORK_EVENT_LIMIT
 from ..recorder import Recorder
 from .core_io_mixin import SessionIOMixin
 from .core_ops_mixin import SessionOpsMixin
@@ -55,7 +56,8 @@ class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin):
     _last_markdown_capture_key: str | None = None
     _pending_markdown_capture: Any | None = None
     websocket_path: Path | None = None
-    _network_requests: list[dict[str, Any]] = field(default_factory=list)
+    _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
+    _network_requests_dropped: int = 0
     _last_mcp_navigation: str | None = None
     _on_page_close: Callable[..., None] | None = field(default=None, repr=False)
     _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
