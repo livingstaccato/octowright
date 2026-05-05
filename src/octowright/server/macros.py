@@ -127,6 +127,18 @@ def macro_lint(name: str) -> dict[str, Any]:
 @mcp.tool(
     structured_output=False,
     description=(
+        "Preview non-mutating repair suggestions for a saved macro. Returns selector-based "
+        "actions with stored semantic replacement candidates and manual review prompts; "
+        "does not edit or replay the macro."
+    ),
+)
+def macro_repair_preview(name: str) -> dict[str, Any]:
+    return macro_mod.repair_preview(name)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Run all test macros in a directory, producing a JUnit XML report. A macro is "
         "considered a test if its description starts with [test]. Spawns one ephemeral "
         "browser per test (kind defaults to 'webkit') and runs up to max_parallel tests "

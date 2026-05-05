@@ -399,6 +399,46 @@ code, .mono { font-family: var(--mono); }
   white-space: nowrap;
 }
 
+.macro-list__actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.repair-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 20px;
+}
+
+.repair-preview__item {
+  color: var(--fg-2);
+}
+
+.repair-preview__title {
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.repair-preview__action,
+.repair-preview__prompt {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.repair-preview__json {
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 11px;
+  overflow: auto;
+}
+
 /* ── Buttons ───────────────────────────────────────────── */
 
 .btn {
