@@ -66,6 +66,25 @@ function nowMs(): number {
   return Date.now();
 }
 
+async function responseErrorMessage(res: Response): Promise<string> {
+  const fallback = `request failed: ${res.status} ${res.statusText}`;
+  try {
+    const body = (await res.json()) as unknown;
+    if (body && typeof body === "object") {
+      const record = body as Record<string, unknown>;
+      if (typeof record.error === "string" && record.error.trim()) {
+        return `${fallback}: ${record.error}`;
+      }
+      if (typeof record.message === "string" && record.message.trim()) {
+        return `${fallback}: ${record.message}`;
+      }
+    }
+  } catch {
+    // Fall back to the status line when the error body is not JSON.
+  }
+  return fallback;
+}
+
 export async function fetchJson<T>(path: string, opts: FetchJsonOptions = {}): Promise<T> {
   const method = opts.method ?? "GET";
   const tmpl = pathTemplate(path);
@@ -90,6 +109,7 @@ export async function fetchJson<T>(path: string, opts: FetchJsonOptions = {}): P
     const statusStr = String(res.status);
     apiLatencyHistogram.record(duration, { method, path: tmpl, status: statusStr });
     if (!res.ok) {
+      const message = await responseErrorMessage(res);
       apiErrorsCounter.add(1, { method, path: tmpl, status: statusStr });
       log.warn({
         event: "api_error",
@@ -99,7 +119,7 @@ export async function fetchJson<T>(path: string, opts: FetchJsonOptions = {}): P
         status: res.status,
         duration_ms: duration,
       });
-      throw new ApiError(`request failed: ${res.status} ${res.statusText}`, res.status, path);
+      throw new ApiError(message, res.status, path);
     }
     log.debug({
       event: "api_response",
