@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -85,15 +86,23 @@ def test_demo_presentation_config_rejects_unknown_mode() -> None:
         DemoPresentationConfig(mode="freestyle")
 
 
-def test_demo_sync_group_rejects_non_string_roles() -> None:
+@pytest.mark.parametrize(
+    "roles",
+    [
+        cast(object, ["player", 7]),
+        cast(object, "player"),
+        cast(object, ("player", "monitor")),
+    ],
+)
+def test_demo_sync_group_rejects_invalid_roles_container(roles: object) -> None:
     with pytest.raises(ValueError, match=r"presentation\.sync_groups\[\*\]\.roles"):
-        DemoSyncGroup(id="engines", roles=["player", 7])
+        DemoSyncGroup(id="engines", roles=cast("list[str]", roles))
 
 
 @pytest.mark.parametrize("value", [True, "5", 1.5])
 def test_demo_timing_config_rejects_non_integer_intro_ms(value: object) -> None:
     with pytest.raises(ValueError, match=r"presentation\.timing\.intro_ms"):
-        DemoTimingConfig(intro_ms=value)  # type: ignore[arg-type]
+        DemoTimingConfig(intro_ms=cast("int", value))
 
 
 @pytest.mark.parametrize("field_name", ["intro_ms", "outro_ms", "minimum_ms"])
