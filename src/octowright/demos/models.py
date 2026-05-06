@@ -35,7 +35,7 @@ class DemoSyncGroup:
     roles: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if not self.roles:
+        if not isinstance(self.roles, list) or not self.roles:
             raise ValueError("presentation.sync_groups[*].roles must be a non-empty list[str]")
         if not all(isinstance(role, str) for role in self.roles):
             raise ValueError("presentation.sync_groups[*].roles must be a non-empty list[str]")
