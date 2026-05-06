@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from octowright.demos.models import DemoBundle
+from octowright.demos.presentation_profiles import RenderPlan, select_render_plan
 from octowright.export import export_script
 from octowright.scenarios_pool import LiveScenario
 from octowright.video import (
@@ -40,16 +41,16 @@ def render_bundle_video(
     video_path: Path,
     poster_path: Path,
 ) -> dict[str, Any]:
-    profile = _composition_profile(bundle.id)
     if live is None:
         raise RuntimeError("cannot render demo video without a live scenario")
+    plan = select_render_plan(bundle)
     work_path = _temporary_video_path(video_path)
-    if profile is None:
+    if plan.kind in {"single-clean", "artifact-first"}:
         primary = _primary_participant(live, bundle)
         source_video = _find_primary_video(live, close_results, bundle)
         transcode_video(source_video, work_path)
         summary = {
-            "mode": "single",
+            "mode": plan.kind,
             "canvas_width": 0,
             "canvas_height": 0,
             "panes": [],
@@ -77,29 +78,34 @@ def render_bundle_video(
         _finalize_poster(video_path, poster_path)
         return summary
 
-    if profile["mode"] == "grid":
-        panes = _grid_panes(
-            live,
-            close_results,
-            columns=int(profile["columns"]),
-            cell_width=int(profile["cell_width"]),
-            cell_height=int(profile["cell_height"]),
+    if plan.kind == "sync-multi":
+        rendered = render_sync_group_videos(live, close_results, plan=plan)
+        panes = (
+            rendered
+            if isinstance(rendered, list) and rendered
+            else _grid_panes(
+                live,
+                close_results,
+                columns=plan.columns,
+                cell_width=plan.cell_width,
+                cell_height=plan.cell_height,
+            )
         )
         source_videos = [pane["source"] for pane in panes]
         compose_video_grid(
             source_videos,
             work_path,
-            columns=int(profile["columns"]),
-            cell_width=int(profile["cell_width"]),
-            cell_height=int(profile["cell_height"]),
+            columns=plan.columns,
+            cell_width=plan.cell_width,
+            cell_height=plan.cell_height,
         )
         summary = {
-            "mode": "grid",
-            "canvas_width": int(profile["columns"]) * int(profile["cell_width"]),
-            "canvas_height": ((len(panes) - 1) // int(profile["columns"]) + 1) * int(profile["cell_height"]),
-            "columns": int(profile["columns"]),
-            "cell_width": int(profile["cell_width"]),
-            "cell_height": int(profile["cell_height"]),
+            "mode": "sync-multi",
+            "canvas_width": plan.columns * plan.cell_width,
+            "canvas_height": ((len(panes) - 1) // plan.columns + 1) * plan.cell_height,
+            "columns": plan.columns,
+            "cell_width": plan.cell_width,
+            "cell_height": plan.cell_height,
             "panes": [
                 {
                     "persona": pane["persona"],
@@ -114,12 +120,12 @@ def render_bundle_video(
             ],
         }
     else:
-        placements = _featured_video_placements(live, close_results, bundle.id)
+        placements = _featured_video_placements(live, close_results, plan)
         compose_video_layout(placements, work_path)
         summary = {
-            "mode": "featured",
-            "canvas_width": 1920,
-            "canvas_height": 1080,
+            "mode": "hero-composite",
+            "canvas_width": plan.canvas_width,
+            "canvas_height": plan.canvas_height,
             "panes": [
                 {
                     "persona": item["persona"],
@@ -282,37 +288,30 @@ def _grid_panes(
     return panes
 
 
-def _composition_profile(bundle_id: str) -> dict[str, int | str] | None:
-    profiles: dict[str, dict[str, int | str]] = {
-        "cross-engine-trio": {"mode": "grid", "columns": 3, "cell_width": 640, "cell_height": 360},
-        "role-based-duo": {"mode": "grid", "columns": 2, "cell_width": 960, "cell_height": 540},
-        "seven-mix-orchestration": {"mode": "featured"},
-    }
-    return profiles.get(bundle_id)
+def render_sync_group_videos(
+    live: LiveScenario,
+    close_results: dict[str, dict[str, Any]],
+    *,
+    plan: RenderPlan,
+) -> list[dict[str, Any]]:
+    return _grid_panes(
+        live,
+        close_results,
+        columns=plan.columns,
+        cell_width=plan.cell_width,
+        cell_height=plan.cell_height,
+    )
 
 
 def _featured_video_placements(
     live: LiveScenario,
     close_results: dict[str, dict[str, Any]],
-    bundle_id: str,
+    plan: RenderPlan,
 ) -> list[dict[str, Any]]:
-    if bundle_id != "seven-mix-orchestration":
-        raise ValueError(f"no featured layout configured for {bundle_id!r}")
-    order = [
-        ("p1", 0, 0, 1280, 720),
-        ("p2", 1280, 0, 320, 360),
-        ("p3", 1600, 0, 320, 360),
-        ("p4", 1280, 360, 320, 360),
-        ("p5", 1600, 360, 320, 360),
-        ("p6", 0, 720, 480, 360),
-        ("p7", 480, 720, 480, 360),
-        ("ops", 960, 720, 480, 360),
-        ("spectator", 1440, 720, 480, 360),
-    ]
     by_persona = {participant["persona"]: participant for participant in live.participants}
     placements: list[dict[str, Any]] = []
-    for persona, x, y, width, height in order:
-        participant = by_persona.get(persona)
+    for slot in plan.placements:
+        participant = by_persona.get(slot.persona)
         if participant is None:
             continue
         result = close_results.get(participant["instance_id"], {})
@@ -325,10 +324,10 @@ def _featured_video_placements(
                 "persona": participant["persona"],
                 "role": participant["role"],
                 "kind": participant["kind"],
-                "x": x,
-                "y": y,
-                "width": width,
-                "height": height,
+                "x": slot.x,
+                "y": slot.y,
+                "width": slot.width,
+                "height": slot.height,
             }
         )
     if not placements:
