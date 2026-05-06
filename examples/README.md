@@ -1,9 +1,22 @@
 # octowright examples
 
-Demo macros and scenarios that work offline (everything points at `about:blank`
-with injected HTML — no external network required).
+These are the raw offline building blocks for Octowright demos: reusable
+macros, lightweight scenarios, and verify flows that work without external
+network access.
+
+The first-class demo catalog now lives under `demo/bundles/`. Those hero
+bundles reference files in `examples/` rather than copying them, so treat this
+directory as source material for the catalog rather than the catalog itself.
+
+Everything here still points at `about:blank` with injected HTML unless noted
+otherwise.
 
 ## Usage
+
+Use this directory directly when you want the simplest possible local macro or
+scenario inputs. Use `demo/bundles/` when you want the curated gallery-facing
+manifests that drive `demo/INDEX.md`, `/api/demos`, and the dashboard demo
+gallery at `/demos`.
 
 Tell octowright to load these instead of the user-config defaults by setting:
 
@@ -20,17 +33,17 @@ automatically when those env vars are set on the server process.
 | Name | Kind | What |
 |---|---|---|
 | `inject-form` | utility | Drops a tiny `<form>` with `#user` / `#pass` / `#submit` into the current page body. Reused by other demos. |
-| `[test]assert-arithmetic` | test | Trivial smoke: `2 + 2 === 4` via `expect_js`. |
-| `[test]injected-form-fill` | test | Inject a form, fill two inputs, assert values via `expect_js`. No external network. |
-| `[test]click-counter` | test | Inject a button with an inline counter, click 3×, assert `data-n === "3"`. |
-| `[test]selector-presence` | test | Inject HTML, then `expect_selector` + `expect_text`. |
-| `[test:smoke]page-ready` | tagged-test | Tagged with `smoke`. Asserts `window` / `document` / `document.body` exist. |
+| `test-assert-arithmetic` | test | Trivial smoke: `2 + 2 === 4` via `expect_js`. Description is tagged with `[test]`. |
+| `test-injected-form-fill` | test | Inject a form, fill two inputs, assert values via `expect_js`. No external network. Description is tagged with `[test]`. |
+| `test-click-counter` | test | Inject a button with an inline counter, click 3×, assert `data-n === "3"`. Description is tagged with `[test]`. |
+| `test-selector-presence` | test | Inject HTML, then `expect_selector` + `expect_text`. Description is tagged with `[test]`. |
+| `test-smoke-page-ready` | tagged-test | Tagged with `smoke` in the macro description (`[test:smoke]`). Asserts `window` / `document` / `document.body` exist. |
 | `discord-style-login` | parameterized | Demo login flow with `{{email}}` / `{{password}}` substitution against an injected mock form. NOT a real Discord macro — selectors are demo-only. |
 
 Run a single macro:
 ```bash
 # In an MCP session
-macro_run instance_id=<id> name=[test]click-counter
+macro_run instance_id=<id> name=test-click-counter
 ```
 
 Run all `[test]` macros as a suite:
@@ -72,7 +85,7 @@ Or via MCP:
 
 ```
 scenario_start name=cross-engine
-scenario_run_macro scenario_id=<id> macro=[test:smoke]page-ready
+scenario_run_macro scenario_id=<id> macro=test-smoke-page-ready
 scenario_stop scenario_id=<id>
 ```
 
@@ -83,3 +96,8 @@ demos run without any outbound network. Replace those URLs with real targets
 when you're ready. The `with-fixtures.yaml` scenario also installs route
 mocks for `**/api/time` + `**/api/health` to show how shared fixtures fan out
 across participants.
+
+If you are looking for the promoted hero demos, start with `demo/INDEX.md` or
+open the dashboard gallery at `/demos`. Those bundle manifests describe how the
+raw examples are assembled into catalog entries such as `cross-engine-trio` and
+`seven-mix-orchestration`.

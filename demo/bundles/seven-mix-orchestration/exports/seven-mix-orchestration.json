@@ -1,0 +1,18 @@
+{
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl",
+      "artifacts/participant-roster.json"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "seven-mix-orchestration",
+  "regen_command": "uv run python scripts/demos/record_demo.py seven-mix-orchestration",
+  "summary": "Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.",
+  "title": "Seven Mix Orchestration",
+  "tutorial_export": "exports/seven-mix-orchestration.json"
+}

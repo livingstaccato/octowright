@@ -29,6 +29,14 @@ async def _serve_session_html(_: Request) -> Response:
     return FileResponse(str(target), media_type="text/html")
 
 
+async def _serve_demos_html(_: Request) -> Response:
+    """Serve the dedicated demos gallery page."""
+    target = state.FRONTEND_DIR / "demos.html"
+    if not target.exists():
+        return PlainTextResponse("demos.html not bundled (run npm run build)", status_code=404)
+    return FileResponse(str(target), media_type="text/html")
+
+
 def _frontend_routes() -> list[Any]:
     """Routes that serve the bundled SPA at `/`.
 
@@ -42,6 +50,8 @@ def _frontend_routes() -> list[Any]:
     if not (state.FRONTEND_DIR.exists() and state.FRONTEND_DIR.is_dir()):
         return []
     return [
+        Route("/demos", _serve_demos_html, methods=["GET"]),
+        Route("/demos/", _serve_demos_html, methods=["GET"]),
         Route("/sessions/{id:path}", _serve_session_html, methods=["GET"]),
         Mount("/", app=StaticFiles(directory=str(state.FRONTEND_DIR), html=True), name="frontend"),
     ]
