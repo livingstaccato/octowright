@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from octowright.video_overlay import render_overlay_image
+from octowright.video_overlay import DEFAULT_OVERLAY_BOX, MAGENTA, render_overlay_image
 
 # ---------------------------------------------------------------------------
 # Helpers — reload video module with patched shutil.which
@@ -76,6 +76,11 @@ def _read_ppm_pixel(path: Path, x: int, y: int) -> tuple[int, int, int]:
         payload = handle.read()
     offset = ((y * width) + x) * 3
     return tuple(payload[offset : offset + 3])  # type: ignore[return-value]
+
+
+def _blend(base: tuple[int, int, int], overlay: tuple[int, int, int, int]) -> tuple[int, int, int]:
+    alpha = overlay[3] / 255.0
+    return tuple(round((base[index] * (1.0 - alpha)) + (overlay[index] * alpha)) for index in range(3))
 
 
 # ---------------------------------------------------------------------------
@@ -300,15 +305,29 @@ def test_probe_video_reads_dimensions_and_duration(monkeypatch: pytest.MonkeyPat
 
 
 def test_render_overlay_image_uses_translucent_safe_area_defaults(tmp_path: Path) -> None:
+    title = "Alpha"
+    subtitle = "Quiet metadata"
+    canvas_width = 1920
+    canvas_height = 1080
     path = render_overlay_image(
         tmp_path / "overlay.ppm",
-        title="Alpha",
-        subtitle="Quiet metadata",
+        title=title,
+        subtitle=subtitle,
         panes=[],
-        canvas_width=1920,
-        canvas_height=1080,
+        canvas_width=canvas_width,
+        canvas_height=canvas_height,
     )
 
+    title_width = len(title.upper()) * 6 * 4
+    subtitle_width = len(subtitle.upper()) * 6 * 2
+    box_width = max(title_width, subtitle_width) + (DEFAULT_OVERLAY_BOX.padding * 2)
+    box_height = (7 * 4) + (7 * 2) + (DEFAULT_OVERLAY_BOX.padding * 2) + 12
+    x0 = DEFAULT_OVERLAY_BOX.margin
+    y0 = canvas_height - DEFAULT_OVERLAY_BOX.margin - box_height
+    expected_background = _blend(MAGENTA, DEFAULT_OVERLAY_BOX.background_rgba)
+
     assert path.exists()
-    assert _read_ppm_pixel(path, 40, 40) == (255, 0, 255)
-    assert _read_ppm_pixel(path, 60, 980) != (255, 0, 255)
+    assert _read_ppm_pixel(path, 40, 40) == MAGENTA
+    assert _read_ppm_pixel(path, x0 + 8, y0 + 8) == expected_background
+    assert _read_ppm_pixel(path, x0 + box_width + 8, y0 + 8) == MAGENTA
+    assert _read_ppm_pixel(path, x0 + 8, y0 - 8) == MAGENTA
