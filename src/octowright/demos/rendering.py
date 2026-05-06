@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,7 @@ from octowright.demos.models import DemoBundle
 from octowright.export import export_script
 from octowright.scenarios_pool import LiveScenario
 from octowright.video import (
+    apply_video_overlay,
     compose_video_grid,
     compose_video_layout,
     extract_frame,
@@ -40,18 +43,39 @@ def render_bundle_video(
     profile = _composition_profile(bundle.id)
     if live is None:
         raise RuntimeError("cannot render demo video without a live scenario")
+    work_path = _temporary_video_path(video_path)
     if profile is None:
         primary = _primary_participant(live, bundle)
         source_video = _find_primary_video(live, close_results, bundle)
-        transcode_video(source_video, video_path)
-        return {
+        transcode_video(source_video, work_path)
+        summary = {
             "mode": "single",
+            "canvas_width": 0,
+            "canvas_height": 0,
+            "panes": [],
             "primary": {
                 "persona": primary["persona"],
                 "role": primary["role"],
                 "kind": primary["kind"],
             },
         }
+        summary["panes"] = [
+            {
+                "persona": primary["persona"],
+                "role": primary["role"],
+                "kind": primary["kind"],
+                "x": 0,
+                "y": 0,
+                "width": 0,
+                "height": 0,
+            }
+        ]
+        metadata = probe_video(work_path)
+        summary["canvas_width"] = int(metadata["width"])
+        summary["canvas_height"] = int(metadata["height"])
+        _finalize_render(bundle, work_path=work_path, video_path=video_path, summary=summary)
+        _finalize_poster(video_path, poster_path)
+        return summary
 
     if profile["mode"] == "grid":
         panes = _grid_panes(
@@ -64,13 +88,15 @@ def render_bundle_video(
         source_videos = [pane["source"] for pane in panes]
         compose_video_grid(
             source_videos,
-            video_path,
+            work_path,
             columns=int(profile["columns"]),
             cell_width=int(profile["cell_width"]),
             cell_height=int(profile["cell_height"]),
         )
         summary = {
             "mode": "grid",
+            "canvas_width": int(profile["columns"]) * int(profile["cell_width"]),
+            "canvas_height": ((len(panes) - 1) // int(profile["columns"]) + 1) * int(profile["cell_height"]),
             "columns": int(profile["columns"]),
             "cell_width": int(profile["cell_width"]),
             "cell_height": int(profile["cell_height"]),
@@ -89,7 +115,7 @@ def render_bundle_video(
         }
     else:
         placements = _featured_video_placements(live, close_results, bundle.id)
-        compose_video_layout(placements, video_path)
+        compose_video_layout(placements, work_path)
         summary = {
             "mode": "featured",
             "canvas_width": 1920,
@@ -107,9 +133,8 @@ def render_bundle_video(
                 for item in placements
             ],
         }
-    extract_frame(video_path, poster_path)
-    if poster_path.stat().st_size > 500_000:
-        optimize_png(poster_path)
+    _finalize_render(bundle, work_path=work_path, video_path=video_path, summary=summary)
+    _finalize_poster(video_path, poster_path)
     return summary
 
 
@@ -154,6 +179,63 @@ def write_artifact_manifest(
     }
     manifest_path = bundle.root / "artifacts" / "manifest.json"
     manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _temporary_video_path(video_path: Path) -> Path:
+    temp_dir = Path(tempfile.mkdtemp(prefix="octowright-demo-render-"))
+    return temp_dir / video_path.name
+
+
+def _finalize_render(bundle: DemoBundle, *, work_path: Path, video_path: Path, summary: dict[str, Any]) -> None:
+    work_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if bundle.hero:
+            overlay = _overlay_payload(bundle, summary)
+            apply_video_overlay(
+                work_path,
+                video_path,
+                title=overlay["title"],
+                subtitle=overlay["subtitle"],
+                panes=overlay["panes"],
+                canvas_width=int(summary["canvas_width"]),
+                canvas_height=int(summary["canvas_height"]),
+            )
+            summary["overlay"] = overlay
+        else:
+            video_path.parent.mkdir(parents=True, exist_ok=True)
+            work_path.replace(video_path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            work_path.unlink()
+        with contextlib.suppress(OSError):
+            work_path.parent.rmdir()
+
+
+def _finalize_poster(video_path: Path, poster_path: Path) -> None:
+    extract_frame(video_path, poster_path)
+    if poster_path.stat().st_size > 500_000:
+        optimize_png(poster_path)
+
+
+def _overlay_payload(bundle: DemoBundle, summary: dict[str, Any]) -> dict[str, Any]:
+    panes = [
+        {
+            "persona": pane["persona"],
+            "role": pane["role"],
+            "kind": pane["kind"],
+            "x": pane["x"],
+            "y": pane["y"],
+        }
+        for pane in summary["panes"]
+    ]
+    subtitle_parts = [bundle.id]
+    if bundle.summary:
+        subtitle_parts.append(bundle.summary)
+    return {
+        "title": bundle.title,
+        "subtitle": " | ".join(subtitle_parts),
+        "panes": panes,
+    }
 
 
 def _find_primary_video(

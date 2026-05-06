@@ -1,0 +1,55 @@
+{
+  "hero_count": 7,
+  "heroes": [
+    {
+      "artifacts_dir": "artifacts/cross-engine-trio",
+      "id": "cross-engine-trio",
+      "payload": "heroes/cross-engine-trio.json",
+      "summary": "Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.",
+      "title": "Cross-Engine Trio"
+    },
+    {
+      "artifacts_dir": "artifacts/first-run-session",
+      "id": "first-run-session",
+      "payload": "heroes/first-run-session.json",
+      "summary": "Launch one browser, perform a visible offline interaction, and inspect the resulting replay and video artifacts.",
+      "title": "First Run Session"
+    },
+    {
+      "artifacts_dir": "artifacts/fixture-lab",
+      "id": "fixture-lab",
+      "payload": "heroes/fixture-lab.json",
+      "summary": "Demonstrate shared mock routes and dialog policy with deterministic local fixture responses wired across multiple participants.",
+      "title": "Fixture Lab"
+    },
+    {
+      "artifacts_dir": "artifacts/macro-replay-loop",
+      "id": "macro-replay-loop",
+      "payload": "heroes/macro-replay-loop.json",
+      "summary": "Capture a deterministic interaction once, replay it against the same local shape, and inspect the stable loop artifacts.",
+      "title": "Macro Replay Loop"
+    },
+    {
+      "artifacts_dir": "artifacts/role-based-duo",
+      "id": "role-based-duo",
+      "payload": "heroes/role-based-duo.json",
+      "summary": "Start two coordinated participants and show role-filtered actions against a simple offline scenario.",
+      "title": "Role-Based Duo"
+    },
+    {
+      "artifacts_dir": "artifacts/seven-mix-orchestration",
+      "id": "seven-mix-orchestration",
+      "payload": "heroes/seven-mix-orchestration.json",
+      "summary": "Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.",
+      "title": "Seven Mix Orchestration"
+    },
+    {
+      "artifacts_dir": "artifacts/verify-suite",
+      "id": "verify-suite",
+      "payload": "heroes/verify-suite.json",
+      "summary": "Run role-specific verification macros as a compact offline scenario suite and surface the replay plus test-report story together.",
+      "title": "Verify Suite"
+    }
+  ],
+  "version": 1
+}

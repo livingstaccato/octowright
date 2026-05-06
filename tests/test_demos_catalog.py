@@ -272,3 +272,39 @@ def test_hero_demo_manifests_exist() -> None:
             assert bundle.recording.default_seed, demo_id
         if demo_id == "macro-replay-loop":
             assert bundle.macro_refs == ["demo/bundles/macro-replay-loop/macros/replay-loop-login.json"]
+
+
+@pytest.mark.parametrize(
+    ("rel_path", "markers"),
+    [
+        (
+            "demo/bundles/cross-engine-trio/seed/engine-grid.html",
+            ['data-surface="engine-grid"', 'data-engine="chromium"', 'data-engine="firefox"', 'data-engine="webkit"'],
+        ),
+        (
+            "demo/bundles/cross-engine-trio/seed/trio-board.html",
+            ['data-surface="trio-board"', 'data-engine="chromium"', 'data-engine="firefox"', 'data-engine="webkit"'],
+        ),
+        (
+            "demo/bundles/role-based-duo/seed/control-room.html",
+            ['data-surface="control-room"', 'data-role="monitor"'],
+        ),
+        (
+            "demo/bundles/role-based-duo/seed/duo-board.html",
+            ['data-surface="duo-board"', 'data-role="player"'],
+        ),
+        (
+            "demo/bundles/verify-suite/seed/verify-stage.html",
+            ['data-surface="verify-stage"', 'data-role="form"', 'data-role="counter"', 'data-role="arithmetic"'],
+        ),
+    ],
+)
+def test_target_hero_seed_pages_are_self_styled_and_offline(rel_path: str, markers: list[str]) -> None:
+    html = Path(rel_path).read_text(encoding="utf-8")
+
+    assert "<style>" in html
+    assert "<script" not in html
+    assert "http://" not in html
+    assert "https://" not in html
+    for marker in markers:
+        assert marker in html
