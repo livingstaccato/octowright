@@ -1,0 +1,18 @@
+{
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl",
+      "artifacts/replay-roundtrip.jsonl"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "macro-replay-loop",
+  "regen_command": "uv run python scripts/demos/record_demo.py macro-replay-loop",
+  "summary": "Capture a deterministic interaction once, replay it against the same local shape, and inspect the stable loop artifacts.",
+  "title": "Macro Replay Loop",
+  "tutorial_export": "exports/macro-replay-loop.json"
+}

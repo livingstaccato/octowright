@@ -1,0 +1,10 @@
+{
+  "players": 7,
+  "monitor": 1,
+  "spectators": 1,
+  "engines": {
+    "webkit": 4,
+    "firefox": 2,
+    "chromium": 2
+  }
+}

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>octowright demos</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="page page--demos">
+  <header class="topbar">
+    <a class="topbar__back" href="/">&larr; dashboard</a>
+    <h1 class="topbar__title">demo gallery</h1>
+    <nav class="topbar__nav" aria-label="Primary">
+      <a class="topbar__link" href="/">dashboard</a>
+      <a class="topbar__link topbar__link--active" href="/demos">demos</a>
+    </nav>
+    <span class="topbar__hint">catalog view</span>
+  </header>
+  <main class="gallery-shell">
+    <section class="gallery-hero" aria-labelledby="gallery-hero-title">
+      <p class="gallery-hero__eyebrow">demo library</p>
+      <h2 id="gallery-hero-title" class="gallery-hero__title">Browse hero and supporting demos without the rest of the dashboard.</h2>
+      <p class="gallery-hero__body">
+        This page narrows the dashboard experience to demo coverage, replay/video artifact counts, and regeneration commands.
+      </p>
+    </section>
+    <div id="app" class="dashboard-grid dashboard-grid--demos">
+      <noscript>This page requires JavaScript.</noscript>
+    </div>
+  </main>
+  <script type="module" src="../src/dashboard.ts"></script>
+</body>
+</html>

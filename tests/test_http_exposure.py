@@ -57,6 +57,8 @@ SENSITIVE_HTTP_ROUTES = [
     ("GET", "/api/macros/login%2Ftest"),
     ("PUT", "/api/macros/login%2Ftest"),
     ("POST", "/api/macros/login%2Ftest/validate"),
+    ("GET", "/api/demos"),
+    ("GET", "/api/demos/demo-id"),
     ("POST", "/api/sessions/s1/selector/validate"),
 ]
 
@@ -93,6 +95,8 @@ SENSITIVE_ROUTE_PATTERNS = {
     ("PUT", "/api/macros/{name:path}"),
     ("POST", "/api/macros/{name:path}/validate"),
     ("GET", "/api/macros/{name:path}/repair_preview"),
+    ("GET", "/api/demos"),
+    ("GET", "/api/demos/{demo_id}"),
     ("POST", "/api/sessions/{id}/selector/validate"),
 }
 
