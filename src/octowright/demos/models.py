@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from octowright.demos.presentation import validate_presentation_mode
+
 
 @dataclass
 class DemoMacroRun:
@@ -32,6 +34,10 @@ class DemoSyncGroup:
     id: str
     roles: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        if not self.roles:
+            raise ValueError("presentation.sync_groups[*].roles must be a non-empty list[str]")
+
 
 @dataclass
 class DemoOverlayConfig:
@@ -46,6 +52,11 @@ class DemoTimingConfig:
     outro_ms: int = 1500
     minimum_ms: int = 4000
 
+    def __post_init__(self) -> None:
+        for field_name in ("intro_ms", "outro_ms", "minimum_ms"):
+            if getattr(self, field_name) < 0:
+                raise ValueError(f"presentation.timing.{field_name} must be >= 0")
+
 
 @dataclass
 class DemoPresentationConfig:
@@ -54,6 +65,9 @@ class DemoPresentationConfig:
     overlay: DemoOverlayConfig = field(default_factory=DemoOverlayConfig)
     timing: DemoTimingConfig = field(default_factory=DemoTimingConfig)
     sync_groups: list[DemoSyncGroup] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        validate_presentation_mode(self.mode)
 
 
 @dataclass
