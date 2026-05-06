@@ -11,11 +11,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ...server import _state
-from .. import state
-from ..dashboard_events import publish_dashboard_invalidation
-from ..exposure import guard_sensitive_http
-from ._common import _read_json_body
+from octowright.http import state
+from octowright.http.dashboard_events import publish_dashboard_invalidation
+from octowright.http.exposure import guard_sensitive_http
+from octowright.http.routes._common import _read_json_body
+from octowright.server import _state
 
 
 async def list_scenarios(_request: Request) -> JSONResponse:
@@ -25,7 +25,7 @@ async def list_scenarios(_request: Request) -> JSONResponse:
     dashboard can offer a "start scenario" button per row. ``live`` is the
     set currently running.
     """
-    from ...scenarios import list_scenarios as _list_disk
+    from octowright.scenarios import list_scenarios as _list_disk
 
     spool = _state.scenario_pool
     return JSONResponse({"live": spool.list_live(), "saved": _list_disk()})

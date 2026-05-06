@@ -12,10 +12,10 @@ import json as _json
 from pathlib import Path
 from typing import Any
 
-from ...export import export_script as _export_script
-from ...recorder import tail_log
-from ...session import DEFAULT_PREVIEW_CHARS
-from .._state import mcp, pool
+from octowright.export import export_script as _export_script
+from octowright.recorder import tail_log
+from octowright.server._state import mcp, pool
+from octowright.session import DEFAULT_PREVIEW_CHARS
 
 
 @mcp.tool(

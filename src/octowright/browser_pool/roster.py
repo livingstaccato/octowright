@@ -8,10 +8,10 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from .visuals import _BADGE_POSITION_DEFAULT
+from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
 if TYPE_CHECKING:
-    from .pool import BrowserPool
+    from octowright.browser_pool.pool import BrowserPool
 
 
 async def close_all(pool: BrowserPool) -> dict[str, Any]:

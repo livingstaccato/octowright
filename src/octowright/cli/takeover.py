@@ -13,7 +13,7 @@ from typing import Any
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
-from ._root import cli
+from octowright.cli._root import cli
 
 
 def _takeover_default_project_config() -> Path:
@@ -30,7 +30,7 @@ def _takeover_render_findings(detections: list[Any]) -> None:
     if not detections:
         click.echo("No competing playwright MCP plugins detected — octowright is already the one.")
         return
-    from .. import takeover as _t
+    from octowright import takeover as _t
 
     click.echo(_t.summarise(detections))
     for d in detections:
@@ -41,7 +41,7 @@ def _takeover_render_findings(detections: list[Any]) -> None:
 
 
 def _takeover_apply_one(detection: Any, *, backup: bool) -> None:
-    from .. import takeover as _t
+    from octowright import takeover as _t
 
     result = _t.apply_takeover(detection, backup=backup)
     if not result.get("disabled"):
@@ -73,7 +73,7 @@ def _takeover_apply_one(detection: Any, *, backup: bool) -> None:
 @click.option("--no-backup", is_flag=True, help="Skip the .bak file (not recommended).")
 def takeover(do_apply: bool, scope: str | None, name: str | None, no_backup: bool) -> None:
     """Detect competing Playwright MCP plugins and optionally take over."""
-    from .. import takeover as _t
+    from octowright import takeover as _t
 
     setup_telemetry()
     try:

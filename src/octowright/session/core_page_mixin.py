@@ -9,8 +9,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ..defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
-from ._protocols import SessionLike
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from octowright.session._protocols import SessionLike
 
 
 class SessionPageMixin(SessionLike):

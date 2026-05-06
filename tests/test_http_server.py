@@ -89,7 +89,13 @@ def client(isolated_recordings: Path, empty_pool: dict[str, Any]) -> TestClient:
     return TestClient(app)
 
 
-def _write_recording(rec_dir: Path, instance_id: str, *, kind: str = "chromium") -> Path:
+def _write_recording(
+    rec_dir: Path,
+    instance_id: str,
+    *,
+    kind: str = "chromium",
+    extra: list[dict[str, Any]] | None = None,
+) -> Path:
     """Synthesise a `<stamp>-<kind>-<id>.jsonl` recording with a launch + navigate + close.
 
     instance_id is what the http_server parses out of the filename (third dash-token).
@@ -108,6 +114,8 @@ def _write_recording(rec_dir: Path, instance_id: str, *, kind: str = "chromium")
         {"ts": "2026-01-01T00:00:01Z", "action": "navigate", "url": "https://example.com/login"},
         {"ts": "2026-01-01T00:00:02Z", "action": "close", "video_path": None, "trace_path": None},
     ]
+    if extra:
+        rows.extend(extra)
     p.write_text("".join(json.dumps(r) + "\n" for r in rows))
     return p
 
@@ -193,6 +201,33 @@ def test_list_sessions_with_live_session(
     assert all(s["id"] != "livethere01" for s in body["closed"])
 
 
+def test_list_sessions_live_session_uses_launch_timestamp(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = _write_recording(isolated_recordings, "livetstime01")
+    fake_session = SimpleNamespace(
+        instance_id="livetstime01",
+        kind="chromium",
+        label=None,
+        profile=None,
+        url="https://example.com/live",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[],
+        downloads=[],
+        pages=[None],
+    )
+    empty_pool["pool"]._sessions["livetstime01"] = fake_session
+
+    r = client.get("/api/sessions")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["live"][0]["started_at"] == "2026-01-01T00:00:00Z"
+
+
 # ---------------------------------------------------------------------------
 # session detail
 # ---------------------------------------------------------------------------
@@ -213,6 +248,24 @@ def test_session_detail_closed(client: TestClient, isolated_recordings: Path) ->
     assert body["markdown_path"] is None
     assert body["action_count"] == 3
     assert body["video_path"] is None
+
+
+def test_session_detail_counts_events_and_actions_separately(client: TestClient, isolated_recordings: Path) -> None:
+    _write_recording(
+        isolated_recordings,
+        "countsplit00",
+        extra=[
+            {"action": "console", "text": "hello"},
+            {"action": "download_saved", "path": "/tmp/file.txt"},
+        ],
+    )
+    r = client.get("/api/sessions/countsplit00")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["event_count"] == 5
+    assert body["action_count"] == 3
+    assert body["console_count"] == 1
+    assert body["download_count"] == 1
 
 
 def test_session_detail_closed_includes_markdown_path(client: TestClient, isolated_recordings: Path) -> None:

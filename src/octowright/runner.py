@@ -14,8 +14,8 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from . import macros as macro_mod
-from .defaults import DEFAULT_URL  # noqa: F401 — kept for downstream callers; runner uses about:blank
+from octowright import macros as macro_mod
+from octowright.defaults import DEFAULT_URL  # noqa: F401 — kept for downstream callers; runner uses about:blank
 
 log = get_logger(__name__)
 
@@ -48,7 +48,7 @@ async def run_suite(
     """Discover test macros, run each in an ephemeral browser, collect results, write JUnit XML.
 
     *macros_dir* is accepted for API completeness (future: filter to a subdir).
-    Currently discovery always uses the global MACROS_DIR from macros.py.
+    Currently discovery always uses the global MACROS_DIR from octowright.macros.storage.
     """
     if max_parallel < 1:
         raise ValueError("max_parallel must be >= 1")

@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import personas as _personas
-from .defaults import PROFILES_DIR, SUPPORTED_KINDS
+from octowright import personas as _personas
+from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
 
 
 def profile_dir(kind: str, name: str) -> Path:

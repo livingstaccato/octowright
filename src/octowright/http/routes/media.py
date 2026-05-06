@@ -15,8 +15,8 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from .. import state
-from ..discovery import (
+from octowright.http import state
+from octowright.http.discovery import (
     _find_recording_for,
     _live_session_or_none,
     _resolve_log_path,
@@ -24,8 +24,8 @@ from ..discovery import (
     _resolve_trace_path,
     _resolve_video_path,
 )
-from ..exposure import guard_sensitive_http
-from ._common import _parse_bool
+from octowright.http.exposure import guard_sensitive_http
+from octowright.http.routes._common import _parse_bool
 
 
 def _frame_cache_path(session_id: str, t: float) -> Path:

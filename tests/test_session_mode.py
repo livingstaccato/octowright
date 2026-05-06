@@ -111,6 +111,56 @@ async def test_session_and_ephemeral_are_mutually_exclusive(isolated_pool) -> No
 
 
 @pytest.mark.asyncio
+async def test_session_and_profile_are_mutually_exclusive(isolated_pool) -> None:
+    pool, _ = isolated_pool
+    try:
+        with pytest.raises(ValueError, match="profile and session are mutually exclusive"):
+            await pool.launch(
+                kind="chromium",
+                url="data:text/html,<html></html>",
+                headed=False,
+                profile="persistent-work",
+                viewport_w=400,
+                viewport_h=300,
+                session=True,
+            )
+    finally:
+        await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_session_launches_do_not_reuse_tmpdir(isolated_pool) -> None:
+    pool, _ = isolated_pool
+    try:
+        first = await pool.launch(
+            kind="chromium",
+            url="data:text/html,<html></html>",
+            headed=False,
+            viewport_w=400,
+            viewport_h=300,
+            session=True,
+        )
+        first_session = pool.get(first["instance_id"])
+        assert first_session is not None
+        first_tmp = first_session.user_data_dir
+        await pool.close_all()
+
+        second = await pool.launch(
+            kind="chromium",
+            url="data:text/html,<html></html>",
+            headed=False,
+            viewport_w=400,
+            viewport_h=300,
+            session=True,
+        )
+        second_session = pool.get(second["instance_id"])
+        assert second_session is not None
+        assert second_session.user_data_dir != first_tmp
+    finally:
+        await pool.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_session_mode_records_user_data_dir(
     isolated_pool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
