@@ -197,7 +197,7 @@ async def session_launch(request: Request) -> JSONResponse:
         "profile": payload.get("profile"),
         "viewport_w": payload.get("viewport_w"),
         "viewport_h": payload.get("viewport_h"),
-        "headed": payload.get("headed", True),
+        "headed": payload.get("headed") if "headed" in payload else None,
         "stabilize": payload.get("stabilize", False),
         "record_video": payload.get("record_video", False),
         "trace": payload.get("trace", False),

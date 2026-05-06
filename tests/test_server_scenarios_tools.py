@@ -39,7 +39,11 @@ def test_scenario_remap_participants_forwards(_patch_deps: dict[str, MagicMock])
     _patch_deps["scenario_pool"].remap_participants.return_value = {"scenario_id": "s", "count": 1, "applied": []}
     out = _scenarios.scenario_remap_participants("s", [{"old_instance_id": "a", "new_instance_id": "b"}])
     assert out["count"] == 1
-    _patch_deps["scenario_pool"].remap_participants.assert_called_once()
+    _patch_deps["scenario_pool"].remap_participants.assert_called_once_with(
+        scenario_id="s",
+        remaps=[{"old_instance_id": "a", "new_instance_id": "b"}],
+        browser_pool=_patch_deps["pool"],
+    )
 
 
 def test_scenario_list_and_status(_patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch) -> None:
