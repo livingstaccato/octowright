@@ -1,0 +1,13 @@
+{
+  "suite": "verify-suite",
+  "roles": [
+    "form",
+    "counter",
+    "arithmetic"
+  ],
+  "expected_exit_code": 0,
+  "artifacts": [
+    "report.xml",
+    "replay.jsonl"
+  ]
+}

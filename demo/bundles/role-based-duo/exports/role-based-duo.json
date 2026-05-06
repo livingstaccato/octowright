@@ -1,0 +1,17 @@
+{
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "role-based-duo",
+  "regen_command": "uv run python scripts/demos/record_demo.py role-based-duo",
+  "summary": "Start two coordinated participants and show role-filtered actions against a simple offline scenario.",
+  "title": "Role-Based Duo",
+  "tutorial_export": "exports/role-based-duo.json"
+}

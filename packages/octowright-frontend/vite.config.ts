@@ -25,11 +25,12 @@ export default defineConfig({
   root: resolve(__dirname, "static"),
   build: {
     // outDir is resolved relative to `root`, so go up two extra levels.
-    outDir: "../../../src/octowright/server/frontend",
+    outDir: process.env.OCTOWRIGHT_FRONTEND_OUTDIR ?? "../../../src/octowright/server/frontend",
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
       input: {
+        demos: resolve(__dirname, "static/demos.html"),
         index: resolve(__dirname, "static/index.html"),
         session: resolve(__dirname, "static/session.html"),
       },

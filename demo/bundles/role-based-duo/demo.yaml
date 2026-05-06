@@ -1,0 +1,36 @@
+id: role-based-duo
+title: Role-Based Duo
+summary: Start two coordinated participants and show role-filtered actions against a simple offline scenario.
+hero: true
+audiences:
+  - evaluators
+  - users
+  - contributors
+tags:
+  - hero
+  - roles
+  - scenarios
+  - broadcast
+engines:
+  - webkit
+roles:
+  - player
+  - monitor
+source_refs:
+  scenarios:
+    - examples/scenarios/duo.yaml
+  macros:
+    - examples/macros/test-selector-presence.json
+artifact_expectations:
+  replay:
+    - artifacts/replay.jsonl
+  video:
+    - artifacts/demo.mp4
+    - artifacts/poster.png
+regen:
+  command: uv run python scripts/demos/record_demo.py role-based-duo
+tutorial_export:
+  include: exports/role-based-duo.json
+seed_refs:
+  - seed/control-room.html
+  - seed/duo-board.html

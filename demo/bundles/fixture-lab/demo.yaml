@@ -1,0 +1,37 @@
+id: fixture-lab
+title: Fixture Lab
+summary: Demonstrate shared mock routes and dialog policy with deterministic local fixture responses wired across multiple participants.
+hero: true
+audiences:
+  - evaluators
+  - contributors
+  - testers
+tags:
+  - hero
+  - fixtures
+  - mock-routes
+  - offline
+engines:
+  - webkit
+roles:
+  - player
+source_refs:
+  scenarios:
+    - examples/scenarios/with-fixtures.yaml
+  macros:
+    - examples/macros/test-smoke-page-ready.json
+artifact_expectations:
+  replay:
+    - artifacts/replay.jsonl
+    - artifacts/mock-routes.json
+  video:
+    - artifacts/demo.mp4
+    - artifacts/poster.png
+regen:
+  command: uv run python scripts/demos/record_demo.py fixture-lab
+tutorial_export:
+  include: exports/fixture-lab.json
+seed_refs:
+  - seed/fixtures.html
+  - seed/api-health.json
+  - seed/api-time.json

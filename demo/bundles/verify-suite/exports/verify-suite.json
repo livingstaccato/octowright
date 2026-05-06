@@ -1,0 +1,18 @@
+{
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl",
+      "artifacts/report.xml"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "verify-suite",
+  "regen_command": "uv run python scripts/demos/record_demo.py verify-suite",
+  "summary": "Run role-specific verification macros as a compact offline scenario suite and surface the replay plus test-report story together.",
+  "title": "Verify Suite",
+  "tutorial_export": "exports/verify-suite.json"
+}

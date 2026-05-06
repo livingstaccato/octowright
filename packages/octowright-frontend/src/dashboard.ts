@@ -1,6 +1,7 @@
 import {
   dashboardEventsUrl,
   deleteRecording,
+  getDemos,
   getMacro,
   getMacroRepairPreview,
   validateMacro,
@@ -16,9 +17,11 @@ import {
   startScenario,
   updatePersonaYaml,
 } from "./api.js";
+import { renderDemoGallery } from "./demo-gallery.js";
 import { formatDateTime, shortUrl } from "./format.js";
 import { getLogger, initTelemetry } from "./telemetry.js";
 import type {
+  DemoListResponse,
   LiveScenario,
   MacroAction,
   MacroDetail,
@@ -42,6 +45,7 @@ interface DashboardState {
   scenarios: ScenarioListResponse;
   personas: PersonaSummary[];
   macros: MacroSummary[];
+  demos: DemoListResponse;
 }
 
 const EMPTY_STATE: DashboardState = {
@@ -49,6 +53,7 @@ const EMPTY_STATE: DashboardState = {
   scenarios: { live: [] },
   personas: [],
   macros: [],
+  demos: { heroes: [], supporting: [] },
 };
 
 // Module-level persona sizes cache — populated lazily so initial render isn't blocked.
@@ -591,13 +596,14 @@ function renderMacroRepairPreview(preview: MacroRepairPreview): HTMLElement {
 // ─── state loading ────────────────────────────────────────────────────────────
 
 export async function loadState(): Promise<DashboardState> {
-  const [sessions, scenarios, personas, macros] = await Promise.all([
+  const [sessions, scenarios, personas, macros, demos] = await Promise.all([
     getSessions().catch(() => EMPTY_STATE.sessions),
     getScenarios().catch(() => EMPTY_STATE.scenarios),
     getPersonas().catch<PersonaSummary[]>(() => []),
     getMacros().catch<MacroSummary[]>(() => []),
+    getDemos().catch(() => EMPTY_STATE.demos),
   ]);
-  return { sessions, scenarios, personas, macros };
+  return { sessions, scenarios, personas, macros, demos };
 }
 
 // ─── render ───────────────────────────────────────────────────────────────────
@@ -611,6 +617,7 @@ export function renderDashboard(root: HTMLElement, state: DashboardState): void 
   );
   root.innerHTML = "";
   root.append(
+    section("Demo gallery", "demo-gallery", renderDemoGalleryPanel(state.demos)),
     section("Live browsers", "live-browsers", renderSessionTable(state.sessions.live, true)),
     section("Live scenarios", "live-scenarios", renderScenarioList(state.scenarios.live)),
     section("Personas", "personas", renderPersonaGrid(state.personas)),
@@ -629,6 +636,12 @@ export function renderDashboard(root: HTMLElement, state: DashboardState): void 
       open: openPanels.get("panel-macros") ?? false,
     }),
   );
+}
+
+function renderDemoGalleryPanel(demos: DemoListResponse): HTMLElement {
+  const container = document.createElement("div");
+  renderDemoGallery(container, demos);
+  return container;
 }
 
 function section(
