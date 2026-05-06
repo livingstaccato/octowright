@@ -1,0 +1,17 @@
+{
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "first-run-session",
+  "regen_command": "uv run python scripts/demos/record_demo.py first-run-session",
+  "summary": "Launch one browser, perform a visible offline interaction, and inspect the resulting replay and video artifacts.",
+  "title": "First Run Session",
+  "tutorial_export": "exports/first-run-session.json"
+}

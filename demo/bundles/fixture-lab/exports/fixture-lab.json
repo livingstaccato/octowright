@@ -1,0 +1,18 @@
+{
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl",
+      "artifacts/mock-routes.json"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "fixture-lab",
+  "regen_command": "uv run python scripts/demos/record_demo.py fixture-lab",
+  "summary": "Demonstrate shared mock routes and dialog policy with deterministic local fixture responses wired across multiple participants.",
+  "title": "Fixture Lab",
+  "tutorial_export": "exports/fixture-lab.json"
+}
