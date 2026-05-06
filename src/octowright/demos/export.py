@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from octowright.demos.models import DemoBundle
@@ -18,7 +19,7 @@ def build_tutorial_export(bundle: DemoBundle, *, tutorial_export_path: Path | st
             resolved_export = path_value.relative_to(bundle.root).as_posix()
         except ValueError:
             resolved_export = path_value.as_posix()
-    return {
+    payload = {
         "id": bundle.id,
         "title": bundle.title,
         "summary": bundle.summary,
@@ -30,3 +31,7 @@ def build_tutorial_export(bundle: DemoBundle, *, tutorial_export_path: Path | st
             "replay": list(bundle.replay_artifacts),
         },
     }
+    manifest_path = bundle.root / "artifacts" / "manifest.json"
+    if manifest_path.exists():
+        payload["artifact_manifest"] = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return payload
