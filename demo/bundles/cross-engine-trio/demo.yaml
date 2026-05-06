@@ -1,0 +1,37 @@
+id: cross-engine-trio
+title: Cross-Engine Trio
+summary: Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.
+hero: true
+audiences:
+  - evaluators
+  - users
+  - contributors
+tags:
+  - hero
+  - engines
+  - scenarios
+  - smoke
+engines:
+  - chromium
+  - firefox
+  - webkit
+roles:
+  - player
+source_refs:
+  scenarios:
+    - examples/scenarios/cross-engine.yaml
+  macros:
+    - examples/macros/test-smoke-page-ready.json
+artifact_expectations:
+  replay:
+    - artifacts/replay.jsonl
+  video:
+    - artifacts/demo.mp4
+    - artifacts/poster.png
+regen:
+  command: uv run python scripts/demos/record_demo.py cross-engine-trio
+tutorial_export:
+  include: exports/cross-engine-trio.json
+seed_refs:
+  - seed/engine-grid.html
+  - seed/trio-board.html

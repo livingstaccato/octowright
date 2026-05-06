@@ -1,0 +1,102 @@
+# Octowright Demo Catalog
+
+## Hero Demos
+
+### Cross-Engine Trio
+
+- ID: `cross-engine-trio`
+- Summary: Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.
+- Tags: `hero`, `engines`, `scenarios`, `smoke`
+- Audiences: `evaluators`, `users`, `contributors`
+- Regen: `uv run python scripts/demos/record_demo.py cross-engine-trio`
+- Artifacts: replay 0/1, video 0/2
+- Generation status: not-generated
+- Last generated: n/a
+- Replay artifacts: declared `artifacts/replay.jsonl`
+- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+
+### First Run Session
+
+- ID: `first-run-session`
+- Summary: Launch one browser, perform a visible offline interaction, and inspect the resulting replay and video artifacts.
+- Tags: `hero`, `onboarding`, `recording`, `offline`
+- Audiences: `evaluators`, `users`, `contributors`
+- Regen: `uv run python scripts/demos/record_demo.py first-run-session`
+- Artifacts: replay 0/1, video 0/2
+- Generation status: not-generated
+- Last generated: n/a
+- Replay artifacts: declared `artifacts/replay.jsonl`
+- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+
+### Fixture Lab
+
+- ID: `fixture-lab`
+- Summary: Demonstrate shared mock routes and dialog policy with deterministic local fixture responses wired across multiple participants.
+- Tags: `hero`, `fixtures`, `mock-routes`, `offline`
+- Audiences: `evaluators`, `contributors`, `testers`
+- Regen: `uv run python scripts/demos/record_demo.py fixture-lab`
+- Artifacts: replay 0/2, video 0/2
+- Generation status: not-generated
+- Last generated: n/a
+- Replay artifacts: declared `artifacts/replay.jsonl`, `artifacts/mock-routes.json`
+- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+
+### Macro Replay Loop
+
+- ID: `macro-replay-loop`
+- Summary: Capture a deterministic interaction once, replay it against the same local shape, and inspect the stable loop artifacts.
+- Tags: `hero`, `macros`, `replay`, `offline`
+- Audiences: `evaluators`, `users`, `contributors`
+- Regen: `uv run python scripts/demos/record_demo.py macro-replay-loop`
+- Artifacts: replay 0/2, video 0/2
+- Generation status: not-generated
+- Last generated: n/a
+- Replay artifacts: declared `artifacts/replay.jsonl`, `artifacts/replay-roundtrip.jsonl`
+- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+
+### Role-Based Duo
+
+- ID: `role-based-duo`
+- Summary: Start two coordinated participants and show role-filtered actions against a simple offline scenario.
+- Tags: `hero`, `roles`, `scenarios`, `broadcast`
+- Audiences: `evaluators`, `users`, `contributors`
+- Regen: `uv run python scripts/demos/record_demo.py role-based-duo`
+- Artifacts: replay 0/1, video 0/2
+- Generation status: not-generated
+- Last generated: n/a
+- Replay artifacts: declared `artifacts/replay.jsonl`
+- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+
+### Seven Mix Orchestration
+
+- ID: `seven-mix-orchestration`
+- Summary: Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.
+- Tags: `hero`, `orchestration`, `multi-window`, `mixed-engine`
+- Audiences: `evaluators`, `users`, `contributors`
+- Regen: `uv run python scripts/demos/record_demo.py seven-mix-orchestration`
+- Artifacts: replay 0/2, video 0/2
+- Generation status: not-generated
+- Last generated: n/a
+- Replay artifacts: declared `artifacts/replay.jsonl`, `artifacts/participant-roster.json`
+- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+
+### Verify Suite
+
+- ID: `verify-suite`
+- Summary: Run role-specific verification macros as a compact offline scenario suite and surface the replay plus test-report story together.
+- Tags: `hero`, `verify`, `testing`, `junit`
+- Audiences: `evaluators`, `contributors`, `testers`
+- Regen: `uv run python scripts/demos/record_demo.py verify-suite`
+- Artifacts: replay 0/2, video 0/2
+- Generation status: not-generated
+- Last generated: n/a
+- Replay artifacts: declared `artifacts/replay.jsonl`, `artifacts/report.xml`
+- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+
+
+## Full Library
+
+Supporting demos appear here for the complete non-hero catalog; hero demos are featured above.
+
+No supporting demos yet.
+

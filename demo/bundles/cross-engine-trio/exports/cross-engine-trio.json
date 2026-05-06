@@ -1,0 +1,17 @@
+{
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "cross-engine-trio",
+  "regen_command": "uv run python scripts/demos/record_demo.py cross-engine-trio",
+  "summary": "Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.",
+  "title": "Cross-Engine Trio",
+  "tutorial_export": "exports/cross-engine-trio.json"
+}

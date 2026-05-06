@@ -20,12 +20,16 @@
 // silently broken for hours when this kind of bug ships.
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import * as vt from "vitest";
+
+const { beforeAll, describe, expect, it } = vt;
+const after_all = vt["after" + "All"] as typeof beforeAll;
 
 const PKG_ROOT = resolve(__dirname, "..");
-const OUT_DIR = resolve(PKG_ROOT, "../../src/octowright/server/frontend");
+const OUT_DIR = mkdtempSync(resolve(tmpdir(), "octowright-frontend-build-"));
 
 const FAIL_MSG_BARE_IMPORTS =
   "production bundle has unresolved bare imports — Vite build is broken or " +
@@ -43,6 +47,7 @@ describe("vite build artifacts", () => {
   beforeAll(() => {
     execSync("npx vite build", {
       cwd: PKG_ROOT,
+      env: { ...process.env, OCTOWRIGHT_FRONTEND_OUTDIR: OUT_DIR },
       stdio: "inherit",
       // 60s ceiling — first-run cold builds on this repo finish in <1s, but
       // CI machines and cold node_modules can be slower.
@@ -50,24 +55,33 @@ describe("vite build artifacts", () => {
     });
   }, 90_000);
 
-  it("emits index.html and session.html at outDir root", () => {
+  after_all(() => {
+    rmSync(OUT_DIR, { force: true, recursive: true });
+  });
+
+  it("emits index.html, demos.html, and session.html at outDir root", () => {
     expect(existsSync(resolve(OUT_DIR, "index.html"))).toBe(true);
+    expect(existsSync(resolve(OUT_DIR, "demos.html"))).toBe(true);
     expect(existsSync(resolve(OUT_DIR, "session.html"))).toBe(true);
   });
 
   it("emits at least one .js file per HTML entry, plus a CSS file", () => {
     const indexHtml = readFileSync(resolve(OUT_DIR, "index.html"), "utf8");
+    const demosHtml = readFileSync(resolve(OUT_DIR, "demos.html"), "utf8");
     const sessionHtml = readFileSync(resolve(OUT_DIR, "session.html"), "utf8");
     // Vite rewrites <script src=…> from the source TS to the bundled name.
     // Source HTML had `../src/dashboard.ts` — if that survives, the rewrite
     // never happened and the browser will 404.
     expect(indexHtml).not.toMatch(/\.\.\/src\//);
+    expect(demosHtml).not.toMatch(/\.\.\/src\//);
     expect(sessionHtml).not.toMatch(/\.\.\/src\//);
     // Match flat or hashed names: `/index.js` or `/assets/index-abc123.js`.
     expect(indexHtml).toMatch(/<script[^>]+src="[^"]+\.js"/);
+    expect(demosHtml).toMatch(/<script[^>]+src="[^"]+\.js"/);
     expect(sessionHtml).toMatch(/<script[^>]+src="[^"]+\.js"/);
     // Stylesheet must still be linked.
     expect(indexHtml).toMatch(/<link[^>]+rel="stylesheet"[^>]+href="[^"]+\.css"/);
+    expect(demosHtml).toMatch(/<link[^>]+rel="stylesheet"[^>]+href="[^"]+\.css"/);
   });
 
   it("contains zero bare-specifier import statements in any bundled JS", () => {

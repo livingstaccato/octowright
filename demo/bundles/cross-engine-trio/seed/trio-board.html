@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Cross Engine Trio</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, sans-serif;
+        background: #f4f7fb;
+        color: #132238;
+      }
+      main {
+        max-width: 52rem;
+        margin: 0 auto;
+        padding: 2rem;
+      }
+      .grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      article {
+        padding: 1rem;
+        background: #ffffff;
+        border: 1px solid #d8e1ef;
+        border-radius: 0.9rem;
+      }
+      .pill {
+        display: inline-block;
+        margin-bottom: 0.75rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 999px;
+        background: #dceafe;
+        color: #0b4a78;
+        font-size: 0.8rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Three engines, one deterministic page</h1>
+      <div class="grid">
+        <article>
+          <span class="pill">chromium</span>
+          <p>Fast smoke path for the same offline DOM.</p>
+        </article>
+        <article>
+          <span class="pill">firefox</span>
+          <p>Useful for parity checks and side-by-side recordings.</p>
+        </article>
+        <article>
+          <span class="pill">webkit</span>
+          <p>Matches the smallest first-run story while sharing the same shape.</p>
+        </article>
+      </div>
+    </main>
+  </body>
+</html>
