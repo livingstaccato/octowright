@@ -87,6 +87,8 @@ def test_load_demo_bundle_reads_demo_yaml_fields(tmp_path: Path) -> None:
     assert bundle.recording.macros[0].args == {"email": "demo@example.com"}
     assert bundle.recording.verify_report == "artifacts/report.xml"
     assert bundle.recording.extras == ["participant-roster"]
+    assert bundle.presentation.mode == "single-clean"
+    assert bundle.presentation.primary_asset == "hero_video"
     assert bundle.root == bundle_dir
 
 

@@ -28,6 +28,35 @@ class DemoRecordingConfig:
 
 
 @dataclass
+class DemoSyncGroup:
+    id: str
+    roles: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DemoOverlayConfig:
+    enabled: bool = True
+    style: str = "subtle"
+    placement: str = "bottom-left"
+
+
+@dataclass
+class DemoTimingConfig:
+    intro_ms: int = 0
+    outro_ms: int = 1500
+    minimum_ms: int = 4000
+
+
+@dataclass
+class DemoPresentationConfig:
+    mode: str = "single-clean"
+    primary_asset: str = "hero_video"
+    overlay: DemoOverlayConfig = field(default_factory=DemoOverlayConfig)
+    timing: DemoTimingConfig = field(default_factory=DemoTimingConfig)
+    sync_groups: list[DemoSyncGroup] = field(default_factory=list)
+
+
+@dataclass
 class DemoBundle:
     id: str
     title: str
@@ -45,6 +74,7 @@ class DemoBundle:
     regen_command: str | None = None
     tutorial_export: str | None = None
     recording: DemoRecordingConfig = field(default_factory=DemoRecordingConfig)
+    presentation: DemoPresentationConfig = field(default_factory=DemoPresentationConfig)
     root: Path = field(default_factory=Path)
 
     @property
