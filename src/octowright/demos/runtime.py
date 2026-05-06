@@ -21,7 +21,7 @@ from octowright.recorder import tail_log
 from octowright.runner import _write_junit
 from octowright.scenarios import Participant, Scenario, load_python_scenario, load_yaml_scenario
 from octowright.scenarios_pool import LiveScenario, ScenarioPool
-from octowright.video import optimize_png, transcode_video
+from octowright.video import compose_video_grid, extract_frame, optimize_png, transcode_video
 
 
 async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
@@ -52,8 +52,7 @@ async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
     _write_supporting_artifacts(bundle, live, scenario, replay_path)
     _write_exports(replay_path)
     video_path = _primary_video_path(bundle)
-    source_video = _find_primary_video(live, close_results, bundle)
-    transcode_video(source_video, video_path)
+    _render_bundle_video(bundle, live, close_results, video_path)
     return {
         "bundle_id": bundle.id,
         "replay_path": str(replay_path),
@@ -247,6 +246,59 @@ def _find_primary_video(
     if not isinstance(raw, str) or not raw:
         raise RuntimeError(f"demo bundle {bundle.id!r} did not produce a source video")
     return Path(raw)
+
+
+def _render_bundle_video(
+    bundle: DemoBundle,
+    live: LiveScenario | None,
+    close_results: dict[str, dict[str, Any]],
+    video_path: Path,
+) -> None:
+    profile = _composition_profile(bundle.id)
+    if live is None:
+        raise RuntimeError("cannot render demo video without a live scenario")
+    poster_path = _primary_poster_path(bundle)
+    if profile is None:
+        source_video = _find_primary_video(live, close_results, bundle)
+        transcode_video(source_video, video_path)
+        return
+
+    source_videos = _ordered_video_sources(live, close_results)
+    compose_video_grid(
+        source_videos,
+        video_path,
+        columns=profile["columns"],
+        cell_width=profile["cell_width"],
+        cell_height=profile["cell_height"],
+    )
+    extract_frame(video_path, poster_path)
+    if poster_path.stat().st_size > 500_000:
+        optimize_png(poster_path)
+
+
+def _ordered_video_sources(
+    live: LiveScenario,
+    close_results: dict[str, dict[str, Any]],
+) -> list[Path]:
+    ordered: list[Path] = []
+    for participant in live.participants:
+        result = close_results.get(participant["instance_id"], {})
+        raw_path = result.get("video_path")
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        ordered.append(Path(raw_path))
+    if not ordered:
+        raise RuntimeError("no recorded participant videos were available for composition")
+    return ordered
+
+
+def _composition_profile(bundle_id: str) -> dict[str, int] | None:
+    profiles: dict[str, dict[str, int]] = {
+        "cross-engine-trio": {"columns": 3, "cell_width": 640, "cell_height": 360},
+        "role-based-duo": {"columns": 2, "cell_width": 960, "cell_height": 540},
+        "seven-mix-orchestration": {"columns": 3, "cell_width": 640, "cell_height": 360},
+    }
+    return profiles.get(bundle_id)
 
 
 def _primary_participant(live: LiveScenario, bundle: DemoBundle) -> dict[str, Any]:

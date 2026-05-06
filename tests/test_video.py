@@ -176,3 +176,39 @@ def test_extract_frames_raises_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch, 
     video.touch()
     with pytest.raises(RuntimeError, match="ffmpeg exited 1"):
         _v.extract_frames(video, tmp_path / "out", fps=1.0)
+
+
+def test_extract_frame_emits_single_frame_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _v, cmds = _import_video_mock_run(monkeypatch, tmp_path)
+    video = tmp_path / "test.webm"
+    video.touch()
+    out = tmp_path / "poster.png"
+
+    _v.extract_frame(video, out, at_time=1.25)
+
+    assert len(cmds) == 1
+    cmd = cmds[0]
+    assert cmd[0] == "/fake/ffmpeg"
+    assert cmd[cmd.index("-ss") + 1] == "1.25"
+    assert cmd[cmd.index("-i") + 1] == str(video)
+    assert cmd[-2] == str(out)
+
+
+def test_compose_video_grid_builds_xstack_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _v, cmds = _import_video_mock_run(monkeypatch, tmp_path)
+    inputs = [tmp_path / "a.webm", tmp_path / "b.webm", tmp_path / "c.webm"]
+    for path in inputs:
+        path.touch()
+    out = tmp_path / "composite.mp4"
+
+    _v.compose_video_grid(inputs, out, columns=3, cell_width=640, cell_height=360)
+
+    assert len(cmds) == 1
+    cmd = cmds[0]
+    assert cmd[0] == "/fake/ffmpeg"
+    assert cmd.count("-i") == 3
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert "xstack=inputs=3" in filter_complex
+    assert "layout=0_0|640_0|1280_0" in filter_complex
+    assert "scale=640:360" in filter_complex
+    assert cmd[-2] == str(out)

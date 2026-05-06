@@ -12,13 +12,13 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
   await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html");
-  ctx = await firefox.launchPersistentContext("/Users/tim/.config/octowright/profiles/cx-firefox/firefox", {
+  ctx = await chromium.launchPersistentContext("/Users/tim/.config/octowright/profiles/cx-chromium/chromium", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
   await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html");
-  ctx = await chromium.launchPersistentContext("/Users/tim/.config/octowright/profiles/cx-chromium/chromium", {
+  ctx = await firefox.launchPersistentContext("/Users/tim/.config/octowright/profiles/cx-firefox/firefox", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });
