@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .._state import mcp, pool
+from octowright.server._state import mcp, pool
 
 
 @mcp.tool(

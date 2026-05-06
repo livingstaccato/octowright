@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 if TYPE_CHECKING:
-    from .session import BrowserSession
+    from octowright.session import BrowserSession
 
 log = get_logger(__name__)
 

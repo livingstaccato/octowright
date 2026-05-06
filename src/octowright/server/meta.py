@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import takeover as _takeover
-from ._state import mcp, pool, scenario_pool
+from octowright import takeover as _takeover
+from octowright.server._state import mcp, pool, scenario_pool
 
 
 @mcp.tool(
@@ -81,7 +81,7 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
     Reports `running: false` with an `error` field when the HTTP sidecar
     failed to bind (e.g., port collision, sidecar not started).
     """
-    from .. import http as _http
+    from octowright import http as _http
 
     status = _http.runtime_status()
     base_url = _http.runtime_url()
@@ -89,7 +89,7 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
     closed_count = 0
     live_count = pool.active_count()
     try:
-        from ..defaults import RECORDINGS_DIR
+        from octowright.defaults import RECORDINGS_DIR
 
         if RECORDINGS_DIR.exists():
             closed_count = sum(1 for _ in RECORDINGS_DIR.glob("*.jsonl"))
@@ -129,11 +129,11 @@ def octowright_status() -> dict[str, Any]:
     import os
     import time
 
-    from .. import http as _http
-    from .. import personas as _personas
-    from .. import session_manifest as _session_manifest
-    from .. import singleton as _singleton
-    from ..defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
+    from octowright import http as _http
+    from octowright import personas as _personas
+    from octowright import session_manifest as _session_manifest
+    from octowright import singleton as _singleton
+    from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 
     lock = _singleton.read_lock()
     daemon_pid: int | None = None

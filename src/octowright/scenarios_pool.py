@@ -101,7 +101,7 @@ class ScenarioPool:
         return {"scenario_id": scenario_id, "applied": applied, "count": len(applied)}
 
     async def start(self, *, name: str | None = None, browser_pool: Any, spec: Any | None = None) -> LiveScenario:
-        from .scenarios import load_scenario, resolve_launch_kwargs
+        from octowright.scenarios import load_scenario, resolve_launch_kwargs
 
         if spec is None:
             if name is None:
@@ -151,7 +151,7 @@ class ScenarioPool:
             raise KeyError(self._missing_scenario_message(scenario_id))
         summary: dict[str, Any] = {"scenario_id": scenario_id, "teardown_errors": [], "closed": []}
         if live.spec.teardown_macro:
-            from . import macros as _macros
+            from octowright import macros as _macros
 
             for p in live.participants:
                 try:
@@ -168,7 +168,7 @@ class ScenarioPool:
         return summary
 
     def tail(self, *, scenario_id: str, since_cursors: dict[str, int] | None = None) -> dict[str, Any]:
-        from .recorder import tail_log
+        from octowright.recorder import tail_log
 
         live = self.get(scenario_id)
         cursors = dict(since_cursors or {})
@@ -196,7 +196,7 @@ class ScenarioPool:
     ) -> dict[str, Any]:
         import asyncio as _asyncio
 
-        from . import macros as _macros
+        from octowright import macros as _macros
 
         live = self.get(scenario_id)
         targets = [p for p in live.participants if role is None or p["role"] == role]
@@ -286,8 +286,8 @@ async def _apply_fixtures(browser_pool: Any, live: LiveScenario, fixtures: dict[
 async def _run_startup_macros(browser_pool: Any, live: LiveScenario) -> None:
     import asyncio as _asyncio
 
-    from . import macros as _macros
-    from .scenarios import resolve_startup_macros
+    from octowright import macros as _macros
+    from octowright.scenarios import resolve_startup_macros
 
     async def _run_for_participant(participant_dict: dict[str, Any], participant_spec: Any) -> None:
         for macro_name in resolve_startup_macros(participant_spec):

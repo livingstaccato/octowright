@@ -9,11 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from ..defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
-from ._protocols import SessionLike
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from octowright.session._protocols import SessionLike
 
 if TYPE_CHECKING:
-    from .core import BrowserSession
+    from octowright.session.core import BrowserSession
 
 DEFAULT_PREVIEW_CHARS = 4000
 
@@ -96,7 +96,7 @@ class SessionOpsMixin(SessionLike):
         url_pattern: str | None = None,
     ) -> dict[str, Any]:
         """Switch the active target to an iframe. Exactly one of selector/name/url_pattern must be given."""
-        from . import frames as _frames
+        from octowright.session import frames as _frames
 
         frame, info = await _frames.switch_frame_impl(
             self.page,
@@ -124,7 +124,7 @@ class SessionOpsMixin(SessionLike):
 
     def list_frames(self) -> list[dict[str, Any]]:
         """Return [{index, name, url, is_active}, ...] for every frame on the active page."""
-        from . import frames as _frames
+        from octowright.session import frames as _frames
 
         return _frames.list_frames_impl(self.page, self.active_frame)
 
@@ -133,7 +133,7 @@ class SessionOpsMixin(SessionLike):
         record to self.downloads once the file lands on disk."""
         import asyncio
 
-        from . import downloads as _downloads
+        from octowright.session import downloads as _downloads
 
         # Fire-and-forget: Playwright dispatches downloads synchronously but saving is async.
         # Task reference is kept on the session to prevent GC collecting it mid-flight (RUF006).
@@ -147,7 +147,7 @@ class SessionOpsMixin(SessionLike):
     async def wait_for_download(self, timeout_ms: int = 15000) -> dict[str, Any]:
         """Block until the next download completes (save-to-disk). Raises TimeoutError
         if no download arrives within timeout_ms. Returns the new download record."""
-        from . import downloads as _downloads
+        from octowright.session import downloads as _downloads
 
         return await _downloads.wait_for_download_impl(cast("BrowserSession", self), timeout_ms)
 
@@ -386,7 +386,7 @@ class SessionOpsMixin(SessionLike):
         Exactly one of role / label / text / test_id must be supplied. Routes
         through _target() so this also works inside iframes when one is active.
         """
-        from . import locators as _locators
+        from octowright.session import locators as _locators
 
         return _locators.build_locator(self._target(), **finders)
 

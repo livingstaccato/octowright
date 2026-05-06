@@ -46,8 +46,8 @@ end note
 
 note bottom of ROOT
   Legacy layout was `profiles/<kind>/<name>/`. Migrated
-  one-shot on first import of pool.py via personas.migrate_legacy_layout().
-  Idempotent; explicit re-run via `octowright migrate-profiles`.
+  by the explicit `octowright migrate-profiles` command.
+  Idempotent and safe to re-run.
 end note
 
 @enduml

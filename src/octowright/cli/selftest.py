@@ -10,8 +10,8 @@ from __future__ import annotations
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
-from ..server import recordings_dir, registered_tool_names
-from ._root import cli
+from octowright.cli._root import cli
+from octowright.server import recordings_dir, registered_tool_names
 
 
 @cli.command()

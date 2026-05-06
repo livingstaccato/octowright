@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from importlib.resources import as_file, files
 from pathlib import Path
 
-from .version import VERSION
+from octowright.version import VERSION
 
 SKILL_NAME = "using-octowright"
 
