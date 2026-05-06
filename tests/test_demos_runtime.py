@@ -287,8 +287,16 @@ async def test_record_demo_bundle_writes_supporting_sync_assets(monkeypatch, tmp
 
     assert "supporting_videos" in result
     assert result["supporting_videos"] == [
-        "artifacts/supporting/player.mp4",
-        "artifacts/supporting/monitor.mp4",
+        {
+            "id": "player",
+            "path": "artifacts/supporting/player.mp4",
+            "poster_path": "artifacts/supporting/player.png",
+        },
+        {
+            "id": "monitor",
+            "path": "artifacts/supporting/monitor.mp4",
+            "poster_path": "artifacts/supporting/monitor.png",
+        },
     ]
 
 
