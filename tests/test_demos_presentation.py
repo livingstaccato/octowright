@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from octowright.demos.catalog import load_demo_bundle
+from octowright.demos.models import DemoPresentationConfig
 
 
 def test_load_demo_bundle_parses_presentation_block(tmp_path: Path) -> None:
@@ -76,4 +77,75 @@ def test_load_demo_bundle_rejects_unknown_presentation_mode(tmp_path: Path) -> N
     (bundle_dir / "demo.yaml").write_text("presentation:\n  mode: freestyle\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"presentation\.mode"):
+        load_demo_bundle(bundle_dir)
+
+
+def test_demo_presentation_config_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match=r"presentation\.mode"):
+        DemoPresentationConfig(mode="freestyle")
+
+
+@pytest.mark.parametrize("field_name", ["intro_ms", "outro_ms", "minimum_ms"])
+def test_load_demo_bundle_rejects_negative_timing_values(tmp_path: Path, field_name: str) -> None:
+    bundle_dir = tmp_path / "demo" / "bundles" / field_name
+    bundle_dir.mkdir(parents=True)
+    (bundle_dir / "demo.yaml").write_text(
+        f"presentation:\n  timing:\n    {field_name}: -1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=rf"presentation\.timing\.{field_name}"):
+        load_demo_bundle(bundle_dir)
+
+
+def test_load_demo_bundle_rejects_malformed_overlay_payload(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "demo" / "bundles" / "bad-overlay"
+    bundle_dir.mkdir(parents=True)
+    (bundle_dir / "demo.yaml").write_text(
+        "presentation:\n  overlay: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"presentation\.overlay"):
+        load_demo_bundle(bundle_dir)
+
+
+def test_load_demo_bundle_rejects_malformed_timing_payload(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "demo" / "bundles" / "bad-timing"
+    bundle_dir.mkdir(parents=True)
+    (bundle_dir / "demo.yaml").write_text(
+        "presentation:\n  timing:\n    intro_ms: soon\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"presentation\.timing\.intro_ms"):
+        load_demo_bundle(bundle_dir)
+
+
+def test_load_demo_bundle_rejects_empty_sync_group_roles(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "demo" / "bundles" / "empty-roles"
+    bundle_dir.mkdir(parents=True)
+    (bundle_dir / "demo.yaml").write_text(
+        """
+presentation:
+  sync_groups:
+    - id: engines
+      roles: []
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"presentation\.sync_groups\[0\]\.roles"):
+        load_demo_bundle(bundle_dir)
+
+
+def test_load_demo_bundle_rejects_malformed_sync_groups_payload(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "demo" / "bundles" / "bad-sync-groups"
+    bundle_dir.mkdir(parents=True)
+    (bundle_dir / "demo.yaml").write_text(
+        "presentation:\n  sync_groups:\n    - id: engines\n      roles: player\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"presentation\.sync_groups\[0\]\.roles"):
         load_demo_bundle(bundle_dir)
