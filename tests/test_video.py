@@ -12,6 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from octowright.video_overlay import render_overlay_image
+
 # ---------------------------------------------------------------------------
 # Helpers — reload video module with patched shutil.which
 # ---------------------------------------------------------------------------
@@ -60,6 +62,20 @@ def _import_video_mock_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     monkeypatch.setattr("octowright.video.subprocess.run", fake_run)
     return _v, captured_cmds
+
+
+def _read_ppm_pixel(path: Path, x: int, y: int) -> tuple[int, int, int]:
+    with path.open("rb") as handle:
+        magic = handle.readline().strip()
+        if magic != b"P6":
+            raise AssertionError(f"unexpected ppm header: {magic!r}")
+        width, _height = (int(part) for part in handle.readline().split())
+        max_value = handle.readline().strip()
+        if max_value != b"255":
+            raise AssertionError(f"unexpected ppm max value: {max_value!r}")
+        payload = handle.read()
+    offset = ((y * width) + x) * 3
+    return tuple(payload[offset : offset + 3])  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -281,3 +297,18 @@ def test_probe_video_reads_dimensions_and_duration(monkeypatch: pytest.MonkeyPat
     metadata = _v.probe_video(tmp_path / "demo.mp4")
 
     assert metadata == {"width": 1920, "height": 1080, "duration_seconds": 3.5}
+
+
+def test_render_overlay_image_uses_translucent_safe_area_defaults(tmp_path: Path) -> None:
+    path = render_overlay_image(
+        tmp_path / "overlay.ppm",
+        title="Alpha",
+        subtitle="Quiet metadata",
+        panes=[],
+        canvas_width=1920,
+        canvas_height=1080,
+    )
+
+    assert path.exists()
+    assert _read_ppm_pixel(path, 40, 40) == (255, 0, 255)
+    assert _read_ppm_pixel(path, 60, 980) != (255, 0, 255)
