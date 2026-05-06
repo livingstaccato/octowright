@@ -98,8 +98,6 @@ material.
 
 - Repo-facing catalog: [`demo/INDEX.md`](demo/INDEX.md)
 - Authored bundle manifests: `demo/bundles/<demo-id>/demo.yaml`
-- HTTP API: `GET /api/demos` and `GET /api/demos/{demo_id}`
-- Dashboard gallery: `http://127.0.0.1:8765/demos`
 
 The current hero set promotes seven offline-first bundles:
 `first-run-session`, `macro-replay-loop`, `cross-engine-trio`,
@@ -108,7 +106,8 @@ The current hero set promotes seven offline-first bundles:
 
 `examples/` remains the raw source layer for reusable macros and scenarios.
 `demo/bundles/` is the product-facing layer that adds audience/tag metadata,
-artifact expectations, regen commands, and small deterministic seed assets.
+artifact expectations, regen commands, tutorial-export metadata, and small
+deterministic seed assets.
 
 To refresh the generated repo catalog and per-bundle tutorial-export JSON from the manifests:
 
@@ -197,10 +196,6 @@ logging so frontend log lines are correlated with the Python server's
 `provide.telemetry` calls. The compiled bundle ships inside the wheel; the
 frontend has zero runtime dependency on Node — Node is only needed at build
 time and for the optional `npx playwright show-trace` deep-dive.
-
-The same frontend bundle also exposes a standalone demo gallery at `/demos`,
-fed by `/api/demos`, so you can browse hero and supporting bundles without the
-rest of the session dashboard.
 
 If port 8765 is taken, the server walks up to 5 higher ports and picks the
 first free one (or logs a warning and continues without the HTTP layer if all

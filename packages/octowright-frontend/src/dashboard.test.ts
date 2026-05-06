@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadState, renderDashboard } from "./dashboard.js";
 import * as api from "./api.js";
 import type {
-  DemoListResponse,
   LiveScenario,
   MacroSummary,
   PersonaSummary,
@@ -40,7 +39,6 @@ vi.mock("./api.js", async (importOriginal) => {
     getScenarios: vi.fn(async () => ({ live: [] })),
     getPersonas: vi.fn(async () => []),
     getMacros: vi.fn(async () => []),
-    getDemos: vi.fn(async () => ({ heroes: [], supporting: [] })),
   };
 });
 
@@ -100,100 +98,29 @@ const macros: MacroSummary[] = [
   { name: "login", description: "logs in", parameters: ["user"], updated_at: "2026-04-23T00:00:00Z" },
 ];
 
-const demos: DemoListResponse = {
-  heroes: [
-    {
-      id: "hero-checkout",
-      title: "Checkout Hero",
-      summary: "Walk through a complete checkout flow.",
-      hero: true,
-      audiences: ["sales"],
-      tags: ["checkout"],
-      engines: ["chromium"],
-      roles: ["shopper"],
-      scenarios: ["checkout-two-party"],
-      regen_command: "uv run octowright demo regen hero-checkout",
-      tutorial_export: null,
-      artifacts: {
-        replay: {
-          declared_count: 1,
-          existing_count: 1,
-          declared_paths: ["replays/checkout.jsonl"],
-          existing_paths: ["replays/checkout.jsonl"],
-        },
-        video: {
-          declared_count: 1,
-          existing_count: 1,
-          declared_paths: ["videos/checkout.mp4"],
-          existing_paths: ["videos/checkout.mp4"],
-        },
-      },
-    },
-  ],
-  supporting: [
-    {
-      id: "support-admin",
-      title: "Admin Support",
-      summary: "Covers the supporting admin workflow.",
-      hero: false,
-      audiences: ["ops"],
-      tags: ["admin"],
-      engines: ["firefox"],
-      roles: ["admin"],
-      scenarios: ["admin-backoffice"],
-      regen_command: null,
-      tutorial_export: null,
-      artifacts: {
-        replay: {
-          declared_count: 0,
-          existing_count: 0,
-          declared_paths: [],
-          existing_paths: [],
-        },
-        video: {
-          declared_count: 1,
-          existing_count: 0,
-          declared_paths: ["videos/admin.mp4"],
-          existing_paths: [],
-        },
-      },
-    },
-  ],
-};
-
 describe("renderDashboard", () => {
-  it("renders all five panels", () => {
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
-    expect(root.querySelector('[data-testid="panel-demo-gallery"]')).not.toBeNull();
+  it("renders the core dashboard panels", () => {
+    renderDashboard(root, { sessions, scenarios, personas, macros });
     expect(root.querySelector('[data-testid="panel-live-browsers"]')).not.toBeNull();
     expect(root.querySelector('[data-testid="panel-live-scenarios"]')).not.toBeNull();
     expect(root.querySelector('[data-testid="panel-personas"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="panel-saved-scenarios"]')).not.toBeNull();
     expect(root.querySelector('[data-testid="panel-closed-sessions"]')).not.toBeNull();
     expect(root.querySelector('[data-testid="panel-macros"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="panel-demo-gallery"]')).toBeNull();
   });
   it("renders live and closed session rows", () => {
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
+    renderDashboard(root, { sessions, scenarios, personas, macros });
     const live = root.querySelector('[data-testid="table-live-sessions"]');
     expect(live?.querySelectorAll("tbody tr").length).toBe(1);
     const closed = root.querySelector('[data-testid="table-closed-sessions"]');
     expect(closed?.querySelectorAll("tbody tr").length).toBe(1);
   });
   it("renders scenario chips with links", () => {
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
+    renderDashboard(root, { sessions, scenarios, personas, macros });
     const chips = root.querySelectorAll('[data-testid="panel-live-scenarios"] a.chip');
     expect(chips.length).toBe(2);
     expect((chips[0] as HTMLAnchorElement).href).toContain("/sessions/L1");
-  });
-  it("renders the demo gallery within the dashboard", () => {
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
-    const gallery = root.querySelector('[data-testid="panel-demo-gallery"]');
-    expect(gallery?.querySelector(".scenario-list")).not.toBeNull();
-    expect(gallery?.querySelector('[data-testid="demo-heroes"] li[data-demo-id="hero-checkout"]')).not.toBeNull();
-    expect(gallery?.querySelector('[data-testid="demo-supporting"] li[data-demo-id="support-admin"]')).not.toBeNull();
-    expect(gallery?.textContent).toContain("Checkout Hero");
-    expect(gallery?.textContent).toContain("Admin Support");
-    expect(gallery?.textContent).toContain("Replay artifacts: 1/1");
-    expect(gallery?.querySelector("code")?.textContent).toBe("uv run octowright demo regen hero-checkout");
   });
   it("shows empty placeholders when nothing is provided", () => {
     renderDashboard(root, {
@@ -201,13 +128,12 @@ describe("renderDashboard", () => {
       scenarios: { live: [] },
       personas: [],
       macros: [],
-      demos: { heroes: [], supporting: [] },
     });
     const empties = root.querySelectorAll(".empty");
     expect(empties.length).toBeGreaterThanOrEqual(4);
   });
   it("opens a non-mutating macro repair preview", async () => {
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
+    renderDashboard(root, { sessions, scenarios, personas, macros });
     const button = root.querySelector<HTMLButtonElement>('[data-testid="macro-repair-preview-login"]');
     expect(button).not.toBeNull();
 
@@ -221,7 +147,7 @@ describe("renderDashboard", () => {
     expect(dialog?.querySelector("button.btn--primary")).toBeNull();
   });
   it("opens macro editor and shows conditional summaries", async () => {
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
+    renderDashboard(root, { sessions, scenarios, personas, macros });
     const button = root.querySelector<HTMLButtonElement>('[data-testid="macro-edit-login"]');
     expect(button).not.toBeNull();
     button?.click();
@@ -238,7 +164,7 @@ describe("renderDashboard", () => {
   it("validates and saves macro from editor", async () => {
     const validateSpy = vi.mocked(api.validateMacro);
     const updateSpy = vi.mocked(api.updateMacro);
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
+    renderDashboard(root, { sessions, scenarios, personas, macros });
     const button = root.querySelector<HTMLButtonElement>('[data-testid="macro-edit-login"]');
     button?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -254,7 +180,7 @@ describe("renderDashboard", () => {
   });
   it("validates selector against active session", async () => {
     const validateSessionSpy = vi.mocked(api.validateSessionSelector);
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
+    renderDashboard(root, { sessions, scenarios, personas, macros });
     const button = root.querySelector<HTMLButtonElement>('[data-testid="macro-edit-login"]');
     button?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -267,40 +193,42 @@ describe("renderDashboard", () => {
     expect(validateSessionSpy).toHaveBeenCalledWith("L1", "#test");
   });
   it("preserves collapsible macro panel state across refresh renders", () => {
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
+    renderDashboard(root, { sessions, scenarios, personas, macros });
     const first = root.querySelector<HTMLDetailsElement>('[data-testid="panel-macros"]');
     expect(first).not.toBeNull();
     if (first) first.open = true;
 
-    renderDashboard(root, { sessions, scenarios, personas, macros, demos });
+    renderDashboard(root, { sessions, scenarios, personas, macros });
 
     expect(root.querySelector<HTMLDetailsElement>('[data-testid="panel-macros"]')?.open).toBe(true);
   });
 });
 
 describe("loadState", () => {
-  it("includes demos from getDemos", async () => {
+  it("loads sessions, scenarios, personas, and macros", async () => {
     vi.mocked(api.getSessions).mockResolvedValueOnce(sessions);
     vi.mocked(api.getScenarios).mockResolvedValueOnce(scenarios);
     vi.mocked(api.getPersonas).mockResolvedValueOnce(personas);
     vi.mocked(api.getMacros).mockResolvedValueOnce(macros);
-    vi.mocked(api.getDemos).mockResolvedValueOnce(demos);
 
     const state = await loadState();
 
-    expect(state.demos).toEqual(demos);
-    expect(api.getDemos).toHaveBeenCalledTimes(1);
+    expect(state).toEqual({ sessions, scenarios, personas, macros });
   });
 
-  it("falls back to empty demos when getDemos fails", async () => {
+  it("falls back to empty state when dashboard loaders fail", async () => {
     vi.mocked(api.getSessions).mockResolvedValueOnce(sessions);
-    vi.mocked(api.getScenarios).mockResolvedValueOnce(scenarios);
-    vi.mocked(api.getPersonas).mockResolvedValueOnce(personas);
-    vi.mocked(api.getMacros).mockResolvedValueOnce(macros);
-    vi.mocked(api.getDemos).mockRejectedValueOnce(new Error("boom"));
+    vi.mocked(api.getScenarios).mockRejectedValueOnce(new Error("boom"));
+    vi.mocked(api.getPersonas).mockRejectedValueOnce(new Error("boom"));
+    vi.mocked(api.getMacros).mockRejectedValueOnce(new Error("boom"));
 
     const state = await loadState();
 
-    expect(state.demos).toEqual({ heroes: [], supporting: [] });
+    expect(state).toEqual({
+      sessions,
+      scenarios: { live: [] },
+      personas: [],
+      macros: [],
+    });
   });
 });

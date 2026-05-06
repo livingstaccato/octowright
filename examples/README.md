@@ -14,9 +14,9 @@ otherwise.
 ## Usage
 
 Use this directory directly when you want the simplest possible local macro or
-scenario inputs. Use `demo/bundles/` when you want the curated gallery-facing
-manifests that drive `demo/INDEX.md`, `/api/demos`, and the dashboard demo
-gallery at `/demos`.
+scenario inputs. Use `demo/bundles/` when you want the curated catalog-facing
+manifests that drive `demo/INDEX.md` and the regeneration scripts under
+`scripts/demos/`.
 
 Tell octowright to load these instead of the user-config defaults by setting:
 
@@ -97,7 +97,6 @@ when you're ready. The `with-fixtures.yaml` scenario also installs route
 mocks for `**/api/time` + `**/api/health` to show how shared fixtures fan out
 across participants.
 
-If you are looking for the promoted hero demos, start with `demo/INDEX.md` or
-open the dashboard gallery at `/demos`. Those bundle manifests describe how the
-raw examples are assembled into catalog entries such as `cross-engine-trio` and
-`seven-mix-orchestration`.
+If you are looking for the promoted hero demos, start with `demo/INDEX.md`.
+Those bundle manifests describe how the raw examples are assembled into catalog
+entries such as `cross-engine-trio` and `seven-mix-orchestration`.
