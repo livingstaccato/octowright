@@ -12,12 +12,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .. import _format as fmt
-from .. import macros as macro_mod
-from .. import runner as runner_mod
-from .. import scenarios as scenario_mod
-from ..http.dashboard_events import publish_dashboard_invalidation_nowait
-from ._state import mcp, pool, scenario_pool
+from octowright import _format as fmt
+from octowright import macros as macro_mod
+from octowright import runner as runner_mod
+from octowright import scenarios as scenario_mod
+from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.server._state import mcp, pool, scenario_pool
 
 
 @mcp.tool(structured_output=False, description="List scenario specs on disk (YAML or Python).")

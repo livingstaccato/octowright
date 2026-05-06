@@ -3,9 +3,9 @@
 # SPDX-Comment: Part of octowright.
 #
 
-from .errors import maybe_wrap_playwright_error
-from .pool import BrowserPool
-from .roster import close_all, spawn_roster
+from octowright.browser_pool.errors import maybe_wrap_playwright_error
+from octowright.browser_pool.pool import BrowserPool
+from octowright.browser_pool.roster import close_all, spawn_roster
 
 __all__ = [
     "BrowserPool",

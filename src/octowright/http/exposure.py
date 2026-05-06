@@ -18,7 +18,7 @@ from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from ..defaults import DASHBOARD_REMOTE_ALLOWED_ENV
+from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
 
 ResponseT = TypeVar("ResponseT", bound=Response)
 _DEFAULT_HTTP_HOST = "127.0.0.1"

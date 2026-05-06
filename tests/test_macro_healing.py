@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright import macros
+from octowright.macros import execution as macro_execution
+from octowright.macros import storage as macro_storage
 
 
 @pytest.fixture
@@ -71,10 +73,10 @@ async def test_suggest_fix_reflects_dom_change(mock_session: MagicMock) -> None:
 async def test_run_macro_includes_healing_on_failure(mock_session: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
     # Mock load_macro to return a simple macro
     macro_data = {"name": "test-macro", "actions": [{"action": "click", "selector": "#email"}]}
-    monkeypatch.setattr(macros, "load_macro", lambda name: macro_data)
+    monkeypatch.setattr(macro_execution, "load_macro", lambda name: macro_data)
 
     # Mock _dispatch_one to raise an error
-    monkeypatch.setattr(macros, "_dispatch_one", AsyncMock(side_effect=RuntimeError("Selector not found")))
+    monkeypatch.setattr(macro_execution, "_dispatch_one", AsyncMock(side_effect=RuntimeError("Selector not found")))
 
     with pytest.raises(RuntimeError) as excinfo:
         await macros.run_macro(mock_session, "test-macro")
@@ -89,7 +91,7 @@ def test_repair_preview_suggests_structured_semantic_replacement(
 ) -> None:
     macros_dir = tmp_path / "macros"
     macros_dir.mkdir()
-    monkeypatch.setattr(macros, "MACROS_DIR", macros_dir)
+    monkeypatch.setattr(macro_storage, "MACROS_DIR", macros_dir)
     macro_path = macros_dir / "login.json"
     original_action = {
         "action": "fill",

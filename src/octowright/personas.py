@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 from provide.telemetry import get_logger
 
-from .defaults import PROFILES_DIR, SUPPORTED_KINDS
+from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
 
 log = get_logger(__name__)
 

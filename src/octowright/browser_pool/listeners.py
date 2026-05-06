@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
-from ..session import BrowserSession
+from octowright.session import BrowserSession
 
 if TYPE_CHECKING:
-    from .pool import BrowserPool
+    from octowright.browser_pool.pool import BrowserPool
 
 log = get_logger(__name__)
 
@@ -86,7 +86,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             # "octowright.browser.closed" itself. Stay silent.
             return
         try:
-            from ..session_manifest import remove_session as _manifest_remove_session
+            from octowright.session_manifest import remove_session as _manifest_remove_session
 
             _manifest_remove_session(instance_id)
         except Exception as exc:

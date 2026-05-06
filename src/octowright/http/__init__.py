@@ -51,10 +51,10 @@ etc.) live in ``state``. Tests should monkeypatch via ``_http.state.X``.
 
 from __future__ import annotations
 
-from ..defaults import DEFAULT_URL
-from .app import build_app, get_mcp_active_session_count
-from .lifespan import serve_app
-from .state import (
+from octowright.defaults import DEFAULT_URL
+from octowright.http.app import build_app, get_mcp_active_session_count
+from octowright.http.lifespan import serve_app
+from octowright.http.state import (
     FRONTEND_DIR,
     RECORDINGS_DIR,
     runtime_session_url,

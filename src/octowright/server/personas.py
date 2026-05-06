@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import personas as persona_mod
-from .. import profiles as profile_mod
-from ..http.dashboard_events import publish_dashboard_invalidation_nowait
-from ._state import log, mcp, pool
+from octowright import personas as persona_mod
+from octowright import profiles as profile_mod
+from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.server._state import log, mcp, pool
 
 
 @mcp.tool(structured_output=False, description="List saved browser profiles. Pass kind to filter to one engine.")

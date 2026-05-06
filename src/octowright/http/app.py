@@ -22,10 +22,10 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from .exposure import guard_sensitive_asgi_app
-from .frontend import _frontend_routes
-from .metrics import HttpMetricsMiddleware, metrics_enabled
-from .routes import all_routes
+from octowright.http.exposure import guard_sensitive_asgi_app
+from octowright.http.frontend import _frontend_routes
+from octowright.http.metrics import HttpMetricsMiddleware, metrics_enabled
+from octowright.http.routes import all_routes
 
 # Set by build_app(mcp_leader=True); used by idle_watchdog to count active
 # HTTP-MCP proxy sessions so the daemon doesn't exit while followers are live.
@@ -54,7 +54,7 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
 
     lifespan = None
     if mcp_leader:
-        from ..server import mcp as _mcp
+        from octowright.server import mcp as _mcp
 
         # The inner app's own route is at "/" so mounting it at "/mcp" puts the
         # endpoint at "/mcp" exactly (not "/mcp/mcp").

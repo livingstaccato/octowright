@@ -14,7 +14,7 @@ from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import state
+from octowright.http import state
 
 
 async def _serve_session_html(_: Request) -> Response:

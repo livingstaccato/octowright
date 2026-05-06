@@ -366,7 +366,9 @@ def test_macro_lint_tool_wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
 
     import octowright.macros as macros_mod
+    import octowright.macros.storage as macros_storage
 
+    importlib.reload(macros_storage)
     importlib.reload(macros_mod)
     from octowright.server import macros as server_macros_mod
 
@@ -382,8 +384,8 @@ def test_macro_lint_tool_wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
             {"action": "snapshot"},  # warning: lifecycle
         ],
     }
-    macros_mod.MACROS_DIR.mkdir(parents=True, exist_ok=True)
-    (macros_mod.MACROS_DIR / "linttest.json").write_text(json.dumps(macro), encoding="utf-8")
+    macros_storage.MACROS_DIR.mkdir(parents=True, exist_ok=True)
+    (macros_storage.MACROS_DIR / "linttest.json").write_text(json.dumps(macro), encoding="utf-8")
 
     result = server_macros_mod.macro_lint(name="linttest")
     assert result["macro"] == "linttest"
@@ -405,7 +407,9 @@ def test_macro_lint_tool_wrapper_clean_macro(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
 
     import octowright.macros as macros_mod
+    import octowright.macros.storage as macros_storage
 
+    importlib.reload(macros_storage)
     importlib.reload(macros_mod)
     from octowright.server import macros as server_macros_mod
 
@@ -418,8 +422,8 @@ def test_macro_lint_tool_wrapper_clean_macro(monkeypatch: pytest.MonkeyPatch, tm
             {"action": "click", "selector": "#go"},
         ],
     }
-    macros_mod.MACROS_DIR.mkdir(parents=True, exist_ok=True)
-    (macros_mod.MACROS_DIR / "clean.json").write_text(json.dumps(macro), encoding="utf-8")
+    macros_storage.MACROS_DIR.mkdir(parents=True, exist_ok=True)
+    (macros_storage.MACROS_DIR / "clean.json").write_text(json.dumps(macro), encoding="utf-8")
 
     result = server_macros_mod.macro_lint(name="clean")
     assert result["ok"] is True
@@ -432,7 +436,10 @@ def test_macro_lint_tool_wrapper_missing_macro(monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
 
     import octowright.macros as macros_mod
+    import octowright.macros.storage as macros_storage
 
+    importlib.reload(macros_mod)
+    importlib.reload(macros_storage)
     importlib.reload(macros_mod)
     from octowright.server import macros as server_macros_mod
 

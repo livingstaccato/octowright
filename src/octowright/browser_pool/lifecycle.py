@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
-from ..session_manifest import remove_session as remove_manifest_session
+from octowright.session_manifest import remove_session as remove_manifest_session
 
 if TYPE_CHECKING:
-    from .pool import BrowserPool
+    from octowright.browser_pool.pool import BrowserPool
 
 log = get_logger(__name__)
 
