@@ -80,17 +80,9 @@ def render_bundle_video(
 
     if plan.kind == "sync-multi":
         rendered = render_sync_group_videos(live, close_results, plan=plan)
-        panes = (
-            rendered
-            if isinstance(rendered, list) and rendered
-            else _grid_panes(
-                live,
-                close_results,
-                columns=plan.columns,
-                cell_width=plan.cell_width,
-                cell_height=plan.cell_height,
-            )
-        )
+        if not rendered:
+            raise RuntimeError(f"sync-multi render plan for {bundle.id!r} did not produce any panes")
+        panes = rendered
         source_videos = [pane["source"] for pane in panes]
         compose_video_grid(
             source_videos,
