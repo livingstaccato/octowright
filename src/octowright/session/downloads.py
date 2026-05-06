@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .core import BrowserSession
+    from octowright.session.core import BrowserSession
 
 
 def _timestamp() -> str:
@@ -21,7 +21,7 @@ async def save_download(session: BrowserSession, download: Any) -> dict[str, Any
     """Save a Playwright Download to disk under RECORDINGS_DIR/downloads/<instance_id>/.
     Appends the record to session.downloads and signals any pending waiters.
     Records download_save_error on failure."""
-    from ..defaults import RECORDINGS_DIR
+    from octowright.defaults import RECORDINGS_DIR
 
     target_dir = RECORDINGS_DIR / "downloads" / session.instance_id
     target_dir.mkdir(parents=True, exist_ok=True)

@@ -101,7 +101,7 @@ target-version = "py311"
 extend-exclude = ["recordings", "profiles", ".venv"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "ARG", "RUF"]
+select = ["E", "F", "I", "UP", "B", "SIM", "ARG", "RUF", "TID"]
 ignore = [
     "E501",   # line-too-long — rely on line-length above
     "SIM105", # contextlib.suppress vs try/except pass — stylistic

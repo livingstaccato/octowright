@@ -30,10 +30,10 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from .. import macros as _macros
-from .. import personas as _personas
-from .. import video as _video
-from ..defaults import RECORDINGS_DIR
+from octowright import macros as _macros
+from octowright import personas as _personas
+from octowright import video as _video
+from octowright.defaults import RECORDINGS_DIR
 
 log = get_logger("octowright.http")
 

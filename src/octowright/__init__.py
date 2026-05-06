@@ -3,6 +3,6 @@
 # SPDX-Comment: Part of octowright.
 #
 
-from .version import VERSION, __version__
+from octowright.version import VERSION, __version__
 
 __all__ = ["VERSION", "__version__"]

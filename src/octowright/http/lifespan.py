@@ -16,9 +16,9 @@ from __future__ import annotations
 import socket
 from collections.abc import Callable
 
-from ..defaults import HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES
-from . import state
-from .app import build_app
+from octowright.defaults import HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES
+from octowright.http import state
+from octowright.http.app import build_app
 
 
 def _port_is_free(host: str, port: int) -> bool:

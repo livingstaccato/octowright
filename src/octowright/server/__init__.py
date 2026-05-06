@@ -10,30 +10,26 @@ submodule (`browser`, `personas`, `macros`, `goldens`, `scenarios`) registers
 its tools against that shared instance at import time, so importing this
 package is enough to make every tool callable.
 
-`registered_tool_names()` and `recordings_dir()` are kept here at the top
-level for `cli.py selftest` and external introspection.
+`registered_tool_names` and `recordings_dir` are re-exported here for
+`cli.py selftest` and external introspection.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from ..defaults import RECORDINGS_DIR
-
 # Submodule imports trigger @mcp.tool registration via decorator side effects.
 # Order does not matter; F401 ignored intentionally.
-from . import browser as _browser  # noqa: F401
-from . import goldens as _goldens  # noqa: F401
-from . import macro_semantic as _macro_semantic  # noqa: F401
-from . import macros as _macros  # noqa: F401
-from . import meta as _meta  # noqa: F401
-from . import personas as _personas  # noqa: F401
-from . import scenarios as _scenarios  # noqa: F401
-from ._state import log, mcp, pool, scenario_pool
+from octowright.server import browser as _browser  # noqa: F401
+from octowright.server import goldens as _goldens  # noqa: F401
+from octowright.server import macro_semantic as _macro_semantic  # noqa: F401
+from octowright.server import macros as _macros  # noqa: F401
+from octowright.server import meta as _meta  # noqa: F401
+from octowright.server import personas as _personas  # noqa: F401
+from octowright.server import scenarios as _scenarios  # noqa: F401
+from octowright.server._state import log, mcp, pool, scenario_pool
 
 # Re-export every tool function at the package level for direct test access
 # (e.g. `from octowright import server; server.browser_open_trace(...)`).
-from .browser import (
+from octowright.server.browser import (
     browser_click,
     browser_click_by,
     browser_close,
@@ -74,9 +70,9 @@ from .browser import (
     page_list,
     page_switch,
 )
-from .goldens import golden_assert, golden_delete, golden_list, golden_save
-from .macro_semantic import macro_explain
-from .macros import (
+from octowright.server.goldens import golden_assert, golden_delete, golden_list, golden_save
+from octowright.server.macro_semantic import macro_explain
+from octowright.server.macros import (
     macro_delete,
     macro_lint,
     macro_list,
@@ -88,8 +84,8 @@ from .macros import (
     recordings_cleanup,
     run_test_suite,
 )
-from .meta import octowright_check_takeover, octowright_dashboard_url, octowright_status
-from .personas import (
+from octowright.server.meta import octowright_check_takeover, octowright_dashboard_url, octowright_status
+from octowright.server.personas import (
     persona_create,
     persona_credentials_check,
     persona_delete,
@@ -98,7 +94,8 @@ from .personas import (
     profile_delete,
     profile_list,
 )
-from .scenarios import (
+from octowright.server.registry import recordings_dir, registered_tool_names
+from octowright.server.scenarios import (
     scenario_list,
     scenario_participants,
     scenario_plan,
@@ -110,16 +107,6 @@ from .scenarios import (
     scenario_stop,
     scenario_tail,
 )
-
-
-def registered_tool_names() -> list[str]:
-    """Used by `cli.py selftest` to verify registration without a client."""
-    return sorted(t.name for t in mcp._tool_manager.list_tools())
-
-
-def recordings_dir() -> Path:
-    return RECORDINGS_DIR
-
 
 __all__ = [
     "browser_click",

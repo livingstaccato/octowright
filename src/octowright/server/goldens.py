@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import goldens as goldens_mod
-from ._state import mcp, pool
+from octowright import goldens as goldens_mod
+from octowright.server._state import mcp, pool
 
 
 @mcp.tool(

@@ -12,8 +12,8 @@ from typing import Any
 import yaml
 from provide.telemetry import get_logger
 
-from .defaults import SCENARIO_TEMPLATES_DIR, SCENARIOS_DIR, SUPPORTED_KINDS
-from .scenarios_pool import LiveScenario, ScenarioPool
+from octowright.defaults import SCENARIO_TEMPLATES_DIR, SCENARIOS_DIR, SUPPORTED_KINDS
+from octowright.scenarios_pool import LiveScenario, ScenarioPool
 
 log = get_logger(__name__)
 
@@ -160,7 +160,7 @@ def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
     """Return kwargs suitable for pool.launch(**kwargs) from a Participant,
     applying the participant override → persona default → fallback resolution
     order for each field."""
-    from . import personas as _p
+    from octowright import personas as _p
 
     try:
         persona = _p.load_persona(p.persona)
@@ -187,7 +187,7 @@ def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
 
 def resolve_startup_macros(p: Participant) -> list[str]:
     """participant override → persona default_macros → []."""
-    from . import personas as _p
+    from octowright import personas as _p
 
     if p.startup_macros is not None:
         return list(p.startup_macros)

@@ -28,8 +28,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-from . import personas as _personas
-from . import profiles as _profiles
+from octowright import personas as _personas
+from octowright import profiles as _profiles
 
 
 def _host_of(url: str | None) -> str:

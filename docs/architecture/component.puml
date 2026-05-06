@@ -21,22 +21,22 @@ package "user surfaces" #eff6ff {
 }
 
 package "live state" #fef3c7 {
-  [BrowserPool\npool.py] as POOL
-  [BrowserSession\nsession.py] as SESSION
-  [ScenarioPool\nscenarios.py (live)] as SPOOL
+  [BrowserPool\nbrowser_pool/pool.py] as POOL
+  [BrowserSession\nsession/core.py] as SESSION
+  [ScenarioPool\nscenarios_pool.py] as SPOOL
 }
 
-package "session helpers (split for size)" #fdf4ff {
-  [session_frames.py] as SF
-  [session_downloads.py] as SD
-  [session_locators.py] as SL
+package "session modules" #fdf4ff {
+  [session/frames.py] as SF
+  [session/downloads.py] as SD
+  [session/locators.py] as SL
 }
 
 package "domain modules" #ecfccb {
   [personas.py\nPersona, load, migrate, creds] as PERSONAS
   [profiles.py\nengine-profile path layer] as PROFILES
   [scenarios.py\nScenario, Participant, loaders] as SCENARIOS
-  [macros.py\nrecord, save, substitute, run] as MACROS
+  [macros/\nstorage, import, substitute, run] as MACROS
   [runner.py\ntest-macro discovery + JUnit] as RUNNER
   [goldens.py\naria-tree snapshots + diff] as GOLDENS
   [video.py\nffmpeg frame extraction] as VIDEO
@@ -65,7 +65,6 @@ SESSION ..> SD
 SESSION ..> SL
 
 ' domain dependencies
-POOL ..> PERSONAS : auto-migrate on import
 POOL ..> PROFILES : engine_profile_dir
 POOL ..> STABILIZE : init script
 SCENARIOS ..> PERSONAS : default URL / macros / creds
