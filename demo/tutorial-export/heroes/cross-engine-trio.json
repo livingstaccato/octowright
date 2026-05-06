@@ -1,0 +1,120 @@
+{
+  "artifact_manifest": {
+    "artifacts": {
+      "replay": {
+        "event_count": 18,
+        "path": "artifacts/replay.jsonl",
+        "python_export": "artifacts/replay.py",
+        "size_bytes": 7191,
+        "ts_export": "artifacts/replay.ts"
+      },
+      "video": {
+        "duration_seconds": 4.6,
+        "height": 360,
+        "path": "artifacts/demo.mp4",
+        "poster_path": "artifacts/poster.png",
+        "size_bytes": 47049,
+        "width": 1920
+      }
+    },
+    "bundle_id": "cross-engine-trio",
+    "composition": {
+      "canvas_height": 360,
+      "canvas_width": 1920,
+      "cell_height": 360,
+      "cell_width": 640,
+      "columns": 3,
+      "mode": "grid",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "chromium",
+            "persona": "cx-chromium",
+            "role": "player",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "kind": "firefox",
+            "persona": "cx-firefox",
+            "role": "player",
+            "x": 640,
+            "y": 0
+          },
+          {
+            "kind": "webkit",
+            "persona": "cx-webkit",
+            "role": "player",
+            "x": 1280,
+            "y": 0
+          }
+        ],
+        "subtitle": "cross-engine-trio | Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.",
+        "title": "Cross-Engine Trio"
+      },
+      "panes": [
+        {
+          "height": 360,
+          "kind": "chromium",
+          "persona": "cx-chromium",
+          "role": "player",
+          "width": 640,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "firefox",
+          "persona": "cx-firefox",
+          "role": "player",
+          "width": 640,
+          "x": 640,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "cx-webkit",
+          "role": "player",
+          "width": 640,
+          "x": 1280,
+          "y": 0
+        }
+      ]
+    },
+    "hero": true,
+    "participants": [
+      {
+        "kind": "chromium",
+        "persona": "cx-chromium",
+        "role": "player"
+      },
+      {
+        "kind": "firefox",
+        "persona": "cx-firefox",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "cx-webkit",
+        "role": "player"
+      }
+    ],
+    "title": "Cross-Engine Trio"
+  },
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "cross-engine-trio",
+  "regen_command": "uv run python scripts/demos/record_demo.py cross-engine-trio",
+  "summary": "Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.",
+  "title": "Cross-Engine Trio",
+  "tutorial_export": "heroes/cross-engine-trio.json"
+}

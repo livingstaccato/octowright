@@ -9,17 +9,43 @@
         "ts_export": "artifacts/replay.ts"
       },
       "video": {
-        "duration_seconds": 1.64,
+        "duration_seconds": 1.68,
         "height": 600,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 4593,
+        "size_bytes": 9162,
         "width": 800
       }
     },
     "bundle_id": "first-run-session",
     "composition": {
+      "canvas_height": 600,
+      "canvas_width": 800,
       "mode": "single",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "webkit",
+            "persona": "solo-player",
+            "role": "player",
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "subtitle": "first-run-session | Launch one browser, perform a visible offline interaction, and inspect the resulting replay and video artifacts.",
+        "title": "First Run Session"
+      },
+      "panes": [
+        {
+          "height": 0,
+          "kind": "webkit",
+          "persona": "solo-player",
+          "role": "player",
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      ],
       "primary": {
         "kind": "webkit",
         "persona": "solo-player",

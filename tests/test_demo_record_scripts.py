@@ -178,3 +178,133 @@ def test_record_heroes_writes_only_hero_exports(monkeypatch, tmp_path: Path, cap
     assert f"- hero-demo -> {hero_json_path}" in captured.out
     assert "replay=replay.jsonl video=demo.mp4" in captured.out
     assert "support-demo" not in captured.out
+
+
+def test_sync_tutorial_export_tree_writes_static_hero_payloads_and_index(monkeypatch, tmp_path: Path) -> None:
+    _load_script(monkeypatch, "_shared")
+    shared = sys.modules["_shared"]
+    hero = DemoBundle(
+        id="hero-demo",
+        title="Hero Demo",
+        summary="Primary walkthrough.",
+        hero=True,
+        replay_artifacts=["artifacts/replay.jsonl"],
+        video_artifacts=["artifacts/demo.mp4", "artifacts/poster.png"],
+        tutorial_export="exports/hero-demo.json",
+        root=tmp_path / "hero",
+    )
+    support = DemoBundle(
+        id="support-demo",
+        title="Support Demo",
+        hero=False,
+        tutorial_export="exports/support-demo.json",
+        root=tmp_path / "support",
+    )
+    tutorial_root = tmp_path / "demo" / "tutorial-export"
+    hero_artifacts = hero.root / "artifacts"
+    hero_artifacts.mkdir(parents=True)
+    support.root.mkdir(parents=True)
+    (hero_artifacts / "replay.jsonl").write_text("{}", encoding="utf-8")
+    (hero_artifacts / "demo.mp4").write_bytes(b"video")
+    (hero_artifacts / "poster.png").write_bytes(b"poster")
+    (hero_artifacts / "manifest.json").write_text('{"composition":{"mode":"grid"}}', encoding="utf-8")
+    monkeypatch.setattr(shared, "TUTORIAL_EXPORT_ROOT", tutorial_root)
+
+    payloads = shared.sync_tutorial_exports([hero, support], heroes_only=True)
+
+    hero_payload_path = tutorial_root / "heroes" / "hero-demo.json"
+    support_payload_path = tutorial_root / "heroes" / "support-demo.json"
+    index_path = tutorial_root / "index.json"
+    assert payloads == [hero_payload_path]
+    assert hero_payload_path.exists()
+    assert not support_payload_path.exists()
+    assert (tutorial_root / "artifacts" / "hero-demo" / "demo.mp4").read_bytes() == b"video"
+    assert (tutorial_root / "artifacts" / "hero-demo" / "poster.png").read_bytes() == b"poster"
+    assert json.loads(hero_payload_path.read_text(encoding="utf-8")) == {
+        "id": "hero-demo",
+        "title": "Hero Demo",
+        "summary": "Primary walkthrough.",
+        "hero": True,
+        "tutorial_export": "heroes/hero-demo.json",
+        "regen_command": None,
+        "assets": {
+            "video": ["artifacts/demo.mp4", "artifacts/poster.png"],
+            "replay": ["artifacts/replay.jsonl"],
+        },
+        "artifact_manifest": {"composition": {"mode": "grid"}},
+    }
+    assert json.loads(index_path.read_text(encoding="utf-8")) == {
+        "heroes": [
+            {
+                "id": "hero-demo",
+                "title": "Hero Demo",
+                "summary": "Primary walkthrough.",
+                "payload": "heroes/hero-demo.json",
+                "artifacts_dir": "artifacts/hero-demo",
+            }
+        ]
+    }
+
+
+def test_regenerate_website_heroes_records_rewrites_and_syncs(monkeypatch, tmp_path: Path, capsys) -> None:
+    regen_website_heroes = _load_script(monkeypatch, "regenerate_website_heroes")
+    shared = sys.modules["_shared"]
+    hero = DemoBundle(
+        id="hero-demo",
+        title="Hero Demo",
+        summary="Primary walkthrough.",
+        hero=True,
+        replay_artifacts=["artifacts/replay.jsonl"],
+        video_artifacts=["artifacts/demo.mp4", "artifacts/poster.png"],
+        tutorial_export="exports/hero-demo.json",
+        root=tmp_path / "hero",
+    )
+    support = DemoBundle(
+        id="support-demo",
+        title="Support Demo",
+        hero=False,
+        root=tmp_path / "support",
+    )
+    hero.root.mkdir(parents=True)
+    support.root.mkdir(parents=True)
+    tutorial_root = tmp_path / "demo" / "tutorial-export"
+    monkeypatch.setattr(regen_website_heroes, "list_demo_bundles", lambda: [hero, support])
+    monkeypatch.setattr(shared, "INDEX_PATH", tmp_path / "demo" / "INDEX.md")
+    monkeypatch.setattr(shared, "TUTORIAL_EXPORT_ROOT", tutorial_root)
+
+    def _fake_record_bundle(bundle: DemoBundle) -> dict[str, object]:
+        artifacts_dir = bundle.root / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "replay.jsonl").write_text("{}", encoding="utf-8")
+        (artifacts_dir / "demo.mp4").write_bytes(b"video")
+        (artifacts_dir / "poster.png").write_bytes(b"poster")
+        (artifacts_dir / "manifest.json").write_text('{"composition":{"mode":"single"}}', encoding="utf-8")
+        return {
+            "replay_path": str(artifacts_dir / "replay.jsonl"),
+            "video_path": str(artifacts_dir / "demo.mp4"),
+            "poster_path": str(artifacts_dir / "poster.png"),
+        }
+
+    monkeypatch.setattr(regen_website_heroes, "record_bundle", _fake_record_bundle)
+
+    exit_code = regen_website_heroes.main()
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert (tmp_path / "demo" / "INDEX.md").exists()
+    assert (hero.root / "exports" / "hero-demo.json").exists()
+    assert (tutorial_root / "heroes" / "hero-demo.json").exists()
+    assert (tutorial_root / "artifacts" / "hero-demo" / "replay.jsonl").exists()
+    assert json.loads((tutorial_root / "index.json").read_text(encoding="utf-8")) == {
+        "heroes": [
+            {
+                "id": "hero-demo",
+                "title": "Hero Demo",
+                "summary": "Primary walkthrough.",
+                "payload": "heroes/hero-demo.json",
+                "artifacts_dir": "artifacts/hero-demo",
+            }
+        ]
+    }
+    assert "website hero bundles regenerated: 1" in captured.out
+    assert f"tutorial export root: {tutorial_root}" in captured.out

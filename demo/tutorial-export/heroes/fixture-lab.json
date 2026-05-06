@@ -1,0 +1,86 @@
+{
+  "artifact_manifest": {
+    "artifacts": {
+      "replay": {
+        "event_count": 18,
+        "path": "artifacts/replay.jsonl",
+        "python_export": "artifacts/replay.py",
+        "size_bytes": 5916,
+        "ts_export": "artifacts/replay.ts"
+      },
+      "video": {
+        "duration_seconds": 1.68,
+        "height": 600,
+        "path": "artifacts/demo.mp4",
+        "poster_path": "artifacts/poster.png",
+        "size_bytes": 7895,
+        "width": 800
+      }
+    },
+    "bundle_id": "fixture-lab",
+    "composition": {
+      "canvas_height": 600,
+      "canvas_width": 800,
+      "mode": "single",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "webkit",
+            "persona": "fix-a",
+            "role": "player",
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "subtitle": "fixture-lab | Demonstrate shared mock routes and dialog policy with deterministic local fixture responses wired across multiple participants.",
+        "title": "Fixture Lab"
+      },
+      "panes": [
+        {
+          "height": 0,
+          "kind": "webkit",
+          "persona": "fix-a",
+          "role": "player",
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "primary": {
+        "kind": "webkit",
+        "persona": "fix-a",
+        "role": "player"
+      }
+    },
+    "hero": true,
+    "participants": [
+      {
+        "kind": "webkit",
+        "persona": "fix-a",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "fix-b",
+        "role": "player"
+      }
+    ],
+    "title": "Fixture Lab"
+  },
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl",
+      "artifacts/mock-routes.json"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "fixture-lab",
+  "regen_command": "uv run python scripts/demos/record_demo.py fixture-lab",
+  "summary": "Demonstrate shared mock routes and dialog policy with deterministic local fixture responses wired across multiple participants.",
+  "title": "Fixture Lab",
+  "tutorial_export": "heroes/fixture-lab.json"
+}
