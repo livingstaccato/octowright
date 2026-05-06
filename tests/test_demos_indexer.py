@@ -132,6 +132,10 @@ def test_build_tutorial_export_includes_hero_assets(tmp_path: Path) -> None:
     (tmp_path / "artifacts" / "poster.png").write_bytes(b"png")
     (tmp_path / "artifacts" / "demo.mp4").write_bytes(b"mp4")
     (tmp_path / "artifacts" / "replay.jsonl").write_text("{}", encoding="utf-8")
+    (tmp_path / "artifacts" / "manifest.json").write_text(
+        '{"composition":{"mode":"grid"},"artifacts":{"video":{"width":1920,"height":360}}}',
+        encoding="utf-8",
+    )
 
     payload = build_tutorial_export(bundle)
 
@@ -145,6 +149,10 @@ def test_build_tutorial_export_includes_hero_assets(tmp_path: Path) -> None:
         "assets": {
             "video": ["artifacts/demo.mp4", "artifacts/poster.png"],
             "replay": ["artifacts/replay.jsonl"],
+        },
+        "artifact_manifest": {
+            "composition": {"mode": "grid"},
+            "artifacts": {"video": {"width": 1920, "height": 360}},
         },
     }
 

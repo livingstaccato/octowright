@@ -20,7 +20,7 @@ async def main() -> None:
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/first-run-session/seed/welcome.html"
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/first-run-session/seed/welcome.html?persona=solo-player&role=player&kind=webkit&slot=0"
         )
         await page.evaluate(
             "document.body.innerHTML = '<form><input id=user name=user><input id=pass type=password name=pass><button id=submit type=button>Go</button></form>'"

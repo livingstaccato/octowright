@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -206,3 +207,85 @@ def compose_video_grid(
     ]
     _run_ffmpeg(cmd)
     return target_path
+
+
+def compose_video_layout(
+    placements: list[dict[str, int | Path]],
+    target_path: Path,
+) -> Path:
+    if not placements:
+        raise ValueError("compose_video_layout requires at least one placement")
+
+    ffmpeg = ensure_ffmpeg()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    inputs: list[str] = []
+    filters: list[str] = []
+    layouts: list[str] = []
+
+    for index, placement in enumerate(placements):
+        source_path = placement["source"]
+        width = int(placement["width"])
+        height = int(placement["height"])
+        x = int(placement["x"])
+        y = int(placement["y"])
+        inputs.extend(["-i", str(source_path)])
+        filters.append(
+            f"[{index}:v]setpts=PTS-STARTPTS,"
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black[v{index}]"
+        )
+        layouts.append(f"{x}_{y}")
+
+    filter_complex = ";".join(filters) + ";" + "".join(f"[v{index}]" for index in range(len(placements)))
+    filter_complex += f"xstack=inputs={len(placements)}:layout={'|'.join(layouts)}[v]"
+    cmd = [
+        ffmpeg,
+        *inputs,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(target_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    return target_path
+
+
+def probe_video(path: Path) -> dict[str, float | int]:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("ffprobe not found on PATH; install ffmpeg tools first")
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "json",
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe exited {result.returncode}:\n{result.stderr}")
+    payload = json.loads(result.stdout or "{}")
+    streams = payload.get("streams") or [{}]
+    stream = streams[0] if streams else {}
+    format_info = payload.get("format") or {}
+    return {
+        "width": int(stream.get("width") or 0),
+        "height": int(stream.get("height") or 0),
+        "duration_seconds": float(format_info.get("duration") or 0.0),
+    }

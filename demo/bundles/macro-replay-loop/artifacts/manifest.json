@@ -1,0 +1,37 @@
+{
+  "artifacts": {
+    "replay": {
+      "event_count": 9,
+      "path": "artifacts/replay.jsonl",
+      "python_export": "artifacts/replay.py",
+      "size_bytes": 3008,
+      "ts_export": "artifacts/replay.ts"
+    },
+    "video": {
+      "duration_seconds": 1.72,
+      "height": 600,
+      "path": "artifacts/demo.mp4",
+      "poster_path": "artifacts/poster.png",
+      "size_bytes": 4575,
+      "width": 800
+    }
+  },
+  "bundle_id": "macro-replay-loop",
+  "composition": {
+    "mode": "single",
+    "primary": {
+      "kind": "webkit",
+      "persona": "solo-player",
+      "role": "player"
+    }
+  },
+  "hero": true,
+  "participants": [
+    {
+      "kind": "webkit",
+      "persona": "solo-player",
+      "role": "player"
+    }
+  ],
+  "title": "Macro Replay Loop"
+}

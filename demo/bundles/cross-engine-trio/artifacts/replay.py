@@ -20,17 +20,7 @@ async def main() -> None:
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html"
-        )
-        ctx = await p.chromium.launch_persistent_context(
-            "/Users/tim/.config/octowright/profiles/cx-chromium/chromium",
-            headless=False,
-            viewport={"width": 1280, "height": 800},
-        )
-        browser = None
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html"
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html?persona=cx-webkit&role=player&kind=webkit&slot=2"
         )
         ctx = await p.firefox.launch_persistent_context(
             "/Users/tim/.config/octowright/profiles/cx-firefox/firefox",
@@ -40,7 +30,17 @@ async def main() -> None:
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html"
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html?persona=cx-firefox&role=player&kind=firefox&slot=1"
+        )
+        ctx = await p.chromium.launch_persistent_context(
+            "/Users/tim/.config/octowright/profiles/cx-chromium/chromium",
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+        )
+        browser = None
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html?persona=cx-chromium&role=player&kind=chromium&slot=0"
         )
         if browser is not None:
             await browser.close()

@@ -11,19 +11,19 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html");
-  ctx = await chromium.launchPersistentContext("/Users/tim/.config/octowright/profiles/cx-chromium/chromium", {
-    headless: false,
-    viewport: { width: 1280, height: 800 },
-  });
-  page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html?persona=cx-webkit&role=player&kind=webkit&slot=2");
   ctx = await firefox.launchPersistentContext("/Users/tim/.config/octowright/profiles/cx-firefox/firefox", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html?persona=cx-firefox&role=player&kind=firefox&slot=1");
+  ctx = await chromium.launchPersistentContext("/Users/tim/.config/octowright/profiles/cx-chromium/chromium", {
+    headless: false,
+    viewport: { width: 1280, height: 800 },
+  });
+  page = ctx.pages()[0] ?? await ctx.newPage();
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html?persona=cx-chromium&role=player&kind=chromium&slot=0");
   if (browser !== null) {
     await browser.close();
   } else {

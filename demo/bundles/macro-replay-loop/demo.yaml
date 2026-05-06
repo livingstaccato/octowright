@@ -19,8 +19,7 @@ source_refs:
   scenarios:
     - examples/scenarios/solo.yaml
   macros:
-    - examples/macros/discord-style-login.json
-    - examples/macros/conditional-discord-modal-dismiss.json
+    - demo/bundles/macro-replay-loop/macros/replay-loop-login.json
 artifact_expectations:
   replay:
     - artifacts/replay.jsonl
@@ -39,12 +38,10 @@ recording:
   primary_role: player
   default_seed: seed/login-card.html
   macros:
-    - name: discord-style-login
+    - name: replay-loop-login
       role: player
       args:
         email: demo@example.com
         password: swordfish
-    - name: conditional-discord-modal-dismiss
-      role: player
   extras:
     - replay-roundtrip
