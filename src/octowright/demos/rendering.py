@@ -22,6 +22,7 @@ from octowright.video import (
     extract_frame,
     optimize_png,
     probe_video,
+    render_supporting_video,
     transcode_video,
 )
 
@@ -79,10 +80,17 @@ def render_bundle_video(
         return summary
 
     if plan.kind == "sync-multi":
-        rendered = render_sync_group_videos(live, close_results, plan=plan)
-        if not rendered:
-            raise RuntimeError(f"sync-multi render plan for {bundle.id!r} did not produce any panes")
-        panes = rendered
+        try:
+            panes = _grid_panes(
+                live,
+                close_results,
+                columns=plan.columns,
+                cell_width=plan.cell_width,
+                cell_height=plan.cell_height,
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(f"sync-multi render plan for {bundle.id!r} did not produce any panes") from exc
+        supporting_videos = render_sync_group_videos(panes, output_dir=video_path.parent / "supporting")
         source_videos = [pane["source"] for pane in panes]
         compose_video_grid(
             source_videos,
@@ -110,6 +118,7 @@ def render_bundle_video(
                 }
                 for pane in panes
             ],
+            "supporting_videos": supporting_videos,
         }
     else:
         placements = _featured_video_placements(live, close_results, plan)
@@ -281,18 +290,28 @@ def _grid_panes(
 
 
 def render_sync_group_videos(
-    live: LiveScenario,
-    close_results: dict[str, dict[str, Any]],
+    sync_group_panes: list[dict[str, Any]],
     *,
-    plan: RenderPlan,
+    output_dir: Path,
 ) -> list[dict[str, Any]]:
-    return _grid_panes(
-        live,
-        close_results,
-        columns=plan.columns,
-        cell_width=plan.cell_width,
-        cell_height=plan.cell_height,
-    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rendered: list[dict[str, Any]] = []
+    for index, pane in enumerate(sync_group_panes, start=1):
+        pane_id = _supporting_video_id(pane, index=index)
+        output_path = output_dir / f"{pane_id}.mp4"
+        poster_path = output_dir / f"{pane_id}.png"
+        asset = render_supporting_video(Path(pane["source"]), output_path, poster_path=poster_path)
+        rendered.append(
+            {
+                "id": pane_id,
+                "path": asset["path"],
+                "poster_path": asset["poster_path"],
+                "persona": pane["persona"],
+                "role": pane["role"],
+                "kind": pane["kind"],
+            }
+        )
+    return rendered
 
 
 def _featured_video_placements(
@@ -335,6 +354,12 @@ def _primary_participant(live: LiveScenario, bundle: DemoBundle) -> dict[str, An
         if participant["role"] == primary_role:
             return participant
     raise RuntimeError(f"demo bundle {bundle.id!r} primary role {primary_role!r} was not launched")
+
+
+def _supporting_video_id(pane: dict[str, Any], *, index: int) -> str:
+    raw = str(pane.get("role") or pane.get("persona") or f"pane-{index}")
+    slug = "".join(char.lower() if char.isalnum() else "-" for char in raw).strip("-")
+    return slug or f"pane-{index}"
 
 
 def _ensure_spdx_header(path: Path) -> None:
