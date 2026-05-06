@@ -5,15 +5,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 Color = tuple[int, int, int]
+ColorAlpha = tuple[int, int, int, int]
 
 MAGENTA: Color = (255, 0, 255)
-BLACK: Color = (14, 20, 28)
-WHITE: Color = (255, 255, 255)
-SOFT_WHITE: Color = (230, 235, 240)
+
+
+@dataclass(frozen=True)
+class OverlayBox:
+    anchor: str
+    background_rgba: ColorAlpha
+    title_rgba: ColorAlpha
+    subtitle_rgba: ColorAlpha
+    padding: int
+    margin: int
+
 
 FONT_5X7: dict[str, tuple[str, ...]] = {
     " ": ("00000",) * 7,
@@ -60,6 +70,15 @@ FONT_5X7: dict[str, tuple[str, ...]] = {
     "?": ("11110", "00001", "00010", "00100", "00100", "00000", "00100"),
 }
 
+DEFAULT_OVERLAY_BOX = OverlayBox(
+    anchor="bottom-left",
+    background_rgba=(12, 16, 24, 120),
+    title_rgba=(245, 247, 250, 220),
+    subtitle_rgba=(203, 213, 225, 190),
+    padding=24,
+    margin=28,
+)
+
 
 def render_overlay_image(
     target_path: Path,
@@ -71,14 +90,15 @@ def render_overlay_image(
     canvas_height: int,
 ) -> Path:
     pixels = [list([MAGENTA] * canvas_width) for _ in range(canvas_height)]
-    _fill_rect(pixels, 20, 18, canvas_width - 20, 108, BLACK)
-    _draw_text(pixels, 40, 28, title.upper(), scale=4, color=WHITE)
-    _draw_text(pixels, 40, 76, subtitle.upper(), scale=2, color=SOFT_WHITE)
+    _draw_overlay_box(
+        pixels,
+        title=title.upper(),
+        subtitle=subtitle.upper(),
+        canvas_height=canvas_height,
+        overlay_box=DEFAULT_OVERLAY_BOX,
+    )
     for pane in panes:
         _draw_pane_label(pixels, pane)
-    footer = f"{canvas_width}X{canvas_height} WEBSITE HERO EXPORT"
-    footer_width = _measure_text(footer, scale=1)
-    _draw_text(pixels, canvas_width - footer_width - 32, canvas_height - 24, footer, scale=1, color=SOFT_WHITE)
     _write_ppm(target_path, pixels)
     return target_path
 
@@ -88,15 +108,51 @@ def _draw_pane_label(pixels: list[list[Color]], pane: dict[str, Any]) -> None:
     x = int(pane["x"]) + 18
     y = int(pane["y"]) + 18
     width = _measure_text(label, scale=2) + 20
-    _fill_rect(pixels, x - 8, y - 8, x + width, y + 22, BLACK)
-    _draw_text(pixels, x, y, label, scale=2, color=WHITE)
+    _blend_rect(pixels, x - 8, y - 8, x + width, y + 22, DEFAULT_OVERLAY_BOX.background_rgba)
+    _draw_text(pixels, x, y, label, scale=2, color=DEFAULT_OVERLAY_BOX.title_rgba)
+
+
+def _draw_overlay_box(
+    pixels: list[list[Color]],
+    *,
+    title: str,
+    subtitle: str,
+    canvas_height: int,
+    overlay_box: OverlayBox,
+) -> None:
+    title_scale = 4
+    subtitle_scale = 2
+    line_gap = 12
+    title_width = _measure_text(title, scale=title_scale)
+    subtitle_width = _measure_text(subtitle, scale=subtitle_scale)
+    box_width = max(title_width, subtitle_width) + (overlay_box.padding * 2)
+    box_height = (7 * title_scale) + (7 * subtitle_scale) + (overlay_box.padding * 2) + line_gap
+    x0 = overlay_box.margin
+    y0 = canvas_height - overlay_box.margin - box_height if overlay_box.anchor == "bottom-left" else overlay_box.margin
+    _blend_rect(pixels, x0, y0, x0 + box_width, y0 + box_height, overlay_box.background_rgba)
+    _draw_text(
+        pixels,
+        x0 + overlay_box.padding,
+        y0 + overlay_box.padding,
+        title,
+        scale=title_scale,
+        color=overlay_box.title_rgba,
+    )
+    _draw_text(
+        pixels,
+        x0 + overlay_box.padding,
+        y0 + overlay_box.padding + (7 * title_scale) + line_gap,
+        subtitle,
+        scale=subtitle_scale,
+        color=overlay_box.subtitle_rgba,
+    )
 
 
 def _measure_text(text: str, *, scale: int) -> int:
     return sum((5 * scale) + scale for _ in text)
 
 
-def _draw_text(pixels: list[list[Color]], x: int, y: int, text: str, *, scale: int, color: Color) -> None:
+def _draw_text(pixels: list[list[Color]], x: int, y: int, text: str, *, scale: int, color: ColorAlpha) -> None:
     cursor = x
     for char in text:
         glyph = FONT_5X7.get(char, FONT_5X7["?"])
@@ -104,7 +160,7 @@ def _draw_text(pixels: list[list[Color]], x: int, y: int, text: str, *, scale: i
             for col, bit in enumerate(pattern):
                 if bit != "1":
                     continue
-                _fill_rect(
+                _blend_rect(
                     pixels,
                     cursor + (col * scale),
                     y + (row * scale),
@@ -115,7 +171,7 @@ def _draw_text(pixels: list[list[Color]], x: int, y: int, text: str, *, scale: i
         cursor += (5 * scale) + scale
 
 
-def _fill_rect(pixels: list[list[Color]], x0: int, y0: int, x1: int, y1: int, color: Color) -> None:
+def _blend_rect(pixels: list[list[Color]], x0: int, y0: int, x1: int, y1: int, color: ColorAlpha) -> None:
     height = len(pixels)
     width = len(pixels[0]) if pixels else 0
     left = max(0, x0)
@@ -125,7 +181,12 @@ def _fill_rect(pixels: list[list[Color]], x0: int, y0: int, x1: int, y1: int, co
     for row in range(top, bottom):
         line = pixels[row]
         for col in range(left, right):
-            line[col] = color
+            line[col] = _blend_pixel(line[col], color)
+
+
+def _blend_pixel(base: Color, overlay: ColorAlpha) -> Color:
+    alpha = overlay[3] / 255.0
+    return tuple(round((base[index] * (1.0 - alpha)) + (overlay[index] * alpha)) for index in range(3))
 
 
 def _write_ppm(target_path: Path, pixels: list[list[Color]]) -> None:

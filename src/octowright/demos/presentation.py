@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 VALID_PRESENTATION_MODES = {
+    "artifact-first",
+    "hero-composite",
     "single-clean",
     "sync-multi",
 }
