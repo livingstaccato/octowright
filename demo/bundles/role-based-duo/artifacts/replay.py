@@ -20,7 +20,7 @@ async def main() -> None:
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/role-based-duo/seed/duo-board.html"
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/role-based-duo/seed/duo-board.html?persona=duo-player&role=player&kind=webkit&slot=0"
         )
         ctx = await p.webkit.launch_persistent_context(
             "/Users/tim/.config/octowright/profiles/duo-monitor/webkit",
@@ -30,7 +30,7 @@ async def main() -> None:
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/role-based-duo/seed/control-room.html"
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/role-based-duo/seed/control-room.html?persona=duo-monitor&role=monitor&kind=webkit&slot=1"
         )
         await page.evaluate("document.body.innerHTML = '<h1 id=title>Demo</h1><p class=note>hi</p>'")
         if browser is not None:

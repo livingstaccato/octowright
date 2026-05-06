@@ -1,0 +1,60 @@
+{
+  "artifacts": {
+    "replay": {
+      "event_count": 11,
+      "path": "artifacts/replay.jsonl",
+      "python_export": "artifacts/replay.py",
+      "size_bytes": 4490,
+      "ts_export": "artifacts/replay.ts"
+    },
+    "video": {
+      "duration_seconds": 1.72,
+      "height": 540,
+      "path": "artifacts/demo.mp4",
+      "poster_path": "artifacts/poster.png",
+      "size_bytes": 6281,
+      "width": 1920
+    }
+  },
+  "bundle_id": "role-based-duo",
+  "composition": {
+    "cell_height": 540,
+    "cell_width": 960,
+    "columns": 2,
+    "mode": "grid",
+    "panes": [
+      {
+        "height": 540,
+        "kind": "webkit",
+        "persona": "duo-player",
+        "role": "player",
+        "width": 960,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "height": 540,
+        "kind": "webkit",
+        "persona": "duo-monitor",
+        "role": "monitor",
+        "width": 960,
+        "x": 960,
+        "y": 0
+      }
+    ]
+  },
+  "hero": true,
+  "participants": [
+    {
+      "kind": "webkit",
+      "persona": "duo-player",
+      "role": "player"
+    },
+    {
+      "kind": "webkit",
+      "persona": "duo-monitor",
+      "role": "monitor"
+    }
+  ],
+  "title": "Role-Based Duo"
+}

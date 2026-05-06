@@ -11,13 +11,13 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/fixture-lab/seed/fixtures.html");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/fixture-lab/seed/fixtures.html?persona=fix-b&role=player&kind=webkit&slot=1");
   ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/fix-a/webkit", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/fixture-lab/seed/fixtures.html");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/fixture-lab/seed/fixtures.html?persona=fix-a&role=player&kind=webkit&slot=0");
   if (browser !== null) {
     await browser.close();
   } else {
