@@ -5,10 +5,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
+
+from octowright.video_overlay import render_overlay_image
 
 
 def ensure_ffmpeg() -> str:
@@ -256,6 +260,57 @@ def compose_video_layout(
         "-y",
     ]
     _run_ffmpeg(cmd)
+    return target_path
+
+
+def apply_video_overlay(
+    source_path: Path,
+    target_path: Path,
+    *,
+    title: str,
+    subtitle: str,
+    panes: list[dict[str, object]],
+    canvas_width: int,
+    canvas_height: int,
+) -> Path:
+    ffmpeg = ensure_ffmpeg()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix="octowright-video-overlay-"))
+    overlay_path = render_overlay_image(
+        temp_dir / "overlay.ppm",
+        title=title,
+        subtitle=subtitle,
+        panes=panes,
+        canvas_width=canvas_width,
+        canvas_height=canvas_height,
+    )
+    try:
+        cmd = [
+            ffmpeg,
+            "-i",
+            str(source_path),
+            "-i",
+            str(overlay_path),
+            "-filter_complex",
+            "[1:v]colorkey=0xFF00FF:0.01:0.0[ol];[0:v][ol]overlay=0:0[v]",
+            "-map",
+            "[v]",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(target_path),
+            "-y",
+        ]
+        _run_ffmpeg(cmd)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            overlay_path.unlink()
+        with contextlib.suppress(OSError):
+            temp_dir.rmdir()
     return target_path
 
 

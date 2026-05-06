@@ -9,11 +9,11 @@
         "ts_export": "artifacts/replay.ts"
       },
       "video": {
-        "duration_seconds": 5.24,
+        "duration_seconds": 6.0,
         "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 50328,
+        "size_bytes": 80789,
         "width": 1920
       }
     },
@@ -22,6 +22,75 @@
       "canvas_height": 1080,
       "canvas_width": 1920,
       "mode": "featured",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "webkit",
+            "persona": "p1",
+            "role": "player",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "kind": "webkit",
+            "persona": "p2",
+            "role": "player",
+            "x": 1280,
+            "y": 0
+          },
+          {
+            "kind": "webkit",
+            "persona": "p3",
+            "role": "player",
+            "x": 1600,
+            "y": 0
+          },
+          {
+            "kind": "firefox",
+            "persona": "p4",
+            "role": "player",
+            "x": 1280,
+            "y": 360
+          },
+          {
+            "kind": "firefox",
+            "persona": "p5",
+            "role": "player",
+            "x": 1600,
+            "y": 360
+          },
+          {
+            "kind": "chromium",
+            "persona": "p6",
+            "role": "player",
+            "x": 0,
+            "y": 720
+          },
+          {
+            "kind": "chromium",
+            "persona": "p7",
+            "role": "player",
+            "x": 480,
+            "y": 720
+          },
+          {
+            "kind": "webkit",
+            "persona": "ops",
+            "role": "monitor",
+            "x": 960,
+            "y": 720
+          },
+          {
+            "kind": "webkit",
+            "persona": "spectator",
+            "role": "main-site",
+            "x": 1440,
+            "y": 720
+          }
+        ],
+        "subtitle": "seven-mix-orchestration | Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.",
+        "title": "Seven Mix Orchestration"
+      },
       "panes": [
         {
           "height": 720,
