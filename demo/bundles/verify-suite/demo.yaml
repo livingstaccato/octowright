@@ -38,3 +38,7 @@ tutorial_export:
 seed_refs:
   - seed/verify-stage.html
   - seed/assertions.json
+recording:
+  primary_role: form
+  default_seed: seed/verify-stage.html
+  verify_report: artifacts/report.xml
