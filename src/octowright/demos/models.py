@@ -37,6 +37,8 @@ class DemoSyncGroup:
     def __post_init__(self) -> None:
         if not self.roles:
             raise ValueError("presentation.sync_groups[*].roles must be a non-empty list[str]")
+        if not all(isinstance(role, str) for role in self.roles):
+            raise ValueError("presentation.sync_groups[*].roles must be a non-empty list[str]")
 
 
 @dataclass
@@ -54,7 +56,10 @@ class DemoTimingConfig:
 
     def __post_init__(self) -> None:
         for field_name in ("intro_ms", "outro_ms", "minimum_ms"):
-            if getattr(self, field_name) < 0:
+            value = getattr(self, field_name)
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"presentation.timing.{field_name} must be an integer")
+            if value < 0:
                 raise ValueError(f"presentation.timing.{field_name} must be >= 0")
 
 
