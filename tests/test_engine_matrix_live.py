@@ -145,6 +145,7 @@ async def test_live_handoff_and_scenario_remap_per_engine(
             old_instance_id=old_id,
             new_instance_id=new_id,
             role="player",
+            browser_pool=pool,
         )
         assert remap["new_instance_id"] == new_id
         assert spool._live["scn-live"].participants[0]["instance_id"] == new_id

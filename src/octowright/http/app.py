@@ -53,6 +53,7 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
     routes: list[Any] = list(all_routes())
 
     lifespan = None
+    _mcp_session_manager = None
     if mcp_leader:
         from octowright.server import mcp as _mcp
 
