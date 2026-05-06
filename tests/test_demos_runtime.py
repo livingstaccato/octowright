@@ -10,8 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from octowright.demos.models import DemoBundle, DemoMacroRun, DemoRecordingConfig
+from octowright.demos.models import DemoBundle, DemoMacroRun, DemoPresentationConfig, DemoRecordingConfig
+from octowright.demos.rendering import render_bundle_video
 from octowright.demos.runtime import record_demo_bundle
+from octowright.scenarios_pool import LiveScenario
 
 
 class _FakeSession:
@@ -253,3 +255,69 @@ async def test_record_demo_bundle_composes_video_for_multi_browser_bundles(monke
     assert composed["participant_count"] == 2
     assert extracted["video"] == str(bundle.root / "artifacts" / "demo.mp4")
     assert extracted["target"] == str(bundle.root / "artifacts" / "poster.png")
+
+
+def test_render_bundle_video_uses_presentation_mode_for_sync_multi(monkeypatch, tmp_path: Path) -> None:
+    bundle = DemoBundle(id="alpha", title="Alpha", root=tmp_path)
+    bundle.presentation = DemoPresentationConfig(mode="sync-multi")
+
+    source_video = tmp_path / "alpha.webm"
+    source_video.write_bytes(b"source")
+    mirror_video = tmp_path / "mirror.webm"
+    mirror_video.write_bytes(b"mirror")
+    live = LiveScenario(
+        scenario_id="live-alpha",
+        name="alpha",
+        spec=None,
+        participants=[
+            {
+                "instance_id": "iid-1",
+                "persona": "alpha",
+                "role": "player",
+                "kind": "chromium",
+            },
+            {
+                "instance_id": "iid-2",
+                "persona": "mirror",
+                "role": "monitor",
+                "kind": "firefox",
+            },
+        ],
+    )
+    close_results = {
+        "iid-1": {"video_path": str(source_video)},
+        "iid-2": {"video_path": str(mirror_video)},
+    }
+    video_path = tmp_path / "demo.mp4"
+    poster_path = tmp_path / "poster.png"
+
+    called: dict[str, object] = {}
+
+    def _fake_render_sync_group_videos(*args, **kwargs):
+        called["sync"] = True
+        return []
+
+    monkeypatch.setattr(
+        "octowright.demos.rendering.render_sync_group_videos", _fake_render_sync_group_videos, raising=False
+    )
+    monkeypatch.setattr(
+        "octowright.demos.rendering.transcode_video",
+        lambda source, target: target.write_bytes(Path(source).read_bytes()) or target,
+    )
+    monkeypatch.setattr(
+        "octowright.demos.rendering.extract_frame",
+        lambda source, target: target.write_bytes(b"poster") or target,
+    )
+    monkeypatch.setattr(
+        "octowright.demos.rendering.compose_video_grid",
+        lambda sources, target, **kwargs: target.write_bytes(b"video") or target,
+    )
+    monkeypatch.setattr(
+        "octowright.demos.rendering.probe_video",
+        lambda _: {"width": 1280, "height": 720, "duration_seconds": 2.0},
+    )
+
+    summary = render_bundle_video(bundle, live, close_results, video_path=video_path, poster_path=poster_path)
+
+    assert summary["mode"] == "sync-multi"
+    assert called["sync"] is True
