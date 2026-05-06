@@ -270,3 +270,5 @@ def test_hero_demo_manifests_exist() -> None:
             assert bundle.recording.role_seeds, demo_id
         else:
             assert bundle.recording.default_seed, demo_id
+        if demo_id == "macro-replay-loop":
+            assert bundle.macro_refs == ["demo/bundles/macro-replay-loop/macros/replay-loop-login.json"]

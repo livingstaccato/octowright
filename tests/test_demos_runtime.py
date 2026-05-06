@@ -159,15 +159,25 @@ async def test_record_demo_bundle_writes_expected_artifacts(monkeypatch, tmp_pat
     monkeypatch.setattr("octowright.demos.runtime._repo_root", lambda _: tmp_path)
     monkeypatch.setattr("octowright.demos.runtime._prepare_scenario", _fake_prepare_scenario)
     monkeypatch.setattr(
-        "octowright.demos.runtime.transcode_video", lambda src, dst: dst.write_bytes(src.read_bytes()) or dst
-    )
-    monkeypatch.setattr(
-        "octowright.demos.runtime.export_script",
-        lambda log_path, out_path, fmt="python": (
-            created_exports.append(out_path) or out_path.write_text(fmt, encoding="utf-8") or out_path
+        "octowright.demos.runtime.write_exports",
+        lambda replay_path: (
+            created_exports.extend([replay_path.with_suffix(".py"), replay_path.with_suffix(".ts")])
+            or replay_path.with_suffix(".py").write_text("python", encoding="utf-8")
+            or replay_path.with_suffix(".ts").write_text("ts", encoding="utf-8")
         ),
     )
-
+    monkeypatch.setattr(
+        "octowright.demos.runtime.render_bundle_video",
+        lambda bundle_obj, live, close_results, *, video_path, poster_path: (
+            video_path.write_bytes(b"video")
+            or poster_path.write_bytes(b"poster")
+            or {"mode": "single", "sources": ["raw.webm"]}
+        ),
+    )
+    monkeypatch.setattr(
+        "octowright.demos.runtime.write_artifact_manifest",
+        lambda *args, **kwargs: ((kwargs["video_path"].parent / "manifest.json").write_text("{}", encoding="utf-8")),
+    )
     result = await record_demo_bundle(bundle)
 
     replay_path = bundle.root / "artifacts" / "replay.jsonl"
@@ -200,39 +210,40 @@ async def test_record_demo_bundle_composes_video_for_multi_browser_bundles(monke
     monkeypatch.setattr("octowright.demos.runtime._repo_root", lambda _: tmp_path)
     monkeypatch.setattr("octowright.demos.runtime._prepare_scenario", _fake_prepare_scenario)
     monkeypatch.setattr(
-        "octowright.demos.runtime.export_script",
-        lambda log_path, out_path, fmt="python": out_path.write_text(fmt, encoding="utf-8") or out_path,
-    )
-    monkeypatch.setattr(
-        "octowright.demos.runtime.compose_video_grid",
-        lambda sources, target, columns, cell_width, cell_height: (
-            composed.update(
-                {
-                    "sources": [str(source) for source in sources],
-                    "target": str(target),
-                    "columns": columns,
-                    "cell_width": cell_width,
-                    "cell_height": cell_height,
-                }
-            )
-            or target.write_bytes(b"video")
-            or target
+        "octowright.demos.runtime.write_exports",
+        lambda replay_path: (
+            replay_path.with_suffix(".py").write_text("python", encoding="utf-8")
+            or replay_path.with_suffix(".ts").write_text("ts", encoding="utf-8")
         ),
     )
     monkeypatch.setattr(
-        "octowright.demos.runtime.extract_frame",
-        lambda video, target: extracted.update({"video": str(video), "target": str(target)})
-        or target.write_bytes(b"poster")
-        or target,
+        "octowright.demos.runtime.render_bundle_video",
+        lambda bundle_obj, live, close_results, *, video_path, poster_path: (
+            composed.update(
+                {
+                    "target": str(video_path),
+                    "poster_target": str(poster_path),
+                    "bundle": bundle_obj.id,
+                    "participant_count": len(live.participants),
+                }
+            )
+            or video_path.write_bytes(b"video")
+            or poster_path.write_bytes(b"poster")
+            or {"mode": "grid", "sources": ["a.webm", "b.webm"]}
+        ),
     )
-    monkeypatch.setattr("octowright.demos.runtime.transcode_video", lambda *_: pytest.fail("should compose instead"))
+    monkeypatch.setattr(
+        "octowright.demos.runtime.write_artifact_manifest",
+        lambda *args, **kwargs: (
+            extracted.update({"video": str(kwargs["video_path"]), "target": str(kwargs["poster_path"])})
+            or (kwargs["video_path"].parent / "manifest.json").write_text("{}", encoding="utf-8")
+        ),
+    )
 
     result = await record_demo_bundle(bundle)
 
     assert result["bundle_id"] == "role-based-duo"
-    assert composed["columns"] == 2
-    assert composed["cell_width"] == 960
-    assert composed["cell_height"] == 540
-    assert len(composed["sources"]) == 2
+    assert composed["bundle"] == "role-based-duo"
+    assert composed["participant_count"] == 2
     assert extracted["video"] == str(bundle.root / "artifacts" / "demo.mp4")
     assert extracted["target"] == str(bundle.root / "artifacts" / "poster.png")

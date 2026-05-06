@@ -6,24 +6,24 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
   let ctx!: BrowserContext;
   let page!: Page;
 
-  ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/vs-counter/webkit", {
-    headless: false,
-    viewport: { width: 1280, height: 800 },
-  });
-  page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html");
   ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/vs-arithmetic/webkit", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2");
   ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/vs-form/webkit", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html?persona=vs-form&role=form&kind=webkit&slot=0");
+  ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/vs-counter/webkit", {
+    headless: false,
+    viewport: { width: 1280, height: 800 },
+  });
+  page = ctx.pages()[0] ?? await ctx.newPage();
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html?persona=vs-counter&role=counter&kind=webkit&slot=1");
   await page.evaluate("document.body.innerHTML = '<input id=user><input id=pass type=password>'");
   try {
     await page.getByRole("form", { name: "" }).fill("alice");

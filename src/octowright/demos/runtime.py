@@ -13,15 +13,16 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from octowright.browser_pool import BrowserPool
 from octowright.demos.models import DemoBundle, DemoMacroRun
-from octowright.export import export_script
+from octowright.demos.rendering import render_bundle_video, write_artifact_manifest, write_exports
 from octowright.recorder import tail_log
 from octowright.runner import _write_junit
 from octowright.scenarios import Participant, Scenario, load_python_scenario, load_yaml_scenario
 from octowright.scenarios_pool import LiveScenario, ScenarioPool
-from octowright.video import compose_video_grid, extract_frame, optimize_png, transcode_video
+from octowright.video import optimize_png
 
 
 async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
@@ -50,9 +51,25 @@ async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
     replay_path = _primary_replay_path(bundle)
     merged_events = _write_merged_replay(live, replay_path)
     _write_supporting_artifacts(bundle, live, scenario, replay_path)
-    _write_exports(replay_path)
+    write_exports(replay_path)
     video_path = _primary_video_path(bundle)
-    _render_bundle_video(bundle, live, close_results, video_path)
+    poster_path = _primary_poster_path(bundle)
+    render_summary = render_bundle_video(
+        bundle,
+        live,
+        close_results,
+        video_path=video_path,
+        poster_path=poster_path,
+    )
+    write_artifact_manifest(
+        bundle,
+        live,
+        replay_path=replay_path,
+        video_path=video_path,
+        poster_path=poster_path,
+        event_count=merged_events,
+        render_summary=render_summary,
+    )
     return {
         "bundle_id": bundle.id,
         "replay_path": str(replay_path),
@@ -76,10 +93,11 @@ def _load_bundle_scenario(bundle: DemoBundle) -> Scenario:
 
 def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
     participants: list[Participant] = []
-    default_url = _seed_url(bundle, bundle.recording.default_seed) if bundle.recording.default_seed else None
-    for participant in scenario.participants:
+    for index, participant in enumerate(scenario.participants):
         role_seed = bundle.recording.role_seeds.get(participant.role)
-        target_url = _seed_url(bundle, role_seed) if role_seed else default_url
+        target_url = _seed_url(bundle, role_seed, participant=participant, slot=index) if role_seed else None
+        if target_url is None and bundle.recording.default_seed:
+            target_url = _seed_url(bundle, bundle.recording.default_seed, participant=participant, slot=index)
         participants.append(
             replace(
                 participant,
@@ -97,8 +115,21 @@ def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
     )
 
 
-def _seed_url(bundle: DemoBundle, rel_path: str) -> str:
-    return (bundle.root / rel_path).resolve().as_uri()
+def _seed_url(
+    bundle: DemoBundle, rel_path: str, *, participant: Participant | None = None, slot: int | None = None
+) -> str:
+    base = (bundle.root / rel_path).resolve().as_uri()
+    if participant is None:
+        return base
+    query = urlencode(
+        {
+            "persona": participant.persona,
+            "role": participant.role,
+            "kind": participant.kind,
+            "slot": slot if slot is not None else 0,
+        }
+    )
+    return f"{base}?{query}"
 
 
 async def _run_bundle_macros(
@@ -226,79 +257,13 @@ def _write_supporting_artifacts(
         mock_routes_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _write_exports(replay_path: Path) -> None:
-    python_export = replay_path.with_suffix(".py")
-    export_script(replay_path, python_export, fmt="python")
-    _ensure_spdx_header(python_export)
-    export_script(replay_path, replay_path.with_suffix(".ts"), fmt="ts")
-
-
-def _find_primary_video(
-    live: LiveScenario | None,
-    close_results: dict[str, dict[str, Any]],
-    bundle: DemoBundle,
-) -> Path:
-    if live is None:
-        raise RuntimeError("cannot resolve primary video without a live scenario")
-    primary = _primary_participant(live, bundle)
-    result = close_results.get(primary["instance_id"], {})
-    raw = result.get("video_path")
-    if not isinstance(raw, str) or not raw:
-        raise RuntimeError(f"demo bundle {bundle.id!r} did not produce a source video")
-    return Path(raw)
-
-
-def _render_bundle_video(
-    bundle: DemoBundle,
-    live: LiveScenario | None,
-    close_results: dict[str, dict[str, Any]],
-    video_path: Path,
-) -> None:
-    profile = _composition_profile(bundle.id)
-    if live is None:
-        raise RuntimeError("cannot render demo video without a live scenario")
-    poster_path = _primary_poster_path(bundle)
-    if profile is None:
-        source_video = _find_primary_video(live, close_results, bundle)
-        transcode_video(source_video, video_path)
-        return
-
-    source_videos = _ordered_video_sources(live, close_results)
-    compose_video_grid(
-        source_videos,
-        video_path,
-        columns=profile["columns"],
-        cell_width=profile["cell_width"],
-        cell_height=profile["cell_height"],
-    )
-    extract_frame(video_path, poster_path)
-    if poster_path.stat().st_size > 500_000:
-        optimize_png(poster_path)
-
-
-def _ordered_video_sources(
-    live: LiveScenario,
-    close_results: dict[str, dict[str, Any]],
-) -> list[Path]:
-    ordered: list[Path] = []
-    for participant in live.participants:
-        result = close_results.get(participant["instance_id"], {})
-        raw_path = result.get("video_path")
-        if not isinstance(raw_path, str) or not raw_path:
-            continue
-        ordered.append(Path(raw_path))
-    if not ordered:
-        raise RuntimeError("no recorded participant videos were available for composition")
-    return ordered
-
-
-def _composition_profile(bundle_id: str) -> dict[str, int] | None:
-    profiles: dict[str, dict[str, int]] = {
-        "cross-engine-trio": {"columns": 3, "cell_width": 640, "cell_height": 360},
-        "role-based-duo": {"columns": 2, "cell_width": 960, "cell_height": 540},
-        "seven-mix-orchestration": {"columns": 3, "cell_width": 640, "cell_height": 360},
-    }
-    return profiles.get(bundle_id)
+def _primary_replay_path(bundle: DemoBundle) -> Path:
+    for rel_path in bundle.replay_artifacts:
+        if rel_path.endswith("replay.jsonl"):
+            return bundle.root / rel_path
+    if bundle.replay_artifacts:
+        return bundle.root / bundle.replay_artifacts[0]
+    raise ValueError(f"demo bundle {bundle.id!r} has no replay artifact declaration")
 
 
 def _primary_participant(live: LiveScenario, bundle: DemoBundle) -> dict[str, Any]:
@@ -309,15 +274,6 @@ def _primary_participant(live: LiveScenario, bundle: DemoBundle) -> dict[str, An
         if participant["role"] == primary_role:
             return participant
     raise RuntimeError(f"demo bundle {bundle.id!r} primary role {primary_role!r} was not launched")
-
-
-def _primary_replay_path(bundle: DemoBundle) -> Path:
-    for rel_path in bundle.replay_artifacts:
-        if rel_path.endswith("replay.jsonl"):
-            return bundle.root / rel_path
-    if bundle.replay_artifacts:
-        return bundle.root / bundle.replay_artifacts[0]
-    raise ValueError(f"demo bundle {bundle.id!r} has no replay artifact declaration")
 
 
 def _match_replay_artifact(bundle: DemoBundle, slug: str) -> Path:
@@ -372,16 +328,3 @@ async def _run_macro_direct(session: Any, macro_run: DemoMacroRun) -> None:
     from octowright import macros as macro_module
 
     await macro_module.run_macro(session=session, name=macro_run.name, args=macro_run.args)
-
-
-def _ensure_spdx_header(path: Path) -> None:
-    header = (
-        "# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc\n"
-        "# SPDX-License-Identifier: Apache-2.0\n"
-        "# SPDX-Comment: Part of octowright.\n"
-        "#\n\n"
-    )
-    content = path.read_text(encoding="utf-8")
-    if content.startswith("# SPDX-FileCopyrightText:"):
-        return
-    path.write_text(header + content, encoding="utf-8")

@@ -19,7 +19,9 @@ async def main() -> None:
         )
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/fixture-lab/seed/fixtures.html")
+        await page.goto(
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/fixture-lab/seed/fixtures.html?persona=fix-b&role=player&kind=webkit&slot=1"
+        )
         ctx = await p.webkit.launch_persistent_context(
             "/Users/tim/.config/octowright/profiles/fix-a/webkit",
             headless=False,
@@ -27,7 +29,9 @@ async def main() -> None:
         )
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/fixture-lab/seed/fixtures.html")
+        await page.goto(
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/fixture-lab/seed/fixtures.html?persona=fix-a&role=player&kind=webkit&slot=0"
+        )
         if browser is not None:
             await browser.close()
         else:

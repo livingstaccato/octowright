@@ -13,16 +13,6 @@ from playwright.async_api import async_playwright
 async def main() -> None:
     async with async_playwright() as p:
         ctx = await p.webkit.launch_persistent_context(
-            "/Users/tim/.config/octowright/profiles/vs-counter/webkit",
-            headless=False,
-            viewport={"width": 1280, "height": 800},
-        )
-        browser = None
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html"
-        )
-        ctx = await p.webkit.launch_persistent_context(
             "/Users/tim/.config/octowright/profiles/vs-arithmetic/webkit",
             headless=False,
             viewport={"width": 1280, "height": 800},
@@ -30,7 +20,7 @@ async def main() -> None:
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html"
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2"
         )
         ctx = await p.webkit.launch_persistent_context(
             "/Users/tim/.config/octowright/profiles/vs-form/webkit",
@@ -40,7 +30,17 @@ async def main() -> None:
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html"
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html?persona=vs-form&role=form&kind=webkit&slot=0"
+        )
+        ctx = await p.webkit.launch_persistent_context(
+            "/Users/tim/.config/octowright/profiles/vs-counter/webkit",
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+        )
+        browser = None
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/verify-suite/seed/verify-stage.html?persona=vs-counter&role=counter&kind=webkit&slot=1"
         )
         await page.evaluate("document.body.innerHTML = '<input id=user><input id=pass type=password>'")
         try:
