@@ -9,17 +9,43 @@
         "ts_export": "artifacts/replay.ts"
       },
       "video": {
-        "duration_seconds": 1.88,
+        "duration_seconds": 1.92,
         "height": 600,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 3831,
+        "size_bytes": 8605,
         "width": 800
       }
     },
     "bundle_id": "verify-suite",
     "composition": {
+      "canvas_height": 600,
+      "canvas_width": 800,
       "mode": "single",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "webkit",
+            "persona": "vs-form",
+            "role": "form",
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "subtitle": "verify-suite | Run role-specific verification macros as a compact offline scenario suite and surface the replay plus test-report story together.",
+        "title": "Verify Suite"
+      },
+      "panes": [
+        {
+          "height": 0,
+          "kind": "webkit",
+          "persona": "vs-form",
+          "role": "form",
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      ],
       "primary": {
         "kind": "webkit",
         "persona": "vs-form",

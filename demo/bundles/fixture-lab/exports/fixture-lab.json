@@ -13,13 +13,39 @@
         "height": 600,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 3958,
+        "size_bytes": 7895,
         "width": 800
       }
     },
     "bundle_id": "fixture-lab",
     "composition": {
+      "canvas_height": 600,
+      "canvas_width": 800,
       "mode": "single",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "webkit",
+            "persona": "fix-a",
+            "role": "player",
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "subtitle": "fixture-lab | Demonstrate shared mock routes and dialog policy with deterministic local fixture responses wired across multiple participants.",
+        "title": "Fixture Lab"
+      },
+      "panes": [
+        {
+          "height": 0,
+          "kind": "webkit",
+          "persona": "fix-a",
+          "role": "player",
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      ],
       "primary": {
         "kind": "webkit",
         "persona": "fix-a",

@@ -171,7 +171,7 @@ async def test_record_demo_bundle_writes_expected_artifacts(monkeypatch, tmp_pat
         lambda bundle_obj, live, close_results, *, video_path, poster_path: (
             video_path.write_bytes(b"video")
             or poster_path.write_bytes(b"poster")
-            or {"mode": "single", "sources": ["raw.webm"]}
+            or {"mode": "single", "canvas_width": 800, "canvas_height": 600, "panes": [], "overlay": {"title": "A"}}
         ),
     )
     monkeypatch.setattr(
@@ -229,7 +229,13 @@ async def test_record_demo_bundle_composes_video_for_multi_browser_bundles(monke
             )
             or video_path.write_bytes(b"video")
             or poster_path.write_bytes(b"poster")
-            or {"mode": "grid", "sources": ["a.webm", "b.webm"]}
+            or {
+                "mode": "grid",
+                "canvas_width": 1920,
+                "canvas_height": 540,
+                "panes": [],
+                "overlay": {"title": "Role Based Duo"},
+            }
         ),
     )
     monkeypatch.setattr(

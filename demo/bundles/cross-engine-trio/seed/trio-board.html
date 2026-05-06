@@ -3,57 +3,162 @@
   <head>
     <meta charset="utf-8">
     <title>Cross Engine Trio</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+      :root {
+        color-scheme: light;
+        --ink: #11233b;
+        --muted: #5b6c83;
+        --line: rgba(17, 35, 59, 0.14);
+        --paper: rgba(255, 255, 255, 0.88);
+        --bg-a: #d7f0ff;
+        --bg-b: #f8f1d7;
+        --bg-c: #dce9ff;
+      }
+      * { box-sizing: border-box; }
       body {
         margin: 0;
-        font-family: ui-sans-serif, sans-serif;
-        background: #f4f7fb;
-        color: #132238;
+        min-height: 100vh;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(255,255,255,0.92), transparent 26%),
+          linear-gradient(135deg, var(--bg-a), var(--bg-b) 52%, var(--bg-c));
       }
       main {
-        max-width: 52rem;
+        width: min(1100px, calc(100vw - 32px));
         margin: 0 auto;
-        padding: 2rem;
+        padding: 32px 0 40px;
       }
-      .grid {
+      .hero {
         display: grid;
-        gap: 1rem;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 20px;
+        grid-template-columns: 1.3fr 0.9fr;
+        align-items: stretch;
       }
-      article {
-        padding: 1rem;
-        background: #ffffff;
-        border: 1px solid #d8e1ef;
-        border-radius: 0.9rem;
+      .panel, .metric {
+        background: var(--paper);
+        backdrop-filter: blur(16px);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        box-shadow: 0 22px 50px rgba(17, 35, 59, 0.12);
       }
-      .pill {
-        display: inline-block;
-        margin-bottom: 0.75rem;
-        padding: 0.25rem 0.6rem;
+      .panel { padding: 28px; }
+      .eyebrow, .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
         border-radius: 999px;
-        background: #dceafe;
-        color: #0b4a78;
-        font-size: 0.8rem;
+        padding: 7px 12px;
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .eyebrow {
+        background: rgba(17, 35, 59, 0.08);
+        color: var(--muted);
+      }
+      h1 {
+        margin: 18px 0 10px;
+        font-size: clamp(40px, 5vw, 72px);
+        line-height: 0.94;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.55;
+      }
+      .engine-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+        margin-top: 24px;
+      }
+      .engine-card {
+        padding: 18px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+      }
+      .engine-card strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 16px;
+      }
+      .metric {
+        display: grid;
+        gap: 14px;
+        padding: 24px;
+      }
+      .metric-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .metric article {
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: rgba(17, 35, 59, 0.05);
+      }
+      .metric .big {
+        font-size: 34px;
+        font-weight: 700;
+      }
+      .status {
+        margin-top: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .chip { background: #11233b; color: #fff; }
+      .chip.alt { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+      @media (max-width: 860px) {
+        .hero { grid-template-columns: 1fr; }
+        .engine-row, .metric-grid { grid-template-columns: 1fr; }
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>Three engines, one deterministic page</h1>
-      <div class="grid">
-        <article>
-          <span class="pill">chromium</span>
-          <p>Fast smoke path for the same offline DOM.</p>
-        </article>
-        <article>
-          <span class="pill">firefox</span>
-          <p>Useful for parity checks and side-by-side recordings.</p>
-        </article>
-        <article>
-          <span class="pill">webkit</span>
-          <p>Matches the smallest first-run story while sharing the same shape.</p>
-        </article>
-      </div>
+      <section class="hero" data-surface="trio-board">
+        <div class="panel">
+          <span class="eyebrow" id="eyebrow">Hero demo · side by side</span>
+          <h1>Three engines, one deterministic stage.</h1>
+          <p>
+            This board is tuned for Octowright’s composite recordings: the same local page shape,
+            the same assertions, and a clearly legible visual signature per engine.
+          </p>
+          <div class="engine-row">
+            <article class="engine-card" data-engine="chromium">
+              <strong>Chromium</strong>
+              <p>Fast path for smoke runs and broad browser parity.</p>
+            </article>
+            <article class="engine-card" data-engine="firefox">
+              <strong>Firefox</strong>
+              <p>Useful for engine drift checks and debug comparisons.</p>
+            </article>
+            <article class="engine-card" data-engine="webkit">
+              <strong>WebKit</strong>
+              <p>Compact first-run footprint with the same deterministic target.</p>
+            </article>
+          </div>
+        </div>
+        <aside class="metric">
+          <span class="eyebrow">Recording profile</span>
+          <div class="metric-grid">
+            <article><div class="big">3</div><div>engines in one capture</div></article>
+            <article><div class="big">0</div><div>external requests required</div></article>
+            <article><div class="big">1</div><div>shared offline seed</div></article>
+            <article><div class="big" id="slot-value">slot 0</div><div>session placement</div></article>
+          </div>
+          <div class="status">
+            <span class="chip">cross-engine</span>
+            <span class="chip alt">player role</span>
+            <span class="chip alt">engine parity</span>
+          </div>
+        </aside>
+      </section>
     </main>
   </body>
 </html>
