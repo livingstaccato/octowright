@@ -323,6 +323,17 @@ def test_post_sessions_default_url_when_omitted(
     r = client.post("/api/sessions", json={"kind": "chromium"})
     assert r.status_code == 201, r.text
     assert pool.launch_calls[0]["url"] == _http.DEFAULT_URL
+    assert pool.launch_calls[0]["headed"] is None
+
+
+def test_post_sessions_preserves_explicit_headed_false(
+    client: TestClient,
+    fakes: dict[str, Any],
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    r = client.post("/api/sessions", json={"kind": "chromium", "headed": False})
+    assert r.status_code == 201, r.text
+    assert pool.launch_calls[0]["headed"] is False
 
 
 def test_post_sessions_pool_value_error_400(

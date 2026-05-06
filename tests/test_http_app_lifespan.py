@@ -72,6 +72,14 @@ def test_build_app_mcp_leader_tolerates_missing_mcp_route_app(monkeypatch: pytes
     assert app.router.lifespan_context == fake_mcp_app.router.lifespan_context
 
 
+def test_build_app_non_leader_clears_stale_mcp_session_manager() -> None:
+    _http_app._mcp_session_manager = types.SimpleNamespace(_server_instances={"stale": object()})
+
+    _http_app.build_app(mcp_leader=False)
+
+    assert _http_app.get_mcp_active_session_count() == 0
+
+
 def test_health_route_returns_unknown_when_metadata_version_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise(_name: str) -> str:
         raise RuntimeError("boom")

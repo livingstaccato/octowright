@@ -811,17 +811,17 @@ class TestScenarioPoolTail:
 
 
 # ---------------------------------------------------------------------------
-# startup_macros error suppression
+# startup_macros failure handling
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_startup_macro_failure_logged_not_raised(
+async def test_startup_macro_failure_raises_and_cleans_up(
     scenarios_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """If a startup macro raises, scenario start succeeds anyway and logs a warning."""
+    """If a startup macro raises, scenario start fails and no live scenario remains."""
     pdir = tmp_path / "profiles"
     (pdir / "a").mkdir(parents=True)
     (pdir / "a" / "profile.yaml").write_text(yaml.safe_dump({"name": "a", "default_macros": ["nonexistent-startup"]}))
@@ -840,6 +840,6 @@ async def test_startup_macro_failure_logged_not_raised(
 
     bp = _StubPool()
     spool = ScenarioPool()
-    # Must not raise even though the startup macro fails.
-    live = await spool.start(name="sm", browser_pool=bp)
-    assert live.scenario_id in {ls["scenario_id"] for ls in spool.list_live()}
+    with pytest.raises(RuntimeError, match="startup macro failures"):
+        await spool.start(name="sm", browser_pool=bp)
+    assert spool.list_live() == []
