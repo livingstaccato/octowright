@@ -30,7 +30,6 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       input: {
-        demos: resolve(__dirname, "static/demos.html"),
         index: resolve(__dirname, "static/index.html"),
         session: resolve(__dirname, "static/session.html"),
       },

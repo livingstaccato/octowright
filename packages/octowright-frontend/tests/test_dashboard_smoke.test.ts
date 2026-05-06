@@ -59,29 +59,24 @@ describe("vite build artifacts", () => {
     rmSync(OUT_DIR, { force: true, recursive: true });
   });
 
-  it("emits index.html, demos.html, and session.html at outDir root", () => {
+  it("emits index.html and session.html at outDir root", () => {
     expect(existsSync(resolve(OUT_DIR, "index.html"))).toBe(true);
-    expect(existsSync(resolve(OUT_DIR, "demos.html"))).toBe(true);
     expect(existsSync(resolve(OUT_DIR, "session.html"))).toBe(true);
   });
 
   it("emits at least one .js file per HTML entry, plus a CSS file", () => {
     const indexHtml = readFileSync(resolve(OUT_DIR, "index.html"), "utf8");
-    const demosHtml = readFileSync(resolve(OUT_DIR, "demos.html"), "utf8");
     const sessionHtml = readFileSync(resolve(OUT_DIR, "session.html"), "utf8");
     // Vite rewrites <script src=…> from the source TS to the bundled name.
     // Source HTML had `../src/dashboard.ts` — if that survives, the rewrite
     // never happened and the browser will 404.
     expect(indexHtml).not.toMatch(/\.\.\/src\//);
-    expect(demosHtml).not.toMatch(/\.\.\/src\//);
     expect(sessionHtml).not.toMatch(/\.\.\/src\//);
     // Match flat or hashed names: `/index.js` or `/assets/index-abc123.js`.
     expect(indexHtml).toMatch(/<script[^>]+src="[^"]+\.js"/);
-    expect(demosHtml).toMatch(/<script[^>]+src="[^"]+\.js"/);
     expect(sessionHtml).toMatch(/<script[^>]+src="[^"]+\.js"/);
     // Stylesheet must still be linked.
     expect(indexHtml).toMatch(/<link[^>]+rel="stylesheet"[^>]+href="[^"]+\.css"/);
-    expect(demosHtml).toMatch(/<link[^>]+rel="stylesheet"[^>]+href="[^"]+\.css"/);
   });
 
   it("contains zero bare-specifier import statements in any bundled JS", () => {
