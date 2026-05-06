@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from octowright.demos.models import DemoBundle, DemoMacroRun, DemoPresentationConfig, DemoRecordingConfig
+from octowright.demos.presentation_profiles import select_render_plan
 from octowright.demos.rendering import render_bundle_video
 from octowright.demos.runtime import record_demo_bundle
 from octowright.scenarios_pool import LiveScenario
@@ -295,7 +296,28 @@ def test_render_bundle_video_uses_presentation_mode_for_sync_multi(monkeypatch, 
 
     def _fake_render_sync_group_videos(*args, **kwargs):
         called["sync"] = True
-        return []
+        return [
+            {
+                "source": source_video,
+                "persona": "alpha",
+                "role": "player",
+                "kind": "chromium",
+                "x": 0,
+                "y": 0,
+                "width": 960,
+                "height": 540,
+            },
+            {
+                "source": mirror_video,
+                "persona": "mirror",
+                "role": "monitor",
+                "kind": "firefox",
+                "x": 960,
+                "y": 0,
+                "width": 960,
+                "height": 540,
+            },
+        ]
 
     monkeypatch.setattr(
         "octowright.demos.rendering.render_sync_group_videos", _fake_render_sync_group_videos, raising=False
@@ -321,3 +343,50 @@ def test_render_bundle_video_uses_presentation_mode_for_sync_multi(monkeypatch, 
 
     assert summary["mode"] == "sync-multi"
     assert called["sync"] is True
+
+
+def test_render_bundle_video_raises_when_sync_multi_plan_produces_no_panes(monkeypatch, tmp_path: Path) -> None:
+    bundle = DemoBundle(id="alpha", title="Alpha", root=tmp_path)
+    bundle.presentation = DemoPresentationConfig(mode="sync-multi")
+
+    live = LiveScenario(
+        scenario_id="live-alpha",
+        name="alpha",
+        spec=None,
+        participants=[
+            {
+                "instance_id": "iid-1",
+                "persona": "alpha",
+                "role": "player",
+                "kind": "chromium",
+            },
+            {
+                "instance_id": "iid-2",
+                "persona": "mirror",
+                "role": "monitor",
+                "kind": "firefox",
+            },
+        ],
+    )
+
+    monkeypatch.setattr(
+        "octowright.demos.rendering.render_sync_group_videos",
+        lambda *args, **kwargs: [],
+    )
+
+    with pytest.raises(RuntimeError, match="sync-multi"):
+        render_bundle_video(
+            bundle,
+            live,
+            {},
+            video_path=tmp_path / "demo.mp4",
+            poster_path=tmp_path / "poster.png",
+        )
+
+
+def test_select_render_plan_raises_for_unsupported_mode(tmp_path: Path) -> None:
+    bundle = DemoBundle(id="alpha", title="Alpha", root=tmp_path)
+    bundle.presentation.mode = "future-mode"
+
+    with pytest.raises(ValueError, match="unsupported presentation mode"):
+        select_render_plan(bundle)

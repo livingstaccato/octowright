@@ -62,7 +62,9 @@ def select_render_plan(bundle: DemoBundle) -> RenderPlan:
         return resolve_composite_plan(bundle)
     if bundle.presentation.mode == "sync-multi":
         return resolve_sync_multi_plan(bundle)
-    return RenderPlan(kind="artifact-first")
+    if bundle.presentation.mode == "artifact-first":
+        return RenderPlan(kind="artifact-first")
+    raise ValueError(f"unsupported presentation mode {bundle.presentation.mode!r}")
 
 
 def resolve_sync_multi_plan(bundle: DemoBundle) -> RenderPlan:
