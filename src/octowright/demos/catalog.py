@@ -10,7 +10,16 @@ from typing import Any
 
 import yaml
 
-from octowright.demos.models import DemoBundle, DemoMacroRun, DemoRecordingConfig
+from octowright.demos.models import (
+    DemoBundle,
+    DemoMacroRun,
+    DemoOverlayConfig,
+    DemoPresentationConfig,
+    DemoRecordingConfig,
+    DemoSyncGroup,
+    DemoTimingConfig,
+)
+from octowright.demos.presentation import validate_presentation_mode
 
 DEMO_BUNDLES_DIR = Path("demo/bundles")
 
@@ -65,6 +74,22 @@ def _require_string_map(name: str, raw: Any) -> dict[str, str]:
     return dict(raw)
 
 
+def _require_int(name: str, raw: Any, *, default: int) -> int:
+    if raw is None:
+        return default
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    raise ValueError(f"{name} must be an integer")
+
+
+def _require_bool(name: str, raw: Any, *, default: bool) -> bool:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    raise ValueError(f"{name} must be a boolean")
+
+
 def _parse_macro_runs(raw: Any) -> list[DemoMacroRun]:
     if raw is None:
         return []
@@ -106,6 +131,61 @@ def _parse_recording(raw: Any) -> DemoRecordingConfig:
     )
 
 
+def _parse_overlay(raw: Any) -> DemoOverlayConfig:
+    overlay = _as_dict("presentation.overlay", raw)
+    return DemoOverlayConfig(
+        enabled=_require_bool("presentation.overlay.enabled", overlay.get("enabled"), default=True),
+        style=_optional_string("presentation.overlay.style", overlay.get("style")) or "subtle",
+        placement=_optional_string("presentation.overlay.placement", overlay.get("placement")) or "bottom-left",
+    )
+
+
+def _parse_timing(raw: Any) -> DemoTimingConfig:
+    timing = _as_dict("presentation.timing", raw)
+    return DemoTimingConfig(
+        intro_ms=_require_int("presentation.timing.intro_ms", timing.get("intro_ms"), default=0),
+        outro_ms=_require_int("presentation.timing.outro_ms", timing.get("outro_ms"), default=1500),
+        minimum_ms=_require_int("presentation.timing.minimum_ms", timing.get("minimum_ms"), default=4000),
+    )
+
+
+def _parse_sync_groups(raw: Any) -> list[DemoSyncGroup]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("presentation.sync_groups must be a list[mapping]")
+    groups: list[DemoSyncGroup] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"presentation.sync_groups[{index}] must be a mapping")
+        group_id = _optional_string(f"presentation.sync_groups[{index}].id", item.get("id"))
+        if not group_id:
+            raise ValueError(f"presentation.sync_groups[{index}].id must be a non-empty string")
+        groups.append(
+            DemoSyncGroup(
+                id=group_id,
+                roles=_require_string_list(
+                    f"presentation.sync_groups[{index}].roles",
+                    item.get("roles"),
+                ),
+            )
+        )
+    return groups
+
+
+def _parse_presentation(raw: Any) -> DemoPresentationConfig:
+    presentation = _as_dict("presentation", raw)
+    mode = _optional_string("presentation.mode", presentation.get("mode")) or "single-clean"
+    validate_presentation_mode(mode)
+    return DemoPresentationConfig(
+        mode=mode,
+        primary_asset=_optional_string("presentation.primary_asset", presentation.get("primary_asset")) or "hero_video",
+        overlay=_parse_overlay(presentation.get("overlay")),
+        timing=_parse_timing(presentation.get("timing")),
+        sync_groups=_parse_sync_groups(presentation.get("sync_groups")),
+    )
+
+
 def load_demo_bundle(bundle_dir: Path) -> DemoBundle:
     raw = yaml.safe_load((bundle_dir / "demo.yaml").read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -131,6 +211,7 @@ def load_demo_bundle(bundle_dir: Path) -> DemoBundle:
         regen_command=_optional_string("regen.command", regen.get("command")),
         tutorial_export=_optional_string("tutorial_export.include", tutorial_export.get("include")),
         recording=_parse_recording(raw.get("recording")),
+        presentation=_parse_presentation(raw.get("presentation")),
         root=bundle_dir,
     )
 
