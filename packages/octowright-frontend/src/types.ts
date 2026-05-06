@@ -94,36 +94,6 @@ export interface MacroSummary {
   updated_at: string | null;
 }
 
-export interface DemoArtifactGroup {
-  declared_count: number;
-  existing_count: number;
-  declared_paths: string[];
-  existing_paths: string[];
-}
-
-export interface DemoSummary {
-  id: string;
-  title: string;
-  summary: string | null;
-  hero: boolean;
-  audiences: string[];
-  tags: string[];
-  engines: string[];
-  roles: string[];
-  scenarios: string[];
-  regen_command: string | null;
-  tutorial_export: string | null;
-  artifacts: {
-    replay: DemoArtifactGroup;
-    video: DemoArtifactGroup;
-  };
-}
-
-export interface DemoListResponse {
-  heroes: DemoSummary[];
-  supporting: DemoSummary[];
-}
-
 export interface MacroAction {
   action: string;
   selector?: string;

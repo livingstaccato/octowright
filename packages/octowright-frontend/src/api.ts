@@ -6,7 +6,6 @@ import {
 } from "./telemetry.js";
 import type {
   ConsoleListResponse,
-  DemoListResponse,
   DownloadListResponse,
   EventsResponse,
   HealthResponse,
@@ -174,10 +173,6 @@ export function getPersonas(): Promise<PersonaSummary[]> {
 
 export function getMacros(): Promise<MacroSummary[]> {
   return fetchJson<MacroSummary[]>("/api/macros");
-}
-
-export function getDemos(): Promise<DemoListResponse> {
-  return fetchJson<DemoListResponse>("/api/demos");
 }
 
 export function getMacro(name: string): Promise<MacroDetail> {
