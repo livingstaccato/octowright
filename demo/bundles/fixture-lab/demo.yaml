@@ -35,3 +35,11 @@ seed_refs:
   - seed/fixtures.html
   - seed/api-health.json
   - seed/api-time.json
+recording:
+  primary_role: player
+  default_seed: seed/fixtures.html
+  macros:
+    - name: test-smoke-page-ready
+      role: player
+  extras:
+    - mock-routes

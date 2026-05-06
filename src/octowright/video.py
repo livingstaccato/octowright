@@ -96,3 +96,42 @@ def _extract_at_times(ffmpeg: str, video_path: Path, out_dir: Path, at_times: li
         _run_ffmpeg(cmd)
         produced.append(out_file)
     return sorted(produced)
+
+
+def transcode_video(source_path: Path, target_path: Path) -> Path:
+    ffmpeg = ensure_ffmpeg()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg,
+        "-i",
+        str(source_path),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(target_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    return target_path
+
+
+def optimize_png(path: Path, *, max_width: int = 960) -> Path:
+    ffmpeg = ensure_ffmpeg()
+    temp_path = path.with_suffix(".optimized.png")
+    cmd = [
+        ffmpeg,
+        "-i",
+        str(path),
+        "-vf",
+        f"scale='min(iw,{max_width})':-1",
+        "-frames:v",
+        "1",
+        str(temp_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    temp_path.replace(path)
+    return path

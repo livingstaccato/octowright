@@ -35,6 +35,7 @@ def test_load_demo_bundle_reads_demo_yaml_fields(tmp_path: Path) -> None:
             "roles": ["host", "guest"],
             "source_refs": {
                 "scenarios": ["standup", "handoff"],
+                "macros": ["macros/login.json"],
             },
             "artifact_expectations": {
                 "replay": ["artifacts/replay.py", "artifacts/replay.ts"],
@@ -45,6 +46,17 @@ def test_load_demo_bundle_reads_demo_yaml_fields(tmp_path: Path) -> None:
             },
             "tutorial_export": {
                 "include": "exports/team-sync.md",
+            },
+            "seed_refs": ["seed/stage.html"],
+            "recording": {
+                "primary_role": "host",
+                "default_seed": "seed/stage.html",
+                "role_seeds": {"guest": "seed/guest.html"},
+                "macros": [
+                    {"name": "login", "role": "host", "args": {"email": "demo@example.com"}},
+                ],
+                "verify_report": "artifacts/report.xml",
+                "extras": ["participant-roster"],
             },
         },
     )
@@ -60,10 +72,21 @@ def test_load_demo_bundle_reads_demo_yaml_fields(tmp_path: Path) -> None:
     assert bundle.engines == ["chromium", "webkit"]
     assert bundle.roles == ["host", "guest"]
     assert bundle.scenarios == ["standup", "handoff"]
+    assert bundle.macro_refs == ["macros/login.json"]
+    assert bundle.seed_refs == ["seed/stage.html"]
     assert bundle.replay_artifacts == ["artifacts/replay.py", "artifacts/replay.ts"]
     assert bundle.video_artifacts == ["videos/intro.mp4", "videos/highlight.mp4"]
     assert bundle.regen_command == "uv run octowright demo regen team-sync"
     assert bundle.tutorial_export == "exports/team-sync.md"
+    assert bundle.recording.primary_role == "host"
+    assert bundle.recording.default_seed == "seed/stage.html"
+    assert bundle.recording.role_seeds == {"guest": "seed/guest.html"}
+    assert len(bundle.recording.macros) == 1
+    assert bundle.recording.macros[0].name == "login"
+    assert bundle.recording.macros[0].role == "host"
+    assert bundle.recording.macros[0].args == {"email": "demo@example.com"}
+    assert bundle.recording.verify_report == "artifacts/report.xml"
+    assert bundle.recording.extras == ["participant-roster"]
     assert bundle.root == bundle_dir
 
 
@@ -174,7 +197,24 @@ def test_load_demo_bundle_rejects_malformed_scalar_fields(tmp_path: Path) -> Non
         },
     )
 
-    with pytest.raises(ValueError, match="regen.command"):
+    with pytest.raises(ValueError, match=r"regen\.command"):
+        load_demo_bundle(bundle_dir)
+
+
+def test_load_demo_bundle_rejects_bad_recording_shape(tmp_path: Path) -> None:
+    bundle_dir = _write_bundle(
+        tmp_path,
+        "bad-recording",
+        {
+            "id": "bad-recording",
+            "title": "Bad Recording",
+            "recording": {
+                "role_seeds": ["seed/stage.html"],
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"recording\.role_seeds"):
         load_demo_bundle(bundle_dir)
 
 
@@ -223,3 +263,10 @@ def test_hero_demo_manifests_exist() -> None:
         assert bundle.id == demo_id
         assert bundle.hero is True
         assert bundle.scenarios
+        assert bundle.macro_refs, demo_id
+        assert bundle.seed_refs, demo_id
+        assert bundle.recording.primary_role, demo_id
+        if demo_id == "role-based-duo":
+            assert bundle.recording.role_seeds, demo_id
+        else:
+            assert bundle.recording.default_seed, demo_id
