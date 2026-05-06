@@ -11,13 +11,13 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/role-based-duo/seed/duo-board.html");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/role-based-duo/seed/duo-board.html?persona=duo-player&role=player&kind=webkit&slot=0");
   ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/duo-monitor/webkit", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/role-based-duo/seed/control-room.html");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/role-based-duo/seed/control-room.html?persona=duo-monitor&role=monitor&kind=webkit&slot=1");
   await page.evaluate("document.body.innerHTML = '<h1 id=title>Demo</h1><p class=note>hi</p>'");
   if (browser !== null) {
     await browser.close();

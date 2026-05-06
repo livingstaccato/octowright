@@ -20,24 +20,20 @@ async def main() -> None:
         browser = None
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/macro-replay-loop/seed/login-card.html"
-        )
-        await page.evaluate(
-            "document.body.innerHTML = '<form><input name=email id=email><input name=password type=password id=password><button id=submit type=button>Log in</button></form>'"
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/macro-replay-loop/seed/login-card.html?persona=solo-player&role=player&kind=webkit&slot=0"
         )
         try:
-            await page.get_by_role("player", name="").fill("demo@example.com")
+            await page.get_by_role("player", name="Email").fill("demo@example.com")
         except Exception:
             await page.fill("#email", "demo@example.com")
         try:
-            await page.get_by_role("player", name="").fill("swordfish")
+            await page.get_by_role("player", name="Password").fill("swordfish")
         except Exception:
             await page.fill("#password", "swordfish")
         try:
             await page.get_by_role("player", name="Log in").click()
         except Exception:
             await page.click("#submit")
-        await page.keyboard.press("Escape")
         if browser is not None:
             await browser.close()
         else:

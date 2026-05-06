@@ -212,3 +212,45 @@ def test_compose_video_grid_builds_xstack_command(monkeypatch: pytest.MonkeyPatc
     assert "layout=0_0|640_0|1280_0" in filter_complex
     assert "scale=640:360" in filter_complex
     assert cmd[-2] == str(out)
+
+
+def test_compose_video_layout_builds_custom_positions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _v, cmds = _import_video_mock_run(monkeypatch, tmp_path)
+    sources = [tmp_path / "a.webm", tmp_path / "b.webm"]
+    for path in sources:
+        path.touch()
+    out = tmp_path / "featured.mp4"
+
+    _v.compose_video_layout(
+        [
+            {"source": sources[0], "x": 0, "y": 0, "width": 1280, "height": 720},
+            {"source": sources[1], "x": 1280, "y": 0, "width": 640, "height": 360},
+        ],
+        out,
+    )
+
+    assert len(cmds) == 1
+    filter_complex = cmds[0][cmds[0].index("-filter_complex") + 1]
+    assert "xstack=inputs=2" in filter_complex
+    assert "layout=0_0|1280_0" in filter_complex
+    assert "scale=1280:720" in filter_complex
+    assert "scale=640:360" in filter_complex
+
+
+def test_probe_video_reads_dimensions_and_duration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import octowright.video as _v
+
+    monkeypatch.setattr("octowright.video.shutil.which", lambda name: "/fake/ffprobe" if name == "ffprobe" else None)
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> MagicMock:
+        result = MagicMock()
+        result.returncode = 0
+        result.stderr = ""
+        result.stdout = '{"streams":[{"width":1920,"height":1080}],"format":{"duration":"3.5"}}'
+        return result
+
+    monkeypatch.setattr("octowright.video.subprocess.run", fake_run)
+
+    metadata = _v.probe_video(tmp_path / "demo.mp4")
+
+    assert metadata == {"width": 1920, "height": 1080, "duration_seconds": 3.5}

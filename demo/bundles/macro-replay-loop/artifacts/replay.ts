@@ -11,15 +11,14 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
     viewport: { width: 1280, height: 800 },
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/macro-replay-loop/seed/login-card.html");
-  await page.evaluate("document.body.innerHTML = '<form><input name=email id=email><input name=password type=password id=password><button id=submit type=button>Log in</button></form>'");
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/macro-replay-loop/seed/login-card.html?persona=solo-player&role=player&kind=webkit&slot=0");
   try {
-    await page.getByRole("player", { name: "" }).fill("demo@example.com");
+    await page.getByRole("player", { name: "Email" }).fill("demo@example.com");
   } catch {
     await page.fill("#email", "demo@example.com");
   }
   try {
-    await page.getByRole("player", { name: "" }).fill("swordfish");
+    await page.getByRole("player", { name: "Password" }).fill("swordfish");
   } catch {
     await page.fill("#password", "swordfish");
   }
@@ -28,7 +27,6 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
   } catch {
     await page.click("#submit");
   }
-  await page.keyboard.press("Escape");
   if (browser !== null) {
     await browser.close();
   } else {

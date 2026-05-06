@@ -1,4 +1,161 @@
 {
+  "artifact_manifest": {
+    "artifacts": {
+      "replay": {
+        "event_count": 59,
+        "path": "artifacts/replay.jsonl",
+        "python_export": "artifacts/replay.py",
+        "size_bytes": 22125,
+        "ts_export": "artifacts/replay.ts"
+      },
+      "video": {
+        "duration_seconds": 5.24,
+        "height": 1080,
+        "path": "artifacts/demo.mp4",
+        "poster_path": "artifacts/poster.png",
+        "size_bytes": 50328,
+        "width": 1920
+      }
+    },
+    "bundle_id": "seven-mix-orchestration",
+    "composition": {
+      "canvas_height": 1080,
+      "canvas_width": 1920,
+      "mode": "featured",
+      "panes": [
+        {
+          "height": 720,
+          "kind": "webkit",
+          "persona": "p1",
+          "role": "player",
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p2",
+          "role": "player",
+          "width": 320,
+          "x": 1280,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p3",
+          "role": "player",
+          "width": 320,
+          "x": 1600,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "firefox",
+          "persona": "p4",
+          "role": "player",
+          "width": 320,
+          "x": 1280,
+          "y": 360
+        },
+        {
+          "height": 360,
+          "kind": "firefox",
+          "persona": "p5",
+          "role": "player",
+          "width": 320,
+          "x": 1600,
+          "y": 360
+        },
+        {
+          "height": 360,
+          "kind": "chromium",
+          "persona": "p6",
+          "role": "player",
+          "width": 480,
+          "x": 0,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "chromium",
+          "persona": "p7",
+          "role": "player",
+          "width": 480,
+          "x": 480,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "ops",
+          "role": "monitor",
+          "width": 480,
+          "x": 960,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "spectator",
+          "role": "main-site",
+          "width": 480,
+          "x": 1440,
+          "y": 720
+        }
+      ]
+    },
+    "hero": true,
+    "participants": [
+      {
+        "kind": "webkit",
+        "persona": "p1",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "p2",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "p3",
+        "role": "player"
+      },
+      {
+        "kind": "firefox",
+        "persona": "p4",
+        "role": "player"
+      },
+      {
+        "kind": "firefox",
+        "persona": "p5",
+        "role": "player"
+      },
+      {
+        "kind": "chromium",
+        "persona": "p6",
+        "role": "player"
+      },
+      {
+        "kind": "chromium",
+        "persona": "p7",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "ops",
+        "role": "monitor"
+      },
+      {
+        "kind": "webkit",
+        "persona": "spectator",
+        "role": "main-site"
+      }
+    ],
+    "title": "Seven Mix Orchestration"
+  },
   "assets": {
     "replay": [
       "artifacts/replay.jsonl",

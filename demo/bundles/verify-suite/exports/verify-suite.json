@@ -1,4 +1,51 @@
 {
+  "artifact_manifest": {
+    "artifacts": {
+      "replay": {
+        "event_count": 23,
+        "path": "artifacts/replay.jsonl",
+        "python_export": "artifacts/replay.py",
+        "size_bytes": 8271,
+        "ts_export": "artifacts/replay.ts"
+      },
+      "video": {
+        "duration_seconds": 1.88,
+        "height": 600,
+        "path": "artifacts/demo.mp4",
+        "poster_path": "artifacts/poster.png",
+        "size_bytes": 3831,
+        "width": 800
+      }
+    },
+    "bundle_id": "verify-suite",
+    "composition": {
+      "mode": "single",
+      "primary": {
+        "kind": "webkit",
+        "persona": "vs-form",
+        "role": "form"
+      }
+    },
+    "hero": true,
+    "participants": [
+      {
+        "kind": "webkit",
+        "persona": "vs-form",
+        "role": "form"
+      },
+      {
+        "kind": "webkit",
+        "persona": "vs-counter",
+        "role": "counter"
+      },
+      {
+        "kind": "webkit",
+        "persona": "vs-arithmetic",
+        "role": "arithmetic"
+      }
+    ],
+    "title": "Verify Suite"
+  },
   "assets": {
     "replay": [
       "artifacts/replay.jsonl",

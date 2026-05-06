@@ -1,4 +1,78 @@
 {
+  "artifact_manifest": {
+    "artifacts": {
+      "replay": {
+        "event_count": 18,
+        "path": "artifacts/replay.jsonl",
+        "python_export": "artifacts/replay.py",
+        "size_bytes": 7191,
+        "ts_export": "artifacts/replay.ts"
+      },
+      "video": {
+        "duration_seconds": 3.72,
+        "height": 360,
+        "path": "artifacts/demo.mp4",
+        "poster_path": "artifacts/poster.png",
+        "size_bytes": 21473,
+        "width": 1920
+      }
+    },
+    "bundle_id": "cross-engine-trio",
+    "composition": {
+      "cell_height": 360,
+      "cell_width": 640,
+      "columns": 3,
+      "mode": "grid",
+      "panes": [
+        {
+          "height": 360,
+          "kind": "chromium",
+          "persona": "cx-chromium",
+          "role": "player",
+          "width": 640,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "firefox",
+          "persona": "cx-firefox",
+          "role": "player",
+          "width": 640,
+          "x": 640,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "cx-webkit",
+          "role": "player",
+          "width": 640,
+          "x": 1280,
+          "y": 0
+        }
+      ]
+    },
+    "hero": true,
+    "participants": [
+      {
+        "kind": "chromium",
+        "persona": "cx-chromium",
+        "role": "player"
+      },
+      {
+        "kind": "firefox",
+        "persona": "cx-firefox",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "cx-webkit",
+        "role": "player"
+      }
+    ],
+    "title": "Cross-Engine Trio"
+  },
   "assets": {
     "replay": [
       "artifacts/replay.jsonl"
