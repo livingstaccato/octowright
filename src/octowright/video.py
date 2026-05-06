@@ -160,6 +160,14 @@ def extract_frame(video_path: Path, out_path: Path, *, at_time: float = 0.5) -> 
     return out_path
 
 
+def render_supporting_video(source_path: Path, target_path: Path, *, poster_path: Path) -> dict[str, str]:
+    transcoded_path = transcode_video(source_path, target_path)
+    extract_frame(transcoded_path, poster_path)
+    if poster_path.stat().st_size > 500_000:
+        optimize_png(poster_path)
+    return {"path": str(transcoded_path), "poster_path": str(poster_path)}
+
+
 def compose_video_grid(
     source_paths: list[Path],
     target_path: Path,
