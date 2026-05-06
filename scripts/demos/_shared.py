@@ -20,6 +20,7 @@ from octowright.demos.catalog import list_demo_bundles
 from octowright.demos.export import build_tutorial_export
 from octowright.demos.indexer import build_demo_index
 from octowright.demos.models import DemoBundle
+from octowright.demos.runtime import record_demo_bundle
 
 INDEX_PATH = REPO_ROOT / "demo" / "INDEX.md"
 
@@ -72,3 +73,9 @@ def write_tutorial_export(bundle: DemoBundle) -> Path | None:
 
 def write_many_tutorial_exports(bundles: list[DemoBundle]) -> list[tuple[DemoBundle, Path | None]]:
     return [(bundle, write_tutorial_export(bundle)) for bundle in bundles]
+
+
+def record_bundle(bundle: DemoBundle) -> dict[str, object]:
+    import asyncio
+
+    return asyncio.run(record_demo_bundle(bundle))

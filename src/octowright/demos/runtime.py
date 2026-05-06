@@ -1,0 +1,335 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-Comment: Part of octowright.
+#
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import shutil
+import tempfile
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+from octowright.browser_pool import BrowserPool
+from octowright.demos.models import DemoBundle, DemoMacroRun
+from octowright.export import export_script
+from octowright.recorder import tail_log
+from octowright.runner import _write_junit
+from octowright.scenarios import Participant, Scenario, load_python_scenario, load_yaml_scenario
+from octowright.scenarios_pool import LiveScenario, ScenarioPool
+from octowright.video import optimize_png, transcode_video
+
+
+async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
+    artifacts_dir = bundle.root / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    scenario = _load_bundle_scenario(bundle)
+    runnable = _prepare_scenario(bundle, scenario)
+
+    pool = BrowserPool()
+    scenario_pool = ScenarioPool()
+    live: LiveScenario | None = None
+    close_results: dict[str, dict[str, Any]] = {}
+
+    with _macro_dir(bundle):
+        try:
+            live = await scenario_pool.start(spec=runnable, browser_pool=pool)
+            await _run_bundle_macros(bundle, scenario_pool, live, pool)
+            if bundle.recording.verify_report:
+                await _run_verify_suite(bundle, live, pool)
+            await _capture_poster(bundle, live, pool)
+        finally:
+            if live is not None:
+                close_results = await _close_live_scenario(live, pool, scenario_pool)
+            await pool.shutdown()
+
+    replay_path = _primary_replay_path(bundle)
+    merged_events = _write_merged_replay(live, replay_path)
+    _write_supporting_artifacts(bundle, live, scenario, replay_path)
+    _write_exports(replay_path)
+    video_path = _primary_video_path(bundle)
+    source_video = _find_primary_video(live, close_results, bundle)
+    transcode_video(source_video, video_path)
+    return {
+        "bundle_id": bundle.id,
+        "replay_path": str(replay_path),
+        "video_path": str(video_path),
+        "poster_path": str(_primary_poster_path(bundle)),
+        "event_count": merged_events,
+    }
+
+
+def _load_bundle_scenario(bundle: DemoBundle) -> Scenario:
+    ref = bundle.scenario_ref
+    if ref is None:
+        raise ValueError(f"demo bundle {bundle.id!r} is missing source_refs.scenarios")
+    path = _repo_root(bundle) / ref
+    if not path.exists():
+        raise FileNotFoundError(f"scenario ref for bundle {bundle.id!r} does not exist: {path}")
+    if path.suffix == ".py":
+        return load_python_scenario(path)
+    return load_yaml_scenario(path.read_text(encoding="utf-8"), path.stem)
+
+
+def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
+    participants: list[Participant] = []
+    default_url = _seed_url(bundle, bundle.recording.default_seed) if bundle.recording.default_seed else None
+    for participant in scenario.participants:
+        role_seed = bundle.recording.role_seeds.get(participant.role)
+        target_url = _seed_url(bundle, role_seed) if role_seed else default_url
+        participants.append(
+            replace(
+                participant,
+                url=target_url or participant.url,
+                record_video=True,
+            )
+        )
+    return Scenario(
+        name=scenario.name,
+        participants=participants,
+        description=scenario.description,
+        fixtures=dict(scenario.fixtures),
+        teardown_macro=scenario.teardown_macro,
+        verify=dict(scenario.verify),
+    )
+
+
+def _seed_url(bundle: DemoBundle, rel_path: str) -> str:
+    return (bundle.root / rel_path).resolve().as_uri()
+
+
+async def _run_bundle_macros(
+    bundle: DemoBundle,
+    scenario_pool: ScenarioPool,
+    live: LiveScenario,
+    browser_pool: BrowserPool,
+) -> None:
+    for macro_run in bundle.recording.macros:
+        outcome = await scenario_pool.run_macro(
+            scenario_id=live.scenario_id,
+            macro=macro_run.name,
+            browser_pool=browser_pool,
+            role=macro_run.role,
+            args=macro_run.args,
+        )
+        failures = [item for item in outcome["results"] if not item["ok"]]
+        if failures:
+            raise RuntimeError(f"demo bundle {bundle.id!r} macro {macro_run.name!r} failed: {failures}")
+
+
+async def _run_verify_suite(bundle: DemoBundle, live: LiveScenario, pool: BrowserPool) -> None:
+    report_path = bundle.root / bundle.recording.verify_report
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    for participant in live.participants:
+        macro = live.spec.verify.get(participant["role"])
+        if not macro:
+            continue
+        start = asyncio.get_running_loop().time()
+        error: str | None = None
+        try:
+            session = pool.get(participant["instance_id"])
+            await _run_macro_direct(session, DemoMacroRun(name=macro))
+            ok = True
+        except Exception as exc:
+            ok = False
+            error = repr(exc)
+        duration = asyncio.get_running_loop().time() - start
+        results.append(
+            {
+                "name": f"{participant['role']}:{participant['persona']}",
+                "ok": ok,
+                "error": error,
+                "duration": duration,
+            }
+        )
+    _write_junit(results, report_path, kind="scenario")
+    if any(not item["ok"] for item in results):
+        raise RuntimeError(f"demo bundle {bundle.id!r} verify suite failed")
+
+
+async def _capture_poster(bundle: DemoBundle, live: LiveScenario, pool: BrowserPool) -> None:
+    session = pool.get(_primary_participant(live, bundle)["instance_id"])
+    target = _primary_poster_path(bundle)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    await session.page.screenshot(path=str(target), scale="css")
+    if target.stat().st_size > 500_000:
+        optimize_png(target)
+
+
+async def _close_live_scenario(
+    live: LiveScenario,
+    pool: BrowserPool,
+    scenario_pool: ScenarioPool,
+) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    scenario_pool._live.pop(live.scenario_id, None)
+    for participant in live.participants:
+        instance_id = participant["instance_id"]
+        results[instance_id] = await pool.close(instance_id)
+    return results
+
+
+def _write_merged_replay(live: LiveScenario | None, replay_path: Path) -> int:
+    if live is None:
+        raise RuntimeError("cannot write replay without a live scenario")
+    replay_path.parent.mkdir(parents=True, exist_ok=True)
+    merged: list[dict[str, Any]] = []
+    for participant in live.participants:
+        log_path = Path(participant["log_path"])
+        events, _, _ = tail_log(log_path, 0)
+        for event in events:
+            merged.append(
+                {
+                    **event,
+                    "instance_id": participant["instance_id"],
+                    "persona": participant["persona"],
+                    "role": participant["role"],
+                    "kind": participant["kind"],
+                }
+            )
+    merged.sort(key=lambda item: item.get("ts", ""))
+    with replay_path.open("w", encoding="utf-8") as handle:
+        for event in merged:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    return len(merged)
+
+
+def _write_supporting_artifacts(
+    bundle: DemoBundle,
+    live: LiveScenario | None,
+    scenario: Scenario,
+    replay_path: Path,
+) -> None:
+    extras = set(bundle.recording.extras)
+    if "replay-roundtrip" in extras:
+        roundtrip_path = _match_replay_artifact(bundle, "roundtrip")
+        shutil.copyfile(replay_path, roundtrip_path)
+    if "participant-roster" in extras:
+        if live is None:
+            raise RuntimeError("cannot write participant roster without live scenario")
+        roster_path = _match_replay_artifact(bundle, "participant-roster")
+        payload = {
+            "scenario_id": live.scenario_id,
+            "participants": live.participants,
+        }
+        roster_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if "mock-routes" in extras:
+        mock_routes_path = _match_replay_artifact(bundle, "mock-routes")
+        payload = {
+            "mock_routes": list(scenario.fixtures.get("mock_routes", [])),
+            "dialog_policy": scenario.fixtures.get("dialog_policy"),
+        }
+        mock_routes_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _write_exports(replay_path: Path) -> None:
+    python_export = replay_path.with_suffix(".py")
+    export_script(replay_path, python_export, fmt="python")
+    _ensure_spdx_header(python_export)
+    export_script(replay_path, replay_path.with_suffix(".ts"), fmt="ts")
+
+
+def _find_primary_video(
+    live: LiveScenario | None,
+    close_results: dict[str, dict[str, Any]],
+    bundle: DemoBundle,
+) -> Path:
+    if live is None:
+        raise RuntimeError("cannot resolve primary video without a live scenario")
+    primary = _primary_participant(live, bundle)
+    result = close_results.get(primary["instance_id"], {})
+    raw = result.get("video_path")
+    if not isinstance(raw, str) or not raw:
+        raise RuntimeError(f"demo bundle {bundle.id!r} did not produce a source video")
+    return Path(raw)
+
+
+def _primary_participant(live: LiveScenario, bundle: DemoBundle) -> dict[str, Any]:
+    primary_role = bundle.recording.primary_role
+    if primary_role is None:
+        return live.participants[0]
+    for participant in live.participants:
+        if participant["role"] == primary_role:
+            return participant
+    raise RuntimeError(f"demo bundle {bundle.id!r} primary role {primary_role!r} was not launched")
+
+
+def _primary_replay_path(bundle: DemoBundle) -> Path:
+    for rel_path in bundle.replay_artifacts:
+        if rel_path.endswith("replay.jsonl"):
+            return bundle.root / rel_path
+    if bundle.replay_artifacts:
+        return bundle.root / bundle.replay_artifacts[0]
+    raise ValueError(f"demo bundle {bundle.id!r} has no replay artifact declaration")
+
+
+def _match_replay_artifact(bundle: DemoBundle, slug: str) -> Path:
+    matches = [bundle.root / path for path in bundle.replay_artifacts if slug in path]
+    if not matches:
+        raise ValueError(f"demo bundle {bundle.id!r} has no replay artifact containing {slug!r}")
+    return matches[0]
+
+
+def _primary_video_path(bundle: DemoBundle) -> Path:
+    for rel_path in bundle.video_artifacts:
+        if rel_path.endswith(".mp4"):
+            return bundle.root / rel_path
+    raise ValueError(f"demo bundle {bundle.id!r} has no mp4 video artifact declaration")
+
+
+def _primary_poster_path(bundle: DemoBundle) -> Path:
+    for rel_path in bundle.video_artifacts:
+        if rel_path.endswith(".png"):
+            return bundle.root / rel_path
+    raise ValueError(f"demo bundle {bundle.id!r} has no poster artifact declaration")
+
+
+@contextlib.contextmanager
+def _macro_dir(bundle: DemoBundle):
+    import octowright.macros.storage as macro_storage
+
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"octowright-demo-macros-{bundle.id}-"))
+    original = macro_storage.MACROS_DIR
+    try:
+        for ref in bundle.macro_refs:
+            source = _repo_root(bundle) / ref
+            shutil.copy2(source, temp_dir / source.name)
+        macro_storage.MACROS_DIR = temp_dir
+        yield
+    finally:
+        macro_storage.MACROS_DIR = original
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _repo_root(bundle: DemoBundle) -> Path:
+    try:
+        demo_dir = bundle.root.parents[1]
+        if demo_dir.name == "bundles":
+            return bundle.root.parents[2]
+    except IndexError:
+        pass
+    return Path.cwd()
+
+
+async def _run_macro_direct(session: Any, macro_run: DemoMacroRun) -> None:
+    from octowright import macros as macro_module
+
+    await macro_module.run_macro(session=session, name=macro_run.name, args=macro_run.args)
+
+
+def _ensure_spdx_header(path: Path) -> None:
+    header = (
+        "# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc\n"
+        "# SPDX-License-Identifier: Apache-2.0\n"
+        "# SPDX-Comment: Part of octowright.\n"
+        "#\n\n"
+    )
+    content = path.read_text(encoding="utf-8")
+    if content.startswith("# SPDX-FileCopyrightText:"):
+        return
+    path.write_text(header + content, encoding="utf-8")

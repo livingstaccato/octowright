@@ -35,3 +35,16 @@ tutorial_export:
 seed_refs:
   - seed/form-stage.html
   - seed/login-card.html
+recording:
+  primary_role: player
+  default_seed: seed/login-card.html
+  macros:
+    - name: discord-style-login
+      role: player
+      args:
+        email: demo@example.com
+        password: swordfish
+    - name: conditional-discord-modal-dismiss
+      role: player
+  extras:
+    - replay-roundtrip

@@ -9,11 +9,11 @@
 - Tags: `hero`, `engines`, `scenarios`, `smoke`
 - Audiences: `evaluators`, `users`, `contributors`
 - Regen: `uv run python scripts/demos/record_demo.py cross-engine-trio`
-- Artifacts: replay 0/1, video 0/2
-- Generation status: not-generated
-- Last generated: n/a
-- Replay artifacts: declared `artifacts/replay.jsonl`
-- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+- Artifacts: replay 1/1, video 2/2
+- Generation status: generated
+- Last generated: 2026-05-06 14:30:47 UTC
+- Replay artifacts: existing `artifacts/replay.jsonl`; declared `artifacts/replay.jsonl`
+- Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
 ### First Run Session
 
@@ -22,11 +22,11 @@
 - Tags: `hero`, `onboarding`, `recording`, `offline`
 - Audiences: `evaluators`, `users`, `contributors`
 - Regen: `uv run python scripts/demos/record_demo.py first-run-session`
-- Artifacts: replay 0/1, video 0/2
-- Generation status: not-generated
-- Last generated: n/a
-- Replay artifacts: declared `artifacts/replay.jsonl`
-- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+- Artifacts: replay 1/1, video 2/2
+- Generation status: generated
+- Last generated: 2026-05-06 14:30:48 UTC
+- Replay artifacts: existing `artifacts/replay.jsonl`; declared `artifacts/replay.jsonl`
+- Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
 ### Fixture Lab
 
@@ -35,11 +35,11 @@
 - Tags: `hero`, `fixtures`, `mock-routes`, `offline`
 - Audiences: `evaluators`, `contributors`, `testers`
 - Regen: `uv run python scripts/demos/record_demo.py fixture-lab`
-- Artifacts: replay 0/2, video 0/2
-- Generation status: not-generated
-- Last generated: n/a
-- Replay artifacts: declared `artifacts/replay.jsonl`, `artifacts/mock-routes.json`
-- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+- Artifacts: replay 2/2, video 2/2
+- Generation status: generated
+- Last generated: 2026-05-06 14:30:50 UTC
+- Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/mock-routes.json`; declared `artifacts/replay.jsonl`, `artifacts/mock-routes.json`
+- Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
 ### Macro Replay Loop
 
@@ -48,11 +48,11 @@
 - Tags: `hero`, `macros`, `replay`, `offline`
 - Audiences: `evaluators`, `users`, `contributors`
 - Regen: `uv run python scripts/demos/record_demo.py macro-replay-loop`
-- Artifacts: replay 0/2, video 0/2
-- Generation status: not-generated
-- Last generated: n/a
-- Replay artifacts: declared `artifacts/replay.jsonl`, `artifacts/replay-roundtrip.jsonl`
-- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+- Artifacts: replay 2/2, video 2/2
+- Generation status: generated
+- Last generated: 2026-05-06 14:32:26 UTC
+- Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/replay-roundtrip.jsonl`; declared `artifacts/replay.jsonl`, `artifacts/replay-roundtrip.jsonl`
+- Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
 ### Role-Based Duo
 
@@ -61,11 +61,11 @@
 - Tags: `hero`, `roles`, `scenarios`, `broadcast`
 - Audiences: `evaluators`, `users`, `contributors`
 - Regen: `uv run python scripts/demos/record_demo.py role-based-duo`
-- Artifacts: replay 0/1, video 0/2
-- Generation status: not-generated
-- Last generated: n/a
-- Replay artifacts: declared `artifacts/replay.jsonl`
-- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+- Artifacts: replay 1/1, video 2/2
+- Generation status: generated
+- Last generated: 2026-05-06 14:33:16 UTC
+- Replay artifacts: existing `artifacts/replay.jsonl`; declared `artifacts/replay.jsonl`
+- Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
 ### Seven Mix Orchestration
 
@@ -74,11 +74,11 @@
 - Tags: `hero`, `orchestration`, `multi-window`, `mixed-engine`
 - Audiences: `evaluators`, `users`, `contributors`
 - Regen: `uv run python scripts/demos/record_demo.py seven-mix-orchestration`
-- Artifacts: replay 0/2, video 0/2
-- Generation status: not-generated
-- Last generated: n/a
-- Replay artifacts: declared `artifacts/replay.jsonl`, `artifacts/participant-roster.json`
-- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+- Artifacts: replay 2/2, video 2/2
+- Generation status: generated
+- Last generated: 2026-05-06 14:32:33 UTC
+- Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/participant-roster.json`; declared `artifacts/replay.jsonl`, `artifacts/participant-roster.json`
+- Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
 ### Verify Suite
 
@@ -87,11 +87,11 @@
 - Tags: `hero`, `verify`, `testing`, `junit`
 - Audiences: `evaluators`, `contributors`, `testers`
 - Regen: `uv run python scripts/demos/record_demo.py verify-suite`
-- Artifacts: replay 0/2, video 0/2
-- Generation status: not-generated
-- Last generated: n/a
-- Replay artifacts: declared `artifacts/replay.jsonl`, `artifacts/report.xml`
-- Video artifacts: declared `artifacts/demo.mp4`, `artifacts/poster.png`
+- Artifacts: replay 2/2, video 2/2
+- Generation status: generated
+- Last generated: 2026-05-06 14:32:35 UTC
+- Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/report.xml`; declared `artifacts/replay.jsonl`, `artifacts/report.xml`
+- Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
 
 ## Full Library

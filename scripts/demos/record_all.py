@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
-from _shared import list_demo_bundles, rewrite_index, write_many_tutorial_exports
+from _shared import list_demo_bundles, record_bundle, rewrite_index, write_many_tutorial_exports
 
 
 def main() -> int:
     bundles = list_demo_bundles()
+    recordings = {bundle.id: record_bundle(bundle) for bundle in bundles}
     rewrite_index(bundles)
     exports = write_many_tutorial_exports(bundles)
     print(f"prepared demo bundles: {len(exports)}")
@@ -18,6 +19,8 @@ def main() -> int:
             print(f"- {bundle.id} -> no tutorial export configured")
         else:
             print(f"- {bundle.id} -> {export_path}")
+        recording = recordings[bundle.id]
+        print(f"  replay={recording['replay_path']} video={recording['video_path']}")
     return 0
 
 

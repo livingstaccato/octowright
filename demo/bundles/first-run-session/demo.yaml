@@ -34,3 +34,11 @@ tutorial_export:
 seed_refs:
   - seed/landing.html
   - seed/welcome.html
+recording:
+  primary_role: player
+  default_seed: seed/welcome.html
+  macros:
+    - name: inject-form
+      role: player
+    - name: test-selector-presence
+      role: player
