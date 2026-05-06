@@ -22,8 +22,8 @@ async def main() -> None:
         await page.goto(
             "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html"
         )
-        ctx = await p.firefox.launch_persistent_context(
-            "/Users/tim/.config/octowright/profiles/cx-firefox/firefox",
+        ctx = await p.chromium.launch_persistent_context(
+            "/Users/tim/.config/octowright/profiles/cx-chromium/chromium",
             headless=False,
             viewport={"width": 1280, "height": 800},
         )
@@ -32,8 +32,8 @@ async def main() -> None:
         await page.goto(
             "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/cross-engine-trio/seed/trio-board.html"
         )
-        ctx = await p.chromium.launch_persistent_context(
-            "/Users/tim/.config/octowright/profiles/cx-chromium/chromium",
+        ctx = await p.firefox.launch_persistent_context(
+            "/Users/tim/.config/octowright/profiles/cx-firefox/firefox",
             headless=False,
             viewport={"width": 1280, "height": 800},
         )

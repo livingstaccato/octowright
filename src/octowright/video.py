@@ -135,3 +135,74 @@ def optimize_png(path: Path, *, max_width: int = 960) -> Path:
     _run_ffmpeg(cmd)
     temp_path.replace(path)
     return path
+
+
+def extract_frame(video_path: Path, out_path: Path, *, at_time: float = 0.5) -> Path:
+    ffmpeg = ensure_ffmpeg()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg,
+        "-ss",
+        str(at_time),
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        str(out_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    return out_path
+
+
+def compose_video_grid(
+    source_paths: list[Path],
+    target_path: Path,
+    *,
+    columns: int,
+    cell_width: int,
+    cell_height: int,
+) -> Path:
+    if not source_paths:
+        raise ValueError("compose_video_grid requires at least one source video")
+    if columns < 1:
+        raise ValueError("columns must be >= 1")
+
+    ffmpeg = ensure_ffmpeg()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    inputs: list[str] = []
+    filters: list[str] = []
+    layouts: list[str] = []
+
+    for index, source_path in enumerate(source_paths):
+        inputs.extend(["-i", str(source_path)])
+        filters.append(
+            f"[{index}:v]setpts=PTS-STARTPTS,"
+            f"scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease,"
+            f"pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black[v{index}]"
+        )
+        col = index % columns
+        row = index // columns
+        layouts.append(f"{col * cell_width}_{row * cell_height}")
+
+    filter_complex = ";".join(filters) + ";" + "".join(f"[v{index}]" for index in range(len(source_paths)))
+    filter_complex += f"xstack=inputs={len(source_paths)}:layout={'|'.join(layouts)}[v]"
+    cmd = [
+        ffmpeg,
+        *inputs,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(target_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    return target_path
