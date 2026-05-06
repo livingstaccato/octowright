@@ -82,7 +82,16 @@ async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
     supporting_videos = render_summary.get("supporting_videos", [])
     if supporting_videos:
         result["supporting_videos"] = [
-            item["path"] for item in supporting_videos if isinstance(item, dict) and isinstance(item.get("path"), str)
+            {
+                "id": item["id"],
+                "path": item["path"],
+                "poster_path": item["poster_path"],
+            }
+            for item in supporting_videos
+            if isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and isinstance(item.get("path"), str)
+            and isinstance(item.get("poster_path"), str)
         ]
     return result
 
