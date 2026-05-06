@@ -82,6 +82,13 @@ def _require_int(name: str, raw: Any, *, default: int) -> int:
     raise ValueError(f"{name} must be an integer")
 
 
+def _require_non_negative_int(name: str, raw: Any, *, default: int) -> int:
+    value = _require_int(name, raw, default=default)
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return value
+
+
 def _require_bool(name: str, raw: Any, *, default: bool) -> bool:
     if raw is None:
         return default
@@ -143,9 +150,9 @@ def _parse_overlay(raw: Any) -> DemoOverlayConfig:
 def _parse_timing(raw: Any) -> DemoTimingConfig:
     timing = _as_dict("presentation.timing", raw)
     return DemoTimingConfig(
-        intro_ms=_require_int("presentation.timing.intro_ms", timing.get("intro_ms"), default=0),
-        outro_ms=_require_int("presentation.timing.outro_ms", timing.get("outro_ms"), default=1500),
-        minimum_ms=_require_int("presentation.timing.minimum_ms", timing.get("minimum_ms"), default=4000),
+        intro_ms=_require_non_negative_int("presentation.timing.intro_ms", timing.get("intro_ms"), default=0),
+        outro_ms=_require_non_negative_int("presentation.timing.outro_ms", timing.get("outro_ms"), default=1500),
+        minimum_ms=_require_non_negative_int("presentation.timing.minimum_ms", timing.get("minimum_ms"), default=4000),
     )
 
 
@@ -161,13 +168,16 @@ def _parse_sync_groups(raw: Any) -> list[DemoSyncGroup]:
         group_id = _optional_string(f"presentation.sync_groups[{index}].id", item.get("id"))
         if not group_id:
             raise ValueError(f"presentation.sync_groups[{index}].id must be a non-empty string")
+        roles = _require_string_list(
+            f"presentation.sync_groups[{index}].roles",
+            item.get("roles"),
+        )
+        if not roles:
+            raise ValueError(f"presentation.sync_groups[{index}].roles must be a non-empty list[str]")
         groups.append(
             DemoSyncGroup(
                 id=group_id,
-                roles=_require_string_list(
-                    f"presentation.sync_groups[{index}].roles",
-                    item.get("roles"),
-                ),
+                roles=roles,
             )
         )
     return groups
