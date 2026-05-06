@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from octowright.demos.catalog import load_demo_bundle
-from octowright.demos.models import DemoPresentationConfig
+from octowright.demos.models import DemoPresentationConfig, DemoSyncGroup, DemoTimingConfig
 
 
 def test_load_demo_bundle_parses_presentation_block(tmp_path: Path) -> None:
@@ -83,6 +83,17 @@ def test_load_demo_bundle_rejects_unknown_presentation_mode(tmp_path: Path) -> N
 def test_demo_presentation_config_rejects_unknown_mode() -> None:
     with pytest.raises(ValueError, match=r"presentation\.mode"):
         DemoPresentationConfig(mode="freestyle")
+
+
+def test_demo_sync_group_rejects_non_string_roles() -> None:
+    with pytest.raises(ValueError, match=r"presentation\.sync_groups\[\*\]\.roles"):
+        DemoSyncGroup(id="engines", roles=["player", 7])
+
+
+@pytest.mark.parametrize("value", [True, "5", 1.5])
+def test_demo_timing_config_rejects_non_integer_intro_ms(value: object) -> None:
+    with pytest.raises(ValueError, match=r"presentation\.timing\.intro_ms"):
+        DemoTimingConfig(intro_ms=value)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("field_name", ["intro_ms", "outro_ms", "minimum_ms"])
