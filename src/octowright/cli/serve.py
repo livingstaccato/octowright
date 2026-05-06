@@ -178,8 +178,8 @@ async def _serve_async(
     of it. This way the leader is never a child of Claude Code (or any
     other MCP launcher), so SIGKILL on the launcher's child can't reach it.
     """
-    from .. import daemonize as _daemon
-    from .. import singleton as _sn
+    from octowright import daemonize as _daemon
+    from octowright import singleton as _sn
 
     # The daemon itself runs leader code directly — it knows it's the leader,
     # and it has no parent to follow.
@@ -252,7 +252,7 @@ async def _serve_async(
 
 async def _run_follower(leader_mcp_url: str) -> None:
     """Bridge stdio to the leader's HTTP-MCP endpoint."""
-    from ..proxy_bridge import run_proxy
+    from octowright.proxy_bridge import run_proxy
 
     # Same host:port serves /api/health — used by the bridge watchdog to
     # detect a wedged leader (silent SSE) and tear down rather than hang.
@@ -274,17 +274,17 @@ async def _run_leader(
     """Serve MCP stdio + HTTP debugger + (when not --no-http) HTTP-MCP."""
     import asyncio as _asyncio
 
-    from .. import http as _http
-    from .. import singleton as _sn
-    from ..defaults import (
+    from octowright import http as _http
+    from octowright import singleton as _sn
+    from octowright.defaults import (
         HTTP_HOST,
         HTTP_PORT,
         HTTP_PORT_RETRIES,
         IDLE_GRACE_SECONDS,
         IDLE_POLL_SECONDS,
     )
-    from ..idle_watchdog import idle_watchdog
-    from ..server._state import pool, scenario_pool
+    from octowright.idle_watchdog import idle_watchdog
+    from octowright.server._state import pool, scenario_pool
 
     grace = idle_grace if idle_grace is not None else IDLE_GRACE_SECONDS
     bound_host = http_host or HTTP_HOST

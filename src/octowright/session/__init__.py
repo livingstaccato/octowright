@@ -12,6 +12,6 @@ BrowserSession`) continue to work after the split.
 
 from __future__ import annotations
 
-from .core import DEFAULT_PREVIEW_CHARS, BrowserSession
+from octowright.session.core import DEFAULT_PREVIEW_CHARS, BrowserSession
 
 __all__ = ["DEFAULT_PREVIEW_CHARS", "BrowserSession"]

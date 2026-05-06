@@ -19,10 +19,10 @@ from starlette.routing import Route
 import octowright.http.state as state
 import octowright.server._state as _state
 from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
+from octowright.http.artifacts import _build_cache_components
+from octowright.http.artifacts import cache_report_for_recording as _cache_report_for_recording
 from octowright.http.dashboard_events import publish_dashboard_invalidation
 from octowright.http.discovery import (
-    _build_cache_components,
-    _cache_report_for_recording,
     _closed_sessions,
     _find_recording_for,
     _iso,
@@ -88,6 +88,7 @@ async def session_detail(request: Request) -> JSONResponse:
         if log_path.exists():
             artefacts = _scan_recording_artefacts(log_path)
             detail["action_count"] = artefacts["action_count"]
+            detail["event_count"] = artefacts["event_count"]
 
         # ARIA tree snapshot
         with contextlib.suppress(Exception):
@@ -118,6 +119,7 @@ async def session_detail(request: Request) -> JSONResponse:
         "trace_path": artefacts["trace_path"],
         "markdown_path": artefacts["markdown_path"],
         "websocket_path": artefacts["websocket_path"],
+        "event_count": artefacts["event_count"],
         "action_count": artefacts["action_count"],
         "console_count": artefacts["console_count"],
         "download_count": artefacts["download_count"],

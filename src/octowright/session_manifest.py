@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .defaults import SESSION_MANIFEST_PATH
+from octowright.defaults import SESSION_MANIFEST_PATH
 
 SCHEMA_VERSION = 1
 

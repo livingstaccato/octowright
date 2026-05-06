@@ -11,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-from ..metrics import HTTP_METRICS, metrics_enabled
+from octowright.http.metrics import HTTP_METRICS, metrics_enabled
 
 
 async def health_endpoint(_request: Request) -> JSONResponse:

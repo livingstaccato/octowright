@@ -125,7 +125,7 @@ def test_macro_update_endpoint_writes_macro_and_invalidates(
     tmp_path: Path,
 ) -> None:
     macro_dir = tmp_path / "macros"
-    monkeypatch.setattr(_meta_routes.state._macros, "MACROS_DIR", macro_dir)
+    monkeypatch.setattr(_meta_routes.state._macros.storage, "MACROS_DIR", macro_dir)
 
     published: list[str] = []
 

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import json
 import time
@@ -42,6 +43,9 @@ def _import_macros(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
     # Force re-import so module-level constants pick up patched env vars.
+    import octowright.macros.storage as _storage
+
+    importlib.reload(_storage)
     import octowright.macros as _m
 
     importlib.reload(_m)
@@ -78,6 +82,36 @@ def test_save_macro_writes_expected_shape(monkeypatch: pytest.MonkeyPatch, tmp_p
     fill_actions = [a for a in actions if a["action"] == "fill"]
     assert any("{{email}}" in a.get("value", "") for a in fill_actions)
     assert any("{{password}}" in a.get("value", "") for a in fill_actions)
+
+
+def test_macros_init_is_export_surface_only() -> None:
+    init_path = Path("src/octowright/macros/__init__.py")
+    tree = ast.parse(init_path.read_text(encoding="utf-8"))
+    allowed = (
+        ast.Assign,
+        ast.Expr,
+        ast.ImportFrom,
+    )
+    disallowed = [
+        node
+        for node in tree.body
+        if not isinstance(node, allowed)
+        or isinstance(
+            node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.If | ast.For | ast.Try | ast.With
+        )
+    ]
+    assert disallowed == []
+
+
+def test_package_init_files_are_export_surfaces_only() -> None:
+    disallowed_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.If, ast.For, ast.Try, ast.With)
+    offenders: list[str] = []
+    for init_path in sorted(Path("src/octowright").rglob("__init__.py")):
+        tree = ast.parse(init_path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, disallowed_nodes):
+                offenders.append(f"{init_path}:{node.lineno}:{type(node).__name__}")
+    assert offenders == []
 
 
 def test_save_macro_strips_lifecycle_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -398,7 +432,9 @@ async def test_run_macro_macro_call_detects_mutual_recursion(monkeypatch: pytest
 @pytest.mark.anyio
 async def test_run_macro_macro_call_enforces_depth_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     m = _import_macros(monkeypatch, tmp_path)
-    monkeypatch.setattr(m, "_MAX_MACRO_CALL_DEPTH", 2, raising=False)
+    import octowright.macros.execution as macro_execution
+
+    monkeypatch.setattr(macro_execution, "MAX_MACRO_CALL_DEPTH", 2, raising=False)
     _save_macro_file(m, tmp_path, "root", [{"action": "macro_call", "name": "second"}])
     _save_macro_file(m, tmp_path, "second", [{"action": "macro_call", "name": "third"}])
     _save_macro_file(m, tmp_path, "third", [{"action": "navigate", "url": "https://example.com"}])

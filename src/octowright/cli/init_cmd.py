@@ -14,16 +14,16 @@ from __future__ import annotations
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
-from ._root import cli
+from octowright.cli._root import cli
 
 
 @cli.command()
 @click.option("--force", is_flag=True, help="Overwrite existing sample persona/scenario/macro files.")
 def init(force: bool) -> None:
     """Scaffold the standard layout: profile/scenario/macro dirs + samples + MCP registration block."""
-    from .. import scaffold
-    from ..defaults import PROFILES_DIR, SCENARIOS_DIR
-    from ..macros import MACROS_DIR
+    import octowright.scaffold as scaffold
+    from octowright.defaults import PROFILES_DIR, SCENARIOS_DIR
+    from octowright.macros.storage import MACROS_DIR
 
     setup_telemetry()
     try:

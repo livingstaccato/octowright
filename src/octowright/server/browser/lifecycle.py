@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ... import _format as fmt
-from ... import resolve as resolve_mod
-from ...http.dashboard_events import publish_dashboard_invalidation_nowait
-from .._state import mcp, pool
+from octowright import _format as fmt
+from octowright import resolve as resolve_mod
+from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.server._state import mcp, pool
 
 
 @mcp.tool(

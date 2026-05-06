@@ -24,11 +24,11 @@ from dataclasses import dataclass
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Action catalogues — kept in sync with macros.py / conditional.py manually.
+# Action catalogues — kept in sync with macros/runtime.py and conditional.py manually.
 # ---------------------------------------------------------------------------
 
 # Map: simple action name -> tuple of REQUIRED field names.
-# Mirrors `octowright.macros._dispatch_simple` (around line ~218 of macros.py).
+# Mirrors `octowright.macros._dispatch_simple`.
 _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "navigate": ("url",),
     "click": ("selector",),

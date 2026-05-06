@@ -10,7 +10,7 @@ from __future__ import annotations
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
-from ._root import cli
+from octowright.cli._root import cli
 
 
 @cli.command()
@@ -18,8 +18,8 @@ from ._root import cli
 @click.option("--apply", is_flag=True, help="Actually delete (default is dry-run).")
 def cleanup(days: float, apply: bool) -> None:
     """Prune old recordings/screenshots/videos/traces under RECORDINGS_DIR."""
-    from .. import recording_cleanup as _rc
-    from ..defaults import RECORDINGS_DIR
+    from octowright import recording_cleanup as _rc
+    from octowright.defaults import RECORDINGS_DIR
 
     setup_telemetry()
     try:

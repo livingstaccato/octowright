@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import click
 
-from ..skill_distribution import (
+from octowright.cli._root import cli
+from octowright.skill_distribution import (
     SKILL_NAME,
     doctor_distributed_assets,
     install_distributed_assets,
@@ -15,7 +16,6 @@ from ..skill_distribution import (
     render_table,
     status_distributed_assets,
 )
-from ._root import cli
 
 
 @cli.group()

@@ -10,7 +10,7 @@ from __future__ import annotations
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
-from ._root import cli
+from octowright.cli._root import cli
 
 
 @cli.group()
@@ -21,7 +21,7 @@ def persona() -> None:
 @persona.command("list")
 def persona_list_cmd() -> None:
     """List all personas with engines and last-used timestamps."""
-    from .. import personas as _p
+    from octowright import personas as _p
 
     setup_telemetry()
     try:
@@ -37,7 +37,7 @@ def persona_list_cmd() -> None:
 @click.argument("name")
 def persona_show_cmd(name: str) -> None:
     """Print the full profile.yaml for a persona."""
-    from .. import personas as _p
+    from octowright import personas as _p
 
     setup_telemetry()
     try:
@@ -58,7 +58,7 @@ def persona_show_cmd(name: str) -> None:
 @click.option("--url", "default_url", default=None)
 def persona_create_cmd(name: str, display_name: str | None, default_url: str | None) -> None:
     """Scaffold a new persona dir + stub profile.yaml."""
-    from .. import personas as _p
+    from octowright import personas as _p
 
     setup_telemetry()
     try:
@@ -80,7 +80,7 @@ def persona_create_cmd(name: str, display_name: str | None, default_url: str | N
 @click.argument("name")
 def persona_delete_cmd(name: str) -> None:
     """Delete an entire persona (all engines + metadata)."""
-    from ..profiles import delete_persona
+    from octowright.profiles import delete_persona
 
     setup_telemetry()
     try:

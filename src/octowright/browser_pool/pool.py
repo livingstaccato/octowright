@@ -15,26 +15,13 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
-from ..defaults import (
-    DEFAULT_URL,
-    DEFAULT_VIEWPORT_H,
-    DEFAULT_VIEWPORT_W,
-    HEADLESS_DEFAULT,
-    RECORDINGS_DIR,
-    SUPPORTED_KINDS,
-)
-from ..profiles import profile_dir
-from ..recorder import Recorder, new_log_path
-from ..session import BrowserSession
-from ..session_manifest import record_launch as _manifest_record_launch
-from ..stabilize import render_stabilize_script
-from .errors import maybe_wrap_playwright_error
-from .lifecycle import close_browser, handoff_browser, shutdown_pool
-from .listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
-from .roster import close_all as _close_all
-from .roster import spawn_roster as _spawn_roster
-from .visuals import (
-    _BADGE_POSITION_DEFAULT,
+from octowright.browser_pool.errors import maybe_wrap_playwright_error
+from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
+from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
+from octowright.browser_pool.options import LaunchOptions
+from octowright.browser_pool.roster import close_all as _close_all
+from octowright.browser_pool.roster import spawn_roster as _spawn_roster
+from octowright.browser_pool.visuals import (
     _BADGE_POSITIONS,
     _BADGE_SCRIPT,
     _TITLE_TAG_SCRIPT,
@@ -43,6 +30,18 @@ from .visuals import (
     _tile_args_for_chromium,
     _title_tag_for,
 )
+from octowright.defaults import (
+    DEFAULT_URL,
+    DEFAULT_VIEWPORT_H,
+    DEFAULT_VIEWPORT_W,
+    HEADLESS_DEFAULT,
+    RECORDINGS_DIR,
+)
+from octowright.profiles import profile_dir
+from octowright.recorder import Recorder, new_log_path
+from octowright.session import BrowserSession
+from octowright.session_manifest import record_launch as _manifest_record_launch
+from octowright.stabilize import render_stabilize_script
 
 log = get_logger(__name__)
 
@@ -79,37 +78,26 @@ class BrowserPool:
         self,
         **options: Any,
     ) -> dict[str, Any]:
-        kind = options.get("kind", "chromium")
-        url = options.get("url")
-        headed = options.get("headed")
-        label = options.get("label")
-        viewport_w = options.get("viewport_w")
-        viewport_h = options.get("viewport_h")
-        profile = options.get("profile")
-        stabilize = options.get("stabilize", False)
-        record_video = options.get("record_video", False)
-        trace = options.get("trace", False)
-        har = options.get("har", False)
-        har_path_opt = options.get("har_path")
-        har_mode = options.get("har_mode", "minimal")
-        har_url_filter = options.get("har_url_filter")
-        har_content = options.get("har_content")
-        badge = options.get("badge", True)
-        badge_position = options.get("badge_position", _BADGE_POSITION_DEFAULT)
-        tile = options.get("tile", False)
-        ephemeral = options.get("ephemeral", False)
-        session = options.get("session", False)
-
-        if kind not in SUPPORTED_KINDS:
-            raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {kind!r}")
-        if badge_position not in _BADGE_POSITIONS:
-            raise ValueError(f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {badge_position!r}")
-        if ephemeral and session:
-            raise ValueError("ephemeral and session are mutually exclusive")
-        if har_mode not in {"full", "minimal"}:
-            raise ValueError("har_mode must be one of ['full', 'minimal']")
-        if har_content is not None and har_content not in {"omit", "embed", "attach"}:
-            raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
+        launch_options = LaunchOptions.from_mapping(options)
+        kind = launch_options.kind
+        url = launch_options.url
+        headed = launch_options.headed
+        label = launch_options.label
+        viewport_w = launch_options.viewport_w
+        viewport_h = launch_options.viewport_h
+        profile = launch_options.profile
+        stabilize = launch_options.stabilize
+        record_video = launch_options.record_video
+        trace = launch_options.trace
+        har = launch_options.har
+        har_path_opt = launch_options.har_path
+        har_mode = launch_options.har_mode
+        har_url_filter = launch_options.har_url_filter
+        har_content = launch_options.har_content
+        badge = launch_options.badge
+        badge_position = launch_options.badge_position
+        tile = launch_options.tile
+        session = launch_options.session
 
         browser: Any | None = None
         context: Any | None = None
@@ -117,25 +105,28 @@ class BrowserPool:
         recorder: Recorder | None = None
         registered = False
 
+        instance_id = uuid.uuid4().hex[:12]
+
         # Promote: a named launch (label given, no explicit profile, not ephemeral
         # and not session-scoped) gets a persistent profile by default. The whole
         # reason for naming a browser is so you can come back to it; ephemeral
         # and session are the explicit exceptions.
-        if profile is None and label is not None and not ephemeral and not session:
-            profile = label
+        profile = launch_options.promoted_profile()
 
         # Session-scoped: tmpdir profile that lives for the daemon's lifetime.
         # Reused across launches with the same (session_key, kind) — so closing
         # and reopening keeps state, but daemon shutdown wipes everything.
-        # Keyed off label (or "anon" if neither label nor profile given).
+        # Named session launches are reusable by label. Anonymous session launches
+        # get an instance-scoped key so unrelated callers never share state.
         session_user_data_dir: str | None = None
         if session:
             import tempfile
 
-            session_key = (label or profile or "anon", kind)
+            session_name = launch_options.session_name(instance_id)
+            session_key = (session_name, kind)
             existing = self._session_profile_dirs.get(session_key)
             if existing is None or not existing.exists():
-                tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_key[0]}-{kind}-"))
+                tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_name}-{kind}-"))
                 self._session_profile_dirs[session_key] = tmp
                 existing = tmp
             session_user_data_dir = str(existing)
@@ -144,7 +135,6 @@ class BrowserPool:
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
         target_url = url or DEFAULT_URL
-        instance_id = uuid.uuid4().hex[:12]
         log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
 
         # Headed: when neither viewport_w nor viewport_h is given, let Playwright
@@ -306,7 +296,7 @@ class BrowserPool:
             persona_emoji_override: str | None = None
             if profile:
                 try:
-                    from ..personas import load_persona
+                    from octowright.personas import load_persona
 
                     persona_emoji_override = load_persona(profile).emoji
                 except FileNotFoundError:

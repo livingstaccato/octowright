@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
-from ..recorder import Recorder
+from octowright.recorder import Recorder
 
 
 class SessionLike(Protocol):

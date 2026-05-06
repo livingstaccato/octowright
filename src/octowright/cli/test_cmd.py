@@ -16,7 +16,7 @@ from typing import Any
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
-from ._root import cli
+from octowright.cli._root import cli
 
 
 @cli.command()
@@ -31,8 +31,8 @@ def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | Non
     """Run all test macros in a directory. Outputs JUnit XML."""
     import asyncio
 
-    from .. import runner
-    from ..browser_pool import BrowserPool
+    from octowright import runner
+    from octowright.browser_pool import BrowserPool
 
     setup_telemetry()
 
