@@ -145,6 +145,49 @@ def _write_duo_bundle_layout(root: Path) -> DemoBundle:
     )
 
 
+def _patch_runtime_recording(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    render_summary: dict[str, object] | None = None,
+) -> None:
+    def _fake_prepare_scenario(bundle_obj, scenario):
+        runnable = scenario
+        runnable._log_dir = bundle_obj.root / "artifacts" / "raw"
+        runnable._log_dir.mkdir(parents=True, exist_ok=True)
+        return runnable
+
+    monkeypatch.setattr("octowright.demos.runtime.BrowserPool", _FakePool)
+    monkeypatch.setattr("octowright.demos.runtime.ScenarioPool", _FakeScenarioPool)
+    monkeypatch.setattr("octowright.demos.runtime._repo_root", lambda _: tmp_path)
+    monkeypatch.setattr("octowright.demos.runtime._prepare_scenario", _fake_prepare_scenario)
+    monkeypatch.setattr(
+        "octowright.demos.runtime.write_exports",
+        lambda replay_path: (
+            replay_path.with_suffix(".py").write_text("python", encoding="utf-8")
+            or replay_path.with_suffix(".ts").write_text("ts", encoding="utf-8")
+        ),
+    )
+    monkeypatch.setattr(
+        "octowright.demos.runtime.render_bundle_video",
+        _render_summary_factory(render_summary),
+    )
+    monkeypatch.setattr(
+        "octowright.demos.runtime.write_artifact_manifest",
+        lambda *args, **kwargs: ((kwargs["video_path"].parent / "manifest.json").write_text("{}", encoding="utf-8")),
+    )
+
+
+def _render_summary_factory(render_summary: dict[str, object] | None = None):
+    def _render(bundle_obj, live, close_results, *, video_path: Path, poster_path: Path) -> dict[str, object]:
+        _ = (bundle_obj, live, close_results)
+        video_path.write_bytes(b"video")
+        poster_path.write_bytes(b"poster")
+        return render_summary or {"mode": "single", "canvas_width": 800, "canvas_height": 600, "panes": []}
+
+    return _render
+
+
 @pytest.mark.asyncio
 async def test_record_demo_bundle_writes_expected_artifacts(monkeypatch, tmp_path: Path) -> None:
     bundle = _write_bundle_layout(tmp_path)
@@ -171,10 +214,8 @@ async def test_record_demo_bundle_writes_expected_artifacts(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(
         "octowright.demos.runtime.render_bundle_video",
-        lambda bundle_obj, live, close_results, *, video_path, poster_path: (
-            video_path.write_bytes(b"video")
-            or poster_path.write_bytes(b"poster")
-            or {"mode": "single", "canvas_width": 800, "canvas_height": 600, "panes": [], "overlay": {"title": "A"}}
+        _render_summary_factory(
+            {"mode": "single", "canvas_width": 800, "canvas_height": 600, "panes": [], "overlay": {"title": "A"}}
         ),
     )
     monkeypatch.setattr(
@@ -193,6 +234,62 @@ async def test_record_demo_bundle_writes_expected_artifacts(monkeypatch, tmp_pat
     assert video_path.exists()
     assert poster_path.exists()
     assert created_exports == [replay_path.with_suffix(".py"), replay_path.with_suffix(".ts")]
+
+
+@pytest.mark.asyncio
+async def test_record_demo_bundle_applies_intro_and_outro_holds(monkeypatch, tmp_path: Path) -> None:
+    bundle = _write_bundle_layout(tmp_path)
+    bundle.presentation.timing.intro_ms = 250
+    bundle.presentation.timing.outro_ms = 1250
+
+    sleeps: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    _patch_runtime_recording(monkeypatch, tmp_path)
+    monkeypatch.setattr("octowright.demos.runtime.asyncio.sleep", _fake_sleep)
+
+    await record_demo_bundle(bundle)
+
+    assert sleeps == [0.25, 1.25]
+
+
+@pytest.mark.asyncio
+async def test_record_demo_bundle_writes_supporting_sync_assets(monkeypatch, tmp_path: Path) -> None:
+    bundle = _write_duo_bundle_layout(tmp_path)
+    bundle.presentation.mode = "sync-multi"
+
+    _patch_runtime_recording(
+        monkeypatch,
+        tmp_path,
+        render_summary={
+            "mode": "sync-multi",
+            "canvas_width": 1920,
+            "canvas_height": 540,
+            "panes": [],
+            "supporting_videos": [
+                {
+                    "id": "player",
+                    "path": "artifacts/supporting/player.mp4",
+                    "poster_path": "artifacts/supporting/player.png",
+                },
+                {
+                    "id": "monitor",
+                    "path": "artifacts/supporting/monitor.mp4",
+                    "poster_path": "artifacts/supporting/monitor.png",
+                },
+            ],
+        },
+    )
+
+    result = await record_demo_bundle(bundle)
+
+    assert "supporting_videos" in result
+    assert result["supporting_videos"] == [
+        "artifacts/supporting/player.mp4",
+        "artifacts/supporting/monitor.mp4",
+    ]
 
 
 @pytest.mark.asyncio
@@ -219,28 +316,33 @@ async def test_record_demo_bundle_composes_video_for_multi_browser_bundles(monke
             or replay_path.with_suffix(".ts").write_text("ts", encoding="utf-8")
         ),
     )
-    monkeypatch.setattr(
-        "octowright.demos.runtime.render_bundle_video",
-        lambda bundle_obj, live, close_results, *, video_path, poster_path: (
-            composed.update(
-                {
-                    "target": str(video_path),
-                    "poster_target": str(poster_path),
-                    "bundle": bundle_obj.id,
-                    "participant_count": len(live.participants),
-                }
-            )
-            or video_path.write_bytes(b"video")
-            or poster_path.write_bytes(b"poster")
-            or {
+
+    def _fake_render(bundle_obj, live, close_results, *, video_path: Path, poster_path: Path) -> dict[str, object]:
+        composed.update(
+            {
+                "target": str(video_path),
+                "poster_target": str(poster_path),
+                "bundle": bundle_obj.id,
+                "participant_count": len(live.participants),
+            }
+        )
+        return _render_summary_factory(
+            {
                 "mode": "grid",
                 "canvas_width": 1920,
                 "canvas_height": 540,
                 "panes": [],
                 "overlay": {"title": "Role Based Duo"},
             }
-        ),
-    )
+        )(
+            bundle_obj,
+            live,
+            close_results,
+            video_path=video_path,
+            poster_path=poster_path,
+        )
+
+    monkeypatch.setattr("octowright.demos.runtime.render_bundle_video", _fake_render)
     monkeypatch.setattr(
         "octowright.demos.runtime.write_artifact_manifest",
         lambda *args, **kwargs: (
@@ -298,24 +400,14 @@ def test_render_bundle_video_uses_presentation_mode_for_sync_multi(monkeypatch, 
         called["sync"] = True
         return [
             {
-                "source": source_video,
-                "persona": "alpha",
-                "role": "player",
-                "kind": "chromium",
-                "x": 0,
-                "y": 0,
-                "width": 960,
-                "height": 540,
+                "id": "player",
+                "path": str(tmp_path / "supporting" / "player.mp4"),
+                "poster_path": str(tmp_path / "supporting" / "player.png"),
             },
             {
-                "source": mirror_video,
-                "persona": "mirror",
-                "role": "monitor",
-                "kind": "firefox",
-                "x": 960,
-                "y": 0,
-                "width": 960,
-                "height": 540,
+                "id": "monitor",
+                "path": str(tmp_path / "supporting" / "monitor.mp4"),
+                "poster_path": str(tmp_path / "supporting" / "monitor.png"),
             },
         ]
 
@@ -343,6 +435,18 @@ def test_render_bundle_video_uses_presentation_mode_for_sync_multi(monkeypatch, 
 
     assert summary["mode"] == "sync-multi"
     assert called["sync"] is True
+    assert summary["supporting_videos"] == [
+        {
+            "id": "player",
+            "path": str(tmp_path / "supporting" / "player.mp4"),
+            "poster_path": str(tmp_path / "supporting" / "player.png"),
+        },
+        {
+            "id": "monitor",
+            "path": str(tmp_path / "supporting" / "monitor.mp4"),
+            "poster_path": str(tmp_path / "supporting" / "monitor.png"),
+        },
+    ]
 
 
 def test_render_bundle_video_raises_when_sync_multi_plan_produces_no_panes(monkeypatch, tmp_path: Path) -> None:
