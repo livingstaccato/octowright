@@ -46,6 +46,11 @@ def test_record_demo_rewrites_index_for_known_bundle(monkeypatch, tmp_path: Path
     )
     bundle.root.mkdir(parents=True)
     monkeypatch.setattr(record_demo, "bundle_map", lambda: {bundle.id: bundle})
+    monkeypatch.setattr(
+        record_demo,
+        "record_bundle",
+        lambda _: {"replay_path": "replay.jsonl", "video_path": "demo.mp4", "poster_path": "poster.png"},
+    )
     monkeypatch.setattr(shared, "INDEX_PATH", tmp_path / "demo" / "INDEX.md")
 
     exit_code = record_demo.main([bundle.id])
@@ -55,7 +60,7 @@ def test_record_demo_rewrites_index_for_known_bundle(monkeypatch, tmp_path: Path
     assert exit_code == 0
     assert index_path.exists()
     assert "Alpha Demo" in index_path.read_text(encoding="utf-8")
-    assert "prepared demo bundle: alpha-demo" in captured.out
+    assert "recorded demo bundle: alpha-demo" in captured.out
     assert "tutorial export: not configured" in captured.out
 
 
@@ -75,6 +80,9 @@ def test_record_all_writes_tutorial_export_json(monkeypatch, tmp_path: Path, cap
     )
     bundle.root.mkdir(parents=True)
     monkeypatch.setattr(record_all, "list_demo_bundles", lambda: [bundle])
+    monkeypatch.setattr(
+        record_all, "record_bundle", lambda _: {"replay_path": "replay.jsonl", "video_path": "demo.mp4"}
+    )
     monkeypatch.setattr(shared, "INDEX_PATH", tmp_path / "demo" / "INDEX.md")
 
     exit_code = record_all.main()
@@ -97,6 +105,7 @@ def test_record_all_writes_tutorial_export_json(monkeypatch, tmp_path: Path, cap
     }
     assert "prepared demo bundles: 1" in captured.out
     assert "- hero-demo -> " in captured.out
+    assert "replay=replay.jsonl video=demo.mp4" in captured.out
 
 
 def test_record_demo_normalizes_non_json_tutorial_export_suffix(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -112,6 +121,11 @@ def test_record_demo_normalizes_non_json_tutorial_export_suffix(monkeypatch, tmp
     )
     bundle.root.mkdir(parents=True)
     monkeypatch.setattr(record_demo, "bundle_map", lambda: {bundle.id: bundle})
+    monkeypatch.setattr(
+        record_demo,
+        "record_bundle",
+        lambda _: {"replay_path": "replay.jsonl", "video_path": "demo.mp4", "poster_path": "poster.png"},
+    )
     monkeypatch.setattr(shared, "INDEX_PATH", tmp_path / "demo" / "INDEX.md")
 
     exit_code = record_demo.main([bundle.id])
@@ -146,6 +160,9 @@ def test_record_heroes_writes_only_hero_exports(monkeypatch, tmp_path: Path, cap
     hero.root.mkdir(parents=True)
     support.root.mkdir(parents=True)
     monkeypatch.setattr(record_heroes, "list_demo_bundles", lambda: [hero, support])
+    monkeypatch.setattr(
+        record_heroes, "record_bundle", lambda _: {"replay_path": "replay.jsonl", "video_path": "demo.mp4"}
+    )
     monkeypatch.setattr(shared, "INDEX_PATH", tmp_path / "demo" / "INDEX.md")
 
     exit_code = record_heroes.main()
@@ -159,4 +176,5 @@ def test_record_heroes_writes_only_hero_exports(monkeypatch, tmp_path: Path, cap
     assert not support_json_path.exists()
     assert "prepared hero bundles: 1" in captured.out
     assert f"- hero-demo -> {hero_json_path}" in captured.out
+    assert "replay=replay.jsonl video=demo.mp4" in captured.out
     assert "support-demo" not in captured.out

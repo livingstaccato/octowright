@@ -35,3 +35,9 @@ tutorial_export:
 seed_refs:
   - seed/engine-grid.html
   - seed/trio-board.html
+recording:
+  primary_role: player
+  default_seed: seed/trio-board.html
+  macros:
+    - name: test-smoke-page-ready
+      role: player
