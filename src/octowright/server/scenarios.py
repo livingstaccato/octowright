@@ -202,7 +202,7 @@ def scenario_participants(scenario_id: str, role: str | None = None) -> dict[str
     ),
 )
 def scenario_remap_participants(scenario_id: str, remaps: list[dict[str, Any]]) -> dict[str, Any]:
-    return scenario_pool.remap_participants(scenario_id=scenario_id, remaps=remaps)
+    return scenario_pool.remap_participants(scenario_id=scenario_id, remaps=remaps, browser_pool=pool)
 
 
 @mcp.tool(

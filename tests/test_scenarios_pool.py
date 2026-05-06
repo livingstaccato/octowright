@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -73,7 +74,7 @@ def _live() -> LiveScenario:
         scenario_id="sid",
         name="demo",
         spec=_Spec("demo", [_ParticipantSpec("alice", "r1")], fixtures={}),
-        participants=[{"instance_id": "a", "persona": "alice", "role": "r1", "log_path": "a.log"}],
+        participants=[{"instance_id": "a", "persona": "alice", "role": "r1", "kind": "chromium", "log_path": "a.log"}],
     )
 
 
@@ -84,6 +85,9 @@ def test_get_list_and_remap_errors() -> None:
 
     live = _live()
     sp._live[live.scenario_id] = live
+    sp._browser_pool = SimpleNamespace(
+        maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="alice") if instance_id == "x" else None
+    )
     assert sp.list_live()[0]["scenario_id"] == "sid"
 
     out = sp.remap_participant(scenario_id="sid", old_instance_id="a", new_instance_id="x")
@@ -108,15 +112,69 @@ def test_remap_participants_validation() -> None:
     sp = ScenarioPool()
     live = _live()
     sp._live[live.scenario_id] = live
+    browser_pool = SimpleNamespace(
+        maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="alice") if instance_id == "b" else None
+    )
 
     result = sp.remap_participants(
         scenario_id="sid",
         remaps=[{"old_instance_id": "a", "new_instance_id": "b", "role": "r1"}],
+        browser_pool=browser_pool,
     )
     assert result["count"] == 1
 
     with pytest.raises(ValueError):
         sp.remap_participants(scenario_id="sid", remaps=[{"old_instance_id": "", "new_instance_id": "b"}])
+
+
+def test_remap_participant_requires_live_replacement() -> None:
+    sp = ScenarioPool()
+    live = _live()
+    sp._live[live.scenario_id] = live
+
+    with pytest.raises(ValueError, match="is not live"):
+        sp.remap_participant(
+            scenario_id="sid",
+            old_instance_id="a",
+            new_instance_id="missing",
+            browser_pool=SimpleNamespace(maybe_get=lambda _instance_id: None),
+        )
+
+
+def test_remap_participant_rejects_kind_mismatch() -> None:
+    sp = ScenarioPool()
+    live = _live()
+    sp._live[live.scenario_id] = live
+
+    with pytest.raises(ValueError, match="expected 'chromium'"):
+        sp.remap_participant(
+            scenario_id="sid",
+            old_instance_id="a",
+            new_instance_id="b",
+            browser_pool=SimpleNamespace(
+                maybe_get=lambda instance_id: SimpleNamespace(kind="firefox", profile="alice")
+                if instance_id == "b"
+                else None
+            ),
+        )
+
+
+def test_remap_participant_rejects_profile_mismatch() -> None:
+    sp = ScenarioPool()
+    live = _live()
+    sp._live[live.scenario_id] = live
+
+    with pytest.raises(ValueError, match="expected 'alice'"):
+        sp.remap_participant(
+            scenario_id="sid",
+            old_instance_id="a",
+            new_instance_id="b",
+            browser_pool=SimpleNamespace(
+                maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="bob")
+                if instance_id == "b"
+                else None
+            ),
+        )
 
 
 @pytest.mark.anyio
@@ -175,7 +233,11 @@ async def test_start_launch_failure_closes_partials(monkeypatch: pytest.MonkeyPa
     sp = ScenarioPool()
     pool = _Pool()
     pool.spawn_error = True
-    spec = _Spec(name="demo", participants=[_ParticipantSpec("alice", "r1")], fixtures={})
+    spec = _Spec(
+        name="demo",
+        participants=[_ParticipantSpec("alice", "r1"), _ParticipantSpec("bob", "r2")],
+        fixtures={},
+    )
 
     monkeypatch.setattr(scenarios_mod, "load_scenario", lambda name: spec)
     monkeypatch.setattr(scenarios_mod, "resolve_launch_kwargs", lambda p: {"persona": p.persona})
@@ -183,6 +245,36 @@ async def test_start_launch_failure_closes_partials(monkeypatch: pytest.MonkeyPa
     with pytest.raises(RuntimeError):
         await sp.start(name="demo", browser_pool=pool)
     assert pool.closed == ["a"]
+
+
+@pytest.mark.anyio
+async def test_startup_macro_failure_closes_participants(monkeypatch: pytest.MonkeyPatch) -> None:
+    import octowright.macros as macros_mod
+    import octowright.scenarios as scenarios_mod
+    import octowright.scenarios_pool as pool_mod
+
+    sp = ScenarioPool()
+    pool = _Pool()
+    spec = _Spec(
+        name="demo",
+        participants=[_ParticipantSpec("alice", "r1"), _ParticipantSpec("bob", "r2")],
+        fixtures={},
+    )
+
+    monkeypatch.setattr(scenarios_mod, "load_scenario", lambda name: spec)
+    monkeypatch.setattr(scenarios_mod, "resolve_launch_kwargs", lambda p: {"persona": p.persona})
+    monkeypatch.setattr(scenarios_mod, "resolve_startup_macros", lambda p: ["boot"])
+    monkeypatch.setattr(pool_mod, "_apply_fixtures", _apply_fixtures)
+
+    async def _raise_macro(session, name, args):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(macros_mod, "run_macro", _raise_macro)
+
+    with pytest.raises(RuntimeError, match="startup macro failures"):
+        await sp.start(name="demo", browser_pool=pool)
+    assert pool.closed == ["a", "b"]
+    assert sp.list_live() == []
 
 
 @pytest.mark.anyio
