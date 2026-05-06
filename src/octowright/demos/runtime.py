@@ -39,9 +39,11 @@ async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
     with _macro_dir(bundle):
         try:
             live = await scenario_pool.start(spec=runnable, browser_pool=pool)
+            await _apply_intro_hold(bundle)
             await _run_bundle_macros(bundle, scenario_pool, live, pool)
             if bundle.recording.verify_report:
                 await _run_verify_suite(bundle, live, pool)
+            await _apply_outro_hold(bundle)
             await _capture_poster(bundle, live, pool)
         finally:
             if live is not None:
@@ -70,13 +72,19 @@ async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
         event_count=merged_events,
         render_summary=render_summary,
     )
-    return {
+    result = {
         "bundle_id": bundle.id,
         "replay_path": str(replay_path),
         "video_path": str(video_path),
         "poster_path": str(_primary_poster_path(bundle)),
         "event_count": merged_events,
     }
+    supporting_videos = render_summary.get("supporting_videos", [])
+    if supporting_videos:
+        result["supporting_videos"] = [
+            item["path"] for item in supporting_videos if isinstance(item, dict) and isinstance(item.get("path"), str)
+        ]
+    return result
 
 
 def _load_bundle_scenario(bundle: DemoBundle) -> Scenario:
@@ -149,6 +157,16 @@ async def _run_bundle_macros(
         failures = [item for item in outcome["results"] if not item["ok"]]
         if failures:
             raise RuntimeError(f"demo bundle {bundle.id!r} macro {macro_run.name!r} failed: {failures}")
+
+
+async def _apply_intro_hold(bundle: DemoBundle) -> None:
+    if bundle.presentation.timing.intro_ms > 0:
+        await asyncio.sleep(bundle.presentation.timing.intro_ms / 1000)
+
+
+async def _apply_outro_hold(bundle: DemoBundle) -> None:
+    if bundle.presentation.timing.outro_ms > 0:
+        await asyncio.sleep(bundle.presentation.timing.outro_ms / 1000)
 
 
 async def _run_verify_suite(bundle: DemoBundle, live: LiveScenario, pool: BrowserPool) -> None:

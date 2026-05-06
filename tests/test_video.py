@@ -258,6 +258,40 @@ def test_compose_video_layout_builds_custom_positions(monkeypatch: pytest.Monkey
     assert "scale=640:360" in filter_complex
 
 
+def test_render_supporting_video_writes_video_and_poster(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import octowright.video as _v
+
+    source = tmp_path / "source.webm"
+    source.write_bytes(b"source")
+    target = tmp_path / "supporting" / "player.mp4"
+    poster = tmp_path / "supporting" / "player.png"
+    calls: list[tuple[str, Path, Path]] = []
+
+    def _fake_transcode(src: Path, dst: Path) -> Path:
+        calls.append(("video", Path(src), Path(dst)))
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        Path(dst).write_bytes(b"video")
+        return Path(dst)
+
+    def _fake_extract(src: Path, dst: Path) -> Path:
+        calls.append(("poster", Path(src), Path(dst)))
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        Path(dst).write_bytes(b"poster")
+        return Path(dst)
+
+    monkeypatch.setattr("octowright.video.transcode_video", _fake_transcode)
+    monkeypatch.setattr("octowright.video.extract_frame", _fake_extract)
+    monkeypatch.setattr("octowright.video.optimize_png", lambda path, **kwargs: path)
+
+    result = _v.render_supporting_video(source, target, poster_path=poster)
+
+    assert result == {"path": str(target), "poster_path": str(poster)}
+    assert calls == [
+        ("video", source, target),
+        ("poster", target, poster),
+    ]
+
+
 def test_apply_video_overlay_builds_overlay_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _v, cmds = _import_video_mock_run(monkeypatch, tmp_path)
     source = tmp_path / "base.mp4"
