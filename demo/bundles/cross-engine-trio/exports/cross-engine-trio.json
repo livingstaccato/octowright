@@ -9,20 +9,49 @@
         "ts_export": "artifacts/replay.ts"
       },
       "video": {
-        "duration_seconds": 3.72,
+        "duration_seconds": 4.6,
         "height": 360,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 21473,
+        "size_bytes": 47049,
         "width": 1920
       }
     },
     "bundle_id": "cross-engine-trio",
     "composition": {
+      "canvas_height": 360,
+      "canvas_width": 1920,
       "cell_height": 360,
       "cell_width": 640,
       "columns": 3,
       "mode": "grid",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "chromium",
+            "persona": "cx-chromium",
+            "role": "player",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "kind": "firefox",
+            "persona": "cx-firefox",
+            "role": "player",
+            "x": 640,
+            "y": 0
+          },
+          {
+            "kind": "webkit",
+            "persona": "cx-webkit",
+            "role": "player",
+            "x": 1280,
+            "y": 0
+          }
+        ],
+        "subtitle": "cross-engine-trio | Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.",
+        "title": "Cross-Engine Trio"
+      },
       "panes": [
         {
           "height": 360,

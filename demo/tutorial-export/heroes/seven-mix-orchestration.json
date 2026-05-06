@@ -1,0 +1,244 @@
+{
+  "artifact_manifest": {
+    "artifacts": {
+      "replay": {
+        "event_count": 59,
+        "path": "artifacts/replay.jsonl",
+        "python_export": "artifacts/replay.py",
+        "size_bytes": 22125,
+        "ts_export": "artifacts/replay.ts"
+      },
+      "video": {
+        "duration_seconds": 6.0,
+        "height": 1080,
+        "path": "artifacts/demo.mp4",
+        "poster_path": "artifacts/poster.png",
+        "size_bytes": 80789,
+        "width": 1920
+      }
+    },
+    "bundle_id": "seven-mix-orchestration",
+    "composition": {
+      "canvas_height": 1080,
+      "canvas_width": 1920,
+      "mode": "featured",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "webkit",
+            "persona": "p1",
+            "role": "player",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "kind": "webkit",
+            "persona": "p2",
+            "role": "player",
+            "x": 1280,
+            "y": 0
+          },
+          {
+            "kind": "webkit",
+            "persona": "p3",
+            "role": "player",
+            "x": 1600,
+            "y": 0
+          },
+          {
+            "kind": "firefox",
+            "persona": "p4",
+            "role": "player",
+            "x": 1280,
+            "y": 360
+          },
+          {
+            "kind": "firefox",
+            "persona": "p5",
+            "role": "player",
+            "x": 1600,
+            "y": 360
+          },
+          {
+            "kind": "chromium",
+            "persona": "p6",
+            "role": "player",
+            "x": 0,
+            "y": 720
+          },
+          {
+            "kind": "chromium",
+            "persona": "p7",
+            "role": "player",
+            "x": 480,
+            "y": 720
+          },
+          {
+            "kind": "webkit",
+            "persona": "ops",
+            "role": "monitor",
+            "x": 960,
+            "y": 720
+          },
+          {
+            "kind": "webkit",
+            "persona": "spectator",
+            "role": "main-site",
+            "x": 1440,
+            "y": 720
+          }
+        ],
+        "subtitle": "seven-mix-orchestration | Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.",
+        "title": "Seven Mix Orchestration"
+      },
+      "panes": [
+        {
+          "height": 720,
+          "kind": "webkit",
+          "persona": "p1",
+          "role": "player",
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p2",
+          "role": "player",
+          "width": 320,
+          "x": 1280,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p3",
+          "role": "player",
+          "width": 320,
+          "x": 1600,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "firefox",
+          "persona": "p4",
+          "role": "player",
+          "width": 320,
+          "x": 1280,
+          "y": 360
+        },
+        {
+          "height": 360,
+          "kind": "firefox",
+          "persona": "p5",
+          "role": "player",
+          "width": 320,
+          "x": 1600,
+          "y": 360
+        },
+        {
+          "height": 360,
+          "kind": "chromium",
+          "persona": "p6",
+          "role": "player",
+          "width": 480,
+          "x": 0,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "chromium",
+          "persona": "p7",
+          "role": "player",
+          "width": 480,
+          "x": 480,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "ops",
+          "role": "monitor",
+          "width": 480,
+          "x": 960,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "spectator",
+          "role": "main-site",
+          "width": 480,
+          "x": 1440,
+          "y": 720
+        }
+      ]
+    },
+    "hero": true,
+    "participants": [
+      {
+        "kind": "webkit",
+        "persona": "p1",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "p2",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "p3",
+        "role": "player"
+      },
+      {
+        "kind": "firefox",
+        "persona": "p4",
+        "role": "player"
+      },
+      {
+        "kind": "firefox",
+        "persona": "p5",
+        "role": "player"
+      },
+      {
+        "kind": "chromium",
+        "persona": "p6",
+        "role": "player"
+      },
+      {
+        "kind": "chromium",
+        "persona": "p7",
+        "role": "player"
+      },
+      {
+        "kind": "webkit",
+        "persona": "ops",
+        "role": "monitor"
+      },
+      {
+        "kind": "webkit",
+        "persona": "spectator",
+        "role": "main-site"
+      }
+    ],
+    "title": "Seven Mix Orchestration"
+  },
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl",
+      "artifacts/participant-roster.json"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "seven-mix-orchestration",
+  "regen_command": "uv run python scripts/demos/record_demo.py seven-mix-orchestration",
+  "summary": "Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.",
+  "title": "Seven Mix Orchestration",
+  "tutorial_export": "heroes/seven-mix-orchestration.json"
+}

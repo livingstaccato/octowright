@@ -1,0 +1,91 @@
+{
+  "artifact_manifest": {
+    "artifacts": {
+      "replay": {
+        "event_count": 23,
+        "path": "artifacts/replay.jsonl",
+        "python_export": "artifacts/replay.py",
+        "size_bytes": 8271,
+        "ts_export": "artifacts/replay.ts"
+      },
+      "video": {
+        "duration_seconds": 1.92,
+        "height": 600,
+        "path": "artifacts/demo.mp4",
+        "poster_path": "artifacts/poster.png",
+        "size_bytes": 8605,
+        "width": 800
+      }
+    },
+    "bundle_id": "verify-suite",
+    "composition": {
+      "canvas_height": 600,
+      "canvas_width": 800,
+      "mode": "single",
+      "overlay": {
+        "panes": [
+          {
+            "kind": "webkit",
+            "persona": "vs-form",
+            "role": "form",
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "subtitle": "verify-suite | Run role-specific verification macros as a compact offline scenario suite and surface the replay plus test-report story together.",
+        "title": "Verify Suite"
+      },
+      "panes": [
+        {
+          "height": 0,
+          "kind": "webkit",
+          "persona": "vs-form",
+          "role": "form",
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "primary": {
+        "kind": "webkit",
+        "persona": "vs-form",
+        "role": "form"
+      }
+    },
+    "hero": true,
+    "participants": [
+      {
+        "kind": "webkit",
+        "persona": "vs-form",
+        "role": "form"
+      },
+      {
+        "kind": "webkit",
+        "persona": "vs-counter",
+        "role": "counter"
+      },
+      {
+        "kind": "webkit",
+        "persona": "vs-arithmetic",
+        "role": "arithmetic"
+      }
+    ],
+    "title": "Verify Suite"
+  },
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl",
+      "artifacts/report.xml"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "verify-suite",
+  "regen_command": "uv run python scripts/demos/record_demo.py verify-suite",
+  "summary": "Run role-specific verification macros as a compact offline scenario suite and surface the replay plus test-report story together.",
+  "title": "Verify Suite",
+  "tutorial_export": "heroes/verify-suite.json"
+}

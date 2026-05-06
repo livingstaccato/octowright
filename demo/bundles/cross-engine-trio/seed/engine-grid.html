@@ -4,11 +4,278 @@
     <meta charset="utf-8" />
     <title>Cross-Engine Trio</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <style>
+      :root {
+        --page: #f3efe7;
+        --ink: #1a2230;
+        --muted: #5d6777;
+        --line: rgba(26, 34, 48, 0.14);
+        --card: rgba(255, 255, 255, 0.84);
+        --shadow: 0 24px 60px rgba(26, 34, 48, 0.12);
+        --chromium: #1d6ff2;
+        --firefox: #d65527;
+        --webkit: #11897a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at top left, rgba(29, 111, 242, 0.12), transparent 28rem),
+          radial-gradient(circle at top right, rgba(214, 85, 39, 0.11), transparent 24rem),
+          linear-gradient(180deg, #fbf8f2 0%, var(--page) 100%);
+        color: var(--ink);
+        font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      }
+
+      .shell {
+        width: min(1120px, calc(100vw - 40px));
+        margin: 0 auto;
+        padding: 40px 0 48px;
+      }
+
+      .hero,
+      .grid article,
+      .footer {
+        background: var(--card);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        display: grid;
+        gap: 24px;
+        grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.9fr);
+        padding: 28px;
+        border-radius: 28px;
+      }
+
+      .eyebrow,
+      .stat-label,
+      .engine-kicker {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow {
+        color: var(--muted);
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        margin-top: 12px;
+        max-width: 12ch;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        font-size: clamp(2.8rem, 4.4vw, 4.8rem);
+        line-height: 0.94;
+        letter-spacing: -0.04em;
+      }
+
+      .hero p {
+        margin-top: 14px;
+        max-width: 34rem;
+        color: var(--muted);
+        font-size: 1.02rem;
+        line-height: 1.6;
+      }
+
+      .stat-strip {
+        display: grid;
+        gap: 12px;
+      }
+
+      .stat {
+        padding: 16px 18px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.68);
+      }
+
+      .stat-value {
+        display: block;
+        margin-top: 6px;
+        font-size: 1.9rem;
+        font-weight: 700;
+      }
+
+      .grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 22px;
+      }
+
+      .grid article {
+        position: relative;
+        overflow: hidden;
+        padding: 22px;
+        border-radius: 24px;
+      }
+
+      .grid article::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto;
+        height: 10px;
+        background: var(--accent);
+      }
+
+      .engine-kicker {
+        color: var(--accent);
+      }
+
+      .grid h2 {
+        margin-top: 14px;
+        font-size: 1.45rem;
+      }
+
+      .grid p {
+        margin-top: 12px;
+        color: var(--muted);
+        line-height: 1.58;
+      }
+
+      .metric-row {
+        display: grid;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .metric {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(26, 34, 48, 0.09);
+        font-size: 0.92rem;
+      }
+
+      .footer {
+        margin-top: 22px;
+        padding: 18px 22px;
+        border-radius: 22px;
+      }
+
+      .footer p {
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      [data-engine="chromium"] {
+        --accent: var(--chromium);
+      }
+
+      [data-engine="firefox"] {
+        --accent: var(--firefox);
+      }
+
+      [data-engine="webkit"] {
+        --accent: var(--webkit);
+      }
+
+      @media (max-width: 860px) {
+        .hero,
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .shell {
+          width: min(100vw - 24px, 1120px);
+          padding: 20px 0 28px;
+        }
+      }
+    </style>
   </head>
-  <body>
-    <main>
-      <h1>Cross-Engine Trio</h1>
-      <p>A common local target for Chromium, Firefox, and WebKit orchestration demos.</p>
+  <body data-surface="engine-grid">
+    <main class="shell">
+      <section class="hero" aria-label="Cross-engine summary">
+        <div>
+          <div class="eyebrow">Engine render lab</div>
+          <h1>One offline brief across three engines.</h1>
+          <p>
+            This seed page turns the trio bundle into a clean side-by-side rendering check:
+            identical structure, fixed copy, and stable visual anchors for Chromium, Firefox,
+            and WebKit.
+          </p>
+        </div>
+        <div class="stat-strip" aria-label="Comparison stats">
+          <div class="stat">
+            <span class="stat-label">Participants</span>
+            <span class="stat-value">3 lanes</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Determinism</span>
+            <span class="stat-value">Offline only</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Primary story</span>
+            <span class="stat-value">Visual parity</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid" aria-label="Engine comparison">
+        <article data-engine="chromium">
+          <div class="engine-kicker">Lane 01</div>
+          <h2>Chromium</h2>
+          <p>
+            Optimized for broad compatibility checks and crisp first-pass recordings against the
+            exact same local document.
+          </p>
+          <div class="metric-row">
+            <div class="metric"><span>Focus</span><strong>Fast smoke</strong></div>
+            <div class="metric"><span>Seed mode</span><strong>Shared HTML</strong></div>
+            <div class="metric"><span>Visual cue</span><strong>Electric blue rail</strong></div>
+          </div>
+        </article>
+
+        <article data-engine="firefox">
+          <div class="engine-kicker">Lane 02</div>
+          <h2>Firefox</h2>
+          <p>
+            Highlights layout parity and role-consistent output with a warm contrast palette that
+            remains stable in screenshots and recordings.
+          </p>
+          <div class="metric-row">
+            <div class="metric"><span>Focus</span><strong>Parity scan</strong></div>
+            <div class="metric"><span>Seed mode</span><strong>Shared HTML</strong></div>
+            <div class="metric"><span>Visual cue</span><strong>Ember rail</strong></div>
+          </div>
+        </article>
+
+        <article data-engine="webkit">
+          <div class="engine-kicker">Lane 03</div>
+          <h2>WebKit</h2>
+          <p>
+            Matches the smallest hero flow while still participating in a richer comparison board
+            for trio-level orchestration and recording demos.
+          </p>
+          <div class="metric-row">
+            <div class="metric"><span>Focus</span><strong>Baseline story</strong></div>
+            <div class="metric"><span>Seed mode</span><strong>Shared HTML</strong></div>
+            <div class="metric"><span>Visual cue</span><strong>Tide rail</strong></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="footer" aria-label="Deterministic rendering note">
+        <p>
+          All elements on this page are authored inline with no scripts, no remote assets, and no
+          time-varying content so recordings remain repeatable across demo regenerations.
+        </p>
+      </section>
     </main>
   </body>
 </html>

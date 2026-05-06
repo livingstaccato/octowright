@@ -237,6 +237,33 @@ def test_compose_video_layout_builds_custom_positions(monkeypatch: pytest.Monkey
     assert "scale=640:360" in filter_complex
 
 
+def test_apply_video_overlay_builds_overlay_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _v, cmds = _import_video_mock_run(monkeypatch, tmp_path)
+    source = tmp_path / "base.mp4"
+    source.touch()
+    out = tmp_path / "overlay.mp4"
+
+    _v.apply_video_overlay(
+        source,
+        out,
+        title="Seven Mix Orchestration",
+        subtitle="seven-mix-orchestration | flagship hero",
+        panes=[
+            {"persona": "p1", "role": "player", "kind": "chromium", "x": 0, "y": 0},
+            {"persona": "ops", "role": "monitor", "kind": "webkit", "x": 960, "y": 720},
+        ],
+        canvas_width=1920,
+        canvas_height=1080,
+    )
+
+    assert len(cmds) == 1
+    cmd = cmds[0]
+    assert cmd.count("-i") == 2
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert filter_complex == "[1:v]colorkey=0xFF00FF:0.01:0.0[ol];[0:v][ol]overlay=0:0[v]"
+    assert cmd[-2] == str(out)
+
+
 def test_probe_video_reads_dimensions_and_duration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import octowright.video as _v
 
