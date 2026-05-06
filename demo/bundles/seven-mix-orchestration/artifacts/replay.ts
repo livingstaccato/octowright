@@ -6,25 +6,7 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
   let ctx!: BrowserContext;
   let page!: Page;
 
-  ctx = await chromium.launchPersistentContext("/Users/tim/.config/octowright/profiles/p6/chromium", {
-    headless: false,
-    viewport: { width: 1280, height: 800 },
-  });
-  page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html");
-  ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/ops/webkit", {
-    headless: false,
-    viewport: { width: 1280, height: 800 },
-  });
-  page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html");
   ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/spectator/webkit", {
-    headless: false,
-    viewport: { width: 1280, height: 800 },
-  });
-  page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html");
-  ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/p3/webkit", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });
@@ -42,6 +24,18 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
   });
   page = ctx.pages()[0] ?? await ctx.newPage();
   await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html");
+  ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/ops/webkit", {
+    headless: false,
+    viewport: { width: 1280, height: 800 },
+  });
+  page = ctx.pages()[0] ?? await ctx.newPage();
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html");
+  ctx = await webkit.launchPersistentContext("/Users/tim/.config/octowright/profiles/p3/webkit", {
+    headless: false,
+    viewport: { width: 1280, height: 800 },
+  });
+  page = ctx.pages()[0] ?? await ctx.newPage();
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html");
   ctx = await firefox.launchPersistentContext("/Users/tim/.config/octowright/profiles/p5/firefox", {
     headless: false,
     viewport: { width: 1280, height: 800 },
@@ -49,6 +43,12 @@ import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwr
   page = ctx.pages()[0] ?? await ctx.newPage();
   await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html");
   ctx = await chromium.launchPersistentContext("/Users/tim/.config/octowright/profiles/p7/chromium", {
+    headless: false,
+    viewport: { width: 1280, height: 800 },
+  });
+  page = ctx.pages()[0] ?? await ctx.newPage();
+  await page.goto("file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html");
+  ctx = await chromium.launchPersistentContext("/Users/tim/.config/octowright/profiles/p6/chromium", {
     headless: false,
     viewport: { width: 1280, height: 800 },
   });

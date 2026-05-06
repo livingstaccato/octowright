@@ -12,38 +12,8 @@ from playwright.async_api import async_playwright
 
 async def main() -> None:
     async with async_playwright() as p:
-        ctx = await p.chromium.launch_persistent_context(
-            "/Users/tim/.config/octowright/profiles/p6/chromium",
-            headless=False,
-            viewport={"width": 1280, "height": 800},
-        )
-        browser = None
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html"
-        )
-        ctx = await p.webkit.launch_persistent_context(
-            "/Users/tim/.config/octowright/profiles/ops/webkit",
-            headless=False,
-            viewport={"width": 1280, "height": 800},
-        )
-        browser = None
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html"
-        )
         ctx = await p.webkit.launch_persistent_context(
             "/Users/tim/.config/octowright/profiles/spectator/webkit",
-            headless=False,
-            viewport={"width": 1280, "height": 800},
-        )
-        browser = None
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto(
-            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html"
-        )
-        ctx = await p.webkit.launch_persistent_context(
-            "/Users/tim/.config/octowright/profiles/p3/webkit",
             headless=False,
             viewport={"width": 1280, "height": 800},
         )
@@ -72,6 +42,26 @@ async def main() -> None:
         await page.goto(
             "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html"
         )
+        ctx = await p.webkit.launch_persistent_context(
+            "/Users/tim/.config/octowright/profiles/ops/webkit",
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+        )
+        browser = None
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html"
+        )
+        ctx = await p.webkit.launch_persistent_context(
+            "/Users/tim/.config/octowright/profiles/p3/webkit",
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+        )
+        browser = None
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html"
+        )
         ctx = await p.firefox.launch_persistent_context(
             "/Users/tim/.config/octowright/profiles/p5/firefox",
             headless=False,
@@ -84,6 +74,16 @@ async def main() -> None:
         )
         ctx = await p.chromium.launch_persistent_context(
             "/Users/tim/.config/octowright/profiles/p7/chromium",
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+        )
+        browser = None
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(
+            "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html"
+        )
+        ctx = await p.chromium.launch_persistent_context(
+            "/Users/tim/.config/octowright/profiles/p6/chromium",
             headless=False,
             viewport={"width": 1280, "height": 800},
         )
