@@ -115,7 +115,6 @@ async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     run_suite_mock = AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1})
     monkeypatch.setattr(runner_mod, "run_suite", run_suite_mock)
     out = await _macros.run_test_suite(
-        macros_dir="/tmp/m",
         kind="firefox",
         tag="smoke",
         out_path="/tmp/j.xml",
@@ -123,7 +122,6 @@ async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert out["total"] == 1
     run_suite_mock.assert_awaited_once_with(
-        macros_dir="/tmp/m",
         kind="firefox",
         tag="smoke",
         out_path="/tmp/j.xml",
