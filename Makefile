@@ -36,7 +36,9 @@ secrets-scan: ## Re-run detect-secrets across the repo against .secrets.baseline
 	bash ci/run_detect_secrets.sh
 
 mutmut: ## Mutation testing on critical parsing/dispatch modules (slow; opt-in)
-	uv run --active mutmut run --paths-to-mutate src/octowright/macros,src/octowright/scenarios.py,src/octowright/personas.py
+	# mutmut 3.x copies the project to mutants/ before running pytest; src-layout
+	# packages need PYTHONPATH=src so the copied tree can import octowright.
+	PYTHONPATH=src uv run --active mutmut run
 
 spdx-fix: ## Normalize SPDX headers in source files
 	uv run --active python scripts/normalize_spdx_headers.py
