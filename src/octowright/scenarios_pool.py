@@ -148,8 +148,14 @@ class ScenarioPool:
             for launched in result["launched"]:
                 try:
                     await browser_pool.close(launched["instance_id"])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Cleanup-after-error path: surface failures so a stuck
+                    # browser leaking after a partial-roster crash is auditable.
+                    log.warning(
+                        "scenario.rollback.close_failed",
+                        instance_id=launched["instance_id"],
+                        error=repr(exc),
+                    )
             raise RuntimeError(
                 f"scenario {effective_name!r}: {len(result['errors'])} participant(s) failed to launch: {result['errors']}"
             )
@@ -171,8 +177,14 @@ class ScenarioPool:
             for launched in result["launched"]:
                 try:
                     await browser_pool.close(launched["instance_id"])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Cleanup-after-error path: surface failures so a stuck
+                    # browser leaking after a partial-roster crash is auditable.
+                    log.warning(
+                        "scenario.rollback.close_failed",
+                        instance_id=launched["instance_id"],
+                        error=repr(exc),
+                    )
             raise
         return live
 
