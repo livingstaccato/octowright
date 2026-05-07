@@ -21,7 +21,7 @@ source_refs:
   scenarios:
     - examples/scenarios/cross-engine.yaml
   macros:
-    - examples/macros/test-smoke-page-ready.json
+    - examples/macros/cross-engine-showroom.json
 artifact_expectations:
   replay:
     - artifacts/replay.jsonl
@@ -54,5 +54,5 @@ recording:
   primary_role: player
   default_seed: seed/trio-board.html
   macros:
-    - name: test-smoke-page-ready
+    - name: cross-engine-showroom
       role: player
