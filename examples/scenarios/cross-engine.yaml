@@ -16,4 +16,4 @@ participants:
     role: player
     url: about:blank
 verify:
-  player: "test-smoke-page-ready"
+  player: "cross-engine-showroom"
