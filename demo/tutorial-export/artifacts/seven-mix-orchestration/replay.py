@@ -36,7 +36,13 @@ async def main() -> None:
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await ctx.new_page()
         await page.goto(
-            _resolve_bundle_url("bundle://seed/orchestration-stage.html?persona=p3&role=player&kind=webkit&slot=2")
+            _resolve_bundle_url("bundle://seed/orchestration-stage.html?persona=p2&role=player&kind=webkit&slot=1")
+        )
+        browser = await p.firefox.launch(headless=True)
+        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        page = await ctx.new_page()
+        await page.goto(
+            _resolve_bundle_url("bundle://seed/orchestration-stage.html?persona=p4&role=player&kind=firefox&slot=3")
         )
         browser = await p.webkit.launch(headless=True)
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
@@ -48,7 +54,7 @@ async def main() -> None:
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await ctx.new_page()
         await page.goto(
-            _resolve_bundle_url("bundle://seed/orchestration-stage.html?persona=p2&role=player&kind=webkit&slot=1")
+            _resolve_bundle_url("bundle://seed/orchestration-stage.html?persona=p3&role=player&kind=webkit&slot=2")
         )
         browser = await p.webkit.launch(headless=True)
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
@@ -63,12 +69,6 @@ async def main() -> None:
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url("bundle://seed/orchestration-stage.html?persona=ops&role=monitor&kind=webkit&slot=7")
-        )
-        browser = await p.firefox.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
-        page = await ctx.new_page()
-        await page.goto(
-            _resolve_bundle_url("bundle://seed/orchestration-stage.html?persona=p4&role=player&kind=firefox&slot=3")
         )
         browser = await p.firefox.launch(headless=True)
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})

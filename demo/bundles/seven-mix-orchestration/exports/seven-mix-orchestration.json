@@ -46,11 +46,11 @@
         }
       ],
       "video": {
-        "duration_seconds": 12.84,
+        "duration_seconds": 13.08,
         "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 377098,
+        "size_bytes": 377847,
         "width": 1920
       }
     },
@@ -272,11 +272,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 12.84,
+      "duration_seconds": 13.08,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 377098,
+      "size_bytes": 377847,
       "width": 1920
     },
     "supporting": [
