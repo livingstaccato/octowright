@@ -2,19 +2,16 @@
   "allow_violations": [
     "block \"src/octowright/browser_pool/lifecycle.py:49 handoff_browser\" has a rank of C",
     "block \"src/octowright/browser_pool/pool.py:70 launch\" has a rank of D",
-    "block \"src/octowright/cli/watch.py:20 _format_watch_event\" has a rank of C",
     "block \"src/octowright/engines.py:72 engine_status\" has a rank of C",
     "block \"src/octowright/goldens.py:128 _diff_nodes\" has a rank of C",
     "block \"src/octowright/http/routes/media.py:118 session_screenshot_now\" has a rank of C",
     "block \"src/octowright/http/routes/meta.py:117 persona_sizes_endpoint\" has a rank of C",
     "block \"src/octowright/http/routes/sessions.py:48 session_detail\" has a rank of C",
-    "block \"src/octowright/idle_watchdog.py:30 idle_watchdog\" has a rank of C",
     "block \"src/octowright/macros/repair.py:57 replacement_preview\" has a rank of C",
     "block \"src/octowright/macros/runtime.py:57 _dispatch_click_or_fill\" has a rank of C",
     "block \"src/octowright/personas.py:246 check_credentials\" has a rank of C",
     "block \"src/octowright/profile_cleanup.py:51 find_stale_profiles\" has a rank of C",
     "block \"src/octowright/recording_cleanup.py:113 cleanup_stale\" has a rank of C",
-    "block \"src/octowright/resolve.py:60 suggest_for_url\" has a rank of D",
     "block \"src/octowright/scenarios_pool.py:134 start\" has a rank of C",
     "block \"src/octowright/scenarios_pool.py:59 remap_participant\" has a rank of C",
     "block \"src/octowright/server/browser/lifecycle.py:123 browser_quick_launch\" has a rank of C",
@@ -22,9 +19,6 @@
     "block \"src/octowright/session/core_ops_mixin.py:353 get_network_requests\" has a rank of C",
     "block \"src/octowright/session/core_ops_mixin.py:442 close\" has a rank of C",
     "block \"src/octowright/session/frames.py:16 switch_frame_impl\" has a rank of C",
-    "block \"src/octowright/takeover.py:264 apply_takeover\" has a rank of C",
-    "module 'src/octowright/cli/watch.py' has a rank of C",
-    "module 'src/octowright/idle_watchdog.py' has a rank of C",
-    "module 'src/octowright/resolve.py' has a rank of C"
+    "block \"src/octowright/takeover.py:264 apply_takeover\" has a rank of C"
   ]
 }
