@@ -9,7 +9,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from octowright.demos.models import DemoBundle
+from octowright_demos.models import DemoBundle
 
 
 def _artifact_summary(bundle: DemoBundle, rel_paths: list[str]) -> dict[str, object]:

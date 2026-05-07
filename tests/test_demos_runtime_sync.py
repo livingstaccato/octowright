@@ -9,10 +9,10 @@ import json
 from pathlib import Path
 
 import pytest
+from octowright_demos.models import DemoBundle, DemoMacroRun, DemoPresentationConfig, DemoRecordingConfig
+from octowright_demos.rendering import render_bundle_video, render_sync_group_videos
+from octowright_demos.runtime import record_demo_bundle
 
-from octowright.demos.models import DemoBundle, DemoMacroRun, DemoPresentationConfig, DemoRecordingConfig
-from octowright.demos.rendering import render_bundle_video, render_sync_group_videos
-from octowright.demos.runtime import record_demo_bundle
 from octowright.scenarios_pool import LiveScenario
 
 
@@ -156,24 +156,24 @@ def _patch_runtime_recording(
         runnable._log_dir.mkdir(parents=True, exist_ok=True)
         return runnable
 
-    monkeypatch.setattr("octowright.demos.runtime.BrowserPool", _FakePool)
-    monkeypatch.setattr("octowright.demos.runtime.ScenarioPool", _FakeScenarioPool)
-    monkeypatch.setattr("octowright.demos.runtime._repo_root", lambda _: tmp_path)
-    monkeypatch.setattr("octowright.demos.runtime._prepare_scenario", _fake_prepare_scenario)
+    monkeypatch.setattr("octowright_demos.runtime.BrowserPool", _FakePool)
+    monkeypatch.setattr("octowright_demos.runtime.ScenarioPool", _FakeScenarioPool)
+    monkeypatch.setattr("octowright_demos.runtime._repo_root", lambda _: tmp_path)
+    monkeypatch.setattr("octowright_demos.runtime._prepare_scenario", _fake_prepare_scenario)
     monkeypatch.setattr(
-        "octowright.demos.runtime.write_exports",
+        "octowright_demos.runtime.write_exports",
         lambda replay_path: (
             replay_path.with_suffix(".py").write_text("python", encoding="utf-8")
             or replay_path.with_suffix(".ts").write_text("ts", encoding="utf-8")
         ),
     )
     monkeypatch.setattr(
-        "octowright.demos.runtime.render_bundle_video",
+        "octowright_demos.runtime.render_bundle_video",
         _render_summary_factory(render_summary),
     )
     monkeypatch.setattr(
-        "octowright.demos.runtime.write_artifact_manifest",
-        lambda *args, **kwargs: ((kwargs["video_path"].parent / "manifest.json").write_text("{}", encoding="utf-8")),
+        "octowright_demos.runtime.write_artifact_manifest",
+        lambda *args, **kwargs: (kwargs["video_path"].parent / "manifest.json").write_text("{}", encoding="utf-8"),
     )
 
 
@@ -200,7 +200,7 @@ async def test_record_demo_bundle_applies_intro_and_outro_holds(monkeypatch, tmp
         sleeps.append(seconds)
 
     _patch_runtime_recording(monkeypatch, tmp_path)
-    monkeypatch.setattr("octowright.demos.runtime.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("octowright_demos.runtime.asyncio.sleep", _fake_sleep)
 
     await record_demo_bundle(bundle)
 
@@ -225,8 +225,8 @@ async def test_record_demo_bundle_enforces_minimum_duration(monkeypatch, tmp_pat
         sleeps.append(seconds)
 
     _patch_runtime_recording(monkeypatch, tmp_path)
-    monkeypatch.setattr("octowright.demos.runtime.asyncio.sleep", _fake_sleep)
-    monkeypatch.setattr("octowright.demos.runtime.asyncio.get_running_loop", lambda: _FakeLoop())
+    monkeypatch.setattr("octowright_demos.runtime.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("octowright_demos.runtime.asyncio.get_running_loop", lambda: _FakeLoop())
 
     await record_demo_bundle(bundle)
 
@@ -292,12 +292,12 @@ async def test_record_demo_bundle_composes_video_for_multi_browser_bundles(monke
     composed: dict[str, object] = {}
     extracted: dict[str, object] = {}
 
-    monkeypatch.setattr("octowright.demos.runtime.BrowserPool", _FakePool)
-    monkeypatch.setattr("octowright.demos.runtime.ScenarioPool", _FakeScenarioPool)
-    monkeypatch.setattr("octowright.demos.runtime._repo_root", lambda _: tmp_path)
-    monkeypatch.setattr("octowright.demos.runtime._prepare_scenario", _fake_prepare_scenario)
+    monkeypatch.setattr("octowright_demos.runtime.BrowserPool", _FakePool)
+    monkeypatch.setattr("octowright_demos.runtime.ScenarioPool", _FakeScenarioPool)
+    monkeypatch.setattr("octowright_demos.runtime._repo_root", lambda _: tmp_path)
+    monkeypatch.setattr("octowright_demos.runtime._prepare_scenario", _fake_prepare_scenario)
     monkeypatch.setattr(
-        "octowright.demos.runtime.write_exports",
+        "octowright_demos.runtime.write_exports",
         lambda replay_path: (
             replay_path.with_suffix(".py").write_text("python", encoding="utf-8")
             or replay_path.with_suffix(".ts").write_text("ts", encoding="utf-8")
@@ -329,9 +329,9 @@ async def test_record_demo_bundle_composes_video_for_multi_browser_bundles(monke
             poster_path=poster_path,
         )
 
-    monkeypatch.setattr("octowright.demos.runtime.render_bundle_video", _fake_render)
+    monkeypatch.setattr("octowright_demos.runtime.render_bundle_video", _fake_render)
     monkeypatch.setattr(
-        "octowright.demos.runtime.write_artifact_manifest",
+        "octowright_demos.runtime.write_artifact_manifest",
         lambda *args, **kwargs: (
             extracted.update({"video": str(kwargs["video_path"]), "target": str(kwargs["poster_path"])})
             or (kwargs["video_path"].parent / "manifest.json").write_text("{}", encoding="utf-8")
@@ -381,17 +381,17 @@ def test_render_bundle_video_writes_unique_supporting_assets_for_duplicate_roles
         rendered_targets.append((target_path.name, poster_path.name))
         return {"path": str(target_path), "poster_path": str(poster_path)}
 
-    monkeypatch.setattr("octowright.demos.rendering.render_supporting_video", _fake_supporting_video)
+    monkeypatch.setattr("octowright_demos.rendering.render_supporting_video", _fake_supporting_video)
     monkeypatch.setattr(
-        "octowright.demos.rendering.compose_video_grid",
+        "octowright_demos.rendering.compose_video_grid",
         lambda sources, target, **kwargs: target.write_bytes(b"video") or target,
     )
     monkeypatch.setattr(
-        "octowright.demos.rendering.extract_frame",
+        "octowright_demos.rendering.extract_frame",
         lambda source, target, **kwargs: target.write_bytes(b"poster") or target,
     )
     monkeypatch.setattr(
-        "octowright.demos.rendering.probe_video",
+        "octowright_demos.rendering.probe_video",
         lambda _: {"width": 1920, "height": 360, "duration_seconds": 2.0},
     )
 
@@ -432,7 +432,7 @@ def test_render_sync_group_videos_avoids_collisions_with_pre_suffixed_roles(
         rendered_targets.append((target_path.name, poster_path.name))
         return {"path": str(target_path), "poster_path": str(poster_path)}
 
-    monkeypatch.setattr("octowright.demos.rendering.render_supporting_video", _fake_supporting_video)
+    monkeypatch.setattr("octowright_demos.rendering.render_supporting_video", _fake_supporting_video)
 
     rendered = render_sync_group_videos(
         [
