@@ -57,6 +57,84 @@ def _hosts_match(a: str, b: str) -> bool:
     return a.endswith("." + b) or b.endswith("." + a)
 
 
+def _persona_hosts(persona: Any) -> list[str]:
+    """Extract the lower-cased host list from a persona's app config."""
+    app_hosts = persona.app.get("hosts") if isinstance(persona.app, dict) else None
+    if not isinstance(app_hosts, list):
+        return []
+    return [str(h).lower() for h in app_hosts]
+
+
+def _resolve_engines(prow: dict[str, Any], kind: str | None) -> list[str]:
+    """Engines to score for this persona row.
+
+    Empty engine list still yields a persona-level entry under "webkit"
+    so the LLM gets a nudge even before any browser has been launched.
+    """
+    engines = prow.get("engines") or ["webkit"]
+    if kind is not None:
+        return [e for e in engines if e == kind]
+    return list(engines)
+
+
+def _score_persona_engine(
+    host: str,
+    prow: dict[str, Any],
+    persona_hosts: list[str],
+    default_host: str,
+    engine_kind: str,
+    profile_index: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Score one (persona, engine) pair against the target host. Returns
+    a candidate dict, or None if the score is below the inclusion threshold."""
+    score = 0.0
+    reasons: list[str] = []
+    if any(_hosts_match(host, h) for h in persona_hosts):
+        score += 3
+        reasons.append(f"app.hosts contains {host}")
+    if default_host and _hosts_match(host, default_host):
+        score += 2
+        reasons.append(f"default_url host is {default_host}")
+    engine_profile = profile_index.get((prow["name"], engine_kind))
+    if engine_profile is not None:
+        score += 1
+        reasons.append(f"{engine_kind} profile exists ({engine_profile['size_bytes']} bytes)")
+    if score < 1:
+        return None
+    mtime = engine_profile["mtime"] if engine_profile else prow.get("mtime", 0)
+    last_used = engine_profile["last_used"] if engine_profile else prow.get("last_used", "")
+    return {
+        "persona": prow["name"],
+        "kind": engine_kind,
+        "score": score,
+        "reasons": reasons,
+        "last_used": last_used,
+        "mtime": mtime,
+    }
+
+
+def _collect_candidates(
+    host: str,
+    kind: str | None,
+    persona_rows: list[dict[str, Any]],
+    profile_index: dict[tuple[str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Walk each persona row x applicable engine, scoring against host."""
+    candidates: dict[tuple[str, str], dict[str, Any]] = {}
+    for prow in persona_rows:
+        try:
+            persona = _personas.load_persona(prow["name"])
+        except FileNotFoundError:
+            continue
+        ph = _persona_hosts(persona)
+        default_host = _host_of(persona.default_url)
+        for engine_kind in _resolve_engines(prow, kind):
+            entry = _score_persona_engine(host, prow, ph, default_host, engine_kind, profile_index)
+            if entry is not None:
+                candidates[(prow["name"], engine_kind)] = entry
+    return list(candidates.values())
+
+
 def suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]:
     """Return ranked persona/profile suggestions for a URL.
 
@@ -79,69 +157,13 @@ def suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]:
         }
     """
     host = _host_of(url)
-
-    persona_rows = _personas.list_personas()
-    profile_rows = _profiles.list_profiles()
-    profile_index: dict[tuple[str, str], dict[str, Any]] = {(p["name"], p["kind"]): p for p in profile_rows}
-
-    candidates: dict[tuple[str, str], dict[str, Any]] = {}
-
-    for prow in persona_rows:
-        try:
-            persona = _personas.load_persona(prow["name"])
-        except FileNotFoundError:
-            continue
-
-        persona_hosts: list[str] = []
-        app_hosts = persona.app.get("hosts") if isinstance(persona.app, dict) else None
-        if isinstance(app_hosts, list):
-            persona_hosts.extend(str(h).lower() for h in app_hosts)
-        default_host = _host_of(persona.default_url)
-
-        engines = prow.get("engines") or []
-        if not engines:
-            engines = ["webkit"]  # report at the persona level even with no engine yet
-        if kind is not None:
-            engines = [e for e in engines if e == kind]
-
-        for engine_kind in engines:
-            score = 0.0
-            reasons: list[str] = []
-
-            if any(_hosts_match(host, h) for h in persona_hosts):
-                score += 3
-                reasons.append(f"app.hosts contains {host}")
-            if default_host and _hosts_match(host, default_host):
-                score += 2
-                reasons.append(f"default_url host is {default_host}")
-
-            engine_profile = profile_index.get((prow["name"], engine_kind))
-            if engine_profile is not None:
-                score += 1
-                reasons.append(f"{engine_kind} profile exists ({engine_profile['size_bytes']} bytes)")
-
-            if score < 1:
-                continue
-
-            mtime = engine_profile["mtime"] if engine_profile else prow.get("mtime", 0)
-            last_used = engine_profile["last_used"] if engine_profile else prow.get("last_used", "")
-
-            candidates[(prow["name"], engine_kind)] = {
-                "persona": prow["name"],
-                "kind": engine_kind,
-                "score": score,
-                "reasons": reasons,
-                "last_used": last_used,
-                "mtime": mtime,
-            }
+    profile_index: dict[tuple[str, str], dict[str, Any]] = {
+        (p["name"], p["kind"]): p for p in _profiles.list_profiles()
+    }
+    candidates = _collect_candidates(host, kind, _personas.list_personas(), profile_index)
 
     # Sort by score desc, then mtime desc (most-recently-used wins ties).
-    matches = sorted(
-        candidates.values(),
-        key=lambda c: (c["score"], c["mtime"]),
-        reverse=True,
-    )
-
+    matches = sorted(candidates, key=lambda c: (c["score"], c["mtime"]), reverse=True)
     strong = [m for m in matches if m["score"] >= 2]
     ambiguous = len(strong) > 1
     ephemeral_ok = len(strong) == 0
@@ -150,7 +172,6 @@ def suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]:
 
     # Strip mtime from the public payload — internal tie-breaker only.
     public_matches = [{k: v for k, v in m.items() if k != "mtime"} for m in matches]
-
     return {
         "url": url,
         "host": host,
