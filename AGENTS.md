@@ -14,10 +14,15 @@ make install              # uv sync --all-groups
 
 # Test & quality
 make test                 # pytest (no live browsers)
-make lint                 # ruff check + format check + mypy + codespell
+make lint                 # ruff/format/mypy/ty/bandit/codespell/SPDX/LOC/vulture/xenon/secrets
 make format               # ruff format + ruff --fix
 make typecheck            # mypy only
 make ci                   # lint + test
+make audit                # pip-audit against the dependency tree
+make vulture              # dead-code scan (baseline-ratchet)
+make xenon                # cyclomatic complexity (baseline-ratchet)
+make secrets-scan         # detect-secrets vs .secrets.baseline
+make mutmut               # opt-in mutation testing (slow)
 
 # Run a single test
 uv run pytest tests/path/to/test_file.py::test_name -v
@@ -103,6 +108,17 @@ Tools are `@mcp.tool`-decorated async functions in `server/browser/`, `server/ma
 Every page launched by the pool gets a faint translucent overlay at the bottom-center. While `run_macro` is dispatching, the pill shows the per-browser ID chip (matches the corner-badge color), a live elapsed counter, and the current action description. After completion the pill stays visible with `done` / `failed`; the next macro's `start` push resets the counter. Holding **Alt** makes the pill clickable — click opens a themed modal with the full per-push run history. The pill is `pointer-events: none` by default so it never intercepts page clicks.
 
 Pass `slowmo_ms=N` to `macro_run` / `macro_run_sequence` (or set `OCTOWRIGHT_MACRO_SLOWMO_MS`) to insert a per-action delay between status push and dispatch — useful for following execution by eye.
+
+### Silent-swallow audit policy
+
+Bandit's B110 (`try/except/pass`) and B112 (`try/except/continue`) are blanket-suppressed in `make lint`. Roughly 47 such blocks exist in production code; an audit found them all to be **legitimate cleanup or scan-skip patterns**:
+
+- Process shutdown paths (signal-handler restore, task-cancel await)
+- Dir scans skipping orphans (profile cleanup, recording cleanup)
+- JSONL/YAML parse-skip on per-line malformed input (recorder, macro list, persona list)
+- Best-effort I/O during teardown
+
+Two sites that previously swallowed errors silently in non-cleanup paths now log via `log.warning`: `scenarios_pool.start` rollback and `http/app.py` MCP-session-manager probe. New silent-swallow code in user-action paths should also `log.warning`/`log.debug` rather than truly swallow — the bandit suppression is a project-wide policy that assumes the swallow is intentional, not an excuse.
 
 ### Idle Watchdog
 
