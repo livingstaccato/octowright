@@ -33,7 +33,7 @@ async def browser_screenshot(instance_id: str, path: str | None = None) -> dict[
     structured_output=False,
     description=(
         "Return an aria-tree snapshot for an instance. By default snapshots the "
-        "full document and truncates the YAML at ~4000 chars; pass selector to "
+        "page body and truncates the YAML at ~4000 chars; pass selector to "
         "scope a subtree (e.g. selector='main') and full=True to skip truncation."
     ),
 )
@@ -321,21 +321,23 @@ async def browser_read_markdown(
     max_chars: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
+    if max_chars is not None and max_chars < 0:
+        raise ValueError("max_chars must be >= 0")
 
-    path = session.markdown_path
-    if not path or not path.exists():
-        path = await session.capture_markdown()
+    # Always refresh on explicit reads so SPA/in-page changes do not serve a
+    # stale markdown cache from a prior render.
+    path = await session.capture_markdown(force=True)
 
     if not path or not path.exists():
         return {"error": "Markdown generation failed or is unavailable"}
 
     text = path.read_text(encoding="utf-8")
     original_size = len(text)
-    cap = max_chars or DEFAULT_PREVIEW_CHARS
+    cap = DEFAULT_PREVIEW_CHARS if max_chars is None else max_chars
 
     truncated = False
     if original_size > cap:
-        text = text[:cap] + f"\n\n... (truncated {original_size - cap} more chars)"
+        text = text[:cap]
         truncated = True
 
     return {
