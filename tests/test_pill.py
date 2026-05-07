@@ -397,9 +397,9 @@ async def test_macro_slowmo_delays_dispatch(tmp_path) -> None:
         slow_elapsed = _time.monotonic() - t0
         assert slow["slowmo_ms"] == 200
         assert slow["executed"] == 3
-        assert (
-            slow_elapsed >= baseline_elapsed + 0.55
-        ), f"slowmo did not delay dispatch: baseline={baseline_elapsed:.3f}s slow={slow_elapsed:.3f}s"
+        assert slow_elapsed >= baseline_elapsed + 0.55, (
+            f"slowmo did not delay dispatch: baseline={baseline_elapsed:.3f}s slow={slow_elapsed:.3f}s"
+        )
     finally:
         try:
             macro_path.unlink()
