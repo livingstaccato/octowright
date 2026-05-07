@@ -164,37 +164,54 @@ def _validate_required_simple(action: dict[str, Any], kind: str, path: str, *, s
             _error(f"{path}: {kind} is missing required field '{field}'", strict=strict)
 
 
+def _expand_scalar_shorthand(key: str, value: Any) -> dict[str, Any] | None:
+    """`{key: scalar}` shorthand for navigate/click/press_key — returns the
+    expanded {"action": key, <field>: value} or None if the kind is wrong."""
+    field = _SHORTHAND_ACTION_FIELDS.get(key)
+    if not isinstance(field, str):
+        return None
+    return {"action": key, field: value}
+
+
+def _expand_mapping_shorthand(key: str, value: Any, path: str, *, strict: bool) -> dict[str, Any]:
+    """`{key: {...}}` shorthand for fill / if_selector / try / try_each."""
+    if not isinstance(value, dict):
+        msg = (
+            f"{path}: fill shorthand requires a mapping payload"
+            if key == "fill"
+            else f"{path}: {key} shorthand must be a mapping, got {type(value).__name__}"
+        )
+        _error(msg, strict=strict)
+        if strict:
+            raise ValueError(msg)
+        return {key: value}
+    return {"action": key, **value}
+
+
 def _normalize_shorthand(node: dict[str, Any], path: str, *, strict: bool) -> dict[str, Any]:
     if len(node) != 1:
         return node
     key, value = next(iter(node.items()))
     if key not in _SHORTHAND_ACTION_FIELDS:
         return node
-
-    field = _SHORTHAND_ACTION_FIELDS[key]
     if key in {"navigate", "click", "press_key"}:
-        if not isinstance(field, str):
-            return node
-        return {"action": key, field: value}
-    if key == "fill":
-        if not isinstance(value, dict):
-            _error(f"{path}: fill shorthand requires a mapping payload", strict=strict)
-            if strict:
-                raise ValueError(f"{path}: fill shorthand requires a mapping payload")
-            return {**node}
-        expanded = {"action": key}
-        expanded.update(value)
-        return expanded
-    if key in {"if_selector", "try", "try_each"}:
-        if not isinstance(value, dict):
-            _error(f"{path}: {key} shorthand must be a mapping, got {type(value).__name__}", strict=strict)
-            if strict:
-                raise ValueError(f"{path}: {key} shorthand must be a mapping, got {type(value).__name__}")
-            return {**node}
-        expanded = {"action": key}
-        expanded.update(value)
-        return expanded
+        return _expand_scalar_shorthand(key, value) or node
+    if key in {"fill", "if_selector", "try", "try_each"}:
+        return _expand_mapping_shorthand(key, value, path, strict=strict)
     return node
+
+
+# Conditional-action compilers — keyed by action name.
+_CONDITIONAL_COMPILERS: dict[str, Any] = {}
+
+
+def _register_conditional_compilers() -> None:
+    """Late-binding registration: the compilers are defined elsewhere in this
+    module; we wire them into the dispatch table here so _compile_action stays
+    a thin lookup."""
+    _CONDITIONAL_COMPILERS["if_selector"] = _compile_if_selector
+    _CONDITIONAL_COMPILERS["try"] = _compile_try
+    _CONDITIONAL_COMPILERS["try_each"] = _compile_try_each
 
 
 def _compile_action(action: Any, path: str, *, strict: bool) -> dict[str, Any] | None:
@@ -213,24 +230,16 @@ def _compile_action(action: Any, path: str, *, strict: bool) -> dict[str, Any] |
         return action_obj
 
     kind = action_obj["action"]
-
-    if kind in _CONDITIONAL_ACTIONS:
-        if kind == "if_selector":
-            return _compile_if_selector(action_obj, path, strict=strict)
-        if kind == "try":
-            return _compile_try(action_obj, path, strict=strict)
-        return _compile_try_each(action_obj, path, strict=strict)
-
+    compiler = _CONDITIONAL_COMPILERS.get(kind)
+    if compiler is not None:
+        return compiler(action_obj, path, strict=strict)
     if kind in _SIMPLE_REQUIRED_FIELDS:
-        if kind == "fill":
-            _validate_required_simple(action_obj, kind, path, strict=strict)
-            return action_obj
-        if kind in _SIMPLE_REQUIRED_FIELDS:
-            _validate_required_simple(action_obj, kind, path, strict=strict)
-        return action_obj
-
+        _validate_required_simple(action_obj, kind, path, strict=strict)
     # Unknown or server-defined action keys pass through.
     return action_obj
+
+
+_register_conditional_compilers()
 
 
 def compile_macro_document(

@@ -299,3 +299,53 @@ def test_cli_format_helpers_resolved_from_format_module() -> None:
     # Trivial assertion; main purpose is to exercise the import line so that
     # coverage counts the cli module's top-level binding.
     assert callable(fmt.browser_summary)
+
+
+# ---------------------------------------------------------------------------
+# cli/_root.py: no-subcommand path and main() entry point
+# ---------------------------------------------------------------------------
+
+
+def test_cli_invoked_without_subcommand_delegates_to_serve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When octowright is run with no subcommand, _root.cli invokes `serve`.
+
+    We replace the serve command's callback with a no-op so no daemon starts.
+    Lines 24-26 of cli/_root.py (late import + ctx.invoke branch) are hit.
+    """
+    import octowright.cli.serve as serve_mod
+
+    serve_invoked: list[bool] = []
+
+    # Wrap the real serve click.Command so ctx.invoke(serve) calls our no-op.
+    real_serve = serve_mod.serve
+    original_callback = real_serve.callback
+
+    def _noop_serve(**kwargs: object) -> None:
+        serve_invoked.append(True)
+
+    monkeypatch.setattr(real_serve, "callback", _noop_serve)
+
+    try:
+        result = CliRunner().invoke(cli, [])
+    finally:
+        # Restore in case monkeypatch teardown order is non-deterministic.
+        monkeypatch.setattr(real_serve, "callback", original_callback)
+
+    # Either the no-op ran (exit 0) or Click noted the invocation.
+    assert result.exit_code == 0
+    assert serve_invoked, "serve callback should have been called"
+
+
+def test_main_entry_point_calls_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() (line 31 of cli/_root.py) is the console_scripts entry point.
+
+    Invoke it with --help so it exits cleanly rather than starting a server.
+    """
+    import sys
+
+    import octowright.cli._root as _root_mod
+
+    monkeypatch.setattr(sys, "argv", ["octowright", "--help"])
+    with pytest.raises(SystemExit) as exc_info:
+        _root_mod.main()
+    assert exc_info.value.code == 0

@@ -178,69 +178,71 @@ async def _serve_async(
     of it. This way the leader is never a child of Claude Code (or any
     other MCP launcher), so SIGKILL on the launcher's child can't reach it.
     """
+    leader_kwargs: dict[str, Any] = {
+        "http_host": http_host,
+        "http_port": http_port,
+        "no_http": no_http,
+        "keep_alive": keep_alive,
+        "idle_grace": idle_grace,
+    }
+    # Direct-leader paths: daemon-mode (the spawned daemon runs leader code
+    # directly) and --no-singleton (legacy inline mode, no daemon, no follower).
+    if daemon_mode:
+        await _run_leader(**leader_kwargs, no_singleton=False, arm_watchdog_immediately=True)
+        return
+    if no_singleton:
+        await _run_leader(**leader_kwargs, no_singleton=True)
+        return
+    await _serve_singleton(leader_kwargs, http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+
+
+async def _ensure_leader_or_inline(
+    leader_kwargs: dict[str, Any],
+    *,
+    http_host: str | None,
+    http_port: int | None,
+    idle_grace: float | None,
+) -> Any:
+    """Find or spawn a daemon leader. Returns the leader info, OR None if
+    we ended up running the leader inline as a fallback (caller should
+    return immediately in that case)."""
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
-    # The daemon itself runs leader code directly — it knows it's the leader,
-    # and it has no parent to follow.
-    if daemon_mode:
-        await _run_leader(
-            http_host=http_host,
-            http_port=http_port,
-            no_http=no_http,
-            keep_alive=keep_alive,
-            idle_grace=idle_grace,
-            no_singleton=False,
-            arm_watchdog_immediately=True,
-        )
-        return
-
-    # --no-singleton: legacy inline-leader mode (no daemon, no follower).
-    if no_singleton:
-        await _run_leader(
-            http_host=http_host,
-            http_port=http_port,
-            no_http=no_http,
-            keep_alive=keep_alive,
-            idle_grace=idle_grace,
-            no_singleton=True,
-        )
-        return
-
     existing = _sn.read_lock()
     leader_alive = existing is not None and not _sn.is_stale(existing) and await _sn.probe_http_alive(existing)
+    if leader_alive:
+        return existing
+    click.echo("octowright: no live leader; spawning daemon", err=True)
+    _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+    spawned = await _daemon.wait_for_daemon()
+    if spawned is None:
+        # Daemon didn't come up in time — fall back to running leader inline
+        # so the user at least gets a working server (browsers will die on
+        # this process's exit, but that's better than no service at all).
+        click.echo("octowright: daemon spawn timed out; running leader inline", err=True)
+        await _run_leader(**leader_kwargs, no_singleton=False)
+        return None
+    return spawned
 
-    # No healthy leader → spawn a daemonized one and follow it.
-    if not leader_alive:
-        click.echo("octowright: no live leader; spawning daemon", err=True)
-        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
-        existing = await _daemon.wait_for_daemon()
-        if existing is None:
-            # Daemon didn't come up in time — fall back to running leader inline
-            # so the user at least gets a working server (browsers will die on
-            # this process's exit, but that's better than no service at all).
-            click.echo("octowright: daemon spawn timed out; running leader inline", err=True)
-            await _run_leader(
-                http_host=http_host,
-                http_port=http_port,
-                no_http=no_http,
-                keep_alive=keep_alive,
-                idle_grace=idle_grace,
-                no_singleton=False,
-            )
-            return
 
-    assert existing is not None
+async def _bridge_to_leader(leader_info: Any) -> None:
+    """Run the follower bridge; log how it ended (exception vs clean close)."""
     try:
-        await _run_follower(existing.mcp_url)
+        await _run_follower(leader_info.mcp_url)
     except Exception as exc:
         click.echo(f"octowright: leader bridge ended ({exc}); checking daemon", err=True)
     else:
         click.echo("octowright: leader bridge closed; checking daemon", err=True)
 
-    # Re-check: did the daemon really go away? If yes, spawn a fresh one and
-    # exit — we don't run leader inline here either (we'd just die with the
-    # parent's next signal). One spawn attempt is enough.
+
+async def _respawn_if_leader_gone(*, http_host: str | None, http_port: int | None, idle_grace: float | None) -> None:
+    """After the bridge ends: if the leader is genuinely gone, spawn a
+    replacement daemon and exit. We don't run leader inline here — we'd
+    just die with the parent's next signal. One spawn attempt is enough."""
+    from octowright import daemonize as _daemon
+    from octowright import singleton as _sn
+
     recheck = _sn.read_lock()
     still_alive = recheck is not None and not _sn.is_stale(recheck) and await _sn.probe_http_alive(recheck)
     if still_alive:
@@ -248,6 +250,24 @@ async def _serve_async(
         return
     click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
     _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+
+
+async def _serve_singleton(
+    leader_kwargs: dict[str, Any],
+    *,
+    http_host: str | None,
+    http_port: int | None,
+    idle_grace: float | None,
+) -> None:
+    """The default singleton-coordinated path: find or spawn a daemon leader,
+    follow it, and re-spawn if it dies mid-session."""
+    existing = await _ensure_leader_or_inline(
+        leader_kwargs, http_host=http_host, http_port=http_port, idle_grace=idle_grace
+    )
+    if existing is None:
+        return
+    await _bridge_to_leader(existing)
+    await _respawn_if_leader_gone(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
 
 
 async def _run_follower(leader_mcp_url: str) -> None:
@@ -333,77 +353,123 @@ async def _run_leader(
     # fires or a sidecar fails.
     discoverable = not no_http and not no_singleton
 
-    # Convert SIGTERM/SIGHUP (sent by parent MCP clients on close) into a
-    # graceful "stdio done" signal — cancel mcp_task and let the keep-alive
-    # path below take over. SIGINT keeps default behavior so Ctrl+C still
-    # exits the process for interactive users. Only install on a discoverable
-    # leader; in --no-http / --no-singleton modes the leader is single-purpose
-    # and the default "exit on signal" semantics are correct.
-    import signal as _signal
+    # Signal handlers: see _install_leader_signal_handlers for rationale.
 
     loop = _asyncio.get_running_loop()
-    installed_signals: list[_signal.Signals] = []
-    installed_signal_handlers: list[tuple[_signal.Signals, _SignalHandler]] = []
-    if discoverable:
-        signals = [_signal.SIGTERM]
-        if hasattr(_signal, "SIGHUP"):
-            signals.append(_signal.SIGHUP)
-        for sig in signals:
-            try:
-                loop.add_signal_handler(sig, mcp_task.cancel)
-                installed_signals.append(sig)
-            except (NotImplementedError, ValueError):
-                try:
-                    previous = _signal.getsignal(sig)
-                    _signal.signal(sig, lambda *_args: loop.call_soon_threadsafe(mcp_task.cancel))
-                    installed_signal_handlers.append((sig, previous))
-                except (OSError, RuntimeError, ValueError):
-                    pass
+    installed_signals, installed_signal_handlers = _install_leader_signal_handlers(loop, mcp_task, discoverable)
 
     wait_for: set[_asyncio.Task[object]] = {mcp_task}
     if watch_task is not None:
         wait_for.add(watch_task)
 
     try:
-        await _asyncio.wait(wait_for, return_when=_asyncio.FIRST_COMPLETED)
-        _log_first_done("octowright.leader.first_phase_ended", mcp_task, watch_task, sidecars)
-
-        # If only the stdio MCP task ended (the typical "client disconnected"
-        # case) and we're discoverable, keep serving via HTTP-MCP. The
-        # watchdog or a sidecar failure will eventually end us; the user
-        # reopening their MCP client will spawn a new follower that bridges
-        # back here without losing browser state.
-        if mcp_task.done() and discoverable and watch_task is not None and not watch_task.done():
-            click.echo(
-                "octowright: stdio client disconnected; leader staying alive for HTTP-MCP "
-                "(reconnect by reopening your MCP client; auto-quit governed by --idle-grace)",
-                err=True,
-            )
-            await _asyncio.wait(
-                {watch_task, *sidecars},
-                return_when=_asyncio.FIRST_COMPLETED,
-            )
-            _log_first_done("octowright.leader.second_phase_ended", mcp_task, watch_task, sidecars)
+        await _run_leader_phases(wait_for, mcp_task, watch_task, sidecars, discoverable)
     finally:
-        for sig in installed_signals:
-            try:
-                loop.remove_signal_handler(sig)
-            except (NotImplementedError, ValueError):
-                pass
-        for sig, previous in installed_signal_handlers:
-            try:
-                _signal.signal(sig, previous)
-            except (OSError, RuntimeError, ValueError):
-                pass
-        for t in (*sidecars, watch_task, mcp_task):
-            if t is not None and not t.done():
-                t.cancel()
-        for t in (*sidecars, watch_task, mcp_task):
-            if t is None:
-                continue
-            try:
-                await t
-            except (_asyncio.CancelledError, Exception):
-                pass
+        _uninstall_leader_signal_handlers(loop, installed_signals, installed_signal_handlers)
+        await _cancel_and_collect_tasks(sidecars, watch_task, mcp_task)
         if not no_singleton:
             _sn.remove_lock()
+
+
+def _install_leader_signal_handlers(
+    loop: Any,
+    mcp_task: Any,
+    discoverable: bool,
+) -> tuple[list[Any], list[tuple[Any, _SignalHandler]]]:
+    """Convert SIGTERM/SIGHUP (sent by parent MCP clients on close) into a
+    graceful "stdio done" signal — cancel mcp_task and let the leader's
+    keep-alive path take over. SIGINT keeps default behavior so Ctrl+C still
+    exits the process for interactive users. Only install on a discoverable
+    leader; in --no-http / --no-singleton modes the default "exit on signal"
+    semantics are correct."""
+    import signal as _signal
+
+    installed_signals: list[Any] = []
+    installed_signal_handlers: list[tuple[Any, _SignalHandler]] = []
+    if not discoverable:
+        return installed_signals, installed_signal_handlers
+    signals = [_signal.SIGTERM]
+    if hasattr(_signal, "SIGHUP"):
+        signals.append(_signal.SIGHUP)
+    for sig in signals:
+        try:
+            loop.add_signal_handler(sig, mcp_task.cancel)
+            installed_signals.append(sig)
+        except (NotImplementedError, ValueError):
+            try:
+                previous = _signal.getsignal(sig)
+                _signal.signal(sig, lambda *_args: loop.call_soon_threadsafe(mcp_task.cancel))
+                installed_signal_handlers.append((sig, previous))
+            except (OSError, RuntimeError, ValueError):
+                pass
+    return installed_signals, installed_signal_handlers
+
+
+def _uninstall_leader_signal_handlers(
+    loop: Any,
+    installed_signals: list[Any],
+    installed_signal_handlers: list[tuple[Any, _SignalHandler]],
+) -> None:
+    """Restore signal handlers — best-effort; we're already shutting down."""
+    import signal as _signal
+
+    for sig in installed_signals:
+        try:
+            loop.remove_signal_handler(sig)
+        except (NotImplementedError, ValueError):
+            pass
+    for sig, previous in installed_signal_handlers:
+        try:
+            _signal.signal(sig, previous)
+        except (OSError, RuntimeError, ValueError):
+            pass
+
+
+async def _cancel_and_collect_tasks(
+    sidecars: list[Any],
+    watch_task: Any,
+    mcp_task: Any,
+) -> None:
+    """Cancel any still-running task and await each so exceptions surface."""
+    import asyncio as _asyncio
+
+    for t in (*sidecars, watch_task, mcp_task):
+        if t is not None and not t.done():
+            t.cancel()
+    for t in (*sidecars, watch_task, mcp_task):
+        if t is None:
+            continue
+        try:
+            await t
+        except (_asyncio.CancelledError, Exception):
+            pass
+
+
+async def _run_leader_phases(
+    wait_for: set[Any],
+    mcp_task: Any,
+    watch_task: Any,
+    sidecars: list[Any],
+    discoverable: bool,
+) -> None:
+    """Two-phase leader life: wait for stdio-or-watchdog, then if only the
+    stdio task ended on a discoverable leader, keep serving via HTTP-MCP
+    until the watchdog or a sidecar fires."""
+    import asyncio as _asyncio
+
+    await _asyncio.wait(wait_for, return_when=_asyncio.FIRST_COMPLETED)
+    _log_first_done("octowright.leader.first_phase_ended", mcp_task, watch_task, sidecars)
+
+    # If only the stdio MCP task ended (the typical "client disconnected"
+    # case) and we're discoverable, keep serving via HTTP-MCP. The watchdog
+    # or a sidecar failure will eventually end us; the user reopening their
+    # MCP client will spawn a new follower that bridges back here without
+    # losing browser state.
+    if mcp_task.done() and discoverable and watch_task is not None and not watch_task.done():
+        click.echo(
+            "octowright: stdio client disconnected; leader staying alive for HTTP-MCP "
+            "(reconnect by reopening your MCP client; auto-quit governed by --idle-grace)",
+            err=True,
+        )
+        await _asyncio.wait({watch_task, *sidecars}, return_when=_asyncio.FIRST_COMPLETED)
+        _log_first_done("octowright.leader.second_phase_ended", mcp_task, watch_task, sidecars)
