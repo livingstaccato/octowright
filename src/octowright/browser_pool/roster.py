@@ -26,7 +26,7 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
         return await pool.launch(
             kind=spec.get("kind", "chromium"),
             url=spec.get("url"),
-            headed=spec.get("headed", True),
+            headed=spec.get("headed"),
             label=spec.get("label"),
             viewport_w=spec.get("viewport_w"),
             viewport_h=spec.get("viewport_h"),
