@@ -4,7 +4,7 @@
       "event_count": 58,
       "path": "artifacts/replay.jsonl",
       "python_export": "artifacts/replay.py",
-      "size_bytes": 14619,
+      "size_bytes": 14623,
       "ts_export": "artifacts/replay.ts"
     },
     "supporting_videos": [
@@ -38,11 +38,11 @@
       }
     ],
     "video": {
-      "duration_seconds": 8.44,
+      "duration_seconds": 11.52,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 351943,
+      "size_bytes": 899717,
       "width": 1920
     }
   },

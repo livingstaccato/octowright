@@ -5,23 +5,23 @@
         "event_count": 18,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 4384,
+        "size_bytes": 4386,
         "ts_export": "artifacts/replay.ts"
       },
       "supporting_videos": [],
       "video": {
-        "duration_seconds": 4.72,
-        "height": 500,
+        "duration_seconds": 4.76,
+        "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 10594,
-        "width": 800
+        "size_bytes": 20763,
+        "width": 1920
       }
     },
     "bundle_id": "fixture-lab",
     "composition": {
-      "canvas_height": 500,
-      "canvas_width": 800,
+      "canvas_height": 1080,
+      "canvas_width": 1920,
       "mode": "single-clean",
       "overlay": {
         "panes": [
@@ -92,12 +92,12 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 4.72,
-      "height": 500,
+      "duration_seconds": 4.76,
+      "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 10594,
-      "width": 800
+      "size_bytes": 20763,
+      "width": 1920
     },
     "supporting": []
   },

@@ -17,13 +17,13 @@ const resolveBundleUrl = (raw: string): string => {
   let page!: Page;
 
   browser = await webkit.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/fixtures.html?persona=fix-b&role=player&kind=webkit&slot=1"));
-  browser = await webkit.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("bundle://seed/fixtures.html?persona=fix-a&role=player&kind=webkit&slot=0"));
+  browser = await webkit.launch({ headless: true });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("bundle://seed/fixtures.html?persona=fix-b&role=player&kind=webkit&slot=1"));
   if (browser !== null) {
     await browser.close();
   } else {

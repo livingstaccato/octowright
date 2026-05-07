@@ -21,23 +21,23 @@ def _resolve_bundle_url(raw: str) -> str:
 async def main() -> None:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url("bundle://seed/trio-board.html?persona=cx-chromium&role=player&kind=chromium&slot=0")
         )
         browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("http://127.0.0.1:8765/"))
         browser = await p.webkit.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url("bundle://seed/trio-board.html?persona=cx-webkit&role=player&kind=webkit&slot=2")
         )
         browser = await p.firefox.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url("bundle://seed/trio-board.html?persona=cx-firefox&role=player&kind=firefox&slot=1")
@@ -61,49 +61,41 @@ async def main() -> None:
         except Exception:
             await page.fill("#name", "Octavia Wright")
         try:
+            await page.get_by_role("player", name='Email":\n  - /placeholder: o.wright@example.com').fill(
+                "octavia@example.com"
+            )
+        except Exception:
+            await page.fill("#email", "octavia@example.com")
+        try:
             await page.get_by_role("player", name='Full name":\n  - /placeholder: Octavia Wright').fill(
                 "Octavia Wright"
             )
         except Exception:
             await page.fill("#name", "Octavia Wright")
         try:
+            await page.get_by_role("player", name='Departure": 2026-06-12').click()
+        except Exception:
+            await page.click("#depart")
+        await page.keyboard.press("Escape")
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
+        )
+        try:
             await page.get_by_role("player", name='Email":\n  - /placeholder: o.wright@example.com').fill(
                 "octavia@example.com"
             )
         except Exception:
             await page.fill("#email", "octavia@example.com")
         try:
-            await page.get_by_role("player", name='Email":\n  - /placeholder: o.wright@example.com').fill(
-                "octavia@example.com"
-            )
-        except Exception:
-            await page.fill("#email", "octavia@example.com")
-        try:
-            await page.get_by_role("player", name='Departure": 2026-06-12').click()
-        except Exception:
-            await page.click("#depart")
-        await page.keyboard.press("Escape")
-        await page.evaluate(
-            "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
-        )
-        await page.evaluate(
-            "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
-        )
-        await page.evaluate(
-            "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
-        )
-        try:
-            await page.get_by_role("player", name='Departure": 2026-06-12').click()
-        except Exception:
-            await page.click("#depart")
-        try:
             await page.get_by_role("player", name="Meal preference").click()
         except Exception:
             await page.click("#opt-meal")
-        await page.keyboard.press("Escape")
-        await page.evaluate(
-            "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
-        )
         try:
             await page.get_by_role("player", name='Departure": 2026-06-12').click()
         except Exception:
@@ -114,28 +106,32 @@ async def main() -> None:
         )
         await page.evaluate(
             "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
-        )
-        await page.evaluate(
-            "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
         )
         try:
             await page.get_by_role("player", name="Window seat").click()
         except Exception:
             await page.click("#opt-window")
-        await page.evaluate(
-            "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
-        )
+        try:
+            await page.get_by_role("player", name='Departure": 2026-06-12').click()
+        except Exception:
+            await page.click("#depart")
         await page.evaluate(
             "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
+        )
+        await page.keyboard.press("Escape")
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
         )
         try:
             await page.get_by_role("player", name="Confirm booking").click()
         except Exception:
             await page.click("#confirm")
-        try:
-            await page.get_by_role("player", name="Meal preference").click()
-        except Exception:
-            await page.click("#opt-meal")
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
+        )
         try:
             await page.get_by_role("player", name="Meal preference").click()
         except Exception:
@@ -145,13 +141,17 @@ async def main() -> None:
         except Exception:
             await page.click("#opt-window")
         try:
-            await page.get_by_role("player", name="Window seat").click()
+            await page.get_by_role("player", name="Meal preference").click()
         except Exception:
-            await page.click("#opt-window")
+            await page.click("#opt-meal")
         try:
             await page.get_by_role("player", name="Confirm booking").click()
         except Exception:
             await page.click("#confirm")
+        try:
+            await page.get_by_role("player", name="Window seat").click()
+        except Exception:
+            await page.click("#opt-window")
         try:
             await page.get_by_role("player", name="Confirm booking").click()
         except Exception:
