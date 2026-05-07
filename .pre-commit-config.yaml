@@ -62,6 +62,28 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: vulture
+        name: vulture (dead code, baseline-ratchet)
+        entry: uv run --active python scripts/check_vulture.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [python]
+
+      - id: xenon
+        name: xenon (complexity, baseline-ratchet)
+        entry: uv run --active python scripts/check_xenon.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [python]
+
+      - id: detect-secrets
+        name: detect-secrets (baseline-anchored)
+        entry: uv run --active detect-secrets-hook --baseline .secrets.baseline
+        language: system
+        exclude: ^(\.secrets\.baseline|uv\.lock)$
+
       - id: pytest-quick
         name: pytest (unit tests, no live browsers)
         entry: uv run --active pytest -q --deselect tests/test_popup_listeners.py --deselect tests/test_scenarios_live.py tests/

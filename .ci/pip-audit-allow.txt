@@ -1,0 +1,22 @@
+# pip-audit ignore list. One CVE/GHSA id per line.
+#
+# Add an entry only with a justification comment immediately above it,
+# e.g. an upstream patch ETA, a downstream-controlled mitigation, or a
+# vulnerability that does not affect the import paths octowright uses.
+#
+# Format:
+#     # CVE-XXXX-NNNNN: <one-line why> (until: 2026-MM-DD)
+#     CVE-XXXX-NNNNN
+
+# CVE-2026-3219: pip 26.0.1 — no upstream fix released yet. Risk surface is
+# package-installation only; not exposed to network input from octowright.
+# Re-evaluate when a fixed pip ships.
+CVE-2026-3219
+
+# CVE-2026-6357: pip 26.0.1 — fix in 26.1. Pinned by uv runtime; revisit
+# after the next uv release that bundles pip >= 26.1.
+CVE-2026-6357
+
+# CVE-2026-42561: python-multipart 0.0.26 — fix in 0.0.27. Transitive via
+# starlette. Track upstream starlette release that pulls the fix.
+CVE-2026-42561
