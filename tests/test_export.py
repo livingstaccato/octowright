@@ -82,8 +82,8 @@ def test_python_export_compiles_with_full_action_set(tmp_path: Path) -> None:
     assert "async with async_playwright() as p:" in src
     assert "await p.webkit.launch(headless=False)" in src
     assert "viewport={'width': 1024, 'height': 768}" in src
-    assert "await page.goto('https://example.com')" in src  # initial nav from launch
-    assert "await page.goto('https://example.com/home')" in src  # explicit navigate
+    assert "await page.goto(_resolve_bundle_url('https://example.com'))" in src  # initial nav from launch
+    assert "await page.goto(_resolve_bundle_url('https://example.com/home'))" in src  # explicit navigate
     assert "await page.click('#login')" in src
     assert "await page.fill('input[name=email]', 'a@b.com')" in src
     assert "await page.type('input[name=q]', 'hi', delay=30)" in src
@@ -127,6 +127,21 @@ def test_python_export_persistent_context_branch(tmp_path: Path) -> None:
     assert "browser = None" in src
     # Ephemeral-only call should be absent.
     assert "browser.new_context(" not in src
+
+
+def test_python_export_resolves_bundle_scheme_urls(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [{"action": "launch", "kind": "webkit", "url": "bundle://seed/welcome.html?slot=0", "headed": True}],
+    )
+    out = export_script(log, tmp_path / "artifacts" / "replay.py", fmt="python")
+    src = out.read_text()
+
+    assert _python_compiles(src)
+    assert "from pathlib import Path" in src
+    assert "def _resolve_bundle_url(raw: str) -> str:" in src
+    assert "Path(__file__).resolve().parents[1]" in src
+    assert "await page.goto(_resolve_bundle_url('bundle://seed/welcome.html?slot=0'))" in src
 
 
 def test_python_export_uses_default_viewport_when_omitted(tmp_path: Path) -> None:
@@ -244,8 +259,8 @@ def test_ts_export_full_action_set(tmp_path: Path) -> None:
     assert 'import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwright";' in src
     # Engine launch path (lowercase headless boolean — ts is case-sensitive).
     assert "browser = await firefox.launch({ headless: false })" in src
-    assert 'await page.goto("https://example.com");' in src  # initial nav
-    assert 'await page.goto("https://example.com/home");' in src
+    assert 'await page.goto(resolveBundleUrl("https://example.com"));' in src  # initial nav
+    assert 'await page.goto(resolveBundleUrl("https://example.com/home"));' in src
     assert 'await page.click("#login");' in src
     assert 'await page.fill("input[name=email]", "a@b.com");' in src
     assert 'await page.type("input[name=q]", "hi", { delay: 25 });' in src
@@ -279,6 +294,20 @@ def test_ts_export_persistent_context_branch(tmp_path: Path) -> None:
     assert "headless: true" in src  # headed=False → headless=true
     assert "viewport: { width: 1024, height: 768 }" in src
     assert "ctx.pages()[0] ?? await ctx.newPage()" in src
+
+
+def test_ts_export_resolves_bundle_scheme_urls(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [{"action": "launch", "kind": "webkit", "url": "bundle://seed/welcome.html?slot=0", "headed": True}],
+    )
+    out = export_script(log, tmp_path / "artifacts" / "replay.ts", fmt="ts")
+    src = out.read_text()
+
+    assert 'import { fileURLToPath, pathToFileURL } from "node:url";' in src
+    assert 'import path from "node:path";' in src
+    assert "const resolveBundleUrl = (raw: string): string => {" in src
+    assert 'await page.goto(resolveBundleUrl("bundle://seed/welcome.html?slot=0"));' in src
 
 
 def test_ts_export_default_viewport(tmp_path: Path) -> None:

@@ -169,3 +169,27 @@ def test_load_demo_bundle_rejects_malformed_sync_groups_payload(tmp_path: Path) 
 
     with pytest.raises(ValueError, match=r"presentation\.sync_groups\[0\]\.roles"):
         load_demo_bundle(bundle_dir)
+
+
+def test_site_facing_demo_bundles_declare_explicit_presentation_settings() -> None:
+    cross_engine = load_demo_bundle(Path("demo/bundles/cross-engine-trio"))
+    role_based = load_demo_bundle(Path("demo/bundles/role-based-duo"))
+    seven_mix = load_demo_bundle(Path("demo/bundles/seven-mix-orchestration"))
+
+    assert cross_engine.presentation.mode == "sync-multi"
+    assert cross_engine.presentation.overlay.enabled is True
+    assert cross_engine.presentation.overlay.style == "subtle"
+    assert cross_engine.presentation.timing.minimum_ms == 6500
+    assert [group.roles for group in cross_engine.presentation.sync_groups] == [["player"]]
+
+    assert role_based.presentation.mode == "sync-multi"
+    assert role_based.presentation.overlay.enabled is True
+    assert role_based.presentation.overlay.style == "subtle"
+    assert role_based.presentation.timing.minimum_ms == 6500
+    assert [group.roles for group in role_based.presentation.sync_groups] == [["player", "monitor"]]
+
+    assert seven_mix.presentation.mode == "hero-composite"
+    assert seven_mix.presentation.overlay.enabled is True
+    assert seven_mix.presentation.overlay.style == "subtle"
+    assert seven_mix.presentation.timing.minimum_ms == 9000
+    assert [group.roles for group in seven_mix.presentation.sync_groups] == [["player", "monitor", "main-site"]]

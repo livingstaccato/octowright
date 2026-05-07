@@ -72,11 +72,11 @@ FONT_5X7: dict[str, tuple[str, ...]] = {
 
 DEFAULT_OVERLAY_BOX = OverlayBox(
     anchor="bottom-left",
-    background_rgba=(12, 16, 24, 120),
-    title_rgba=(245, 247, 250, 220),
-    subtitle_rgba=(203, 213, 225, 190),
-    padding=24,
-    margin=28,
+    background_rgba=(12, 16, 24, 88),
+    title_rgba=(245, 247, 250, 188),
+    subtitle_rgba=(203, 213, 225, 164),
+    padding=12,
+    margin=18,
 )
 
 
@@ -90,13 +90,16 @@ def render_overlay_image(
     canvas_height: int,
 ) -> Path:
     pixels = [list([MAGENTA] * canvas_width) for _ in range(canvas_height)]
-    _draw_overlay_box(
-        pixels,
-        title=title.upper(),
-        subtitle=subtitle.upper(),
-        canvas_height=canvas_height,
-        overlay_box=DEFAULT_OVERLAY_BOX,
-    )
+    normalized_title = title.strip().upper()
+    normalized_subtitle = subtitle.strip().upper()
+    if normalized_title or normalized_subtitle:
+        _draw_overlay_box(
+            pixels,
+            title=normalized_title,
+            subtitle=normalized_subtitle,
+            canvas_height=canvas_height,
+            overlay_box=DEFAULT_OVERLAY_BOX,
+        )
     for pane in panes:
         _draw_pane_label(pixels, pane)
     _write_ppm(target_path, pixels)
@@ -104,12 +107,29 @@ def render_overlay_image(
 
 
 def _draw_pane_label(pixels: list[list[Color]], pane: dict[str, Any]) -> None:
-    label = f"{pane['persona']}/{pane['role']}/{pane['kind']}".upper()
-    x = int(pane["x"]) + 18
-    y = int(pane["y"]) + 18
-    width = _measure_text(label, scale=2) + 20
-    _blend_rect(pixels, x - 8, y - 8, x + width, y + 22, DEFAULT_OVERLAY_BOX.background_rgba)
-    _draw_text(pixels, x, y, label, scale=2, color=DEFAULT_OVERLAY_BOX.title_rgba)
+    label_parts = [str(pane["persona"]).upper()]
+    role = str(pane["role"]).upper()
+    kind = str(pane["kind"]).upper()
+    if role:
+        label_parts.append(role)
+    if kind:
+        label_parts.append(kind)
+    label = " / ".join(label_parts)
+    scale = 1
+    padding = 8
+    width = _measure_text(label, scale=scale) + (padding * 2)
+    height = (7 * scale) + (padding * 2)
+    x0 = int(pane["x"]) + 16
+    y0 = int(pane["y"]) + int(pane.get("height", 0)) - height - 16
+    _blend_rect(pixels, x0, y0, x0 + width, y0 + height, DEFAULT_OVERLAY_BOX.background_rgba)
+    _draw_text(
+        pixels,
+        x0 + padding,
+        y0 + padding,
+        label,
+        scale=scale,
+        color=DEFAULT_OVERLAY_BOX.subtitle_rgba,
+    )
 
 
 def _draw_overlay_box(
@@ -120,9 +140,9 @@ def _draw_overlay_box(
     canvas_height: int,
     overlay_box: OverlayBox,
 ) -> None:
-    title_scale = 4
-    subtitle_scale = 2
-    line_gap = 12
+    title_scale = 2
+    subtitle_scale = 1
+    line_gap = 8
     title_width = _measure_text(title, scale=title_scale)
     subtitle_width = _measure_text(subtitle, scale=subtitle_scale)
     box_width = max(title_width, subtitle_width) + (overlay_box.padding * 2)
