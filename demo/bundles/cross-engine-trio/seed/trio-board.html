@@ -2,18 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>Cross Engine Trio</title>
+    <title>Cross Engine Trio — engine showroom</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
       :root {
         color-scheme: light;
-        --ink: #11233b;
-        --muted: #5b6c83;
-        --line: rgba(17, 35, 59, 0.14);
-        --paper: rgba(255, 255, 255, 0.88);
+        --ink: #0f1f33;
+        --muted: #5a6b80;
+        --line: rgba(15, 31, 51, 0.14);
+        --paper: rgba(255, 255, 255, 0.92);
+        --accent: #1d6ff2;
         --bg-a: #d7f0ff;
-        --bg-b: #f8f1d7;
-        --bg-c: #dce9ff;
+        --bg-b: #f4ecd9;
+        --bg-c: #dde7ff;
       }
       * { box-sizing: border-box; }
       body {
@@ -26,139 +27,249 @@
           linear-gradient(135deg, var(--bg-a), var(--bg-b) 52%, var(--bg-c));
       }
       main {
-        width: min(1100px, calc(100vw - 32px));
+        width: min(1120px, calc(100vw - 32px));
         margin: 0 auto;
-        padding: 32px 0 40px;
+        padding: 28px 0 40px;
       }
-      .hero {
-        display: grid;
+      .header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
         gap: 20px;
-        grid-template-columns: 1.3fr 0.9fr;
-        align-items: stretch;
-      }
-      .panel, .metric {
-        background: var(--paper);
-        backdrop-filter: blur(16px);
-        border: 1px solid var(--line);
-        border-radius: 24px;
-        box-shadow: 0 22px 50px rgba(17, 35, 59, 0.12);
-      }
-      .panel { padding: 28px; }
-      .eyebrow, .chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        border-radius: 999px;
-        padding: 7px 12px;
-        font-size: 12px;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
+        margin-bottom: 22px;
       }
       .eyebrow {
-        background: rgba(17, 35, 59, 0.08);
-        color: var(--muted);
-      }
-      h1 {
-        margin: 18px 0 10px;
-        font-size: clamp(40px, 5vw, 72px);
-        line-height: 0.94;
-      }
-      p {
-        margin: 0;
-        color: var(--muted);
-        font-size: 18px;
-        line-height: 1.55;
-      }
-      .engine-row {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 16px;
-        margin-top: 24px;
-      }
-      .engine-card {
-        padding: 18px;
-        border-radius: 18px;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.78);
-      }
-      .engine-card strong {
-        display: block;
-        margin-bottom: 8px;
-        font-size: 16px;
-      }
-      .metric {
-        display: grid;
-        gap: 14px;
-        padding: 24px;
-      }
-      .metric-grid {
-        display: grid;
-        gap: 12px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-      .metric article {
-        padding: 14px 16px;
-        border-radius: 18px;
-        background: rgba(17, 35, 59, 0.05);
-      }
-      .metric .big {
-        font-size: 34px;
+        display: inline-block;
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--accent);
         font-weight: 700;
       }
-      .status {
-        margin-top: 18px;
+      h1 {
+        margin: 6px 0 0;
+        font-size: clamp(32px, 4vw, 50px);
+        line-height: 1;
+        letter-spacing: -0.02em;
+      }
+      .header p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+        max-width: 36ch;
+      }
+      .grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .panel {
+        background: var(--paper);
+        backdrop-filter: blur(18px);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 22px 24px 24px;
+        box-shadow: 0 18px 44px rgba(15, 31, 51, 0.10);
+      }
+      .panel h2 {
+        margin: 0 0 4px;
+        font-size: 18px;
+        letter-spacing: -0.01em;
+      }
+      .panel small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 14px;
+      }
+      .panel .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      label.field {
         display: flex;
-        flex-wrap: wrap;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        flex: 1 1 auto;
+        min-width: 140px;
+      }
+      input[type="date"], input[type="text"], input[type="email"], select {
+        padding: 10px 12px;
+        font: inherit;
+        font-size: 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        color: var(--ink);
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      input[type="range"] {
+        width: 100%;
+      }
+      input[type="file"]::-webkit-file-upload-button {
+        font: inherit;
+      }
+      .check-row {
+        display: grid;
         gap: 10px;
+        grid-template-columns: 1fr 1fr;
+        margin-top: 12px;
       }
-      .chip { background: #11233b; color: #fff; }
-      .chip.alt { background: #fff; color: var(--ink); border: 1px solid var(--line); }
-      @media (max-width: 860px) {
-        .hero { grid-template-columns: 1fr; }
-        .engine-row, .metric-grid { grid-template-columns: 1fr; }
+      .check-row label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--ink);
       }
+      .scroll-demo {
+        height: 90px;
+        overflow: auto;
+        background: rgba(15, 31, 51, 0.04);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      .ranges { display: grid; gap: 10px; }
+      .ranges output {
+        display: inline-block;
+        font-variant-numeric: tabular-nums;
+        color: var(--accent);
+        font-weight: 700;
+      }
+      .badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      .badge {
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(15, 31, 51, 0.08);
+        color: var(--muted);
+      }
+      .footer {
+        margin-top: 22px;
+        text-align: right;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      button.primary {
+        appearance: none;
+        background: var(--accent);
+        color: #fff;
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 18px;
+        font: inherit;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+      }
+      button.primary:hover { background: #1654c2; }
     </style>
   </head>
   <body>
     <main>
-      <section class="hero" data-surface="trio-board">
-        <div class="panel">
-          <span class="eyebrow" id="eyebrow">Hero demo · side by side</span>
-          <h1>Three engines, one deterministic stage.</h1>
-          <p>
-            This board is tuned for Octowright’s composite recordings: the same local page shape,
-            the same assertions, and a clearly legible visual signature per engine.
-          </p>
-          <div class="engine-row">
-            <article class="engine-card" data-engine="chromium">
-              <strong>Chromium</strong>
-              <p>Fast path for smoke runs and broad browser parity.</p>
-            </article>
-            <article class="engine-card" data-engine="firefox">
-              <strong>Firefox</strong>
-              <p>Useful for engine drift checks and debug comparisons.</p>
-            </article>
-            <article class="engine-card" data-engine="webkit">
-              <strong>WebKit</strong>
-              <p>Compact first-run footprint with the same deterministic target.</p>
-            </article>
-          </div>
+      <div class="header">
+        <div>
+          <span class="eyebrow">Cross-engine showroom</span>
+          <h1>One stage. Three engines.</h1>
         </div>
-        <aside class="metric">
-          <span class="eyebrow">Recording profile</span>
-          <div class="metric-grid">
-            <article><div class="big">3</div><div>engines in one capture</div></article>
-            <article><div class="big">0</div><div>external requests required</div></article>
-            <article><div class="big">1</div><div>shared offline seed</div></article>
-            <article><div class="big" id="slot-value">slot 0</div><div>session placement</div></article>
+        <p>Native form widgets and chrome render slightly differently in Chromium, Firefox, and WebKit. Watch the same flow drive each engine in parallel.</p>
+      </div>
+
+      <div class="grid">
+        <section class="panel" id="panel-form">
+          <h2>Booking widget</h2>
+          <small>Date pickers, selects, and ranges all expose engine-specific UI.</small>
+          <div class="row">
+            <label class="field">
+              <span>Departure</span>
+              <input id="depart" type="date" value="2026-06-12">
+            </label>
+            <label class="field">
+              <span>Cabin</span>
+              <select id="cabin">
+                <option value="Economy">Economy</option>
+                <option value="Premium economy">Premium economy</option>
+                <option value="Business" selected>Business</option>
+                <option value="First">First</option>
+              </select>
+            </label>
           </div>
-          <div class="status">
-            <span class="chip">cross-engine</span>
-            <span class="chip alt">player role</span>
-            <span class="chip alt">engine parity</span>
+          <div class="ranges">
+            <label class="field">
+              <span>Passengers — <output id="pax-out">2</output></span>
+              <input id="pax" type="range" min="1" max="9" value="2">
+            </label>
+            <label class="field">
+              <span>Budget — <output id="budget-out">$2,400</output></span>
+              <input id="budget" type="range" min="500" max="8000" step="100" value="2400">
+            </label>
           </div>
-        </aside>
-      </section>
+          <div class="check-row">
+            <label><input type="checkbox" id="opt-bag" checked> Checked bag</label>
+            <label><input type="checkbox" id="opt-meal"> Meal preference</label>
+            <label><input type="checkbox" id="opt-window"> Window seat</label>
+            <label><input type="checkbox" id="opt-wifi" checked> Wi-Fi pass</label>
+          </div>
+          <div class="badge-row">
+            <span class="badge">native widgets</span>
+            <span class="badge">engine-specific UI</span>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-input">
+          <h2>Account intake</h2>
+          <small>Text inputs, file pickers, and scrollers — each engine has its own chrome.</small>
+          <label class="field">
+            <span>Full name</span>
+            <input id="name" type="text" placeholder="Octavia Wright">
+          </label>
+          <label class="field" style="margin-top:10px">
+            <span>Email</span>
+            <input id="email" type="email" placeholder="o.wright@example.com">
+          </label>
+          <label class="field" style="margin-top:10px">
+            <span>Avatar (file picker chrome differs)</span>
+            <input id="avatar" type="file" accept="image/*">
+          </label>
+          <div class="scroll-demo" id="scroller">
+            Scrollbars get engine-specific chrome here. Chromium shows a thin overlay,
+            Firefox uses its native track, and WebKit hides until hover. Drag the
+            inner panel to see the difference. Lorem ipsum dolor sit amet, consectetur
+            adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore
+            magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco
+            laboris nisi ut aliquip ex ea commodo consequat.
+          </div>
+          <div class="row" style="margin-top:14px">
+            <button type="button" class="primary" id="confirm">Confirm booking</button>
+            <span class="badge" id="confirm-status">unsaved</span>
+          </div>
+        </section>
+      </div>
+
+      <p class="footer">offline seed · same DOM in every engine</p>
     </main>
+    <script>
+      var pax = document.getElementById('pax');
+      var paxOut = document.getElementById('pax-out');
+      var budget = document.getElementById('budget');
+      var budgetOut = document.getElementById('budget-out');
+      var fmt = function (v) { return '$' + Number(v).toLocaleString('en-US'); };
+      pax.addEventListener('input', function () { paxOut.textContent = pax.value; });
+      budget.addEventListener('input', function () { budgetOut.textContent = fmt(budget.value); });
+      var confirmBtn = document.getElementById('confirm');
+      var confirmStatus = document.getElementById('confirm-status');
+      confirmBtn.addEventListener('click', function () {
+        confirmStatus.textContent = 'saved';
+        confirmStatus.style.background = 'rgba(29, 111, 242, 0.18)';
+        confirmStatus.style.color = '#1d6ff2';
+      });
+    </script>
   </body>
 </html>
