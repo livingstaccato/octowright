@@ -4,23 +4,23 @@
       "event_count": 9,
       "path": "artifacts/replay.jsonl",
       "python_export": "artifacts/replay.py",
-      "size_bytes": 2218,
+      "size_bytes": 2219,
       "ts_export": "artifacts/replay.ts"
     },
     "supporting_videos": [],
     "video": {
       "duration_seconds": 4.6,
-      "height": 500,
+      "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 20731,
-      "width": 800
+      "size_bytes": 51470,
+      "width": 1920
     }
   },
   "bundle_id": "macro-replay-loop",
   "composition": {
-    "canvas_height": 500,
-    "canvas_width": 800,
+    "canvas_height": 1080,
+    "canvas_width": 1920,
     "mode": "single-clean",
     "overlay": {
       "panes": [

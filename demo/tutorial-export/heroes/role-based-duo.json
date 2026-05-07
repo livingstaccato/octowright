@@ -5,7 +5,7 @@
         "event_count": 10,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 2745,
+        "size_bytes": 2747,
         "ts_export": "artifacts/replay.ts"
       },
       "supporting_videos": [
@@ -25,26 +25,26 @@
         }
       ],
       "video": {
-        "duration_seconds": 7.72,
-        "height": 720,
+        "duration_seconds": 8.8,
+        "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 175849,
+        "size_bytes": 135908,
         "width": 1920
       }
     },
     "bundle_id": "role-based-duo",
     "composition": {
-      "canvas_height": 720,
+      "canvas_height": 1080,
       "canvas_width": 1920,
-      "cell_height": 720,
+      "cell_height": 1080,
       "cell_width": 960,
       "columns": 2,
       "mode": "sync-multi",
       "overlay": {
         "panes": [
           {
-            "height": 720,
+            "height": 1080,
             "kind": "webkit",
             "persona": "duo-player",
             "role": "player",
@@ -53,7 +53,7 @@
             "y": 0
           },
           {
-            "height": 720,
+            "height": 1080,
             "kind": "webkit",
             "persona": "duo-monitor",
             "role": "monitor",
@@ -67,7 +67,7 @@
       },
       "panes": [
         {
-          "height": 720,
+          "height": 1080,
           "kind": "webkit",
           "persona": "duo-player",
           "role": "player",
@@ -76,7 +76,7 @@
           "y": 0
         },
         {
-          "height": 720,
+          "height": 1080,
           "kind": "webkit",
           "persona": "duo-monitor",
           "role": "monitor",
@@ -140,11 +140,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 7.72,
-      "height": 720,
+      "duration_seconds": 8.8,
+      "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 175849,
+      "size_bytes": 135908,
       "width": 1920
     },
     "supporting": [
