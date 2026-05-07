@@ -296,8 +296,9 @@ def render_sync_group_videos(
 ) -> list[dict[str, Any]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rendered: list[dict[str, Any]] = []
+    used_ids: dict[str, int] = {}
     for index, pane in enumerate(sync_group_panes, start=1):
-        pane_id = _supporting_video_id(pane, index=index)
+        pane_id = _supporting_video_id(pane, index=index, used_ids=used_ids)
         output_path = output_dir / f"{pane_id}.mp4"
         poster_path = output_dir / f"{pane_id}.png"
         asset = render_supporting_video(Path(pane["source"]), output_path, poster_path=poster_path)
@@ -356,10 +357,12 @@ def _primary_participant(live: LiveScenario, bundle: DemoBundle) -> dict[str, An
     raise RuntimeError(f"demo bundle {bundle.id!r} primary role {primary_role!r} was not launched")
 
 
-def _supporting_video_id(pane: dict[str, Any], *, index: int) -> str:
+def _supporting_video_id(pane: dict[str, Any], *, index: int, used_ids: dict[str, int]) -> str:
     raw = str(pane.get("role") or pane.get("persona") or f"pane-{index}")
-    slug = "".join(char.lower() if char.isalnum() else "-" for char in raw).strip("-")
-    return slug or f"pane-{index}"
+    base = "".join(char.lower() if char.isalnum() else "-" for char in raw).strip("-") or f"pane-{index}"
+    count = used_ids.get(base, 0) + 1
+    used_ids[base] = count
+    return base if count == 1 else f"{base}-{count}"
 
 
 def _ensure_spdx_header(path: Path) -> None:
