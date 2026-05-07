@@ -38,6 +38,120 @@ async def main() -> None:
         await page.goto(
             _resolve_bundle_url("bundle://seed/trio-board.html?persona=cx-firefox&role=player&kind=firefox&slot=1")
         )
+        try:
+            await page.get_by_role("player", name='Full name":\n  - /placeholder: Octavia Wright').fill(
+                "Octavia Wright"
+            )
+        except Exception:
+            await page.fill("#name", "Octavia Wright")
+        try:
+            await page.get_by_role("player", name='Email":\n  - /placeholder: o.wright@example.com').fill(
+                "octavia@example.com"
+            )
+        except Exception:
+            await page.fill("#email", "octavia@example.com")
+        try:
+            await page.get_by_role("player", name='Full name":\n  - /placeholder: Octavia Wright').fill(
+                "Octavia Wright"
+            )
+        except Exception:
+            await page.fill("#name", "Octavia Wright")
+        try:
+            await page.get_by_role("player", name='Full name":\n  - /placeholder: Octavia Wright').fill(
+                "Octavia Wright"
+            )
+        except Exception:
+            await page.fill("#name", "Octavia Wright")
+        try:
+            await page.get_by_role("player", name='Email":\n  - /placeholder: o.wright@example.com').fill(
+                "octavia@example.com"
+            )
+        except Exception:
+            await page.fill("#email", "octavia@example.com")
+        try:
+            await page.get_by_role("player", name='Email":\n  - /placeholder: o.wright@example.com').fill(
+                "octavia@example.com"
+            )
+        except Exception:
+            await page.fill("#email", "octavia@example.com")
+        try:
+            await page.get_by_role("player", name='Departure": 2026-06-12').click()
+        except Exception:
+            await page.click("#depart")
+        await page.keyboard.press("Escape")
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
+        )
+        try:
+            await page.get_by_role("player", name="Meal preference").click()
+        except Exception:
+            await page.click("#opt-meal")
+        try:
+            await page.get_by_role("player", name='Departure": 2026-06-12').click()
+        except Exception:
+            await page.click("#depart")
+        await page.keyboard.press("Escape")
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        try:
+            await page.get_by_role("player", name='Departure": 2026-06-12').click()
+        except Exception:
+            await page.click("#depart")
+        await page.keyboard.press("Escape")
+        try:
+            await page.get_by_role("player", name="Window seat").click()
+        except Exception:
+            await page.click("#opt-window")
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
+        )
+        await page.evaluate(
+            "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
+        )
+        try:
+            await page.get_by_role("player", name="Confirm booking").click()
+        except Exception:
+            await page.click("#confirm")
+        try:
+            await page.get_by_role("player", name="Meal preference").click()
+        except Exception:
+            await page.click("#opt-meal")
+        try:
+            await page.get_by_role("player", name="Meal preference").click()
+        except Exception:
+            await page.click("#opt-meal")
+        try:
+            await page.get_by_role("player", name="Window seat").click()
+        except Exception:
+            await page.click("#opt-window")
+        try:
+            await page.get_by_role("player", name="Window seat").click()
+        except Exception:
+            await page.click("#opt-window")
+        try:
+            await page.get_by_role("player", name="Confirm booking").click()
+        except Exception:
+            await page.click("#confirm")
+        try:
+            await page.get_by_role("player", name="Confirm booking").click()
+        except Exception:
+            await page.click("#confirm")
         if browser is not None:
             await browser.close()
         else:

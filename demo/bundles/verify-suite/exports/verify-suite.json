@@ -10,11 +10,11 @@
       },
       "supporting_videos": [],
       "video": {
-        "duration_seconds": 5.44,
+        "duration_seconds": 5.72,
         "height": 500,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 13133,
+        "size_bytes": 13781,
         "width": 800
       }
     },
@@ -97,11 +97,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 5.44,
+      "duration_seconds": 5.72,
       "height": 500,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 13133,
+      "size_bytes": 13781,
       "width": 800
     },
     "supporting": []

@@ -14,7 +14,7 @@
         "height": 500,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 10442,
+        "size_bytes": 10433,
         "width": 800
       }
     },
@@ -96,7 +96,7 @@
       "height": 500,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 10442,
+      "size_bytes": 10433,
       "width": 800
     },
     "supporting": []
