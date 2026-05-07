@@ -2,7 +2,7 @@
   "participants": [
     {
       "har": false,
-      "instance_id": "2ace2a14ff6f",
+      "instance_id": "82a3e0e8c0f0",
       "kind": "webkit",
       "label": null,
       "persona": "p1",
@@ -14,7 +14,7 @@
     },
     {
       "har": false,
-      "instance_id": "58e7e6618fec",
+      "instance_id": "51c66c7d6987",
       "kind": "webkit",
       "label": null,
       "persona": "p2",
@@ -26,7 +26,7 @@
     },
     {
       "har": false,
-      "instance_id": "3c366a7229ea",
+      "instance_id": "09cc685b5fb4",
       "kind": "webkit",
       "label": null,
       "persona": "p3",
@@ -38,7 +38,7 @@
     },
     {
       "har": false,
-      "instance_id": "9ddab1d35e74",
+      "instance_id": "4abd3e99eb26",
       "kind": "firefox",
       "label": null,
       "persona": "p4",
@@ -50,7 +50,7 @@
     },
     {
       "har": false,
-      "instance_id": "63f24600063e",
+      "instance_id": "a18eb480f059",
       "kind": "firefox",
       "label": null,
       "persona": "p5",
@@ -62,7 +62,7 @@
     },
     {
       "har": false,
-      "instance_id": "f6a19a1d05e7",
+      "instance_id": "b7b2925e3a7e",
       "kind": "chromium",
       "label": null,
       "persona": "p6",
@@ -74,7 +74,7 @@
     },
     {
       "har": false,
-      "instance_id": "610281678843",
+      "instance_id": "291c804e1818",
       "kind": "chromium",
       "label": null,
       "persona": "p7",
@@ -86,7 +86,7 @@
     },
     {
       "har": false,
-      "instance_id": "70541adb7ef7",
+      "instance_id": "6feeaedde994",
       "kind": "webkit",
       "label": null,
       "persona": "ops",
@@ -98,7 +98,7 @@
     },
     {
       "har": false,
-      "instance_id": "47ca2ea68809",
+      "instance_id": "0674de18ea75",
       "kind": "webkit",
       "label": null,
       "persona": "spectator",
@@ -107,7 +107,19 @@
       "role": "main-site",
       "trace": false,
       "url": "bundle://seed/orchestration-stage.html?persona=spectator&role=main-site&kind=webkit&slot=8"
+    },
+    {
+      "har": false,
+      "instance_id": "9ea5bbb658e5",
+      "kind": "chromium",
+      "label": null,
+      "persona": "sm-monitor",
+      "profile": "sm-monitor",
+      "record_video": true,
+      "role": "monitor",
+      "trace": false,
+      "url": "http://127.0.0.1:8765/"
     }
   ],
-  "scenario_id": "2f114ced7b08"
+  "scenario_id": "26d974f37607"
 }

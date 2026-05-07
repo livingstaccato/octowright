@@ -9,11 +9,11 @@
     },
     "supporting_videos": [],
     "video": {
-      "duration_seconds": 4.44,
+      "duration_seconds": 4.6,
       "height": 500,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 21041,
+      "size_bytes": 20731,
       "width": 800
     }
   },
