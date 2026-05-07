@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -43,10 +44,36 @@ def _last_generated(bundle: DemoBundle, *artifact_groups: dict[str, object]) -> 
     return datetime.fromtimestamp(latest, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+def _manifest_media(bundle: DemoBundle) -> dict[str, object] | None:
+    manifest_path = bundle.root / "artifacts" / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        return None
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        artifacts = {}
+    presentation = manifest.get("presentation")
+    if not isinstance(presentation, dict):
+        presentation = {}
+    primary = artifacts.get("video")
+    if not isinstance(primary, dict):
+        primary = {}
+    supporting = artifacts.get("supporting_videos")
+    if not isinstance(supporting, list):
+        supporting = []
+    return {
+        "primary": primary,
+        "supporting": supporting,
+        "presentation": presentation,
+    }
+
+
 def build_manifest_row(bundle: DemoBundle) -> dict[str, object]:
     replay = _artifact_summary(bundle, bundle.replay_artifacts)
     video = _artifact_summary(bundle, bundle.video_artifacts)
-    return {
+    row = {
         "id": bundle.id,
         "title": bundle.title,
         "summary": bundle.summary,
@@ -63,6 +90,10 @@ def build_manifest_row(bundle: DemoBundle) -> dict[str, object]:
             "video": video,
         },
     }
+    media = _manifest_media(bundle)
+    if media is not None:
+        row["media"] = media
+    return row
 
 
 def _artifact_hint(replay: dict[str, object], video: dict[str, object]) -> str:

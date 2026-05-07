@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 from octowright.demos.export import build_tutorial_export
 from octowright.demos.indexer import build_demo_index, build_manifest_row
 from octowright.demos.models import DemoBundle
+from octowright.demos.rendering import write_artifact_manifest
 
 
 def test_build_manifest_row_preserves_declared_and_existing_artifacts(tmp_path: Path) -> None:
@@ -51,6 +53,123 @@ def test_build_manifest_row_preserves_declared_and_existing_artifacts(tmp_path: 
             "declared_paths": ["artifacts/demo.mp4"],
             "existing_paths": [],
         },
+    }
+
+
+def test_write_artifact_manifest_records_primary_and_supporting_assets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bundle = DemoBundle(
+        id="role-based-duo",
+        title="Role Based Duo",
+        hero=True,
+        root=tmp_path,
+    )
+    bundle.presentation.mode = "sync-multi"
+    bundle.presentation.primary_asset = "hero_video"
+    artifacts_dir = tmp_path / "artifacts"
+    supporting_dir = artifacts_dir / "supporting"
+    supporting_dir.mkdir(parents=True)
+    replay_path = artifacts_dir / "replay.jsonl"
+    replay_path.write_text("{}", encoding="utf-8")
+    video_path = artifacts_dir / "demo.mp4"
+    video_path.write_bytes(b"mp4")
+    poster_path = artifacts_dir / "poster.png"
+    poster_path.write_bytes(b"png")
+    supporting_video = supporting_dir / "monitor.mp4"
+    supporting_video.write_bytes(b"support")
+    supporting_poster = supporting_dir / "monitor.png"
+    supporting_poster.write_bytes(b"poster")
+    monkeypatch.setattr(
+        "octowright.demos.rendering.probe_video",
+        lambda _: {"width": 1920, "height": 1080, "duration_seconds": 4.2},
+    )
+
+    write_artifact_manifest(
+        bundle,
+        None,
+        replay_path=replay_path,
+        video_path=video_path,
+        poster_path=poster_path,
+        event_count=7,
+        render_summary={
+            "mode": "sync-multi",
+            "panes": [],
+            "supporting_videos": [
+                {
+                    "id": "monitor",
+                    "path": str(supporting_video),
+                    "poster_path": str(supporting_poster),
+                    "role": "monitor",
+                    "kind": "firefox",
+                    "persona": "supporting-monitor",
+                }
+            ],
+        },
+    )
+
+    manifest = json.loads((artifacts_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["artifacts"]["video"]["path"] == "artifacts/demo.mp4"
+    assert manifest["artifacts"]["supporting_videos"] == [
+        {
+            "id": "monitor",
+            "kind": "firefox",
+            "path": "artifacts/supporting/monitor.mp4",
+            "poster_path": "artifacts/supporting/monitor.png",
+            "role": "monitor",
+        }
+    ]
+    assert manifest["presentation"] == {
+        "mode": "sync-multi",
+        "primary_asset": "hero_video",
+    }
+
+
+def test_build_manifest_row_includes_manifest_media_metadata(tmp_path: Path) -> None:
+    bundle = DemoBundle(
+        id="role-based-duo",
+        title="Role Based Duo",
+        tutorial_export="exports/role-based-duo.json",
+        root=tmp_path,
+    )
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "artifacts" / "manifest.json").write_text(
+        json.dumps(
+            {
+                "artifacts": {
+                    "video": {"path": "artifacts/demo.mp4", "poster_path": "artifacts/poster.png"},
+                    "supporting_videos": [
+                        {
+                            "id": "monitor",
+                            "path": "artifacts/supporting/monitor.mp4",
+                            "poster_path": "artifacts/supporting/monitor.png",
+                            "role": "monitor",
+                            "kind": "firefox",
+                        }
+                    ],
+                },
+                "presentation": {"mode": "sync-multi", "primary_asset": "hero_video"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = build_manifest_row(bundle)
+
+    assert row["media"] == {
+        "primary": {"path": "artifacts/demo.mp4", "poster_path": "artifacts/poster.png"},
+        "supporting": [
+            {
+                "id": "monitor",
+                "path": "artifacts/supporting/monitor.mp4",
+                "poster_path": "artifacts/supporting/monitor.png",
+                "role": "monitor",
+                "kind": "firefox",
+            }
+        ],
+        "presentation": {"mode": "sync-multi", "primary_asset": "hero_video"},
     }
 
 
@@ -153,6 +272,11 @@ def test_build_tutorial_export_includes_hero_assets(tmp_path: Path) -> None:
         "artifact_manifest": {
             "composition": {"mode": "grid"},
             "artifacts": {"video": {"width": 1920, "height": 360}},
+        },
+        "media": {
+            "primary": {"width": 1920, "height": 360},
+            "supporting": [],
+            "presentation": {},
         },
     }
 
