@@ -23,57 +23,40 @@ log = get_logger(__name__)
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-# Tokens that shlex.split surfaces as standalone — i.e. the user is asking
+# Tokens that shlex.split surfaces as standalone — i.e. the cmd is asking
 # for shell semantics (pipes, redirection, subshells, command separators,
 # logical chains). Quoted occurrences of the same characters are folded
-# into argv tokens by shlex and don't count.
+# into argv tokens by shlex and don't count. Cred cmds may not use these
+# directly; if a pipeline is needed, invoke a shell explicitly via
+# `bash -c "..."` so the trust boundary is in the cmd author's hands.
 _SHELL_OPERATOR_TOKENS = frozenset(
-    {
-        "|",
-        "||",
-        "&",
-        "&&",
-        ";",
-        ";;",
-        "<",
-        ">",
-        ">>",
-        "<<",
-        "<<<",
-        "<>",
-        "(",
-        ")",
-        "$(",
-        "`",
-    }
+    {"|", "||", "&", "&&", ";", ";;", "<", ">", ">>", "<<", "<<<", "<>", "(", ")", "$(", "`"}
 )
 
-# Opt-in env gate for shell-form credential commands. Without this set,
-# credential cmds are parsed with shlex.split and run with shell=False —
-# safe for the common case (`op read op://...`, `pass show foo/bar`).
-# Setting OCTOWRIGHT_ALLOW_CRED_SHELL=1 re-enables the legacy shell=True
-# path for users who actually need pipelines, but flags the trust boundary
-# they're crossing in audit logs.
-_ALLOW_CRED_SHELL_ENV = "OCTOWRIGHT_ALLOW_CRED_SHELL"
 
+def _credential_cmd_argv(cmd: str, persona_name: str, cred_name: str) -> list[str]:
+    """Parse `cmd` into argv form; raise MissingCredential if it cannot be
+    safely represented without invoking /bin/sh.
 
-def _credential_cmd_needs_shell(cmd: str) -> tuple[bool, list[str]]:
-    """Try to parse `cmd` as a list-form invocation.
-
-    Returns (needs_shell, argv_or_offending_token_list). If shlex.split
-    fails or any resulting token is a shell-only operator, needs_shell is
-    True and the second element lists the offending token(s); the caller
-    should refuse to exec without the shell-allow opt-in.
+    A persona YAML can come from any source the caller has configured, so
+    we never invoke a shell on its behalf. `bash -c "..."` is the explicit
+    escape hatch for pipeline-style credential helpers — the bash invocation
+    is itself a normal argv token, and the pipeline lives inside its `-c`
+    argument where the cmd author has signed off on it.
     """
     try:
         argv = shlex.split(cmd)
     except ValueError as exc:
-        # Unbalanced quotes / unfinished escape — can't safely list-form.
-        return True, [str(exc)]
+        raise MissingCredential(f"persona {persona_name!r} field {cred_name!r}: cmd parse failure: {exc}") from exc
     bad = [tok for tok in argv if tok in _SHELL_OPERATOR_TOKENS or tok.startswith("$(")]
     if bad:
-        return True, bad
-    return False, argv
+        raise MissingCredential(
+            f"persona {persona_name!r} field {cred_name!r}: cmd uses shell semantics "
+            f'({bad!r}); wrap explicitly as `bash -c "..."` if a pipeline is required'
+        )
+    if not argv:
+        raise MissingCredential(f"persona {persona_name!r} field {cred_name!r}: cmd is empty after parsing")
+    return argv
 
 
 def _slug(name: str) -> str:
@@ -196,42 +179,17 @@ class MissingCredential(RuntimeError):
 
 
 def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str:
-    """Execute a credential cmd and return stdout. Default-deny shell mode.
+    """Execute a credential cmd and return stdout.
 
-    Refuses commands containing shell operator tokens unless
-    OCTOWRIGHT_ALLOW_CRED_SHELL=1, since persona YAML may come from
-    untrusted sources (downloaded packs, shared scenarios). The list-form
-    (shell=False) path covers `op read op://...`, `pass show foo/bar`,
-    `bw get password ...` and similar.
+    Cmds always run in argv form (shell=False). For pipelines, write the
+    cmd as `bash -c "..."` — bash is then a normal argv token whose -c
+    argument carries the shell logic the cmd author has signed off on.
     """
-    needs_shell, parsed = _credential_cmd_needs_shell(cmd_str)
-    shell_allowed = os.environ.get(_ALLOW_CRED_SHELL_ENV, "").lower() in ("1", "true", "yes")
-
-    if needs_shell and not shell_allowed:
-        raise MissingCredential(
-            f"persona {persona_name!r} field {cred_name!r}: cmd uses shell semantics "
-            f"({parsed!r}). Refusing to invoke /bin/sh by default. "
-            f"Set {_ALLOW_CRED_SHELL_ENV}=1 to opt in, or rewrite the cmd as a list-form invocation."
-        )
-
+    argv = _credential_cmd_argv(cmd_str, persona_name, cred_name)
     try:
-        if needs_shell:
-            log.warning(
-                "persona.cred.shell_invoked",
-                persona=persona_name,
-                cred_name=cred_name,
-                note="OCTOWRIGHT_ALLOW_CRED_SHELL=1 — running cmd through /bin/sh",
-            )
-            result = subprocess.run(  # nosec B602 — opt-in via env var
-                cmd_str, capture_output=True, text=True, check=False, shell=True, timeout=30
-            )
-        else:
-            argv = parsed  # already a validated argv from _credential_cmd_needs_shell
-            if not argv:
-                raise MissingCredential(f"persona {persona_name!r} field {cred_name!r}: cmd is empty after parsing")
-            result = subprocess.run(  # nosec B603 B607 — list-arg form, PATH-resolved
-                argv, capture_output=True, text=True, check=False, timeout=30
-            )
+        result = subprocess.run(  # nosec B603 B607 — list-arg form, PATH-resolved
+            argv, capture_output=True, text=True, check=False, timeout=30
+        )
     except FileNotFoundError as e:
         raise MissingCredential(
             f"persona {persona_name!r} field {cred_name!r}: cmd not found on PATH ({e.filename!r})"

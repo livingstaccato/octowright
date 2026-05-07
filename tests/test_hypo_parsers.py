@@ -8,19 +8,29 @@
 Surfaces covered:
   - load_yaml_scenario: round-trip from arbitrary participant lists
   - lint_macro: never raises, always returns a list of Issue objects
-  - _credential_cmd_needs_shell: structural correctness (no false negatives)
+  - _credential_cmd_argv: argv-form parse with shell-metachar refusal
 """
 
 from __future__ import annotations
 
+import pytest
 import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from octowright.defaults import SUPPORTED_KINDS
 from octowright.macros.lint import lint_macro
-from octowright.personas import _credential_cmd_needs_shell
 from octowright.scenarios import load_yaml_scenario
+
+
+def _personas_module():
+    """Re-import personas lazily so the fresh_personas fixture in
+    test_personas.py — which calls importlib.reload(personas) — doesn't
+    cause this file's bound MissingCredential reference to drift."""
+    import octowright.personas as _p
+
+    return _p
+
 
 # Persona names: simple slug-friendly tokens. Keep the strategy narrow so the
 # test focuses on parser logic, not slug edge cases (those have their own tests).
@@ -103,27 +113,38 @@ def test_lint_macro_never_raises_on_arbitrary_actions(actions: list[dict]) -> No
 
 
 # ---------------------------------------------------------------------------
-# _credential_cmd_needs_shell: structural invariants
+# _credential_cmd_argv: argv-form parse + shell-metachar refusal
 # ---------------------------------------------------------------------------
 
 
 @settings(suppress_health_check=[HealthCheck.too_slow], max_examples=120)
 @given(cmd=st.text(min_size=0, max_size=80))
-def test_credential_cmd_needs_shell_is_total(cmd: str) -> None:
-    """The shell-classifier must always return (bool, list) — never raise."""
-    needs_shell, parsed = _credential_cmd_needs_shell(cmd)
-    assert isinstance(needs_shell, bool)
-    assert isinstance(parsed, list)
-    if not needs_shell:
-        # Argv form must be non-empty and contain no shell operator tokens.
-        assert all(isinstance(tok, str) for tok in parsed)
-        assert not any(tok in {"|", "&", ";", ">", "<", "(", ")", "`"} for tok in parsed)
+def test_credential_cmd_argv_only_returns_safe_argv(cmd: str) -> None:
+    """Either parse succeeds and yields a non-empty argv with no shell ops,
+    or it raises MissingCredential. No other exception types escape."""
+    p = _personas_module()
+    try:
+        argv = p._credential_cmd_argv(cmd, "p", "field")
+    except p.MissingCredential:
+        return
+    assert isinstance(argv, list)
+    assert argv, "successful parse must yield non-empty argv"
+    assert all(isinstance(tok, str) for tok in argv)
+    assert not any(tok in {"|", "&", ";", ">", "<", "(", ")", "`"} for tok in argv)
 
 
 @given(cmd=st.from_regex(r"[a-zA-Z][a-zA-Z0-9_/-]*( [a-zA-Z0-9_/.:-]+)*", fullmatch=True))
 @settings(suppress_health_check=[HealthCheck.too_slow], max_examples=80)
-def test_credential_cmd_simple_invocations_are_argv_form(cmd: str) -> None:
-    """Plain `binary arg arg` invocations must classify as argv-form (no shell)."""
-    needs_shell, parsed = _credential_cmd_needs_shell(cmd)
-    assert needs_shell is False, f"plain cmd flagged shell: {cmd!r} -> {parsed!r}"
-    assert parsed[0] == cmd.split()[0]
+def test_credential_cmd_simple_invocations_parse_cleanly(cmd: str) -> None:
+    """Plain `binary arg arg` invocations parse without raising."""
+    p = _personas_module()
+    argv = p._credential_cmd_argv(cmd, "p", "field")
+    assert argv[0] == cmd.split()[0]
+
+
+@pytest.mark.parametrize("op", ["|", "&", ";", "<", ">", ">>", "(", ")", "`"])
+def test_credential_cmd_refuses_each_shell_operator(op: str) -> None:
+    """Each shell operator token in isolation must be refused."""
+    p = _personas_module()
+    with pytest.raises(p.MissingCredential, match="shell semantics"):
+        p._credential_cmd_argv(f"echo foo {op} bar", "p", "field")

@@ -69,11 +69,11 @@ two suffixes:
   stdout (typical for password managers like `op`, `pass`, `bw`). The cmd
   is `shlex.split` and run with `shell=False` — no `/bin/sh` is involved.
 
-  **Pipes / redirection / subshells require an explicit opt-in.** Setting
-  `OCTOWRIGHT_ALLOW_CRED_SHELL=1` re-enables `shell=True` so commands like
-  `pass show foo | tr -d '\n'` work; without it, octowright refuses to invoke
-  `/bin/sh` and surfaces the offending tokens. This is a trust-boundary guard
-  for shared persona files — assume YAML can come from any source.
+  Pipes / redirection / subshells in the raw cmd are refused. To use a
+  pipeline, write the cmd as `bash -c "..."` — bash becomes a normal argv
+  token whose `-c` argument carries the shell logic the cmd author signed
+  off on. The trust boundary stays explicit because the persona YAML
+  itself names the shell binary.
 
 ### Pre-flight check
 
