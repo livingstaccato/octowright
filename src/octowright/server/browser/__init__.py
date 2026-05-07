@@ -32,6 +32,7 @@ from octowright.server.browser.input import (
     browser_type,
 )
 from octowright.server.browser.inspect import (
+    browser_brief,
     browser_console_messages,
     browser_evaluate,
     browser_expect_js,
@@ -69,6 +70,7 @@ from octowright.server.browser.views import (
 )
 
 __all__ = [
+    "browser_brief",
     "browser_click",
     "browser_click_by",
     "browser_close",
