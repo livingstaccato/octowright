@@ -346,3 +346,24 @@ async def browser_read_markdown(
         "truncated": truncated,
         "markdown_size": original_size,
     }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Return a brief summary of the current page state, including URL, title, "
+        "and highly truncated snapshot of actionable elements."
+    ),
+)
+async def browser_brief(instance_id: str) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    title = await session.page.title()
+    # Pull a tiny slice of the body snapshot to provide basic orientation
+    aria = await session.page.locator("body").aria_snapshot()
+    elements = aria[:500] + ("..." if len(aria) > 500 else "")
+
+    return {
+        "url": session.page.url,
+        "title": title,
+        "elements": elements,
+    }
