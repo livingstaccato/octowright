@@ -109,16 +109,16 @@ Every page launched by the pool gets a faint translucent overlay at the bottom-c
 
 Pass `slowmo_ms=N` to `macro_run` / `macro_run_sequence` (or set `OCTOWRIGHT_MACRO_SLOWMO_MS`) to insert a per-action delay between status push and dispatch — useful for following execution by eye.
 
-### Silent-swallow audit policy
+### Silent-swallow policy
 
-Bandit's B110 (`try/except/pass`) and B112 (`try/except/continue`) are blanket-suppressed in `make lint`. Roughly 47 such blocks exist in production code; an audit found them all to be **legitimate cleanup or scan-skip patterns**:
+Bandit's B110 (`try/except/pass`) and B112 (`try/except/continue`) are blanket-suppressed in `make lint`. Production code uses these patterns only in:
 
 - Process shutdown paths (signal-handler restore, task-cancel await)
 - Dir scans skipping orphans (profile cleanup, recording cleanup)
 - JSONL/YAML parse-skip on per-line malformed input (recorder, macro list, persona list)
 - Best-effort I/O during teardown
 
-Two sites that previously swallowed errors silently in non-cleanup paths now log via `log.warning`: `scenarios_pool.start` rollback and `http/app.py` MCP-session-manager probe. New silent-swallow code in user-action paths should also `log.warning`/`log.debug` rather than truly swallow — the bandit suppression is a project-wide policy that assumes the swallow is intentional, not an excuse.
+Silent swallow in **user-action paths** must `log.warning` or `log.debug` instead of truly swallowing. The bandit suppression assumes the swallow is intentional, not an excuse to hide failures from the user.
 
 ### Idle Watchdog
 
