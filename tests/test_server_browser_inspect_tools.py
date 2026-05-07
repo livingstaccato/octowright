@@ -224,6 +224,17 @@ async def test_browser_read_markdown_failure(_patch_pool: MagicMock) -> None:
     assert "error" in out
 
 
+@pytest.mark.anyio
+async def test_browser_brief(_patch_pool: MagicMock) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+    out = await _inspect.browser_brief("i")
+
+    assert out["url"] == "https://example.com"
+    assert out["title"] == "Example"
+    assert "elements" in out
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
