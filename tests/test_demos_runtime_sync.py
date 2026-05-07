@@ -192,6 +192,7 @@ async def test_record_demo_bundle_applies_intro_and_outro_holds(monkeypatch, tmp
     bundle = _write_bundle_layout(tmp_path)
     bundle.presentation.timing.intro_ms = 250
     bundle.presentation.timing.outro_ms = 1250
+    bundle.presentation.timing.minimum_ms = 0
 
     sleeps: list[float] = []
 
@@ -204,6 +205,33 @@ async def test_record_demo_bundle_applies_intro_and_outro_holds(monkeypatch, tmp
     await record_demo_bundle(bundle)
 
     assert sleeps == [0.25, 1.25]
+
+
+@pytest.mark.asyncio
+async def test_record_demo_bundle_enforces_minimum_duration(monkeypatch, tmp_path: Path) -> None:
+    bundle = _write_bundle_layout(tmp_path)
+    bundle.presentation.timing.intro_ms = 250
+    bundle.presentation.timing.outro_ms = 1250
+    bundle.presentation.timing.minimum_ms = 4000
+
+    sleeps: list[float] = []
+    ticks = iter([100.0, 101.8])
+
+    class _FakeLoop:
+        def time(self) -> float:
+            return next(ticks)
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    _patch_runtime_recording(monkeypatch, tmp_path)
+    monkeypatch.setattr("octowright.demos.runtime.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("octowright.demos.runtime.asyncio.get_running_loop", lambda: _FakeLoop())
+
+    await record_demo_bundle(bundle)
+
+    assert sleeps[:2] == [0.25, 1.25]
+    assert sleeps[2] == pytest.approx(2.2)
 
 
 @pytest.mark.asyncio
@@ -360,7 +388,7 @@ def test_render_bundle_video_writes_unique_supporting_assets_for_duplicate_roles
     )
     monkeypatch.setattr(
         "octowright.demos.rendering.extract_frame",
-        lambda source, target: target.write_bytes(b"poster") or target,
+        lambda source, target, **kwargs: target.write_bytes(b"poster") or target,
     )
     monkeypatch.setattr(
         "octowright.demos.rendering.probe_video",
@@ -375,16 +403,16 @@ def test_render_bundle_video_writes_unique_supporting_assets_for_duplicate_roles
         poster_path=tmp_path / "poster.png",
     )
 
-    assert [item["id"] for item in summary["supporting_videos"]] == ["player", "player-2", "player-3"]
+    assert [item["id"] for item in summary["supporting_videos"]] == ["cx-chromium", "cx-firefox", "cx-webkit"]
     assert [item["path"] for item in summary["supporting_videos"]] == [
-        str(tmp_path / "supporting" / "player.mp4"),
-        str(tmp_path / "supporting" / "player-2.mp4"),
-        str(tmp_path / "supporting" / "player-3.mp4"),
+        str(tmp_path / "supporting" / "cx-chromium.mp4"),
+        str(tmp_path / "supporting" / "cx-firefox.mp4"),
+        str(tmp_path / "supporting" / "cx-webkit.mp4"),
     ]
     assert rendered_targets == [
-        ("player.mp4", "player.png"),
-        ("player-2.mp4", "player-2.png"),
-        ("player-3.mp4", "player-3.png"),
+        ("cx-chromium.mp4", "cx-chromium.png"),
+        ("cx-firefox.mp4", "cx-firefox.png"),
+        ("cx-webkit.mp4", "cx-webkit.png"),
     ]
 
 
@@ -415,9 +443,9 @@ def test_render_sync_group_videos_avoids_collisions_with_pre_suffixed_roles(
         output_dir=tmp_path / "supporting",
     )
 
-    assert [item["id"] for item in rendered] == ["player", "player-2", "player-2-2"]
+    assert [item["id"] for item in rendered] == ["p1", "p2", "p3"]
     assert rendered_targets == [
-        ("player.mp4", "player.png"),
-        ("player-2.mp4", "player-2.png"),
-        ("player-2-2.mp4", "player-2-2.png"),
+        ("p1.mp4", "p1.png"),
+        ("p2.mp4", "p2.png"),
+        ("p3.mp4", "p3.png"),
     ]

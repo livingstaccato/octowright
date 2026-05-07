@@ -31,8 +31,8 @@ class RenderPlan:
 
 
 _SYNC_MULTI_PRESETS: dict[str, RenderPlan] = {
-    "cross-engine-trio": RenderPlan(kind="sync-multi", columns=3, cell_width=640, cell_height=360),
-    "role-based-duo": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=540),
+    "cross-engine-trio": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=540),
+    "role-based-duo": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=720),
 }
 
 _HERO_COMPOSITE_PRESETS: dict[str, RenderPlan] = {
@@ -42,14 +42,10 @@ _HERO_COMPOSITE_PRESETS: dict[str, RenderPlan] = {
         canvas_height=1080,
         placements=(
             CompositePlacement("p1", 0, 0, 1280, 720),
-            CompositePlacement("p2", 1280, 0, 320, 360),
-            CompositePlacement("p3", 1600, 0, 320, 360),
-            CompositePlacement("p4", 1280, 360, 320, 360),
-            CompositePlacement("p5", 1600, 360, 320, 360),
-            CompositePlacement("p6", 0, 720, 480, 360),
-            CompositePlacement("p7", 480, 720, 480, 360),
-            CompositePlacement("ops", 960, 720, 480, 360),
-            CompositePlacement("spectator", 1440, 720, 480, 360),
+            CompositePlacement("ops", 1280, 0, 640, 360),
+            CompositePlacement("spectator", 1280, 360, 640, 360),
+            CompositePlacement("p2", 0, 720, 640, 360),
+            CompositePlacement("p3", 640, 720, 640, 360),
         ),
     )
 }
