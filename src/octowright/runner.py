@@ -15,7 +15,6 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright import macros as macro_mod
-from octowright.defaults import DEFAULT_URL  # noqa: F401 — kept for downstream callers; runner uses about:blank
 
 log = get_logger(__name__)
 

@@ -138,9 +138,12 @@ def test_resolve_cmd_nonzero_exit_raises(tmp_path, fresh_personas):
         fresh_personas.resolve_credential(p, "token")
 
 
-def test_resolve_cmd_blocks_shell_metachar_by_default(tmp_path, fresh_personas, monkeypatch):
-    """Pipe / redirect / subshell metachars must be refused without explicit opt-in."""
-    monkeypatch.delenv("OCTOWRIGHT_ALLOW_CRED_SHELL", raising=False)
+def test_resolve_cmd_refuses_shell_metachars(tmp_path, fresh_personas):
+    """Pipe / redirect / subshell metachars are unconditionally refused.
+
+    Pipelines must be expressed as `bash -c "..."` so the shell invocation
+    is an explicit, signed-off-by-the-cmd-author argv token.
+    """
     _write_persona(
         tmp_path,
         "u",
@@ -154,15 +157,15 @@ def test_resolve_cmd_blocks_shell_metachar_by_default(tmp_path, fresh_personas, 
         fresh_personas.resolve_credential(p, "token")
 
 
-def test_resolve_cmd_allows_shell_with_opt_in(tmp_path, fresh_personas, monkeypatch):
-    """OCTOWRIGHT_ALLOW_CRED_SHELL=1 re-enables shell=True for pipelines."""
-    monkeypatch.setenv("OCTOWRIGHT_ALLOW_CRED_SHELL", "1")
+def test_resolve_cmd_supports_explicit_bash_pipeline(tmp_path, fresh_personas):
+    """`bash -c "..."` is the documented escape hatch — bash is a normal
+    argv token, the pipeline is its own argument."""
     _write_persona(
         tmp_path,
         "u",
         {
             "name": "u",
-            "credentials": {"token_cmd": "echo hunter2 | tr h H"},
+            "credentials": {"token_cmd": 'bash -c "echo hunter2 | tr h H"'},
         },
     )
     p = fresh_personas.load_persona("u")
@@ -170,14 +173,12 @@ def test_resolve_cmd_allows_shell_with_opt_in(tmp_path, fresh_personas, monkeypa
 
 
 def test_resolve_cmd_uses_argv_form_for_simple_commands(tmp_path, fresh_personas, monkeypatch):
-    """A cmd with no shell metachars must NOT invoke /bin/sh — exec'd directly."""
-    monkeypatch.delenv("OCTOWRIGHT_ALLOW_CRED_SHELL", raising=False)
+    """A cmd with no shell metachars is exec'd directly — never via /bin/sh."""
     captured: dict[str, object] = {}
 
     def _spy_run(*args, **kwargs):
         captured["argv"] = args[0]
         captured["shell"] = kwargs.get("shell")
-        # Mimic a successful subprocess result.
         from types import SimpleNamespace
 
         return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
@@ -196,12 +197,11 @@ def test_resolve_cmd_uses_argv_form_for_simple_commands(tmp_path, fresh_personas
     p = fresh_personas.load_persona("u")
     assert fresh_personas.resolve_credential(p, "token") == "ok"
     assert captured["argv"] == ["op", "read", "op://Personal/Github/token"]
-    assert captured["shell"] is None  # shell= not passed = default False
+    assert captured["shell"] is None
 
 
-def test_resolve_cmd_missing_binary_raises_friendly(tmp_path, fresh_personas, monkeypatch):
-    """A nonexistent binary on the argv path raises a MissingCredential, not OSError."""
-    monkeypatch.delenv("OCTOWRIGHT_ALLOW_CRED_SHELL", raising=False)
+def test_resolve_cmd_missing_binary_raises_friendly(tmp_path, fresh_personas):
+    """A nonexistent binary on the argv path raises MissingCredential, not OSError."""
     _write_persona(
         tmp_path,
         "u",

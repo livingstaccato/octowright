@@ -102,9 +102,8 @@ def _title_tag_for(
     """Window-title suffix combining the emoji pair and the [tag] label.
 
     Returned with a leading space so it appends cleanly after the page's own
-    title (e.g. ``"Yahoo (🐬🦊) [microdosing]"``). Without an engine kind the
-    emoji pair is skipped — keeps backwards-compat for the few legacy callers
-    that don't know the engine yet.
+    title (e.g. ``"Yahoo (🐬🦊) [microdosing]"``). When ``kind`` is None the
+    emoji pair is skipped and only ``[tag]`` is returned.
     """
     tag = profile or label
     if not tag:
