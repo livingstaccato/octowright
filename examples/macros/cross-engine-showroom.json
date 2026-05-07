@@ -1,0 +1,23 @@
+{
+  "name": "cross-engine-showroom",
+  "description": "[demo] Drive the cross-engine showroom seed: fill text fields, move range sliders, change a select, toggle checkboxes, and confirm. Native widget chrome renders differently per engine — that's the point.",
+  "parameters": [],
+  "created_at": "2026-05-07T00:00:00Z",
+  "updated_at": "2026-05-07T00:00:00Z",
+  "actions": [
+    {"action": "expect_js", "expression": "typeof document.getElementById('depart') === 'object' && document.getElementById('depart') !== null"},
+    {"action": "fill", "selector": "#name", "value": "Octavia Wright"},
+    {"action": "fill", "selector": "#email", "value": "octavia@example.com"},
+    {"action": "click", "selector": "#depart"},
+    {"action": "press_key", "key": "Escape"},
+    {"action": "evaluate", "expression": "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"},
+    {"action": "evaluate", "expression": "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"},
+    {"action": "evaluate", "expression": "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"},
+    {"action": "click", "selector": "#opt-meal"},
+    {"action": "click", "selector": "#opt-window"},
+    {"action": "click", "selector": "#confirm"},
+    {"action": "expect_js", "expression": "document.getElementById('confirm-status').textContent", "equals": "saved"},
+    {"action": "expect_js", "expression": "document.getElementById('cabin').value", "equals": "First"},
+    {"action": "expect_js", "expression": "document.getElementById('pax').value", "equals": "5"}
+  ]
+}
