@@ -9,12 +9,12 @@ import json
 from pathlib import Path
 
 import pytest
+from octowright_demos.catalog import load_demo_bundle
+from octowright_demos.models import DemoBundle, DemoMacroRun, DemoPresentationConfig, DemoRecordingConfig
+from octowright_demos.presentation_profiles import select_render_plan
+from octowright_demos.rendering import render_bundle_video
+from octowright_demos.runtime import record_demo_bundle
 
-from octowright.demos.catalog import load_demo_bundle
-from octowright.demos.models import DemoBundle, DemoMacroRun, DemoPresentationConfig, DemoRecordingConfig
-from octowright.demos.presentation_profiles import select_render_plan
-from octowright.demos.rendering import render_bundle_video
-from octowright.demos.runtime import record_demo_bundle
 from octowright.scenarios_pool import LiveScenario
 
 
@@ -158,12 +158,12 @@ async def test_record_demo_bundle_writes_expected_artifacts(monkeypatch, tmp_pat
 
     created_exports: list[Path] = []
 
-    monkeypatch.setattr("octowright.demos.runtime.BrowserPool", _FakePool)
-    monkeypatch.setattr("octowright.demos.runtime.ScenarioPool", _FakeScenarioPool)
-    monkeypatch.setattr("octowright.demos.runtime._repo_root", lambda _: tmp_path)
-    monkeypatch.setattr("octowright.demos.runtime._prepare_scenario", _fake_prepare_scenario)
+    monkeypatch.setattr("octowright_demos.runtime.BrowserPool", _FakePool)
+    monkeypatch.setattr("octowright_demos.runtime.ScenarioPool", _FakeScenarioPool)
+    monkeypatch.setattr("octowright_demos.runtime._repo_root", lambda _: tmp_path)
+    monkeypatch.setattr("octowright_demos.runtime._prepare_scenario", _fake_prepare_scenario)
     monkeypatch.setattr(
-        "octowright.demos.runtime.write_exports",
+        "octowright_demos.runtime.write_exports",
         lambda replay_path: (
             created_exports.extend([replay_path.with_suffix(".py"), replay_path.with_suffix(".ts")])
             or replay_path.with_suffix(".py").write_text("python", encoding="utf-8")
@@ -171,7 +171,7 @@ async def test_record_demo_bundle_writes_expected_artifacts(monkeypatch, tmp_pat
         ),
     )
     monkeypatch.setattr(
-        "octowright.demos.runtime.render_bundle_video",
+        "octowright_demos.runtime.render_bundle_video",
         lambda bundle_obj, live, close_results, *, video_path, poster_path: (
             video_path.write_bytes(b"video"),
             poster_path.write_bytes(b"poster"),
@@ -179,8 +179,8 @@ async def test_record_demo_bundle_writes_expected_artifacts(monkeypatch, tmp_pat
         )[-1],
     )
     monkeypatch.setattr(
-        "octowright.demos.runtime.write_artifact_manifest",
-        lambda *args, **kwargs: ((kwargs["video_path"].parent / "manifest.json").write_text("{}", encoding="utf-8")),
+        "octowright_demos.runtime.write_artifact_manifest",
+        lambda *args, **kwargs: (kwargs["video_path"].parent / "manifest.json").write_text("{}", encoding="utf-8"),
     )
     result = await record_demo_bundle(bundle)
 
@@ -248,22 +248,22 @@ def test_render_bundle_video_uses_presentation_mode_for_sync_multi(monkeypatch, 
         ]
 
     monkeypatch.setattr(
-        "octowright.demos.rendering.render_sync_group_videos", _fake_render_sync_group_videos, raising=False
+        "octowright_demos.rendering.render_sync_group_videos", _fake_render_sync_group_videos, raising=False
     )
     monkeypatch.setattr(
-        "octowright.demos.rendering.transcode_video",
+        "octowright_demos.rendering.transcode_video",
         lambda source, target: target.write_bytes(Path(source).read_bytes()) or target,
     )
     monkeypatch.setattr(
-        "octowright.demos.rendering.extract_frame",
+        "octowright_demos.rendering.extract_frame",
         lambda source, target, **kwargs: target.write_bytes(b"poster") or target,
     )
     monkeypatch.setattr(
-        "octowright.demos.rendering.compose_video_grid",
+        "octowright_demos.rendering.compose_video_grid",
         lambda sources, target, **kwargs: target.write_bytes(b"video") or target,
     )
     monkeypatch.setattr(
-        "octowright.demos.rendering.probe_video",
+        "octowright_demos.rendering.probe_video",
         lambda _: {"width": 1280, "height": 720, "duration_seconds": 2.0},
     )
 
@@ -310,7 +310,7 @@ def test_render_bundle_video_raises_when_sync_multi_plan_produces_no_panes(monke
     )
 
     monkeypatch.setattr(
-        "octowright.demos.rendering.render_sync_group_videos",
+        "octowright_demos.rendering.render_sync_group_videos",
         lambda *args, **kwargs: [],
     )
 
@@ -341,10 +341,12 @@ def test_site_facing_render_plans_use_readable_canvases() -> None:
     assert (cross_engine.columns, cross_engine.cell_width, cross_engine.cell_height) == (2, 960, 540)
 
     assert role_based.kind == "sync-multi"
-    assert (role_based.columns, role_based.cell_width, role_based.cell_height) == (2, 960, 720)
+    assert (role_based.columns, role_based.cell_width, role_based.cell_height) == (2, 960, 1080)
 
     assert seven_mix.kind == "hero-composite"
     assert (seven_mix.canvas_width, seven_mix.canvas_height) == (1920, 1080)
-    assert len(seven_mix.placements) == 5
+    # 6 placements after commit c019c08 added the live Octowright dashboard
+    # (sm-monitor) to fill the previously-empty composition cell.
+    assert len(seven_mix.placements) == 6
     assert min(slot.width for slot in seven_mix.placements) >= 640
     assert min(slot.height for slot in seven_mix.placements) >= 360
