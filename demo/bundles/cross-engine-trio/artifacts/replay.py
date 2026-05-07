@@ -26,6 +26,10 @@ async def main() -> None:
         await page.goto(
             _resolve_bundle_url("bundle://seed/trio-board.html?persona=cx-chromium&role=player&kind=chromium&slot=0")
         )
+        browser = await p.chromium.launch(headless=True)
+        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        page = await ctx.new_page()
+        await page.goto(_resolve_bundle_url("http://127.0.0.1:8765/"))
         browser = await p.webkit.launch(headless=True)
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await ctx.new_page()
@@ -89,13 +93,13 @@ async def main() -> None:
             "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
         )
         try:
-            await page.get_by_role("player", name="Meal preference").click()
-        except Exception:
-            await page.click("#opt-meal")
-        try:
             await page.get_by_role("player", name='Departure": 2026-06-12').click()
         except Exception:
             await page.click("#depart")
+        try:
+            await page.get_by_role("player", name="Meal preference").click()
+        except Exception:
+            await page.click("#opt-meal")
         await page.keyboard.press("Escape")
         await page.evaluate(
             "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
@@ -105,10 +109,6 @@ async def main() -> None:
         except Exception:
             await page.click("#depart")
         await page.keyboard.press("Escape")
-        try:
-            await page.get_by_role("player", name="Window seat").click()
-        except Exception:
-            await page.click("#opt-window")
         await page.evaluate(
             "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
         )
@@ -118,6 +118,10 @@ async def main() -> None:
         await page.evaluate(
             "(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"
         )
+        try:
+            await page.get_by_role("player", name="Window seat").click()
+        except Exception:
+            await page.click("#opt-window")
         await page.evaluate(
             "(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"
         )
