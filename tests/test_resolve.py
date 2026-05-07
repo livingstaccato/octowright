@@ -98,7 +98,8 @@ class TestHostMatching:
 # ---------------------------------------------------------------------------
 
 
-def test_no_matches_returns_ephemeral_ok(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_no_matches_returns_ephemeral_ok() -> None:
     """Site nobody owns — ephemeral launch is fine. Weak matches (engine
     profile exists, but no host signal) may still appear; only strong matches
     block ephemeral_ok."""
@@ -112,7 +113,8 @@ def test_no_matches_returns_ephemeral_ok(populated_profiles_dir: Path) -> None:
     assert "ephemeral" in result["recommendation"].lower()
 
 
-def test_single_strong_match_recommends_specific_persona(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_single_strong_match_recommends_specific_persona() -> None:
     result = _resolve.suggest_for_url("https://github.com/issues")
     # freshie has default_url=https://github.com/ (score 2 on persona; no engine profile = score stays 2)
     assert result["ambiguous"] is False
@@ -122,7 +124,8 @@ def test_single_strong_match_recommends_specific_persona(populated_profiles_dir:
     assert "freshie" in result["recommendation"]
 
 
-def test_ambiguous_when_multiple_personas_share_host(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_ambiguous_when_multiple_personas_share_host() -> None:
     """dante (webkit + firefox) and ops (firefox) all default to discord.com."""
     result = _resolve.suggest_for_url("https://discord.com/channels")
     assert result["ambiguous"] is True
@@ -137,7 +140,8 @@ def test_ambiguous_when_multiple_personas_share_host(populated_profiles_dir: Pat
     assert "ops" in rec
 
 
-def test_kind_filter_narrows_candidates(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_kind_filter_narrows_candidates() -> None:
     """'open discord.com using webkit' → only dante/webkit qualifies."""
     result = _resolve.suggest_for_url("https://discord.com/", kind="webkit")
     assert result["kind_filter"] == "webkit"
@@ -148,7 +152,8 @@ def test_kind_filter_narrows_candidates(populated_profiles_dir: Path) -> None:
     assert "dante" in result["recommendation"]
 
 
-def test_kind_filter_can_still_be_ambiguous(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_kind_filter_can_still_be_ambiguous() -> None:
     """'using firefox' on discord still hits both dante AND ops."""
     result = _resolve.suggest_for_url("https://discord.com/", kind="firefox")
     assert result["kind_filter"] == "firefox"
@@ -157,7 +162,8 @@ def test_kind_filter_can_still_be_ambiguous(populated_profiles_dir: Path) -> Non
     assert result["ambiguous"] is True
 
 
-def test_kind_filter_with_no_match_suggests_dropping_filter(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_kind_filter_with_no_match_suggests_dropping_filter() -> None:
     """User said 'using firefox' but only chromium has tradewars.com — point them at the broader query."""
     result = _resolve.suggest_for_url("https://tradewars.com/", kind="firefox")
     assert result["kind_filter"] == "firefox"
@@ -174,7 +180,8 @@ def test_kind_filter_with_no_match_suggests_dropping_filter(populated_profiles_d
     assert "browser_suggest_for_url" in rec
 
 
-def test_app_hosts_metadata_matches(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_app_hosts_metadata_matches() -> None:
     """commander has app.hosts: ['tradewars.com'] but no default_url."""
     result = _resolve.suggest_for_url("https://tradewars.com/play")
     assert any(m["persona"] == "commander" for m in result["matches"])
@@ -184,14 +191,16 @@ def test_app_hosts_metadata_matches(populated_profiles_dir: Path) -> None:
     assert cmd["score"] >= 3
 
 
-def test_subdomain_url_matches_parent_host_default(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_subdomain_url_matches_parent_host_default() -> None:
     """app.discord.com should still resolve dante/ops who declared discord.com."""
     result = _resolve.suggest_for_url("https://app.discord.com/")
     persona_names = {m["persona"] for m in result["matches"]}
     assert {"dante", "ops"}.issubset(persona_names)
 
 
-def test_matches_sorted_by_score_then_recency(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_matches_sorted_by_score_then_recency() -> None:
     """Strong matches (score>=2) come before weak ones; among ties, most recent wins."""
     result = _resolve.suggest_for_url("https://discord.com/")
     scores = [m["score"] for m in result["matches"]]
@@ -199,7 +208,8 @@ def test_matches_sorted_by_score_then_recency(populated_profiles_dir: Path) -> N
     assert scores == sorted(scores, reverse=True)
 
 
-def test_payload_omits_internal_mtime_field(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_payload_omits_internal_mtime_field() -> None:
     """mtime is an internal sort key — shouldn't leak to the MCP caller."""
     result = _resolve.suggest_for_url("https://discord.com/")
     for m in result["matches"]:
@@ -213,7 +223,8 @@ def test_payload_omits_internal_mtime_field(populated_profiles_dir: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_bare_host_without_scheme_is_resolved(populated_profiles_dir: Path) -> None:
+@pytest.mark.usefixtures("populated_profiles_dir")
+def test_bare_host_without_scheme_is_resolved() -> None:
     """The user often says 'discord.com' with no https://. Treat it as the host."""
     result = _resolve.suggest_for_url("discord.com")
     assert result["host"] == "discord.com"

@@ -120,216 +120,249 @@ def _ts_semantic_with_fallback(semantic_call: str, fallback_call: str) -> str:
     return f"  try {{\n    {semantic_call}\n  }} catch {{\n    {fallback_call}\n  }}"
 
 
-def _py_line(entry: dict) -> str | None:
-    action = entry.get("action")
-    if action == "launch":
-        kind = entry["kind"]
-        vp = entry.get("viewport") or {"w": 1280, "h": 800}
-        headed = entry.get("headed", True)
-        url = entry["url"]
-        user_data_dir = entry.get("user_data_dir")
-        if user_data_dir:
-            return (
-                f"        ctx = await p.{kind}.launch_persistent_context(\n"
-                f"            {user_data_dir!r},\n"
-                f"            headless={not headed},\n"
-                f"            viewport={{'width': {vp['w']}, 'height': {vp['h']}}},\n"
-                f"        )\n"
-                f"        browser = None\n"
-                f"        page = ctx.pages[0] if ctx.pages else await ctx.new_page()\n"
-                f"        await page.goto(_resolve_bundle_url({url!r}))"
-            )
+# --- Python emitter: per-action handlers + dispatch table ----------------
+
+
+def _py_launch(entry: dict) -> str:
+    kind = entry["kind"]
+    vp = entry.get("viewport") or {"w": 1280, "h": 800}
+    headed = entry.get("headed", True)
+    url = entry["url"]
+    user_data_dir = entry.get("user_data_dir")
+    if user_data_dir:
         return (
-            f"        browser = await p.{kind}.launch(headless={not headed})\n"
-            f"        ctx = await browser.new_context(viewport={{'width': {vp['w']}, 'height': {vp['h']}}})\n"
-            f"        page = await ctx.new_page()\n"
+            f"        ctx = await p.{kind}.launch_persistent_context(\n"
+            f"            {user_data_dir!r},\n"
+            f"            headless={not headed},\n"
+            f"            viewport={{'width': {vp['w']}, 'height': {vp['h']}}},\n"
+            f"        )\n"
+            f"        browser = None\n"
+            f"        page = ctx.pages[0] if ctx.pages else await ctx.new_page()\n"
             f"        await page.goto(_resolve_bundle_url({url!r}))"
         )
-    if action == "navigate":
-        return f"        await page.goto(_resolve_bundle_url({entry['url']!r}))"
-    if action == "click":
-        if _has_semantic_locator(entry):
-            loc = _py_locator(entry)
-            if loc is not None:
-                return _py_semantic_with_fallback(
-                    f"await {loc}.click()",
-                    f"await page.click({entry['selector']!r})",
-                )
-        return f"        await page.click({entry['selector']!r})"
-    if action == "fill":
-        if _has_semantic_locator(entry):
-            loc = _py_locator(entry)
-            if loc is not None:
-                return _py_semantic_with_fallback(
-                    f"await {loc}.fill({entry['value']!r})",
-                    f"await page.fill({entry['selector']!r}, {entry['value']!r})",
-                )
-        return f"        await page.fill({entry['selector']!r}, {entry['value']!r})"
-    if action == "click_by":
+    return (
+        f"        browser = await p.{kind}.launch(headless={not headed})\n"
+        f"        ctx = await browser.new_context(viewport={{'width': {vp['w']}, 'height': {vp['h']}}})\n"
+        f"        page = await ctx.new_page()\n"
+        f"        await page.goto(_resolve_bundle_url({url!r}))"
+    )
+
+
+def _py_click(entry: dict) -> str:
+    if _has_semantic_locator(entry):
         loc = _py_locator(entry)
         if loc is not None:
-            semantic_call = f"await {loc}.click()"
-            if entry.get("selector"):
-                return _py_semantic_with_fallback(semantic_call, f"await page.click({entry['selector']!r})")
-            return f"        {semantic_call}"
-        if entry.get("selector"):
-            return f"        await page.click({entry['selector']!r})"
-        return None
-    if action == "fill_by":
+            return _py_semantic_with_fallback(f"await {loc}.click()", f"await page.click({entry['selector']!r})")
+    return f"        await page.click({entry['selector']!r})"
+
+
+def _py_fill(entry: dict) -> str:
+    if _has_semantic_locator(entry):
         loc = _py_locator(entry)
         if loc is not None:
-            semantic_call = f"await {loc}.fill({entry['value']!r})"
-            if entry.get("selector"):
-                return _py_semantic_with_fallback(
-                    semantic_call,
-                    f"await page.fill({entry['selector']!r}, {entry['value']!r})",
-                )
-            return f"        {semantic_call}"
-        if entry.get("selector"):
-            return f"        await page.fill({entry['selector']!r}, {entry['value']!r})"
-        return None
-    if action == "type":
-        delay = entry.get("delay_ms") or 0
-        return f"        await page.type({entry['selector']!r}, {entry['text']!r}, delay={delay})"
-    if action == "press_key":
-        return f"        await page.keyboard.press({entry['key']!r})"
-    if action == "screenshot":
-        return f"        await page.screenshot(path={entry['path']!r})"
-    if action == "evaluate":
-        return f"        await page.evaluate({entry['expression']!r})"
-    if action == "wait_for":
-        if entry.get("selector"):
-            return f"        await page.wait_for_selector({entry['selector']!r})"
-        if entry.get("text"):
-            text = entry["text"]
-            return (
-                f"        await page.wait_for_function("
-                f"'t => document.body && document.body.innerText.includes(t)', arg={text!r})"
+            return _py_semantic_with_fallback(
+                f"await {loc}.fill({entry['value']!r})",
+                f"await page.fill({entry['selector']!r}, {entry['value']!r})",
             )
-        return "        await page.wait_for_load_state('networkidle')"
-    if action == "hover":
-        return f"        await page.hover({entry['selector']!r})"
-    if action == "select_option":
-        sel = entry["selector"]
-        if entry.get("value") is not None:
-            return f"        await page.select_option({sel!r}, value={entry['value']!r})"
-        if entry.get("label") is not None:
-            return f"        await page.select_option({sel!r}, label={entry['label']!r})"
-        if entry.get("index") is not None:
-            return f"        await page.select_option({sel!r}, index={entry['index']!r})"
-        return f"        await page.select_option({sel!r})"
-    if action == "drag":
-        return f"        await page.drag_and_drop({entry['source']!r}, {entry['target']!r})"
-    if action == "navigate_back":
-        return "        await page.go_back()"
-    if action == "resize":
-        return f"        await page.set_viewport_size({{'width': {entry['width']}, 'height': {entry['height']}}})"
+    return f"        await page.fill({entry['selector']!r}, {entry['value']!r})"
+
+
+def _py_click_by(entry: dict) -> str | None:
+    loc = _py_locator(entry)
+    if loc is not None:
+        call = f"await {loc}.click()"
+        if entry.get("selector"):
+            return _py_semantic_with_fallback(call, f"await page.click({entry['selector']!r})")
+        return f"        {call}"
+    if entry.get("selector"):
+        return f"        await page.click({entry['selector']!r})"
     return None
+
+
+def _py_fill_by(entry: dict) -> str | None:
+    loc = _py_locator(entry)
+    if loc is not None:
+        call = f"await {loc}.fill({entry['value']!r})"
+        if entry.get("selector"):
+            return _py_semantic_with_fallback(call, f"await page.fill({entry['selector']!r}, {entry['value']!r})")
+        return f"        {call}"
+    if entry.get("selector"):
+        return f"        await page.fill({entry['selector']!r}, {entry['value']!r})"
+    return None
+
+
+def _py_wait_for(entry: dict) -> str:
+    if entry.get("selector"):
+        return f"        await page.wait_for_selector({entry['selector']!r})"
+    if entry.get("text"):
+        return (
+            f"        await page.wait_for_function("
+            f"'t => document.body && document.body.innerText.includes(t)', "
+            f"arg={entry['text']!r})"
+        )
+    return "        await page.wait_for_load_state('networkidle')"
+
+
+def _py_select_option(entry: dict) -> str:
+    sel = entry["selector"]
+    if entry.get("value") is not None:
+        return f"        await page.select_option({sel!r}, value={entry['value']!r})"
+    if entry.get("label") is not None:
+        return f"        await page.select_option({sel!r}, label={entry['label']!r})"
+    if entry.get("index") is not None:
+        return f"        await page.select_option({sel!r}, index={entry['index']!r})"
+    return f"        await page.select_option({sel!r})"
+
+
+_PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
+    "launch": _py_launch,
+    "navigate": lambda e: f"        await page.goto(_resolve_bundle_url({e['url']!r}))",
+    "click": _py_click,
+    "fill": _py_fill,
+    "click_by": _py_click_by,
+    "fill_by": _py_fill_by,
+    "type": lambda e: f"        await page.type({e['selector']!r}, {e['text']!r}, delay={e.get('delay_ms') or 0})",
+    "press_key": lambda e: f"        await page.keyboard.press({e['key']!r})",
+    "screenshot": lambda e: f"        await page.screenshot(path={e['path']!r})",
+    "evaluate": lambda e: f"        await page.evaluate({e['expression']!r})",
+    "wait_for": _py_wait_for,
+    "hover": lambda e: f"        await page.hover({e['selector']!r})",
+    "select_option": _py_select_option,
+    "drag": lambda e: f"        await page.drag_and_drop({e['source']!r}, {e['target']!r})",
+    "navigate_back": lambda _e: "        await page.go_back()",
+    "resize": lambda e: f"        await page.set_viewport_size({{'width': {e['width']}, 'height': {e['height']}}})",
+}
+
+
+def _py_line(entry: dict) -> str | None:
+    handler = _PY_HANDLERS.get(entry.get("action") or "")
+    return handler(entry) if handler else None
+
+
+# --- TypeScript emitter: per-action handlers + dispatch table ------------
+
+
+def _ts_launch(entry: dict) -> str:
+    kind = entry["kind"]
+    vp = entry.get("viewport") or {"w": 1280, "h": 800}
+    headed = entry.get("headed", True)
+    url = entry["url"]
+    user_data_dir = entry.get("user_data_dir")
+    if user_data_dir:
+        return (
+            f"  ctx = await {kind}.launchPersistentContext({json.dumps(user_data_dir)}, {{\n"
+            f"    headless: {str(not headed).lower()},\n"
+            f"    viewport: {{ width: {vp['w']}, height: {vp['h']} }},\n"
+            f"  }});\n"
+            f"  page = ctx.pages()[0] ?? await ctx.newPage();\n"
+            f"  await page.goto(resolveBundleUrl({json.dumps(url)}));"
+        )
+    return (
+        f"  browser = await {kind}.launch({{ headless: {str(not headed).lower()} }});\n"
+        f"  ctx = await browser.newContext({{ viewport: {{ width: {vp['w']}, height: {vp['h']} }} }});\n"
+        f"  page = await ctx.newPage();\n"
+        f"  await page.goto(resolveBundleUrl({json.dumps(url)}));"
+    )
+
+
+def _ts_click(entry: dict) -> str:
+    if _has_semantic_locator(entry):
+        loc = _ts_locator(entry)
+        if loc is not None:
+            return _ts_semantic_with_fallback(
+                f"await {loc}.click();", f"await page.click({json.dumps(entry['selector'])});"
+            )
+    return f"  await page.click({json.dumps(entry['selector'])});"
+
+
+def _ts_fill(entry: dict) -> str:
+    if _has_semantic_locator(entry):
+        loc = _ts_locator(entry)
+        if loc is not None:
+            return _ts_semantic_with_fallback(
+                f"await {loc}.fill({json.dumps(entry['value'])});",
+                f"await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});",
+            )
+    return f"  await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});"
+
+
+def _ts_click_by(entry: dict) -> str | None:
+    loc = _ts_locator(entry)
+    if loc is not None:
+        call = f"await {loc}.click();"
+        if entry.get("selector"):
+            return _ts_semantic_with_fallback(call, f"await page.click({json.dumps(entry['selector'])});")
+        return f"  {call}"
+    if entry.get("selector"):
+        return f"  await page.click({json.dumps(entry['selector'])});"
+    return None
+
+
+def _ts_fill_by(entry: dict) -> str | None:
+    loc = _ts_locator(entry)
+    if loc is not None:
+        call = f"await {loc}.fill({json.dumps(entry['value'])});"
+        if entry.get("selector"):
+            return _ts_semantic_with_fallback(
+                call, f"await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});"
+            )
+        return f"  {call}"
+    if entry.get("selector"):
+        return f"  await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});"
+    return None
+
+
+def _ts_wait_for(entry: dict) -> str:
+    if entry.get("selector"):
+        return f"  await page.waitForSelector({json.dumps(entry['selector'])});"
+    if entry.get("text"):
+        return (
+            f"  await page.waitForFunction("
+            f"(t) => document.body && document.body.innerText.includes(t), "
+            f"{json.dumps(entry['text'])});"
+        )
+    return "  await page.waitForLoadState('networkidle');"
+
+
+def _ts_select_option(entry: dict) -> str:
+    sel = json.dumps(entry["selector"])
+    if entry.get("value") is not None:
+        return f"  await page.selectOption({sel}, {{ value: {json.dumps(entry['value'])} }});"
+    if entry.get("label") is not None:
+        return f"  await page.selectOption({sel}, {{ label: {json.dumps(entry['label'])} }});"
+    if entry.get("index") is not None:
+        return f"  await page.selectOption({sel}, {{ index: {entry['index']} }});"
+    return f"  await page.selectOption({sel});"
+
+
+_TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
+    "launch": _ts_launch,
+    "navigate": lambda e: f"  await page.goto(resolveBundleUrl({json.dumps(e['url'])}));",
+    "click": _ts_click,
+    "fill": _ts_fill,
+    "click_by": _ts_click_by,
+    "fill_by": _ts_fill_by,
+    "type": (
+        lambda e: (
+            f"  await page.type({json.dumps(e['selector'])}, {json.dumps(e['text'])}, "
+            f"{{ delay: {e.get('delay_ms') or 0} }});"
+        )
+    ),
+    "press_key": lambda e: f"  await page.keyboard.press({json.dumps(e['key'])});",
+    "screenshot": lambda e: f"  await page.screenshot({{ path: {json.dumps(e['path'])} }});",
+    "evaluate": lambda e: f"  await page.evaluate({json.dumps(e['expression'])});",
+    "wait_for": _ts_wait_for,
+    "hover": lambda e: f"  await page.hover({json.dumps(e['selector'])});",
+    "select_option": _ts_select_option,
+    "drag": lambda e: f"  await page.dragAndDrop({json.dumps(e['source'])}, {json.dumps(e['target'])});",
+    "navigate_back": lambda _e: "  await page.goBack();",
+    "resize": lambda e: f"  await page.setViewportSize({{ width: {e['width']}, height: {e['height']} }});",
+}
 
 
 def _ts_line(entry: dict) -> str | None:
-    action = entry.get("action")
-    if action == "launch":
-        kind = entry["kind"]
-        vp = entry.get("viewport") or {"w": 1280, "h": 800}
-        headed = entry.get("headed", True)
-        url = entry["url"]
-        user_data_dir = entry.get("user_data_dir")
-        if user_data_dir:
-            return (
-                f"  ctx = await {kind}.launchPersistentContext({json.dumps(user_data_dir)}, {{\n"
-                f"    headless: {str(not headed).lower()},\n"
-                f"    viewport: {{ width: {vp['w']}, height: {vp['h']} }},\n"
-                f"  }});\n"
-                f"  page = ctx.pages()[0] ?? await ctx.newPage();\n"
-                f"  await page.goto(resolveBundleUrl({json.dumps(url)}));"
-            )
-        return (
-            f"  browser = await {kind}.launch({{ headless: {str(not headed).lower()} }});\n"
-            f"  ctx = await browser.newContext({{ viewport: {{ width: {vp['w']}, height: {vp['h']} }} }});\n"
-            f"  page = await ctx.newPage();\n"
-            f"  await page.goto(resolveBundleUrl({json.dumps(url)}));"
-        )
-    if action == "navigate":
-        return f"  await page.goto(resolveBundleUrl({json.dumps(entry['url'])}));"
-    if action == "click":
-        if _has_semantic_locator(entry):
-            loc = _ts_locator(entry)
-            if loc is not None:
-                return _ts_semantic_with_fallback(
-                    f"await {loc}.click();",
-                    f"await page.click({json.dumps(entry['selector'])});",
-                )
-        return f"  await page.click({json.dumps(entry['selector'])});"
-    if action == "fill":
-        if _has_semantic_locator(entry):
-            loc = _ts_locator(entry)
-            if loc is not None:
-                return _ts_semantic_with_fallback(
-                    f"await {loc}.fill({json.dumps(entry['value'])});",
-                    f"await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});",
-                )
-        return f"  await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});"
-    if action == "click_by":
-        loc = _ts_locator(entry)
-        if loc is not None:
-            semantic_call = f"await {loc}.click();"
-            if entry.get("selector"):
-                return _ts_semantic_with_fallback(semantic_call, f"await page.click({json.dumps(entry['selector'])});")
-            return f"  {semantic_call}"
-        if entry.get("selector"):
-            return f"  await page.click({json.dumps(entry['selector'])});"
-        return None
-    if action == "fill_by":
-        loc = _ts_locator(entry)
-        if loc is not None:
-            semantic_call = f"await {loc}.fill({json.dumps(entry['value'])});"
-            if entry.get("selector"):
-                return _ts_semantic_with_fallback(
-                    semantic_call,
-                    f"await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});",
-                )
-            return f"  {semantic_call}"
-        if entry.get("selector"):
-            return f"  await page.fill({json.dumps(entry['selector'])}, {json.dumps(entry['value'])});"
-        return None
-    if action == "type":
-        delay = entry.get("delay_ms") or 0
-        return f"  await page.type({json.dumps(entry['selector'])}, {json.dumps(entry['text'])}, {{ delay: {delay} }});"
-    if action == "press_key":
-        return f"  await page.keyboard.press({json.dumps(entry['key'])});"
-    if action == "screenshot":
-        return f"  await page.screenshot({{ path: {json.dumps(entry['path'])} }});"
-    if action == "evaluate":
-        return f"  await page.evaluate({json.dumps(entry['expression'])});"
-    if action == "wait_for":
-        if entry.get("selector"):
-            return f"  await page.waitForSelector({json.dumps(entry['selector'])});"
-        if entry.get("text"):
-            return (
-                f"  await page.waitForFunction("
-                f"(t) => document.body && document.body.innerText.includes(t), "
-                f"{json.dumps(entry['text'])});"
-            )
-        return "  await page.waitForLoadState('networkidle');"
-    if action == "hover":
-        return f"  await page.hover({json.dumps(entry['selector'])});"
-    if action == "select_option":
-        sel = json.dumps(entry["selector"])
-        if entry.get("value") is not None:
-            return f"  await page.selectOption({sel}, {{ value: {json.dumps(entry['value'])} }});"
-        if entry.get("label") is not None:
-            return f"  await page.selectOption({sel}, {{ label: {json.dumps(entry['label'])} }});"
-        if entry.get("index") is not None:
-            return f"  await page.selectOption({sel}, {{ index: {entry['index']} }});"
-        return f"  await page.selectOption({sel});"
-    if action == "drag":
-        return f"  await page.dragAndDrop({json.dumps(entry['source'])}, {json.dumps(entry['target'])});"
-    if action == "navigate_back":
-        return "  await page.goBack();"
-    if action == "resize":
-        return f"  await page.setViewportSize({{ width: {entry['width']}, height: {entry['height']} }});"
-    return None
+    handler = _TS_HANDLERS.get(entry.get("action") or "")
+    return handler(entry) if handler else None
 
 
 def export_script(log_path: Path, out_path: Path, fmt: str = "python") -> Path:
