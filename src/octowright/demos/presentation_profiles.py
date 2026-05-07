@@ -32,7 +32,7 @@ class RenderPlan:
 
 _SYNC_MULTI_PRESETS: dict[str, RenderPlan] = {
     "cross-engine-trio": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=540),
-    "role-based-duo": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=720),
+    "role-based-duo": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=1080),
 }
 
 _HERO_COMPOSITE_PRESETS: dict[str, RenderPlan] = {
