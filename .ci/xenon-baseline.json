@@ -1,7 +1,7 @@
 {
   "allow_violations": [
     "block \"src/octowright/browser_pool/lifecycle.py:49 handoff_browser\" has a rank of C",
-    "block \"src/octowright/browser_pool/pool.py:79 launch\" has a rank of F",
+    "block \"src/octowright/browser_pool/pool.py:70 launch\" has a rank of D",
     "block \"src/octowright/cli/serve.py:164 _serve_async\" has a rank of C",
     "block \"src/octowright/cli/serve.py:264 _run_leader\" has a rank of D",
     "block \"src/octowright/cli/takeover.py:74 takeover\" has a rank of C",
