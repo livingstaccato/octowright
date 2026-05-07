@@ -20,7 +20,7 @@ source_refs:
   scenarios:
     - examples/scenarios/duo.yaml
   macros:
-    - examples/macros/test-selector-presence.json
+    - examples/macros/test-smoke-page-ready.json
 artifact_expectations:
   replay:
     - artifacts/replay.jsonl
@@ -31,6 +31,22 @@ regen:
   command: uv run python scripts/demos/record_demo.py role-based-duo
 tutorial_export:
   include: exports/role-based-duo.json
+presentation:
+  mode: sync-multi
+  primary_asset: hero_video
+  overlay:
+    enabled: true
+    style: subtle
+    placement: bottom-left
+  timing:
+    intro_ms: 400
+    outro_ms: 1800
+    minimum_ms: 6500
+  sync_groups:
+    - id: roles
+      roles:
+        - player
+        - monitor
 seed_refs:
   - seed/control-room.html
   - seed/duo-board.html
@@ -40,5 +56,5 @@ recording:
     player: seed/duo-board.html
     monitor: seed/control-room.html
   macros:
-    - name: test-selector-presence
+    - name: test-smoke-page-ready
       role: player

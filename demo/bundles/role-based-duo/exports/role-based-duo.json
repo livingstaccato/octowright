@@ -2,52 +2,72 @@
   "artifact_manifest": {
     "artifacts": {
       "replay": {
-        "event_count": 11,
+        "event_count": 10,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 4490,
+        "size_bytes": 2745,
         "ts_export": "artifacts/replay.ts"
       },
+      "supporting_videos": [
+        {
+          "id": "duo-player",
+          "kind": "webkit",
+          "path": "artifacts/supporting/duo-player.mp4",
+          "poster_path": "artifacts/supporting/duo-player.png",
+          "role": "player"
+        },
+        {
+          "id": "duo-monitor",
+          "kind": "webkit",
+          "path": "artifacts/supporting/duo-monitor.mp4",
+          "poster_path": "artifacts/supporting/duo-monitor.png",
+          "role": "monitor"
+        }
+      ],
       "video": {
-        "duration_seconds": 2.72,
-        "height": 540,
+        "duration_seconds": 7.68,
+        "height": 720,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 16953,
+        "size_bytes": 149260,
         "width": 1920
       }
     },
     "bundle_id": "role-based-duo",
     "composition": {
-      "canvas_height": 540,
+      "canvas_height": 720,
       "canvas_width": 1920,
-      "cell_height": 540,
+      "cell_height": 720,
       "cell_width": 960,
       "columns": 2,
-      "mode": "grid",
+      "mode": "sync-multi",
       "overlay": {
         "panes": [
           {
+            "height": 720,
             "kind": "webkit",
             "persona": "duo-player",
             "role": "player",
+            "width": 960,
             "x": 0,
             "y": 0
           },
           {
+            "height": 720,
             "kind": "webkit",
             "persona": "duo-monitor",
             "role": "monitor",
+            "width": 960,
             "x": 960,
             "y": 0
           }
         ],
-        "subtitle": "role-based-duo | Start two coordinated participants and show role-filtered actions against a simple offline scenario.",
-        "title": "Role-Based Duo"
+        "subtitle": "",
+        "title": ""
       },
       "panes": [
         {
-          "height": 540,
+          "height": 720,
           "kind": "webkit",
           "persona": "duo-player",
           "role": "player",
@@ -56,13 +76,31 @@
           "y": 0
         },
         {
-          "height": 540,
+          "height": 720,
           "kind": "webkit",
           "persona": "duo-monitor",
           "role": "monitor",
           "width": 960,
           "x": 960,
           "y": 0
+        }
+      ],
+      "supporting_videos": [
+        {
+          "id": "duo-player",
+          "kind": "webkit",
+          "path": "demo/bundles/role-based-duo/artifacts/supporting/duo-player.mp4",
+          "persona": "duo-player",
+          "poster_path": "demo/bundles/role-based-duo/artifacts/supporting/duo-player.png",
+          "role": "player"
+        },
+        {
+          "id": "duo-monitor",
+          "kind": "webkit",
+          "path": "demo/bundles/role-based-duo/artifacts/supporting/duo-monitor.mp4",
+          "persona": "duo-monitor",
+          "poster_path": "demo/bundles/role-based-duo/artifacts/supporting/duo-monitor.png",
+          "role": "monitor"
         }
       ]
     },
@@ -79,6 +117,10 @@
         "role": "monitor"
       }
     ],
+    "presentation": {
+      "mode": "sync-multi",
+      "primary_asset": "hero_video"
+    },
     "title": "Role-Based Duo"
   },
   "assets": {
@@ -92,6 +134,36 @@
   },
   "hero": true,
   "id": "role-based-duo",
+  "media": {
+    "presentation": {
+      "mode": "sync-multi",
+      "primary_asset": "hero_video"
+    },
+    "primary": {
+      "duration_seconds": 7.68,
+      "height": 720,
+      "path": "artifacts/demo.mp4",
+      "poster_path": "artifacts/poster.png",
+      "size_bytes": 149260,
+      "width": 1920
+    },
+    "supporting": [
+      {
+        "id": "duo-player",
+        "kind": "webkit",
+        "path": "artifacts/supporting/duo-player.mp4",
+        "poster_path": "artifacts/supporting/duo-player.png",
+        "role": "player"
+      },
+      {
+        "id": "duo-monitor",
+        "kind": "webkit",
+        "path": "artifacts/supporting/duo-monitor.mp4",
+        "poster_path": "artifacts/supporting/duo-monitor.png",
+        "role": "monitor"
+      }
+    ]
+  },
   "regen_command": "uv run python scripts/demos/record_demo.py role-based-duo",
   "summary": "Start two coordinated participants and show role-filtered actions against a simple offline scenario.",
   "title": "Role-Based Duo",
