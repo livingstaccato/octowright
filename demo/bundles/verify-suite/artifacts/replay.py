@@ -24,14 +24,6 @@ async def main() -> None:
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await ctx.new_page()
         await page.goto(
-            _resolve_bundle_url(
-                "bundle://seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2"
-            )
-        )
-        browser = await p.webkit.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
-        page = await ctx.new_page()
-        await page.goto(
             _resolve_bundle_url("bundle://seed/verify-stage.html?persona=vs-form&role=form&kind=webkit&slot=0")
         )
         browser = await p.webkit.launch(headless=True)
@@ -39,6 +31,14 @@ async def main() -> None:
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url("bundle://seed/verify-stage.html?persona=vs-counter&role=counter&kind=webkit&slot=1")
+        )
+        browser = await p.webkit.launch(headless=True)
+        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        page = await ctx.new_page()
+        await page.goto(
+            _resolve_bundle_url(
+                "bundle://seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2"
+            )
         )
         await page.evaluate("document.body.innerHTML = '<input id=user><input id=pass type=password>'")
         try:
