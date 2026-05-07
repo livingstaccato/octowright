@@ -113,14 +113,32 @@ def _load_bundle_scenario(bundle: DemoBundle) -> Scenario:
     return load_yaml_scenario(path.read_text(encoding="utf-8"), path.stem)
 
 
+_DEMO_VIEWPORT_W = 1920
+_DEMO_VIEWPORT_H = 1080
+
+
 def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
     participants: list[Participant] = []
     for index, participant in enumerate(scenario.participants):
+        # Demo recordings always run at 1920x1080 so the resulting videos
+        # land on a 1080p canvas (single-pane bundles) or feed a 1080p
+        # composite (multi-pane bundles) without scale-up softness.
+        # A scenario can still pin a different size by setting viewport_w/h.
+        viewport_w = participant.viewport_w if participant.viewport_w else _DEMO_VIEWPORT_W
+        viewport_h = participant.viewport_h if participant.viewport_h else _DEMO_VIEWPORT_H
+
         # Preserve explicit external URLs (http://, https://) so participants
         # pointing at the dashboard sidecar (or any live service) keep their
         # target URL instead of being rewritten to a bundle seed.
         if participant.url and (participant.url.startswith("http://") or participant.url.startswith("https://")):
-            participants.append(replace(participant, record_video=True))
+            participants.append(
+                replace(
+                    participant,
+                    viewport_w=viewport_w,
+                    viewport_h=viewport_h,
+                    record_video=True,
+                )
+            )
             continue
         role_seed = bundle.recording.role_seeds.get(participant.role)
         target_url = _seed_url(bundle, role_seed, participant=participant, slot=index) if role_seed else None
@@ -130,6 +148,8 @@ def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
             replace(
                 participant,
                 url=target_url or participant.url,
+                viewport_w=viewport_w,
+                viewport_h=viewport_h,
                 record_video=True,
             )
         )
