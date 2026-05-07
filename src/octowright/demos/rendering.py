@@ -155,6 +155,7 @@ def write_artifact_manifest(
     event_count: int,
     render_summary: dict[str, Any],
 ) -> None:
+    supporting_videos = render_summary.get("supporting_videos", [])
     payload: dict[str, Any] = {
         "bundle_id": bundle.id,
         "title": bundle.title,
@@ -183,7 +184,27 @@ def write_artifact_manifest(
             },
         },
         "composition": render_summary,
+        "presentation": {
+            "mode": bundle.presentation.mode,
+            "primary_asset": bundle.presentation.primary_asset,
+        },
     }
+    payload["artifacts"]["supporting_videos"] = [
+        {
+            "id": item["id"],
+            "path": _relative_manifest_path(bundle, item["path"]),
+            "poster_path": _relative_manifest_path(bundle, item["poster_path"]),
+            "role": item["role"],
+            "kind": item["kind"],
+        }
+        for item in supporting_videos
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and isinstance(item.get("path"), str)
+        and isinstance(item.get("poster_path"), str)
+        and isinstance(item.get("role"), str)
+        and isinstance(item.get("kind"), str)
+    ]
     manifest_path = bundle.root / "artifacts" / "manifest.json"
     manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -191,6 +212,14 @@ def write_artifact_manifest(
 def _temporary_video_path(video_path: Path) -> Path:
     temp_dir = Path(tempfile.mkdtemp(prefix="octowright-demo-render-"))
     return temp_dir / video_path.name
+
+
+def _relative_manifest_path(bundle: DemoBundle, raw_path: str) -> str:
+    path = Path(raw_path)
+    try:
+        return path.relative_to(bundle.root).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _finalize_render(bundle: DemoBundle, *, work_path: Path, video_path: Path, summary: dict[str, Any]) -> None:
