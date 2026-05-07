@@ -69,17 +69,20 @@ CLI (Click)
 
 | Path | Role |
 |------|------|
-| `src/octowright/pool.py` | `BrowserPool` — all browser lifecycle, emoji badges, title injection |
+| `src/octowright/browser_pool/pool.py` | `BrowserPool` — all browser lifecycle |
+| `src/octowright/browser_pool/visuals.py` | Emoji badges, title injection, macro-status pill helpers |
+| `src/octowright/browser_pool/_assets/*.js` | Init scripts injected into every page (title tag, corner badge, macro pill) |
 | `src/octowright/session/core.py` | `BrowserSession` dataclass |
 | `src/octowright/server/_state.py` | Shared singletons: `pool`, `mcp`, `scenario_pool` |
 | `src/octowright/server/browser/lifecycle.py` | MCP tools: `browser_launch`, `browser_close`, `browser_navigate` |
 | `src/octowright/cli/serve.py` | Leader-election + server startup |
 | `src/octowright/http/app.py` | Starlette app factory |
-| `src/octowright/macros.py` | Record → save → replay pipeline |
+| `src/octowright/macros/` (package) | Record → save → replay pipeline; `execution.py` runs macros, `storage.py` reads/writes JSON, `runtime.py` dispatches actions |
 | `src/octowright/scenarios.py` | `Scenario`/`Participant` models + YAML/Python loaders |
 | `src/octowright/personas.py` | Persona metadata + credential resolution |
 | `src/octowright/resolve.py` | `suggest_for_url()` — persona ranking by URL |
 | `src/octowright/defaults.py` | All env-var-driven defaults (port, paths, timeouts) |
+| `tools/octowright_demos/` | **Out-of-wheel** demo-bundle generation (catalog, indexer, runtime, exports). Imported by `scripts/demos/*` and `tests/test_demos_*`; not part of the shipped package. |
 | `docs/architecture/MCP-SHARED-CONTRACT.md` | HTTP API spec (endpoints, request/response shapes) |
 | `docs/architecture/` | PlantUML diagrams (render with `make diagrams`) |
 
@@ -88,12 +91,18 @@ CLI (Click)
 Every browser action is appended as a JSON object `{ts, action, ...fields}` to a `.jsonl` file per session. JSONL is:
 - **Streamed live** via WebSocket `/api/sessions/{id}/tail`
 - **Exported** to standalone Python/TS scripts via `export.py`
-- **Replayed** as a macro via `macros.py`
+- **Replayed** as a macro via `macros/execution.py`
 - **Diffed** as golden accessibility-tree snapshots via `server/goldens.py`
 
 ### MCP Tool Registration
 
 Tools are `@mcp.tool`-decorated async functions in `server/browser/`, `server/macros.py`, `server/personas.py`, `server/scenarios.py`, `server/goldens.py`, and `server/meta.py`. The `mcp` singleton lives in `server/_state.py` and is imported by each submodule. Adding a new tool: decorate a function with `@mcp.tool` in the appropriate submodule — no manual registration needed.
+
+### Macro Status Pill
+
+Every page launched by the pool gets a faint translucent overlay at the bottom-center. While `run_macro` is dispatching, the pill shows the per-browser ID chip (matches the corner-badge color), a live elapsed counter, and the current action description. After completion the pill stays visible with `done` / `failed`; the next macro's `start` push resets the counter. Holding **Alt** makes the pill clickable — click opens a themed modal with the full per-push run history. The pill is `pointer-events: none` by default so it never intercepts page clicks.
+
+Pass `slowmo_ms=N` to `macro_run` / `macro_run_sequence` (or set `OCTOWRIGHT_MACRO_SLOWMO_MS`) to insert a per-action delay between status push and dispatch — useful for following execution by eye.
 
 ### Idle Watchdog
 
@@ -110,3 +119,5 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_HEADLESS` — force headless mode
 - `OCTOWRIGHT_IDLE_GRACE` — seconds before auto-exit (default 300)
 - `OCTOWRIGHT_PROFILES_DIR` — override profile storage root
+- `OCTOWRIGHT_MACROS_DIR` — override macro JSON storage root
+- `OCTOWRIGHT_MACRO_SLOWMO_MS` — default per-action delay during macro replay (0 disables)
