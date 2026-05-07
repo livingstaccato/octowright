@@ -32,6 +32,21 @@ regen:
   command: uv run python scripts/demos/record_demo.py cross-engine-trio
 tutorial_export:
   include: exports/cross-engine-trio.json
+presentation:
+  mode: sync-multi
+  primary_asset: hero_video
+  overlay:
+    enabled: true
+    style: subtle
+    placement: bottom-left
+  timing:
+    intro_ms: 400
+    outro_ms: 1800
+    minimum_ms: 6500
+  sync_groups:
+    - id: engines
+      roles:
+        - player
 seed_refs:
   - seed/engine-grid.html
   - seed/trio-board.html

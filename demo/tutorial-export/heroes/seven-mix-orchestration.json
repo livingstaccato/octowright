@@ -5,15 +5,52 @@
         "event_count": 59,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 22125,
+        "size_bytes": 14908,
         "ts_export": "artifacts/replay.ts"
       },
+      "supporting_videos": [
+        {
+          "id": "p1",
+          "kind": "webkit",
+          "path": "artifacts/supporting/p1.mp4",
+          "poster_path": "artifacts/supporting/p1.png",
+          "role": "player"
+        },
+        {
+          "id": "ops",
+          "kind": "webkit",
+          "path": "artifacts/supporting/ops.mp4",
+          "poster_path": "artifacts/supporting/ops.png",
+          "role": "monitor"
+        },
+        {
+          "id": "spectator",
+          "kind": "webkit",
+          "path": "artifacts/supporting/spectator.mp4",
+          "poster_path": "artifacts/supporting/spectator.png",
+          "role": "main-site"
+        },
+        {
+          "id": "p2",
+          "kind": "webkit",
+          "path": "artifacts/supporting/p2.mp4",
+          "poster_path": "artifacts/supporting/p2.png",
+          "role": "player"
+        },
+        {
+          "id": "p3",
+          "kind": "webkit",
+          "path": "artifacts/supporting/p3.mp4",
+          "poster_path": "artifacts/supporting/p3.png",
+          "role": "player"
+        }
+      ],
       "video": {
-        "duration_seconds": 6.0,
+        "duration_seconds": 12.84,
         "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 80789,
+        "size_bytes": 377098,
         "width": 1920
       }
     },
@@ -21,75 +58,57 @@
     "composition": {
       "canvas_height": 1080,
       "canvas_width": 1920,
-      "mode": "featured",
+      "mode": "hero-composite",
       "overlay": {
         "panes": [
           {
+            "height": 720,
             "kind": "webkit",
             "persona": "p1",
             "role": "player",
+            "width": 1280,
             "x": 0,
             "y": 0
           },
           {
-            "kind": "webkit",
-            "persona": "p2",
-            "role": "player",
-            "x": 1280,
-            "y": 0
-          },
-          {
-            "kind": "webkit",
-            "persona": "p3",
-            "role": "player",
-            "x": 1600,
-            "y": 0
-          },
-          {
-            "kind": "firefox",
-            "persona": "p4",
-            "role": "player",
-            "x": 1280,
-            "y": 360
-          },
-          {
-            "kind": "firefox",
-            "persona": "p5",
-            "role": "player",
-            "x": 1600,
-            "y": 360
-          },
-          {
-            "kind": "chromium",
-            "persona": "p6",
-            "role": "player",
-            "x": 0,
-            "y": 720
-          },
-          {
-            "kind": "chromium",
-            "persona": "p7",
-            "role": "player",
-            "x": 480,
-            "y": 720
-          },
-          {
+            "height": 360,
             "kind": "webkit",
             "persona": "ops",
             "role": "monitor",
-            "x": 960,
-            "y": 720
+            "width": 640,
+            "x": 1280,
+            "y": 0
           },
           {
+            "height": 360,
             "kind": "webkit",
             "persona": "spectator",
             "role": "main-site",
-            "x": 1440,
+            "width": 640,
+            "x": 1280,
+            "y": 360
+          },
+          {
+            "height": 360,
+            "kind": "webkit",
+            "persona": "p2",
+            "role": "player",
+            "width": 640,
+            "x": 0,
+            "y": 720
+          },
+          {
+            "height": 360,
+            "kind": "webkit",
+            "persona": "p3",
+            "role": "player",
+            "width": 640,
+            "x": 640,
             "y": 720
           }
         ],
-        "subtitle": "seven-mix-orchestration | Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.",
-        "title": "Seven Mix Orchestration"
+        "subtitle": "",
+        "title": ""
       },
       "panes": [
         {
@@ -104,74 +123,80 @@
         {
           "height": 360,
           "kind": "webkit",
-          "persona": "p2",
-          "role": "player",
-          "width": 320,
-          "x": 1280,
-          "y": 0
-        },
-        {
-          "height": 360,
-          "kind": "webkit",
-          "persona": "p3",
-          "role": "player",
-          "width": 320,
-          "x": 1600,
-          "y": 0
-        },
-        {
-          "height": 360,
-          "kind": "firefox",
-          "persona": "p4",
-          "role": "player",
-          "width": 320,
-          "x": 1280,
-          "y": 360
-        },
-        {
-          "height": 360,
-          "kind": "firefox",
-          "persona": "p5",
-          "role": "player",
-          "width": 320,
-          "x": 1600,
-          "y": 360
-        },
-        {
-          "height": 360,
-          "kind": "chromium",
-          "persona": "p6",
-          "role": "player",
-          "width": 480,
-          "x": 0,
-          "y": 720
-        },
-        {
-          "height": 360,
-          "kind": "chromium",
-          "persona": "p7",
-          "role": "player",
-          "width": 480,
-          "x": 480,
-          "y": 720
-        },
-        {
-          "height": 360,
-          "kind": "webkit",
           "persona": "ops",
           "role": "monitor",
-          "width": 480,
-          "x": 960,
-          "y": 720
+          "width": 640,
+          "x": 1280,
+          "y": 0
         },
         {
           "height": 360,
           "kind": "webkit",
           "persona": "spectator",
           "role": "main-site",
-          "width": 480,
-          "x": 1440,
+          "width": 640,
+          "x": 1280,
+          "y": 360
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p2",
+          "role": "player",
+          "width": 640,
+          "x": 0,
           "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p3",
+          "role": "player",
+          "width": 640,
+          "x": 640,
+          "y": 720
+        }
+      ],
+      "supporting_videos": [
+        {
+          "id": "p1",
+          "kind": "webkit",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p1.mp4",
+          "persona": "p1",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p1.png",
+          "role": "player"
+        },
+        {
+          "id": "ops",
+          "kind": "webkit",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/ops.mp4",
+          "persona": "ops",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/ops.png",
+          "role": "monitor"
+        },
+        {
+          "id": "spectator",
+          "kind": "webkit",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/spectator.mp4",
+          "persona": "spectator",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/spectator.png",
+          "role": "main-site"
+        },
+        {
+          "id": "p2",
+          "kind": "webkit",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p2.mp4",
+          "persona": "p2",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p2.png",
+          "role": "player"
+        },
+        {
+          "id": "p3",
+          "kind": "webkit",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.mp4",
+          "persona": "p3",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.png",
+          "role": "player"
         }
       ]
     },
@@ -223,6 +248,10 @@
         "role": "main-site"
       }
     ],
+    "presentation": {
+      "mode": "hero-composite",
+      "primary_asset": "hero_video"
+    },
     "title": "Seven Mix Orchestration"
   },
   "assets": {
@@ -237,6 +266,57 @@
   },
   "hero": true,
   "id": "seven-mix-orchestration",
+  "media": {
+    "presentation": {
+      "mode": "hero-composite",
+      "primary_asset": "hero_video"
+    },
+    "primary": {
+      "duration_seconds": 12.84,
+      "height": 1080,
+      "path": "artifacts/demo.mp4",
+      "poster_path": "artifacts/poster.png",
+      "size_bytes": 377098,
+      "width": 1920
+    },
+    "supporting": [
+      {
+        "id": "p1",
+        "kind": "webkit",
+        "path": "artifacts/supporting/p1.mp4",
+        "poster_path": "artifacts/supporting/p1.png",
+        "role": "player"
+      },
+      {
+        "id": "ops",
+        "kind": "webkit",
+        "path": "artifacts/supporting/ops.mp4",
+        "poster_path": "artifacts/supporting/ops.png",
+        "role": "monitor"
+      },
+      {
+        "id": "spectator",
+        "kind": "webkit",
+        "path": "artifacts/supporting/spectator.mp4",
+        "poster_path": "artifacts/supporting/spectator.png",
+        "role": "main-site"
+      },
+      {
+        "id": "p2",
+        "kind": "webkit",
+        "path": "artifacts/supporting/p2.mp4",
+        "poster_path": "artifacts/supporting/p2.png",
+        "role": "player"
+      },
+      {
+        "id": "p3",
+        "kind": "webkit",
+        "path": "artifacts/supporting/p3.mp4",
+        "poster_path": "artifacts/supporting/p3.png",
+        "role": "player"
+      }
+    ]
+  },
   "regen_command": "uv run python scripts/demos/record_demo.py seven-mix-orchestration",
   "summary": "Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.",
   "title": "Seven Mix Orchestration",
