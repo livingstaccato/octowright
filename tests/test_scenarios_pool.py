@@ -51,7 +51,7 @@ class _Pool:
         self.closed: list[str] = []
         self.spawn_error = False
 
-    async def spawn_roster(self, reqs):
+    async def spawn_roster(self, _reqs):
         if self.spawn_error:
             return {"launched": [{"instance_id": "a", "log_path": "a.log"}], "errors": ["boom"]}
         return {
@@ -152,9 +152,9 @@ def test_remap_participant_rejects_kind_mismatch() -> None:
             old_instance_id="a",
             new_instance_id="b",
             browser_pool=SimpleNamespace(
-                maybe_get=lambda instance_id: SimpleNamespace(kind="firefox", profile="alice")
-                if instance_id == "b"
-                else None
+                maybe_get=lambda instance_id: (
+                    SimpleNamespace(kind="firefox", profile="alice") if instance_id == "b" else None
+                )
             ),
         )
 
@@ -170,9 +170,9 @@ def test_remap_participant_rejects_profile_mismatch() -> None:
             old_instance_id="a",
             new_instance_id="b",
             browser_pool=SimpleNamespace(
-                maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="bob")
-                if instance_id == "b"
-                else None
+                maybe_get=lambda instance_id: (
+                    SimpleNamespace(kind="chromium", profile="bob") if instance_id == "b" else None
+                )
             ),
         )
 

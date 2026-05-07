@@ -11,8 +11,19 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import TypedDict
 
 from octowright.video_overlay import render_overlay_image
+
+
+class VideoPlacement(TypedDict):
+    """One source-clip placement in a composite layout."""
+
+    source: Path
+    width: int
+    height: int
+    x: int
+    y: int
 
 
 def ensure_ffmpeg() -> str:
@@ -233,7 +244,7 @@ def compose_video_grid(
 
 
 def compose_video_layout(
-    placements: list[dict[str, int | Path]],
+    placements: list[VideoPlacement],
     target_path: Path,
 ) -> Path:
     if not placements:
@@ -247,10 +258,10 @@ def compose_video_layout(
 
     for index, placement in enumerate(placements):
         source_path = placement["source"]
-        width = int(placement["width"])
-        height = int(placement["height"])
-        x = int(placement["x"])
-        y = int(placement["y"])
+        width = placement["width"]
+        height = placement["height"]
+        x = placement["x"]
+        y = placement["y"]
         inputs.extend(["-i", str(source_path)])
         filters.append(
             f"[{index}:v]setpts=PTS-STARTPTS,"
