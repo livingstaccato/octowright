@@ -27,7 +27,11 @@ const resolveBundleUrl = (raw: string): string => {
   browser = await webkit.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/orchestration-stage.html?persona=p3&role=player&kind=webkit&slot=2"));
+  await page.goto(resolveBundleUrl("bundle://seed/orchestration-stage.html?persona=p2&role=player&kind=webkit&slot=1"));
+  browser = await firefox.launch({ headless: true });
+  ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("bundle://seed/orchestration-stage.html?persona=p4&role=player&kind=firefox&slot=3"));
   browser = await webkit.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await ctx.newPage();
@@ -35,7 +39,7 @@ const resolveBundleUrl = (raw: string): string => {
   browser = await webkit.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/orchestration-stage.html?persona=p2&role=player&kind=webkit&slot=1"));
+  await page.goto(resolveBundleUrl("bundle://seed/orchestration-stage.html?persona=p3&role=player&kind=webkit&slot=2"));
   browser = await webkit.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await ctx.newPage();
@@ -44,10 +48,6 @@ const resolveBundleUrl = (raw: string): string => {
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("bundle://seed/orchestration-stage.html?persona=ops&role=monitor&kind=webkit&slot=7"));
-  browser = await firefox.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/orchestration-stage.html?persona=p4&role=player&kind=firefox&slot=3"));
   browser = await firefox.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await ctx.newPage();

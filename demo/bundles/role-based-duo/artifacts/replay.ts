@@ -19,11 +19,11 @@ const resolveBundleUrl = (raw: string): string => {
   browser = await webkit.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/control-room.html?persona=duo-monitor&role=monitor&kind=webkit&slot=1"));
+  await page.goto(resolveBundleUrl("bundle://seed/duo-board.html?persona=duo-player&role=player&kind=webkit&slot=0"));
   browser = await webkit.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/duo-board.html?persona=duo-player&role=player&kind=webkit&slot=0"));
+  await page.goto(resolveBundleUrl("bundle://seed/control-room.html?persona=duo-monitor&role=monitor&kind=webkit&slot=1"));
   if (browser !== null) {
     await browser.close();
   } else {

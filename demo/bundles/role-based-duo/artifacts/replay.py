@@ -24,13 +24,13 @@ async def main() -> None:
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await ctx.new_page()
         await page.goto(
-            _resolve_bundle_url("bundle://seed/control-room.html?persona=duo-monitor&role=monitor&kind=webkit&slot=1")
+            _resolve_bundle_url("bundle://seed/duo-board.html?persona=duo-player&role=player&kind=webkit&slot=0")
         )
         browser = await p.webkit.launch(headless=True)
         ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await ctx.new_page()
         await page.goto(
-            _resolve_bundle_url("bundle://seed/duo-board.html?persona=duo-player&role=player&kind=webkit&slot=0")
+            _resolve_bundle_url("bundle://seed/control-room.html?persona=duo-monitor&role=monitor&kind=webkit&slot=1")
         )
         if browser is not None:
             await browser.close()
