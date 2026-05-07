@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from octowright.demos.models import DemoBundle
+from octowright_demos.models import DemoBundle
 
 _DROP_EVENT_KEYS = {
     "har_path",

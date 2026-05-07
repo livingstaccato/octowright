@@ -13,15 +13,18 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = REPO_ROOT / "src"
+# Demo lib lives at tools/octowright_demos/ (NOT inside the shipped wheel).
+TOOLS_DIR = REPO_ROOT / "tools"
 
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+for _path in (SRC_DIR, TOOLS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
-from octowright.demos.catalog import list_demo_bundles
-from octowright.demos.export import build_tutorial_export
-from octowright.demos.indexer import build_demo_index
-from octowright.demos.models import DemoBundle
-from octowright.demos.runtime import record_demo_bundle
+from octowright_demos.catalog import list_demo_bundles
+from octowright_demos.export import build_tutorial_export
+from octowright_demos.indexer import build_demo_index
+from octowright_demos.models import DemoBundle
+from octowright_demos.runtime import record_demo_bundle
 
 INDEX_PATH = REPO_ROOT / "demo" / "INDEX.md"
 TUTORIAL_EXPORT_ROOT = REPO_ROOT / "demo" / "tutorial-export"

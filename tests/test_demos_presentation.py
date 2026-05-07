@@ -9,9 +9,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-
-from octowright.demos.catalog import load_demo_bundle
-from octowright.demos.models import DemoPresentationConfig, DemoSyncGroup, DemoTimingConfig
+from octowright_demos.catalog import load_demo_bundle
+from octowright_demos.models import DemoPresentationConfig, DemoSyncGroup, DemoTimingConfig
 
 
 def test_load_demo_bundle_parses_presentation_block(tmp_path: Path) -> None:

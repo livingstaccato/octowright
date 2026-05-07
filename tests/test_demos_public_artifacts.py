@@ -8,8 +8,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from octowright.demos.models import DemoBundle
-from octowright.demos.public_artifacts import sanitize_public_artifacts
+from octowright_demos.models import DemoBundle
+from octowright_demos.public_artifacts import sanitize_public_artifacts
 
 
 def test_sanitize_public_artifacts_strips_absolute_local_paths(tmp_path: Path) -> None:
