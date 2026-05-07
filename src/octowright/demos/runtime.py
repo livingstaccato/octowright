@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 
 from octowright.browser_pool import BrowserPool
 from octowright.demos.models import DemoBundle, DemoMacroRun
+from octowright.demos.public_artifacts import sanitize_public_artifacts
 from octowright.demos.rendering import render_bundle_video, write_artifact_manifest, write_exports
 from octowright.recorder import tail_log
 from octowright.runner import _write_junit
@@ -39,11 +40,13 @@ async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
     with _macro_dir(bundle):
         try:
             live = await scenario_pool.start(spec=runnable, browser_pool=pool)
+            run_started = asyncio.get_running_loop().time()
             await _apply_intro_hold(bundle)
             await _run_bundle_macros(bundle, scenario_pool, live, pool)
             if bundle.recording.verify_report:
                 await _run_verify_suite(bundle, live, pool)
             await _apply_outro_hold(bundle)
+            await _apply_minimum_duration(bundle, started_at=run_started)
             await _capture_poster(bundle, live, pool)
         finally:
             if live is not None:
@@ -53,6 +56,7 @@ async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
     replay_path = _primary_replay_path(bundle)
     merged_events = _write_merged_replay(live, replay_path)
     _write_supporting_artifacts(bundle, live, scenario, replay_path)
+    sanitize_public_artifacts(bundle)
     write_exports(replay_path)
     video_path = _primary_video_path(bundle)
     poster_path = _primary_poster_path(bundle)
@@ -176,6 +180,16 @@ async def _apply_intro_hold(bundle: DemoBundle) -> None:
 async def _apply_outro_hold(bundle: DemoBundle) -> None:
     if bundle.presentation.timing.outro_ms > 0:
         await asyncio.sleep(bundle.presentation.timing.outro_ms / 1000)
+
+
+async def _apply_minimum_duration(bundle: DemoBundle, *, started_at: float) -> None:
+    minimum_seconds = bundle.presentation.timing.minimum_ms / 1000
+    if minimum_seconds <= 0:
+        return
+    elapsed = asyncio.get_running_loop().time() - started_at
+    remaining = minimum_seconds - elapsed
+    if remaining > 0:
+        await asyncio.sleep(remaining)
 
 
 async def _run_verify_suite(bundle: DemoBundle, live: LiveScenario, pool: BrowserPool) -> None:

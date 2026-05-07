@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from octowright.demos.catalog import load_demo_bundle
 from octowright.demos.models import DemoBundle, DemoMacroRun, DemoPresentationConfig, DemoRecordingConfig
 from octowright.demos.presentation_profiles import select_render_plan
 from octowright.demos.rendering import render_bundle_video
@@ -255,7 +256,7 @@ def test_render_bundle_video_uses_presentation_mode_for_sync_multi(monkeypatch, 
     )
     monkeypatch.setattr(
         "octowright.demos.rendering.extract_frame",
-        lambda source, target: target.write_bytes(b"poster") or target,
+        lambda source, target, **kwargs: target.write_bytes(b"poster") or target,
     )
     monkeypatch.setattr(
         "octowright.demos.rendering.compose_video_grid",
@@ -329,3 +330,21 @@ def test_select_render_plan_raises_for_unsupported_mode(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsupported presentation mode"):
         select_render_plan(bundle)
+
+
+def test_site_facing_render_plans_use_readable_canvases() -> None:
+    cross_engine = select_render_plan(load_demo_bundle(Path("demo/bundles/cross-engine-trio")))
+    role_based = select_render_plan(load_demo_bundle(Path("demo/bundles/role-based-duo")))
+    seven_mix = select_render_plan(load_demo_bundle(Path("demo/bundles/seven-mix-orchestration")))
+
+    assert cross_engine.kind == "sync-multi"
+    assert (cross_engine.columns, cross_engine.cell_width, cross_engine.cell_height) == (2, 960, 540)
+
+    assert role_based.kind == "sync-multi"
+    assert (role_based.columns, role_based.cell_width, role_based.cell_height) == (2, 960, 720)
+
+    assert seven_mix.kind == "hero-composite"
+    assert (seven_mix.canvas_width, seven_mix.canvas_height) == (1920, 1080)
+    assert len(seven_mix.placements) == 5
+    assert min(slot.width for slot in seven_mix.placements) >= 640
+    assert min(slot.height for slot in seven_mix.placements) >= 360
