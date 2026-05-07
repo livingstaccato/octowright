@@ -163,6 +163,15 @@ class BrowserPool:
         ctx_video_kwargs: dict[str, Any] = {}
         if video_dir is not None:
             ctx_video_kwargs["record_video_dir"] = str(video_dir)
+            # Pin video size to the viewport so Playwright doesn't auto-scale
+            # to fit its 800x800 default. Without this, a 1280x800 viewport
+            # records as 800x500 — which is below 1080p for any composite
+            # downstream and visibly soft when scaled up on the site.
+            if headless or explicit_size:
+                ctx_video_kwargs["record_video_size"] = {
+                    "width": viewport_w or DEFAULT_VIEWPORT_W,
+                    "height": viewport_h or DEFAULT_VIEWPORT_H,
+                }
 
         har_path: Path | None = None
         if har or har_path_opt:
