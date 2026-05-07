@@ -37,6 +37,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"replay path: {recording['replay_path']}")
     print(f"video path: {recording['video_path']}")
     print(f"poster path: {recording['poster_path']}")
+    supporting_videos = recording.get("supporting_videos", [])
+    if isinstance(supporting_videos, list) and supporting_videos:
+        labels = [
+            item["id"] for item in supporting_videos if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
+        summary = ", ".join(labels) if labels else str(len(supporting_videos))
+        print(f"supporting videos: {summary}")
     return 0
 
 
