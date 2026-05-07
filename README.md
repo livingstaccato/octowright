@@ -300,7 +300,8 @@ ARIA locator first, then fall back to the original CSS selector.
 | Tool | What |
 |---|---|
 | `browser_screenshot` | PNG to disk. |
-| `browser_snapshot` | Accessibility tree. |
+| `browser_snapshot` | Accessibility tree (defaults to `body`). |
+| `browser_read_markdown` | Cached Markdown representation (highly token-efficient for reading). |
 | `browser_evaluate` | Run JS in the page. |
 | `browser_console_messages` | Collected console output since launch (cursor pagination). |
 | `browser_wait_for` | Wait for selector / text / network-idle. |
