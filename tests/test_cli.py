@@ -88,7 +88,6 @@ def test_test_command_forwards_max_parallel(monkeypatch: pytest.MonkeyPatch, tmp
         cli,
         [
             "test",
-            str(tmp_path / "macros"),
             "--kind",
             "firefox",
             "--tag",
@@ -102,7 +101,6 @@ def test_test_command_forwards_max_parallel(monkeypatch: pytest.MonkeyPatch, tmp
 
     assert result.exit_code == 0
     run_suite.assert_awaited_once_with(
-        macros_dir=str(tmp_path / "macros"),
         kind="firefox",
         tag="smoke",
         out_path=str(tmp_path / "j.xml"),

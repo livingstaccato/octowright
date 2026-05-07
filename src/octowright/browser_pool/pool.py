@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
@@ -16,34 +15,26 @@ from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
+from octowright.browser_pool.launch_helpers import (
+    _build_har_kwargs,
+    _build_video_kwargs,
+    _build_viewport_kwargs,
+    _open_browser_context,
+    _record_launch_event,
+    _safe_manifest_record,
+)
 from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
 from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
 from octowright.browser_pool.options import LaunchOptions
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.visuals import (
-    _BADGE_POSITIONS,
-    _BADGE_SCRIPT,
-    _MACRO_STATUS_SCRIPT,
-    _TITLE_TAG_SCRIPT,
-    _badge_color_for,
-    _badge_text_for,
-    _macro_pill_chip_for,
     _tile_args_for_chromium,
-    _title_tag_for,
+    wire_init_scripts,
 )
-from octowright.defaults import (
-    DEFAULT_URL,
-    DEFAULT_VIEWPORT_H,
-    DEFAULT_VIEWPORT_W,
-    HEADLESS_DEFAULT,
-    RECORDINGS_DIR,
-)
-from octowright.profiles import profile_dir
+from octowright.defaults import DEFAULT_URL, HEADLESS_DEFAULT, RECORDINGS_DIR
 from octowright.recorder import Recorder, new_log_path
 from octowright.session import BrowserSession
-from octowright.session_manifest import record_launch as _manifest_record_launch
-from octowright.stabilize import render_stabilize_script
 
 log = get_logger(__name__)
 
@@ -115,23 +106,7 @@ class BrowserPool:
         # and session are the explicit exceptions.
         profile = launch_options.promoted_profile()
 
-        # Session-scoped: tmpdir profile that lives for the daemon's lifetime.
-        # Reused across launches with the same (session_key, kind) — so closing
-        # and reopening keeps state, but daemon shutdown wipes everything.
-        # Named session launches are reusable by label. Anonymous session launches
-        # get an instance-scoped key so unrelated callers never share state.
-        session_user_data_dir: str | None = None
-        if session:
-            import tempfile
-
-            session_name = launch_options.session_name(instance_id)
-            session_key = (session_name, kind)
-            existing = self._session_profile_dirs.get(session_key)
-            if existing is None or not existing.exists():
-                tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_name}-{kind}-"))
-                self._session_profile_dirs[session_key] = tmp
-                existing = tmp
-            session_user_data_dir = str(existing)
+        session_user_data_dir = self._resolve_session_dir(session, launch_options, instance_id, kind)
 
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
@@ -139,98 +114,31 @@ class BrowserPool:
         target_url = url or DEFAULT_URL
         log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
 
-        # Headed: when neither viewport_w nor viewport_h is given, let Playwright
-        # adopt the OS window size (no_viewport=True) so the page can resize
-        # naturally with the window. Caller can still pin a size by passing one
-        # or both. Headless still needs a fixed viewport — that's the rendering
-        # target — so we keep the defaults there.
-        explicit_size = viewport_w is not None or viewport_h is not None
-        if headless or explicit_size:
-            vw = viewport_w or DEFAULT_VIEWPORT_W
-            vh = viewport_h or DEFAULT_VIEWPORT_H
-            viewport_kwargs: dict[str, Any] = {"viewport": {"width": vw, "height": vh}}
-            log_viewport: dict[str, Any] | None = {"w": vw, "h": vh}
-        else:
-            viewport_kwargs = {"no_viewport": True}
-            log_viewport = None
-
+        viewport_kwargs, log_viewport, explicit_size = _build_viewport_kwargs(headless, viewport_w, viewport_h)
+        ctx_video_kwargs, video_dir = _build_video_kwargs(record_video, headless, explicit_size, viewport_w, viewport_h)
+        har_path, ctx_har_kwargs = _build_har_kwargs(
+            har=har,
+            har_path_opt=har_path_opt,
+            har_mode=har_mode,
+            har_url_filter=har_url_filter,
+            har_content=har_content,
+            log_path=log_path,
+        )
+        launch_kwargs = self._build_launch_kwargs(tile=tile, kind=kind, headless=headless)
         user_data_dir: str | None = None
-        video_dir: Path | None = None
-        if record_video:
-            # We need a log_path parent to nest the videos/ dir, but log_path is
-            # created after context. Use a temp dir under RECORDINGS_DIR/videos/.
-            video_dir = RECORDINGS_DIR / "videos" / uuid.uuid4().hex[:8]
-            video_dir.mkdir(parents=True, exist_ok=True)
-
-        ctx_video_kwargs: dict[str, Any] = {}
-        if video_dir is not None:
-            ctx_video_kwargs["record_video_dir"] = str(video_dir)
-            # Pin video size to the viewport so Playwright doesn't auto-scale
-            # to fit its 800x800 default. Without this, a 1280x800 viewport
-            # records as 800x500 — which is below 1080p for any composite
-            # downstream and visibly soft when scaled up on the site.
-            if headless or explicit_size:
-                ctx_video_kwargs["record_video_size"] = {
-                    "width": viewport_w or DEFAULT_VIEWPORT_W,
-                    "height": viewport_h or DEFAULT_VIEWPORT_H,
-                }
-
-        har_path: Path | None = None
-        if har or har_path_opt:
-            har_path = Path(har_path_opt) if har_path_opt else log_path.with_suffix(".har")
-            if not har_path.is_absolute():
-                har_path = (RECORDINGS_DIR / har_path).resolve()
-            har_path.parent.mkdir(parents=True, exist_ok=True)
-
-        ctx_har_kwargs: dict[str, Any] = {}
-        if har_path is not None:
-            ctx_har_kwargs["record_har_path"] = str(har_path)
-            ctx_har_kwargs["record_har_mode"] = har_mode
-            if har_url_filter:
-                ctx_har_kwargs["record_har_url_filter"] = har_url_filter
-            if har_content:
-                ctx_har_kwargs["record_har_content"] = har_content
-
-        # Chromium-only window tiling: deterministic grid based on a monotonic
-        # counter incremented before any await — safe under parallel launches.
-        # No-op for firefox/webkit (no equivalent CLI hook) and headless runs.
-        launch_kwargs: dict[str, Any] = {}
-        if tile and kind == "chromium" and not headless:
-            tile_index = self._tile_counter
-            self._tile_counter += 1
-            launch_kwargs["args"] = _tile_args_for_chromium(tile_index)
 
         try:
-            if profile or session_user_data_dir:
-                if profile:
-                    pdir = profile_dir(kind, profile)
-                    pdir.mkdir(parents=True, exist_ok=True)
-                    user_data_dir = str(pdir)
-                else:
-                    # Session-scoped tmpdir branch — same launch_persistent_context
-                    # mechanism as a real persona profile, but the dir lives only
-                    # for the daemon's lifetime.
-                    user_data_dir = session_user_data_dir
-                context = await browser_type.launch_persistent_context(
-                    user_data_dir,
-                    headless=headless,
-                    accept_downloads=True,
-                    **viewport_kwargs,
-                    **ctx_video_kwargs,
-                    **ctx_har_kwargs,
-                    **launch_kwargs,
-                )
-                browser = None
-                page = context.pages[0] if context.pages else await context.new_page()
-            else:
-                browser = await browser_type.launch(headless=headless, **launch_kwargs)
-                context = await browser.new_context(
-                    accept_downloads=True,
-                    **viewport_kwargs,
-                    **ctx_video_kwargs,
-                    **ctx_har_kwargs,
-                )
-                page = await context.new_page()
+            browser, context, page, user_data_dir = await _open_browser_context(
+                browser_type=browser_type,
+                kind=kind,
+                profile=profile,
+                session_user_data_dir=session_user_data_dir,
+                headless=headless,
+                viewport_kwargs=viewport_kwargs,
+                ctx_video_kwargs=ctx_video_kwargs,
+                ctx_har_kwargs=ctx_har_kwargs,
+                launch_kwargs=launch_kwargs,
+            )
         except Exception as exc:
             if context is not None:
                 try:
@@ -249,25 +157,24 @@ class BrowserPool:
 
         try:
             recorder = Recorder(log_path)
-            recorder.record(
-                "launch",
+            _record_launch_event(
+                recorder,
                 instance_id=instance_id,
                 kind=kind,
                 label=label,
                 profile=profile,
                 user_data_dir=user_data_dir,
-                url=target_url,
-                headed=not headless,
-                viewport=log_viewport,
+                target_url=target_url,
+                headless=headless,
+                log_viewport=log_viewport,
                 stabilize=stabilize,
                 record_video=record_video,
-                video_dir=str(video_dir) if video_dir else None,
+                video_dir=video_dir,
                 trace=trace,
-                har=bool(har_path),
-                har_path=str(har_path) if har_path else None,
-                har_mode=har_mode if har_path else None,
-                har_url_filter=har_url_filter if har_path else None,
-                har_content=har_content if har_path else None,
+                har_path=har_path,
+                har_mode=har_mode,
+                har_url_filter=har_url_filter,
+                har_content=har_content,
             )
 
             # NOTE: this local was named ``session`` for years, but ``session`` is
@@ -302,44 +209,16 @@ class BrowserPool:
             _wire_listeners(new_session, page)
             context.on("page", new_session._register_popup)
 
-            # Look up the persona's emoji override (if any) so title + badge can
-            # show it. Ephemeral / unknown personas just hash-pick from the pool.
-            persona_emoji_override: str | None = None
-            if profile:
-                try:
-                    from octowright.personas import load_persona
-
-                    persona_emoji_override = load_persona(profile).emoji
-                except FileNotFoundError:
-                    pass
-
-            title_tag = _title_tag_for(profile, label, persona_emoji=persona_emoji_override, kind=kind)
-            if title_tag:
-                script = _TITLE_TAG_SCRIPT.replace("__SUFFIX__", json.dumps(title_tag))
-                await context.add_init_script(script=script)
-            if badge:
-                badge_text = _badge_text_for(
-                    profile, label, instance_id, persona_emoji=persona_emoji_override, kind=kind
-                )
-                # Color seed is persona-stable: identical across engines so the
-                # same persona launched in chromium + firefox + webkit shares one
-                # color. Engine differentiation rests on the engine emoji.
-                color_seed = profile or label or instance_id[:6]
-                badge_script = (
-                    _BADGE_SCRIPT.replace("__TAG__", json.dumps(badge_text))
-                    .replace("__COLOR__", json.dumps(_badge_color_for(color_seed)))
-                    .replace("__POS__", json.dumps(_BADGE_POSITIONS[badge_position]))
-                )
-                await context.add_init_script(script=badge_script)
-            # Macro status pill is always wired — the overlay stays invisible
-            # until a running macro pushes text via window.__octowright_macro_status.
-            chip_text, chip_color = _macro_pill_chip_for(profile, label, instance_id)
-            pill_script = _MACRO_STATUS_SCRIPT.replace("__ID_TAG__", json.dumps(chip_text)).replace(
-                "__ID_COLOR__", json.dumps(chip_color)
+            await wire_init_scripts(
+                context,
+                profile=profile,
+                label=label,
+                instance_id=instance_id,
+                kind=kind,
+                badge=badge,
+                badge_position=badge_position,
+                stabilize=stabilize,
             )
-            await context.add_init_script(script=pill_script)
-            if stabilize:
-                await context.add_init_script(script=render_stabilize_script())
 
             if trace:
                 await context.tracing.start(screenshots=True, snapshots=True, sources=True)
@@ -350,17 +229,14 @@ class BrowserPool:
 
             async with self._sessions_lock:
                 self._sessions[instance_id] = new_session
-            try:
-                _manifest_record_launch(
-                    session_id=instance_id,
-                    kind=kind,
-                    label=label,
-                    profile=profile,
-                    user_data_dir=user_data_dir,
-                    log_path=log_path,
-                )
-            except Exception as exc:
-                log.warning("octowright.session_manifest.write_failed", instance_id=instance_id, error=repr(exc))
+            _safe_manifest_record(
+                instance_id=instance_id,
+                kind=kind,
+                label=label,
+                profile=profile,
+                user_data_dir=user_data_dir,
+                log_path=log_path,
+            )
             registered = True
             log.info(
                 "octowright.browser.launched",
@@ -498,3 +374,39 @@ class BrowserPool:
 
     async def shutdown(self) -> None:
         await shutdown_pool(self)
+
+    def _build_launch_kwargs(self, *, tile: bool, kind: str, headless: bool) -> dict[str, Any]:
+        """Chromium-only window tiling. Increments _tile_counter under the
+        synchronous part of launch() so parallel launches don't share slots.
+        No-op for firefox/webkit (no equivalent CLI hook) and headless runs."""
+        out: dict[str, Any] = {}
+        if tile and kind == "chromium" and not headless:
+            tile_index = self._tile_counter
+            self._tile_counter += 1
+            out["args"] = _tile_args_for_chromium(tile_index)
+        return out
+
+    def _resolve_session_dir(
+        self,
+        session: bool,
+        launch_options: LaunchOptions,
+        instance_id: str,
+        kind: str,
+    ) -> str | None:
+        """Session=True: a tmpdir profile that lives for the daemon's lifetime.
+        Reused across launches sharing the same (session_key, kind), so close
+        + reopen keeps state but daemon shutdown wipes everything. Named
+        sessions are reusable by label; anonymous sessions get an instance-
+        scoped key so unrelated callers never share state."""
+        if not session:
+            return None
+        import tempfile
+
+        session_name = launch_options.session_name(instance_id)
+        session_key = (session_name, kind)
+        existing = self._session_profile_dirs.get(session_key)
+        if existing is None or not existing.exists():
+            tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_name}-{kind}-"))
+            self._session_profile_dirs[session_key] = tmp
+            existing = tmp
+        return str(existing)

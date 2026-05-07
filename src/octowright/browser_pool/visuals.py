@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 from provide.telemetry import get_logger
 
@@ -213,3 +214,71 @@ def _tile_args_for_chromium(index: int) -> list[str]:
     """
     x, y, w, h = _tile_position(index)
     return [f"--window-position={x},{y}", f"--window-size={w},{h}"]
+
+
+# --- per-context init-script wiring ----------------------------------------
+#
+# Pulled out of BrowserPool.launch so launch stays below the complexity gate.
+# Adds title-tag, corner badge, macro pill, and stabilize shim init scripts
+# to a Playwright BrowserContext.
+
+
+def _resolve_persona_emoji(profile: str | None) -> str | None:
+    """Look up the persona's emoji override. Ephemeral / unknown personas
+    fall through to the hash-pick path downstream."""
+    if not profile:
+        return None
+    try:
+        from octowright.personas import load_persona
+
+        return load_persona(profile).emoji
+    except FileNotFoundError:
+        return None
+
+
+async def wire_init_scripts(
+    context: Any,
+    *,
+    profile: str | None,
+    label: str | None,
+    instance_id: str,
+    kind: str,
+    badge: bool,
+    badge_position: str,
+    stabilize: bool,
+) -> None:
+    """Inject title-tag, badge, macro-pill, and (optional) stabilize scripts."""
+    import json as _json
+
+    from octowright.stabilize import render_stabilize_script
+
+    persona_emoji = _resolve_persona_emoji(profile)
+
+    title_tag = _title_tag_for(profile, label, persona_emoji=persona_emoji, kind=kind)
+    if title_tag:
+        script = _TITLE_TAG_SCRIPT.replace("__SUFFIX__", _json.dumps(title_tag))
+        await context.add_init_script(script=script)
+
+    if badge:
+        badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji, kind=kind)
+        # Color seed is persona-stable: chromium / firefox / webkit launches
+        # of the same persona share one color. Engine emoji handles engine
+        # differentiation.
+        color_seed = profile or label or instance_id[:6]
+        badge_script = (
+            _BADGE_SCRIPT.replace("__TAG__", _json.dumps(badge_text))
+            .replace("__COLOR__", _json.dumps(_badge_color_for(color_seed)))
+            .replace("__POS__", _json.dumps(_BADGE_POSITIONS[badge_position]))
+        )
+        await context.add_init_script(script=badge_script)
+
+    # Macro status pill — overlay stays invisible until a running macro
+    # pushes text via window.__octowright_macro_status.
+    chip_text, chip_color = _macro_pill_chip_for(profile, label, instance_id)
+    pill_script = _MACRO_STATUS_SCRIPT.replace("__ID_TAG__", _json.dumps(chip_text)).replace(
+        "__ID_COLOR__", _json.dumps(chip_color)
+    )
+    await context.add_init_script(script=pill_script)
+
+    if stabilize:
+        await context.add_init_script(script=render_stabilize_script())

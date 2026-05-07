@@ -20,15 +20,14 @@ from octowright.cli._root import cli
 
 
 @cli.command()
-@click.argument("macros_dir", required=False)
 @click.option("--kind", default="webkit", help="Browser engine to use for tests.")
 @click.option("--tag", default=None, help="Only run macros tagged with [tag].")
 @click.option("--out", "out_path", default=None, help="JUnit XML output path.")
 @click.option(
     "--max-parallel", default=1, type=click.IntRange(min=1), show_default=True, help="Maximum tests to run at once."
 )
-def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | None, max_parallel: int) -> None:
-    """Run all test macros in a directory. Outputs JUnit XML."""
+def test(kind: str, tag: str | None, out_path: str | None, max_parallel: int) -> None:
+    """Run all `[test]`-tagged macros from MACROS_DIR. Outputs JUnit XML."""
     import asyncio
 
     from octowright import runner
@@ -43,7 +42,6 @@ def test(macros_dir: str | None, kind: str, tag: str | None, out_path: str | Non
         pool = BrowserPool()
         try:
             return await runner.run_suite(
-                macros_dir=macros_dir,
                 kind=kind,
                 tag=tag,
                 out_path=out_path,
