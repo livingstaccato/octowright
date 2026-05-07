@@ -1270,7 +1270,8 @@ def stub_frontend_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     return bundle
 
 
-def test_index_html_served_at_root(stub_frontend_bundle: Path) -> None:
+@pytest.mark.usefixtures("stub_frontend_bundle")
+def test_index_html_served_at_root() -> None:
     with TestClient(_http.build_app()) as client:
         r = client.get("/")
         assert r.status_code == 200
@@ -1278,14 +1279,16 @@ def test_index_html_served_at_root(stub_frontend_bundle: Path) -> None:
         assert r.headers["content-type"].startswith("text/html")
 
 
-def test_static_asset_served(stub_frontend_bundle: Path) -> None:
+@pytest.mark.usefixtures("stub_frontend_bundle")
+def test_static_asset_served() -> None:
     with TestClient(_http.build_app()) as client:
         r = client.get("/styles.css")
         assert r.status_code == 200
         assert "color: red" in r.text
 
 
-def test_session_deep_link_serves_session_html(stub_frontend_bundle: Path) -> None:
+@pytest.mark.usefixtures("stub_frontend_bundle")
+def test_session_deep_link_serves_session_html() -> None:
     """SPA fallback: /sessions/<id> must serve session.html (frontend reads id from URL)."""
     with TestClient(_http.build_app()) as client:
         r = client.get("/sessions/abc123")
@@ -1294,7 +1297,8 @@ def test_session_deep_link_serves_session_html(stub_frontend_bundle: Path) -> No
         assert r.headers["content-type"].startswith("text/html")
 
 
-def test_session_deep_link_with_complex_id(stub_frontend_bundle: Path) -> None:
+@pytest.mark.usefixtures("stub_frontend_bundle")
+def test_session_deep_link_with_complex_id() -> None:
     """The path catchall handles ids with arbitrary characters."""
     with TestClient(_http.build_app()) as client:
         for sid in ["abc-123", "ABC123def456", "id_with_underscores", "0123456789ab"]:

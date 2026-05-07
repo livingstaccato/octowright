@@ -134,10 +134,30 @@ skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,pa
 ignore-words-list = "nd,strat,optionel,ths"
 
 # Mutation testing — opt-in via `make mutmut`. Scoped to parsing / dispatch
-# modules where weak assertions matter most. Tests run via the Makefile call
-# rather than mutmut's auto-detection, so the runner is explicit and fast.
+# modules where weak assertions matter most. mutmut 3.x reads ALL config
+# from this block; CLI flags for paths/runner are no longer accepted.
 [tool.mutmut]
-paths_to_mutate = "src/octowright/macros,src/octowright/scenarios.py,src/octowright/personas.py"
-runner = "uv run --active pytest -x -q --no-cov tests/test_macros.py tests/test_scenarios_unit.py tests/test_personas.py tests/test_hypo_parsers.py"
-tests_dir = "tests/"
-do_not_mutate = "*/migrations/*,*/__init__.py"
+paths_to_mutate = [
+    "src/octowright/personas.py",
+    "src/octowright/scenarios.py",
+    "src/octowright/macros/",
+]
+# Only run the tests that exercise the mutated paths. mutmut 3.x's mutants/
+# workdir doesn't navigate the full repo cleanly (demo bundles, scripts/demos,
+# etc.), so we point it at the targeted unit suites only.
+tests_dir = [
+    "tests/test_personas.py",
+    "tests/test_scenarios_unit.py",
+    "tests/test_macros.py",
+    "tests/test_macro_lint.py",
+    "tests/test_macro_dsl.py",
+    "tests/test_macro_checks.py",
+    "tests/test_macro_healing.py",
+    "tests/test_hypo_parsers.py",
+]
+do_not_mutate = ["*/__init__.py"]
+pytest_add_cli_args = ["-x", "-q", "--no-cov"]
+# mutmut 3.x copies only the files in paths_to_mutate by default; the rest of
+# the src tree must be listed here or imports fail in the mutants/ workdir.
+# tools/ holds the out-of-wheel demo lib that tests/conftest.py adds to sys.path.
+also_copy = ["src/", "tools/", "demo/", "examples/"]

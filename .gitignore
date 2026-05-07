@@ -37,3 +37,4 @@ scripts/profile_benchmarks.py
 
 .DS_Store
 .superpowers/
+mutants/
