@@ -2,10 +2,10 @@
   "artifact_manifest": {
     "artifacts": {
       "replay": {
-        "event_count": 18,
+        "event_count": 54,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 4815,
+        "size_bytes": 13647,
         "ts_export": "artifacts/replay.ts"
       },
       "supporting_videos": [
@@ -32,50 +32,50 @@
         }
       ],
       "video": {
-        "duration_seconds": 8.44,
-        "height": 1080,
+        "duration_seconds": 8.56,
+        "height": 400,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 330598,
+        "size_bytes": 178800,
         "width": 1920
       }
     },
     "bundle_id": "cross-engine-trio",
     "composition": {
-      "canvas_height": 1080,
+      "canvas_height": 400,
       "canvas_width": 1920,
-      "cell_height": 540,
-      "cell_width": 960,
-      "columns": 2,
+      "cell_height": 400,
+      "cell_width": 640,
+      "columns": 3,
       "mode": "sync-multi",
       "overlay": {
         "panes": [
           {
-            "height": 540,
+            "height": 400,
             "kind": "chromium",
             "persona": "cx-chromium",
             "role": "player",
-            "width": 960,
+            "width": 640,
             "x": 0,
             "y": 0
           },
           {
-            "height": 540,
+            "height": 400,
             "kind": "firefox",
             "persona": "cx-firefox",
             "role": "player",
-            "width": 960,
-            "x": 960,
+            "width": 640,
+            "x": 640,
             "y": 0
           },
           {
-            "height": 540,
+            "height": 400,
             "kind": "webkit",
             "persona": "cx-webkit",
             "role": "player",
-            "width": 960,
-            "x": 0,
-            "y": 540
+            "width": 640,
+            "x": 1280,
+            "y": 0
           }
         ],
         "subtitle": "",
@@ -83,31 +83,31 @@
       },
       "panes": [
         {
-          "height": 540,
+          "height": 400,
           "kind": "chromium",
           "persona": "cx-chromium",
           "role": "player",
-          "width": 960,
+          "width": 640,
           "x": 0,
           "y": 0
         },
         {
-          "height": 540,
+          "height": 400,
           "kind": "firefox",
           "persona": "cx-firefox",
           "role": "player",
-          "width": 960,
-          "x": 960,
+          "width": 640,
+          "x": 640,
           "y": 0
         },
         {
-          "height": 540,
+          "height": 400,
           "kind": "webkit",
           "persona": "cx-webkit",
           "role": "player",
-          "width": 960,
-          "x": 0,
-          "y": 540
+          "width": 640,
+          "x": 1280,
+          "y": 0
         }
       ],
       "supporting_videos": [
@@ -178,11 +178,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 8.44,
-      "height": 1080,
+      "duration_seconds": 8.56,
+      "height": 400,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 330598,
+      "size_bytes": 178800,
       "width": 1920
     },
     "supporting": [

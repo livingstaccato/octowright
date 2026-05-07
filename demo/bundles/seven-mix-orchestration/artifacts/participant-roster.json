@@ -2,7 +2,7 @@
   "participants": [
     {
       "har": false,
-      "instance_id": "6f2aed824507",
+      "instance_id": "2ace2a14ff6f",
       "kind": "webkit",
       "label": null,
       "persona": "p1",
@@ -14,7 +14,7 @@
     },
     {
       "har": false,
-      "instance_id": "80bfd5ae092f",
+      "instance_id": "58e7e6618fec",
       "kind": "webkit",
       "label": null,
       "persona": "p2",
@@ -26,7 +26,7 @@
     },
     {
       "har": false,
-      "instance_id": "375175b47669",
+      "instance_id": "3c366a7229ea",
       "kind": "webkit",
       "label": null,
       "persona": "p3",
@@ -38,7 +38,7 @@
     },
     {
       "har": false,
-      "instance_id": "5f32793d2dc3",
+      "instance_id": "9ddab1d35e74",
       "kind": "firefox",
       "label": null,
       "persona": "p4",
@@ -50,7 +50,7 @@
     },
     {
       "har": false,
-      "instance_id": "f7f9b98301f4",
+      "instance_id": "63f24600063e",
       "kind": "firefox",
       "label": null,
       "persona": "p5",
@@ -62,7 +62,7 @@
     },
     {
       "har": false,
-      "instance_id": "a835941f30d9",
+      "instance_id": "f6a19a1d05e7",
       "kind": "chromium",
       "label": null,
       "persona": "p6",
@@ -74,7 +74,7 @@
     },
     {
       "har": false,
-      "instance_id": "fbfb40abf7e1",
+      "instance_id": "610281678843",
       "kind": "chromium",
       "label": null,
       "persona": "p7",
@@ -86,7 +86,7 @@
     },
     {
       "har": false,
-      "instance_id": "0967e3887316",
+      "instance_id": "70541adb7ef7",
       "kind": "webkit",
       "label": null,
       "persona": "ops",
@@ -98,7 +98,7 @@
     },
     {
       "har": false,
-      "instance_id": "c9de04ce3755",
+      "instance_id": "47ca2ea68809",
       "kind": "webkit",
       "label": null,
       "persona": "spectator",
@@ -109,5 +109,5 @@
       "url": "bundle://seed/orchestration-stage.html?persona=spectator&role=main-site&kind=webkit&slot=8"
     }
   ],
-  "scenario_id": "28966da66cbb"
+  "scenario_id": "2f114ced7b08"
 }
