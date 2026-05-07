@@ -53,16 +53,20 @@ def macro_list() -> list[dict[str, Any]]:
     description=(
         "Replay a saved macro against a live browser instance. `args` supplies values "
         "for any {{placeholders}} the macro declares. Lifecycle actions (launch, close, "
-        "snapshot) are skipped. Returns {macro, executed, skipped, args_used}."
+        "snapshot) are skipped. Pass `slowmo_ms` to insert a per-action delay (after the "
+        "status pill updates, before the action dispatches) so a human can follow along; "
+        "default comes from OCTOWRIGHT_MACRO_SLOWMO_MS. Returns {macro, executed, skipped, "
+        "args_used, slowmo_ms}."
     ),
 )
 async def macro_run(
     instance_id: str,
     name: str,
     args: dict[str, Any] | None = None,
+    slowmo_ms: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
-    return await macro_mod.run_macro(session=session, name=name, args=args)
+    return await macro_mod.run_macro(session=session, name=name, args=args, slowmo_ms=slowmo_ms)
 
 
 @mcp.tool(structured_output=False, description="Delete a saved macro by name. Raises if the macro does not exist.")
@@ -86,6 +90,7 @@ async def macro_run_sequence(
     names: list[str],
     args_list: list[dict[str, Any]] | None = None,
     stop_on_failure: bool = True,
+    slowmo_ms: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     return await macro_mod.run_sequence(
@@ -93,6 +98,7 @@ async def macro_run_sequence(
         names=names,
         args_list=args_list,
         stop_on_failure=stop_on_failure,
+        slowmo_ms=slowmo_ms,
     )
 
 
