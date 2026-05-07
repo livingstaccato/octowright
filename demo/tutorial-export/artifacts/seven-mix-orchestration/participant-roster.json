@@ -2,130 +2,112 @@
   "participants": [
     {
       "har": false,
-      "instance_id": "ce829e4ed61a",
+      "instance_id": "6f2aed824507",
       "kind": "webkit",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-webkit-ce829e4ed61a.jsonl",
       "persona": "p1",
       "profile": "p1",
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=p1&role=player&kind=webkit&slot=0",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/acf82352"
+      "url": "bundle://seed/orchestration-stage.html?persona=p1&role=player&kind=webkit&slot=0"
     },
     {
       "har": false,
-      "instance_id": "b3be0bef43af",
+      "instance_id": "80bfd5ae092f",
       "kind": "webkit",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-webkit-b3be0bef43af.jsonl",
       "persona": "p2",
       "profile": "p2",
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=p2&role=player&kind=webkit&slot=1",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/136631a3"
+      "url": "bundle://seed/orchestration-stage.html?persona=p2&role=player&kind=webkit&slot=1"
     },
     {
       "har": false,
-      "instance_id": "538ba6d9c1e5",
+      "instance_id": "375175b47669",
       "kind": "webkit",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-webkit-538ba6d9c1e5.jsonl",
       "persona": "p3",
       "profile": "p3",
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=p3&role=player&kind=webkit&slot=2",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/6f030b6a"
+      "url": "bundle://seed/orchestration-stage.html?persona=p3&role=player&kind=webkit&slot=2"
     },
     {
       "har": false,
-      "instance_id": "1b1249eba3b6",
+      "instance_id": "5f32793d2dc3",
       "kind": "firefox",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-firefox-1b1249eba3b6.jsonl",
       "persona": "p4",
       "profile": "p4",
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=p4&role=player&kind=firefox&slot=3",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/8b252c31"
+      "url": "bundle://seed/orchestration-stage.html?persona=p4&role=player&kind=firefox&slot=3"
     },
     {
       "har": false,
-      "instance_id": "6336a0219c91",
+      "instance_id": "f7f9b98301f4",
       "kind": "firefox",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-firefox-6336a0219c91.jsonl",
       "persona": "p5",
       "profile": "p5",
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=p5&role=player&kind=firefox&slot=4",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/077254bc"
+      "url": "bundle://seed/orchestration-stage.html?persona=p5&role=player&kind=firefox&slot=4"
     },
     {
       "har": false,
-      "instance_id": "a5a016638d75",
+      "instance_id": "a835941f30d9",
       "kind": "chromium",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-chromium-a5a016638d75.jsonl",
       "persona": "p6",
       "profile": "p6",
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=p6&role=player&kind=chromium&slot=5",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/0edceec7"
+      "url": "bundle://seed/orchestration-stage.html?persona=p6&role=player&kind=chromium&slot=5"
     },
     {
       "har": false,
-      "instance_id": "dc5dfd0c6d33",
+      "instance_id": "fbfb40abf7e1",
       "kind": "chromium",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-chromium-dc5dfd0c6d33.jsonl",
       "persona": "p7",
       "profile": "p7",
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=p7&role=player&kind=chromium&slot=6",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/ac3efb6c"
+      "url": "bundle://seed/orchestration-stage.html?persona=p7&role=player&kind=chromium&slot=6"
     },
     {
       "har": false,
-      "instance_id": "45b1862f6305",
+      "instance_id": "0967e3887316",
       "kind": "webkit",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-webkit-45b1862f6305.jsonl",
       "persona": "ops",
       "profile": "ops",
       "record_video": true,
       "role": "monitor",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=ops&role=monitor&kind=webkit&slot=7",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/cdd8d00b"
+      "url": "bundle://seed/orchestration-stage.html?persona=ops&role=monitor&kind=webkit&slot=7"
     },
     {
       "har": false,
-      "instance_id": "789bdb4d6c35",
+      "instance_id": "c9de04ce3755",
       "kind": "webkit",
       "label": null,
-      "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260506T152824Z-webkit-789bdb4d6c35.jsonl",
       "persona": "spectator",
       "profile": "spectator",
       "record_video": true,
       "role": "main-site",
       "trace": false,
-      "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/seven-mix-orchestration/seed/orchestration-stage.html?persona=spectator&role=main-site&kind=webkit&slot=8",
-      "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/4311f8c1"
+      "url": "bundle://seed/orchestration-stage.html?persona=spectator&role=main-site&kind=webkit&slot=8"
     }
   ],
-  "scenario_id": "f9f0201daacb"
+  "scenario_id": "28966da66cbb"
 }

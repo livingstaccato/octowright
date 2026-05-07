@@ -4,35 +4,38 @@
       "event_count": 8,
       "path": "artifacts/replay.jsonl",
       "python_export": "artifacts/replay.py",
-      "size_bytes": 2889,
+      "size_bytes": 2099,
       "ts_export": "artifacts/replay.ts"
     },
+    "supporting_videos": [],
     "video": {
-      "duration_seconds": 1.68,
-      "height": 600,
+      "duration_seconds": 4.56,
+      "height": 500,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 9162,
+      "size_bytes": 8188,
       "width": 800
     }
   },
   "bundle_id": "first-run-session",
   "composition": {
-    "canvas_height": 600,
+    "canvas_height": 500,
     "canvas_width": 800,
-    "mode": "single",
+    "mode": "single-clean",
     "overlay": {
       "panes": [
         {
+          "height": 0,
           "kind": "webkit",
           "persona": "solo-player",
           "role": "player",
+          "width": 0,
           "x": 0,
           "y": 0
         }
       ],
-      "subtitle": "first-run-session | Launch one browser, perform a visible offline interaction, and inspect the resulting replay and video artifacts.",
-      "title": "First Run Session"
+      "subtitle": "",
+      "title": ""
     },
     "panes": [
       {
@@ -59,5 +62,9 @@
       "role": "player"
     }
   ],
+  "presentation": {
+    "mode": "single-clean",
+    "primary_asset": "hero_video"
+  },
   "title": "First Run Session"
 }
