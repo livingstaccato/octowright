@@ -21,7 +21,7 @@ package "input" #ecfccb {
 }
 
 package "introspection (truncated by default)" #fef3c7 {
-  rectangle "browser_evaluate (max_chars / full)\nbrowser_snapshot (selector / max_chars)\nbrowser_console_messages (level / since)\nbrowser_screenshot\nbrowser_recording_path" as INTRO
+  rectangle "browser_evaluate (max_chars / full)\nbrowser_snapshot (selector / max_chars)\nbrowser_read_markdown (max_chars)\nbrowser_console_messages (level / since)\nbrowser_screenshot\nbrowser_recording_path" as INTRO
 }
 
 package "wait + assert" #fdf4ff {
