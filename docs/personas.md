@@ -65,8 +65,15 @@ Credentials are stored as **references**, never secrets. Each entry uses one of
 two suffixes:
 
 - `<name>_env: VAR_NAME` — read from the named environment variable at use-time.
-- `<name>_cmd: "shell command"` — execute the command and capture stdout (typical
-  for password managers like `op`, `pass`, `bw`).
+- `<name>_cmd: "command argv-form"` — exec the command directly and capture
+  stdout (typical for password managers like `op`, `pass`, `bw`). The cmd
+  is `shlex.split` and run with `shell=False` — no `/bin/sh` is involved.
+
+  **Pipes / redirection / subshells require an explicit opt-in.** Setting
+  `OCTOWRIGHT_ALLOW_CRED_SHELL=1` re-enables `shell=True` so commands like
+  `pass show foo | tr -d '\n'` work; without it, octowright refuses to invoke
+  `/bin/sh` and surfaces the offending tokens. This is a trust-boundary guard
+  for shared persona files — assume YAML can come from any source.
 
 ### Pre-flight check
 
