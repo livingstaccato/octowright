@@ -35,6 +35,23 @@ regen:
   command: uv run python scripts/demos/record_demo.py seven-mix-orchestration
 tutorial_export:
   include: exports/seven-mix-orchestration.json
+presentation:
+  mode: hero-composite
+  primary_asset: hero_video
+  overlay:
+    enabled: true
+    style: subtle
+    placement: bottom-left
+  timing:
+    intro_ms: 600
+    outro_ms: 2600
+    minimum_ms: 9000
+  sync_groups:
+    - id: orchestration
+      roles:
+        - player
+        - monitor
+        - main-site
 seed_refs:
   - seed/orchestration-stage.html
   - seed/roster.json
