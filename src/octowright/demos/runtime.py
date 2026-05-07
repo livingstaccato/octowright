@@ -37,21 +37,22 @@ async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
     live: LiveScenario | None = None
     close_results: dict[str, dict[str, Any]] = {}
 
-    with _macro_dir(bundle):
-        try:
-            live = await scenario_pool.start(spec=runnable, browser_pool=pool)
-            run_started = asyncio.get_running_loop().time()
-            await _apply_intro_hold(bundle)
-            await _run_bundle_macros(bundle, scenario_pool, live, pool)
-            if bundle.recording.verify_report:
-                await _run_verify_suite(bundle, live, pool)
-            await _apply_outro_hold(bundle)
-            await _apply_minimum_duration(bundle, started_at=run_started)
-            await _capture_poster(bundle, live, pool)
-        finally:
-            if live is not None:
-                close_results = await _close_live_scenario(live, pool, scenario_pool)
-            await pool.shutdown()
+    async with _dashboard_sidecar_if_needed(runnable):
+        with _macro_dir(bundle):
+            try:
+                live = await scenario_pool.start(spec=runnable, browser_pool=pool)
+                run_started = asyncio.get_running_loop().time()
+                await _apply_intro_hold(bundle)
+                await _run_bundle_macros(bundle, scenario_pool, live, pool)
+                if bundle.recording.verify_report:
+                    await _run_verify_suite(bundle, live, pool)
+                await _apply_outro_hold(bundle)
+                await _apply_minimum_duration(bundle, started_at=run_started)
+                await _capture_poster(bundle, live, pool)
+            finally:
+                if live is not None:
+                    close_results = await _close_live_scenario(live, pool, scenario_pool)
+                await pool.shutdown()
 
     replay_path = _primary_replay_path(bundle)
     merged_events = _write_merged_replay(live, replay_path)
@@ -115,6 +116,12 @@ def _load_bundle_scenario(bundle: DemoBundle) -> Scenario:
 def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
     participants: list[Participant] = []
     for index, participant in enumerate(scenario.participants):
+        # Preserve explicit external URLs (http://, https://) so participants
+        # pointing at the dashboard sidecar (or any live service) keep their
+        # target URL instead of being rewritten to a bundle seed.
+        if participant.url and (participant.url.startswith("http://") or participant.url.startswith("https://")):
+            participants.append(replace(participant, record_video=True))
+            continue
         role_seed = bundle.recording.role_seeds.get(participant.role)
         target_url = _seed_url(bundle, role_seed, participant=participant, slot=index) if role_seed else None
         if target_url is None and bundle.recording.default_seed:
@@ -369,3 +376,65 @@ async def _run_macro_direct(session: Any, macro_run: DemoMacroRun) -> None:
     from octowright import macros as macro_module
 
     await macro_module.run_macro(session=session, name=macro_run.name, args=macro_run.args)
+
+
+def _scenario_needs_dashboard(scenario: Scenario) -> bool:
+    """True if any participant points at the local dashboard sidecar."""
+    from octowright.defaults import HTTP_HOST, HTTP_PORT
+
+    needles = (f"127.0.0.1:{HTTP_PORT}", f"localhost:{HTTP_PORT}", f"{HTTP_HOST}:{HTTP_PORT}")
+    for participant in scenario.participants:
+        if not participant.url:
+            continue
+        if any(needle in participant.url for needle in needles):
+            return True
+    return False
+
+
+@contextlib.asynccontextmanager
+async def _dashboard_sidecar_if_needed(scenario: Scenario):
+    """Start the Octowright HTTP dashboard in-process when a participant
+    references the local dashboard URL. Tears down on exit.
+
+    Yields immediately if no participant references the dashboard.
+    """
+    if not _scenario_needs_dashboard(scenario):
+        yield
+        return
+
+    import uvicorn
+
+    from octowright.defaults import HTTP_HOST, HTTP_PORT
+    from octowright.http.app import build_app
+
+    app = build_app(mcp_leader=False)
+    app.state.octowright_http_host = HTTP_HOST
+    config = uvicorn.Config(
+        app=app,
+        host=HTTP_HOST,
+        port=HTTP_PORT,
+        log_level="warning",
+        access_log=False,
+        loop="asyncio",
+    )
+    server = uvicorn.Server(config)
+    serve_task = asyncio.create_task(server.serve())
+
+    # Wait until uvicorn reports started, with a hard timeout so a stuck
+    # server can't block the recording forever.
+    for _ in range(60):
+        if server.started:
+            break
+        await asyncio.sleep(0.1)
+    if not server.started:
+        serve_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await serve_task
+        raise RuntimeError(f"dashboard sidecar failed to start on {HTTP_HOST}:{HTTP_PORT}")
+
+    try:
+        yield
+    finally:
+        server.should_exit = True
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait_for(serve_task, timeout=5.0)
