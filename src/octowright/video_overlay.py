@@ -206,7 +206,10 @@ def _blend_rect(pixels: list[list[Color]], x0: int, y0: int, x1: int, y1: int, c
 
 def _blend_pixel(base: Color, overlay: ColorAlpha) -> Color:
     alpha = overlay[3] / 255.0
-    return tuple(round((base[index] * (1.0 - alpha)) + (overlay[index] * alpha)) for index in range(3))
+    r = round((base[0] * (1.0 - alpha)) + (overlay[0] * alpha))
+    g = round((base[1] * (1.0 - alpha)) + (overlay[1] * alpha))
+    b = round((base[2] * (1.0 - alpha)) + (overlay[2] * alpha))
+    return (r, g, b)
 
 
 def _write_ppm(target_path: Path, pixels: list[list[Color]]) -> None:
