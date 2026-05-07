@@ -40,5 +40,9 @@ participants:
     kind: webkit
     role: main-site
     url: about:blank
+  - persona: sm-monitor
+    kind: chromium
+    role: monitor
+    url: http://127.0.0.1:8765/
 fixtures:
   dialog_policy: dismiss

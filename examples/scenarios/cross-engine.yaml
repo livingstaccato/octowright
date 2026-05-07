@@ -1,7 +1,9 @@
 name: cross-engine
 description: |
-  One instance per engine — chromium, firefox, webkit — all loading about:blank.
-  Useful for cross-engine smoke tests when paired with `--test` and a verify map.
+  One instance per engine — chromium, firefox, webkit — plus a fourth pane
+  showing the live Octowright dashboard. The three players run the same
+  showroom flow against the deterministic seed; the dashboard pane just
+  watches the recording happen in real time.
 participants:
   - persona: cx-chromium
     kind: chromium
@@ -15,5 +17,9 @@ participants:
     kind: webkit
     role: player
     url: about:blank
+  - persona: cx-monitor
+    kind: chromium
+    role: monitor
+    url: http://127.0.0.1:8765/
 verify:
   player: "cross-engine-showroom"
