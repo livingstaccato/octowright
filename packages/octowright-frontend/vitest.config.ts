@@ -20,6 +20,15 @@ export default defineConfig({
       reportsDirectory: "./coverage",
       include: ["src/**/*.ts"],
       exclude: ["src/**/*.test.ts", "src/test-setup.ts"],
+      // Ratchet thresholds — tuned just below current to catch regressions
+      // without blocking on under-tested surfaces (session.ts, dashboard.ts).
+      // Raise these as coverage improves; never lower them silently.
+      thresholds: {
+        statements: 76,
+        branches: 66,
+        functions: 64,
+        lines: 78,
+      },
     },
   },
 });

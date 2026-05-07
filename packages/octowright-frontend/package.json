@@ -5,8 +5,8 @@
   "scripts": {
     "build": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test": "vitest run --coverage",
+    "test:nocov": "vitest run",
     "lint": "biome lint src/",
     "fix": "biome check --write --unsafe src/"
   },
