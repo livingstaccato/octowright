@@ -32,3 +32,4 @@ verify_macro_explain.py
 scripts/profile_benchmarks.py
 
 .DS_Store
+.superpowers/
