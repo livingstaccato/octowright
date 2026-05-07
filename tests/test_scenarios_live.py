@@ -59,8 +59,7 @@ async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
     )
 
     # Force headless globally via env — reload defaults and pool so HEADLESS_DEFAULT
-    # is picked up. Also patch spawn_roster to inject headed=False into every spec
-    # since spawn_roster defaults headed=True (designed for interactive use).
+    # is picked up by scenario-driven launches too.
     monkeypatch.setenv("OCTOWRIGHT_HEADLESS", "1")
     for m in ("octowright.defaults", "octowright.browser_pool.pool"):
         if m in sys.modules:
@@ -71,16 +70,6 @@ async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
 
     # Reload scenarios so it picks up the freshly-reloaded defaults.
     importlib.reload(_s)
-
-    # Patch spawn_roster to inject headed=False so HEADLESS_DEFAULT is honoured
-    # (spawn_roster normally defaults headed=True for interactive use).
-    _original_spawn = BrowserPool.spawn_roster
-
-    async def _headless_spawn(self, specs):  # type: ignore[override]
-        patched = [{**spec, "headed": False} for spec in specs]
-        return await _original_spawn(self, patched)
-
-    monkeypatch.setattr(BrowserPool, "spawn_roster", _headless_spawn)
 
     pool = BrowserPool()
     spool = _s.ScenarioPool()

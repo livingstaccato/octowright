@@ -21,6 +21,7 @@ from octowright.video import (
     compose_video_layout,
     extract_frame,
     optimize_png,
+    poster_capture_time,
     probe_video,
     render_supporting_video,
     transcode_video,
@@ -122,6 +123,7 @@ def render_bundle_video(
         }
     else:
         placements = _featured_video_placements(live, close_results, plan)
+        supporting_videos = render_sync_group_videos(placements, output_dir=video_path.parent / "supporting")
         compose_video_layout(placements, work_path)
         summary = {
             "mode": "hero-composite",
@@ -139,6 +141,7 @@ def render_bundle_video(
                 }
                 for item in placements
             ],
+            "supporting_videos": supporting_videos,
         }
     _finalize_render(bundle, work_path=work_path, video_path=video_path, summary=summary)
     _finalize_poster(video_path, poster_path)
@@ -225,8 +228,8 @@ def _relative_manifest_path(bundle: DemoBundle, raw_path: str) -> str:
 def _finalize_render(bundle: DemoBundle, *, work_path: Path, video_path: Path, summary: dict[str, Any]) -> None:
     work_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        if bundle.hero:
-            overlay = _overlay_payload(bundle, summary)
+        if bundle.hero and bundle.presentation.overlay.enabled:
+            overlay = _overlay_payload(summary)
             apply_video_overlay(
                 work_path,
                 video_path,
@@ -248,29 +251,27 @@ def _finalize_render(bundle: DemoBundle, *, work_path: Path, video_path: Path, s
 
 
 def _finalize_poster(video_path: Path, poster_path: Path) -> None:
-    extract_frame(video_path, poster_path)
+    extract_frame(video_path, poster_path, at_time=poster_capture_time(video_path))
     if poster_path.stat().st_size > 500_000:
         optimize_png(poster_path)
 
 
-def _overlay_payload(bundle: DemoBundle, summary: dict[str, Any]) -> dict[str, Any]:
-    panes = [
-        {
-            "persona": pane["persona"],
-            "role": pane["role"],
-            "kind": pane["kind"],
-            "x": pane["x"],
-            "y": pane["y"],
-        }
-        for pane in summary["panes"]
-    ]
-    subtitle_parts = [bundle.id]
-    if bundle.summary:
-        subtitle_parts.append(bundle.summary)
+def _overlay_payload(summary: dict[str, Any]) -> dict[str, Any]:
     return {
-        "title": bundle.title,
-        "subtitle": " | ".join(subtitle_parts),
-        "panes": panes,
+        "title": "",
+        "subtitle": "",
+        "panes": [
+            {
+                "persona": pane["persona"],
+                "role": pane["role"],
+                "kind": pane["kind"],
+                "x": pane["x"],
+                "y": pane["y"],
+                "width": pane["width"],
+                "height": pane["height"],
+            }
+            for pane in summary["panes"]
+        ],
     }
 
 
@@ -387,7 +388,7 @@ def _primary_participant(live: LiveScenario, bundle: DemoBundle) -> dict[str, An
 
 
 def _supporting_video_id(pane: dict[str, Any], *, index: int, used_ids: set[str]) -> str:
-    raw = str(pane.get("role") or pane.get("persona") or f"pane-{index}")
+    raw = str(pane.get("persona") or pane.get("role") or f"pane-{index}")
     base = "".join(char.lower() if char.isalnum() else "-" for char in raw).strip("-") or f"pane-{index}"
     candidate = base
     suffix = 2

@@ -160,9 +160,20 @@ def extract_frame(video_path: Path, out_path: Path, *, at_time: float = 0.5) -> 
     return out_path
 
 
+def poster_capture_time(video_path: Path) -> float:
+    try:
+        metadata = probe_video(video_path)
+    except RuntimeError:
+        return 0.5
+    duration = float(metadata.get("duration_seconds") or 0.0)
+    if duration <= 0:
+        return 0.5
+    return min(2.0, max(0.5, duration / 2.0))
+
+
 def render_supporting_video(source_path: Path, target_path: Path, *, poster_path: Path) -> dict[str, str]:
     transcoded_path = transcode_video(source_path, target_path)
-    extract_frame(transcoded_path, poster_path)
+    extract_frame(transcoded_path, poster_path, at_time=poster_capture_time(transcoded_path))
     if poster_path.stat().st_size > 500_000:
         optimize_png(poster_path)
     return {"path": str(transcoded_path), "poster_path": str(poster_path)}
