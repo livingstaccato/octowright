@@ -59,6 +59,13 @@ SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))
 DEFAULT_ACTION_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_ACTION_TIMEOUT_MS", "15000"))
 
+# Per-action delay applied to macros, useful for visually following execution.
+# Sleep happens AFTER pushing status to the pill and BEFORE dispatching the
+# action, so the pill reflects the upcoming action while the user gets time
+# to see it. 0 disables. Override per-call via the `slowmo_ms` arg on
+# run_macro / macro_run / macro_run_sequence.
+MACRO_SLOWMO_MS = int(os.environ.get("OCTOWRIGHT_MACRO_SLOWMO_MS", "0"))
+
 # HTTP debugger / dashboard sidecar — runs alongside the MCP stdio server when
 # `octowright serve` is invoked. Bind defaults to localhost only because the
 # debugger UI exposes raw recordings, video, and trace data.
