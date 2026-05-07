@@ -157,6 +157,36 @@ uv run octowright test [path] --kind webkit --tag smoke --out dist/macro-tests.x
 
 Equivalent MCP tool: `run_test_suite`.
 
+## Watching execution
+
+Every page rendered by a launched browser gets a faint **status pill** injected at
+the bottom-center. While a macro runs, the pill shows:
+
+```
+[ <id-chip> ]  <elapsed>  ·  <macro-stack> | <action description>
+```
+
+- The ID chip color matches the corner badge for the same browser.
+- The elapsed counter ticks live (~10Hz) and freezes on completion.
+- After a macro finishes the pill stays visible with `<name> | done` (or
+  `| failed`) until the next macro starts or `visible: false` is pushed.
+- The pill is `pointer-events: none` by default — clicks fall through to the page.
+
+**Alt-click** (Option-click on Mac) the pill to open a themed run-history modal
+listing every push for the run with timestamps. Dismiss with the X button, by
+clicking the dimmed backdrop, or by pressing Esc.
+
+To slow execution down so you can follow along by eye, pass `slowmo_ms`:
+
+```bash
+macro_run instance_id=<id> name=discord-login slowmo_ms=800
+```
+
+Or set the default for a session via `OCTOWRIGHT_MACRO_SLOWMO_MS=800`. The pause
+happens between the status push and the action dispatch, so the pill always
+reflects the upcoming action while you have time to read it. The headed walkthrough
+under `examples/pill-status-demo/` shows this end-to-end.
+
 ## Tools
 
 | Tool | Purpose |

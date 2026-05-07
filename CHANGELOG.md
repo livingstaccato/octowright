@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- In-page macro status pill: bottom-centered, faint translucent overlay shows the
+  ID chip (matches corner-badge color), live elapsed counter, and current action
+  description. Stays visible after a macro finishes (frozen elapsed + `done`/`failed`
+  status); next macro's `start` push resets the counter.
+- Alt-modifier click-through: holding Alt makes the pill clickable; click opens a
+  themed run-history modal listing every push with timestamps. Modal dismisses via
+  X button, backdrop click, or Esc.
+- `slowmo_ms` parameter on `macro_run`, `macro_run_sequence`, and `run_macro` for
+  per-action delay; defaults from `OCTOWRIGHT_MACRO_SLOWMO_MS`. Sleep happens after
+  the pill status push and before dispatch so the pill reflects the upcoming action.
+- `run_macro` return value now includes `slowmo_ms` and `elapsed_s`.
+- `examples/pill-status-demo/` — runnable headed walkthrough (macro JSON, probe
+  page, runner script).
+
+### Internal
+- Extracted browser-pool init scripts (title-tag, corner badge, macro pill) to
+  standalone `.js` files under `src/octowright/browser_pool/_assets/`. Loaded once
+  at import; shipped in the wheel.
+- File-size discipline: `visuals.py` 752→216 LOC; split `tests/test_badge.py` into
+  `test_badge.py` + new `tests/test_pill.py`.
+
 ## 0.3.0 - 2026-05-03
 
 ### Added

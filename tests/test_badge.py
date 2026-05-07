@@ -191,11 +191,6 @@ async def test_invalid_badge_position_raises(tmp_path) -> None:
         await pool.shutdown()
 
 
-# ---------------------------------------------------------------------------
-# End-to-end: real Playwright launch, verify the badge lands in the DOM.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_badge_actually_renders_in_real_browser(tmp_path) -> None:
     """Launch a headless browser via the pool, navigate to a data: URL, read DOM."""

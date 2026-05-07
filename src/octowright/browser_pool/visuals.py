@@ -5,54 +5,20 @@
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 from provide.telemetry import get_logger
 
 log = get_logger(__name__)
 
-_TITLE_TAG_SCRIPT = r"""
-(() => {
-    const SUFFIX = __SUFFIX__;
-    // SUFFIX is " (emoji) [tag]" with a leading space. Browsers strip trailing
-    // whitespace from titles on read, but a leading space inside the actual
-    // value survives. We compare on a trimmed anchor so any double-injection
-    // (e.g. "Yahoo (🐬🦊) [acct] (🐬🦊) [acct]") collapses back to a single tag.
-    const SUFFIX_BASE = SUFFIX.replace(/^\s+/, "");
-    const ensure = (v) => {
-        const s = String(v == null ? "" : v);
-        return s.endsWith(SUFFIX_BASE) ? s : s + SUFFIX;
-    };
-    const desc = Object.getOwnPropertyDescriptor(Document.prototype, "title");
-    if (desc && desc.get && desc.set) {
-        Object.defineProperty(Document.prototype, "title", {
-            configurable: true,
-            enumerable: desc.enumerable,
-            get() { return desc.get.call(this); },
-            set(v) { desc.set.call(this, ensure(v)); },
-        });
-    }
-    const apply = () => {
-        try {
-            const cur = document.title || "";
-            const want = ensure(cur);
-            if (cur !== want) document.title = want;
-        } catch (_) {}
-    };
-    apply();
-    const watchHead = () => {
-        const head = document.querySelector("head");
-        if (!head) return false;
-        new MutationObserver(apply).observe(head, {
-            subtree: true, childList: true, characterData: true,
-        });
-        return true;
-    };
-    const onReady = () => { watchHead(); apply(); };
-    if (!watchHead()) {
-        document.addEventListener("DOMContentLoaded", onReady, { once: true });
-    }
-    window.addEventListener("load", apply, { once: true });
-})();
-"""
+
+# JS init scripts live as standalone .js files for editor highlighting + lint.
+# Loaded once at import — small (a few KB each) and read-only at runtime.
+_ASSETS = Path(__file__).with_name("_assets")
+_TITLE_TAG_SCRIPT = (_ASSETS / "title_tag.js").read_text(encoding="utf-8")
+_BADGE_SCRIPT = (_ASSETS / "badge.js").read_text(encoding="utf-8")
+_MACRO_STATUS_SCRIPT = (_ASSETS / "macro_pill.js").read_text(encoding="utf-8")
 
 
 # Curated emoji pool for per-persona/per-label visual identity. 33 picks: mostly
@@ -109,8 +75,6 @@ _ENGINE_EMOJI: dict[str, str] = {
 
 def _persona_emoji_for(seed: str) -> str:
     """Stable persona emoji from a string seed. Same seed → same emoji."""
-    import hashlib
-
     digest = hashlib.sha1(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
     idx = int(digest[:8], 16) % len(_PERSONA_EMOJI_POOL)
     return _PERSONA_EMOJI_POOL[idx]
@@ -150,47 +114,6 @@ def _title_tag_for(
     return f" [{tag}]"
 
 
-# Corner-badge injection: adds a small fixed-position label in the top-right of
-# every page so 10+ parallel browsers can be told apart visually. Survives
-# navigation via addInitScript + a MutationObserver re-injection guard.
-_BADGE_SCRIPT = r"""
-(() => {
-    if (window.top !== window.self) return;
-    const TAG = __TAG__;
-    const COLOR = __COLOR__;
-    const POS = __POS__;
-    const ID = "__octowright_badge__";
-    const inject = () => {
-        if (!document.body) return;
-        if (document.getElementById(ID)) return;
-        const div = document.createElement("div");
-        div.id = ID;
-        div.textContent = TAG;
-        const styles = {
-            position: "fixed",
-            zIndex: "2147483647", padding: "4px 10px",
-            background: COLOR, color: "white",
-            font: "bold 12px ui-monospace, Menlo, monospace",
-            borderRadius: "4px", boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
-            textShadow: "0 0 2px rgba(0,0,0,0.7)",
-            pointerEvents: "none", userSelect: "none",
-        };
-        styles[POS.vertical] = "8px";
-        styles[POS.horizontal] = "8px";
-        Object.assign(div.style, styles);
-        document.body.appendChild(div);
-    };
-    inject();
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", inject, { once: true });
-    }
-    new MutationObserver(() => {
-        if (document.body && !document.getElementById(ID)) inject();
-    }).observe(document.documentElement || document, { childList: true, subtree: true });
-})();
-"""
-
-
 # Badge corner positions, mapped to (vertical-css-prop, horizontal-css-prop).
 # Used by _BADGE_SCRIPT to decide which two CSS edges to anchor to.
 _BADGE_POSITIONS: dict[str, dict[str, str]] = {
@@ -212,8 +135,6 @@ def _badge_color_for(seed: str) -> str:
     page underneath remains slightly visible; the white text gets a black
     text-shadow in the JS for legibility against any backdrop.
     """
-    import hashlib
-
     digest = hashlib.sha1(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
     hue = int(digest[:6], 16) % 360
     return f"hsla({hue}, 70%, 45%, {_BADGE_ALPHA})"
@@ -232,6 +153,41 @@ def _badge_text_for(
     if kind:
         return f"{_emoji_pair_for(persona_emoji, tag, kind)} {tag}"
     return tag
+
+
+def _macro_pill_chip_for(
+    profile: str | None,
+    label: str | None,
+    instance_id: str,
+) -> tuple[str, str]:
+    """(chip_text, chip_color) for the pill's left-side ID chip.
+
+    Mirrors the corner-badge seed (``profile or label or instance_id[:6]``) so
+    the same browser shows the same color in both indicators. Chip text is the
+    short tag if there is one, else a 4-char id slice — keeps the pill compact.
+    """
+    seed = profile or label or instance_id[:6]
+    chip_text = profile or label or instance_id[:4]
+    return chip_text, _badge_color_for(seed)
+
+
+def _describe_action(action: dict[str, object]) -> str:
+    """One-line human hint for a macro action — '<verb> <key>=<value>'.
+
+    Picks the first informative locator/value field (name → text → role → selector
+    → url → key → value) so the pill stays single-line. Long values are clipped
+    with an ellipsis to fit the pill's max-width.
+    """
+    name = str(action.get("action") or "?")
+    for key in ("name", "text", "role", "selector", "url", "key", "value"):
+        val = action.get(key)
+        if val in (None, "", [], {}):
+            continue
+        s = str(val)
+        if len(s) > 40:
+            s = s[:39] + "…"
+        return f"{name} {key}={s}"
+    return name
 
 
 def _tile_position(index: int, *, cols: int = 4, win_w: int = 720, win_h: int = 540) -> tuple[int, int, int, int]:
