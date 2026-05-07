@@ -2,9 +2,6 @@
   "allow_violations": [
     "block \"src/octowright/browser_pool/lifecycle.py:49 handoff_browser\" has a rank of C",
     "block \"src/octowright/browser_pool/pool.py:70 launch\" has a rank of D",
-    "block \"src/octowright/cli/serve.py:164 _serve_async\" has a rank of C",
-    "block \"src/octowright/cli/serve.py:264 _run_leader\" has a rank of D",
-    "block \"src/octowright/cli/takeover.py:74 takeover\" has a rank of C",
     "block \"src/octowright/cli/watch.py:20 _format_watch_event\" has a rank of C",
     "block \"src/octowright/engines.py:72 engine_status\" has a rank of C",
     "block \"src/octowright/goldens.py:128 _diff_nodes\" has a rank of C",
@@ -12,8 +9,6 @@
     "block \"src/octowright/http/routes/meta.py:117 persona_sizes_endpoint\" has a rank of C",
     "block \"src/octowright/http/routes/sessions.py:48 session_detail\" has a rank of C",
     "block \"src/octowright/idle_watchdog.py:30 idle_watchdog\" has a rank of C",
-    "block \"src/octowright/macros/dsl.py:167 _normalize_shorthand\" has a rank of C",
-    "block \"src/octowright/macros/dsl.py:200 _compile_action\" has a rank of C",
     "block \"src/octowright/macros/repair.py:57 replacement_preview\" has a rank of C",
     "block \"src/octowright/macros/runtime.py:57 _dispatch_click_or_fill\" has a rank of C",
     "block \"src/octowright/personas.py:246 check_credentials\" has a rank of C",
@@ -28,7 +23,6 @@
     "block \"src/octowright/session/core_ops_mixin.py:442 close\" has a rank of C",
     "block \"src/octowright/session/frames.py:16 switch_frame_impl\" has a rank of C",
     "block \"src/octowright/takeover.py:264 apply_takeover\" has a rank of C",
-    "module 'src/octowright/cli/serve.py' has a rank of C",
     "module 'src/octowright/cli/watch.py' has a rank of C",
     "module 'src/octowright/idle_watchdog.py' has a rank of C",
     "module 'src/octowright/resolve.py' has a rank of C"
