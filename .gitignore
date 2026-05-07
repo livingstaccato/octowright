@@ -12,6 +12,10 @@ dist/
 .coverage.*
 .hypothesis/
 .ci/
+# Keep tracked baseline ratchets — CI + contributors share these.
+!.ci/
+!.ci/*-baseline.json
+!.ci/pip-audit-allow.txt
 node_modules/
 *.actcache
 

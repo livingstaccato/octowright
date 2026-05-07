@@ -43,6 +43,7 @@ dev = [
     "bandit>=1.8.6",
     "build>=1.2.2",
     "codespell>=2.4.1",
+    "detect-secrets>=1.5.0",
     "hypothesis>=6.130.0",
     "memray>=1.19.3; sys_platform == 'linux' or sys_platform == 'darwin'",
     "mutmut>=3.3.1",
@@ -131,3 +132,12 @@ skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,pa
 # JS variable shorthands that codespell mistakes for typos:
 # `optionel` = HTML <option> elements; `ths` = HTML <th> elements (table headers)
 ignore-words-list = "nd,strat,optionel,ths"
+
+# Mutation testing — opt-in via `make mutmut`. Scoped to parsing / dispatch
+# modules where weak assertions matter most. Tests run via the Makefile call
+# rather than mutmut's auto-detection, so the runner is explicit and fast.
+[tool.mutmut]
+paths_to_mutate = "src/octowright/macros,src/octowright/scenarios.py,src/octowright/personas.py"
+runner = "uv run --active pytest -x -q --no-cov tests/test_macros.py tests/test_scenarios_unit.py tests/test_personas.py tests/test_hypo_parsers.py"
+tests_dir = "tests/"
+do_not_mutate = "*/migrations/*,*/__init__.py"
