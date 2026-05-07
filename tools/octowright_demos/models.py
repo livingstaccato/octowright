@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from octowright.demos.presentation import validate_presentation_mode
+from octowright_demos.presentation import validate_presentation_mode
 
 
 @dataclass

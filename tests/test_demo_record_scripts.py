@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-from octowright.demos.models import DemoBundle
+from octowright_demos.models import DemoBundle
 
 
 def _load_script(monkeypatch, name: str):

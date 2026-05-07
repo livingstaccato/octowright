@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from octowright.demos.models import DemoBundle
+from octowright_demos.models import DemoBundle
 
 
 def _build_media_payload(manifest: dict[str, object]) -> dict[str, object]:
