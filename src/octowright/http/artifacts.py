@@ -109,70 +109,82 @@ def _build_cache_components(
 EVENT_ONLY_ACTIONS = {"console", "download_saved", "popup_opened"}
 
 
+# JSONL action → counter name mapping for the per-event tally.
+_ACTION_COUNTERS: dict[str, str] = {
+    "console": "console_count",
+    "download_saved": "download_count",
+    "popup_opened": "page_count",
+}
+
+# Sidecar artefacts captured on the `close` event. Each maps the entry-key
+# to the local-state field it populates.
+_CLOSE_SIDECARS: tuple[str, ...] = ("video_path", "trace_path", "markdown_path", "websocket_path")
+
+# Sidecar files we look for next to the JSONL when the close event didn't
+# record a path. Maps state-field-name → suffix to probe.
+_FILESYSTEM_FALLBACKS: dict[str, str] = {
+    "trace_path": ".trace.zip",
+    "markdown_path": ".markdown.md",
+    "websocket_path": ".websocket.jsonl",
+}
+
+
+def _ingest_entry(entry: dict[str, Any], state: dict[str, Any], counts: dict[str, int]) -> None:
+    """Apply one JSONL entry's effects to the running state + counts."""
+    counts["event_count"] += 1
+    action = entry.get("action")
+    if action not in EVENT_ONLY_ACTIONS:
+        counts["action_count"] += 1
+    counter_name = _ACTION_COUNTERS.get(action or "")
+    if counter_name:
+        counts[counter_name] += 1
+    if action == "navigate" and entry.get("url"):
+        state["url"] = entry["url"]
+    if action == "close":
+        for field in _CLOSE_SIDECARS:
+            if entry.get(field):
+                state[field] = entry[field]
+
+
+def _tally_jsonl(jsonl_path: Path, state: dict[str, Any], counts: dict[str, int]) -> None:
+    """Walk one JSONL file and feed each entry to _ingest_entry."""
+    try:
+        fh = jsonl_path.open(encoding="utf-8")
+    except OSError:
+        return
+    with fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            _ingest_entry(entry, state, counts)
+
+
 def scan_recording_artifacts(jsonl_path: Path) -> dict[str, Any]:
     counts = {"event_count": 0, "action_count": 0, "console_count": 0, "download_count": 0, "page_count": 1}
-    title: str | None = None
-    last_url: str | None = None
-    video_path: str | None = None
-    trace_path: str | None = None
-    markdown_path: str | None = None
-    websocket_path: str | None = None
-
-    try:
-        with jsonl_path.open(encoding="utf-8") as fh:
-            for raw in fh:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    entry = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                counts["event_count"] += 1
-                action = entry.get("action")
-                if action not in EVENT_ONLY_ACTIONS:
-                    counts["action_count"] += 1
-                if action == "console":
-                    counts["console_count"] += 1
-                elif action == "download_saved":
-                    counts["download_count"] += 1
-                elif action == "popup_opened":
-                    counts["page_count"] += 1
-                if action == "navigate" and entry.get("url"):
-                    last_url = entry["url"]
-                if action == "close":
-                    if entry.get("video_path"):
-                        video_path = entry["video_path"]
-                    if entry.get("trace_path"):
-                        trace_path = entry["trace_path"]
-                    if entry.get("markdown_path"):
-                        markdown_path = entry["markdown_path"]
-                    if entry.get("websocket_path"):
-                        websocket_path = entry["websocket_path"]
-    except OSError:
-        pass
-
-    candidate_trace = jsonl_path.with_suffix(".trace.zip")
-    if trace_path is None and candidate_trace.exists():
-        trace_path = str(candidate_trace)
-
-    candidate_markdown = jsonl_path.with_suffix(".markdown.md")
-    if markdown_path is None and candidate_markdown.exists():
-        markdown_path = str(candidate_markdown)
-
-    candidate_websocket = jsonl_path.with_suffix(".websocket.jsonl")
-    if websocket_path is None and candidate_websocket.exists():
-        websocket_path = str(candidate_websocket)
-
-    return {
-        **counts,
-        "title": title,
-        "video_path": video_path,
-        "trace_path": trace_path,
-        "markdown_path": markdown_path,
-        "websocket_path": websocket_path,
-        "url": last_url,
+    state: dict[str, Any] = {
+        "title": None,
+        "url": None,
+        "video_path": None,
+        "trace_path": None,
+        "markdown_path": None,
+        "websocket_path": None,
     }
+    _tally_jsonl(jsonl_path, state, counts)
+
+    # Sidecar fallback: if the close event didn't record a path, probe the
+    # canonical filename next to the JSONL.
+    for field, suffix in _FILESYSTEM_FALLBACKS.items():
+        if state[field] is None:
+            candidate = jsonl_path.with_suffix(suffix)
+            if candidate.exists():
+                state[field] = str(candidate)
+
+    return {**counts, **state}
 
 
 def cache_report_for_recording(jsonl_path: Path) -> dict[str, Any]:
