@@ -273,7 +273,8 @@ def test_render_supporting_video_writes_video_and_poster(monkeypatch: pytest.Mon
         Path(dst).write_bytes(b"video")
         return Path(dst)
 
-    def _fake_extract(src: Path, dst: Path) -> Path:
+    def _fake_extract(src: Path, dst: Path, *, at_time: float = 0.5) -> Path:
+        assert at_time == 1.75
         calls.append(("poster", Path(src), Path(dst)))
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         Path(dst).write_bytes(b"poster")
@@ -282,6 +283,7 @@ def test_render_supporting_video_writes_video_and_poster(monkeypatch: pytest.Mon
     monkeypatch.setattr("octowright.video.transcode_video", _fake_transcode)
     monkeypatch.setattr("octowright.video.extract_frame", _fake_extract)
     monkeypatch.setattr("octowright.video.optimize_png", lambda path, **kwargs: path)
+    monkeypatch.setattr("octowright.video.poster_capture_time", lambda path: 1.75)
 
     result = _v.render_supporting_video(source, target, poster_path=poster)
 
@@ -290,6 +292,21 @@ def test_render_supporting_video_writes_video_and_poster(monkeypatch: pytest.Mon
         ("video", source, target),
         ("poster", target, poster),
     ]
+
+
+def test_poster_capture_time_targets_mid_clip_but_caps_at_two_seconds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import octowright.video as _v
+
+    monkeypatch.setattr("octowright.video.probe_video", lambda path: {"duration_seconds": 8.0})
+    assert _v.poster_capture_time(tmp_path / "long.mp4") == 2.0
+
+    monkeypatch.setattr("octowright.video.probe_video", lambda path: {"duration_seconds": 3.0})
+    assert _v.poster_capture_time(tmp_path / "medium.mp4") == 1.5
+
+    monkeypatch.setattr("octowright.video.probe_video", lambda path: {"duration_seconds": 0.4})
+    assert _v.poster_capture_time(tmp_path / "short.mp4") == 0.5
 
 
 def test_apply_video_overlay_builds_overlay_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -352,16 +369,34 @@ def test_render_overlay_image_uses_translucent_safe_area_defaults(tmp_path: Path
         canvas_height=canvas_height,
     )
 
-    title_width = len(title.upper()) * 6 * 4
-    subtitle_width = len(subtitle.upper()) * 6 * 2
+    title_width = len(title.upper()) * 6 * 2
+    subtitle_width = len(subtitle.upper()) * 6
     box_width = max(title_width, subtitle_width) + (DEFAULT_OVERLAY_BOX.padding * 2)
-    box_height = (7 * 4) + (7 * 2) + (DEFAULT_OVERLAY_BOX.padding * 2) + 12
+    box_height = (7 * 2) + 7 + (DEFAULT_OVERLAY_BOX.padding * 2) + 8
     x0 = DEFAULT_OVERLAY_BOX.margin
     y0 = canvas_height - DEFAULT_OVERLAY_BOX.margin - box_height
     expected_background = _blend(MAGENTA, DEFAULT_OVERLAY_BOX.background_rgba)
 
     assert path.exists()
     assert _read_ppm_pixel(path, 40, 40) == MAGENTA
-    assert _read_ppm_pixel(path, x0 + 8, y0 + 8) == expected_background
+    assert _read_ppm_pixel(path, x0 + 4, y0 + 4) == expected_background
     assert _read_ppm_pixel(path, x0 + box_width + 8, y0 + 8) == MAGENTA
     assert _read_ppm_pixel(path, x0 + 8, y0 - 8) == MAGENTA
+
+
+def test_render_overlay_image_skips_large_title_card_when_text_is_empty(tmp_path: Path) -> None:
+    path = render_overlay_image(
+        tmp_path / "overlay.ppm",
+        title="",
+        subtitle="",
+        panes=[
+            {"persona": "p1", "role": "player", "kind": "webkit", "x": 0, "y": 0, "width": 960, "height": 540},
+        ],
+        canvas_width=1920,
+        canvas_height=1080,
+    )
+
+    expected_label_background = _blend(MAGENTA, DEFAULT_OVERLAY_BOX.background_rgba)
+
+    assert _read_ppm_pixel(path, 24, 24) == MAGENTA
+    assert _read_ppm_pixel(path, 24, 508) == expected_label_background
