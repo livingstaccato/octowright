@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from octowright.demos.models import (
+from octowright_demos.models import (
     DemoBundle,
     DemoMacroRun,
     DemoOverlayConfig,
@@ -19,7 +19,7 @@ from octowright.demos.models import (
     DemoSyncGroup,
     DemoTimingConfig,
 )
-from octowright.demos.presentation import validate_presentation_mode
+from octowright_demos.presentation import validate_presentation_mode
 
 DEMO_BUNDLES_DIR = Path("demo/bundles")
 

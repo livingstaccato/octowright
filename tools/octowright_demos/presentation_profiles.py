@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from octowright.demos.models import DemoBundle
+from octowright_demos.models import DemoBundle
 
 
 @dataclass(frozen=True)

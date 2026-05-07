@@ -16,14 +16,14 @@ from typing import Any
 from urllib.parse import urlencode
 
 from octowright.browser_pool import BrowserPool
-from octowright.demos.models import DemoBundle, DemoMacroRun
-from octowright.demos.public_artifacts import sanitize_public_artifacts
-from octowright.demos.rendering import render_bundle_video, write_artifact_manifest, write_exports
 from octowright.recorder import tail_log
 from octowright.runner import _write_junit
 from octowright.scenarios import Participant, Scenario, load_python_scenario, load_yaml_scenario
 from octowright.scenarios_pool import LiveScenario, ScenarioPool
 from octowright.video import optimize_png
+from octowright_demos.models import DemoBundle, DemoMacroRun
+from octowright_demos.public_artifacts import sanitize_public_artifacts
+from octowright_demos.rendering import render_bundle_video, write_artifact_manifest, write_exports
 
 
 async def record_demo_bundle(bundle: DemoBundle) -> dict[str, Any]:
