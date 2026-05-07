@@ -24,9 +24,11 @@ from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.visuals import (
     _BADGE_POSITIONS,
     _BADGE_SCRIPT,
+    _MACRO_STATUS_SCRIPT,
     _TITLE_TAG_SCRIPT,
     _badge_color_for,
     _badge_text_for,
+    _macro_pill_chip_for,
     _tile_args_for_chromium,
     _title_tag_for,
 )
@@ -329,6 +331,13 @@ class BrowserPool:
                     .replace("__POS__", json.dumps(_BADGE_POSITIONS[badge_position]))
                 )
                 await context.add_init_script(script=badge_script)
+            # Macro status pill is always wired — the overlay stays invisible
+            # until a running macro pushes text via window.__octowright_macro_status.
+            chip_text, chip_color = _macro_pill_chip_for(profile, label, instance_id)
+            pill_script = _MACRO_STATUS_SCRIPT.replace("__ID_TAG__", json.dumps(chip_text)).replace(
+                "__ID_COLOR__", json.dumps(chip_color)
+            )
+            await context.add_init_script(script=pill_script)
             if stabilize:
                 await context.add_init_script(script=render_stabilize_script())
 

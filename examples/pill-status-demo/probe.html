@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Pill Probe</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 60px;
+      background: #fafbfc;
+      font-size: 18px;
+      transition: background 400ms ease;
+    }
+    h1 { font-size: 32px; margin-bottom: 16px; }
+    p { color: #444; line-height: 1.5; max-width: 60ch; }
+    code { background: #eee; padding: 2px 6px; border-radius: 3px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>pill probe</h1>
+  <p>
+    Watch the <strong>bottom-center</strong> of this window: a small, faint
+    translucent pill should fade in and track the macro's current action,
+    e.g. <code>pill-status-demo | evaluate</code>, then
+    <code>pill-status-demo | expect_text text=pill probe</code>, and so on.
+  </p>
+  <p>
+    The corner badge in the bottom-right is the existing per-browser indicator
+    you already had — the new pill is the centered one. Both share a stable
+    color seeded from the launch label.
+  </p>
+</body>
+</html>
