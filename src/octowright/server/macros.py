@@ -170,15 +170,14 @@ def macro_compile(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Run all test macros in a directory, producing a JUnit XML report. A macro is "
-        "considered a test if its description starts with [test]. Spawns one ephemeral "
-        "browser per test (kind defaults to 'webkit') and runs up to max_parallel tests "
-        "concurrently. Returns {passed, failed, total, "
-        "report_path, results: [per-test summary]}."
+        "Run all `[test]`-tagged macros against ephemeral browsers and emit a JUnit "
+        "XML report. Discovery uses MACROS_DIR (override via OCTOWRIGHT_MACROS_DIR). "
+        "Spawns one browser per test (kind defaults to 'webkit') with up to "
+        "max_parallel running concurrently. Returns "
+        "{passed, failed, total, report_path, results: [per-test summary]}."
     ),
 )
 async def run_test_suite(
-    macros_dir: str | None = None,
     kind: str = "webkit",
     tag: str | None = None,
     out_path: str | None = None,
@@ -187,7 +186,6 @@ async def run_test_suite(
     import octowright.runner as runner
 
     return await runner.run_suite(
-        macros_dir=macros_dir,
         kind=kind,
         tag=tag,
         out_path=out_path,

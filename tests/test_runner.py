@@ -169,7 +169,6 @@ class TestRunSuite:
             patch("octowright.runner.macro_mod.run_macro", new_callable=AsyncMock),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(tmp_path / "out.xml"),
@@ -196,7 +195,6 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(tmp_path / "out.xml"),
@@ -225,7 +223,6 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(tmp_path / "out.xml"),
@@ -263,7 +260,6 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag="smoke",
                 out_path=str(tmp_path / "out.xml"),
@@ -289,7 +285,6 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(report_path),
@@ -329,7 +324,6 @@ class TestRunSuite:
             patch("octowright.runner.macro_mod.run_macro", side_effect=_run_macro),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(tmp_path / "out.xml"),
@@ -372,7 +366,6 @@ class TestRunSuite:
             patch("octowright.runner.macro_mod.run_macro", side_effect=_run_macro),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(tmp_path / "out.xml"),
@@ -410,7 +403,6 @@ class TestRunSuite:
             patch("octowright.runner.macro_mod.run_macro", side_effect=_run_macro),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(tmp_path / "out.xml"),
@@ -450,7 +442,6 @@ class TestRunSuite:
         ):
             fake_pool.launch.side_effect = _launch
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(report_path),
@@ -489,7 +480,6 @@ class TestRunSuite:
             ),
         ):
             result = await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(report_path),
@@ -510,7 +500,6 @@ class TestRunSuite:
     async def test_rejects_max_parallel_less_than_one(self, fake_pool: MagicMock, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="max_parallel"):
             await run_suite(
-                macros_dir=None,
                 kind="webkit",
                 tag=None,
                 out_path=str(tmp_path / "out.xml"),
