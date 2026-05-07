@@ -117,6 +117,14 @@ async def test_wait_recording_capture_export_and_expects(
     assert tail["complete"] is True and tail["cursor"] == 10
 
 
+@pytest.mark.anyio
+async def test_snapshot_default_selector(_patch_pool: MagicMock) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+    await _inspect.browser_snapshot("i")
+    s.page.locator.assert_called_once_with("body")
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"

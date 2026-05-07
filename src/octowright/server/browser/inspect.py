@@ -39,7 +39,7 @@ async def browser_screenshot(instance_id: str, path: str | None = None) -> dict[
 )
 async def browser_snapshot(
     instance_id: str,
-    selector: str = "html",
+    selector: str = "body",
     full: bool = False,
     max_chars: int | None = None,
 ) -> dict[str, Any]:
