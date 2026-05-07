@@ -1,4 +1,4 @@
-.PHONY: help install test lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean
+.PHONY: help install test test-frontend lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
@@ -6,8 +6,11 @@ help: ## Show this help
 install: ## uv sync --all-groups (deps + dev tools)
 	uv sync --all-groups
 
-test: ## Run unit + integration tests (no live browsers)
+test: ## Run Python unit + integration tests (no live browsers)
 	uv run --active pytest -q tests/
+
+test-frontend: ## Run TypeScript frontend tests with coverage gating
+	cd packages/octowright-frontend && npm test
 
 lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, secrets-scan
 	uv run --active ruff check .
