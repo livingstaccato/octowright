@@ -45,9 +45,9 @@ class DashboardEventSubscriptionContext:
 
     async def __aexit__(
         self,
-        exc_type: type[BaseException] | None,
+        _exc_type: type[BaseException] | None,
         exc: BaseException | None,
-        traceback: TracebackType | None,
+        _traceback: TracebackType | None,
     ) -> None:
         if self._subscriber is not None:
             self._bus._subscribers.discard(self._subscriber)
