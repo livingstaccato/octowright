@@ -4,80 +4,135 @@
       "event_count": 18,
       "path": "artifacts/replay.jsonl",
       "python_export": "artifacts/replay.py",
-      "size_bytes": 7191,
+      "size_bytes": 4815,
       "ts_export": "artifacts/replay.ts"
     },
+    "supporting_videos": [
+      {
+        "id": "cx-chromium",
+        "kind": "chromium",
+        "path": "artifacts/supporting/cx-chromium.mp4",
+        "poster_path": "artifacts/supporting/cx-chromium.png",
+        "role": "player"
+      },
+      {
+        "id": "cx-firefox",
+        "kind": "firefox",
+        "path": "artifacts/supporting/cx-firefox.mp4",
+        "poster_path": "artifacts/supporting/cx-firefox.png",
+        "role": "player"
+      },
+      {
+        "id": "cx-webkit",
+        "kind": "webkit",
+        "path": "artifacts/supporting/cx-webkit.mp4",
+        "poster_path": "artifacts/supporting/cx-webkit.png",
+        "role": "player"
+      }
+    ],
     "video": {
-      "duration_seconds": 4.6,
-      "height": 360,
+      "duration_seconds": 8.44,
+      "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 47049,
+      "size_bytes": 330598,
       "width": 1920
     }
   },
   "bundle_id": "cross-engine-trio",
   "composition": {
-    "canvas_height": 360,
+    "canvas_height": 1080,
     "canvas_width": 1920,
-    "cell_height": 360,
-    "cell_width": 640,
-    "columns": 3,
-    "mode": "grid",
+    "cell_height": 540,
+    "cell_width": 960,
+    "columns": 2,
+    "mode": "sync-multi",
     "overlay": {
       "panes": [
         {
+          "height": 540,
           "kind": "chromium",
           "persona": "cx-chromium",
           "role": "player",
+          "width": 960,
           "x": 0,
           "y": 0
         },
         {
+          "height": 540,
           "kind": "firefox",
           "persona": "cx-firefox",
           "role": "player",
-          "x": 640,
+          "width": 960,
+          "x": 960,
           "y": 0
         },
         {
+          "height": 540,
           "kind": "webkit",
           "persona": "cx-webkit",
           "role": "player",
-          "x": 1280,
-          "y": 0
+          "width": 960,
+          "x": 0,
+          "y": 540
         }
       ],
-      "subtitle": "cross-engine-trio | Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.",
-      "title": "Cross-Engine Trio"
+      "subtitle": "",
+      "title": ""
     },
     "panes": [
       {
-        "height": 360,
+        "height": 540,
         "kind": "chromium",
         "persona": "cx-chromium",
         "role": "player",
-        "width": 640,
+        "width": 960,
         "x": 0,
         "y": 0
       },
       {
-        "height": 360,
+        "height": 540,
         "kind": "firefox",
         "persona": "cx-firefox",
         "role": "player",
-        "width": 640,
-        "x": 640,
+        "width": 960,
+        "x": 960,
         "y": 0
       },
       {
-        "height": 360,
+        "height": 540,
         "kind": "webkit",
         "persona": "cx-webkit",
         "role": "player",
-        "width": 640,
-        "x": 1280,
-        "y": 0
+        "width": 960,
+        "x": 0,
+        "y": 540
+      }
+    ],
+    "supporting_videos": [
+      {
+        "id": "cx-chromium",
+        "kind": "chromium",
+        "path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-chromium.mp4",
+        "persona": "cx-chromium",
+        "poster_path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-chromium.png",
+        "role": "player"
+      },
+      {
+        "id": "cx-firefox",
+        "kind": "firefox",
+        "path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-firefox.mp4",
+        "persona": "cx-firefox",
+        "poster_path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-firefox.png",
+        "role": "player"
+      },
+      {
+        "id": "cx-webkit",
+        "kind": "webkit",
+        "path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-webkit.mp4",
+        "persona": "cx-webkit",
+        "poster_path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-webkit.png",
+        "role": "player"
       }
     ]
   },
@@ -99,5 +154,9 @@
       "role": "player"
     }
   ],
+  "presentation": {
+    "mode": "sync-multi",
+    "primary_asset": "hero_video"
+  },
   "title": "Cross-Engine Trio"
 }
