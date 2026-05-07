@@ -37,7 +37,6 @@ def _is_test(macro: dict[str, Any], tag: str | None) -> bool:
 
 async def run_suite(
     *,
-    macros_dir: str | None,  # noqa: ARG001 — reserved for per-suite dir override; default MACROS_DIR used today
     kind: str = "webkit",
     tag: str | None = None,
     out_path: str | None = None,
@@ -46,8 +45,8 @@ async def run_suite(
 ) -> dict[str, Any]:
     """Discover test macros, run each in an ephemeral browser, collect results, write JUnit XML.
 
-    *macros_dir* is accepted for API completeness (future: filter to a subdir).
-    Currently discovery always uses the global MACROS_DIR from octowright.macros.storage.
+    Discovery uses the global MACROS_DIR from octowright.macros.storage; override
+    that via the OCTOWRIGHT_MACROS_DIR env var if you need a different directory.
     """
     if max_parallel < 1:
         raise ValueError("max_parallel must be >= 1")
