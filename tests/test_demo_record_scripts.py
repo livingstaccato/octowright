@@ -64,6 +64,44 @@ def test_record_demo_rewrites_index_for_known_bundle(monkeypatch, tmp_path: Path
     assert "tutorial export: not configured" in captured.out
 
 
+def test_record_demo_reports_supporting_outputs(monkeypatch, tmp_path: Path, capsys) -> None:
+    record_demo = _load_script(monkeypatch, "record_demo")
+    shared = sys.modules["_shared"]
+    bundle = DemoBundle(
+        id="role-based-duo",
+        title="Role Based Duo",
+        summary="Primary walkthrough.",
+        hero=True,
+        root=tmp_path / "bundle",
+    )
+    bundle.root.mkdir(parents=True)
+    monkeypatch.setattr(record_demo, "bundle_map", lambda: {bundle.id: bundle})
+    monkeypatch.setattr(
+        record_demo,
+        "record_bundle",
+        lambda _: {
+            "replay_path": "replay.jsonl",
+            "video_path": "demo.mp4",
+            "poster_path": "poster.png",
+            "supporting_videos": [
+                {
+                    "id": "monitor",
+                    "path": "artifacts/supporting/monitor.mp4",
+                    "poster_path": "artifacts/supporting/monitor.png",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(shared, "INDEX_PATH", tmp_path / "demo" / "INDEX.md")
+
+    exit_code = record_demo.main([bundle.id])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "supporting videos" in captured.out.lower()
+    assert "monitor" in captured.out
+
+
 def test_record_all_writes_tutorial_export_json(monkeypatch, tmp_path: Path, capsys) -> None:
     record_all = _load_script(monkeypatch, "record_all")
     shared = sys.modules["_shared"]
@@ -232,6 +270,11 @@ def test_sync_tutorial_export_tree_writes_static_hero_payloads_and_index(monkeyp
             "replay": ["artifacts/replay.jsonl"],
         },
         "artifact_manifest": {"composition": {"mode": "grid"}},
+        "media": {
+            "primary": {},
+            "supporting": [],
+            "presentation": {},
+        },
     }
     assert json.loads(index_path.read_text(encoding="utf-8")) == {
         "heroes": [
