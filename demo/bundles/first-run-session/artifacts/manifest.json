@@ -4,23 +4,23 @@
       "event_count": 8,
       "path": "artifacts/replay.jsonl",
       "python_export": "artifacts/replay.py",
-      "size_bytes": 2099,
+      "size_bytes": 2100,
       "ts_export": "artifacts/replay.ts"
     },
     "supporting_videos": [],
     "video": {
-      "duration_seconds": 4.56,
-      "height": 500,
+      "duration_seconds": 4.44,
+      "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 8169,
-      "width": 800
+      "size_bytes": 57939,
+      "width": 1920
     }
   },
   "bundle_id": "first-run-session",
   "composition": {
-    "canvas_height": 500,
-    "canvas_width": 800,
+    "canvas_height": 1080,
+    "canvas_width": 1920,
     "mode": "single-clean",
     "overlay": {
       "panes": [
