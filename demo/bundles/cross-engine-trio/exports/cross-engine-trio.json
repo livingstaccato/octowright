@@ -2,10 +2,10 @@
   "artifact_manifest": {
     "artifacts": {
       "replay": {
-        "event_count": 54,
+        "event_count": 58,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 13647,
+        "size_bytes": 14619,
         "ts_export": "artifacts/replay.ts"
       },
       "supporting_videos": [
@@ -29,53 +29,69 @@
           "path": "artifacts/supporting/cx-webkit.mp4",
           "poster_path": "artifacts/supporting/cx-webkit.png",
           "role": "player"
+        },
+        {
+          "id": "cx-monitor",
+          "kind": "chromium",
+          "path": "artifacts/supporting/cx-monitor.mp4",
+          "poster_path": "artifacts/supporting/cx-monitor.png",
+          "role": "monitor"
         }
       ],
       "video": {
-        "duration_seconds": 8.56,
-        "height": 400,
+        "duration_seconds": 8.44,
+        "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 178800,
+        "size_bytes": 351943,
         "width": 1920
       }
     },
     "bundle_id": "cross-engine-trio",
     "composition": {
-      "canvas_height": 400,
+      "canvas_height": 1080,
       "canvas_width": 1920,
-      "cell_height": 400,
-      "cell_width": 640,
-      "columns": 3,
+      "cell_height": 540,
+      "cell_width": 960,
+      "columns": 2,
       "mode": "sync-multi",
       "overlay": {
         "panes": [
           {
-            "height": 400,
+            "height": 540,
             "kind": "chromium",
             "persona": "cx-chromium",
             "role": "player",
-            "width": 640,
+            "width": 960,
             "x": 0,
             "y": 0
           },
           {
-            "height": 400,
+            "height": 540,
             "kind": "firefox",
             "persona": "cx-firefox",
             "role": "player",
-            "width": 640,
-            "x": 640,
+            "width": 960,
+            "x": 960,
             "y": 0
           },
           {
-            "height": 400,
+            "height": 540,
             "kind": "webkit",
             "persona": "cx-webkit",
             "role": "player",
-            "width": 640,
-            "x": 1280,
-            "y": 0
+            "width": 960,
+            "x": 0,
+            "y": 540
+          },
+          {
+            "height": 540,
+            "kind": "chromium",
+            "persona": "cx-monitor",
+            "role": "monitor",
+            "width": 960,
+            "x": 960,
+            "y": 540
           }
         ],
         "subtitle": "",
@@ -83,31 +99,40 @@
       },
       "panes": [
         {
-          "height": 400,
+          "height": 540,
           "kind": "chromium",
           "persona": "cx-chromium",
           "role": "player",
-          "width": 640,
+          "width": 960,
           "x": 0,
           "y": 0
         },
         {
-          "height": 400,
+          "height": 540,
           "kind": "firefox",
           "persona": "cx-firefox",
           "role": "player",
-          "width": 640,
-          "x": 640,
+          "width": 960,
+          "x": 960,
           "y": 0
         },
         {
-          "height": 400,
+          "height": 540,
           "kind": "webkit",
           "persona": "cx-webkit",
           "role": "player",
-          "width": 640,
-          "x": 1280,
-          "y": 0
+          "width": 960,
+          "x": 0,
+          "y": 540
+        },
+        {
+          "height": 540,
+          "kind": "chromium",
+          "persona": "cx-monitor",
+          "role": "monitor",
+          "width": 960,
+          "x": 960,
+          "y": 540
         }
       ],
       "supporting_videos": [
@@ -134,6 +159,14 @@
           "persona": "cx-webkit",
           "poster_path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-webkit.png",
           "role": "player"
+        },
+        {
+          "id": "cx-monitor",
+          "kind": "chromium",
+          "path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-monitor.mp4",
+          "persona": "cx-monitor",
+          "poster_path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-monitor.png",
+          "role": "monitor"
         }
       ]
     },
@@ -153,6 +186,11 @@
         "kind": "webkit",
         "persona": "cx-webkit",
         "role": "player"
+      },
+      {
+        "kind": "chromium",
+        "persona": "cx-monitor",
+        "role": "monitor"
       }
     ],
     "presentation": {
@@ -178,11 +216,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 8.56,
-      "height": 400,
+      "duration_seconds": 8.44,
+      "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 178800,
+      "size_bytes": 351943,
       "width": 1920
     },
     "supporting": [
@@ -206,6 +244,13 @@
         "path": "artifacts/supporting/cx-webkit.mp4",
         "poster_path": "artifacts/supporting/cx-webkit.png",
         "role": "player"
+      },
+      {
+        "id": "cx-monitor",
+        "kind": "chromium",
+        "path": "artifacts/supporting/cx-monitor.mp4",
+        "poster_path": "artifacts/supporting/cx-monitor.png",
+        "role": "monitor"
       }
     ]
   },
