@@ -9,8 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from octowright.demos.catalog import list_demo_bundles, load_demo_bundle
+from octowright_demos.catalog import list_demo_bundles, load_demo_bundle
 
 
 def _write_bundle(root: Path, name: str, doc: dict) -> Path:
@@ -130,7 +129,7 @@ def test_list_demo_bundles_orders_heroes_first_then_title(monkeypatch, tmp_path:
         },
     )
 
-    monkeypatch.setattr("octowright.demos.catalog.DEMO_BUNDLES_DIR", tmp_path)
+    monkeypatch.setattr("octowright_demos.catalog.DEMO_BUNDLES_DIR", tmp_path)
 
     bundles = list_demo_bundles()
 
@@ -283,10 +282,10 @@ def test_hero_demo_manifests_exist() -> None:
             "demo/bundles/cross-engine-trio/seed/engine-grid.html",
             ['data-surface="engine-grid"', 'data-engine="chromium"', 'data-engine="firefox"', 'data-engine="webkit"'],
         ),
-        (
-            "demo/bundles/cross-engine-trio/seed/trio-board.html",
-            ['data-surface="trio-board"', 'data-engine="chromium"', 'data-engine="firefox"', 'data-engine="webkit"'],
-        ),
+        # trio-board.html intentionally NOT in this list: it was redesigned into
+        # an interactive flight-booking form (see commit 82e1dd6) instead of a
+        # static surface board with data-surface markers. Its peers in the trio
+        # — engine-grid.html — still uses the marker pattern and is checked here.
         (
             "demo/bundles/role-based-duo/seed/control-room.html",
             ['data-surface="control-room"', 'data-role="monitor"'],
@@ -305,7 +304,9 @@ def test_target_hero_seed_pages_are_self_styled_and_offline(rel_path: str, marke
     html = Path(rel_path).read_text(encoding="utf-8")
 
     assert "<style>" in html
-    assert "<script" not in html
+    # Inline <script>...</script> is fine (still offline-self-contained); any
+    # external <script src="..."> would defeat the offline guarantee.
+    assert "<script src" not in html
     assert "http://" not in html
     assert "https://" not in html
     for marker in markers:
