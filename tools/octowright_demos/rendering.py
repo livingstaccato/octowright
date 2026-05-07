@@ -11,8 +11,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from octowright.demos.models import DemoBundle
-from octowright.demos.presentation_profiles import RenderPlan, select_render_plan
 from octowright.export import export_script
 from octowright.scenarios_pool import LiveScenario
 from octowright.video import (
@@ -26,6 +24,8 @@ from octowright.video import (
     render_supporting_video,
     transcode_video,
 )
+from octowright_demos.models import DemoBundle
+from octowright_demos.presentation_profiles import RenderPlan, select_render_plan
 
 
 def write_exports(replay_path: Path) -> None:

@@ -10,10 +10,10 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from octowright.demos.export import build_tutorial_export
-from octowright.demos.indexer import build_demo_index, build_manifest_row
-from octowright.demos.models import DemoBundle
-from octowright.demos.rendering import write_artifact_manifest
+from octowright_demos.export import build_tutorial_export
+from octowright_demos.indexer import build_demo_index, build_manifest_row
+from octowright_demos.models import DemoBundle
+from octowright_demos.rendering import write_artifact_manifest
 
 
 def test_build_manifest_row_preserves_declared_and_existing_artifacts(tmp_path: Path) -> None:
@@ -82,7 +82,7 @@ def test_write_artifact_manifest_records_primary_and_supporting_assets(
     supporting_poster = supporting_dir / "monitor.png"
     supporting_poster.write_bytes(b"poster")
     monkeypatch.setattr(
-        "octowright.demos.rendering.probe_video",
+        "octowright_demos.rendering.probe_video",
         lambda _: {"width": 1920, "height": 1080, "duration_seconds": 4.2},
     )
 
