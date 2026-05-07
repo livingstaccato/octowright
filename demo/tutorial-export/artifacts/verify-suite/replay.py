@@ -21,19 +21,19 @@ def _resolve_bundle_url(raw: str) -> str:
 async def main() -> None:
     async with async_playwright() as p:
         browser = await p.webkit.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url("bundle://seed/verify-stage.html?persona=vs-form&role=form&kind=webkit&slot=0")
         )
         browser = await p.webkit.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url("bundle://seed/verify-stage.html?persona=vs-counter&role=counter&kind=webkit&slot=1")
         )
         browser = await p.webkit.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url(
