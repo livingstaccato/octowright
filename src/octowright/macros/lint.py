@@ -20,6 +20,7 @@ from `octowright.macros._dispatch_simple`; conditional action shapes mirror
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -266,6 +267,39 @@ def _check_try_each(action: dict[str, Any], outer_index: int, issues: list[Issue
             )
 
 
+def _lint_if_selector(action: dict, idx: int, issues: list[Issue]) -> None:
+    _check_if_selector(action, idx, issues)
+    for sub in action.get("then") or []:
+        _lint_action(sub, idx, issues)
+    for sub in action.get("else") or []:
+        _lint_action(sub, idx, issues)
+
+
+def _lint_try(action: dict, idx: int, issues: list[Issue]) -> None:
+    _check_try(action, idx, issues)
+    for sub in action.get("actions") or []:
+        _lint_action(sub, idx, issues)
+
+
+def _lint_try_each(action: dict, idx: int, issues: list[Issue]) -> None:
+    _check_try_each(action, idx, issues)
+    for branch in action.get("branches") or []:
+        if isinstance(branch, list):
+            for sub in branch:
+                _lint_action(sub, idx, issues)
+
+
+# Per-action-kind linters that need recursion or specialized checks. Simple
+# actions (those in _SIMPLE_REQUIRED) and lifecycle skips are still handled
+# inline because they share the same one-liner shape.
+_LINT_HANDLERS: dict[str, Callable[[dict, int, list[Issue]], None]] = {
+    "if_selector": _lint_if_selector,
+    "try": _lint_try,
+    "try_each": _lint_try_each,
+    _MACRO_CALL_ACTION: lambda action, idx, issues: _check_macro_call(action, idx, issues),
+}
+
+
 def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
     """Lint a single action; recurse into conditional sub-actions.
 
@@ -300,11 +334,10 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
             Issue(
                 severity="warning",
                 code="lifecycle_in_macro",
-                message=(f"action {kind!r} will be silently skipped at runtime; consider removing"),
+                message=f"action {kind!r} will be silently skipped at runtime; consider removing",
                 action_index=outer_index,
             )
         )
-        # No further checks for lifecycle actions — they're skipped anyway.
         return
 
     if kind in _SIMPLE_REQUIRED:
@@ -312,39 +345,17 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
         _check_credentials(action, outer_index, issues)
         return
 
-    if kind == "if_selector":
-        _check_if_selector(action, outer_index, issues)
-        for sub in action.get("then") or []:
-            _lint_action(sub, outer_index, issues)
-        for sub in action.get("else") or []:
-            _lint_action(sub, outer_index, issues)
+    handler = _LINT_HANDLERS.get(kind)
+    if handler is not None:
+        handler(action, outer_index, issues)
         return
 
-    if kind == "try":
-        _check_try(action, outer_index, issues)
-        for sub in action.get("actions") or []:
-            _lint_action(sub, outer_index, issues)
-        return
-
-    if kind == "try_each":
-        _check_try_each(action, outer_index, issues)
-        for branch in action.get("branches") or []:
-            if isinstance(branch, list):
-                for sub in branch:
-                    _lint_action(sub, outer_index, issues)
-        return
-
-    if kind == _MACRO_CALL_ACTION:
-        _check_macro_call(action, outer_index, issues)
-        return
-
-    # Unknown action — typo or future action type.
     if kind not in _KNOWN_ACTIONS:
         issues.append(
             Issue(
                 severity="warning",
                 code="unknown_action",
-                message=(f"unknown action {kind!r} — could be a typo or future action type"),
+                message=f"unknown action {kind!r} — could be a typo or future action type",
                 action_index=outer_index,
             )
         )
