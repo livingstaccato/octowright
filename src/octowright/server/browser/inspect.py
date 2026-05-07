@@ -39,7 +39,7 @@ async def browser_screenshot(instance_id: str, path: str | None = None) -> dict[
 )
 async def browser_snapshot(
     instance_id: str,
-    selector: str = "html",
+    selector: str = "body",
     full: bool = False,
     max_chars: int | None = None,
 ) -> dict[str, Any]:
@@ -306,4 +306,41 @@ def browser_tail_recording(
         "cursor": new_cursor,
         "total_bytes": total_bytes,
         "complete": new_cursor >= total_bytes,
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Read the cached Markdown representation of the page. "
+        "Highly token-efficient way to read article content or documentation."
+    ),
+)
+async def browser_read_markdown(
+    instance_id: str,
+    max_chars: int | None = None,
+) -> dict[str, Any]:
+    session = pool.get(instance_id)
+
+    path = session.markdown_path
+    if not path or not path.exists():
+        path = await session.capture_markdown()
+
+    if not path or not path.exists():
+        return {"error": "Markdown generation failed or is unavailable"}
+
+    text = path.read_text(encoding="utf-8")
+    original_size = len(text)
+    cap = max_chars or DEFAULT_PREVIEW_CHARS
+
+    truncated = False
+    if original_size > cap:
+        text = text[:cap] + f"\n\n... (truncated {original_size - cap} more chars)"
+        truncated = True
+
+    return {
+        "url": session.page.url,
+        "markdown": text,
+        "truncated": truncated,
+        "markdown_size": original_size,
     }
