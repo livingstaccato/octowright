@@ -12,6 +12,8 @@ strings: short, structural, and easy to eyeball when one regresses.
 
 from __future__ import annotations
 
+import pytest
+
 from octowright._format import (
     browser_summary,
     participant_summary,
@@ -47,6 +49,18 @@ class TestShortUrl:
         # Even malformed strings should not raise.
         out = short_url("not a url at all", max_chars=10)
         assert isinstance(out, str)
+
+    def test_urlparse_exception_falls_back_to_truncation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Force urlparse to raise so the except-branch (lines 24-25) is hit.
+        import octowright._format as _fmt
+
+        def _raising_urlparse(url: str):
+            raise ValueError("simulated bad parse")
+
+        monkeypatch.setattr(_fmt, "urlparse", _raising_urlparse)
+        out = short_url("https://example.com/long-path", max_chars=10)
+        assert isinstance(out, str)
+        assert len(out) <= 10
 
 
 class TestShortId:

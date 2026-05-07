@@ -61,6 +61,54 @@ def _takeover_apply_one(detection: Any, *, backup: bool) -> None:
     )
 
 
+def _takeover_render_dry_run(detections: list) -> None:
+    _takeover_render_findings(detections)
+    if detections:
+        click.echo("")
+        click.echo(
+            "Re-run with `--apply --scope={session,project,global}` to disable them, "
+            "or just `--apply` to choose interactively."
+        )
+
+
+def _takeover_resolve_scope(scope: str | None) -> str | None:
+    """Return the resolved scope name, or None if the user cancelled."""
+    if scope is not None:
+        return scope
+    choice = click.prompt(
+        "Take over for which scope? (s)ession / (p)roject / (g)lobal / (c)ancel",
+        type=click.Choice(["s", "p", "g", "c"]),
+        default="c",
+        show_choices=False,
+    )
+    resolved = {"s": "session", "p": "project", "g": "global", "c": "cancel"}[choice]
+    if resolved == "cancel":
+        click.echo("cancelled")
+        return None
+    return resolved
+
+
+def _takeover_apply_targets(detections: list, scope: str, name: str | None, no_backup: bool) -> None:
+    targets = [d for d in detections if d.scope == scope]
+    if name is not None:
+        targets = [d for d in targets if d.server_name == name]
+    if not targets:
+        suffix = f" for name={name!r}" if name else ""
+        click.echo(f"No matching detections in {scope}{suffix}.")
+        return
+    plural = "y" if len(targets) == 1 else "ies"
+    click.echo(f"applying takeover ({scope}, {len(targets)} entr{plural}):")
+    for d in targets:
+        _takeover_apply_one(d, backup=not no_backup)
+
+
+_SESSION_TAKEOVER_NOTE = (
+    "session-only takeover acknowledged; no config changes. "
+    "octowright will take precedence for THIS conversation only — "
+    "tell the assistant to prefer octowright tools when both are available."
+)
+
+
 @cli.command()
 @click.option("--apply", "do_apply", is_flag=True, help="Actually modify config files (default = check only).")
 @click.option(
@@ -79,61 +127,20 @@ def takeover(do_apply: bool, scope: str | None, name: str | None, no_backup: boo
     try:
         project_cfg = _takeover_default_project_config()
         global_cfg = _takeover_default_global_config()
-
-        detections = _t.detect_competing_servers(
-            project_config=project_cfg,
-            global_config=global_cfg,
-        )
+        detections = _t.detect_competing_servers(project_config=project_cfg, global_config=global_cfg)
 
         if not do_apply:
-            _takeover_render_findings(detections)
-            if detections:
-                click.echo("")
-                click.echo(
-                    "Re-run with `--apply --scope={session,project,global}` to disable them, "
-                    "or just `--apply` to choose interactively."
-                )
+            _takeover_render_dry_run(detections)
             return
-
         if not detections:
             click.echo("Nothing to take over — no competing plugins detected.")
             return
-
-        # --apply path: pick a scope.
-        if scope is None:
-            choice = click.prompt(
-                "Take over for which scope? (s)ession / (p)roject / (g)lobal / (c)ancel",
-                type=click.Choice(["s", "p", "g", "c"]),
-                default="c",
-                show_choices=False,
-            )
-            resolved = {"s": "session", "p": "project", "g": "global", "c": "cancel"}[choice]
-            if resolved == "cancel":
-                click.echo("cancelled")
-                return
-            scope = resolved
-
-        if scope == "session":
-            click.echo(
-                "session-only takeover acknowledged; no config changes. "
-                "octowright will take precedence for THIS conversation only — "
-                "tell the assistant to prefer octowright tools when both are available."
-            )
+        resolved = _takeover_resolve_scope(scope)
+        if resolved is None:
             return
-
-        # project / global: filter detections + apply each.
-        targets = [d for d in detections if d.scope == scope]
-        if name is not None:
-            targets = [d for d in targets if d.server_name == name]
-        if not targets:
-            if name:
-                click.echo(f"No matching detections in {scope} for name={name!r}.")
-            else:
-                click.echo(f"No matching detections in {scope}.")
+        if resolved == "session":
+            click.echo(_SESSION_TAKEOVER_NOTE)
             return
-
-        click.echo(f"applying takeover ({scope}, {len(targets)} entr{'y' if len(targets) == 1 else 'ies'}):")
-        for d in targets:
-            _takeover_apply_one(d, backup=not no_backup)
+        _takeover_apply_targets(detections, resolved, name, no_backup)
     finally:
         shutdown_telemetry()
