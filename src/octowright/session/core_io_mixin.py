@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 from playwright.async_api import ConsoleMessage, Page
 
-from ._protocols import SessionLike
+from octowright.session._protocols import SessionLike
 
 if TYPE_CHECKING:
-    from .core import BrowserSession
+    from octowright.session.core import BrowserSession
 
 
 def _looks_like_binary_text(payload: Any) -> bool:
@@ -206,7 +206,7 @@ class SessionIOMixin(SessionLike):
 
     def _register_popup(self, page: Page) -> None:
         """Called by context's 'page' event. Appends new page and records the event."""
-        from .. import pool as _pool
+        from octowright.browser_pool.listeners import _wire_listeners
 
         self.pages.append(page)
         page_index = len(self.pages) - 1
@@ -219,7 +219,7 @@ class SessionIOMixin(SessionLike):
             self.recorder.record("console", **entry)
 
         page.on("console", _on_console)
-        _pool._wire_listeners(cast("BrowserSession", self), page)
+        _wire_listeners(cast("BrowserSession", self), page)
 
     def _handle_websocket(self, websocket: Any) -> None:
         """Attach frame handlers to a Playwright websocket and record lifecycle events."""

@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .defaults import SUPPORTED_KINDS
+from octowright.defaults import SUPPORTED_KINDS
 
 
 @dataclass(frozen=True)

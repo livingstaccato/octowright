@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from octowright.macro_lint import Issue, lint_macro
+from octowright.macros.lint import Issue, lint_macro
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -129,6 +129,33 @@ def test_unknown_action_is_warning() -> None:
     issues = lint_macro(_macro([{"action": "do_the_thing", "foo": "bar"}]))
     assert _codes(issues) == ["unknown_action"]
     assert issues[0].severity == "warning"
+
+
+def test_macro_call_is_valid() -> None:
+    action = {"action": "macro_call", "name": "other", "args": {"email": "alice"}}
+    issues = lint_macro(_macro([action]))
+    assert issues == []
+
+
+def test_macro_call_requires_name() -> None:
+    action = {"action": "macro_call", "args": {"x": "1"}}
+    issues = lint_macro(_macro([action]))
+    assert _codes(issues) == ["macro_call_invalid_name"]
+    assert issues[0].severity == "error"
+
+
+def test_macro_call_name_must_be_string() -> None:
+    action = {"action": "macro_call", "name": 123}
+    issues = lint_macro(_macro([action]))
+    assert _codes(issues) == ["macro_call_invalid_name"]
+    assert issues[0].severity == "error"
+
+
+def test_macro_call_args_must_be_dict() -> None:
+    action = {"action": "macro_call", "name": "other", "args": []}
+    issues = lint_macro(_macro([action]))
+    assert _codes(issues) == ["macro_call_invalid_args"]
+    assert issues[0].severity == "error"
 
 
 def test_lifecycle_launch_is_warning() -> None:
@@ -339,7 +366,9 @@ def test_macro_lint_tool_wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
 
     import octowright.macros as macros_mod
+    import octowright.macros.storage as macros_storage
 
+    importlib.reload(macros_storage)
     importlib.reload(macros_mod)
     from octowright.server import macros as server_macros_mod
 
@@ -355,8 +384,8 @@ def test_macro_lint_tool_wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
             {"action": "snapshot"},  # warning: lifecycle
         ],
     }
-    macros_mod.MACROS_DIR.mkdir(parents=True, exist_ok=True)
-    (macros_mod.MACROS_DIR / "linttest.json").write_text(json.dumps(macro), encoding="utf-8")
+    macros_storage.MACROS_DIR.mkdir(parents=True, exist_ok=True)
+    (macros_storage.MACROS_DIR / "linttest.json").write_text(json.dumps(macro), encoding="utf-8")
 
     result = server_macros_mod.macro_lint(name="linttest")
     assert result["macro"] == "linttest"
@@ -378,7 +407,9 @@ def test_macro_lint_tool_wrapper_clean_macro(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
 
     import octowright.macros as macros_mod
+    import octowright.macros.storage as macros_storage
 
+    importlib.reload(macros_storage)
     importlib.reload(macros_mod)
     from octowright.server import macros as server_macros_mod
 
@@ -391,8 +422,8 @@ def test_macro_lint_tool_wrapper_clean_macro(monkeypatch: pytest.MonkeyPatch, tm
             {"action": "click", "selector": "#go"},
         ],
     }
-    macros_mod.MACROS_DIR.mkdir(parents=True, exist_ok=True)
-    (macros_mod.MACROS_DIR / "clean.json").write_text(json.dumps(macro), encoding="utf-8")
+    macros_storage.MACROS_DIR.mkdir(parents=True, exist_ok=True)
+    (macros_storage.MACROS_DIR / "clean.json").write_text(json.dumps(macro), encoding="utf-8")
 
     result = server_macros_mod.macro_lint(name="clean")
     assert result["ok"] is True
@@ -405,7 +436,10 @@ def test_macro_lint_tool_wrapper_missing_macro(monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
 
     import octowright.macros as macros_mod
+    import octowright.macros.storage as macros_storage
 
+    importlib.reload(macros_mod)
+    importlib.reload(macros_storage)
     importlib.reload(macros_mod)
     from octowright.server import macros as server_macros_mod
 

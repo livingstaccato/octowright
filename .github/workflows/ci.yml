@@ -6,14 +6,32 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      os:
+        description: "OS target to run"
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - linux
+          - macos
+          - windows
+      arch:
+        description: "CPU architecture target to run"
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - amd64
+          - arm64
 
 permissions:
   contents: read
 
 env:
   FORCE_COLOR: "1"
-  # Prefer runner Python and avoid uv-managed interpreter bootstrap.
-  UV_PYTHON: python3
   UV_PYTHON_DOWNLOADS: never
   # Keep scenarios/profiles quiet during CI — never touch $HOME defaults.
   OCTOWRIGHT_RECORDINGS: ${{ github.workspace }}/.ci/recordings
@@ -25,9 +43,9 @@ env:
 jobs:
   lint:
     name: 🎨 Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/bootstrap-uv
       - name: Ruff check
         run: uv run --active ruff check .
@@ -39,19 +57,70 @@ jobs:
         run: uv run --active bandit -q -r src/octowright -s B101,B110,B112,B404,B405,B603,B607
       - name: SPDX headers
         run: uv run --active python scripts/check_spdx_headers.py
+      - name: Agent docs sync
+        run: uv run --active python scripts/check_agent_docs_sync.py
+      - name: Vulture (dead code)
+        run: uv run --active python scripts/check_vulture.py
+      - name: Xenon (complexity)
+        run: uv run --active python scripts/check_xenon.py
+      - name: Secret scan
+        run: bash ci/run_detect_secrets.sh
+      - name: pip-audit (deps)
+        run: uv run --active python scripts/check_pip_audit.py
+
+  select-test-matrix:
+    name: 🧭 Select test matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    env:
+      TARGET_OS: ${{ inputs.os || 'all' }}
+      TARGET_ARCH: ${{ inputs.arch || 'all' }}
+    steps:
+      - id: matrix
+        name: Build matrix JSON
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          target_os = os.environ.get("TARGET_OS") or "all"
+          target_arch = os.environ.get("TARGET_ARCH") or "all"
+          targets = [
+              {"os": "linux", "arch": "amd64", "runner": "ubuntu-24.04"},
+              {"os": "linux", "arch": "arm64", "runner": "ubuntu-24.04-arm"},
+              {"os": "macos", "arch": "amd64", "runner": "macos-15-intel"},
+              {"os": "macos", "arch": "arm64", "runner": "macos-15"},
+              {"os": "windows", "arch": "amd64", "runner": "windows-2025"},
+              {"os": "windows", "arch": "arm64", "runner": "windows-11-arm"},
+          ]
+          include = [
+              target
+              for target in targets
+              if target_os in {"all", target["os"]} and target_arch in {"all", target["arch"]}
+          ]
+          print(f"matrix={json.dumps({'include': include}, separators=(',', ':'))}")
+          PY
 
   test:
-    name: 🧪 Tests
-    runs-on: ubuntu-latest
+    name: 🧪 Tests (${{ matrix.os }} ${{ matrix.arch }})
+    needs: select-test-matrix
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select-test-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/bootstrap-uv
       - name: Install Playwright browsers (act)
         if: ${{ env.ACT == 'true' }}
         run: uv run --active playwright install webkit firefox chromium
-      - name: Install Playwright browsers (github)
-        if: ${{ env.ACT != 'true' }}
+      - name: Install Playwright browsers + Linux deps (github)
+        if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
         run: uv run --active playwright install --with-deps webkit firefox chromium
+      - name: Install Playwright browsers (github)
+        if: ${{ env.ACT != 'true' && runner.os != 'Linux' }}
+        run: uv run --active playwright install webkit firefox chromium
       - name: Run unit tests (headless, act-safe subset)
         if: ${{ env.ACT == 'true' }}
         env:
@@ -61,14 +130,20 @@ jobs:
             --no-cov \
             --ignore=tests/test_engine_matrix_live.py \
             --ignore=tests/test_badge.py \
+            --ignore=tests/test_pill.py \
             --ignore=tests/test_popup_listeners.py \
             --ignore=tests/test_scenario_sync.py \
             --ignore=tests/test_scenarios_live.py \
             --ignore=tests/test_session_mode.py \
             --ignore=tests/test_title_prefix.py \
             --ignore=tests/test_label_promotion.py
+      - name: Run unit tests (headless, Windows verbose)
+        if: ${{ env.ACT != 'true' && runner.os == 'Windows' }}
+        env:
+          OCTOWRIGHT_HEADLESS: "1"
+        run: uv run --active pytest -vv tests/ --tb=short -ra --color=no
       - name: Run unit tests (headless)
-        if: ${{ env.ACT != 'true' }}
+        if: ${{ env.ACT != 'true' && runner.os != 'Windows' }}
         env:
           OCTOWRIGHT_HEADLESS: "1"
         run: uv run --active pytest -q tests/
@@ -77,23 +152,7 @@ jobs:
       - name: Build wheel + sdist
         run: uv run --active python -m build --wheel --sdist
       - name: Verify packaged skill assets in wheel
-        run: |
-          python - <<'PY'
-          import glob
-          import zipfile
-          whl = glob.glob("dist/*.whl")
-          assert whl, "missing wheel artifact"
-          required = {
-              "octowright/skills/using-octowright/SKILL.md",
-              "octowright/skills/using-octowright/skill.json",
-              "octowright/skills/manifests/claude-plugin.json",
-              "octowright/skills/manifests/codex-plugin.json",
-          }
-          with zipfile.ZipFile(whl[0]) as zf:
-              names = set(zf.namelist())
-          missing = sorted(required - names)
-          assert not missing, f"wheel missing required files: {missing}"
-          PY
+        run: uv run --active python scripts/check_wheel_assets.py
       - name: Skill CLI smoke
         env:
           CODEX_HOME: ${{ github.workspace }}/.ci/codex-home
@@ -105,11 +164,11 @@ jobs:
 
   selftest:
     name: 🔧 Selftest — quick smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/bootstrap-uv
         with:
-          sync-args: "--python \"$(command -v python3)\""
+          sync-args: "--python python"
       - name: Selftest
         run: uv run --active octowright selftest

@@ -16,15 +16,102 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from provide.telemetry import get_logger
 
 if TYPE_CHECKING:
-    from .pool import BrowserPool
-    from .scenarios import ScenarioPool
+    from octowright.browser_pool import BrowserPool
+    from octowright.scenarios import ScenarioPool
 
 log = get_logger(__name__)
+
+
+@dataclass
+class _WatchdogState:
+    """Mutable state owned by the watchdog loop. armed=True after the pool
+    has been used at least once (or arm_immediately=True at start);
+    idle_since is set the first tick the pool goes idle after arming."""
+
+    armed: bool = False
+    idle_since: float | None = None
+
+    def idle_for_seconds(self) -> float | None:
+        if self.idle_since is None:
+            return None
+        return time.monotonic() - self.idle_since
+
+
+@dataclass
+class _PoolSnapshot:
+    """Snapshot of the pool at one tick."""
+
+    browsers: int
+    scenarios: int
+    extra: int
+
+    @property
+    def active(self) -> bool:
+        return self.browsers > 0 or self.scenarios > 0 or self.extra > 0
+
+
+def _sample_pool(
+    pool: BrowserPool,
+    scenario_pool: ScenarioPool,
+    get_extra_active_count: Callable[[], int] | None,
+) -> _PoolSnapshot:
+    return _PoolSnapshot(
+        browsers=len(pool.list_sessions()),
+        scenarios=len(scenario_pool.list_live()),
+        extra=get_extra_active_count() if get_extra_active_count is not None else 0,
+    )
+
+
+def _on_active_tick(state: _WatchdogState, snapshot: _PoolSnapshot) -> None:
+    """An active tick clears any pending idle countdown and arms the watchdog."""
+    if not state.armed:
+        log.info(
+            "octowright.watchdog.armed",
+            browsers=snapshot.browsers,
+            scenarios=snapshot.scenarios,
+            extra=snapshot.extra,
+        )
+    state.armed = True
+    if state.idle_since is not None:
+        log.info(
+            "octowright.watchdog.idle_cleared",
+            browsers=snapshot.browsers,
+            scenarios=snapshot.scenarios,
+            extra=snapshot.extra,
+        )
+    state.idle_since = None
+
+
+def _check_idle_expiry(
+    state: _WatchdogState,
+    snapshot: _PoolSnapshot,
+    grace_seconds: float,
+) -> bool:
+    """An idle tick: start the countdown if needed, fire if grace exceeded.
+    Returns True iff the watchdog should exit (caller should return)."""
+    now = time.monotonic()
+    if state.idle_since is None:
+        log.info("octowright.watchdog.idle_started", grace_seconds=grace_seconds)
+        state.idle_since = now
+        return False
+    elapsed = now - state.idle_since
+    if elapsed < grace_seconds:
+        return False
+    log.info(
+        "octowright.watchdog.fired",
+        idle_seconds=elapsed,
+        grace_seconds=grace_seconds,
+        browsers=snapshot.browsers,
+        scenarios=snapshot.scenarios,
+        extra=snapshot.extra,
+    )
+    return True
 
 
 async def idle_watchdog(
@@ -54,57 +141,29 @@ async def idle_watchdog(
 
     The caller is expected to trigger shutdown when this coroutine returns.
     """
-    armed = arm_immediately
-    idle_since: float | None = None
+    state = _WatchdogState(armed=arm_immediately)
     log.info(
         "octowright.watchdog.start",
         grace_seconds=grace_seconds,
         poll_seconds=poll_seconds,
-        armed=armed,
+        armed=state.armed,
     )
     while True:
         await asyncio.sleep(poll_seconds)
-        browsers = len(pool.list_sessions())
-        scenarios = len(scenario_pool.list_live())
-        extra = get_extra_active_count() if get_extra_active_count is not None else 0
-        active = browsers > 0 or scenarios > 0 or extra > 0
-        idle_for = None if idle_since is None else time.monotonic() - idle_since
+        snapshot = _sample_pool(pool, scenario_pool, get_extra_active_count)
         log.debug(
             "octowright.watchdog.tick",
-            browsers=browsers,
-            scenarios=scenarios,
-            extra_mcp_sessions=extra,
-            active=active,
-            armed=armed,
-            idle_for_seconds=idle_for,
+            browsers=snapshot.browsers,
+            scenarios=snapshot.scenarios,
+            extra_mcp_sessions=snapshot.extra,
+            active=snapshot.active,
+            armed=state.armed,
+            idle_for_seconds=state.idle_for_seconds(),
         )
-        if active:
-            if not armed:
-                log.info("octowright.watchdog.armed", browsers=browsers, scenarios=scenarios, extra=extra)
-            armed = True
-            if idle_since is not None:
-                log.info(
-                    "octowright.watchdog.idle_cleared",
-                    browsers=browsers,
-                    scenarios=scenarios,
-                    extra=extra,
-                )
-            idle_since = None
+        if snapshot.active:
+            _on_active_tick(state, snapshot)
             continue
-        if not armed:
+        if not state.armed:
             continue
-        now = time.monotonic()
-        if idle_since is None:
-            log.info("octowright.watchdog.idle_started", grace_seconds=grace_seconds)
-            idle_since = now
-            continue
-        if now - idle_since >= grace_seconds:
-            log.info(
-                "octowright.watchdog.fired",
-                idle_seconds=now - idle_since,
-                grace_seconds=grace_seconds,
-                browsers=browsers,
-                scenarios=scenarios,
-                extra=extra,
-            )
+        if _check_idle_expiry(state, snapshot, grace_seconds):
             return

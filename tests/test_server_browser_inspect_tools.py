@@ -112,9 +112,127 @@ async def test_wait_recording_capture_export_and_expects(
     assert waited["ok"] is True
     assert rec_path["path"].endswith("rec.jsonl")
     assert cap["closed"] is True
-    assert exported["path"] == "/tmp/out.py"
+    assert exported["path"] == str(Path("/tmp/out.py"))
     assert url_ok["ok"] and text_ok["ok"] and sel_ok["ok"] and js_ok["ok"]
     assert tail["complete"] is True and tail["cursor"] == 10
+
+
+@pytest.mark.anyio
+async def test_snapshot_default_selector(_patch_pool: MagicMock) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+    await _inspect.browser_snapshot("i")
+    s.page.locator.assert_called_once_with("body")
+
+
+@pytest.mark.anyio
+async def test_browser_read_markdown(_patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+
+    md_file = tmp_path / "page.md"
+    md_file.write_text("Hello Markdown")
+
+    s.markdown_path = None
+    s.capture_markdown = AsyncMock(return_value=md_file)
+
+    out = await _inspect.browser_read_markdown("i")
+
+    assert out["markdown"] == "Hello Markdown"
+    s.capture_markdown.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_browser_read_markdown_refreshes_existing_cache(_patch_pool: MagicMock, tmp_path: Path) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+
+    stale_file = tmp_path / "stale.md"
+    fresh_file = tmp_path / "fresh.md"
+    stale_file.write_text("Old Markdown")
+    fresh_file.write_text("Fresh Markdown")
+
+    s.markdown_path = stale_file
+    s.capture_markdown = AsyncMock(return_value=fresh_file)
+
+    out = await _inspect.browser_read_markdown("i")
+
+    assert out["markdown"] == "Fresh Markdown"
+    s.capture_markdown.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_browser_read_markdown_truncates(
+    _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+
+    md_file = tmp_path / "page2.md"
+    md_file.write_text("A" * 50)
+    s.markdown_path = md_file
+    s.capture_markdown = AsyncMock(return_value=md_file)
+
+    out = await _inspect.browser_read_markdown("i", max_chars=10)
+
+    assert out["truncated"] is True
+    assert out["markdown_size"] == 50
+    assert len(out["markdown"]) == 10
+    assert out["markdown"] == "A" * 10
+    s.capture_markdown.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_browser_read_markdown_zero_cap(_patch_pool: MagicMock, tmp_path: Path) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+
+    md_file = tmp_path / "page3.md"
+    md_file.write_text("ABCDE")
+    s.markdown_path = md_file
+    s.capture_markdown = AsyncMock(return_value=md_file)
+
+    out = await _inspect.browser_read_markdown("i", max_chars=0)
+
+    assert out["truncated"] is True
+    assert out["markdown"] == ""
+
+
+def test_top_level_server_exports_browser_read_markdown() -> None:
+    from octowright import server
+
+    assert hasattr(server, "browser_read_markdown")
+
+
+@pytest.mark.anyio
+async def test_browser_capture_and_close_with_snapshot(_patch_pool: MagicMock) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+    _patch_pool.close = AsyncMock()
+    out = await _inspect.browser_capture_and_close("i", snapshot=True)
+    assert out["closed"] is True
+    assert out["aria"] == "aria-content"
+
+
+@pytest.mark.anyio
+async def test_browser_read_markdown_failure(_patch_pool: MagicMock) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+    s.markdown_path = None
+    s.capture_markdown = AsyncMock(return_value=None)
+    out = await _inspect.browser_read_markdown("i")
+    assert "error" in out
+
+
+@pytest.mark.anyio
+async def test_browser_brief(_patch_pool: MagicMock) -> None:
+    s = _session()
+    _patch_pool.get.return_value = s
+    out = await _inspect.browser_brief("i")
+
+    assert out["url"] == "https://example.com"
+    assert out["title"] == "Example"
+    assert "elements" in out
 
 
 @pytest.fixture

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from octowright.pool import (
+from octowright.browser_pool.visuals import (
     _ENGINE_EMOJI,
     _PERSONA_EMOJI_POOL,
     _badge_color_for,
@@ -144,13 +144,13 @@ def test_emoji_pair_for_unknown_engine_drops_engine_emoji() -> None:
 
 
 def test_badge_default_position_is_bottom_right() -> None:
-    from octowright.pool import _BADGE_POSITION_DEFAULT
+    from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
     assert _BADGE_POSITION_DEFAULT == "bottom-right"
 
 
 def test_badge_positions_cover_all_four_corners() -> None:
-    from octowright.pool import _BADGE_POSITIONS
+    from octowright.browser_pool.visuals import _BADGE_POSITIONS
 
     assert set(_BADGE_POSITIONS.keys()) == {
         "top-left",
@@ -162,7 +162,7 @@ def test_badge_positions_cover_all_four_corners() -> None:
 
 def test_badge_position_values_have_two_axes() -> None:
     """Each position must declare both a vertical and a horizontal CSS edge."""
-    from octowright.pool import _BADGE_POSITIONS
+    from octowright.browser_pool.visuals import _BADGE_POSITIONS
 
     for name, axes in _BADGE_POSITIONS.items():
         assert axes["vertical"] in ("top", "bottom"), name
@@ -173,7 +173,7 @@ def test_badge_position_values_have_two_axes() -> None:
 async def test_invalid_badge_position_raises(tmp_path) -> None:
     """Bad badge_position string must raise — caught early, not silently fall back."""
     pytest.importorskip("playwright")
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     pool = BrowserPool()
     try:
@@ -191,17 +191,12 @@ async def test_invalid_badge_position_raises(tmp_path) -> None:
         await pool.shutdown()
 
 
-# ---------------------------------------------------------------------------
-# End-to-end: real Playwright launch, verify the badge lands in the DOM.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_badge_actually_renders_in_real_browser(tmp_path) -> None:
     """Launch a headless browser via the pool, navigate to a data: URL, read DOM."""
     pytest.importorskip("playwright")
     from octowright import defaults as _defaults
-    from octowright.pool import BrowserPool
+    from octowright.browser_pool import BrowserPool
 
     # Isolate recordings so the test doesn't pollute the global recordings dir.
     monkey_recordings = tmp_path / "rec"
@@ -209,7 +204,7 @@ async def test_badge_actually_renders_in_real_browser(tmp_path) -> None:
     original = _defaults.RECORDINGS_DIR
     _defaults.RECORDINGS_DIR = monkey_recordings
     # Pool reads from module globals at launch time; patch both.
-    import octowright.pool as _pool
+    import octowright.browser_pool.pool as _pool
 
     original_pool = _pool.RECORDINGS_DIR
     _pool.RECORDINGS_DIR = monkey_recordings

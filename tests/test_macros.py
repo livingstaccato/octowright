@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import json
 import time
@@ -42,6 +43,9 @@ def _import_macros(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
     # Force re-import so module-level constants pick up patched env vars.
+    import octowright.macros.storage as _storage
+
+    importlib.reload(_storage)
     import octowright.macros as _m
 
     importlib.reload(_m)
@@ -80,6 +84,36 @@ def test_save_macro_writes_expected_shape(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert any("{{password}}" in a.get("value", "") for a in fill_actions)
 
 
+def test_macros_init_is_export_surface_only() -> None:
+    init_path = Path("src/octowright/macros/__init__.py")
+    tree = ast.parse(init_path.read_text(encoding="utf-8"))
+    allowed = (
+        ast.Assign,
+        ast.Expr,
+        ast.ImportFrom,
+    )
+    disallowed = [
+        node
+        for node in tree.body
+        if not isinstance(node, allowed)
+        or isinstance(
+            node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.If | ast.For | ast.Try | ast.With
+        )
+    ]
+    assert disallowed == []
+
+
+def test_package_init_files_are_export_surfaces_only() -> None:
+    disallowed_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.If, ast.For, ast.Try, ast.With)
+    offenders: list[str] = []
+    for init_path in sorted(Path("src/octowright").rglob("__init__.py")):
+        tree = ast.parse(init_path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, disallowed_nodes):
+                offenders.append(f"{init_path}:{node.lineno}:{type(node).__name__}")
+    assert offenders == []
+
+
 def test_save_macro_strips_lifecycle_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     m = _import_macros(monkeypatch, tmp_path)
     rec = _write_recording(tmp_path)
@@ -100,6 +134,35 @@ def test_save_macro_strips_lifecycle_actions(monkeypatch: pytest.MonkeyPatch, tm
     assert "launch" in action_types2
     assert "close" not in action_types2
     assert "snapshot" not in action_types2
+
+
+def test_save_macro_preserves_semantic_metadata_on_css_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    m = _import_macros(monkeypatch, tmp_path)
+    rec = _write_recording(
+        tmp_path,
+        [
+            {
+                "action": "click",
+                "selector": "#login",
+                "role": "button",
+                "role_name": "Log in",
+            },
+            {
+                "action": "fill",
+                "selector": "#email",
+                "value": "me@example.com",
+                "label": "Email",
+            },
+        ],
+    )
+
+    path = m.save_macro(recording_path=rec, name="semantic-css")
+    actions = json.loads(path.read_text())["actions"]
+
+    assert actions == [
+        {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
+        {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+    ]
 
 
 def test_save_macro_preserves_created_at_on_overwrite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -289,6 +352,102 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     assert click_calls  # at least one click
 
 
+@pytest.mark.anyio
+async def test_run_macro_macro_call_dispatches_nested_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    m = _import_macros(monkeypatch, tmp_path)
+
+    _save_macro_file(
+        m,
+        tmp_path,
+        "signup-child",
+        [
+            {"action": "fill", "selector": "#email", "value": "{{email}}"},
+            {"action": "click", "selector": "#submit"},
+        ],
+    )
+    _save_macro_file(
+        m,
+        tmp_path,
+        "signup-parent",
+        [
+            {"action": "navigate", "url": "https://example.com"},
+            {"action": "macro_call", "name": "signup-child", "args": {"email": "{{email}}"}},
+        ],
+    )
+
+    session = _CallAwareFakeSession()
+    result = await m.run_macro(session, "signup-parent", args={"email": "person@example.com"})
+
+    assert result["macro"] == "signup-parent"
+    # 1 navigate + 1 macro_call wrapper + 2 child actions = 4 executed.
+    assert result["executed"] == 4
+    assert session.calls[1] == ("fill", ("#email", "person@example.com"), None)
+    assert session.calls[2] == ("click", ("#submit",), None)
+
+
+@pytest.mark.anyio
+async def test_run_macro_macro_call_shape_error_hard_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    m = _import_macros(monkeypatch, tmp_path)
+    _save_macro_file(
+        m,
+        tmp_path,
+        "bad-macro-call",
+        [{"action": "macro_call", "name": 123}],
+    )
+    session = _CallAwareFakeSession()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await m.run_macro(session, "bad-macro-call")
+
+    payload = exc_info.value.args[0]
+    assert payload["macro"] == "bad-macro-call"
+    assert "macro_call action 'name' must be a non-empty string" in payload["original"]
+
+
+@pytest.mark.anyio
+async def test_run_macro_macro_call_detects_direct_recursion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    m = _import_macros(monkeypatch, tmp_path)
+    _save_macro_file(m, tmp_path, "loop", [{"action": "macro_call", "name": "loop"}])
+    session = _CallAwareFakeSession()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await m.run_macro(session, "loop")
+
+    assert "macro_call recursion detected: loop -> loop" in str(exc_info.value.args[0]["original"])
+
+
+@pytest.mark.anyio
+async def test_run_macro_macro_call_detects_mutual_recursion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    m = _import_macros(monkeypatch, tmp_path)
+    _save_macro_file(m, tmp_path, "macro-a", [{"action": "macro_call", "name": "macro-b"}])
+    _save_macro_file(m, tmp_path, "macro-b", [{"action": "macro_call", "name": "macro-a"}])
+    session = _CallAwareFakeSession()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await m.run_macro(session, "macro-a")
+
+    assert "macro_call recursion detected: macro-a -> macro-b -> macro-a" in str(exc_info.value.args[0]["original"])
+
+
+@pytest.mark.anyio
+async def test_run_macro_macro_call_enforces_depth_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    m = _import_macros(monkeypatch, tmp_path)
+    import octowright.macros.execution as macro_execution
+
+    monkeypatch.setattr(macro_execution, "MAX_MACRO_CALL_DEPTH", 2, raising=False)
+    _save_macro_file(m, tmp_path, "root", [{"action": "macro_call", "name": "second"}])
+    _save_macro_file(m, tmp_path, "second", [{"action": "macro_call", "name": "third"}])
+    _save_macro_file(m, tmp_path, "third", [{"action": "navigate", "url": "https://example.com"}])
+    session = _CallAwareFakeSession()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await m.run_macro(session, "root")
+
+    assert "macro_call recursion depth exceeded (2) at root -> second -> third" in str(
+        exc_info.value.args[0]["original"]
+    )
+
+
 # ---------------------------------------------------------------------------
 # run_sequence tests
 # ---------------------------------------------------------------------------
@@ -329,6 +488,56 @@ class _FakeSessionForSequence:
 
     async def wait_for(self, selector: str | None, text: str | None, timeout_ms: int | None) -> None:
         self.calls.append("wait_for")
+
+    async def diagnostic_bundle(
+        self, *, screenshot_dir: Any = None, console_tail: int = 25, html_full: bool = False
+    ) -> dict[str, Any]:
+        return {"screenshot": None, "console": [], "url": "about:blank"}
+
+
+def _save_macro_file(m: Any, tmp_path: Path, name: str, actions: list[dict[str, Any]]) -> None:
+    (tmp_path / "macros").mkdir(parents=True, exist_ok=True)
+    macro = {
+        "name": name,
+        "description": None,
+        "parameters": [],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "actions": actions,
+    }
+    (tmp_path / "macros" / f"{name}.json").write_text(json.dumps(macro), encoding="utf-8")
+
+
+class _CallAwareFakeSession:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any] | None]] = []
+
+    async def navigate(self, url: str) -> dict[str, Any]:
+        self.calls.append(("navigate", (url,), None))
+        return {"url": url, "title": ""}
+
+    async def click(self, selector: str) -> None:
+        self.calls.append(("click", (selector,), None))
+
+    async def type_text(self, selector: str, text: str, delay_ms: int | None) -> None:
+        self.calls.append(("type_text", (selector, text, delay_ms), None))
+
+    async def fill(self, selector: str, value: str) -> None:
+        self.calls.append(("fill", (selector, value), None))
+
+    async def press_key(self, key: str) -> None:
+        self.calls.append(("press_key", (key,), None))
+
+    async def screenshot(self, path: Path) -> Path:
+        self.calls.append(("screenshot", (str(path),), None))
+        return path
+
+    async def evaluate(self, expression: str) -> Any:
+        self.calls.append(("evaluate", (expression,), None))
+        return None
+
+    async def wait_for(self, selector: str | None, text: str | None, timeout_ms: int | None) -> None:
+        self.calls.append(("wait_for", (selector, text, timeout_ms), None))
 
     async def diagnostic_bundle(
         self, *, screenshot_dir: Any = None, console_tail: int = 25, html_full: bool = False

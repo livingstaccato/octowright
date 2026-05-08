@@ -12,10 +12,10 @@ import json as _json
 from pathlib import Path
 from typing import Any
 
-from ...export import export_script as _export_script
-from ...recorder import tail_log
-from ...session import DEFAULT_PREVIEW_CHARS
-from .._state import mcp, pool
+from octowright.export import export_script as _export_script
+from octowright.recorder import tail_log
+from octowright.server._state import mcp, pool
+from octowright.session import DEFAULT_PREVIEW_CHARS
 
 
 @mcp.tool(
@@ -33,13 +33,13 @@ async def browser_screenshot(instance_id: str, path: str | None = None) -> dict[
     structured_output=False,
     description=(
         "Return an aria-tree snapshot for an instance. By default snapshots the "
-        "full document and truncates the YAML at ~4000 chars; pass selector to "
+        "page body and truncates the YAML at ~4000 chars; pass selector to "
         "scope a subtree (e.g. selector='main') and full=True to skip truncation."
     ),
 )
 async def browser_snapshot(
     instance_id: str,
-    selector: str = "html",
+    selector: str = "body",
     full: bool = False,
     max_chars: int | None = None,
 ) -> dict[str, Any]:
@@ -306,4 +306,64 @@ def browser_tail_recording(
         "cursor": new_cursor,
         "total_bytes": total_bytes,
         "complete": new_cursor >= total_bytes,
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Read the cached Markdown representation of the page. "
+        "Highly token-efficient way to read article content or documentation."
+    ),
+)
+async def browser_read_markdown(
+    instance_id: str,
+    max_chars: int | None = None,
+) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    if max_chars is not None and max_chars < 0:
+        raise ValueError("max_chars must be >= 0")
+
+    # Always refresh on explicit reads so SPA/in-page changes do not serve a
+    # stale markdown cache from a prior render.
+    path = await session.capture_markdown(force=True)
+
+    if not path or not path.exists():
+        return {"error": "Markdown generation failed or is unavailable"}
+
+    text = path.read_text(encoding="utf-8")
+    original_size = len(text)
+    cap = DEFAULT_PREVIEW_CHARS if max_chars is None else max_chars
+
+    truncated = False
+    if original_size > cap:
+        text = text[:cap]
+        truncated = True
+
+    return {
+        "url": session.page.url,
+        "markdown": text,
+        "truncated": truncated,
+        "markdown_size": original_size,
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Return a brief summary of the current page state, including URL, title, "
+        "and highly truncated snapshot of actionable elements."
+    ),
+)
+async def browser_brief(instance_id: str) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    title = await session.page.title()
+    # Pull a tiny slice of the body snapshot to provide basic orientation
+    aria = await session.page.locator("body").aria_snapshot()
+    elements = aria[:500] + ("..." if len(aria) > 500 else "")
+
+    return {
+        "url": session.page.url,
+        "title": title,
+        "elements": elements,
     }

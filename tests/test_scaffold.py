@@ -160,10 +160,10 @@ def test_render_report_writes_to_passed_stream(tmp_path: Path) -> None:
 def test_init_cli_first_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`octowright init` against fresh paths reports + creates everything."""
     from octowright import defaults as _defaults
-    from octowright import macros as _macros
     from octowright import personas as _personas
     from octowright import profiles as _profiles
     from octowright import scenarios as _scenarios
+    from octowright.macros import storage as _macro_storage
 
     profiles = tmp_path / "profiles"
     macros = tmp_path / "macros"
@@ -173,7 +173,7 @@ def test_init_cli_first_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(_personas, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_profiles, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_scenarios, "SCENARIOS_DIR", scenarios)
-    monkeypatch.setattr(_macros, "MACROS_DIR", macros)
+    monkeypatch.setattr(_macro_storage, "MACROS_DIR", macros)
 
     result = CliRunner().invoke(cli, ["init"])
     assert result.exit_code == 0, result.output
@@ -188,10 +188,10 @@ def test_init_cli_first_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_init_cli_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Re-running init must not crash and must report items as 'exists'."""
     from octowright import defaults as _defaults
-    from octowright import macros as _macros
     from octowright import personas as _personas
     from octowright import profiles as _profiles
     from octowright import scenarios as _scenarios
+    from octowright.macros import storage as _macro_storage
 
     profiles = tmp_path / "profiles"
     macros = tmp_path / "macros"
@@ -201,7 +201,7 @@ def test_init_cli_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(_personas, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_profiles, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_scenarios, "SCENARIOS_DIR", scenarios)
-    monkeypatch.setattr(_macros, "MACROS_DIR", macros)
+    monkeypatch.setattr(_macro_storage, "MACROS_DIR", macros)
 
     runner = CliRunner()
     runner.invoke(cli, ["init"])
@@ -212,10 +212,10 @@ def test_init_cli_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_init_cli_force_flag_overwrites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from octowright import defaults as _defaults
-    from octowright import macros as _macros
     from octowright import personas as _personas
     from octowright import profiles as _profiles
     from octowright import scenarios as _scenarios
+    from octowright.macros import storage as _macro_storage
 
     profiles = tmp_path / "profiles"
     macros = tmp_path / "macros"
@@ -225,7 +225,7 @@ def test_init_cli_force_flag_overwrites(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(_personas, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_profiles, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_scenarios, "SCENARIOS_DIR", scenarios)
-    monkeypatch.setattr(_macros, "MACROS_DIR", macros)
+    monkeypatch.setattr(_macro_storage, "MACROS_DIR", macros)
 
     runner = CliRunner()
     runner.invoke(cli, ["init"])

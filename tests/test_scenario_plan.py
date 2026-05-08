@@ -52,10 +52,8 @@ def _write(scenarios_dir: Path, name: str, participants: list[dict[str, Any]], *
 # ---------------------------------------------------------------------------
 
 
-def test_single_participant_no_persona_uses_fallback(
-    scenarios_dir: Path,
-    empty_personas_dir: Path,
-) -> None:
+@pytest.mark.usefixtures("empty_personas_dir")
+def test_single_participant_no_persona_uses_fallback(scenarios_dir: Path) -> None:
     _write(scenarios_dir, "solo", [{"persona": "ghost", "kind": "webkit", "role": "player"}])
     plan = scenario_plan(name="solo")
     assert plan["name"] == "solo"
@@ -72,10 +70,8 @@ def test_single_participant_no_persona_uses_fallback(
     assert p["startup_macros"] == []
 
 
-def test_multi_participant_mixed_engines(
-    scenarios_dir: Path,
-    empty_personas_dir: Path,
-) -> None:
+@pytest.mark.usefixtures("empty_personas_dir")
+def test_multi_participant_mixed_engines(scenarios_dir: Path) -> None:
     _write(
         scenarios_dir,
         "mixed",
@@ -186,10 +182,8 @@ def test_explicit_empty_startup_macros_overrides_persona_defaults(
 # ---------------------------------------------------------------------------
 
 
-def test_fixtures_teardown_verify_pass_through(
-    scenarios_dir: Path,
-    empty_personas_dir: Path,
-) -> None:
+@pytest.mark.usefixtures("empty_personas_dir")
+def test_fixtures_teardown_verify_pass_through(scenarios_dir: Path) -> None:
     _write(
         scenarios_dir,
         "full",
@@ -214,10 +208,8 @@ def test_fixtures_teardown_verify_pass_through(
 # ---------------------------------------------------------------------------
 
 
-def test_summary_is_participant_summary_one_liner(
-    scenarios_dir: Path,
-    empty_personas_dir: Path,
-) -> None:
+@pytest.mark.usefixtures("empty_personas_dir")
+def test_summary_is_participant_summary_one_liner(scenarios_dir: Path) -> None:
     _write(
         scenarios_dir,
         "sumtest",
@@ -230,10 +222,8 @@ def test_summary_is_participant_summary_one_liner(
     assert plan["summary"] == "player[dante]/webkit · monitor[ops]/firefox"
 
 
-def test_would_launch_matches_participant_count(
-    scenarios_dir: Path,
-    empty_personas_dir: Path,
-) -> None:
+@pytest.mark.usefixtures("empty_personas_dir")
+def test_would_launch_matches_participant_count(scenarios_dir: Path) -> None:
     _write(
         scenarios_dir,
         "count",
@@ -261,11 +251,8 @@ class _ExplodingPool:
         raise AssertionError(f"scenario_plan must not touch the browser pool (accessed {name!r})")
 
 
-def test_plan_does_not_touch_pool(
-    scenarios_dir: Path,
-    empty_personas_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.usefixtures("empty_personas_dir")
+def test_plan_does_not_touch_pool(scenarios_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the live `pool` and `scenario_pool` with exploding stand-ins to
     prove scenario_plan never reaches into them."""
     from octowright.server import _state

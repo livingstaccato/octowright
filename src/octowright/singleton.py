@@ -8,7 +8,7 @@
 Each MCP client (Claude Code, Cursor, etc.) spawns its own ``octowright serve``
 stdio process. Rather than each one running its own browser pool, the first
 instance becomes the **leader**: it writes a lockfile at
-``~/.config/octowright/octowright.lock`` describing its PID and HTTP-MCP endpoint,
+Octowright's user config directory describing its PID and HTTP-MCP endpoint,
 and serves both stdio MCP and HTTP MCP. Subsequent instances become
 **followers**: they read the lockfile and bridge stdin/stdout to the leader's
 HTTP MCP endpoint instead of spawning their own pool.
@@ -26,12 +26,13 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any, cast
+
+from octowright.config_paths import user_config_dir
 
 # Lockfile location. Override via OCTOWRIGHT_LOCK_PATH for hermetic tests
 # (lets a test spawn a real daemon without touching the user's actual lockfile).
-LOCK_PATH = Path(
-    os.environ.get("OCTOWRIGHT_LOCK_PATH", str(Path.home() / ".config" / "octowright" / "octowright.lock"))
-)
+LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(user_config_dir() / "octowright.lock")))
 
 
 @dataclass
@@ -84,6 +85,8 @@ def pid_is_alive(pid: int) -> bool:
     """True if the OS still has a process with this PID."""
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _pid_is_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -93,6 +96,16 @@ def pid_is_alive(pid: int) -> bool:
         # the purposes of "should I take over the lock".
         return True
     return True
+
+
+def _pid_is_alive_windows(pid: int) -> bool:
+    kernel32 = cast(Any, __import__("ctypes")).windll.kernel32
+    process_query_limited_information = 0x1000
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if handle:
+        kernel32.CloseHandle(handle)
+        return True
+    return kernel32.GetLastError() == 5
 
 
 def is_stale(info: LeaderInfo) -> bool:

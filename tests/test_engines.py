@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from octowright import engines
-from octowright.browser_pool.runtime import BrowserPool
+from octowright.browser_pool import BrowserPool
 
 
 @pytest.mark.anyio
@@ -121,8 +121,14 @@ def test_playwright_failure_sanity_returns_none_for_unknown_error() -> None:
     assert hint is None
 
 
+def _assert_octowright_sanity(exc: pytest.ExceptionInfo[RuntimeError], category: str) -> None:
+    text = str(exc.value)
+    assert "[octowright_sanity]" in text
+    assert category in text
+
+
 @pytest.mark.anyio
-async def test_runtime_launch_wraps_missing_binary_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_canonical_pool_launch_wraps_missing_binary_error(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeBrowserType:
         async def launch(self, **_: Any) -> Any:
             raise RuntimeError("Executable doesn't exist at /tmp/ms-playwright/webkit/pw_run.sh")
@@ -139,6 +145,106 @@ async def test_runtime_launch_wraps_missing_binary_error(monkeypatch: pytest.Mon
 
     with pytest.raises(RuntimeError) as exc:
         await pool.launch(kind="webkit", url="about:blank", ephemeral=True)
-    text = str(exc.value)
-    assert "[octowright_sanity]" in text
-    assert "playwright_binaries_missing" in text
+    _assert_octowright_sanity(exc, "playwright_binaries_missing")
+
+
+@pytest.mark.anyio
+async def test_canonical_pool_launch_wraps_persistent_context_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeBrowserType:
+        async def launch_persistent_context(self, *_: Any, **__: Any) -> Any:
+            raise RuntimeError("Host system is missing dependencies to run browsers")
+
+    class _FakePlaywright:
+        chromium = _FakeBrowserType()
+
+    pool = BrowserPool()
+
+    async def _fake_ensure_pw() -> Any:
+        return _FakePlaywright()
+
+    monkeypatch.setattr(pool, "_ensure_pw", _fake_ensure_pw)
+
+    with pytest.raises(RuntimeError) as exc:
+        await pool.launch(kind="chromium", url="about:blank", profile="review-test")
+    _assert_octowright_sanity(exc, "playwright_os_dependencies_missing")
+
+
+@pytest.mark.anyio
+async def test_canonical_pool_launch_wraps_initial_navigation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakePage:
+        video = None
+        url = "about:blank"
+        main_frame = object()
+
+        def on(self, *_: Any) -> None:
+            pass
+
+        def is_closed(self) -> bool:
+            return False
+
+        async def goto(self, _: str) -> None:
+            raise RuntimeError("net::ERR_NAME_NOT_RESOLVED while navigating")
+
+    class _FakeContext:
+        pages: list[Any] = []
+
+        def __init__(self) -> None:
+            self.tracing = self
+
+        def on(self, *_: Any) -> None:
+            pass
+
+        async def add_init_script(self, **_: Any) -> None:
+            pass
+
+        async def new_page(self) -> _FakePage:
+            return _FakePage()
+
+    class _FakeBrowser:
+        def on(self, *_: Any) -> None:
+            pass
+
+        async def new_context(self, **_: Any) -> _FakeContext:
+            return _FakeContext()
+
+    class _FakeBrowserType:
+        async def launch(self, **_: Any) -> _FakeBrowser:
+            return _FakeBrowser()
+
+    class _FakePlaywright:
+        chromium = _FakeBrowserType()
+
+    pool = BrowserPool()
+
+    async def _fake_ensure_pw() -> Any:
+        return _FakePlaywright()
+
+    monkeypatch.setattr(pool, "_ensure_pw", _fake_ensure_pw)
+
+    with pytest.raises(RuntimeError) as exc:
+        await pool.launch(kind="chromium", url="https://example.invalid", ephemeral=True)
+    _assert_octowright_sanity(exc, "playwright_network_unreachable")
+
+
+@pytest.mark.anyio
+async def test_canonical_pool_launch_preserves_unwrapped_error_cause(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = RuntimeError("application-specific launch failure")
+
+    class _FakeBrowserType:
+        async def launch(self, **_: Any) -> Any:
+            raise original
+
+    class _FakePlaywright:
+        chromium = _FakeBrowserType()
+
+    pool = BrowserPool()
+
+    async def _fake_ensure_pw() -> Any:
+        return _FakePlaywright()
+
+    monkeypatch.setattr(pool, "_ensure_pw", _fake_ensure_pw)
+
+    with pytest.raises(RuntimeError) as exc:
+        await pool.launch(kind="chromium", url="about:blank", ephemeral=True)
+    assert exc.value is original
+    assert exc.value.__cause__ is None

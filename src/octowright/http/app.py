@@ -19,12 +19,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from provide.telemetry import get_logger
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from .frontend import _frontend_routes
-from .metrics import HttpMetricsMiddleware, metrics_enabled
-from .routes import all_routes
+from octowright.http.exposure import guard_sensitive_asgi_app
+from octowright.http.frontend import _frontend_routes
+from octowright.http.metrics import HttpMetricsMiddleware, metrics_enabled
+from octowright.http.routes import all_routes
+
+log = get_logger(__name__)
 
 # Set by build_app(mcp_leader=True); used by idle_watchdog to count active
 # HTTP-MCP proxy sessions so the daemon doesn't exit while followers are live.
@@ -52,14 +56,15 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
     routes: list[Any] = list(all_routes())
 
     lifespan = None
+    _mcp_session_manager = None
     if mcp_leader:
-        from ..server import mcp as _mcp
+        from octowright.server import mcp as _mcp
 
         # The inner app's own route is at "/" so mounting it at "/mcp" puts the
         # endpoint at "/mcp" exactly (not "/mcp/mcp").
         _mcp.settings.streamable_http_path = "/"
         mcp_app = _mcp.streamable_http_app()
-        routes.append(Mount("/mcp", app=mcp_app))
+        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(mcp_app)))
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
         # Capture for get_mcp_active_session_count() — path verified against
@@ -68,11 +73,15 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
             first_route: Any = mcp_app.routes[0]
             route_app: Any = getattr(first_route, "app", None)
             _mcp_session_manager = route_app.session_manager if route_app is not None else None
-        except (AttributeError, IndexError):
-            pass
+        except (AttributeError, IndexError) as exc:
+            # Best-effort: probes a path through the MCP SDK that we know is
+            # version-fragile. Falling back to None disables the
+            # session-count gauge but leaves the rest of the app working.
+            log.warning("octowright.mcp.session_manager_probe_failed", error=repr(exc))
 
     routes.extend(_frontend_routes())
     app = Starlette(routes=routes, lifespan=lifespan)
+    app.state.octowright_http_host = "127.0.0.1"
     if metrics_enabled():
         app.add_middleware(HttpMetricsMiddleware)
     return app

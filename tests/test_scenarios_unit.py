@@ -13,6 +13,7 @@ lifecycle through every error branch.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -270,7 +271,8 @@ class TestLoadScenarioDispatch:
 
 
 class TestResolveLaunchKwargs:
-    def test_participant_overrides_take_precedence(self, empty_personas_dir: Path) -> None:
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_participant_overrides_take_precedence(self) -> None:
         p = Participant(
             persona="dante",
             kind="webkit",
@@ -304,14 +306,16 @@ class TestResolveLaunchKwargs:
         kwargs = resolve_launch_kwargs(p)
         assert kwargs["url"] == "https://from-persona/"
 
-    def test_no_persona_no_url_results_in_none(self, empty_personas_dir: Path) -> None:
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_no_persona_no_url_results_in_none(self) -> None:
         p = Participant(persona="ghost", kind="webkit", role="r")
         kwargs = resolve_launch_kwargs(p)
         assert kwargs["url"] is None
 
 
 class TestResolveStartupMacros:
-    def test_participant_override_wins(self, empty_personas_dir: Path) -> None:
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_participant_override_wins(self) -> None:
         p = Participant(persona="dante", kind="webkit", role="r", startup_macros=["a", "b"])
         assert resolve_startup_macros(p) == ["a", "b"]
 
@@ -328,7 +332,8 @@ class TestResolveStartupMacros:
         p = Participant(persona="dante", kind="webkit", role="r")
         assert resolve_startup_macros(p) == ["from-persona"]
 
-    def test_no_persona_returns_empty_list(self, empty_personas_dir: Path) -> None:
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_no_persona_returns_empty_list(self) -> None:
         p = Participant(persona="ghost", kind="webkit", role="r")
         assert resolve_startup_macros(p) == []
 
@@ -362,11 +367,13 @@ class _StubPool:
         spawn_errors: list[dict[str, Any]] | None = None,
         spawn_launched: list[dict[str, Any]] | None = None,
         close_fails: set[str] | None = None,
+        close_delay: float = 0,
     ) -> None:
         self.spawn_errors = spawn_errors or []
         self._spawn_launched = spawn_launched
         self.closed: list[str] = []
         self.close_fails = close_fails or set()
+        self.close_delay = close_delay
         self.sessions: dict[str, _StubSession] = {}
 
     async def spawn_roster(self, specs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -395,6 +402,8 @@ class _StubPool:
         return self.sessions[instance_id]
 
     async def close(self, instance_id: str) -> dict[str, Any]:
+        if self.close_delay:
+            await asyncio.sleep(self.close_delay)
         if instance_id in self.close_fails:
             raise RuntimeError(f"forced close failure for {instance_id}")
         self.closed.append(instance_id)
@@ -413,12 +422,9 @@ class TestScenarioPoolGet:
         with pytest.raises(KeyError, match="scenario_start"):
             pool.get("ghost")
 
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_get_unknown_includes_status_hint_when_others_live(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-    ) -> None:
+    async def test_get_unknown_includes_status_hint_when_others_live(self, scenarios_dir: Path) -> None:
         _write_trivial_scenario(scenarios_dir, "alive", [{"persona": "a", "kind": "webkit", "role": "r"}])
         spool = ScenarioPool()
         bp = _StubPool()
@@ -428,19 +434,17 @@ class TestScenarioPoolGet:
 
 
 class TestScenarioPoolStart:
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_no_participants_raises(self, scenarios_dir: Path, empty_personas_dir: Path) -> None:
+    async def test_no_participants_raises(self, scenarios_dir: Path) -> None:
         _write_trivial_scenario(scenarios_dir, "empty", [])
         spool = ScenarioPool()
         with pytest.raises(RuntimeError, match="no participants"):
             await spool.start(name="empty", browser_pool=_StubPool())
 
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_partial_launch_failure_closes_succeeded_and_raises(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-    ) -> None:
+    async def test_partial_launch_failure_closes_succeeded_and_raises(self, scenarios_dir: Path) -> None:
         """When spawn_roster reports some errors, the partial launches must be closed before raising."""
         _write_trivial_scenario(
             scenarios_dir,
@@ -468,12 +472,9 @@ class TestScenarioPoolStart:
             await spool.start(name="rough", browser_pool=bp)
         assert bp.closed == ["iid-0"]
 
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_partial_launch_close_failure_is_swallowed(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-    ) -> None:
+    async def test_partial_launch_close_failure_is_swallowed(self, scenarios_dir: Path) -> None:
         """Even if cleanup-close throws, the original launch failure still propagates."""
         _write_trivial_scenario(
             scenarios_dir,
@@ -503,12 +504,9 @@ class TestScenarioPoolStart:
 
 
 class TestScenarioPoolStop:
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_close_failure_recorded_in_teardown_errors(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-    ) -> None:
+    async def test_close_failure_recorded_in_teardown_errors(self, scenarios_dir: Path) -> None:
         _write_trivial_scenario(
             scenarios_dir,
             "stoppy",
@@ -524,13 +522,9 @@ class TestScenarioPoolStop:
         assert "iid-0" in summary["closed"]
         assert any(e["instance_id"] == "iid-1" for e in summary["teardown_errors"])
 
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_teardown_macro_failure_recorded(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    async def test_teardown_macro_failure_recorded(self, scenarios_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """If the teardown macro raises, the close still runs and the error goes into the summary."""
         _write_trivial_scenario(
             scenarios_dir,
@@ -556,14 +550,35 @@ class TestScenarioPoolStop:
         # Close still ran.
         assert "iid-0" in summary["closed"]
 
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_concurrent_stop_claims_scenario_once(self, scenarios_dir: Path) -> None:
+        _write_trivial_scenario(
+            scenarios_dir,
+            "stoppy-once",
+            [{"persona": "a", "kind": "webkit", "role": "r"}],
+        )
+        bp = _StubPool(close_delay=0.01)
+        spool = ScenarioPool()
+        live = await spool.start(name="stoppy-once", browser_pool=bp)
+
+        results = await asyncio.gather(
+            spool.stop(scenario_id=live.scenario_id, browser_pool=bp),
+            spool.stop(scenario_id=live.scenario_id, browser_pool=bp),
+            return_exceptions=True,
+        )
+
+        summaries = [result for result in results if isinstance(result, dict)]
+        errors = [result for result in results if isinstance(result, KeyError)]
+        assert len(summaries) == 1
+        assert len(errors) == 1
+        assert bp.closed == ["iid-0"]
+
 
 class TestScenarioPoolRunMacroAndFixtures:
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_fixtures_apply_dialog_policy_and_mock_routes(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-    ) -> None:
+    async def test_fixtures_apply_dialog_policy_and_mock_routes(self, scenarios_dir: Path) -> None:
         _write_trivial_scenario(
             scenarios_dir,
             "fxt",
@@ -588,12 +603,34 @@ class TestScenarioPoolRunMacroAndFixtures:
             }
         ]
 
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_fixture_failure_unregisters_scenario_and_closes_launches(
+        self, scenarios_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_trivial_scenario(
+            scenarios_dir,
+            "fixture-boom",
+            [{"persona": "a", "kind": "webkit", "role": "r"}],
+            fixtures={"mock_routes": [{"pattern": "**/boom"}]},
+        )
+
+        async def _raise_mock_route(self: _StubSession, pattern: str, **kwargs: Any) -> None:
+            raise RuntimeError("route setup failed")
+
+        monkeypatch.setattr(_StubSession, "mock_route", _raise_mock_route)
+
+        bp = _StubPool()
+        spool = ScenarioPool()
+        with pytest.raises(RuntimeError, match="route setup failed"):
+            await spool.start(name="fixture-boom", browser_pool=bp)
+        assert spool.list_live() == []
+        assert bp.closed == ["iid-0"]
+
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
     async def test_run_macro_collects_per_participant_results(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
+        self, scenarios_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _write_trivial_scenario(
             scenarios_dir,
@@ -633,13 +670,9 @@ class TestScenarioPoolRunMacroAndFixtures:
         fail = next(r for r in result["results"] if not r["ok"])
         assert "second one fails" in fail["error"]
 
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_run_macro_role_filter(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    async def test_run_macro_role_filter(self, scenarios_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_trivial_scenario(
             scenarios_dir,
             "rfilter",
@@ -674,12 +707,9 @@ class TestScenarioPoolRunMacroAndFixtures:
 
 
 class TestScenarioPoolTail:
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_tail_handles_missing_log_file(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-    ) -> None:
+    async def test_tail_handles_missing_log_file(self, scenarios_dir: Path) -> None:
         _write_trivial_scenario(scenarios_dir, "tnone", [{"persona": "a", "kind": "webkit", "role": "r"}])
         bp = _StubPool()  # gives log_path = /tmp/log-0.jsonl, which doesn't exist
         spool = ScenarioPool()
@@ -689,13 +719,9 @@ class TestScenarioPoolTail:
         # Cursor for missing file is preserved at 0 (or whatever was passed).
         assert result["cursors"]["iid-0"] == 0
 
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_tail_advances_only_past_complete_lines(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-        tmp_path: Path,
-    ) -> None:
+    async def test_tail_advances_only_past_complete_lines(self, scenarios_dir: Path, tmp_path: Path) -> None:
         log_path = tmp_path / "log.jsonl"
         log_path.write_text('{"action":"x","ts":"1"}\n{"action":"partial",')  # last line has no \n
         _write_trivial_scenario(scenarios_dir, "tp", [{"persona": "a", "kind": "webkit", "role": "r"}])
@@ -723,13 +749,9 @@ class TestScenarioPoolTail:
         partial_len = len('{"action":"partial",')
         assert cursor == full_size - partial_len
 
+    @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
-    async def test_tail_skips_malformed_json_lines(
-        self,
-        scenarios_dir: Path,
-        empty_personas_dir: Path,
-        tmp_path: Path,
-    ) -> None:
+    async def test_tail_skips_malformed_json_lines(self, scenarios_dir: Path, tmp_path: Path) -> None:
         log_path = tmp_path / "log.jsonl"
         log_path.write_text('{"action":"good"}\nnot-json-at-all\n{"action":"alsogood"}\n')
         _write_trivial_scenario(scenarios_dir, "tj", [{"persona": "a", "kind": "webkit", "role": "r"}])
@@ -753,17 +775,17 @@ class TestScenarioPoolTail:
 
 
 # ---------------------------------------------------------------------------
-# startup_macros error suppression
+# startup_macros failure handling
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_startup_macro_failure_logged_not_raised(
+async def test_startup_macro_failure_raises_and_cleans_up(
     scenarios_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """If a startup macro raises, scenario start succeeds anyway and logs a warning."""
+    """If a startup macro raises, scenario start fails and no live scenario remains."""
     pdir = tmp_path / "profiles"
     (pdir / "a").mkdir(parents=True)
     (pdir / "a" / "profile.yaml").write_text(yaml.safe_dump({"name": "a", "default_macros": ["nonexistent-startup"]}))
@@ -782,6 +804,6 @@ async def test_startup_macro_failure_logged_not_raised(
 
     bp = _StubPool()
     spool = ScenarioPool()
-    # Must not raise even though the startup macro fails.
-    live = await spool.start(name="sm", browser_pool=bp)
-    assert live.scenario_id in {ls["scenario_id"] for ls in spool.list_live()}
+    with pytest.raises(RuntimeError, match="startup macro failures"):
+        await spool.start(name="sm", browser_pool=bp)
+    assert spool.list_live() == []

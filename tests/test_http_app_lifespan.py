@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import socket
 import types
 from typing import Any
 
@@ -71,6 +72,14 @@ def test_build_app_mcp_leader_tolerates_missing_mcp_route_app(monkeypatch: pytes
     assert app.router.lifespan_context == fake_mcp_app.router.lifespan_context
 
 
+def test_build_app_non_leader_clears_stale_mcp_session_manager() -> None:
+    _http_app._mcp_session_manager = types.SimpleNamespace(_server_instances={"stale": object()})
+
+    _http_app.build_app(mcp_leader=False)
+
+    assert _http_app.get_mcp_active_session_count() == 0
+
+
 def test_health_route_returns_unknown_when_metadata_version_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise(_name: str) -> str:
         raise RuntimeError("boom")
@@ -80,6 +89,52 @@ def test_health_route_returns_unknown_when_metadata_version_raises(monkeypatch: 
         res = client.get("/api/health")
     assert res.status_code == 200
     assert res.json()["version"] == "unknown"
+
+
+@pytest.mark.skipif(not socket.has_ipv6, reason="IPv6 is not available")
+def test_port_is_free_supports_ipv6_loopback() -> None:
+    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    s.bind(("::1", 0))
+    busy = int(s.getsockname()[1])
+    try:
+        assert _http_lifespan._port_is_free("::1", busy) is False
+        chosen = _http_lifespan._pick_port("::1", busy, retries=20)
+        assert chosen is not None
+        assert chosen > busy
+    finally:
+        s.close()
+
+
+def test_port_is_free_requires_all_resolved_addresses_to_bind(monkeypatch: pytest.MonkeyPatch) -> None:
+    addrinfos = [
+        (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 8765, 0, 0)),
+        (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 8765, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 8765)),
+    ]
+    bind_attempts: list[tuple[object, ...]] = []
+
+    class _FakeSocket:
+        def __init__(self, family: int, socktype: int, proto: int) -> None:
+            self.family = family
+            self.socktype = socktype
+            self.proto = proto
+
+        def bind(self, sockaddr: tuple[object, ...]) -> None:
+            bind_attempts.append(sockaddr)
+            if self.family == socket.AF_INET:
+                raise OSError("IPv4 localhost port is busy")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(_http_lifespan.socket, "getaddrinfo", lambda *_args, **_kwargs: addrinfos)
+    monkeypatch.setattr(_http_lifespan.socket, "socket", _FakeSocket)
+
+    assert _http_lifespan._port_is_free("localhost", 8765) is False
+    assert bind_attempts == [
+        ("::1", 8765, 0, 0),
+        ("127.0.0.1", 8765),
+    ]
 
 
 @pytest.mark.asyncio

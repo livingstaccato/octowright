@@ -20,6 +20,7 @@ Endpoints (mirror the API contract in MCP-SHARED-CONTRACT.md):
     DEL  /api/sessions/{id}                        → close a live session
     POST /api/sessions/{id}/navigate               → drive page to {url}
     GET  /api/sessions/{id}/events?since=N         → tail JSONL events
+    GET  /api/dashboard/events                     → SSE dashboard invalidations
     GET  /api/sessions/{id}/console?level=&since=N → console messages (paginated)
     GET  /api/sessions/{id}/downloads?since=N      → downloads (paginated)
     WS   /api/sessions/{id}/tail                   → push events ~1Hz (LIVE only;
@@ -50,10 +51,10 @@ etc.) live in ``state``. Tests should monkeypatch via ``_http.state.X``.
 
 from __future__ import annotations
 
-from ..defaults import DEFAULT_URL
-from .app import build_app, get_mcp_active_session_count
-from .lifespan import serve_app
-from .state import (
+from octowright.defaults import DEFAULT_URL
+from octowright.http.app import build_app, get_mcp_active_session_count
+from octowright.http.lifespan import serve_app
+from octowright.http.state import (
     FRONTEND_DIR,
     RECORDINGS_DIR,
     runtime_session_url,

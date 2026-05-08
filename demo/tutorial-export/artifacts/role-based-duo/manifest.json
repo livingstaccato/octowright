@@ -1,0 +1,124 @@
+{
+  "artifacts": {
+    "replay": {
+      "event_count": 10,
+      "path": "artifacts/replay.jsonl",
+      "python_export": "artifacts/replay.py",
+      "size_bytes": 2747,
+      "ts_export": "artifacts/replay.ts"
+    },
+    "supporting_videos": [
+      {
+        "id": "duo-player",
+        "kind": "webkit",
+        "path": "artifacts/supporting/duo-player.mp4",
+        "poster_path": "artifacts/supporting/duo-player.png",
+        "role": "player"
+      },
+      {
+        "id": "duo-monitor",
+        "kind": "webkit",
+        "path": "artifacts/supporting/duo-monitor.mp4",
+        "poster_path": "artifacts/supporting/duo-monitor.png",
+        "role": "monitor"
+      }
+    ],
+    "video": {
+      "duration_seconds": 8.8,
+      "height": 1080,
+      "path": "artifacts/demo.mp4",
+      "poster_path": "artifacts/poster.png",
+      "size_bytes": 135908,
+      "width": 1920
+    }
+  },
+  "bundle_id": "role-based-duo",
+  "composition": {
+    "canvas_height": 1080,
+    "canvas_width": 1920,
+    "cell_height": 1080,
+    "cell_width": 960,
+    "columns": 2,
+    "mode": "sync-multi",
+    "overlay": {
+      "panes": [
+        {
+          "height": 1080,
+          "kind": "webkit",
+          "persona": "duo-player",
+          "role": "player",
+          "width": 960,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "height": 1080,
+          "kind": "webkit",
+          "persona": "duo-monitor",
+          "role": "monitor",
+          "width": 960,
+          "x": 960,
+          "y": 0
+        }
+      ],
+      "subtitle": "",
+      "title": ""
+    },
+    "panes": [
+      {
+        "height": 1080,
+        "kind": "webkit",
+        "persona": "duo-player",
+        "role": "player",
+        "width": 960,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "height": 1080,
+        "kind": "webkit",
+        "persona": "duo-monitor",
+        "role": "monitor",
+        "width": 960,
+        "x": 960,
+        "y": 0
+      }
+    ],
+    "supporting_videos": [
+      {
+        "id": "duo-player",
+        "kind": "webkit",
+        "path": "demo/bundles/role-based-duo/artifacts/supporting/duo-player.mp4",
+        "persona": "duo-player",
+        "poster_path": "demo/bundles/role-based-duo/artifacts/supporting/duo-player.png",
+        "role": "player"
+      },
+      {
+        "id": "duo-monitor",
+        "kind": "webkit",
+        "path": "demo/bundles/role-based-duo/artifacts/supporting/duo-monitor.mp4",
+        "persona": "duo-monitor",
+        "poster_path": "demo/bundles/role-based-duo/artifacts/supporting/duo-monitor.png",
+        "role": "monitor"
+      }
+    ]
+  },
+  "hero": true,
+  "participants": [
+    {
+      "kind": "webkit",
+      "persona": "duo-player",
+      "role": "player"
+    },
+    {
+      "kind": "webkit",
+      "persona": "duo-monitor",
+      "role": "monitor"
+    }
+  ],
+  "presentation": {
+    "mode": "sync-multi",
+    "primary_asset": "hero_video"
+  },
+  "title": "Role-Based Duo"
+}

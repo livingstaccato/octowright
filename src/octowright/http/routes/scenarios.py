@@ -11,9 +11,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ...server import _state
-from .. import state
-from ._common import _read_json_body
+from octowright.http import state
+from octowright.http.dashboard_events import publish_dashboard_invalidation
+from octowright.http.exposure import guard_sensitive_http
+from octowright.http.routes._common import _read_json_body
+from octowright.server import _state
 
 
 async def list_scenarios(_request: Request) -> JSONResponse:
@@ -23,7 +25,7 @@ async def list_scenarios(_request: Request) -> JSONResponse:
     dashboard can offer a "start scenario" button per row. ``live`` is the
     set currently running.
     """
-    from ...scenarios import list_scenarios as _list_disk
+    from octowright.scenarios import list_scenarios as _list_disk
 
     spool = _state.scenario_pool
     return JSONResponse({"live": spool.list_live(), "saved": _list_disk()})
@@ -65,6 +67,8 @@ async def scenario_start_endpoint(request: Request) -> JSONResponse:
         name=live.name,
         participants=len(live.participants),
     )
+    await publish_dashboard_invalidation("scenarios")
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(body, status_code=201)
 
 
@@ -73,7 +77,7 @@ async def scenario_stop_endpoint(request: Request) -> JSONResponse:
     sid = request.path_params["id"]
     spool = _state.scenario_pool
     pool = _state.pool
-    if sid not in spool._live:
+    if not spool.has_live(sid):
         return JSONResponse(
             {"error": f"no live scenario with id {sid!r}"},
             status_code=404,
@@ -84,6 +88,8 @@ async def scenario_stop_endpoint(request: Request) -> JSONResponse:
         state.log.exception("octowright.http.scenario_stop_failed", scenario_id=sid)
         return JSONResponse({"error": f"scenario stop failed: {e}"}, status_code=500)
     state.log.info("octowright.http.scenario_stopped", scenario_id=sid)
+    await publish_dashboard_invalidation("scenarios")
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(result)
 
 
@@ -107,7 +113,7 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
 
     spool = _state.scenario_pool
     pool = _state.pool
-    if sid not in spool._live:
+    if not spool.has_live(sid):
         return JSONResponse(
             {"error": f"no live scenario with id {sid!r}"},
             status_code=404,
@@ -133,13 +139,14 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
         macro=macro,
         role=role,
     )
+    await publish_dashboard_invalidation("scenarios")
     return JSONResponse(result)
 
 
 def routes() -> list[Route]:
     return [
-        Route("/api/scenarios", list_scenarios, methods=["GET"]),
-        Route("/api/scenarios/{name}/start", scenario_start_endpoint, methods=["POST"]),
-        Route("/api/scenarios/{id}", scenario_stop_endpoint, methods=["DELETE"]),
-        Route("/api/scenarios/{id}/run_macro", scenario_run_macro_endpoint, methods=["POST"]),
+        Route("/api/scenarios", guard_sensitive_http(list_scenarios), methods=["GET"]),
+        Route("/api/scenarios/{name}/start", guard_sensitive_http(scenario_start_endpoint), methods=["POST"]),
+        Route("/api/scenarios/{id}", guard_sensitive_http(scenario_stop_endpoint), methods=["DELETE"]),
+        Route("/api/scenarios/{id}/run_macro", guard_sensitive_http(scenario_run_macro_endpoint), methods=["POST"]),
     ]

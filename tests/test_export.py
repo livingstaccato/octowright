@@ -82,8 +82,8 @@ def test_python_export_compiles_with_full_action_set(tmp_path: Path) -> None:
     assert "async with async_playwright() as p:" in src
     assert "await p.webkit.launch(headless=False)" in src
     assert "viewport={'width': 1024, 'height': 768}" in src
-    assert "await page.goto('https://example.com')" in src  # initial nav from launch
-    assert "await page.goto('https://example.com/home')" in src  # explicit navigate
+    assert "await page.goto(_resolve_bundle_url('https://example.com'))" in src  # initial nav from launch
+    assert "await page.goto(_resolve_bundle_url('https://example.com/home'))" in src  # explicit navigate
     assert "await page.click('#login')" in src
     assert "await page.fill('input[name=email]', 'a@b.com')" in src
     assert "await page.type('input[name=q]', 'hi', delay=30)" in src
@@ -129,6 +129,21 @@ def test_python_export_persistent_context_branch(tmp_path: Path) -> None:
     assert "browser.new_context(" not in src
 
 
+def test_python_export_resolves_bundle_scheme_urls(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [{"action": "launch", "kind": "webkit", "url": "bundle://seed/welcome.html?slot=0", "headed": True}],
+    )
+    out = export_script(log, tmp_path / "artifacts" / "replay.py", fmt="python")
+    src = out.read_text()
+
+    assert _python_compiles(src)
+    assert "from pathlib import Path" in src
+    assert "def _resolve_bundle_url(raw: str) -> str:" in src
+    assert "Path(__file__).resolve().parents[1]" in src
+    assert "await page.goto(_resolve_bundle_url('bundle://seed/welcome.html?slot=0'))" in src
+
+
 def test_python_export_uses_default_viewport_when_omitted(tmp_path: Path) -> None:
     log = _write_recording(
         tmp_path / "r.jsonl",
@@ -161,6 +176,42 @@ def test_python_export_skips_blank_and_unknown_lines(tmp_path: Path) -> None:
     assert "totally_unknown_action" not in src
     assert "snapshot" not in src
     assert "page.click('#a')" in src
+
+
+def test_python_export_prefers_semantic_locator_with_selector_fallback(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
+            {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    src = out.read_text()
+
+    assert _python_compiles(src)
+    assert "await page.get_by_role('button', name='Log in').click()" in src
+    assert "await page.click('#login')" in src
+    assert "await page.get_by_label('Email').fill('me@example.com')" in src
+    assert "await page.fill('#email', 'me@example.com')" in src
+
+
+def test_python_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "click_by", "role": "button", "role_name": "Log in"},
+            {"action": "fill_by", "value": "me@example.com", "label": "Email"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    src = out.read_text()
+
+    assert _python_compiles(src)
+    assert "await page.get_by_role('button', name='Log in').click()" in src
+    assert "await page.get_by_label('Email').fill('me@example.com')" in src
+    assert "page.click(" not in src
+    assert "page.fill(" not in src
 
 
 def test_python_export_creates_parent_dir(tmp_path: Path) -> None:
@@ -208,8 +259,8 @@ def test_ts_export_full_action_set(tmp_path: Path) -> None:
     assert 'import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwright";' in src
     # Engine launch path (lowercase headless boolean — ts is case-sensitive).
     assert "browser = await firefox.launch({ headless: false })" in src
-    assert 'await page.goto("https://example.com");' in src  # initial nav
-    assert 'await page.goto("https://example.com/home");' in src
+    assert 'await page.goto(resolveBundleUrl("https://example.com"));' in src  # initial nav
+    assert 'await page.goto(resolveBundleUrl("https://example.com/home"));' in src
     assert 'await page.click("#login");' in src
     assert 'await page.fill("input[name=email]", "a@b.com");' in src
     assert 'await page.type("input[name=q]", "hi", { delay: 25 });' in src
@@ -245,6 +296,20 @@ def test_ts_export_persistent_context_branch(tmp_path: Path) -> None:
     assert "ctx.pages()[0] ?? await ctx.newPage()" in src
 
 
+def test_ts_export_resolves_bundle_scheme_urls(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [{"action": "launch", "kind": "webkit", "url": "bundle://seed/welcome.html?slot=0", "headed": True}],
+    )
+    out = export_script(log, tmp_path / "artifacts" / "replay.ts", fmt="ts")
+    src = out.read_text()
+
+    assert 'import { fileURLToPath, pathToFileURL } from "node:url";' in src
+    assert 'import path from "node:path";' in src
+    assert "const resolveBundleUrl = (raw: string): string => {" in src
+    assert 'await page.goto(resolveBundleUrl("bundle://seed/welcome.html?slot=0"));' in src
+
+
 def test_ts_export_default_viewport(tmp_path: Path) -> None:
     log = _write_recording(
         tmp_path / "r.jsonl",
@@ -267,3 +332,37 @@ def test_ts_export_skips_unknown_actions(tmp_path: Path) -> None:
     src = out.read_text()
     assert "totally_unknown" not in src
     assert 'await page.click("#a");' in src
+
+
+def test_ts_export_prefers_semantic_locator_with_selector_fallback(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
+            {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.ts", fmt="ts")
+    src = out.read_text()
+
+    assert 'await page.getByRole("button", { name: "Log in" }).click();' in src
+    assert 'await page.click("#login");' in src
+    assert 'await page.getByLabel("Email").fill("me@example.com");' in src
+    assert 'await page.fill("#email", "me@example.com");' in src
+
+
+def test_ts_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "click_by", "role": "button", "role_name": "Log in"},
+            {"action": "fill_by", "value": "me@example.com", "label": "Email"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.ts", fmt="ts")
+    src = out.read_text()
+
+    assert 'await page.getByRole("button", { name: "Log in" }).click();' in src
+    assert 'await page.getByLabel("Email").fill("me@example.com");' in src
+    assert "page.click(" not in src
+    assert "page.fill(" not in src

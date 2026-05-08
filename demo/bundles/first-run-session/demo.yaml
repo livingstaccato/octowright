@@ -1,0 +1,44 @@
+id: first-run-session
+title: First Run Session
+summary: Launch one browser, perform a visible offline interaction, and inspect the resulting replay and video artifacts.
+hero: true
+audiences:
+  - evaluators
+  - users
+  - contributors
+tags:
+  - hero
+  - onboarding
+  - recording
+  - offline
+engines:
+  - webkit
+roles:
+  - player
+source_refs:
+  scenarios:
+    - examples/scenarios/solo.yaml
+  macros:
+    - examples/macros/inject-form.json
+    - examples/macros/test-selector-presence.json
+artifact_expectations:
+  replay:
+    - artifacts/replay.jsonl
+  video:
+    - artifacts/demo.mp4
+    - artifacts/poster.png
+regen:
+  command: uv run python scripts/demos/record_demo.py first-run-session
+tutorial_export:
+  include: exports/first-run-session.json
+seed_refs:
+  - seed/landing.html
+  - seed/welcome.html
+recording:
+  primary_role: player
+  default_seed: seed/welcome.html
+  macros:
+    - name: inject-form
+      role: player
+    - name: test-selector-presence
+      role: player
