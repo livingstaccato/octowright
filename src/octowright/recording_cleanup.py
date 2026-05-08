@@ -130,6 +130,8 @@ def cleanup_stale(
     errors: list[dict[str, str]] = []
     touched_video_dirs: set[Path] = set()
 
+    from octowright.http.session_artifacts import session_artifact_cache
+
     for entry in stale:
         if dry_run:
             continue
@@ -140,6 +142,10 @@ def cleanup_stale(
             continue
         removed_count += 1
         removed_bytes += entry.size_bytes
+        # Drop any cached artefact data keyed off this JSONL so a future
+        # recording that happens to land at the same path can't see ghost rows.
+        if entry.kind == "recording":
+            session_artifact_cache.evict(entry.path)
         if entry.kind == "video":
             touched_video_dirs.add(entry.path.parent)
 

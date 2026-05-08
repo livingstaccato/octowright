@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from octowright.http.session_artifacts import SessionArtifactCache
 
 
@@ -91,6 +93,40 @@ def test_read_index_handles_corrupt_sidecar(tmp_path: Path) -> None:
     assert cache.read_console_index(jsonl) is None
 
 
+def test_read_index_rejects_sidecar_with_unknown_version(tmp_path: Path) -> None:
+    """Future-format sidecars are rejected so an old daemon can't serve them."""
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "x"})
+    stat = jsonl.stat()
+    sidecar = jsonl.with_suffix(".console.index.json")
+    sidecar.write_text(
+        json.dumps(
+            {
+                "version": 99,
+                "source": {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size},
+                "rows": [{"level": "log", "text": "future-format"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cache = SessionArtifactCache()
+    assert cache.read_console_index(jsonl) is None
+
+
+def test_read_index_rejects_sidecar_with_missing_source_signature(tmp_path: Path) -> None:
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "x"})
+    sidecar = jsonl.with_suffix(".console.index.json")
+    sidecar.write_text(
+        json.dumps({"version": 1, "rows": [{"level": "log", "text": "stale"}]}),
+        encoding="utf-8",
+    )
+
+    cache = SessionArtifactCache()
+    assert cache.read_console_index(jsonl) is None
+
+
 def test_index_cache_evicts_oldest_when_bound_exceeded(tmp_path: Path) -> None:
     """LRU bound prevents unbounded memory growth across many sessions."""
     from octowright.http.session_artifacts import _MAX_ENTRIES
@@ -123,3 +159,22 @@ def test_evict_drops_all_caches_for_path(tmp_path: Path) -> None:
     cache.evict(jsonl)
     assert key not in cache._console_index_cache
     assert key not in cache._artifact_cache
+
+
+def test_max_entries_is_env_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES propagates from env to module constant."""
+    import importlib
+
+    monkeypatch.setenv("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", "8")
+    import octowright.defaults as defaults_mod
+
+    importlib.reload(defaults_mod)
+    import octowright.http.session_artifacts as sa_mod
+
+    importlib.reload(sa_mod)
+    assert sa_mod._MAX_ENTRIES == 8
+
+    # Restore module state for subsequent tests in the same session.
+    monkeypatch.delenv("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", raising=False)
+    importlib.reload(defaults_mod)
+    importlib.reload(sa_mod)

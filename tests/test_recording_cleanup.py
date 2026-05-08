@@ -122,6 +122,37 @@ def test_cleanup_stale_apply_deletes_and_counts(tmp_path: Path) -> None:
     assert summary["errors"] == []
 
 
+def test_cleanup_stale_evicts_artifact_cache_for_recording(tmp_path: Path) -> None:
+    """Recording deletion should drop any cached artefact rows for that JSONL."""
+    from octowright.http.session_artifacts import SessionArtifactCache
+
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    jsonl = _touch(
+        rec / "stale.jsonl",
+        age_days=10,
+        content=b'{"action": "console", "level": "log", "text": "ghost"}\n',
+    )
+
+    cache = SessionArtifactCache()
+    cache.write_event_indexes(jsonl)
+    assert str(jsonl) in cache._console_index_cache
+
+    # Patch the module-level singleton used by cleanup_stale.
+    import octowright.http.session_artifacts as sa_mod
+
+    sa_mod.session_artifact_cache._console_index_cache = cache._console_index_cache
+    sa_mod.session_artifact_cache._artifact_cache = cache._artifact_cache
+    sa_mod.session_artifact_cache._report_cache = cache._report_cache
+    sa_mod.session_artifact_cache._downloads_index_cache = cache._downloads_index_cache
+
+    stale = rc.find_stale_files(rec, days=1.0)
+    rc.cleanup_stale(stale, dry_run=False)
+
+    assert not jsonl.exists()
+    assert str(jsonl) not in sa_mod.session_artifact_cache._console_index_cache
+
+
 def test_cleanup_stale_video_dir_pruned_when_empty(tmp_path: Path) -> None:
     rec = tmp_path / "recordings"
     rec.mkdir()

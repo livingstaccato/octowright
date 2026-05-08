@@ -87,3 +87,9 @@ NETWORK_EVENT_LIMIT = int(os.environ.get("OCTOWRIGHT_NETWORK_EVENT_LIMIT", "5000
 # still self-clean within minutes; not hours.
 IDLE_GRACE_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_GRACE", "300"))
 IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
+
+# Per-cache LRU bound on `octowright.http.session_artifacts.SessionArtifactCache`.
+# Each cache (artifacts, report, console index, downloads index, path-exists)
+# is independently capped at this many entries so the global singleton can't
+# grow indefinitely as more sessions are processed.
+SESSION_ARTIFACT_CACHE_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", "256"))

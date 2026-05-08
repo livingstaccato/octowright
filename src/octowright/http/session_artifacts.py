@@ -9,14 +9,17 @@ import json
 import os
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from octowright.defaults import SESSION_ARTIFACT_CACHE_MAX_ENTRIES
 from octowright.http.artifacts import cache_report_for_recording, scan_recording_artifacts
 
-# Cap each per-cache to bound memory growth. Sized to comfortably exceed
-# a reasonable working set of recently-viewed sessions while keeping
-# total resident memory under a few MB.
-_MAX_ENTRIES = 256
+_MAX_ENTRIES = SESSION_ARTIFACT_CACHE_MAX_ENTRIES
+
+# Bumped whenever the sidecar payload shape changes incompatibly. Sidecars
+# written with a different version are rejected on read so an upgraded
+# daemon never serves rows from a stale-format file.
+_SIDECAR_FORMAT_VERSION = 1
 
 
 class SessionArtifactCache:
@@ -32,6 +35,7 @@ class SessionArtifactCache:
         self._report_cache: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
         self._console_index_cache: OrderedDict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = OrderedDict()
         self._downloads_index_cache: OrderedDict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = OrderedDict()
+        self._path_exists_cache: OrderedDict[str, bool] = OrderedDict()
 
     def _signature(self, jsonl_path: Path) -> tuple[int, int] | None:
         try:
@@ -90,20 +94,40 @@ class SessionArtifactCache:
     def _downloads_index_path(self, jsonl_path: Path) -> Path:
         return jsonl_path.with_suffix(".downloads.index.json")
 
-    def _read_index_file(self, path: Path) -> list[dict[str, Any]] | None:
+    @staticmethod
+    def _parse_source_signature(raw: object) -> tuple[int, int] | None:
+        if not isinstance(raw, dict):
+            return None
+        raw_dict = cast(dict[str, object], raw)
+        mtime_ns = raw_dict.get("mtime_ns")
+        size = raw_dict.get("size")
+        if not isinstance(mtime_ns, int) or not isinstance(size, int):
+            return None
+        return (mtime_ns, size)
+
+    def _read_index_file(self, path: Path, expected_source_signature: tuple[int, int]) -> list[dict[str, Any]] | None:
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
         if not isinstance(loaded, dict):
             return None
+        if loaded.get("version") != _SIDECAR_FORMAT_VERSION:
+            return None
+        sidecar_source_signature = self._parse_source_signature(loaded.get("source"))
+        if sidecar_source_signature != expected_source_signature:
+            return None
         rows = loaded.get("rows")
         if not isinstance(rows, list):
             return None
         return [row for row in rows if isinstance(row, dict)]
 
-    def _write_index_file(self, path: Path, rows: list[dict[str, Any]]) -> None:
-        payload = {"version": 1, "rows": rows}
+    def _write_index_file(self, path: Path, rows: list[dict[str, Any]], source_signature: tuple[int, int]) -> None:
+        payload = {
+            "version": _SIDECAR_FORMAT_VERSION,
+            "source": {"mtime_ns": source_signature[0], "size": source_signature[1]},
+            "rows": rows,
+        }
         tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
         os.replace(tmp, path)
@@ -117,7 +141,7 @@ class SessionArtifactCache:
         if cached and cached[0] == signature:
             self._console_index_cache.move_to_end(key)
             return cached[1]
-        rows = self._read_index_file(self._console_index_path(jsonl_path))
+        rows = self._read_index_file(self._console_index_path(jsonl_path), signature)
         if rows is None:
             return None
         self._lru_set(self._console_index_cache, key, (signature, rows))
@@ -132,7 +156,7 @@ class SessionArtifactCache:
         if cached and cached[0] == signature:
             self._downloads_index_cache.move_to_end(key)
             return cached[1]
-        rows = self._read_index_file(self._downloads_index_path(jsonl_path))
+        rows = self._read_index_file(self._downloads_index_path(jsonl_path), signature)
         if rows is None:
             return None
         self._lru_set(self._downloads_index_cache, key, (signature, rows))
@@ -171,14 +195,23 @@ class SessionArtifactCache:
         except OSError:
             return
 
-        self._write_index_file(self._console_index_path(jsonl_path), console_rows)
-        self._write_index_file(self._downloads_index_path(jsonl_path), download_rows)
         signature = self._signature(jsonl_path)
         if signature is None:
             return
+        self._write_index_file(self._console_index_path(jsonl_path), console_rows, signature)
+        self._write_index_file(self._downloads_index_path(jsonl_path), download_rows, signature)
         key = str(jsonl_path)
         self._lru_set(self._console_index_cache, key, (signature, console_rows))
         self._lru_set(self._downloads_index_cache, key, (signature, download_rows))
+
+    def path_exists(self, path: str) -> bool:
+        cached = self._path_exists_cache.get(path)
+        if cached is not None:
+            self._path_exists_cache.move_to_end(path)
+            return cached
+        exists = Path(path).exists()
+        self._lru_set(self._path_exists_cache, path, exists)
+        return exists
 
 
 session_artifact_cache = SessionArtifactCache()
