@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from pathlib import Path
@@ -92,9 +93,7 @@ async def _live_session_detail_response(live: Any) -> JSONResponse:
     markdown_path = _resolve_live_markdown_path(live)
     detail = _build_live_session_detail(live, markdown_path)
     log_path = Path(live.log_path)
-    if log_path.exists():
-        artefacts = session_artifact_cache.scan_artifacts(log_path)
-        detail["action_count"] = artefacts["action_count"]
+    detail["action_count"] = int(getattr(getattr(live, "recorder", None), "action_count", 0))
     with contextlib.suppress(Exception):
         detail["aria"] = await live.page.locator("html").aria_snapshot()
     if log_path.exists():
@@ -258,8 +257,8 @@ async def session_close(request: Request) -> JSONResponse:
     if isinstance(log_path, str) and log_path:
         try:
             jsonl_path = Path(log_path)
-            session_artifact_cache.write_event_indexes(jsonl_path)
-            body["cache"] = session_artifact_cache.cache_report(jsonl_path)
+            await asyncio.to_thread(session_artifact_cache.write_event_indexes, jsonl_path)
+            body["cache"] = await asyncio.to_thread(session_artifact_cache.cache_report, jsonl_path)
         except Exception:
             state.log.warning(
                 "octowright.http.session_close_cache_report_failed",

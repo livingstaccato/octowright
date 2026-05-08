@@ -91,17 +91,35 @@ def test_read_index_handles_corrupt_sidecar(tmp_path: Path) -> None:
     assert cache.read_console_index(jsonl) is None
 
 
-def test_path_exists_caches_result(tmp_path: Path) -> None:
-    real = tmp_path / "real"
-    real.write_text("x", encoding="utf-8")
-    missing = tmp_path / "missing"
+def test_index_cache_evicts_oldest_when_bound_exceeded(tmp_path: Path) -> None:
+    """LRU bound prevents unbounded memory growth across many sessions."""
+    from octowright.http.session_artifacts import _MAX_ENTRIES
 
     cache = SessionArtifactCache()
-    assert cache.path_exists(str(real)) is True
-    assert cache.path_exists(str(missing)) is False
+    paths = []
+    for i in range(_MAX_ENTRIES + 5):
+        jsonl = tmp_path / f"s{i}.jsonl"
+        _append_jsonl(jsonl, {"action": "console", "level": "log", "text": f"msg-{i}"})
+        cache.write_event_indexes(jsonl)
+        paths.append(jsonl)
 
-    # Subsequent calls return the cached answer even if the filesystem changes.
-    real.unlink()
-    missing.write_text("now exists", encoding="utf-8")
-    assert cache.path_exists(str(real)) is True
-    assert cache.path_exists(str(missing)) is False
+    assert len(cache._console_index_cache) == _MAX_ENTRIES
+    # The five oldest entries should have been evicted.
+    for old in paths[:5]:
+        assert str(old) not in cache._console_index_cache
+
+
+def test_evict_drops_all_caches_for_path(tmp_path: Path) -> None:
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "x"})
+    cache = SessionArtifactCache()
+    cache.write_event_indexes(jsonl)
+    cache.scan_artifacts(jsonl)
+
+    key = str(jsonl)
+    assert key in cache._console_index_cache
+    assert key in cache._artifact_cache
+
+    cache.evict(jsonl)
+    assert key not in cache._console_index_cache
+    assert key not in cache._artifact_cache

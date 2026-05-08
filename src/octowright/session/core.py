@@ -61,7 +61,6 @@ class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin):
     _last_mcp_navigation: str | None = None
     _on_page_close: Callable[..., None] | None = field(default=None, repr=False)
     _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
-    event_count: int = 0
     console_count: int = 0
     download_count: int = 0
     page_count: int = 1

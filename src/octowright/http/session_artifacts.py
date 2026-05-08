@@ -6,21 +6,32 @@
 from __future__ import annotations
 
 import json
+import os
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 from octowright.http.artifacts import cache_report_for_recording, scan_recording_artifacts
 
+# Cap each per-cache to bound memory growth. Sized to comfortably exceed
+# a reasonable working set of recently-viewed sessions while keeping
+# total resident memory under a few MB.
+_MAX_ENTRIES = 256
+
 
 class SessionArtifactCache:
-    """Shared cache for recording-derived artifacts used by HTTP routes."""
+    """Shared cache for recording-derived artifacts used by HTTP routes.
+
+    Each cache is an LRU bounded by ``_MAX_ENTRIES`` keyed by jsonl path,
+    invalidated by (mtime_ns, size) signature so any change to the
+    underlying file refreshes the entry.
+    """
 
     def __init__(self) -> None:
-        self._stat_cache: dict[str, bool] = {}
-        self._artifact_cache: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
-        self._report_cache: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
-        self._console_index_cache: dict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = {}
-        self._downloads_index_cache: dict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = {}
+        self._artifact_cache: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
+        self._report_cache: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
+        self._console_index_cache: OrderedDict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = OrderedDict()
+        self._downloads_index_cache: OrderedDict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = OrderedDict()
 
     def _signature(self, jsonl_path: Path) -> tuple[int, int] | None:
         try:
@@ -29,13 +40,23 @@ class SessionArtifactCache:
         except OSError:
             return None
 
-    def path_exists(self, path: str) -> bool:
-        cached = self._stat_cache.get(path)
-        if cached is not None:
-            return cached
-        exists = Path(path).exists()
-        self._stat_cache[path] = exists
-        return exists
+    @staticmethod
+    def _lru_set(cache: OrderedDict[str, Any], key: str, value: Any) -> None:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > _MAX_ENTRIES:
+            cache.popitem(last=False)
+
+    def evict(self, jsonl_path: Path) -> None:
+        """Drop any cached entries for ``jsonl_path`` (call on session deletion)."""
+        key = str(jsonl_path)
+        for cache in (
+            self._artifact_cache,
+            self._report_cache,
+            self._console_index_cache,
+            self._downloads_index_cache,
+        ):
+            cache.pop(key, None)
 
     def scan_artifacts(self, jsonl_path: Path) -> dict[str, Any]:
         signature = self._signature(jsonl_path)
@@ -44,9 +65,10 @@ class SessionArtifactCache:
         key = str(jsonl_path)
         cached = self._artifact_cache.get(key)
         if cached and cached[0] == signature:
+            self._artifact_cache.move_to_end(key)
             return cached[1]
         scanned = scan_recording_artifacts(jsonl_path)
-        self._artifact_cache[key] = (signature, scanned)
+        self._lru_set(self._artifact_cache, key, (signature, scanned))
         return scanned
 
     def cache_report(self, jsonl_path: Path) -> dict[str, Any]:
@@ -56,9 +78,10 @@ class SessionArtifactCache:
         key = str(jsonl_path)
         cached = self._report_cache.get(key)
         if cached and cached[0] == signature:
+            self._report_cache.move_to_end(key)
             return cached[1]
         report = cache_report_for_recording(jsonl_path)
-        self._report_cache[key] = (signature, report)
+        self._lru_set(self._report_cache, key, (signature, report))
         return report
 
     def _console_index_path(self, jsonl_path: Path) -> Path:
@@ -81,7 +104,9 @@ class SessionArtifactCache:
 
     def _write_index_file(self, path: Path, rows: list[dict[str, Any]]) -> None:
         payload = {"version": 1, "rows": rows}
-        path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, path)
 
     def read_console_index(self, jsonl_path: Path) -> list[dict[str, Any]] | None:
         signature = self._signature(jsonl_path)
@@ -90,11 +115,12 @@ class SessionArtifactCache:
         key = str(jsonl_path)
         cached = self._console_index_cache.get(key)
         if cached and cached[0] == signature:
+            self._console_index_cache.move_to_end(key)
             return cached[1]
         rows = self._read_index_file(self._console_index_path(jsonl_path))
         if rows is None:
             return None
-        self._console_index_cache[key] = (signature, rows)
+        self._lru_set(self._console_index_cache, key, (signature, rows))
         return rows
 
     def read_downloads_index(self, jsonl_path: Path) -> list[dict[str, Any]] | None:
@@ -104,11 +130,12 @@ class SessionArtifactCache:
         key = str(jsonl_path)
         cached = self._downloads_index_cache.get(key)
         if cached and cached[0] == signature:
+            self._downloads_index_cache.move_to_end(key)
             return cached[1]
         rows = self._read_index_file(self._downloads_index_path(jsonl_path))
         if rows is None:
             return None
-        self._downloads_index_cache[key] = (signature, rows)
+        self._lru_set(self._downloads_index_cache, key, (signature, rows))
         return rows
 
     def write_event_indexes(self, jsonl_path: Path) -> None:
@@ -150,8 +177,8 @@ class SessionArtifactCache:
         if signature is None:
             return
         key = str(jsonl_path)
-        self._console_index_cache[key] = (signature, console_rows)
-        self._downloads_index_cache[key] = (signature, download_rows)
+        self._lru_set(self._console_index_cache, key, (signature, console_rows))
+        self._lru_set(self._downloads_index_cache, key, (signature, download_rows))
 
 
 session_artifact_cache = SessionArtifactCache()
