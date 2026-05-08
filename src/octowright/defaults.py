@@ -93,3 +93,10 @@ IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
 # is independently capped at this many entries so the global singleton can't
 # grow indefinitely as more sessions are processed.
 SESSION_ARTIFACT_CACHE_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", "256"))
+
+# TTL on the path-exists cache used by /downloads to avoid stat'ing every
+# referenced file on every page load. Sized to dedupe stats within a single
+# paginated request (sub-second) while still refreshing fast enough that a
+# user manually deleting a download sees the UI catch up within a couple
+# refreshes.
+DOWNLOAD_PATH_EXISTS_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_DOWNLOAD_PATH_EXISTS_TTL_SECONDS", "2.0"))

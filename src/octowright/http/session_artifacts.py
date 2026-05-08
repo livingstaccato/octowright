@@ -7,14 +7,13 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, cast
 
-from octowright.defaults import SESSION_ARTIFACT_CACHE_MAX_ENTRIES
+from octowright.defaults import DOWNLOAD_PATH_EXISTS_TTL_SECONDS, SESSION_ARTIFACT_CACHE_MAX_ENTRIES
 from octowright.http.artifacts import cache_report_for_recording, scan_recording_artifacts
-
-_MAX_ENTRIES = SESSION_ARTIFACT_CACHE_MAX_ENTRIES
 
 # Bumped whenever the sidecar payload shape changes incompatibly. Sidecars
 # written with a different version are rejected on read so an upgraded
@@ -25,17 +24,30 @@ _SIDECAR_FORMAT_VERSION = 1
 class SessionArtifactCache:
     """Shared cache for recording-derived artifacts used by HTTP routes.
 
-    Each cache is an LRU bounded by ``_MAX_ENTRIES`` keyed by jsonl path,
+    Each cache is an LRU bounded by ``max_entries`` keyed by jsonl path,
     invalidated by (mtime_ns, size) signature so any change to the
     underlying file refreshes the entry.
+
+    Defaults are pulled from ``octowright.defaults`` at construction time
+    (not import time), so tests can override the environment and instantiate
+    a fresh cache without reloading the module.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        max_entries: int | None = None,
+        path_exists_ttl_seconds: float | None = None,
+    ) -> None:
+        self._max_entries = max_entries if max_entries is not None else SESSION_ARTIFACT_CACHE_MAX_ENTRIES
+        self._path_exists_ttl_seconds = (
+            path_exists_ttl_seconds if path_exists_ttl_seconds is not None else DOWNLOAD_PATH_EXISTS_TTL_SECONDS
+        )
         self._artifact_cache: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
         self._report_cache: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
         self._console_index_cache: OrderedDict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = OrderedDict()
         self._downloads_index_cache: OrderedDict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = OrderedDict()
-        self._path_exists_cache: OrderedDict[str, bool] = OrderedDict()
+        self._path_exists_cache: OrderedDict[str, tuple[float, bool]] = OrderedDict()
 
     def _signature(self, jsonl_path: Path) -> tuple[int, int] | None:
         try:
@@ -44,11 +56,10 @@ class SessionArtifactCache:
         except OSError:
             return None
 
-    @staticmethod
-    def _lru_set(cache: OrderedDict[str, Any], key: str, value: Any) -> None:
+    def _lru_set(self, cache: OrderedDict[str, Any], key: str, value: Any) -> None:
         cache[key] = value
         cache.move_to_end(key)
-        while len(cache) > _MAX_ENTRIES:
+        while len(cache) > self._max_entries:
             cache.popitem(last=False)
 
     def evict(self, jsonl_path: Path) -> None:
@@ -93,6 +104,26 @@ class SessionArtifactCache:
 
     def _downloads_index_path(self, jsonl_path: Path) -> Path:
         return jsonl_path.with_suffix(".downloads.index.json")
+
+    @staticmethod
+    def console_row_from_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+        if entry.get("action") != "console":
+            return None
+        row: dict[str, Any] = {"level": entry.get("level"), "text": entry.get("text", "")}
+        if "page_index" in entry:
+            row["page_index"] = entry.get("page_index")
+        return row
+
+    @staticmethod
+    def download_row_from_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+        if entry.get("action") != "download_saved":
+            return None
+        return {
+            "url": entry.get("url"),
+            "suggested_filename": entry.get("suggested_filename"),
+            "path": entry.get("path"),
+            "timestamp": entry.get("timestamp"),
+        }
 
     @staticmethod
     def _parse_source_signature(raw: object) -> tuple[int, int] | None:
@@ -177,21 +208,13 @@ class SessionArtifactCache:
                         entry = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    action = entry.get("action")
-                    if action == "console":
-                        row = {"level": entry.get("level"), "text": entry.get("text", "")}
-                        if "page_index" in entry:
-                            row["page_index"] = entry.get("page_index")
+                    row = self.console_row_from_entry(entry)
+                    if row is not None:
                         console_rows.append(row)
-                    elif action == "download_saved":
-                        download_rows.append(
-                            {
-                                "url": entry.get("url"),
-                                "suggested_filename": entry.get("suggested_filename"),
-                                "path": entry.get("path"),
-                                "timestamp": entry.get("timestamp"),
-                            }
-                        )
+                        continue
+                    download_row = self.download_row_from_entry(entry)
+                    if download_row is not None:
+                        download_rows.append(download_row)
         except OSError:
             return
 
@@ -205,12 +228,13 @@ class SessionArtifactCache:
         self._lru_set(self._downloads_index_cache, key, (signature, download_rows))
 
     def path_exists(self, path: str) -> bool:
+        now = time.monotonic()
         cached = self._path_exists_cache.get(path)
-        if cached is not None:
+        if cached is not None and (now - cached[0]) <= self._path_exists_ttl_seconds:
             self._path_exists_cache.move_to_end(path)
-            return cached
+            return cached[1]
         exists = Path(path).exists()
-        self._lru_set(self._path_exists_cache, path, exists)
+        self._lru_set(self._path_exists_cache, path, (now, exists))
         return exists
 
 

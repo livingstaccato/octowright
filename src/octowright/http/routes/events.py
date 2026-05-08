@@ -127,15 +127,9 @@ def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
                     entry = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if entry.get("action") != "console":
-                    continue
-                message = {
-                    "level": entry.get("level"),
-                    "text": entry.get("text", ""),
-                }
-                if "page_index" in entry:
-                    message["page_index"] = entry.get("page_index")
-                out.append(message)
+                message = session_artifact_cache.console_row_from_entry(entry)
+                if message is not None:
+                    out.append(message)
     except OSError:
         return out
     return out
@@ -164,16 +158,9 @@ def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
                     entry = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if entry.get("action") != "download_saved":
-                    continue
-                out.append(
-                    {
-                        "url": entry.get("url"),
-                        "suggested_filename": entry.get("suggested_filename"),
-                        "path": entry.get("path"),
-                        "timestamp": entry.get("timestamp"),
-                    }
-                )
+                row = session_artifact_cache.download_row_from_entry(entry)
+                if row is not None:
+                    out.append(row)
     except OSError:
         return out
     return out
