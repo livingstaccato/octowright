@@ -110,35 +110,13 @@ async def session_events(request: Request) -> JSONResponse:
 
 
 def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
-    """Reconstruct console messages from persisted ``action: "console"`` rows."""
-    indexed = session_artifact_cache.read_console_index(jsonl_path)
-    if indexed is not None:
-        return indexed
-    out: list[dict[str, Any]] = []
-    if not jsonl_path.exists():
-        return out
-    try:
-        with jsonl_path.open(encoding="utf-8") as fh:
-            for raw in fh:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    entry = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if entry.get("action") != "console":
-                    continue
-                message = {
-                    "level": entry.get("level"),
-                    "text": entry.get("text", ""),
-                }
-                if "page_index" in entry:
-                    message["page_index"] = entry.get("page_index")
-                out.append(message)
-    except OSError:
-        return out
-    return out
+    """Reconstruct console messages from persisted ``action: "console"`` rows.
+
+    Routes through ``SessionArtifactCache.get_console_rows`` so the result of
+    a fallback scan (when no sidecar exists yet) is cached in-memory by JSONL
+    signature. Subsequent requests against the same recording skip the scan.
+    """
+    return session_artifact_cache.get_console_rows(jsonl_path)
 
 
 def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
@@ -146,37 +124,10 @@ def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
 
     ``BrowserSession._handle_download`` → ``downloads.save_download`` records an
     ``action: "download_saved"`` row with the same field shape used in-memory
-    (``url``, ``suggested_filename``, ``path``, ``timestamp``).
+    (``url``, ``suggested_filename``, ``path``, ``timestamp``). Routes through
+    ``get_download_rows`` for the same in-memory caching as console rows.
     """
-    indexed = session_artifact_cache.read_downloads_index(jsonl_path)
-    if indexed is not None:
-        return indexed
-    out: list[dict[str, Any]] = []
-    if not jsonl_path.exists():
-        return out
-    try:
-        with jsonl_path.open(encoding="utf-8") as fh:
-            for raw in fh:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    entry = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if entry.get("action") != "download_saved":
-                    continue
-                out.append(
-                    {
-                        "url": entry.get("url"),
-                        "suggested_filename": entry.get("suggested_filename"),
-                        "path": entry.get("path"),
-                        "timestamp": entry.get("timestamp"),
-                    }
-                )
-    except OSError:
-        return out
-    return out
+    return session_artifact_cache.get_download_rows(jsonl_path)
 
 
 async def session_console(request: Request) -> JSONResponse:
@@ -238,15 +189,15 @@ async def session_downloads(request: Request) -> JSONResponse:
             return JSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
         downloads = _read_downloads_from_jsonl(jsonl)
 
-    # Annotate each record with whether the file is still on disk.
-    annotated: list[dict[str, Any]] = []
-    for d in downloads:
-        path = d.get("path")
-        path_exists = isinstance(path, str) and Path(path).exists()
-        annotated.append({**d, "path_exists": path_exists})
-
-    sliced, total, cursor = _paginate(annotated, since)
-    return JSONResponse({"downloads": sliced, "cursor": cursor, "total": total})
+    # Paginate first, then stat-annotate only the visible slice. Stat-ing all N
+    # records before pagination would be O(total) syscalls per page even when
+    # the page only renders ~50 rows.
+    sliced, total, cursor = _paginate(downloads, since)
+    annotated = [
+        {**d, "path_exists": isinstance(d.get("path"), str) and session_artifact_cache.path_exists(d["path"])}
+        for d in sliced
+    ]
+    return JSONResponse({"downloads": annotated, "cursor": cursor, "total": total})
 
 
 # ---------------------------------------------------------------------------

@@ -66,7 +66,6 @@ def _build_live_session_detail(live: Any, markdown_path: str | None) -> dict[str
         "console_count": int(getattr(live, "console_count", len(live.console))),
         "download_count": int(getattr(live, "download_count", len(live.downloads))),
         "page_count": int(getattr(live, "page_count", len(live.pages))),
-        "title": None,
         "cache": _build_cache_components(
             session_id=live.instance_id,
             jsonl_path=Path(live.log_path),
@@ -120,7 +119,6 @@ def _closed_session_detail_response(sid: str) -> JSONResponse:
         "console_count": artefacts["console_count"],
         "download_count": artefacts["download_count"],
         "page_count": artefacts["page_count"],
-        "title": artefacts["title"],
         "cache": session_artifact_cache.cache_report(jsonl),
     }
     if artefacts["url"]:
@@ -257,8 +255,10 @@ async def session_close(request: Request) -> JSONResponse:
     if isinstance(log_path, str) and log_path:
         try:
             jsonl_path = Path(log_path)
-            await asyncio.to_thread(session_artifact_cache.write_event_indexes, jsonl_path)
-            body["cache"] = await asyncio.to_thread(session_artifact_cache.cache_report, jsonl_path)
+            # Single-pass close: one JSONL walk produces the sidecars AND the
+            # cache report, instead of two parallel threads each scanning the
+            # full file.
+            body["cache"] = await asyncio.to_thread(session_artifact_cache.warm_close, jsonl_path)
         except Exception:
             state.log.warning(
                 "octowright.http.session_close_cache_report_failed",

@@ -8,12 +8,30 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from octowright.http.session_artifacts import SessionArtifactCache
+import pytest
+
+from octowright.http.session_artifacts import SessionArtifactCache, iter_jsonl_entries
 
 
 def _append_jsonl(path: Path, row: dict[str, object]) -> None:
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
+
+
+def test_iter_jsonl_entries_skips_blank_decode_errors_and_non_dicts(tmp_path: Path) -> None:
+    jsonl = tmp_path / "session.jsonl"
+    with jsonl.open("w", encoding="utf-8") as fh:
+        fh.write('{"action": "console", "level": "log", "text": "a"}\n')
+        fh.write("\n")  # blank
+        fh.write("not-json\n")
+        fh.write("[1, 2, 3]\n")  # JSON but not a dict
+        fh.write('{"action": "download_saved", "url": "u"}\n')
+    rows = list(iter_jsonl_entries(jsonl))
+    assert [r["action"] for r in rows] == ["console", "download_saved"]
+
+
+def test_iter_jsonl_entries_returns_empty_for_missing_file(tmp_path: Path) -> None:
+    assert list(iter_jsonl_entries(tmp_path / "does_not_exist.jsonl")) == []
 
 
 def test_read_index_returns_none_without_sidecar(tmp_path: Path) -> None:
@@ -91,19 +109,226 @@ def test_read_index_handles_corrupt_sidecar(tmp_path: Path) -> None:
     assert cache.read_console_index(jsonl) is None
 
 
-def test_index_cache_evicts_oldest_when_bound_exceeded(tmp_path: Path) -> None:
-    """LRU bound prevents unbounded memory growth across many sessions."""
-    from octowright.http.session_artifacts import _MAX_ENTRIES
+def test_read_index_rejects_sidecar_with_unknown_version(tmp_path: Path) -> None:
+    """Future-format sidecars are rejected so an old daemon can't serve them."""
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "x"})
+    stat = jsonl.stat()
+    sidecar = jsonl.with_suffix(".console.index.json")
+    sidecar.write_text(
+        json.dumps(
+            {
+                "version": 99,
+                "source": {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size},
+                "rows": [{"level": "log", "text": "future-format"}],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     cache = SessionArtifactCache()
+    assert cache.read_console_index(jsonl) is None
+
+
+def test_read_index_rejects_sidecar_with_missing_source_signature(tmp_path: Path) -> None:
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "x"})
+    sidecar = jsonl.with_suffix(".console.index.json")
+    sidecar.write_text(
+        json.dumps({"version": 1, "rows": [{"level": "log", "text": "stale"}]}),
+        encoding="utf-8",
+    )
+
+    cache = SessionArtifactCache()
+    assert cache.read_console_index(jsonl) is None
+
+
+def test_row_extractors_filter_and_normalize() -> None:
+    entry_console = {"action": "console", "level": "warn", "text": "x", "page_index": 3}
+    entry_download = {
+        "action": "download_saved",
+        "url": "https://x.test/a",
+        "suggested_filename": "a.txt",
+        "path": "/tmp/a.txt",
+        "timestamp": "now",
+    }
+    assert SessionArtifactCache.console_row_from_entry(entry_console) == {
+        "level": "warn",
+        "text": "x",
+        "page_index": 3,
+    }
+    assert SessionArtifactCache.download_row_from_entry(entry_download) == {
+        "url": "https://x.test/a",
+        "suggested_filename": "a.txt",
+        "path": "/tmp/a.txt",
+        "timestamp": "now",
+    }
+    assert SessionArtifactCache.console_row_from_entry({"action": "click"}) is None
+    assert SessionArtifactCache.download_row_from_entry({"action": "navigate"}) is None
+
+
+def test_path_exists_cache_expires_after_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import octowright.http.session_artifacts as sa_mod
+
+    path = tmp_path / "artifact.bin"
+    path.write_text("ok", encoding="utf-8")
+    cache = SessionArtifactCache(path_exists_ttl_seconds=2.0)
+
+    fake_time = {"t": 1000.0}
+
+    def _now() -> float:
+        return fake_time["t"]
+
+    monkeypatch.setattr(sa_mod.time, "monotonic", _now)
+    assert cache.path_exists(str(path)) is True
+    path.unlink()
+    # Within TTL we still serve cached existence.
+    fake_time["t"] += 1.0
+    assert cache.path_exists(str(path)) is True
+    # After TTL expiry cache refreshes from filesystem.
+    fake_time["t"] += 1.5
+    assert cache.path_exists(str(path)) is False
+
+
+def test_get_console_rows_caches_fallback_scan_in_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a sidecar, the first call scans the JSONL; the second hits the in-memory cache."""
+    import octowright.http.session_artifacts as sa_mod
+
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "hello"})
+
+    cache = SessionArtifactCache()
+    scan_count = 0
+    real_iter = sa_mod.iter_jsonl_entries
+
+    def counting_iter(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal scan_count
+        scan_count += 1
+        yield from real_iter(path)
+
+    monkeypatch.setattr(sa_mod, "iter_jsonl_entries", counting_iter)
+
+    rows1 = cache.get_console_rows(jsonl)
+    rows2 = cache.get_console_rows(jsonl)
+    assert rows1 == [{"level": "log", "text": "hello"}]
+    assert rows2 == rows1
+    # Second call must not have re-scanned.
+    assert scan_count == 1
+
+
+def test_get_download_rows_caches_fallback_scan_in_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirror of the console test for the downloads path."""
+    import octowright.http.session_artifacts as sa_mod
+
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(
+        jsonl,
+        {
+            "action": "download_saved",
+            "url": "https://x.test/a",
+            "suggested_filename": "a.txt",
+            "path": "/tmp/a.txt",
+            "timestamp": "t",
+        },
+    )
+
+    cache = SessionArtifactCache()
+    scan_count = 0
+    real_iter = sa_mod.iter_jsonl_entries
+
+    def counting_iter(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal scan_count
+        scan_count += 1
+        yield from real_iter(path)
+
+    monkeypatch.setattr(sa_mod, "iter_jsonl_entries", counting_iter)
+
+    cache.get_download_rows(jsonl)
+    cache.get_download_rows(jsonl)
+    assert scan_count == 1
+
+
+def test_get_console_rows_invalidates_in_memory_cache_when_jsonl_changes(tmp_path: Path) -> None:
+    """A signature change (mtime/size) on the JSONL must force a fresh scan."""
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "first"})
+
+    cache = SessionArtifactCache()
+    assert cache.get_console_rows(jsonl) == [{"level": "log", "text": "first"}]
+
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "second"})
+    assert cache.get_console_rows(jsonl) == [
+        {"level": "log", "text": "first"},
+        {"level": "log", "text": "second"},
+    ]
+
+
+def test_warm_close_walks_jsonl_once_and_warms_all_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """warm_close should produce sidecars + warm artifact/report caches in a single JSONL pass."""
+    import octowright.http.session_artifacts as sa_mod
+
+    jsonl = tmp_path / "20260101T000000Z-chromium-warmclose0001.jsonl"
+    _append_jsonl(jsonl, {"action": "launch", "kind": "chromium"})
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "hello"})
+    _append_jsonl(jsonl, {"action": "navigate", "url": "https://example.test"})
+    _append_jsonl(
+        jsonl,
+        {
+            "action": "download_saved",
+            "url": "https://x.test/a",
+            "suggested_filename": "a.txt",
+            "path": "/tmp/a.txt",
+            "timestamp": "t0",
+        },
+    )
+
+    cache = SessionArtifactCache()
+    walks = 0
+    real_iter = sa_mod.iter_jsonl_entries
+
+    def counting_iter(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal walks
+        walks += 1
+        yield from real_iter(path)
+
+    monkeypatch.setattr(sa_mod, "iter_jsonl_entries", counting_iter)
+
+    report = cache.warm_close(jsonl)
+
+    # One walk only.
+    assert walks == 1
+    # Sidecars written.
+    assert jsonl.with_suffix(".console.index.json").exists()
+    assert jsonl.with_suffix(".downloads.index.json").exists()
+    # All caches warm — subsequent reads hit memory without re-walking.
+    key = str(jsonl)
+    assert key in cache._console_index_cache
+    assert key in cache._downloads_index_cache
+    assert key in cache._artifact_cache
+    assert key in cache._report_cache
+    # Report shape sanity.
+    assert "components" in report
+    assert "jsonl" in report["components"]
+    # No additional walks for follow-up reads.
+    cache.get_console_rows(jsonl)
+    cache.get_download_rows(jsonl)
+    cache.scan_artifacts(jsonl)
+    cache.cache_report(jsonl)
+    assert walks == 1
+
+
+def test_index_cache_evicts_oldest_when_bound_exceeded(tmp_path: Path) -> None:
+    """LRU bound prevents unbounded memory growth across many sessions."""
+    bound = 8
+    cache = SessionArtifactCache(max_entries=bound)
     paths = []
-    for i in range(_MAX_ENTRIES + 5):
+    for i in range(bound + 5):
         jsonl = tmp_path / f"s{i}.jsonl"
         _append_jsonl(jsonl, {"action": "console", "level": "log", "text": f"msg-{i}"})
         cache.write_event_indexes(jsonl)
         paths.append(jsonl)
 
-    assert len(cache._console_index_cache) == _MAX_ENTRIES
+    assert len(cache._console_index_cache) == bound
     # The five oldest entries should have been evicted.
     for old in paths[:5]:
         assert str(old) not in cache._console_index_cache
@@ -123,3 +348,12 @@ def test_evict_drops_all_caches_for_path(tmp_path: Path) -> None:
     cache.evict(jsonl)
     assert key not in cache._console_index_cache
     assert key not in cache._artifact_cache
+
+
+def test_constructor_defaults_pull_from_module_defaults() -> None:
+    """Cache picks up defaults from octowright.defaults at construction time."""
+    from octowright.defaults import DOWNLOAD_PATH_EXISTS_TTL_SECONDS, SESSION_ARTIFACT_CACHE_MAX_ENTRIES
+
+    cache = SessionArtifactCache()
+    assert cache._max_entries == SESSION_ARTIFACT_CACHE_MAX_ENTRIES
+    assert cache._path_exists_ttl_seconds == DOWNLOAD_PATH_EXISTS_TTL_SECONDS
