@@ -449,6 +449,47 @@ def test_delete_session_happy_path_with_cache_report(
     assert body["cache"]["components"]["jsonl"]["path"] == str(log_path)
 
 
+def test_delete_session_writes_console_and_download_indexes(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+    tmp_path: Path,
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    sid = "liveiid00004"
+    pool._sessions[sid] = SimpleNamespace(instance_id=sid)
+
+    file_path = tmp_path / "artifact.txt"
+    file_path.write_text("ok", encoding="utf-8")
+    log_path = isolated_recordings / "20260101T000000Z-chromium-liveiid00004.jsonl"
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {"action": "console", "level": "warn", "text": "be careful", "page_index": 0},
+        {
+            "action": "download_saved",
+            "url": "https://x.test/artifact.txt",
+            "suggested_filename": "artifact.txt",
+            "path": str(file_path),
+            "timestamp": "20260101T000001Z",
+        },
+        {"action": "close"},
+    ]
+    log_path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    pool.close_result = {
+        "closed": True,
+        "log_path": str(log_path),
+        "video_path": None,
+        "trace_path": None,
+    }
+
+    r = client.delete(f"/api/sessions/{sid}")
+    assert r.status_code == 200, r.text
+    console_index = json.loads(log_path.with_suffix(".console.index.json").read_text(encoding="utf-8"))
+    download_index = json.loads(log_path.with_suffix(".downloads.index.json").read_text(encoding="utf-8"))
+    assert console_index["rows"] == [{"level": "warn", "text": "be careful", "page_index": 0}]
+    assert download_index["rows"][0]["suggested_filename"] == "artifact.txt"
+
+
 def test_delete_session_unknown_id_404(
     client: TestClient,
     fakes: dict[str, Any],

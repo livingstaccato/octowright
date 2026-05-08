@@ -44,6 +44,8 @@ interface DashboardState {
   macros: MacroSummary[];
 }
 
+type DashboardScope = "sessions" | "scenarios" | "personas" | "macros";
+
 const EMPTY_STATE: DashboardState = {
   sessions: { live: [], closed: [] },
   scenarios: { live: [] },
@@ -600,6 +602,84 @@ export async function loadState(): Promise<DashboardState> {
   return { sessions, scenarios, personas, macros };
 }
 
+async function refreshScopedState(
+  current: DashboardState,
+  scopes: ReadonlySet<DashboardScope>,
+): Promise<DashboardState> {
+  const next: DashboardState = { ...current };
+  const jobs: Promise<void>[] = [];
+  if (scopes.has("sessions")) {
+    jobs.push(
+      getSessions()
+        .then((sessions) => {
+          next.sessions = sessions;
+        })
+        .catch(() => {
+          next.sessions = EMPTY_STATE.sessions;
+        }),
+    );
+  }
+  if (scopes.has("scenarios")) {
+    jobs.push(
+      getScenarios()
+        .then((scenarios) => {
+          next.scenarios = scenarios;
+        })
+        .catch(() => {
+          next.scenarios = EMPTY_STATE.scenarios;
+        }),
+    );
+  }
+  if (scopes.has("personas")) {
+    jobs.push(
+      getPersonas()
+        .then((personas) => {
+          next.personas = personas;
+        })
+        .catch(() => {
+          next.personas = [];
+        }),
+    );
+  }
+  if (scopes.has("macros")) {
+    jobs.push(
+      getMacros()
+        .then((macros) => {
+          next.macros = macros;
+        })
+        .catch(() => {
+          next.macros = [];
+        }),
+    );
+  }
+  await Promise.all(jobs);
+  return next;
+}
+
+function parseInvalidateScopes(data: string | null | undefined): ReadonlySet<DashboardScope> | null {
+  if (!data) return null;
+  try {
+    const parsed = JSON.parse(data) as { scope?: unknown };
+    const raw = parsed.scope;
+    if (typeof raw === "string") {
+      const parts = raw
+        .split(",")
+        .map((piece) => piece.trim())
+        .filter(Boolean);
+      const scopes = new Set<DashboardScope>();
+      for (const part of parts) {
+        if (part === "sessions" || part === "scenarios" || part === "personas" || part === "macros") {
+          scopes.add(part);
+        }
+      }
+      return scopes.size > 0 ? scopes : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 // ─── render ───────────────────────────────────────────────────────────────────
 
 export function renderDashboard(root: HTMLElement, state: DashboardState): void {
@@ -1001,13 +1081,15 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   let refreshGeneration = 0;
   let source: EventSource | null = null;
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
+  let currentState = EMPTY_STATE;
 
-  const tick = async (): Promise<void> => {
+  const tick = async (scopes: ReadonlySet<DashboardScope> | null = null): Promise<void> => {
     const generation = ++refreshGeneration;
-    const state = await loadState();
+    const state = scopes ? await refreshScopedState(currentState, scopes) : await loadState();
     if (disposed || generation !== refreshGeneration) {
       return;
     }
+    currentState = state;
     renderDashboard(root, state);
     log.debug({
       event: "dashboard_refresh",
@@ -1021,8 +1103,9 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   await tick();
   if (typeof EventSource !== "undefined") {
     source = new EventSource(dashboardEventsUrl());
-    const refreshFromStream = () => {
-      tick().catch((err: unknown) => {
+    const refreshFromStream = (event?: MessageEvent) => {
+      const scopes = parseInvalidateScopes(event?.data);
+      tick(scopes).catch((err: unknown) => {
         log.warn({ event: "dashboard_stream_refresh_failed", error: String(err) });
       });
     };

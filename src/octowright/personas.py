@@ -18,6 +18,7 @@ import yaml
 from provide.telemetry import get_logger
 
 from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
+from octowright.types import CredentialCheckEntry, CredentialCheckReport, PersonaListEntry
 
 log = get_logger(__name__)
 
@@ -110,7 +111,7 @@ def load_persona(name: str) -> Persona:
     )
 
 
-def list_personas() -> list[dict[str, Any]]:
+def list_personas() -> list[PersonaListEntry]:
     """Return [{name, display_name, engines, path, mtime, last_used}, ...]
     sorted most-recent-mtime first. Empty list if PROFILES_DIR missing.
 
@@ -121,7 +122,7 @@ def list_personas() -> list[dict[str, Any]]:
     """
     if not PROFILES_DIR.exists():
         return []
-    out: list[dict[str, Any]] = []
+    out: list[PersonaListEntry] = []
     for entry in PROFILES_DIR.iterdir():
         if not entry.is_dir():
             continue
@@ -243,7 +244,7 @@ def _credential_names(persona: Persona) -> list[str]:
     return sorted(names)
 
 
-def check_credentials(persona: Persona) -> dict[str, Any]:
+def check_credentials(persona: Persona) -> CredentialCheckReport:
     """Try to resolve every declared credential reference WITHOUT raising.
 
     Returns a structured report per field — success/failure + the reference
@@ -266,7 +267,7 @@ def check_credentials(persona: Persona) -> dict[str, Any]:
     ``resolve_credential`` precedence) — the ``_env`` value is ignored.
     """
     names = _credential_names(persona)
-    checked: list[dict[str, Any]] = []
+    checked: list[CredentialCheckEntry] = []
     for name in names:
         cmd_key = f"{name}_cmd"
         env_key = f"{name}_env"
