@@ -322,60 +322,6 @@ class SessionOpsMixin(SessionLike):
             "url": new_page.url,
         }
 
-    def _handle_response(self, response: Any) -> None:
-        request = response.request
-        self._append_network_request(
-            {
-                "url": request.url,
-                "method": request.method,
-                "resource_type": request.resource_type,
-                "status": response.status,
-                "status_text": response.status_text,
-            }
-        )
-
-    def _handle_request_failed(self, request: Any) -> None:
-        self._append_network_request(
-            {
-                "url": request.url,
-                "method": request.method,
-                "resource_type": request.resource_type,
-                "status": None,
-                "failure": request.failure,
-            }
-        )
-
-    def _append_network_request(self, request: dict[str, Any]) -> None:
-        if self._network_requests.maxlen is not None and len(self._network_requests) == self._network_requests.maxlen:
-            self._network_requests_dropped += 1
-        self._network_requests.append(request)
-
-    def get_network_requests(
-        self,
-        url_filter: str | None = None,
-        method_filter: str | None = None,
-        resource_type_filter: str | None = None,
-        since: int | None = None,
-    ) -> dict[str, Any]:
-        retained = list(self._network_requests)
-        retained_base = self._network_requests_dropped
-        next_cursor = retained_base + len(retained)
-        start = 0 if since is None else max(0, since - retained_base)
-        sliced = retained[start:]
-        if url_filter:
-            sliced = [r for r in sliced if url_filter in r.get("url", "")]
-        if method_filter:
-            sliced = [r for r in sliced if r.get("method", "").upper() == method_filter.upper()]
-        if resource_type_filter:
-            sliced = [r for r in sliced if r.get("resource_type") == resource_type_filter]
-        return {
-            "requests": sliced,
-            "next_cursor": next_cursor,
-            "total": len(retained),
-            "total_retained": len(retained),
-            "dropped": self._network_requests_dropped,
-        }
-
     # ------------------------------------------------------------------
     # Role / label / text / test-id locator methods
     # ------------------------------------------------------------------

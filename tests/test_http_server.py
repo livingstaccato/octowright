@@ -66,6 +66,11 @@ def isolated_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path
     rec = tmp_path / "recordings"
     rec.mkdir()
     monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    # Clear the cached recording-id index so the lookup-table doesn't carry
+    # entries from a prior test's tmp dir.
+    from octowright.http.discovery import invalidate_recording_index
+
+    invalidate_recording_index()
     return rec
 
 
@@ -1130,10 +1135,12 @@ def test_console_closed_session_reads_persisted_rows(client: TestClient, isolate
 def test_console_closed_session_uses_sidecar_index(client: TestClient, isolated_recordings: Path) -> None:
     jsonl = isolated_recordings / "20260101T000000Z-chromium-conssidecar01.jsonl"
     jsonl.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n", encoding="utf-8")
+    stat = jsonl.stat()
     jsonl.with_suffix(".console.index.json").write_text(
         json.dumps(
             {
                 "version": 1,
+                "source": {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size},
                 "rows": [{"level": "error", "text": "from-index", "page_index": 2}],
             }
         ),
@@ -1199,6 +1206,52 @@ def test_downloads_live_session_with_path_exists(
     assert body["downloads"][0]["path_exists"] is True
     assert body["downloads"][1]["path_exists"] is False
     assert body["downloads"][0]["suggested_filename"] == "report.csv"
+
+
+def test_downloads_only_stats_visible_slice(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Annotation should only stat records in the paginated slice, not all N records."""
+    log_path = isolated_recordings / "20260101T000000Z-chromium-dlperfslice0xx.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    rows = [
+        {"url": f"https://x.test/{i}.bin", "suggested_filename": f"{i}.bin", "path": f"/nope/{i}", "timestamp": "t"}
+        for i in range(100)
+    ]
+    empty_pool["pool"]._sessions["dlperfslice0xx"] = SimpleNamespace(
+        instance_id="dlperfslice0xx",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[],
+        downloads=rows,
+        list_downloads=lambda: list(rows),
+    )
+
+    # Patch the cache reference held by the route module (not the source
+    # module's singleton, which can be swapped by other tests that reload
+    # session_artifacts to test env-var-driven config).
+    from octowright.http.routes import events as events_mod
+
+    calls: list[str] = []
+    real_path_exists = events_mod.session_artifact_cache.path_exists
+
+    def counting_path_exists(path: str) -> bool:
+        calls.append(path)
+        return real_path_exists(path)
+
+    monkeypatch.setattr(events_mod.session_artifact_cache, "path_exists", counting_path_exists)
+
+    r = client.get("/api/sessions/dlperfslice0xx/downloads?since=98")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 100
+    # Only the 2 records in the slice should have been stat-checked.
+    assert len(calls) == 2
+    assert [d["suggested_filename"] for d in body["downloads"]] == ["98.bin", "99.bin"]
 
 
 def test_downloads_since_cursor(
@@ -1271,10 +1324,12 @@ def test_downloads_closed_session_uses_sidecar_index(
     existing.write_bytes(b"ok")
     jsonl = isolated_recordings / "20260101T000000Z-chromium-dlsidecar01.jsonl"
     jsonl.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n", encoding="utf-8")
+    stat = jsonl.stat()
     jsonl.with_suffix(".downloads.index.json").write_text(
         json.dumps(
             {
                 "version": 1,
+                "source": {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size},
                 "rows": [
                     {
                         "url": "https://x.test/ok.bin",

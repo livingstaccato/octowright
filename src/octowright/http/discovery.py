@@ -76,8 +76,13 @@ def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
 
 def _live_summary(session: Any) -> dict[str, Any]:
     log_path = Path(session.log_path)
-    launch = _read_first_launch(log_path) if log_path.exists() else None
-    started_at = (launch or {}).get("ts") or _iso(time.time())
+    # `started_at` is set on BrowserSession at construction (see core.py) so we
+    # avoid a per-session JSONL open on every dashboard refresh. Fall back to
+    # reading the first launch row only for sessions predating that field.
+    started_at = getattr(session, "started_at", "") or None
+    if not started_at:
+        launch = _read_first_launch(log_path) if log_path.exists() else None
+        started_at = (launch or {}).get("ts") or _iso(time.time())
     return {
         "id": session.instance_id,
         "kind": session.kind,
@@ -112,14 +117,48 @@ def _closed_sessions(recordings_dir: Path, live_log_paths: set[str]) -> list[dic
 # Session lookups (live OR on-disk recording)
 # ---------------------------------------------------------------------------
 
+# In-memory index of instance_id → JSONL path within a recordings dir, keyed
+# by the dir to keep test isolation safe. Built lazily on first lookup; on a
+# miss we rebuild rather than caching the negative answer, so a recording
+# created out-of-band is picked up on its first request. ``invalidate_recording_index``
+# is called from recording_cleanup so deletes don't leave stale entries.
+_recording_index: dict[Path, dict[str, Path]] = {}
+
+
+def _build_recording_index(recordings_dir: Path) -> dict[str, Path]:
+    index: dict[str, Path] = {}
+    if not recordings_dir.exists():
+        return index
+    for jsonl in _iter_recordings(recordings_dir):
+        sid = _instance_id_from_recording_name(jsonl.stem)
+        if sid:
+            index[sid] = jsonl
+    return index
+
+
+def invalidate_recording_index(recordings_dir: Path | None = None) -> None:
+    """Drop the cached index so the next lookup rebuilds from disk.
+
+    Pass a specific dir or ``None`` to clear all dirs (e.g. tests).
+    """
+    if recordings_dir is None:
+        _recording_index.clear()
+    else:
+        _recording_index.pop(recordings_dir, None)
+
 
 def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
-    if not recordings_dir.exists():
-        return None
-    for jsonl in _iter_recordings(recordings_dir):
-        if _instance_id_from_recording_name(jsonl.stem) == session_id:
-            return jsonl
-    return None
+    index = _recording_index.get(recordings_dir)
+    if index is not None:
+        hit = index.get(session_id)
+        if hit is not None and hit.exists():
+            return hit
+        if hit is not None:
+            # Cached path was deleted out-of-band; fall through to rebuild.
+            del index[session_id]
+    rebuilt = _build_recording_index(recordings_dir)
+    _recording_index[recordings_dir] = rebuilt
+    return rebuilt.get(session_id)
 
 
 def _live_session_or_none(session_id: str) -> Any | None:
@@ -134,43 +173,37 @@ def _resolve_log_path(session_id: str) -> Path | None:
     return _find_recording_for(session_id, state.RECORDINGS_DIR)
 
 
-def _resolve_video_path(session_id: str) -> Path | None:
+def _resolve_artifact_path(session_id: str, attr: str) -> Path | None:
+    """Resolve a session-bound artifact path (live attr → recording → cached scan).
+
+    ``attr`` names both the attribute on a live ``BrowserSession`` and the
+    matching key in the artefact-scan dict (e.g. ``"video_path"``). Adding a
+    new artifact type is a one-line caller addition rather than a copy of
+    this whole pattern.
+    """
     live = _live_session_or_none(session_id)
-    if live is not None and live.video_path is not None:
-        return Path(live.video_path)
+    if live is not None:
+        live_path = getattr(live, attr, None)
+        if live_path is not None:
+            return Path(live_path)
     jsonl = _find_recording_for(session_id, state.RECORDINGS_DIR)
     if jsonl is None:
         return None
     artefacts = session_artifact_cache.scan_artifacts(jsonl)
-    if artefacts["video_path"]:
-        return Path(artefacts["video_path"])
-    return None
+    artefact = artefacts.get(attr)
+    return Path(artefact) if artefact else None
+
+
+def _resolve_video_path(session_id: str) -> Path | None:
+    return _resolve_artifact_path(session_id, "video_path")
 
 
 def _resolve_trace_path(session_id: str) -> Path | None:
-    live = _live_session_or_none(session_id)
-    if live is not None and live.trace_path is not None:
-        return Path(live.trace_path)
-    jsonl = _find_recording_for(session_id, state.RECORDINGS_DIR)
-    if jsonl is None:
-        return None
-    artefacts = session_artifact_cache.scan_artifacts(jsonl)
-    if artefacts["trace_path"]:
-        return Path(artefacts["trace_path"])
-    return None
+    return _resolve_artifact_path(session_id, "trace_path")
 
 
 def _resolve_markdown_path(session_id: str) -> Path | None:
-    live = _live_session_or_none(session_id)
-    if live is not None and live.markdown_path is not None:
-        return Path(live.markdown_path)
-    jsonl = _find_recording_for(session_id, state.RECORDINGS_DIR)
-    if jsonl is None:
-        return None
-    artefacts = session_artifact_cache.scan_artifacts(jsonl)
-    if artefacts["markdown_path"]:
-        return Path(artefacts["markdown_path"])
-    return None
+    return _resolve_artifact_path(session_id, "markdown_path")
 
 
 # ---------------------------------------------------------------------------
