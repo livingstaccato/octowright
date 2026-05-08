@@ -9,11 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from ..defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
-from ._protocols import SessionLike
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from octowright.session._protocols import SessionLike
 
 if TYPE_CHECKING:
-    from .core import BrowserSession
+    from octowright.session.core import BrowserSession
 
 DEFAULT_PREVIEW_CHARS = 4000
 
@@ -26,6 +26,7 @@ class SessionOpsMixin(SessionLike):
     active_frame: Any | None
     video_path: Path | None
     trace_path: Path | None
+    _BG_TASK_DRAIN_TIMEOUT_SECONDS = 1.0
 
     async def diagnostic_bundle(
         self,
@@ -95,7 +96,7 @@ class SessionOpsMixin(SessionLike):
         url_pattern: str | None = None,
     ) -> dict[str, Any]:
         """Switch the active target to an iframe. Exactly one of selector/name/url_pattern must be given."""
-        from . import frames as _frames
+        from octowright.session import frames as _frames
 
         frame, info = await _frames.switch_frame_impl(
             self.page,
@@ -123,7 +124,7 @@ class SessionOpsMixin(SessionLike):
 
     def list_frames(self) -> list[dict[str, Any]]:
         """Return [{index, name, url, is_active}, ...] for every frame on the active page."""
-        from . import frames as _frames
+        from octowright.session import frames as _frames
 
         return _frames.list_frames_impl(self.page, self.active_frame)
 
@@ -132,7 +133,7 @@ class SessionOpsMixin(SessionLike):
         record to self.downloads once the file lands on disk."""
         import asyncio
 
-        from . import downloads as _downloads
+        from octowright.session import downloads as _downloads
 
         # Fire-and-forget: Playwright dispatches downloads synchronously but saving is async.
         # Task reference is kept on the session to prevent GC collecting it mid-flight (RUF006).
@@ -146,7 +147,7 @@ class SessionOpsMixin(SessionLike):
     async def wait_for_download(self, timeout_ms: int = 15000) -> dict[str, Any]:
         """Block until the next download completes (save-to-disk). Raises TimeoutError
         if no download arrives within timeout_ms. Returns the new download record."""
-        from . import downloads as _downloads
+        from octowright.session import downloads as _downloads
 
         return await _downloads.wait_for_download_impl(cast("BrowserSession", self), timeout_ms)
 
@@ -323,7 +324,7 @@ class SessionOpsMixin(SessionLike):
 
     def _handle_response(self, response: Any) -> None:
         request = response.request
-        self._network_requests.append(
+        self._append_network_request(
             {
                 "url": request.url,
                 "method": request.method,
@@ -334,7 +335,7 @@ class SessionOpsMixin(SessionLike):
         )
 
     def _handle_request_failed(self, request: Any) -> None:
-        self._network_requests.append(
+        self._append_network_request(
             {
                 "url": request.url,
                 "method": request.method,
@@ -344,6 +345,11 @@ class SessionOpsMixin(SessionLike):
             }
         )
 
+    def _append_network_request(self, request: dict[str, Any]) -> None:
+        if self._network_requests.maxlen is not None and len(self._network_requests) == self._network_requests.maxlen:
+            self._network_requests_dropped += 1
+        self._network_requests.append(request)
+
     def get_network_requests(
         self,
         url_filter: str | None = None,
@@ -351,8 +357,11 @@ class SessionOpsMixin(SessionLike):
         resource_type_filter: str | None = None,
         since: int | None = None,
     ) -> dict[str, Any]:
-        start = since or 0
-        sliced = list(self._network_requests[start:])
+        retained = list(self._network_requests)
+        retained_base = self._network_requests_dropped
+        next_cursor = retained_base + len(retained)
+        start = 0 if since is None else max(0, since - retained_base)
+        sliced = retained[start:]
         if url_filter:
             sliced = [r for r in sliced if url_filter in r.get("url", "")]
         if method_filter:
@@ -361,8 +370,10 @@ class SessionOpsMixin(SessionLike):
             sliced = [r for r in sliced if r.get("resource_type") == resource_type_filter]
         return {
             "requests": sliced,
-            "next_cursor": len(self._network_requests),
-            "total": len(self._network_requests),
+            "next_cursor": next_cursor,
+            "total": len(retained),
+            "total_retained": len(retained),
+            "dropped": self._network_requests_dropped,
         }
 
     # ------------------------------------------------------------------
@@ -375,7 +386,7 @@ class SessionOpsMixin(SessionLike):
         Exactly one of role / label / text / test_id must be supplied. Routes
         through _target() so this also works inside iframes when one is active.
         """
-        from . import locators as _locators
+        from octowright.session import locators as _locators
 
         return _locators.build_locator(self._target(), **finders)
 
@@ -404,8 +415,33 @@ class SessionOpsMixin(SessionLike):
         self.recorder.record("get_text_by", result=result, **finders)
         return {"ok": True, "text": result}
 
+    async def _drain_background_tasks(self) -> None:
+        import asyncio
+        import contextlib
+
+        current = asyncio.current_task()
+        tasks = {task for task in list(self._bg_tasks) if task is not current}
+        if not tasks:
+            return
+
+        done, pending = await asyncio.wait(tasks, timeout=self._BG_TASK_DRAIN_TIMEOUT_SECONDS)
+        for task in done:
+            if task.cancelled():
+                continue
+            with contextlib.suppress(Exception):
+                task.result()
+
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        for task in tasks:
+            self._bg_tasks.discard(task)
+
     async def close(self) -> None:
         try:
+            await self._drain_background_tasks()
             if self.trace:
                 self.trace_path = self.log_path.with_suffix(".trace.zip")
                 try:

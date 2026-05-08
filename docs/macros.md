@@ -4,8 +4,9 @@ A **macro** is a named, parameterizable action sequence derived from a recording
 Capture a flow once (e.g. a login), replay it later — possibly with different
 arguments, possibly across many participants in a scenario.
 
-Macros live as JSON under `~/.config/octowright/macros/` (override with
-`OCTOWRIGHT_MACROS_DIR`).
+Macros live as JSON under the Octowright config dir: POSIX uses the XDG config
+dir `${XDG_CONFIG_HOME:-~/.config}/octowright/macros/`, and Windows uses
+`%APPDATA%\octowright\macros\`. Override with `OCTOWRIGHT_MACROS_DIR`.
 
 ## When to use a macro
 
@@ -42,9 +43,15 @@ Lifecycle actions (`launch`, `close`, `snapshot`) are dropped by default — mac
 are the **reusable middle** of a flow, not the wrapper. Pass `include_launch=True`
 on `macro_save` if you need the initial navigation baked into the macro.
 
+Recorded CSS `click` and `fill` actions may include semantic metadata such as
+`role`, `role_name`, `label`, `text`, or `test_id`. Macro replay treats those as
+ARIA-first hints: it tries `click_by` / `fill_by` with the semantic metadata,
+then falls back to the recorded CSS selector if the semantic locator fails.
+Standalone Python and TypeScript exports follow the same order.
+
 ## Conditional / branching actions
 
-For sites that ship multiple DOM versions of the same flow, three action types
+For sites that ship multiple DOM versions of the same flow, four action types
 let one macro cover all of them. Hand-author these by editing the JSON directly;
 record the linear baseline first, then wrap the fragile steps.
 
@@ -85,6 +92,43 @@ These nest freely — `if_selector` inside `try_each` inside `try` works as you
 would expect. See `examples/macros/conditional-discord-modal-dismiss.json` for a
 real-world pattern.
 
+### `macro_call`
+
+Call another saved macro from inside a macro. This keeps large branches readable
+and lets shared setup/dismissal snippets stay reusable:
+
+```json
+{"action": "macro_call", "name": "dismiss-cookie-banner",
+ "args": {"variant": "compact"}}
+```
+
+Octowright detects direct and mutual recursion (`a -> b -> a`) and enforces a
+depth cap so a bad macro graph fails with a clear error instead of looping.
+
+## YAML DSL
+
+JSON remains the runtime/storage format, but `macro_compile` can compile a
+friendlier YAML document into canonical macro JSON. Dry-run first:
+
+```bash
+macro_compile yaml_text='
+name: login-smoke
+parameters: [email, password]
+actions:
+  - navigate: "https://example.com/login"
+  - fill: {selector: "#email", value: "{{email}}"}
+  - fill: {selector: "#password", value: "{{password}}"}
+  - try_each:
+      branches:
+        - [{click: "button[type=submit]"}]
+        - [{press_key: Enter}]
+' write=false
+```
+
+Pass `write=true` to save the compiled JSON under the normal macro directory.
+The dashboard editor also edits the canonical JSON shape and shows branch
+summaries for conditionals.
+
 ## Linting
 
 Before promoting a macro into shared workflows or CI, run:
@@ -113,6 +157,36 @@ uv run octowright test [path] --kind webkit --tag smoke --out dist/macro-tests.x
 
 Equivalent MCP tool: `run_test_suite`.
 
+## Watching execution
+
+Every page rendered by a launched browser gets a faint **status pill** injected at
+the bottom-center. While a macro runs, the pill shows:
+
+```
+[ <id-chip> ]  <elapsed>  ·  <macro-stack> | <action description>
+```
+
+- The ID chip color matches the corner badge for the same browser.
+- The elapsed counter ticks live (~10Hz) and freezes on completion.
+- After a macro finishes the pill stays visible with `<name> | done` (or
+  `| failed`) until the next macro starts or `visible: false` is pushed.
+- The pill is `pointer-events: none` by default — clicks fall through to the page.
+
+**Alt-click** (Option-click on Mac) the pill to open a themed run-history modal
+listing every push for the run with timestamps. Dismiss with the X button, by
+clicking the dimmed backdrop, or by pressing Esc.
+
+To slow execution down so you can follow along by eye, pass `slowmo_ms`:
+
+```bash
+macro_run instance_id=<id> name=discord-login slowmo_ms=800
+```
+
+Or set the default for a session via `OCTOWRIGHT_MACRO_SLOWMO_MS=800`. The pause
+happens between the status push and the action dispatch, so the pill always
+reflects the upcoming action while you have time to read it. The headed walkthrough
+under `examples/pill-status-demo/` shows this end-to-end.
+
 ## Tools
 
 | Tool | Purpose |
@@ -121,6 +195,7 @@ Equivalent MCP tool: `run_test_suite`.
 | `macro_list` | Enumerate all saved macros. |
 | `macro_run` | Replay a single macro against a live instance. |
 | `macro_run_sequence` | Replay several macros in order on the same instance. |
+| `macro_compile` | Compile YAML macro DSL to canonical JSON; optionally save it. |
 | `macro_delete` | Remove a saved macro file. |
 | `macro_lint` | Static-analysis pass on a saved macro. |
 | `run_test_suite` | Execute every `[test]`-tagged macro in a directory; emit JUnit XML. |

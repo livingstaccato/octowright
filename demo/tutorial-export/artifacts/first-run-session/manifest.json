@@ -1,0 +1,70 @@
+{
+  "artifacts": {
+    "replay": {
+      "event_count": 8,
+      "path": "artifacts/replay.jsonl",
+      "python_export": "artifacts/replay.py",
+      "size_bytes": 2100,
+      "ts_export": "artifacts/replay.ts"
+    },
+    "supporting_videos": [],
+    "video": {
+      "duration_seconds": 4.44,
+      "height": 1080,
+      "path": "artifacts/demo.mp4",
+      "poster_path": "artifacts/poster.png",
+      "size_bytes": 57939,
+      "width": 1920
+    }
+  },
+  "bundle_id": "first-run-session",
+  "composition": {
+    "canvas_height": 1080,
+    "canvas_width": 1920,
+    "mode": "single-clean",
+    "overlay": {
+      "panes": [
+        {
+          "height": 0,
+          "kind": "webkit",
+          "persona": "solo-player",
+          "role": "player",
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "subtitle": "",
+      "title": ""
+    },
+    "panes": [
+      {
+        "height": 0,
+        "kind": "webkit",
+        "persona": "solo-player",
+        "role": "player",
+        "width": 0,
+        "x": 0,
+        "y": 0
+      }
+    ],
+    "primary": {
+      "kind": "webkit",
+      "persona": "solo-player",
+      "role": "player"
+    }
+  },
+  "hero": true,
+  "participants": [
+    {
+      "kind": "webkit",
+      "persona": "solo-player",
+      "role": "player"
+    }
+  ],
+  "presentation": {
+    "mode": "single-clean",
+    "primary_asset": "hero_video"
+  },
+  "title": "First Run Session"
+}

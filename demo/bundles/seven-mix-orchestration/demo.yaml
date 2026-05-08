@@ -1,0 +1,65 @@
+id: seven-mix-orchestration
+title: Seven Mix Orchestration
+summary: Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.
+hero: true
+audiences:
+  - evaluators
+  - users
+  - contributors
+tags:
+  - hero
+  - orchestration
+  - multi-window
+  - mixed-engine
+engines:
+  - chromium
+  - firefox
+  - webkit
+roles:
+  - player
+  - monitor
+  - main-site
+source_refs:
+  scenarios:
+    - examples/scenarios/seven-mix.yaml
+  macros:
+    - examples/macros/test-smoke-page-ready.json
+artifact_expectations:
+  replay:
+    - artifacts/replay.jsonl
+    - artifacts/participant-roster.json
+  video:
+    - artifacts/demo.mp4
+    - artifacts/poster.png
+regen:
+  command: uv run python scripts/demos/record_demo.py seven-mix-orchestration
+tutorial_export:
+  include: exports/seven-mix-orchestration.json
+presentation:
+  mode: hero-composite
+  primary_asset: hero_video
+  overlay:
+    enabled: true
+    style: subtle
+    placement: bottom-left
+  timing:
+    intro_ms: 600
+    outro_ms: 2600
+    minimum_ms: 9000
+  sync_groups:
+    - id: orchestration
+      roles:
+        - player
+        - monitor
+        - main-site
+seed_refs:
+  - seed/orchestration-stage.html
+  - seed/roster.json
+recording:
+  primary_role: player
+  default_seed: seed/orchestration-stage.html
+  macros:
+    - name: test-smoke-page-ready
+      role: player
+  extras:
+    - participant-roster

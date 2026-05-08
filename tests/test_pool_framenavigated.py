@@ -31,8 +31,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from octowright import pool as pool_module
-from octowright.pool import BrowserPool
+import octowright.browser_pool.pool as pool_module
+from octowright.browser_pool import BrowserPool
 
 # ---------------------------------------------------------------------------
 # Stubs (mirrors the structure used by tests/test_pool_disconnect.py — kept
@@ -185,9 +185,10 @@ async def test_load_event_schedules_markdown_capture(monkeypatch: pytest.MonkeyP
 
     assert session.capture_markdown.await_count >= 1
     load_calls = [call for call in session.capture_markdown.await_args_list if call.kwargs.get("page") is page]
-    assert load_calls, (
+    failure_message = (
         f"expected load handler capture call with page={page!r}; got {session.capture_markdown.await_args_list!r}"
     )
+    assert load_calls, failure_message
     called_kwargs = load_calls[-1].kwargs
     assert called_kwargs.get("force") is True
 

@@ -1,0 +1,293 @@
+{
+  "artifacts": {
+    "replay": {
+      "event_count": 64,
+      "path": "artifacts/replay.jsonl",
+      "python_export": "artifacts/replay.py",
+      "size_bytes": 16096,
+      "ts_export": "artifacts/replay.ts"
+    },
+    "supporting_videos": [
+      {
+        "id": "p1",
+        "kind": "webkit",
+        "path": "artifacts/supporting/p1.mp4",
+        "poster_path": "artifacts/supporting/p1.png",
+        "role": "player"
+      },
+      {
+        "id": "ops",
+        "kind": "webkit",
+        "path": "artifacts/supporting/ops.mp4",
+        "poster_path": "artifacts/supporting/ops.png",
+        "role": "monitor"
+      },
+      {
+        "id": "spectator",
+        "kind": "webkit",
+        "path": "artifacts/supporting/spectator.mp4",
+        "poster_path": "artifacts/supporting/spectator.png",
+        "role": "main-site"
+      },
+      {
+        "id": "p2",
+        "kind": "webkit",
+        "path": "artifacts/supporting/p2.mp4",
+        "poster_path": "artifacts/supporting/p2.png",
+        "role": "player"
+      },
+      {
+        "id": "p3",
+        "kind": "webkit",
+        "path": "artifacts/supporting/p3.mp4",
+        "poster_path": "artifacts/supporting/p3.png",
+        "role": "player"
+      },
+      {
+        "id": "sm-monitor",
+        "kind": "chromium",
+        "path": "artifacts/supporting/sm-monitor.mp4",
+        "poster_path": "artifacts/supporting/sm-monitor.png",
+        "role": "monitor"
+      }
+    ],
+    "video": {
+      "duration_seconds": 32.52,
+      "height": 1080,
+      "path": "artifacts/demo.mp4",
+      "poster_path": "artifacts/poster.png",
+      "size_bytes": 575923,
+      "width": 1920
+    }
+  },
+  "bundle_id": "seven-mix-orchestration",
+  "composition": {
+    "canvas_height": 1080,
+    "canvas_width": 1920,
+    "mode": "hero-composite",
+    "overlay": {
+      "panes": [
+        {
+          "height": 720,
+          "kind": "webkit",
+          "persona": "p1",
+          "role": "player",
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "ops",
+          "role": "monitor",
+          "width": 640,
+          "x": 1280,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "spectator",
+          "role": "main-site",
+          "width": 640,
+          "x": 1280,
+          "y": 360
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p2",
+          "role": "player",
+          "width": 640,
+          "x": 0,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p3",
+          "role": "player",
+          "width": 640,
+          "x": 640,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "chromium",
+          "persona": "sm-monitor",
+          "role": "monitor",
+          "width": 640,
+          "x": 1280,
+          "y": 720
+        }
+      ],
+      "subtitle": "",
+      "title": ""
+    },
+    "panes": [
+      {
+        "height": 720,
+        "kind": "webkit",
+        "persona": "p1",
+        "role": "player",
+        "width": 1280,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "height": 360,
+        "kind": "webkit",
+        "persona": "ops",
+        "role": "monitor",
+        "width": 640,
+        "x": 1280,
+        "y": 0
+      },
+      {
+        "height": 360,
+        "kind": "webkit",
+        "persona": "spectator",
+        "role": "main-site",
+        "width": 640,
+        "x": 1280,
+        "y": 360
+      },
+      {
+        "height": 360,
+        "kind": "webkit",
+        "persona": "p2",
+        "role": "player",
+        "width": 640,
+        "x": 0,
+        "y": 720
+      },
+      {
+        "height": 360,
+        "kind": "webkit",
+        "persona": "p3",
+        "role": "player",
+        "width": 640,
+        "x": 640,
+        "y": 720
+      },
+      {
+        "height": 360,
+        "kind": "chromium",
+        "persona": "sm-monitor",
+        "role": "monitor",
+        "width": 640,
+        "x": 1280,
+        "y": 720
+      }
+    ],
+    "supporting_videos": [
+      {
+        "id": "p1",
+        "kind": "webkit",
+        "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p1.mp4",
+        "persona": "p1",
+        "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p1.png",
+        "role": "player"
+      },
+      {
+        "id": "ops",
+        "kind": "webkit",
+        "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/ops.mp4",
+        "persona": "ops",
+        "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/ops.png",
+        "role": "monitor"
+      },
+      {
+        "id": "spectator",
+        "kind": "webkit",
+        "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/spectator.mp4",
+        "persona": "spectator",
+        "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/spectator.png",
+        "role": "main-site"
+      },
+      {
+        "id": "p2",
+        "kind": "webkit",
+        "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p2.mp4",
+        "persona": "p2",
+        "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p2.png",
+        "role": "player"
+      },
+      {
+        "id": "p3",
+        "kind": "webkit",
+        "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.mp4",
+        "persona": "p3",
+        "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.png",
+        "role": "player"
+      },
+      {
+        "id": "sm-monitor",
+        "kind": "chromium",
+        "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/sm-monitor.mp4",
+        "persona": "sm-monitor",
+        "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/sm-monitor.png",
+        "role": "monitor"
+      }
+    ]
+  },
+  "hero": true,
+  "participants": [
+    {
+      "kind": "webkit",
+      "persona": "p1",
+      "role": "player"
+    },
+    {
+      "kind": "webkit",
+      "persona": "p2",
+      "role": "player"
+    },
+    {
+      "kind": "webkit",
+      "persona": "p3",
+      "role": "player"
+    },
+    {
+      "kind": "firefox",
+      "persona": "p4",
+      "role": "player"
+    },
+    {
+      "kind": "firefox",
+      "persona": "p5",
+      "role": "player"
+    },
+    {
+      "kind": "chromium",
+      "persona": "p6",
+      "role": "player"
+    },
+    {
+      "kind": "chromium",
+      "persona": "p7",
+      "role": "player"
+    },
+    {
+      "kind": "webkit",
+      "persona": "ops",
+      "role": "monitor"
+    },
+    {
+      "kind": "webkit",
+      "persona": "spectator",
+      "role": "main-site"
+    },
+    {
+      "kind": "chromium",
+      "persona": "sm-monitor",
+      "role": "monitor"
+    }
+  ],
+  "presentation": {
+    "mode": "hero-composite",
+    "primary_asset": "hero_video"
+  },
+  "title": "Seven Mix Orchestration"
+}

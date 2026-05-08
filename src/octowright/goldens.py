@@ -12,11 +12,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from octowright.config_paths import user_config_dir
+
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-GOLDENS_DIR: Path = Path(
-    os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(Path.home() / ".config" / "octowright" / "goldens"))
-)
+GOLDENS_DIR: Path = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(user_config_dir() / "goldens")))
 
 
 def _slug(name: str) -> str:

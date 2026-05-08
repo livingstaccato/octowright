@@ -11,8 +11,9 @@ viewing angles at once, or end-to-end verification flows.
 
 ## Where scenarios live
 
-Default location: `~/.config/octowright/scenarios/` (override with
-`OCTOWRIGHT_SCENARIOS_DIR`).
+Default location: POSIX uses the XDG config dir
+`${XDG_CONFIG_HOME:-~/.config}/octowright/scenarios/`; Windows uses
+`%APPDATA%\octowright\scenarios\`. Override with `OCTOWRIGHT_SCENARIOS_DIR`.
 
 Two supported formats:
 

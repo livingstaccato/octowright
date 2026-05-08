@@ -12,16 +12,16 @@ to make every browser_* tool callable.
 
 from __future__ import annotations
 
-from . import input as _input  # noqa: F401
-from . import inspect as _inspect  # noqa: F401
-from . import lifecycle as _lifecycle  # noqa: F401
-from . import network as _network  # noqa: F401
-from . import trace as _trace  # noqa: F401
-from . import views as _views  # noqa: F401
+from octowright.server.browser import input as _input  # noqa: F401
+from octowright.server.browser import inspect as _inspect  # noqa: F401
+from octowright.server.browser import lifecycle as _lifecycle  # noqa: F401
+from octowright.server.browser import network as _network  # noqa: F401
+from octowright.server.browser import trace as _trace  # noqa: F401
+from octowright.server.browser import views as _views  # noqa: F401
 
 # Re-export selected tool functions for direct test access (`from octowright import server;
 # server.browser_open_trace(...)`).
-from .input import (
+from octowright.server.browser.input import (
     browser_click,
     browser_click_by,
     browser_fill,
@@ -31,7 +31,8 @@ from .input import (
     browser_set_input_files,
     browser_type,
 )
-from .inspect import (
+from octowright.server.browser.inspect import (
+    browser_brief,
     browser_console_messages,
     browser_evaluate,
     browser_expect_js,
@@ -39,13 +40,14 @@ from .inspect import (
     browser_expect_text,
     browser_expect_url,
     browser_export_script,
+    browser_read_markdown,
     browser_recording_path,
     browser_screenshot,
     browser_snapshot,
     browser_tail_recording,
     browser_wait_for,
 )
-from .lifecycle import (
+from octowright.server.browser.lifecycle import (
     browser_close,
     browser_close_all,
     browser_launch,
@@ -54,9 +56,9 @@ from .lifecycle import (
     browser_spawn_roster,
     browser_suggest_for_url,
 )
-from .network import browser_mock_route, browser_set_dialog_policy, browser_unmock_route
-from .trace import browser_open_trace
-from .views import (
+from octowright.server.browser.network import browser_mock_route, browser_set_dialog_policy, browser_unmock_route
+from octowright.server.browser.trace import browser_open_trace
+from octowright.server.browser.views import (
     browser_downloads,
     browser_list_frames,
     browser_reset_frame,
@@ -67,7 +69,29 @@ from .views import (
     page_switch,
 )
 
+PROFILES = {
+    "core": [
+        "browser_click",
+        "browser_type",
+        "browser_fill",
+        "browser_launch",
+        "browser_close",
+        "browser_navigate",
+        "browser_brief",
+        "browser_wait_for",
+        "browser_read_markdown",
+    ],
+    "advanced": [
+        "browser_snapshot",
+        "browser_evaluate",
+        "browser_console_messages",
+        "browser_expect_text",
+        "browser_expect_url",
+    ],
+}
+
 __all__ = [
+    "browser_brief",
     "browser_click",
     "browser_click_by",
     "browser_close",
@@ -90,6 +114,7 @@ __all__ = [
     "browser_navigate",
     "browser_open_trace",
     "browser_press_key",
+    "browser_read_markdown",
     "browser_recording_path",
     "browser_reset_frame",
     "browser_screenshot",

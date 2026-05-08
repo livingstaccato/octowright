@@ -16,20 +16,39 @@ from __future__ import annotations
 import socket
 from collections.abc import Callable
 
-from ..defaults import HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES
-from . import state
-from .app import build_app
+from octowright.defaults import HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES
+from octowright.http import state
+from octowright.http.app import build_app
 
 
 def _port_is_free(host: str, port: int) -> bool:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s.bind((host, port))
-        return True
-    except OSError:
+        addrinfos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
         return False
-    finally:
-        s.close()
+
+    if not addrinfos:
+        return False
+
+    seen: set[tuple[int, int, int, object]] = set()
+    checked = False
+    for family, socktype, proto, _canonname, sockaddr in addrinfos:
+        key = (family, socktype, proto, sockaddr)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            s = socket.socket(family, socktype, proto)
+        except OSError:
+            continue
+        try:
+            s.bind(sockaddr)
+            checked = True
+        except OSError:
+            return False
+        finally:
+            s.close()
+    return checked
 
 
 def _pick_port(host: str, preferred: int, retries: int) -> int | None:
@@ -66,8 +85,11 @@ async def serve_app(
 
     import uvicorn
 
+    app = build_app(mcp_leader=mcp_leader)
+    app.state.octowright_http_host = host
+
     config = uvicorn.Config(
-        app=build_app(mcp_leader=mcp_leader),
+        app=app,
         host=host,
         port=bound,
         log_level="warning",

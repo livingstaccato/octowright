@@ -21,12 +21,15 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, call
 
 import pytest
 from starlette.testclient import TestClient
 
 from octowright import http as _http
 from octowright.http import state as _http_state
+from octowright.http.routes import scenarios as scenario_routes
+from octowright.http.routes import sessions as session_routes
 from octowright.server import _state
 
 # ---------------------------------------------------------------------------
@@ -47,8 +50,8 @@ class _FakePool:
     """Minimal stand-in for ``BrowserPool`` for write-endpoint tests.
 
     Records every call so tests can assert kwargs were forwarded correctly.
-    Sessions are SimpleNamespaces stored under ``_sessions`` to mirror the
-    layout the real pool uses (``_sessions: dict[str, BrowserSession]``).
+    Sessions are SimpleNamespaces stored under ``_sessions`` while public
+    accessors mirror the real pool API.
     """
 
     def __init__(self) -> None:
@@ -94,6 +97,15 @@ class _FakePool:
             "trace_path": None,
         }
 
+    def get(self, instance_id: str) -> SimpleNamespace:
+        return self._sessions[instance_id]
+
+    def has_session(self, instance_id: str) -> bool:
+        return instance_id in self._sessions
+
+    def iter_sessions(self) -> tuple[SimpleNamespace, ...]:
+        return tuple(self._sessions.values())
+
 
 class _FakeSession:
     """Minimal stand-in for ``BrowserSession`` exposing just ``navigate``."""
@@ -125,6 +137,9 @@ class _FakeScenarioPool:
 
     def list_live(self) -> list[dict[str, Any]]:
         return []
+
+    def has_live(self, scenario_id: str) -> bool:
+        return scenario_id in self._live
 
     async def start(self, *, name: str, browser_pool: Any) -> SimpleNamespace:
         self.start_calls.append(name)
@@ -217,7 +232,7 @@ def test_post_sessions_happy_path(
     assert body["label"] == "qa-1"
     assert body["url"] == "https://example.com"
     assert body["live"] is True
-    assert body["log_path"] == "/tmp/deadbeef0001.jsonl"
+    assert body["log_path"] == str(Path("/tmp/deadbeef0001.jsonl"))
     assert "started_at" in body
     # pool.launch was called once, with the expected kwargs.
     assert len(pool.launch_calls) == 1
@@ -225,6 +240,20 @@ def test_post_sessions_happy_path(
     assert call["kind"] == "chromium"
     assert call["url"] == "https://example.com"
     assert call["label"] == "qa-1"
+
+
+def test_post_sessions_publishes_dashboard_invalidation(
+    client: TestClient,
+    fakes: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publish = AsyncMock()
+    monkeypatch.setattr(session_routes, "publish_dashboard_invalidation", publish)
+
+    r = client.post("/api/sessions", json={"kind": "chromium"})
+
+    assert r.status_code == 201, r.text
+    publish.assert_awaited_once_with("sessions")
 
 
 def test_post_sessions_missing_kind_400(client: TestClient) -> None:
@@ -294,6 +323,17 @@ def test_post_sessions_default_url_when_omitted(
     r = client.post("/api/sessions", json={"kind": "chromium"})
     assert r.status_code == 201, r.text
     assert pool.launch_calls[0]["url"] == _http.DEFAULT_URL
+    assert pool.launch_calls[0]["headed"] is None
+
+
+def test_post_sessions_preserves_explicit_headed_false(
+    client: TestClient,
+    fakes: dict[str, Any],
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    r = client.post("/api/sessions", json={"kind": "chromium", "headed": False})
+    assert r.status_code == 201, r.text
+    assert pool.launch_calls[0]["headed"] is False
 
 
 def test_post_sessions_pool_value_error_400(
@@ -338,6 +378,22 @@ def test_delete_session_happy_path(
     assert body["instance_id"] == "liveiid00001"
     assert "log_path" in body
     assert pool.close_calls == ["liveiid00001"]
+
+
+def test_delete_session_publishes_dashboard_invalidation(
+    client: TestClient,
+    fakes: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    pool._sessions["liveiid00003"] = SimpleNamespace(instance_id="liveiid00003")
+    publish = AsyncMock()
+    monkeypatch.setattr(session_routes, "publish_dashboard_invalidation", publish)
+
+    r = client.delete("/api/sessions/liveiid00003")
+
+    assert r.status_code == 200, r.text
+    publish.assert_awaited_once_with("sessions")
 
 
 def test_delete_session_happy_path_with_cache_report(
@@ -497,6 +553,20 @@ def test_post_scenario_start_happy_path(
     assert body["name"] == "demo"
     assert len(body["participants"]) == 1
     assert spool.start_calls == ["demo"]
+
+
+def test_post_scenario_start_publishes_dashboard_invalidations(
+    client: TestClient,
+    fakes: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publish = AsyncMock()
+    monkeypatch.setattr(scenario_routes, "publish_dashboard_invalidation", publish)
+
+    r = client.post("/api/scenarios/demo/start")
+
+    assert r.status_code == 201, r.text
+    assert publish.await_args_list == [call("scenarios"), call("sessions")]
 
 
 def test_post_scenario_start_unknown_name_404(

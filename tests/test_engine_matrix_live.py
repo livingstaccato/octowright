@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from octowright.pool import BrowserPool
+from octowright.browser_pool import BrowserPool
 from octowright.scenarios import LiveScenario, Participant, Scenario, ScenarioPool
 
 
@@ -23,9 +23,9 @@ def _configure_runtime_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.setenv("OCTOWRIGHT_RECORDINGS", str(rec))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(prof))
 
+    import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
     from octowright import personas as _personas
-    from octowright import pool as _pool
     from octowright import profiles as _profiles
 
     monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
@@ -145,6 +145,7 @@ async def test_live_handoff_and_scenario_remap_per_engine(
             old_instance_id=old_id,
             new_instance_id=new_id,
             role="player",
+            browser_pool=pool,
         )
         assert remap["new_instance_id"] == new_id
         assert spool._live["scn-live"].participants[0]["instance_id"] == new_id

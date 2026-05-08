@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Seven Mix Orchestration</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #09111f;
+        --panel: rgba(10, 20, 37, 0.84);
+        --border: rgba(148, 163, 184, 0.2);
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Iosevka Aile", "IBM Plex Sans", ui-sans-serif, sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 28rem),
+          linear-gradient(160deg, #020617 0%, #081120 38%, #0b1730 100%);
+        color: var(--text);
+      }
+      main {
+        min-height: 100vh;
+        display: grid;
+        align-content: center;
+        gap: 1.4rem;
+        padding: 2rem;
+      }
+      .masthead {
+        display: grid;
+        gap: 0.65rem;
+      }
+      .eyebrow {
+        display: inline-flex;
+        width: fit-content;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.35rem 0.75rem;
+        border-radius: 999px;
+        border: 1px solid rgba(56, 189, 248, 0.28);
+        background: rgba(8, 20, 37, 0.7);
+        color: #7dd3fc;
+        font-size: 0.82rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(2rem, 4vw, 3.8rem);
+        line-height: 0.96;
+      }
+      .lede {
+        max-width: 46rem;
+        margin: 0;
+        color: var(--muted);
+        font-size: 1rem;
+      }
+      .stage {
+        display: grid;
+        grid-template-columns: 1.6fr 0.9fr;
+        gap: 1rem;
+      }
+      .hero,
+      .sidebar,
+      .stats {
+        border: 1px solid var(--border);
+        background: var(--panel);
+        backdrop-filter: blur(14px);
+        border-radius: 1.25rem;
+      }
+      .hero {
+        display: grid;
+        gap: 1.5rem;
+        padding: 1.35rem;
+      }
+      .identity {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: flex-start;
+      }
+      .identity h2 {
+        margin: 0.1rem 0 0;
+        font-size: clamp(1.8rem, 3vw, 3.2rem);
+      }
+      .identity p {
+        margin: 0.35rem 0 0;
+        color: var(--muted);
+      }
+      .badge {
+        padding: 0.45rem 0.7rem;
+        border-radius: 0.9rem;
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(125, 211, 252, 0.24);
+        text-align: right;
+        min-width: 8rem;
+      }
+      .badge strong,
+      .badge span {
+        display: block;
+      }
+      .badge span {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      .rails {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+      .rail {
+        padding: 0.85rem 0.9rem;
+        border-radius: 0.95rem;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(71, 85, 105, 0.5);
+      }
+      .rail strong,
+      .rail span {
+        display: block;
+      }
+      .rail span {
+        margin-top: 0.25rem;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      .sidebar {
+        padding: 1.2rem;
+        display: grid;
+        gap: 0.9rem;
+      }
+      .mini-grid {
+        display: grid;
+        gap: 0.75rem;
+      }
+      .mini {
+        padding: 0.85rem 0.9rem;
+        border-radius: 0.95rem;
+        background: rgba(15, 23, 42, 0.72);
+        border: 1px solid rgba(71, 85, 105, 0.55);
+      }
+      .mini strong,
+      .mini span {
+        display: block;
+      }
+      .mini span {
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      .stats {
+        display: flex;
+        gap: 0.9rem;
+        flex-wrap: wrap;
+        padding: 1rem 1.1rem;
+      }
+      .stat {
+        min-width: 10rem;
+      }
+      .stat strong,
+      .stat span {
+        display: block;
+      }
+      .stat span {
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      @media (max-width: 900px) {
+        .stage {
+          grid-template-columns: 1fr;
+        }
+        .rails {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="masthead">
+        <span class="eyebrow">Flagship Composite</span>
+        <h1 id="headline">Seven Mix Orchestration</h1>
+        <p class="lede">
+          The same deterministic stage can render as player, operator, or spectator simply by changing the participant identity in the seed URL.
+        </p>
+      </section>
+      <section class="stage">
+        <article class="hero">
+          <div class="identity">
+            <div>
+              <span class="eyebrow" id="role-pill">player</span>
+              <h2 id="persona">p1</h2>
+              <p id="summary">Mixed-engine participant view ready for composition.</p>
+            </div>
+            <div class="badge">
+              <strong id="kind">webkit</strong>
+              <span>runtime engine</span>
+            </div>
+          </div>
+          <div class="rails">
+            <div class="rail">
+              <strong id="slot">slot 1</strong>
+              <span>Composition position</span>
+            </div>
+            <div class="rail">
+              <strong id="focus">primary rail</strong>
+              <span>Focus lane for capture</span>
+            </div>
+            <div class="rail">
+              <strong id="cadence">synced</strong>
+              <span>Deterministic timing</span>
+            </div>
+          </div>
+        </article>
+        <aside class="sidebar">
+          <div class="mini-grid">
+            <div class="mini">
+              <strong>Operator</strong>
+              <span>Observes fan-out and orchestration readiness.</span>
+            </div>
+            <div class="mini">
+              <strong>Spectator</strong>
+              <span>Confirms the public-facing surface remains coherent.</span>
+            </div>
+            <div class="mini">
+              <strong>Players</strong>
+              <span>Spread across Chromium, Firefox, and WebKit lanes.</span>
+            </div>
+          </div>
+        </aside>
+      </section>
+      <section class="stats">
+        <div class="stat">
+          <strong>7 + 2 windows</strong>
+          <span>Players plus operator and spectator</span>
+        </div>
+        <div class="stat">
+          <strong>3 engines</strong>
+          <span>Chromium, Firefox, WebKit</span>
+        </div>
+        <div class="stat">
+          <strong>0 external network</strong>
+          <span>Safe for deterministic recording and replay</span>
+        </div>
+      </section>
+    </main>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const persona = params.get("persona") || "p1";
+      const role = params.get("role") || "player";
+      const kind = params.get("kind") || "webkit";
+      const slot = Number(params.get("slot") || "0") + 1;
+      const rolePill = document.getElementById("role-pill");
+      const headline = document.getElementById("headline");
+      document.getElementById("persona").textContent = persona;
+      document.getElementById("kind").textContent = kind;
+      document.getElementById("slot").textContent = `slot ${slot}`;
+      rolePill.textContent = role;
+      headline.textContent = `${persona} · ${role}`;
+      const focus = document.getElementById("focus");
+      const summary = document.getElementById("summary");
+      const cadence = document.getElementById("cadence");
+      if (role === "monitor") {
+        focus.textContent = "operator rail";
+        summary.textContent = "Control-plane observer confirming the multi-window pattern stays in sync.";
+        cadence.textContent = "monitor cadence";
+      } else if (role === "main-site") {
+        focus.textContent = "spectator rail";
+        summary.textContent = "Public-view spectator preserving a clean, readable top-level narrative.";
+        cadence.textContent = "spectator cadence";
+      } else {
+        focus.textContent = slot === 1 ? "primary rail" : "support rail";
+        summary.textContent = "Player lane in the featured composite, carrying role and engine identity directly in-frame.";
+        cadence.textContent = kind === "chromium" ? "fast lane" : kind === "firefox" ? "parity lane" : "steady lane";
+      }
+    </script>
+  </body>
+</html>

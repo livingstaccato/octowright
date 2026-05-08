@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from octowright.pool import BrowserPool
+from octowright.browser_pool import BrowserPool
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -144,7 +144,7 @@ async def test_spawn_roster_defaults_applied(monkeypatch: pytest.MonkeyPatch) ->
 
     kw = call_kwargs[0]
     assert kw["kind"] == "chromium"
-    assert kw["headed"] is True
+    assert kw["headed"] is None
     assert kw["stabilize"] is False
     assert kw["record_video"] is False
     assert kw["label"] is None

@@ -16,12 +16,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ...defaults import DEFAULT_URL, SUPPORTED_KINDS
-from ...server import _state
-from .. import state
-from ..discovery import (
-    _build_cache_components,
-    _cache_report_for_recording,
+import octowright.http.state as state
+import octowright.server._state as _state
+from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
+from octowright.http.artifacts import _build_cache_components
+from octowright.http.artifacts import cache_report_for_recording as _cache_report_for_recording
+from octowright.http.dashboard_events import publish_dashboard_invalidation
+from octowright.http.discovery import (
     _closed_sessions,
     _find_recording_for,
     _iso,
@@ -32,12 +33,13 @@ from ..discovery import (
     _scan_recording_artefacts,
     _summarise_recording,
 )
-from ._common import _read_json_body
+from octowright.http.exposure import guard_sensitive_http
+from octowright.http.routes._common import _read_json_body
 
 
 async def list_sessions(_request: Request) -> JSONResponse:
     pool = _state.pool
-    live = [_live_summary(s) for s in pool._sessions.values()]
+    live = [_live_summary(s) for s in pool.iter_sessions()]
     live_paths = {s["log_path"] for s in live}
     closed = _closed_sessions(state.RECORDINGS_DIR, live_paths)
     return JSONResponse({"live": live, "closed": closed})
@@ -86,6 +88,7 @@ async def session_detail(request: Request) -> JSONResponse:
         if log_path.exists():
             artefacts = _scan_recording_artefacts(log_path)
             detail["action_count"] = artefacts["action_count"]
+            detail["event_count"] = artefacts["event_count"]
 
         # ARIA tree snapshot
         with contextlib.suppress(Exception):
@@ -94,8 +97,8 @@ async def session_detail(request: Request) -> JSONResponse:
 
         # Macro Intent (if log exists)
         if log_path.exists():
-            from ...macros import load_macro_from_recording
-            from ...server.macro_semantic import get_semantic_intent
+            from octowright.macros import load_macro_from_recording
+            from octowright.server.macro_semantic import get_semantic_intent
 
             with contextlib.suppress(Exception):
                 actions = load_macro_from_recording(log_path)
@@ -116,6 +119,7 @@ async def session_detail(request: Request) -> JSONResponse:
         "trace_path": artefacts["trace_path"],
         "markdown_path": artefacts["markdown_path"],
         "websocket_path": artefacts["websocket_path"],
+        "event_count": artefacts["event_count"],
         "action_count": artefacts["action_count"],
         "console_count": artefacts["console_count"],
         "download_count": artefacts["download_count"],
@@ -127,8 +131,8 @@ async def session_detail(request: Request) -> JSONResponse:
         detail["url"] = artefacts["url"]
 
     # For closed sessions, we can still try to get the macro intent from disk
-    from ...macros import load_macro_from_recording
-    from ...server.macro_semantic import get_semantic_intent
+    from octowright.macros import load_macro_from_recording
+    from octowright.server.macro_semantic import get_semantic_intent
 
     with contextlib.suppress(Exception):
         actions = load_macro_from_recording(jsonl)
@@ -193,7 +197,7 @@ async def session_launch(request: Request) -> JSONResponse:
         "profile": payload.get("profile"),
         "viewport_w": payload.get("viewport_w"),
         "viewport_h": payload.get("viewport_h"),
-        "headed": payload.get("headed", True),
+        "headed": payload.get("headed") if "headed" in payload else None,
         "stabilize": payload.get("stabilize", False),
         "record_video": payload.get("record_video", False),
         "trace": payload.get("trace", False),
@@ -223,6 +227,7 @@ async def session_launch(request: Request) -> JSONResponse:
         record_video=launch_kwargs["record_video"],
         trace=launch_kwargs["trace"],
     )
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(summary, status_code=201)
 
 
@@ -234,7 +239,7 @@ async def session_close(request: Request) -> JSONResponse:
     """
     sid = request.path_params["id"]
     pool = _state.pool
-    if sid not in pool._sessions:
+    if not pool.has_session(sid):
         return JSONResponse(
             {"error": f"no live session with id {sid!r}; closed sessions cannot be re-closed"},
             status_code=404,
@@ -258,6 +263,7 @@ async def session_close(request: Request) -> JSONResponse:
             )
 
     state.log.info("octowright.http.session_closed", instance_id=sid)
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(body)
 
 
@@ -275,12 +281,12 @@ async def session_navigate(request: Request) -> JSONResponse:
         return JSONResponse({"error": "url is required and must be a non-empty string"}, status_code=400)
 
     pool = _state.pool
-    if sid not in pool._sessions:
+    if not pool.has_session(sid):
         return JSONResponse(
             {"error": f"no live session with id {sid!r}"},
             status_code=404,
         )
-    session = pool._sessions[sid]
+    session = pool.get(sid)
     try:
         await session.navigate(url)
     except Exception as e:
@@ -290,11 +296,44 @@ async def session_navigate(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "url": url})
 
 
+async def session_selector_validate(request: Request) -> JSONResponse:
+    """POST /api/sessions/{id}/selector/validate — check a CSS selector against a live page."""
+    sid = request.path_params["id"]
+    payload, err = await _read_json_body(request)
+    if err is not None:
+        return err
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+    selector = payload.get("selector")
+    if not isinstance(selector, str) or not selector.strip():
+        return JSONResponse({"error": "selector is required and must be a non-empty string"}, status_code=400)
+
+    pool = _state.pool
+    if not pool.has_session(sid):
+        return JSONResponse({"error": f"no live session with id {sid!r}"}, status_code=404)
+    session = pool.get(sid)
+    try:
+        count = await session.page.locator(selector).count()
+    except Exception as e:
+        return JSONResponse(
+            {
+                "ok": False,
+                "selector": selector,
+                "found": False,
+                "count": 0,
+                "error": str(e),
+            },
+            status_code=400,
+        )
+    return JSONResponse({"ok": True, "selector": selector, "found": count > 0, "count": count})
+
+
 async def recording_delete(request: Request) -> JSONResponse:
     """DELETE /api/sessions/{id}/recording — remove a closed session's files from disk."""
     sid = request.path_params["id"]
     pool = _state.pool
-    if sid in pool._sessions:
+    if pool.has_session(sid):
         return JSONResponse(
             {"error": f"session {sid!r} is still live; close it first"},
             status_code=409,
@@ -315,6 +354,7 @@ async def recording_delete(request: Request) -> JSONResponse:
                 state.log.warning("recording_delete.unlink_failed", file=str(f), error=str(e))
 
     state.log.info("recording_deleted", session_id=sid, files=len(deleted))
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse({"deleted": True, "session_id": sid, "files_removed": len(deleted)})
 
 
@@ -332,7 +372,7 @@ async def session_relaunch(request: Request) -> JSONResponse:
     """
     sid = request.path_params["id"]
     pool = _state.pool
-    if sid in pool._sessions:
+    if pool.has_session(sid):
         return JSONResponse(
             {"error": f"session {sid!r} is still live; relaunch only applies to closed sessions"},
             status_code=409,
@@ -376,16 +416,22 @@ async def session_relaunch(request: Request) -> JSONResponse:
         instance_id=result["instance_id"],
         kind=result["kind"],
     )
+    await publish_dashboard_invalidation("sessions")
     return JSONResponse(summary, status_code=201)
 
 
 def routes() -> list[Route]:
     return [
-        Route("/api/sessions", list_sessions, methods=["GET"]),
-        Route("/api/sessions", session_launch, methods=["POST"]),
-        Route("/api/sessions/{id}", session_detail, methods=["GET"]),
-        Route("/api/sessions/{id}/recording", recording_delete, methods=["DELETE"]),
-        Route("/api/sessions/{id}/relaunch", session_relaunch, methods=["POST"]),
-        Route("/api/sessions/{id}", session_close, methods=["DELETE"]),
-        Route("/api/sessions/{id}/navigate", session_navigate, methods=["POST"]),
+        Route("/api/sessions", guard_sensitive_http(list_sessions), methods=["GET"]),
+        Route("/api/sessions", guard_sensitive_http(session_launch), methods=["POST"]),
+        Route("/api/sessions/{id}", guard_sensitive_http(session_detail), methods=["GET"]),
+        Route("/api/sessions/{id}/recording", guard_sensitive_http(recording_delete), methods=["DELETE"]),
+        Route("/api/sessions/{id}/relaunch", guard_sensitive_http(session_relaunch), methods=["POST"]),
+        Route("/api/sessions/{id}", guard_sensitive_http(session_close), methods=["DELETE"]),
+        Route("/api/sessions/{id}/navigate", guard_sensitive_http(session_navigate), methods=["POST"]),
+        Route(
+            "/api/sessions/{id}/selector/validate",
+            guard_sensitive_http(session_selector_validate),
+            methods=["POST"],
+        ),
     ]

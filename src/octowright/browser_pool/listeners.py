@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
-from ..session import BrowserSession
+from octowright.session import BrowserSession
 
 if TYPE_CHECKING:
-    from .runtime import BrowserPool
+    from octowright.browser_pool.pool import BrowserPool
 
 log = get_logger(__name__)
 
@@ -80,11 +80,17 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
     instance_id = session.instance_id
 
     def _evict(*_: Any) -> None:
-        existing = pool._sessions.pop(instance_id, None)
+        existing = pool._evict_session_nowait(instance_id)
         if existing is None:
             # Already removed by an explicit pool.close — that path logs
             # "octowright.browser.closed" itself. Stay silent.
             return
+        try:
+            from octowright.session_manifest import remove_session as _manifest_remove_session
+
+            _manifest_remove_session(instance_id)
+        except Exception as exc:
+            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
         log.info(
             "octowright.browser.evicted_externally",
             instance_id=instance_id,

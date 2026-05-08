@@ -3,20 +3,61 @@ name = "octowright"
 version = "0.3.0"
 description = "MCP server that drives multiple headed Playwright browsers (chromium/firefox/webkit) in parallel with per-instance action recording and persistent profiles."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSES/*"]
-authors = [{ name = "Tim", email = "tim@neurotic.org" }]
+authors = [
+    { name = "Tim Perkins", email = "code@tim.life" },
+    { name = "provide.io", email = "code@provide.io" },
+]
+maintainers = [
+    { name = "provide.io", email = "code@provide.io" },
+]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "playwright",
+    "browser-automation",
+    "agent",
+    "claude",
+    "testing",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
 dependencies = [
+    "httpx>=0.27",
     "mcp>=1.2.0",
     "playwright>=1.47.0",
     "anyio>=4.4.0",
     "provide-telemetry>=0.3",
     "click>=8.1",
+    # cryptography stopped shipping win_arm64 wheels after 46.0.3. Pinning
+    # to the 46.0.3.x range keeps Windows ARM64 installable (the alternative
+    # is a build from source via Rust + openssl, which the runner can't do).
+    # Revisit when cryptography resumes win_arm64 wheel coverage upstream.
+    "cryptography>=46.0.3,<46.0.4; sys_platform == 'win32' and (platform_machine == 'ARM64' or platform_machine == 'arm64' or platform_machine == 'aarch64')",
     "pyyaml>=6",
     "starlette>=0.40",
     "uvicorn[standard]>=0.30",
 ]
+
+[project.urls]
+Homepage = "https://github.com/provide-io/octowright"
+Documentation = "https://foundry.provide.io/octowright/"
+Repository = "https://github.com/provide-io/octowright"
+Issues = "https://github.com/provide-io/octowright/issues"
 
 [project.scripts]
 octowright = "octowright.cli:main"
@@ -27,10 +68,30 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/octowright"]
+# Skills package data must be explicit because hatch's default file selection
+# on src-layout wheels only includes .py files. Without these, the wheel ships
+# without the skill manifests + assets.
+artifacts = [
+    "src/octowright/skills/**/*.json",
+    "src/octowright/skills/**/*.md",
+    "src/octowright/browser_pool/_assets/*.js",
+]
 
 [tool.hatch.build.targets.sdist]
+# Default: hatch auto-includes everything tracked by version control under
+# src/. Don't restrict — the prior `include = ["src/octowright/skills/**"]`
+# truncated sdists to just the skills directory, which then produced a
+# 22 KB wheel containing no source code.
 include = [
-    "src/octowright/skills/**",
+    "src/**",
+    "tests/**",
+    "docs/**",
+    "examples/**",
+    "README.md",
+    "LICENSES/**",
+    "REUSE.toml",
+    "Makefile",
+    "pyproject.toml",
 ]
 
 [dependency-groups]
@@ -41,9 +102,9 @@ dev = [
     "bandit>=1.8.6",
     "build>=1.2.2",
     "codespell>=2.4.1",
+    "detect-secrets>=1.5.0",
     "hypothesis>=6.130.0",
-    "memray>=1.19.3",
-    "memray>=1.0; sys_platform == 'linux' or sys_platform == 'darwin'",
+    "memray>=1.19.3; sys_platform == 'linux' or sys_platform == 'darwin'",
     "mutmut>=3.3.1",
     "mypy>=1.18.0",
     "pip-audit>=2.7.0",
@@ -96,11 +157,11 @@ fail_under = 83
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py311"
 extend-exclude = ["recordings", "profiles", ".venv"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "ARG", "RUF"]
+select = ["E", "F", "I", "UP", "B", "SIM", "ARG", "RUF", "TID"]
 ignore = [
     "E501",   # line-too-long — rely on line-length above
     "SIM105", # contextlib.suppress vs try/except pass — stylistic
@@ -111,7 +172,7 @@ ignore = [
 "tests/**/*.py" = ["ARG", "RUF012", "B017"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -130,3 +191,32 @@ skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,pa
 # JS variable shorthands that codespell mistakes for typos:
 # `optionel` = HTML <option> elements; `ths` = HTML <th> elements (table headers)
 ignore-words-list = "nd,strat,optionel,ths"
+
+# Mutation testing — opt-in via `make mutmut`. Scoped to parsing / dispatch
+# modules where weak assertions matter most. mutmut 3.x reads ALL config
+# from this block; CLI flags for paths/runner are no longer accepted.
+[tool.mutmut]
+paths_to_mutate = [
+    "src/octowright/personas.py",
+    "src/octowright/scenarios.py",
+    "src/octowright/macros/",
+]
+# Only run the tests that exercise the mutated paths. mutmut 3.x's mutants/
+# workdir doesn't navigate the full repo cleanly (demo bundles, scripts/demos,
+# etc.), so we point it at the targeted unit suites only.
+tests_dir = [
+    "tests/test_personas.py",
+    "tests/test_scenarios_unit.py",
+    "tests/test_macros.py",
+    "tests/test_macro_lint.py",
+    "tests/test_macro_dsl.py",
+    "tests/test_macro_checks.py",
+    "tests/test_macro_healing.py",
+    "tests/test_hypo_parsers.py",
+]
+do_not_mutate = ["*/__init__.py"]
+pytest_add_cli_args = ["-x", "-q", "--no-cov"]
+# mutmut 3.x copies only the files in paths_to_mutate by default; the rest of
+# the src tree must be listed here or imports fail in the mutants/ workdir.
+# tools/ holds the out-of-wheel demo lib that tests/conftest.py adds to sys.path.
+also_copy = ["src/", "tools/", "demo/", "examples/"]

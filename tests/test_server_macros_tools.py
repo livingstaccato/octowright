@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -53,29 +55,82 @@ async def test_macro_run_and_sequence(_patch_deps: dict[str, MagicMock]) -> None
 
 
 def test_macro_lint_formats_issues(monkeypatch: pytest.MonkeyPatch) -> None:
-    import octowright.macro_lint as lint_module
+    import octowright.macros.lint as lint_module
 
     issue_err = MagicMock(severity="error", code="E1", message="bad", action_index=1)
     issue_warn = MagicMock(severity="warning", code="W1", message="warn", action_index=2)
     monkeypatch.setattr(lint_module, "lint_macro", MagicMock(return_value=[issue_err, issue_warn]))
 
-    _macros.macro_mod.load_macro.return_value = {"name": "demo", "actions": []}
+    cast(Any, _macros.macro_mod).load_macro.return_value = {"name": "demo", "actions": []}
     out = _macros.macro_lint("demo")
     assert out["ok"] is False
     assert "errors" in out["summary"]
     assert len(out["issues"]) == 2
 
 
+def test_macro_repair_preview_forwards_to_core(_patch_deps: dict[str, MagicMock]) -> None:
+    fake_macros = _patch_deps["macros"]
+    fake_macros.repair_preview.return_value = {"macro": "demo", "suggestions": []}
+
+    out = _macros.macro_repair_preview("demo")
+
+    assert out == {"macro": "demo", "suggestions": []}
+    fake_macros.repair_preview.assert_called_once_with("demo")
+
+
+def test_macro_compile_returns_compiled_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    import octowright.macros.dsl as dsl_mod
+
+    compile_mock = MagicMock(return_value={"name": "demo", "actions": [{"action": "press_key", "key": "Escape"}]})
+    monkeypatch.setattr(dsl_mod, "compile_macro_yaml", compile_mock)
+
+    out = _macros.macro_compile("name: demo\nactions:\n  - press_key: Escape\n", name="demo", write=False)
+
+    assert out["compiled"]["name"] == "demo"
+    assert out["written"] is False
+    compile_mock.assert_called_once_with("name: demo\nactions:\n  - press_key: Escape\n", name="demo", strict=True)
+
+
+def test_macro_compile_can_write_compiled_macro(
+    _patch_deps: dict[str, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import octowright.macros.dsl as dsl_mod
+
+    compiled = {"name": "demo", "actions": [{"action": "press_key", "key": "Escape"}]}
+    monkeypatch.setattr(dsl_mod, "compile_macro_yaml", MagicMock(return_value=compiled))
+    _patch_deps["macros"].write_macro.return_value = Path("/tmp/demo.json")
+
+    out = _macros.macro_compile("name: demo\nactions: []\n", write=True)
+
+    assert out["written"] is True
+    assert out["path"] == str(Path("/tmp/demo.json"))
+    _patch_deps["macros"].write_macro.assert_called_once_with(name="demo", macro=compiled)
+
+
 @pytest.mark.anyio
 async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.runner as runner_mod
 
-    monkeypatch.setattr(runner_mod, "run_suite", AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1}))
-    out = await _macros.run_test_suite(macros_dir="/tmp/m", kind="firefox", tag="smoke", out_path="/tmp/j.xml")
+    run_suite_mock = AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1})
+    monkeypatch.setattr(runner_mod, "run_suite", run_suite_mock)
+    out = await _macros.run_test_suite(
+        kind="firefox",
+        tag="smoke",
+        out_path="/tmp/j.xml",
+        max_parallel=3,
+    )
     assert out["total"] == 1
+    run_suite_mock.assert_awaited_once_with(
+        kind="firefox",
+        tag="smoke",
+        out_path="/tmp/j.xml",
+        pool=_macros.pool,
+        max_parallel=3,
+    )
 
 
-def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import octowright.defaults as defaults_mod
     import octowright.profile_cleanup as cleanup_mod
 
@@ -86,7 +141,9 @@ def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch,
 
     in_use = MagicMock()
     in_use.user_data_dir = str(tmp_path / "live")
-    _macros.pool._sessions = {"x": in_use}
+    pool_mock = cast(Any, _macros.pool)
+    pool_mock._sessions = {"x": in_use}
+    pool_mock.iter_sessions.return_value = (in_use,)
     out = _macros.profile_cleanup(days=1.0, dry_run=False)
     assert out["removed"] == 1
     assert out["skipped_in_use"] == 1

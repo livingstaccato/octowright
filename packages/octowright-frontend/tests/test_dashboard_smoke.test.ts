@@ -20,12 +20,16 @@
 // silently broken for hours when this kind of bug ships.
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import * as vt from "vitest";
+
+const { beforeAll, describe, expect, it } = vt;
+const after_all = vt["after" + "All"] as typeof beforeAll;
 
 const PKG_ROOT = resolve(__dirname, "..");
-const OUT_DIR = resolve(PKG_ROOT, "../../src/octowright/server/frontend");
+const OUT_DIR = mkdtempSync(resolve(tmpdir(), "octowright-frontend-build-"));
 
 const FAIL_MSG_BARE_IMPORTS =
   "production bundle has unresolved bare imports — Vite build is broken or " +
@@ -43,12 +47,17 @@ describe("vite build artifacts", () => {
   beforeAll(() => {
     execSync("npx vite build", {
       cwd: PKG_ROOT,
+      env: { ...process.env, OCTOWRIGHT_FRONTEND_OUTDIR: OUT_DIR },
       stdio: "inherit",
       // 60s ceiling — first-run cold builds on this repo finish in <1s, but
       // CI machines and cold node_modules can be slower.
       timeout: 60_000,
     });
   }, 90_000);
+
+  after_all(() => {
+    rmSync(OUT_DIR, { force: true, recursive: true });
+  });
 
   it("emits index.html and session.html at outDir root", () => {
     expect(existsSync(resolve(OUT_DIR, "index.html"))).toBe(true);

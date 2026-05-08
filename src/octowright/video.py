@@ -5,9 +5,25 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
+from typing import TypedDict
+
+from octowright.video_overlay import render_overlay_image
+
+
+class VideoPlacement(TypedDict):
+    """One source-clip placement in a composite layout."""
+
+    source: Path
+    width: int
+    height: int
+    x: int
+    y: int
 
 
 def ensure_ffmpeg() -> str:
@@ -96,3 +112,265 @@ def _extract_at_times(ffmpeg: str, video_path: Path, out_dir: Path, at_times: li
         _run_ffmpeg(cmd)
         produced.append(out_file)
     return sorted(produced)
+
+
+def transcode_video(source_path: Path, target_path: Path) -> Path:
+    ffmpeg = ensure_ffmpeg()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg,
+        "-i",
+        str(source_path),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(target_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    return target_path
+
+
+def optimize_png(path: Path, *, max_width: int = 960) -> Path:
+    ffmpeg = ensure_ffmpeg()
+    temp_path = path.with_suffix(".optimized.png")
+    cmd = [
+        ffmpeg,
+        "-i",
+        str(path),
+        "-vf",
+        f"scale='min(iw,{max_width})':-1",
+        "-frames:v",
+        "1",
+        str(temp_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    temp_path.replace(path)
+    return path
+
+
+def extract_frame(video_path: Path, out_path: Path, *, at_time: float = 0.5) -> Path:
+    ffmpeg = ensure_ffmpeg()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg,
+        "-ss",
+        str(at_time),
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        str(out_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    return out_path
+
+
+def poster_capture_time(video_path: Path) -> float:
+    try:
+        metadata = probe_video(video_path)
+    except RuntimeError:
+        return 0.5
+    duration = float(metadata.get("duration_seconds") or 0.0)
+    if duration <= 0:
+        return 0.5
+    return min(2.0, max(0.5, duration / 2.0))
+
+
+def render_supporting_video(source_path: Path, target_path: Path, *, poster_path: Path) -> dict[str, str]:
+    transcoded_path = transcode_video(source_path, target_path)
+    extract_frame(transcoded_path, poster_path, at_time=poster_capture_time(transcoded_path))
+    if poster_path.stat().st_size > 500_000:
+        optimize_png(poster_path)
+    return {"path": str(transcoded_path), "poster_path": str(poster_path)}
+
+
+def compose_video_grid(
+    source_paths: list[Path],
+    target_path: Path,
+    *,
+    columns: int,
+    cell_width: int,
+    cell_height: int,
+) -> Path:
+    if not source_paths:
+        raise ValueError("compose_video_grid requires at least one source video")
+    if columns < 1:
+        raise ValueError("columns must be >= 1")
+
+    ffmpeg = ensure_ffmpeg()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    inputs: list[str] = []
+    filters: list[str] = []
+    layouts: list[str] = []
+
+    for index, source_path in enumerate(source_paths):
+        inputs.extend(["-i", str(source_path)])
+        filters.append(
+            f"[{index}:v]setpts=PTS-STARTPTS,"
+            f"scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease,"
+            f"pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black[v{index}]"
+        )
+        col = index % columns
+        row = index // columns
+        layouts.append(f"{col * cell_width}_{row * cell_height}")
+
+    filter_complex = ";".join(filters) + ";" + "".join(f"[v{index}]" for index in range(len(source_paths)))
+    filter_complex += f"xstack=inputs={len(source_paths)}:layout={'|'.join(layouts)}[v]"
+    cmd = [
+        ffmpeg,
+        *inputs,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(target_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    return target_path
+
+
+def compose_video_layout(
+    placements: list[VideoPlacement],
+    target_path: Path,
+) -> Path:
+    if not placements:
+        raise ValueError("compose_video_layout requires at least one placement")
+
+    ffmpeg = ensure_ffmpeg()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    inputs: list[str] = []
+    filters: list[str] = []
+    layouts: list[str] = []
+
+    for index, placement in enumerate(placements):
+        source_path = placement["source"]
+        width = placement["width"]
+        height = placement["height"]
+        x = placement["x"]
+        y = placement["y"]
+        inputs.extend(["-i", str(source_path)])
+        filters.append(
+            f"[{index}:v]setpts=PTS-STARTPTS,"
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black[v{index}]"
+        )
+        layouts.append(f"{x}_{y}")
+
+    filter_complex = ";".join(filters) + ";" + "".join(f"[v{index}]" for index in range(len(placements)))
+    filter_complex += f"xstack=inputs={len(placements)}:layout={'|'.join(layouts)}[v]"
+    cmd = [
+        ffmpeg,
+        *inputs,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(target_path),
+        "-y",
+    ]
+    _run_ffmpeg(cmd)
+    return target_path
+
+
+def apply_video_overlay(
+    source_path: Path,
+    target_path: Path,
+    *,
+    title: str,
+    subtitle: str,
+    panes: list[dict[str, object]],
+    canvas_width: int,
+    canvas_height: int,
+) -> Path:
+    ffmpeg = ensure_ffmpeg()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix="octowright-video-overlay-"))
+    overlay_path = render_overlay_image(
+        temp_dir / "overlay.ppm",
+        title=title,
+        subtitle=subtitle,
+        panes=panes,
+        canvas_width=canvas_width,
+        canvas_height=canvas_height,
+    )
+    try:
+        cmd = [
+            ffmpeg,
+            "-i",
+            str(source_path),
+            "-i",
+            str(overlay_path),
+            "-filter_complex",
+            "[1:v]colorkey=0xFF00FF:0.01:0.0[ol];[0:v][ol]overlay=0:0[v]",
+            "-map",
+            "[v]",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(target_path),
+            "-y",
+        ]
+        _run_ffmpeg(cmd)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            overlay_path.unlink()
+        with contextlib.suppress(OSError):
+            temp_dir.rmdir()
+    return target_path
+
+
+def probe_video(path: Path) -> dict[str, float | int]:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("ffprobe not found on PATH; install ffmpeg tools first")
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "json",
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe exited {result.returncode}:\n{result.stderr}")
+    payload = json.loads(result.stdout or "{}")
+    streams = payload.get("streams") or [{}]
+    stream = streams[0] if streams else {}
+    format_info = payload.get("format") or {}
+    return {
+        "width": int(stream.get("width") or 0),
+        "height": int(stream.get("height") or 0),
+        "duration_seconds": float(format_info.get("duration") or 0.0),
+    }

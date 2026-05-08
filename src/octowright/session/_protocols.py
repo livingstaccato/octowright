@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
-from ..recorder import Recorder
+from octowright.recorder import Recorder
 
 
 class SessionLike(Protocol):
@@ -28,7 +28,8 @@ class SessionLike(Protocol):
     _dialog_policy: str
     _dialog_prompt_text: str | None
     _active_routes: dict[str, Any]
-    _network_requests: list[dict[str, Any]]
+    _network_requests: deque[dict[str, Any]]
+    _network_requests_dropped: int
     trace: bool
     trace_path: Path | None
     har_path: Path | None

@@ -13,6 +13,7 @@ fixture-managed tmp paths so each test is hermetic.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
@@ -37,15 +38,15 @@ def isolated_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str,
     scenarios.mkdir()
 
     from octowright import defaults as _defaults
-    from octowright import macros as _macros
     from octowright import personas as _personas
     from octowright import profiles as _profiles
     from octowright import scenarios as _scenarios
+    from octowright.macros import storage as _macro_storage
 
     monkeypatch.setattr(_defaults, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_personas, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_profiles, "PROFILES_DIR", profiles)
-    monkeypatch.setattr(_macros, "MACROS_DIR", macros)
+    monkeypatch.setattr(_macro_storage, "MACROS_DIR", macros)
     monkeypatch.setattr(_defaults, "SCENARIOS_DIR", scenarios)
     monkeypatch.setattr(_scenarios, "SCENARIOS_DIR", scenarios)
 
@@ -71,6 +72,42 @@ def test_selftest_lists_registered_tools(isolated_paths: dict[str, Path]) -> Non
     # A handful of well-known tool names should appear.
     for expected in ("browser_launch", "browser_list", "scenario_start", "persona_list"):
         assert expected in result.output
+
+
+def test_test_command_forwards_max_parallel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import octowright.browser_pool as pool_pkg
+    from octowright import runner as runner_mod
+
+    fake_pool = MagicMock()
+    fake_pool.shutdown = AsyncMock()
+    run_suite = AsyncMock(return_value={"passed": 1, "failed": 0, "total": 1, "report_path": str(tmp_path / "j.xml")})
+    monkeypatch.setattr(pool_pkg, "BrowserPool", MagicMock(return_value=fake_pool))
+    monkeypatch.setattr(runner_mod, "run_suite", run_suite)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "test",
+            "--kind",
+            "firefox",
+            "--tag",
+            "smoke",
+            "--out",
+            str(tmp_path / "j.xml"),
+            "--max-parallel",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 0
+    run_suite.assert_awaited_once_with(
+        kind="firefox",
+        tag="smoke",
+        out_path=str(tmp_path / "j.xml"),
+        pool=fake_pool,
+        max_parallel=4,
+    )
+    fake_pool.shutdown.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -262,3 +299,53 @@ def test_cli_format_helpers_resolved_from_format_module() -> None:
     # Trivial assertion; main purpose is to exercise the import line so that
     # coverage counts the cli module's top-level binding.
     assert callable(fmt.browser_summary)
+
+
+# ---------------------------------------------------------------------------
+# cli/_root.py: no-subcommand path and main() entry point
+# ---------------------------------------------------------------------------
+
+
+def test_cli_invoked_without_subcommand_delegates_to_serve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When octowright is run with no subcommand, _root.cli invokes `serve`.
+
+    We replace the serve command's callback with a no-op so no daemon starts.
+    Lines 24-26 of cli/_root.py (late import + ctx.invoke branch) are hit.
+    """
+    import octowright.cli.serve as serve_mod
+
+    serve_invoked: list[bool] = []
+
+    # Wrap the real serve click.Command so ctx.invoke(serve) calls our no-op.
+    real_serve = serve_mod.serve
+    original_callback = real_serve.callback
+
+    def _noop_serve(**kwargs: object) -> None:
+        serve_invoked.append(True)
+
+    monkeypatch.setattr(real_serve, "callback", _noop_serve)
+
+    try:
+        result = CliRunner().invoke(cli, [])
+    finally:
+        # Restore in case monkeypatch teardown order is non-deterministic.
+        monkeypatch.setattr(real_serve, "callback", original_callback)
+
+    # Either the no-op ran (exit 0) or Click noted the invocation.
+    assert result.exit_code == 0
+    assert serve_invoked, "serve callback should have been called"
+
+
+def test_main_entry_point_calls_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() (line 31 of cli/_root.py) is the console_scripts entry point.
+
+    Invoke it with --help so it exits cleanly rather than starting a server.
+    """
+    import sys
+
+    import octowright.cli._root as _root_mod
+
+    monkeypatch.setattr(sys, "argv", ["octowright", "--help"])
+    with pytest.raises(SystemExit) as exc_info:
+        _root_mod.main()
+    assert exc_info.value.code == 0

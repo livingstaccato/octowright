@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from importlib.resources import as_file, files
 from pathlib import Path
 
-from .version import VERSION
+from octowright.version import VERSION
 
 SKILL_NAME = "using-octowright"
 
@@ -161,7 +161,7 @@ def install_plugin_manifests(
             continue
 
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(content, encoding="utf-8")
+        destination.write_text(content, encoding="utf-8", newline="\n")
         out.append(
             InstallResult(
                 target=target,

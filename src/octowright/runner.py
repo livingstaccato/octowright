@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
@@ -13,8 +14,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from . import macros as macro_mod
-from .defaults import DEFAULT_URL  # noqa: F401 — kept for downstream callers; runner uses about:blank
+from octowright import macros as macro_mod
 
 log = get_logger(__name__)
 
@@ -37,17 +37,20 @@ def _is_test(macro: dict[str, Any], tag: str | None) -> bool:
 
 async def run_suite(
     *,
-    macros_dir: str | None,  # noqa: ARG001 — reserved for per-suite dir override; default MACROS_DIR used today
     kind: str = "webkit",
     tag: str | None = None,
     out_path: str | None = None,
     pool: Any,
+    max_parallel: int = 1,
 ) -> dict[str, Any]:
     """Discover test macros, run each in an ephemeral browser, collect results, write JUnit XML.
 
-    *macros_dir* is accepted for API completeness (future: filter to a subdir).
-    Currently discovery always uses the global MACROS_DIR from macros.py.
+    Discovery uses the global MACROS_DIR from octowright.macros.storage; override
+    that via the OCTOWRIGHT_MACROS_DIR env var if you need a different directory.
     """
+    if max_parallel < 1:
+        raise ValueError("max_parallel must be >= 1")
+
     entries = macro_mod.list_macros()
     tests: list[dict[str, Any]] = []
     for entry in entries:
@@ -58,41 +61,53 @@ async def run_suite(
         if _is_test(full, tag):
             tests.append(full)
 
-    results: list[dict[str, Any]] = []
-    for t in tests:
+    async def _run_test(t: dict[str, Any]) -> dict[str, Any]:
         start = datetime.now(UTC)
-        # Tests start on about:blank so they don't accidentally depend on the global
-        # DEFAULT_URL (which points at the production site and is CSP-locked).
-        # Macros that need a specific URL should issue `navigate` as their first action.
-        launch_result = await pool.launch(
-            kind=kind,
-            url="about:blank",
-            headed=False,
-            label=f"test-{t['name']}",
-            viewport_w=1280,
-            viewport_h=800,
-            profile=None,
-        )
-        iid = launch_result["instance_id"]
-        session = pool.get(iid)
+        iid: str | None = None
         ok = True
         err: str | None = None
         try:
+            # Tests start on about:blank so they don't accidentally depend on the global
+            # DEFAULT_URL (which points at the production site and is CSP-locked).
+            # Macros that need a specific URL should issue `navigate` as their first action.
+            launch_result = await pool.launch(
+                kind=kind,
+                url="about:blank",
+                headed=False,
+                label=f"test-{t['name']}",
+                viewport_w=1280,
+                viewport_h=800,
+                profile=None,
+            )
+            iid = launch_result["instance_id"]
+            session = pool.get(iid)
             await macro_mod.run_macro(session=session, name=t["name"], args={})
         except Exception as e:
             ok = False
             err = repr(e)
         finally:
-            await pool.close(iid)
+            if iid is not None:
+                try:
+                    await pool.close(iid)
+                except Exception as e:
+                    ok = False
+                    close_err = repr(e)
+                    err = f"{err}; close failed: {close_err}" if err else close_err
         duration = (datetime.now(UTC) - start).total_seconds()
-        results.append(
-            {
-                "name": t["name"],
-                "ok": ok,
-                "error": err,
-                "duration": duration,
-            }
-        )
+        return {
+            "name": t["name"],
+            "ok": ok,
+            "error": err,
+            "duration": duration,
+        }
+
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async def _run_bounded(t: dict[str, Any]) -> dict[str, Any]:
+        async with semaphore:
+            return await _run_test(t)
+
+    results = list(await asyncio.gather(*(_run_bounded(t) for t in tests)))
 
     passed = sum(1 for r in results if r["ok"])
     failed = len(results) - passed

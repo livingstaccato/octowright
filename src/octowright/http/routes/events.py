@@ -8,24 +8,86 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
 
 from starlette.endpoints import WebSocketEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from .. import state
-from ..discovery import (
+from octowright.http import state
+from octowright.http.dashboard_events import dashboard_events
+from octowright.http.discovery import (
     _find_recording_for,
     _live_session_or_none,
     _resolve_log_path,
     _tail_jsonl,
 )
-from ._common import _paginate, _parse_since
+from octowright.http.exposure import guard_sensitive_http, sensitive_allowed_for_connection
+from octowright.http.routes._common import _paginate, _parse_since
+
+DASHBOARD_DISCONNECT_POLL_SECONDS = 0.05
+DASHBOARD_HEARTBEAT_SECONDS = 15.0
+
+
+def _sse_frame(event: str, data: dict[str, Any]) -> bytes:
+    payload = json.dumps(data, separators=(",", ":"))
+    return f"event: {event}\ndata: {payload}\n\n".encode()
+
+
+def _sse_comment(comment: str) -> bytes:
+    return f": {comment}\n\n".encode()
+
+
+async def _wait_for_dashboard_disconnect(request: Request) -> None:
+    while True:
+        if await request.is_disconnected():
+            return
+        await asyncio.sleep(DASHBOARD_DISCONNECT_POLL_SECONDS)
+
+
+async def dashboard_events_endpoint(request: Request) -> StreamingResponse:
+    async def stream() -> Any:
+        async with dashboard_events.subscribe() as subscription:
+            yield _sse_frame("hello", {"ok": True})
+            disconnect_task = asyncio.create_task(_wait_for_dashboard_disconnect(request))
+            try:
+                while not disconnect_task.done():
+                    event_task = asyncio.create_task(subscription.get())
+                    done, _pending = await asyncio.wait(
+                        {event_task, disconnect_task},
+                        timeout=DASHBOARD_HEARTBEAT_SECONDS,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if disconnect_task in done:
+                        event_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await event_task
+                        break
+                    if event_task in done:
+                        yield _sse_frame("invalidate", event_task.result())
+                        continue
+                    event_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await event_task
+                    yield _sse_comment("heartbeat")
+            finally:
+                disconnect_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await disconnect_task
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def session_events(request: Request) -> JSONResponse:
@@ -47,14 +109,7 @@ async def session_events(request: Request) -> JSONResponse:
 
 
 def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
-    """Reconstruct console messages from a JSONL recording.
-
-    NOTE: as of this writing ``BrowserSession.attach_console`` does NOT persist
-    console messages to the JSONL log — they live only on the in-memory
-    ``session.console`` list. So for closed sessions this returns ``[]``. The
-    scan is left in place so the endpoint Just Works once a future change starts
-    recording an ``action: "console"`` row alongside ``download_saved`` etc.
-    """
+    """Reconstruct console messages from persisted ``action: "console"`` rows."""
     out: list[dict[str, Any]] = []
     if not jsonl_path.exists():
         return out
@@ -70,13 +125,13 @@ def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
                     continue
                 if entry.get("action") != "console":
                     continue
-                out.append(
-                    {
-                        "level": entry.get("level"),
-                        "text": entry.get("text", ""),
-                        "page_index": entry.get("page_index"),
-                    }
-                )
+                message = {
+                    "level": entry.get("level"),
+                    "text": entry.get("text", ""),
+                }
+                if "page_index" in entry:
+                    message["page_index"] = entry.get("page_index")
+                out.append(message)
     except OSError:
         return out
     return out
@@ -121,11 +176,10 @@ async def session_console(request: Request) -> JSONResponse:
     """Return paginated console messages for a session.
 
     Live sessions read straight from ``pool.get(id).console``. Closed sessions
-    scan the JSONL recording for ``action: "console"`` rows (today this yields
-    an empty list because attach_console doesn't persist — see
-    ``_read_console_from_jsonl``). Optional ``level=`` filters by log level
-    (case-sensitive). Optional ``since=`` is a 0-based index; the response's
-    ``cursor`` is always the new total so callers can pass it on the next poll.
+    scan the JSONL recording for persisted ``action: "console"`` rows. Optional
+    ``level=`` filters by log level (case-sensitive). Optional ``since=`` is a
+    0-based index; the response's ``cursor`` is always the new total so callers
+    can pass it on the next poll.
 
     404 when the id is not in the live pool AND no recording is on disk.
     """
@@ -213,6 +267,9 @@ class TailEndpoint(WebSocketEndpoint):
     encoding = "json"
 
     async def on_connect(self, websocket: WebSocket) -> None:
+        if not sensitive_allowed_for_connection(websocket):
+            await websocket.close(code=1008, reason="remote dashboard access is disabled")
+            return
         await websocket.accept()
         sid = websocket.path_params["id"]
         live_session = _live_session_or_none(sid)
@@ -260,8 +317,9 @@ class TailEndpoint(WebSocketEndpoint):
 
 def routes() -> list[Route | WebSocketRoute]:
     return [
-        Route("/api/sessions/{id}/events", session_events, methods=["GET"]),
-        Route("/api/sessions/{id}/console", session_console, methods=["GET"]),
-        Route("/api/sessions/{id}/downloads", session_downloads, methods=["GET"]),
+        Route("/api/dashboard/events", guard_sensitive_http(dashboard_events_endpoint), methods=["GET"]),
+        Route("/api/sessions/{id}/events", guard_sensitive_http(session_events), methods=["GET"]),
+        Route("/api/sessions/{id}/console", guard_sensitive_http(session_console), methods=["GET"]),
+        Route("/api/sessions/{id}/downloads", guard_sensitive_http(session_downloads), methods=["GET"]),
         WebSocketRoute("/api/sessions/{id}/tail", TailEndpoint),
     ]

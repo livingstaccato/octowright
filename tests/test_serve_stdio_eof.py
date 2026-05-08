@@ -13,6 +13,7 @@ controlled order and assert which ones the leader cancels vs. waits on.
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Any
 
 import pytest
@@ -160,6 +161,7 @@ async def test_leader_exits_when_watchdog_fires_first(stubs: _Stubs, isolated_lo
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows os.kill(SIGTERM) terminates the process.")
 async def test_sigterm_translates_to_graceful_stdio_close(stubs: _Stubs, isolated_lockfile: Any) -> None:
     """SIGTERM on a discoverable leader must NOT exit; treat as stdio EOF.
 

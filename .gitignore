@@ -12,6 +12,10 @@ dist/
 .coverage.*
 .hypothesis/
 .ci/
+# Keep tracked baseline ratchets — CI + contributors share these.
+!.ci/
+!.ci/*-baseline.json
+!.ci/pip-audit-allow.txt
 node_modules/
 *.actcache
 
@@ -25,9 +29,12 @@ packages/octowright-frontend/coverage/
 .claude/
 .claude-plugin/
 .codex-plugin/
+.gemini/
 memray.bin
 /using-octowright/
 verify_macro_explain.py
 scripts/profile_benchmarks.py
 
 .DS_Store
+.superpowers/
+mutants/

@@ -94,6 +94,72 @@ export interface MacroSummary {
   updated_at: string | null;
 }
 
+export interface MacroAction {
+  action: string;
+  selector?: string;
+  present?: boolean;
+  then?: MacroAction[];
+  else?: MacroAction[];
+  branches?: MacroAction[][];
+  [key: string]: unknown;
+}
+
+export interface MacroDetail {
+  name: string;
+  description: string | null;
+  parameters: string[];
+  created_at: string | null;
+  updated_at: string | null;
+  actions: MacroAction[];
+  path?: string;
+}
+
+export interface MacroValidationIssue {
+  code: string;
+  message: string;
+  severity: "error" | "warning" | string;
+  action_index?: number;
+  action?: MacroAction;
+  details?: string;
+}
+
+export interface MacroValidationResponse {
+  ok: boolean;
+  valid: boolean;
+  issues: MacroValidationIssue[];
+  message?: string;
+}
+
+export interface MacroUpdateResponse {
+  ok: boolean;
+  name: string;
+  path?: string;
+  updated_at?: string | null;
+}
+
+export interface SelectorValidationResponse {
+  ok: boolean;
+  selector: string;
+  session_id: string;
+  present: boolean;
+  message?: string;
+}
+
+export interface MacroRepairSuggestion {
+  macro: string;
+  action_index: number;
+  original_action: Record<string, unknown>;
+  source: string;
+  replacement_action: Record<string, unknown> | null;
+  action_preview: string | null;
+  prompt: string;
+}
+
+export interface MacroRepairPreview {
+  macro: string;
+  suggestions: MacroRepairSuggestion[];
+}
+
 export interface ScreenshotEntry {
   path: string;
   filename: string;

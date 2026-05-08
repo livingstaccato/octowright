@@ -1,0 +1,16 @@
+{
+  "name": "pill-status-demo",
+  "description": "Multi-step macro for visually exercising the bottom-center status pill: 3 evaluates with real 1.5s delays interleaved with 3 different assertion types (expect_text, expect_selector, expect_url). Run against examples/pill-status-demo/probe.html.",
+  "parameters": [],
+  "created_at": "2026-05-07T00:00:00Z",
+  "updated_at": "2026-05-07T00:00:00Z",
+  "actions": [
+    {"action": "evaluate", "expression": "new Promise(r => { document.body.style.background = '#fff7e6'; setTimeout(r, 1500); })"},
+    {"action": "expect_text", "selector": "h1", "text": "pill probe"},
+    {"action": "evaluate", "expression": "new Promise(r => { document.body.style.background = '#e6f7ff'; setTimeout(r, 1500); })"},
+    {"action": "expect_selector", "selector": "p"},
+    {"action": "evaluate", "expression": "new Promise(r => { document.body.style.background = '#f6ffed'; setTimeout(r, 1500); })"},
+    {"action": "expect_url", "pattern": "probe", "mode": "contains"},
+    {"action": "evaluate", "expression": "new Promise(r => { document.body.style.background = '#fff1f0'; setTimeout(r, 1500); })"}
+  ]
+}
