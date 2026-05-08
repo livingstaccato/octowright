@@ -69,3 +69,58 @@ def test_find_screenshot_entries_matches_only_token_boundary(tmp_path: Path) -> 
 def test_find_screenshot_entries_returns_empty_for_no_session_id(tmp_path: Path) -> None:
     (tmp_path / "anything.png").write_bytes(b"x")
     assert _find_screenshot_entries(tmp_path, None) == ([], 0)
+
+
+def test_find_screenshot_entries_caches_dir_listing(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The PNG dir listing is cached by dir mtime so repeated per-session lookups
+    against the same dir don't re-scan."""
+    from octowright.http import artifacts as art_mod
+
+    art_mod.invalidate_screenshot_dir_cache()
+    sid = "abc123def456"  # pragma: allowlist secret
+    (tmp_path / f"{sid}-fail-x.png").write_bytes(b"a")
+    (tmp_path / f"20260101-chromium-{sid}.png").write_bytes(b"b")
+
+    glob_count = 0
+    real_glob = Path.glob
+
+    def counting_glob(self, pattern):  # type: ignore[no-untyped-def]
+        nonlocal glob_count
+        if pattern == "*.png":
+            glob_count += 1
+        yield from real_glob(self, pattern)
+
+    monkeypatch.setattr(Path, "glob", counting_glob)
+
+    # First call: glob runs once and result is cached.
+    e1, s1 = _find_screenshot_entries(tmp_path, sid)
+    assert glob_count == 1
+    # Second call against same dir + same session: cache hit, no re-scan.
+    e2, s2 = _find_screenshot_entries(tmp_path, sid)
+    assert glob_count == 1
+    assert e1 == e2 and s1 == s2
+    # Third call with different session_id (but same dir) also hits cache.
+    _find_screenshot_entries(tmp_path, "unrelatedsid")
+    assert glob_count == 1
+
+
+def test_find_screenshot_entries_invalidates_on_dir_mtime_change(tmp_path: Path) -> None:
+    """Adding a new PNG bumps dir mtime → cache invalidates → new file picked up."""
+    from octowright.http import artifacts as art_mod
+
+    art_mod.invalidate_screenshot_dir_cache()
+    sid = "rotateidwxyz"  # pragma: allowlist secret
+    (tmp_path / f"{sid}-fail-1.png").write_bytes(b"a")
+
+    e1, _ = _find_screenshot_entries(tmp_path, sid)
+    assert len(e1) == 1
+
+    # Add a second screenshot for the same session.
+    import os
+
+    (tmp_path / f"{sid}-fail-2.png").write_bytes(b"b")
+    new_mtime = tmp_path.stat().st_mtime_ns + 1_000_000_000
+    os.utime(tmp_path, ns=(new_mtime, new_mtime))
+
+    e2, _ = _find_screenshot_entries(tmp_path, sid)
+    assert len(e2) == 2
