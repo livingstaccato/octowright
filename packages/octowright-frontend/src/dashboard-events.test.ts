@@ -25,7 +25,6 @@ const dashboard = await import("./dashboard.js");
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   listeners: Record<string, ((event: MessageEvent) => void)[]> = {};
-  onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   close = vi.fn();
 
@@ -101,6 +100,7 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(apiMocks.dashboardEventsUrl).toHaveBeenCalledTimes(1);
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0]?.url).toBe("/api/dashboard/events");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("refreshes immediately on invalidation messages", async () => {
@@ -217,7 +217,7 @@ describe("bootDashboard dashboard invalidation stream", () => {
 
     const dispose = await dashboard.bootDashboard(root);
     expect(typeof dispose).toBe("function");
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
 
     dispose();
 
@@ -234,7 +234,7 @@ describe("bootDashboard dashboard invalidation stream", () => {
 
     expect(first?.close).toHaveBeenCalledTimes(1);
     expect(FakeEventSource.instances).toHaveLength(2);
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("suppresses stale refresh renders when an older request resolves last", async () => {
