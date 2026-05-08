@@ -43,7 +43,11 @@ dependencies = [
     "anyio>=4.4.0",
     "provide-telemetry>=0.3",
     "click>=8.1",
-    "cryptography>=46.0.7; sys_platform == 'win32' and (platform_machine == 'ARM64' or platform_machine == 'arm64' or platform_machine == 'aarch64')",
+    # cryptography stopped shipping win_arm64 wheels after 46.0.3. Pinning
+    # to the 46.0.3.x range keeps Windows ARM64 installable (the alternative
+    # is a build from source via Rust + openssl, which the runner can't do).
+    # Revisit when cryptography resumes win_arm64 wheel coverage upstream.
+    "cryptography>=46.0.3,<46.0.4; sys_platform == 'win32' and (platform_machine == 'ARM64' or platform_machine == 'arm64' or platform_machine == 'aarch64')",
     "pyyaml>=6",
     "starlette>=0.40",
     "uvicorn[standard]>=0.30",

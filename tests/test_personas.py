@@ -157,6 +157,10 @@ def test_resolve_cmd_refuses_shell_metachars(tmp_path, fresh_personas):
         fresh_personas.resolve_credential(p, "token")
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="bash isn't on PATH on Windows runners; the escape hatch on Windows is `pwsh -c ...` or `cmd /c ...`, exercised by other argv-form tests",
+)
 def test_resolve_cmd_supports_explicit_bash_pipeline(tmp_path, fresh_personas):
     """`bash -c "..."` is the documented escape hatch — bash is a normal
     argv token, the pipeline is its own argument."""
