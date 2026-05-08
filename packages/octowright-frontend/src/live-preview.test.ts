@@ -179,4 +179,59 @@ describe("mountLivePreview — live session", () => {
     closedHandle.markClosed();
     closedHandle.destroy();
   });
+
+  it("backs off poll interval after repeated screenshot errors", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live10", isLive: true, intervalMs: 1000 });
+    handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    if (!img) throw new Error("img missing");
+
+    img.dispatchEvent(new Event("error"));
+    img.dispatchEvent(new Event("error"));
+
+    const before = img.src;
+    vi.advanceTimersByTime(1_000);
+    expect(img.src).toBe(before);
+    vi.advanceTimersByTime(1_100);
+    expect(img.src).not.toBe(before);
+    handle.destroy();
+  });
+
+  it("returns to base interval quickly after first success", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live11", isLive: true, intervalMs: 1000 });
+    handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    if (!img) throw new Error("img missing");
+
+    img.dispatchEvent(new Event("error"));
+    vi.advanceTimersByTime(2_100);
+    img.dispatchEvent(new Event("load"));
+
+    const before = img.src;
+    vi.advanceTimersByTime(1_100);
+    expect(img.src).not.toBe(before);
+    handle.destroy();
+  });
+
+  it("caps adaptive backoff at the maximum interval", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live12", isLive: true, intervalMs: 1000 });
+    handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    if (!img) throw new Error("img missing");
+
+    for (let i = 0; i < 5; i++) {
+      img.dispatchEvent(new Event("error"));
+      vi.advanceTimersByTime(10_100);
+    }
+
+    const before = img.src;
+    vi.advanceTimersByTime(9_000);
+    expect(img.src).toBe(before);
+    vi.advanceTimersByTime(1_100);
+    expect(img.src).not.toBe(before);
+    handle.destroy();
+  });
 });

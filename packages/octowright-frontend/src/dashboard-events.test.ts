@@ -116,6 +116,80 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes only the requested scope for sessions invalidation", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(1);
+
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(
+      new MessageEvent("invalidate", { data: '{"scope":"sessions"}' }),
+    );
+    await flushPromises();
+
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes all slices when invalidation payload omits scope", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(1);
+
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(new MessageEvent("invalidate"));
+    await flushPromises();
+
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes all slices when invalidation payload has unknown scope", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(1);
+
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(
+      new MessageEvent("invalidate", { data: '{"scope":"not-a-real-scope"}' }),
+    );
+    await flushPromises();
+
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(2);
+  });
+
+  it("supports comma-separated scoped invalidations", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(1);
+
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(
+      new MessageEvent("invalidate", { data: '{"scope":"sessions,macros"}' }),
+    );
+    await flushPromises();
+
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps polling when EventSource is missing", async () => {
     vi.stubGlobal("EventSource", undefined);
     await dashboard.bootDashboard(root);

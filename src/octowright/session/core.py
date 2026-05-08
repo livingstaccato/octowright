@@ -61,10 +61,14 @@ class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin):
     _last_mcp_navigation: str | None = None
     _on_page_close: Callable[..., None] | None = field(default=None, repr=False)
     _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
+    console_count: int = 0
+    download_count: int = 0
+    page_count: int = 1
 
     def __post_init__(self) -> None:
         if self.page not in self.pages:
             self.pages.insert(0, self.page)
+        self.page_count = len(self.pages)
 
     def _target(self) -> Any:
         return self.active_frame if self.active_frame is not None else self.page

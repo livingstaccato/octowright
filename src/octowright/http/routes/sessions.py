@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from pathlib import Path
@@ -20,7 +21,6 @@ import octowright.http.state as state
 import octowright.server._state as _state
 from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
 from octowright.http.artifacts import _build_cache_components
-from octowright.http.artifacts import cache_report_for_recording as _cache_report_for_recording
 from octowright.http.dashboard_events import publish_dashboard_invalidation
 from octowright.http.discovery import (
     _closed_sessions,
@@ -30,11 +30,11 @@ from octowright.http.discovery import (
     _live_summary,
     _read_first_launch,
     _resolve_markdown_path,
-    _scan_recording_artefacts,
     _summarise_recording,
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _read_json_body
+from octowright.http.session_artifacts import session_artifact_cache
 
 
 async def list_sessions(_request: Request) -> JSONResponse:
@@ -45,74 +45,70 @@ async def list_sessions(_request: Request) -> JSONResponse:
     return JSONResponse({"live": live, "closed": closed})
 
 
-async def session_detail(request: Request) -> JSONResponse:
-    sid = request.path_params["id"]
-    live = _live_session_or_none(sid)
-    if live is not None:
-        title = None
-        with contextlib.suppress(Exception):
-            # `page.title()` is async; we can't await it from a sync code path
-            # without blocking. The frontend can call browser_evaluate for live
-            # title via MCP if it really wants up-to-date.
-            title = None
-        markdown_path: str | None = None
-        live_markdown_path = _resolve_markdown_path(live.instance_id)
-        if live.markdown_path is not None:
-            markdown_path = str(live.markdown_path)
-        elif live_markdown_path is not None:
-            markdown_path = str(live_markdown_path)
-        detail = {
-            **_live_summary(live),
-            "video_path": str(live.video_path) if live.video_path else None,
-            "trace_path": str(live.trace_path) if live.trace_path else None,
-            "markdown_path": markdown_path,
-            "websocket_path": str(live.websocket_path) if getattr(live, "websocket_path", None) else None,
-            "action_count": -1,  # unknown without re-reading the file
-            "console_count": len(live.console),
-            "download_count": len(live.downloads),
-            "page_count": len(live.pages),
-            "title": title,
-            "cache": _build_cache_components(
-                session_id=live.instance_id,
-                jsonl_path=Path(live.log_path),
-                markdown_path=Path(markdown_path)
-                if markdown_path
-                else (live.markdown_path if live.markdown_path else None),
-                trace_path=Path(live.trace_path) if live.trace_path else None,
-                video_path=Path(live.video_path) if live.video_path else None,
-                websocket_path=live.websocket_path if getattr(live, "websocket_path", None) else None,
-            ),
-        }
-        # Action count is cheap to derive from the JSONL on disk; do it once.
-        log_path = Path(live.log_path)
-        if log_path.exists():
-            artefacts = _scan_recording_artefacts(log_path)
-            detail["action_count"] = artefacts["action_count"]
-            detail["event_count"] = artefacts["event_count"]
+def _resolve_live_markdown_path(live: Any) -> str | None:
+    live_markdown_path = _resolve_markdown_path(live.instance_id)
+    if live.markdown_path is not None:
+        return str(live.markdown_path)
+    if live_markdown_path is not None:
+        return str(live_markdown_path)
+    return None
 
-        # ARIA tree snapshot
-        with contextlib.suppress(Exception):
-            aria = await live.page.locator("html").aria_snapshot()
-            detail["aria"] = aria
 
-        # Macro Intent (if log exists)
-        if log_path.exists():
-            from octowright.macros import load_macro_from_recording
-            from octowright.server.macro_semantic import get_semantic_intent
+def _build_live_session_detail(live: Any, markdown_path: str | None) -> dict[str, Any]:
+    return {
+        **_live_summary(live),
+        "video_path": str(live.video_path) if live.video_path else None,
+        "trace_path": str(live.trace_path) if live.trace_path else None,
+        "markdown_path": markdown_path,
+        "websocket_path": str(live.websocket_path) if getattr(live, "websocket_path", None) else None,
+        "action_count": -1,  # unknown without re-reading the file
+        "event_count": int(getattr(getattr(live, "recorder", None), "event_count", 0)),
+        "console_count": int(getattr(live, "console_count", len(live.console))),
+        "download_count": int(getattr(live, "download_count", len(live.downloads))),
+        "page_count": int(getattr(live, "page_count", len(live.pages))),
+        "title": None,
+        "cache": _build_cache_components(
+            session_id=live.instance_id,
+            jsonl_path=Path(live.log_path),
+            markdown_path=Path(markdown_path)
+            if markdown_path
+            else (live.markdown_path if live.markdown_path else None),
+            trace_path=Path(live.trace_path) if live.trace_path else None,
+            video_path=Path(live.video_path) if live.video_path else None,
+            websocket_path=live.websocket_path if getattr(live, "websocket_path", None) else None,
+        ),
+    }
 
-            with contextlib.suppress(Exception):
-                actions = load_macro_from_recording(log_path)
-                detail["macro_intent"] = get_semantic_intent(actions)
 
-        return JSONResponse(detail)
+def _attach_macro_intent(detail: dict[str, Any], log_path: Path) -> None:
+    from octowright.macros import load_macro_from_recording
+    from octowright.server.macro_semantic import get_semantic_intent
 
+    with contextlib.suppress(Exception):
+        actions = load_macro_from_recording(log_path)
+        detail["macro_intent"] = get_semantic_intent(actions)
+
+
+async def _live_session_detail_response(live: Any) -> JSONResponse:
+    markdown_path = _resolve_live_markdown_path(live)
+    detail = _build_live_session_detail(live, markdown_path)
+    log_path = Path(live.log_path)
+    detail["action_count"] = int(getattr(getattr(live, "recorder", None), "action_count", 0))
+    with contextlib.suppress(Exception):
+        detail["aria"] = await live.page.locator("html").aria_snapshot()
+    if log_path.exists():
+        _attach_macro_intent(detail, log_path)
+    return JSONResponse(detail)
+
+
+def _closed_session_detail_response(sid: str) -> JSONResponse:
     jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
     if jsonl is None:
         return JSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
     summary = _summarise_recording(jsonl)
     if summary is None:
         return JSONResponse({"error": f"could not parse recording for id {sid!r}"}, status_code=404)
-    artefacts = _scan_recording_artefacts(jsonl)
+    artefacts = session_artifact_cache.scan_artifacts(jsonl)
     detail = {
         **summary,
         "video_path": artefacts["video_path"],
@@ -125,20 +121,22 @@ async def session_detail(request: Request) -> JSONResponse:
         "download_count": artefacts["download_count"],
         "page_count": artefacts["page_count"],
         "title": artefacts["title"],
-        "cache": _cache_report_for_recording(jsonl),
+        "cache": session_artifact_cache.cache_report(jsonl),
     }
     if artefacts["url"]:
         detail["url"] = artefacts["url"]
 
-    # For closed sessions, we can still try to get the macro intent from disk
-    from octowright.macros import load_macro_from_recording
-    from octowright.server.macro_semantic import get_semantic_intent
-
-    with contextlib.suppress(Exception):
-        actions = load_macro_from_recording(jsonl)
-        detail["macro_intent"] = get_semantic_intent(actions)
+    _attach_macro_intent(detail, jsonl)
 
     return JSONResponse(detail)
+
+
+async def session_detail(request: Request) -> JSONResponse:
+    sid = request.path_params["id"]
+    live = _live_session_or_none(sid)
+    if live is not None:
+        return await _live_session_detail_response(live)
+    return _closed_session_detail_response(sid)
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +162,10 @@ def _live_summary_from_launch(result: dict[str, Any]) -> dict[str, Any]:
         "started_at": started_at,
         "live": True,
         "log_path": str(log_path),
+        "event_count": 1,  # launch event is written before HTTP response
+        "console_count": 0,
+        "download_count": 0,
+        "page_count": 1,
     }
 
 
@@ -254,7 +256,9 @@ async def session_close(request: Request) -> JSONResponse:
     log_path = result.get("log_path")
     if isinstance(log_path, str) and log_path:
         try:
-            body["cache"] = _cache_report_for_recording(Path(log_path))
+            jsonl_path = Path(log_path)
+            await asyncio.to_thread(session_artifact_cache.write_event_indexes, jsonl_path)
+            body["cache"] = await asyncio.to_thread(session_artifact_cache.cache_report, jsonl_path)
         except Exception:
             state.log.warning(
                 "octowright.http.session_close_cache_report_failed",

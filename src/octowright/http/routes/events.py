@@ -29,6 +29,7 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http, sensitive_allowed_for_connection
 from octowright.http.routes._common import _paginate, _parse_since
+from octowright.http.session_artifacts import session_artifact_cache
 
 DASHBOARD_DISCONNECT_POLL_SECONDS = 0.05
 DASHBOARD_HEARTBEAT_SECONDS = 15.0
@@ -110,6 +111,9 @@ async def session_events(request: Request) -> JSONResponse:
 
 def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
     """Reconstruct console messages from persisted ``action: "console"`` rows."""
+    indexed = session_artifact_cache.read_console_index(jsonl_path)
+    if indexed is not None:
+        return indexed
     out: list[dict[str, Any]] = []
     if not jsonl_path.exists():
         return out
@@ -144,6 +148,9 @@ def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
     ``action: "download_saved"`` row with the same field shape used in-memory
     (``url``, ``suggested_filename``, ``path``, ``timestamp``).
     """
+    indexed = session_artifact_cache.read_downloads_index(jsonl_path)
+    if indexed is not None:
+        return indexed
     out: list[dict[str, Any]] = []
     if not jsonl_path.exists():
         return out

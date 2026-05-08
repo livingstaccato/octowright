@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from octowright.defaults import SUPPORTED_KINDS
+from octowright.types import PlaywrightFailureHint
 
 
 @dataclass(frozen=True)
@@ -127,7 +128,7 @@ async def engine_install(
     }
 
 
-def playwright_failure_sanity(error_text: str, kind: str | None = None) -> dict[str, Any] | None:
+def playwright_failure_sanity(error_text: str, kind: str | None = None) -> PlaywrightFailureHint | None:
     txt = error_text or ""
     target = kind if kind in SUPPORTED_KINDS else "<engine>"
     detectors = (
@@ -146,7 +147,7 @@ def playwright_failure_sanity(error_text: str, kind: str | None = None) -> dict[
     return None
 
 
-def _detect_binaries_missing(txt: str, target: str) -> dict[str, Any] | None:
+def _detect_binaries_missing(txt: str, target: str) -> PlaywrightFailureHint | None:
     if "Executable doesn't exist" not in txt and "playwright install" not in txt:
         return None
     return {
@@ -160,7 +161,7 @@ def _detect_binaries_missing(txt: str, target: str) -> dict[str, Any] | None:
     }
 
 
-def _detect_target_closed(txt: str, _target: str) -> dict[str, Any] | None:
+def _detect_target_closed(txt: str, _target: str) -> PlaywrightFailureHint | None:
     if "Target page, context or browser has been closed" not in txt:
         return None
     return {
@@ -173,7 +174,7 @@ def _detect_target_closed(txt: str, _target: str) -> dict[str, Any] | None:
     }
 
 
-def _detect_navigation_timeout(txt: str, _target: str) -> dict[str, Any] | None:
+def _detect_navigation_timeout(txt: str, _target: str) -> PlaywrightFailureHint | None:
     if not re.search(r"Navigation timeout .* exceeded", txt):
         return None
     return {
@@ -186,7 +187,7 @@ def _detect_navigation_timeout(txt: str, _target: str) -> dict[str, Any] | None:
     }
 
 
-def _detect_os_dependencies_missing(txt: str, target: str) -> dict[str, Any] | None:
+def _detect_os_dependencies_missing(txt: str, target: str) -> PlaywrightFailureHint | None:
     if not re.search(r"Host system is missing dependencies", txt, flags=re.IGNORECASE):
         return None
     return {
@@ -199,7 +200,7 @@ def _detect_os_dependencies_missing(txt: str, target: str) -> dict[str, Any] | N
     }
 
 
-def _detect_sandbox_blocked(txt: str, _target: str) -> dict[str, Any] | None:
+def _detect_sandbox_blocked(txt: str, _target: str) -> PlaywrightFailureHint | None:
     closed = "browserType.launch: Target page, context or browser has been closed" in txt
     if not closed or "sandbox" not in txt.lower():
         return None
@@ -213,7 +214,7 @@ def _detect_sandbox_blocked(txt: str, _target: str) -> dict[str, Any] | None:
     }
 
 
-def _detect_network_unreachable(txt: str, _target: str) -> dict[str, Any] | None:
+def _detect_network_unreachable(txt: str, _target: str) -> PlaywrightFailureHint | None:
     if not re.search(r"(ECONNREFUSED|ERR_CONNECTION_REFUSED|net::ERR_|Name or service not known|ENOTFOUND)", txt):
         return None
     return {
@@ -226,7 +227,7 @@ def _detect_network_unreachable(txt: str, _target: str) -> dict[str, Any] | None
     }
 
 
-def _detect_permission_error(txt: str, _target: str) -> dict[str, Any] | None:
+def _detect_permission_error(txt: str, _target: str) -> PlaywrightFailureHint | None:
     if not re.search(r"(Permission denied|EACCES|EPERM)", txt):
         return None
     return {
