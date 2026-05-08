@@ -65,11 +65,16 @@ class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin, SessionN
     console_count: int = 0
     download_count: int = 0
     page_count: int = 1
+    started_at: str = ""
 
     def __post_init__(self) -> None:
         if self.page not in self.pages:
             self.pages.insert(0, self.page)
         self.page_count = len(self.pages)
+        if not self.started_at:
+            from datetime import UTC, datetime
+
+            self.started_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     def _target(self) -> Any:
         return self.active_frame if self.active_frame is not None else self.page
