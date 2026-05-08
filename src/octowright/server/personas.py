@@ -13,6 +13,7 @@ from octowright import personas as persona_mod
 from octowright import profiles as profile_mod
 from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import log, mcp, pool
+from octowright.types import CredentialCheckReport, PersonaListEntry
 
 
 @mcp.tool(structured_output=False, description="List saved browser profiles. Pass kind to filter to one engine.")
@@ -48,7 +49,7 @@ def profile_delete(kind: str, name: str) -> dict[str, Any]:
         "A persona is a named identity (e.g. 'dante') that owns engine-specific browser profiles."
     ),
 )
-def persona_list() -> list[dict[str, Any]]:
+def persona_list() -> list[PersonaListEntry]:
     return persona_mod.list_personas()
 
 
@@ -127,6 +128,6 @@ def persona_delete(name: str) -> dict[str, Any]:
         "startup_macros need credentials (e.g. a discord-login macro)."
     ),
 )
-def persona_credentials_check(name: str) -> dict[str, Any]:
+def persona_credentials_check(name: str) -> CredentialCheckReport:
     persona = persona_mod.load_persona(name)
     return persona_mod.check_credentials(persona)

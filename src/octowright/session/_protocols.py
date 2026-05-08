@@ -22,8 +22,11 @@ class SessionLike(Protocol):
     recorder: Recorder
     log_path: Path
     console: deque[dict[str, Any]]
+    console_count: int
     active_frame: Any | None
     downloads: list[dict[str, Any]]
+    download_count: int
+    page_count: int
     _bg_tasks: set[Any]
     _dialog_policy: str
     _dialog_prompt_text: str | None

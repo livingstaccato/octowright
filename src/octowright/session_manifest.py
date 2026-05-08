@@ -15,9 +15,10 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 from octowright.defaults import SESSION_MANIFEST_PATH
+from octowright.types import SessionManifest, SessionManifestEntry
 
 SCHEMA_VERSION = 1
 
@@ -26,7 +27,7 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _empty() -> dict[str, Any]:
+def _empty() -> SessionManifest:
     return {"schema_version": SCHEMA_VERSION, "sessions": {}}
 
 
@@ -34,7 +35,7 @@ def _resolve_path(path: Path | None) -> Path:
     return path or SESSION_MANIFEST_PATH
 
 
-def read_manifest(path: Path | None = None) -> dict[str, Any]:
+def read_manifest(path: Path | None = None) -> SessionManifest:
     """Return a parsed manifest, or an empty manifest if missing/corrupt."""
     path = _resolve_path(path)
     if not path.exists():
@@ -51,7 +52,7 @@ def read_manifest(path: Path | None = None) -> dict[str, Any]:
     return {"schema_version": data.get("schema_version", SCHEMA_VERSION), "sessions": sessions}
 
 
-def write_manifest(data: dict[str, Any], path: Path | None = None) -> None:
+def write_manifest(data: SessionManifest, path: Path | None = None) -> None:
     """Atomically replace the manifest."""
     path = _resolve_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,11 +70,11 @@ def record_launch(
     user_data_dir: str | Path | None,
     log_path: str | Path,
     path: Path | None = None,
-) -> dict[str, Any]:
+) -> SessionManifestEntry:
     """Add/update an open session entry and return the stored entry."""
     manifest = read_manifest(path)
     launched_at = _now_iso()
-    entry = {
+    entry: SessionManifestEntry = {
         "session_id": session_id,
         "kind": kind,
         "label": label,
@@ -103,14 +104,14 @@ def stale_entries(
     *,
     live_session_ids: set[str],
     path: Path | None = None,
-) -> list[dict[str, Any]]:
+) -> list[SessionManifestEntry]:
     """Return manifest entries that are not present in the current live pool."""
     manifest = read_manifest(path)
-    stale: list[dict[str, Any]] = []
+    stale: list[SessionManifestEntry] = []
     for session_id, raw in sorted(manifest["sessions"].items()):
         if session_id in live_session_ids or not isinstance(raw, dict):
             continue
-        entry = dict(raw)
+        entry = cast(SessionManifestEntry, {**raw})
         entry.setdefault("session_id", session_id)
         entry["reason"] = "manifest entry is not present in the live browser pool"
         stale.append(entry)

@@ -36,6 +36,7 @@ async def save_download(session: BrowserSession, download: Any) -> dict[str, Any
             "timestamp": _timestamp(),
         }
         session.downloads.append(record)
+        session.download_count += 1
         session.recorder.record("download_saved", **record)
         for event in session._pending_download_events:
             event.set()
