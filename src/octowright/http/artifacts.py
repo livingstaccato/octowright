@@ -164,7 +164,7 @@ def _tally_jsonl(jsonl_path: Path, state: dict[str, Any], counts: dict[str, int]
             _ingest_entry(entry, state, counts)
 
 
-def scan_recording_artifacts(jsonl_path: Path) -> dict[str, Any]:
+def _empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
     counts = {"event_count": 0, "action_count": 0, "console_count": 0, "download_count": 0, "page_count": 1}
     state: dict[str, Any] = {
         "title": None,
@@ -174,17 +174,44 @@ def scan_recording_artifacts(jsonl_path: Path) -> dict[str, Any]:
         "markdown_path": None,
         "websocket_path": None,
     }
-    _tally_jsonl(jsonl_path, state, counts)
+    return counts, state
 
-    # Sidecar fallback: if the close event didn't record a path, probe the
-    # canonical filename next to the JSONL.
+
+def _apply_filesystem_fallbacks(jsonl_path: Path, state: dict[str, Any]) -> None:
+    """Probe the canonical sidecar filenames for any artefact path the close
+    event didn't record explicitly."""
     for field, suffix in _FILESYSTEM_FALLBACKS.items():
         if state[field] is None:
             candidate = jsonl_path.with_suffix(suffix)
             if candidate.exists():
                 state[field] = str(candidate)
 
+
+def scan_recording_artifacts(jsonl_path: Path) -> dict[str, Any]:
+    counts, state = _empty_artifact_state()
+    _tally_jsonl(jsonl_path, state, counts)
+    _apply_filesystem_fallbacks(jsonl_path, state)
     return {**counts, **state}
+
+
+def ingest_entry(entry: dict[str, Any], state: dict[str, Any], counts: dict[str, int]) -> None:
+    """Public alias for the per-entry ingestion step.
+
+    Exposed so `SessionArtifactCache.warm_close` can fold artifact aggregation
+    into the same JSONL walk that builds the row sidecars, instead of having
+    two threads parse the same file twice on session close.
+    """
+    _ingest_entry(entry, state, counts)
+
+
+def empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
+    """Public alias for the artifact-state initializer (see ``ingest_entry``)."""
+    return _empty_artifact_state()
+
+
+def apply_filesystem_fallbacks(jsonl_path: Path, state: dict[str, Any]) -> None:
+    """Public alias for the filesystem fallback step (see ``ingest_entry``)."""
+    _apply_filesystem_fallbacks(jsonl_path, state)
 
 
 def cache_report_for_recording(jsonl_path: Path) -> dict[str, Any]:

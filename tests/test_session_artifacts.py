@@ -263,6 +263,60 @@ def test_get_console_rows_invalidates_in_memory_cache_when_jsonl_changes(tmp_pat
     ]
 
 
+def test_warm_close_walks_jsonl_once_and_warms_all_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """warm_close should produce sidecars + warm artifact/report caches in a single JSONL pass."""
+    import octowright.http.session_artifacts as sa_mod
+
+    jsonl = tmp_path / "20260101T000000Z-chromium-warmclose0001.jsonl"
+    _append_jsonl(jsonl, {"action": "launch", "kind": "chromium"})
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "hello"})
+    _append_jsonl(jsonl, {"action": "navigate", "url": "https://example.test"})
+    _append_jsonl(
+        jsonl,
+        {
+            "action": "download_saved",
+            "url": "https://x.test/a",
+            "suggested_filename": "a.txt",
+            "path": "/tmp/a.txt",
+            "timestamp": "t0",
+        },
+    )
+
+    cache = SessionArtifactCache()
+    walks = 0
+    real_iter = sa_mod.iter_jsonl_entries
+
+    def counting_iter(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal walks
+        walks += 1
+        yield from real_iter(path)
+
+    monkeypatch.setattr(sa_mod, "iter_jsonl_entries", counting_iter)
+
+    report = cache.warm_close(jsonl)
+
+    # One walk only.
+    assert walks == 1
+    # Sidecars written.
+    assert jsonl.with_suffix(".console.index.json").exists()
+    assert jsonl.with_suffix(".downloads.index.json").exists()
+    # All caches warm — subsequent reads hit memory without re-walking.
+    key = str(jsonl)
+    assert key in cache._console_index_cache
+    assert key in cache._downloads_index_cache
+    assert key in cache._artifact_cache
+    assert key in cache._report_cache
+    # Report shape sanity.
+    assert "components" in report
+    assert "jsonl" in report["components"]
+    # No additional walks for follow-up reads.
+    cache.get_console_rows(jsonl)
+    cache.get_download_rows(jsonl)
+    cache.scan_artifacts(jsonl)
+    cache.cache_report(jsonl)
+    assert walks == 1
+
+
 def test_index_cache_evicts_oldest_when_bound_exceeded(tmp_path: Path) -> None:
     """LRU bound prevents unbounded memory growth across many sessions."""
     bound = 8

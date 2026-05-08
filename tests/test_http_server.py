@@ -66,6 +66,11 @@ def isolated_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path
     rec = tmp_path / "recordings"
     rec.mkdir()
     monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    # Clear the cached recording-id index so the lookup-table doesn't carry
+    # entries from a prior test's tmp dir.
+    from octowright.http.discovery import invalidate_recording_index
+
+    invalidate_recording_index()
     return rec
 
 
