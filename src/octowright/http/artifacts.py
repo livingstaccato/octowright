@@ -41,23 +41,48 @@ def _path_size(path: Path | None) -> int:
 
 
 def _build_component(path: Path | None) -> dict[str, Any]:
-    exists = bool(path is not None and path.exists())
-    size_bytes = _path_size(path) if exists else 0
+    # One stat() call covers both existence and size — no separate exists()
+    # probe. Called for 5 components per cache report, so the syscall halving
+    # adds up on hot dashboard refreshes.
+    if path is None:
+        return {"size_bytes": 0, "size_human": _human_bytes(0), "path": None, "exists": False}
+    try:
+        size_bytes = path.stat().st_size
+        exists = True
+    except OSError:
+        size_bytes = 0
+        exists = False
     return {
         "size_bytes": size_bytes,
         "size_human": _human_bytes(size_bytes),
-        "path": str(path) if path else None,
+        "path": str(path),
         "exists": exists,
     }
 
 
 def _find_screenshot_entries(recording_dir: Path, session_id: str | None) -> tuple[list[str], int]:
+    """Sum + list every screenshot PNG produced for ``session_id`` in ``recording_dir``.
+
+    The two known producers name files as:
+      * ``{instance_id}-fail-{ts}.png`` — failure snapshots (``core_ops_mixin``).
+      * ``{log_path.stem}.png`` — explicit captures via ``inspect`` tools, where
+        ``log_path.stem`` always ends in ``-{instance_id}`` (see ``recorder.new_log_path``).
+
+    Match by exact token boundary on those two patterns rather than the loose
+    ``*{session_id}*.png`` glob, which would falsely match unrelated files
+    that happen to contain the 12-char hex id as a substring.
+    """
     if session_id is None:
         return [], 0
     total = 0
     entries: list[str] = []
-    for path in sorted(recording_dir.glob(f"*{session_id}*.png")):
+    leading = f"{session_id}-"
+    trailing = f"-{session_id}"
+    for path in sorted(recording_dir.glob("*.png")):
         if not path.is_file():
+            continue
+        stem = path.stem
+        if not (stem.startswith(leading) or stem.endswith(trailing)):
             continue
         entries.append(str(path))
         try:
@@ -167,7 +192,6 @@ def _tally_jsonl(jsonl_path: Path, state: dict[str, Any], counts: dict[str, int]
 def _empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
     counts = {"event_count": 0, "action_count": 0, "console_count": 0, "download_count": 0, "page_count": 1}
     state: dict[str, Any] = {
-        "title": None,
         "url": None,
         "video_path": None,
         "trace_path": None,
