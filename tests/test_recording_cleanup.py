@@ -170,10 +170,10 @@ def test_cleanup_stale_invalidates_recording_index(tmp_path: Path) -> None:
         content=b'{"action": "launch"}\n',
     )
 
-    # Prime the index with a lookup.
+    # Prime the index with a lookup. The index is now a (dir_mtime, {sid: path}) tuple.
     found = _find_recording_for("stale1234abcd", rec)
     assert found == jsonl
-    assert "stale1234abcd" in _recording_index[rec]
+    assert "stale1234abcd" in _recording_index[rec][1]
 
     stale = rc.find_stale_files(rec, days=1.0)
     rc.cleanup_stale(stale, dry_run=False)
@@ -187,6 +187,8 @@ def test_cleanup_stale_invalidates_recording_index(tmp_path: Path) -> None:
 
 def test_find_recording_for_caches_lookup(tmp_path: Path) -> None:
     """Second lookup of the same id should hit the in-memory index."""
+    import os
+
     from octowright.http.discovery import (
         _find_recording_for,
         _recording_index,
@@ -200,13 +202,15 @@ def test_find_recording_for_caches_lookup(tmp_path: Path) -> None:
     jsonl.write_text('{"action": "launch"}\n', encoding="utf-8")
 
     assert _find_recording_for("cachedidwxyz", rec) == jsonl
-    assert "cachedidwxyz" in _recording_index[rec]
+    assert "cachedidwxyz" in _recording_index[rec][1]
 
-    # Removing the entry from the cache should NOT cause re-lookup to fail —
-    # the rebuild on miss handles it.
-    _recording_index[rec].pop("cachedidwxyz")
+    # Removing the entry from the inner dict simulates corruption. Rebuild
+    # is gated on dir mtime now — bump the dir mtime so the rebuild fires.
+    _recording_index[rec][1].pop("cachedidwxyz")
+    new_mtime = rec.stat().st_mtime_ns + 1_000_000_000
+    os.utime(rec, ns=(new_mtime, new_mtime))
     assert _find_recording_for("cachedidwxyz", rec) == jsonl
-    assert "cachedidwxyz" in _recording_index[rec]
+    assert "cachedidwxyz" in _recording_index[rec][1]
 
 
 def test_cleanup_stale_video_dir_pruned_when_empty(tmp_path: Path) -> None:

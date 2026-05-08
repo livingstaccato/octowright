@@ -60,6 +60,35 @@ def _build_component(path: Path | None) -> dict[str, Any]:
     }
 
 
+# Per-recording-dir PNG listing cache. Keyed by dir mtime so a new
+# screenshot, deletion, or rename invalidates automatically. Amortizes the
+# readdir across every per-session lookup against the same dir — and per-
+# session lookups happen on every /api/sessions/{id} for live sessions
+# (no cache there) and on the first cache_report build for closed ones.
+_screenshot_dir_cache: dict[Path, tuple[int, list[Path]]] = {}
+
+
+def _list_screenshot_paths_cached(recording_dir: Path) -> list[Path]:
+    try:
+        dir_mtime = recording_dir.stat().st_mtime_ns
+    except OSError:
+        return []
+    cached = _screenshot_dir_cache.get(recording_dir)
+    if cached is not None and cached[0] == dir_mtime:
+        return cached[1]
+    paths = sorted(p for p in recording_dir.glob("*.png") if p.is_file())
+    _screenshot_dir_cache[recording_dir] = (dir_mtime, paths)
+    return paths
+
+
+def invalidate_screenshot_dir_cache(recording_dir: Path | None = None) -> None:
+    """Drop the cached PNG listing so the next call re-reads the dir."""
+    if recording_dir is None:
+        _screenshot_dir_cache.clear()
+    else:
+        _screenshot_dir_cache.pop(recording_dir, None)
+
+
 def _find_screenshot_entries(recording_dir: Path, session_id: str | None) -> tuple[list[str], int]:
     """Sum + list every screenshot PNG produced for ``session_id`` in ``recording_dir``.
 
@@ -78,9 +107,7 @@ def _find_screenshot_entries(recording_dir: Path, session_id: str | None) -> tup
     entries: list[str] = []
     leading = f"{session_id}-"
     trailing = f"-{session_id}"
-    for path in sorted(recording_dir.glob("*.png")):
-        if not path.is_file():
-            continue
+    for path in _list_screenshot_paths_cached(recording_dir):
         stem = path.stem
         if not (stem.startswith(leading) or stem.endswith(trailing)):
             continue
