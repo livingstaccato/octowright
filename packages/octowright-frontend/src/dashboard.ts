@@ -822,16 +822,31 @@ function renderSessionTable(rows: SessionSummary[], live: boolean): HTMLElement 
 }
 
 let dashboardRoot: HTMLElement | null = null;
+let dashboardPanels: DashboardPanel[] | null = null;
 let activeDashboardDisposer: DashboardDisposer | null = null;
+
+/**
+ * Refresh the dashboard after a user-initiated action (delete, relaunch,
+ * scenario start). Reuses the existing panel registry so wrappers, headings,
+ * listeners, and <details> open state survive — and crucially, so a
+ * subsequent SSE invalidation updates the live DOM instead of orphaned nodes
+ * (which is what happened when these handlers called renderDashboard directly).
+ */
+export async function refreshDashboardNow(): Promise<void> {
+  if (!dashboardRoot) return;
+  const state = await loadState();
+  if (dashboardPanels === null) {
+    dashboardPanels = renderDashboard(dashboardRoot, state);
+  } else {
+    updateDashboard(dashboardPanels, state, null);
+  }
+}
 
 async function deleteSessionRecording(id: string): Promise<void> {
   try {
     const result = await deleteRecording(id);
     showSnackbar(`Deleted session ${id.slice(0, 8)}… (${result.files_removed} files removed)`);
-    if (dashboardRoot) {
-      const state = await loadState();
-      renderDashboard(dashboardRoot, state);
-    }
+    await refreshDashboardNow();
   } catch (err: unknown) {
     showSnackbar(`Delete failed: ${String(err)}`, true);
   }
@@ -841,10 +856,7 @@ async function relaunchClosedSession(id: string): Promise<void> {
   try {
     const result = await relaunchSession(id);
     showSnackbar(`Relaunched as ${result.id.slice(0, 8)}… (${result.kind})`);
-    if (dashboardRoot) {
-      const state = await loadState();
-      renderDashboard(dashboardRoot, state);
-    }
+    await refreshDashboardNow();
   } catch (err: unknown) {
     showSnackbar(`Relaunch failed: ${String(err)}`, true);
   }
@@ -854,10 +866,7 @@ async function startSavedScenario(name: string): Promise<void> {
   try {
     const result = await startScenario(name);
     showSnackbar(`Started '${name}' (${result.participants.length} participants)`);
-    if (dashboardRoot) {
-      const state = await loadState();
-      renderDashboard(dashboardRoot, state);
-    }
+    await refreshDashboardNow();
   } catch (err: unknown) {
     showSnackbar(`Start failed: ${String(err)}`, true);
   }
@@ -1104,7 +1113,10 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
   let currentState = EMPTY_STATE;
   let streamHealthy = false;
-  let panels: DashboardPanel[] | null = null;
+  // The panel registry is stored at module scope (`dashboardPanels`) so
+  // user-action handlers — which run outside this closure — can reuse it
+  // via refreshDashboardNow() instead of re-mounting and orphaning the
+  // boot's reference. Reset on dispose below.
 
   const tick = async (scopes: ReadonlySet<DashboardScope> | null = null): Promise<void> => {
     const generation = ++refreshGeneration;
@@ -1113,17 +1125,17 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
       return;
     }
     currentState = state;
-    if (panels === null) {
+    if (dashboardPanels === null) {
       // First tick (or post-dispose remount) — full mount.
-      panels = renderDashboard(root, state);
+      dashboardPanels = renderDashboard(root, state);
     } else if (scopes === null) {
       // Full refresh (poll fallback or initial post-mount tick): re-render
       // every panel in place, but keep the panel roots — listeners on
       // wrappers/headings survive.
-      updateDashboard(panels, state, null);
+      updateDashboard(dashboardPanels, state, null);
     } else {
       // Scoped invalidation: only the matching panels re-render.
-      updateDashboard(panels, state, scopes);
+      updateDashboard(dashboardPanels, state, scopes);
     }
     log.debug({
       event: "dashboard_refresh",
@@ -1185,6 +1197,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
     stopPolling();
     if (dashboardRoot === root) {
       dashboardRoot = null;
+      dashboardPanels = null;
     }
     if (activeDashboardDisposer === dispose) {
       activeDashboardDisposer = null;
