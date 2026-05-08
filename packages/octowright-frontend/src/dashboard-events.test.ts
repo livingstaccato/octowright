@@ -153,6 +153,43 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(personasClicks).toBe(1);
   });
 
+  it("keeps the panel registry in sync after a user-action refresh + later SSE invalidation", async () => {
+    // Regression test for a real bug: the action handlers (delete /
+    // relaunch / start-scenario) used to call renderDashboard directly,
+    // which re-mounted the DOM but left bootDashboard's panel registry
+    // pointing at the now-orphan nodes. The next SSE invalidation then
+    // mutated detached nodes and the dashboard appeared frozen until a
+    // full poll-fallback refresh.
+    apiMocks.getSessions
+      .mockResolvedValueOnce(emptySessions) // initial mount
+      .mockResolvedValueOnce(sessionsWith("after-action")) // refreshDashboardNow
+      .mockResolvedValueOnce(sessionsWith("after-sse")); // SSE invalidation
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+
+    // Simulate the path an action handler now takes.
+    await dashboard.refreshDashboardNow();
+    await flushPromises();
+    let liveRows = root.querySelectorAll('[data-testid="panel-live-browsers"] tbody tr');
+    expect(liveRows.length).toBe(1);
+    // The row should display the after-action id, proving refreshDashboardNow
+    // updated the live DOM (not orphan nodes).
+    expect(liveRows[0]?.textContent).toContain("after-action");
+
+    // An SSE invalidation arrives after the action.
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(
+      new MessageEvent("invalidate", { data: '{"scope":"sessions"}' }),
+    );
+    await flushPromises();
+
+    // The DOM should reflect the SSE-fetched id. If the registry were
+    // stale (the bug), the SSE update would mutate orphan nodes and the
+    // visible row would still be "after-action".
+    liveRows = root.querySelectorAll('[data-testid="panel-live-browsers"] tbody tr');
+    expect(liveRows.length).toBe(1);
+    expect(liveRows[0]?.textContent).toContain("after-sse");
+  });
+
   it("rebuilds the live-browsers body on a sessions-scoped invalidation", async () => {
     // Counterpart to the test above: the matching scope's body IS replaced.
     apiMocks.getSessions

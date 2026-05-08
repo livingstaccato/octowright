@@ -99,13 +99,45 @@ def _live_summary(session: Any) -> dict[str, Any]:
     }
 
 
+# Per-file summary cache. _summarise_recording reads the first launch row
+# (which is stable for the file's lifetime), so a (mtime_ns, size) signature
+# is sufficient to detect anything that would change the summary. Eliminates
+# the ~N file-opens-per-/api/sessions-request that scaled with closed history.
+_summary_per_file: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+
+
+def _summarise_recording_cached(jsonl_path: Path) -> dict[str, Any] | None:
+    try:
+        stat = jsonl_path.stat()
+    except OSError:
+        return None
+    sig = (stat.st_mtime_ns, stat.st_size)
+    key = str(jsonl_path)
+    cached = _summary_per_file.get(key)
+    if cached and cached[0] == sig:
+        return cached[1]
+    summary = _summarise_recording(jsonl_path)
+    if summary is not None:
+        _summary_per_file[key] = (sig, summary)
+    return summary
+
+
+def invalidate_recording_summary(jsonl_path: Path) -> None:
+    """Drop any cached summary for ``jsonl_path``.
+
+    Called from recording_cleanup when a recording is deleted so the cache
+    doesn't carry phantom entries for files that no longer exist.
+    """
+    _summary_per_file.pop(str(jsonl_path), None)
+
+
 def _closed_sessions(recordings_dir: Path, live_log_paths: set[str]) -> list[dict[str, Any]]:
     """Every JSONL file whose path is not currently held by a live session."""
     out: list[dict[str, Any]] = []
     for jsonl in _iter_recordings(recordings_dir):
         if str(jsonl) in live_log_paths:
             continue
-        summary = _summarise_recording(jsonl)
+        summary = _summarise_recording_cached(jsonl)
         if summary is not None:
             out.append(summary)
     # Most-recent first — matches the dashboard's expected ordering.
@@ -117,12 +149,20 @@ def _closed_sessions(recordings_dir: Path, live_log_paths: set[str]) -> list[dic
 # Session lookups (live OR on-disk recording)
 # ---------------------------------------------------------------------------
 
-# In-memory index of instance_id → JSONL path within a recordings dir, keyed
-# by the dir to keep test isolation safe. Built lazily on first lookup; on a
-# miss we rebuild rather than caching the negative answer, so a recording
-# created out-of-band is picked up on its first request. ``invalidate_recording_index``
-# is called from recording_cleanup so deletes don't leave stale entries.
-_recording_index: dict[Path, dict[str, Path]] = {}
+# In-memory {instance_id → path} index per recordings dir. Built lazily on
+# first lookup; rebuilt only when the dir's mtime changes (file added or
+# removed). Negative lookups (unknown id) used to trigger an unconditional
+# rebuild — a real DoS vector under repeated bad-id traffic — so we now
+# stamp the dir mtime alongside the index and skip the rebuild when it
+# hasn't changed since the last build.
+_recording_index: dict[Path, tuple[int, dict[str, Path]]] = {}
+
+
+def _dir_mtime_ns(recordings_dir: Path) -> int | None:
+    try:
+        return recordings_dir.stat().st_mtime_ns
+    except OSError:
+        return None
 
 
 def _build_recording_index(recordings_dir: Path) -> dict[str, Path]:
@@ -148,16 +188,23 @@ def invalidate_recording_index(recordings_dir: Path | None = None) -> None:
 
 
 def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
-    index = _recording_index.get(recordings_dir)
-    if index is not None:
+    cached = _recording_index.get(recordings_dir)
+    current_mtime = _dir_mtime_ns(recordings_dir)
+    if cached is not None:
+        cached_mtime, index = cached
         hit = index.get(session_id)
         if hit is not None and hit.exists():
             return hit
         if hit is not None:
             # Cached path was deleted out-of-band; fall through to rebuild.
             del index[session_id]
+        # Skip rebuild for unknown ids when the dir hasn't changed since
+        # we last walked it — protects against repeated bad-id lookups
+        # (negative-cache via dir mtime).
+        if current_mtime is not None and current_mtime == cached_mtime:
+            return None
     rebuilt = _build_recording_index(recordings_dir)
-    _recording_index[recordings_dir] = rebuilt
+    _recording_index[recordings_dir] = (current_mtime if current_mtime is not None else 0, rebuilt)
     return rebuilt.get(session_id)
 
 
