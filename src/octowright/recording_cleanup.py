@@ -130,7 +130,7 @@ def cleanup_stale(
     errors: list[dict[str, str]] = []
     touched_video_dirs: set[Path] = set()
 
-    from octowright.http.discovery import invalidate_recording_index
+    from octowright.http.discovery import invalidate_recording_index, invalidate_recording_summary
     from octowright.http.session_artifacts import session_artifact_cache
 
     recording_dirs_touched: set[Path] = set()
@@ -148,6 +148,7 @@ def cleanup_stale(
         # recording that happens to land at the same path can't see ghost rows.
         if entry.kind == "recording":
             session_artifact_cache.evict(entry.path)
+            invalidate_recording_summary(entry.path)
             recording_dirs_touched.add(entry.path.parent)
         if entry.kind == "video":
             touched_video_dirs.add(entry.path.parent)
