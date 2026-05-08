@@ -55,6 +55,9 @@ interface InternalState {
   format: "png" | "jpeg";
   timer: ReturnType<typeof setInterval> | null;
   destroyed: boolean;
+  /** Set while an <img> fetch is outstanding so a slow server can't make
+   * setInterval stack new requests + listeners on top of an unresolved one. */
+  inflight: boolean;
 }
 
 function nowMs(): number {
@@ -94,6 +97,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     format: opts.format ?? "jpeg",
     timer: null,
     destroyed: false,
+    inflight: false,
   };
 
   // Closed-session placeholder: never polls.
@@ -199,14 +203,28 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
 
   const tick = (): void => {
     if (state.destroyed) return;
+    // Skip if the previous tick's <img> fetch hasn't resolved yet. Without
+    // this guard, setInterval would stack listeners and in-flight requests
+    // on slow links — and the implicit src-replacement abort would fire
+    // spurious `error` events that bumped consecutiveErrors falsely.
+    if (state.inflight) {
+      log.debug({ event: "live_preview_tick_skipped_inflight", session_id: opts.sessionId });
+      return;
+    }
     const start = nowMs();
     const url = liveScreenshotUrl(opts.sessionId, {
       format: state.format,
       cacheBust: Date.now(),
     });
+    const cleanup = (): void => {
+      state.inflight = false;
+      img.removeEventListener("load", onLoad);
+      img.removeEventListener("error", onError);
+    };
     // Drive the fetch via the <img> rather than fetch() so the browser handles
     // caching/decoding. We use load/error events to update the UI.
     const onLoad = (): void => {
+      cleanup();
       const latency = nowMs() - start;
       ticksCounter.add(1, { session_id: opts.sessionId });
       tickLatencyHistogram.record(latency, { session_id: opts.sessionId });
@@ -225,10 +243,9 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
         session_id: opts.sessionId,
         latency_ms: latency,
       });
-      img.removeEventListener("load", onLoad);
-      img.removeEventListener("error", onError);
     };
     const onError = (): void => {
+      cleanup();
       state.consecutiveErrors += 1;
       state.effectiveIntervalMs = Math.min(
         MAX_BACKOFF_INTERVAL_MS,
@@ -244,9 +261,8 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
         status: 0,
       });
       showError(0);
-      img.removeEventListener("load", onLoad);
-      img.removeEventListener("error", onError);
     };
+    state.inflight = true;
     img.addEventListener("load", onLoad);
     img.addEventListener("error", onError);
     img.src = url;

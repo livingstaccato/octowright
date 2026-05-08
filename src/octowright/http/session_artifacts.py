@@ -9,11 +9,39 @@ import json
 import os
 import time
 from collections import OrderedDict
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
 from octowright.defaults import DOWNLOAD_PATH_EXISTS_TTL_SECONDS, SESSION_ARTIFACT_CACHE_MAX_ENTRIES
 from octowright.http.artifacts import cache_report_for_recording, scan_recording_artifacts
+
+
+def iter_jsonl_entries(jsonl_path: Path) -> Iterator[dict[str, Any]]:
+    """Yield each parsed JSON object from a JSONL file.
+
+    Skips blank lines and lines that don't decode as JSON or aren't dicts.
+    Returns an empty iterator if the file is missing or unreadable.
+    Shared by the cache's sidecar-write path and the route fallbacks so the
+    file-walking + decode + skip-malformed loop only lives in one place.
+    """
+    if not jsonl_path.exists():
+        return
+    try:
+        with jsonl_path.open(encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict):
+                    yield entry
+    except OSError:
+        return
+
 
 # Bumped whenever the sidecar payload shape changes incompatibly. Sidecars
 # written with a different version are rejected on read so an upgraded
@@ -199,25 +227,14 @@ class SessionArtifactCache:
             return
         console_rows: list[dict[str, Any]] = []
         download_rows: list[dict[str, Any]] = []
-        try:
-            with jsonl_path.open(encoding="utf-8") as fh:
-                for raw in fh:
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    row = self.console_row_from_entry(entry)
-                    if row is not None:
-                        console_rows.append(row)
-                        continue
-                    download_row = self.download_row_from_entry(entry)
-                    if download_row is not None:
-                        download_rows.append(download_row)
-        except OSError:
-            return
+        for entry in iter_jsonl_entries(jsonl_path):
+            row = self.console_row_from_entry(entry)
+            if row is not None:
+                console_rows.append(row)
+                continue
+            download_row = self.download_row_from_entry(entry)
+            if download_row is not None:
+                download_rows.append(download_row)
 
         signature = self._signature(jsonl_path)
         if signature is None:

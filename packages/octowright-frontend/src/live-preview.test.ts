@@ -83,6 +83,7 @@ describe("mountLivePreview — live session", () => {
     const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
     if (!img) throw new Error("img missing");
     handle.start();
+    img.dispatchEvent(new Event("load")); // release the initial tick's inflight guard
     const initialSrc = img.src;
     // Switch to 1000ms; advance 1100ms — should have ticked.
     handle.setInterval(1000);
@@ -123,13 +124,14 @@ describe("mountLivePreview — live session", () => {
     vi.useFakeTimers();
     const handle = mountLivePreview(container, { sessionId: "live7", isLive: true, intervalMs: 3000 });
     handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    if (!img) throw new Error("img missing");
+    img.dispatchEvent(new Event("load")); // release the initial tick's inflight guard
     const rate = container.querySelector<HTMLSelectElement>('[data-testid="live-preview-rate"]');
     if (!rate) throw new Error("rate select missing");
     rate.value = "10000";
     rate.dispatchEvent(new Event("change"));
     // Internal state followed: a 1500ms tick now should NOT update src.
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
     const before = img.src;
     vi.advanceTimersByTime(1500);
     expect(img.src).toBe(before);
@@ -226,12 +228,36 @@ describe("mountLivePreview — live session", () => {
       img.dispatchEvent(new Event("error"));
       vi.advanceTimersByTime(10_100);
     }
+    // Resolve the trailing inflight tick with one more error so backoff stays
+    // capped (a load would reset to the base interval). This puts us in a
+    // clean state where the next interval-driven tick can run.
+    img.dispatchEvent(new Event("error"));
 
     const before = img.src;
     vi.advanceTimersByTime(9_000);
     expect(img.src).toBe(before);
     vi.advanceTimersByTime(1_100);
     expect(img.src).not.toBe(before);
+    handle.destroy();
+  });
+
+  it("skips ticks while a fetch is still in flight (no listener stacking)", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live13", isLive: true, intervalMs: 100 });
+    handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    if (!img) throw new Error("img missing");
+
+    const initialSrc = img.src;
+    // Multiple tick intervals fire before the first load resolves.
+    vi.advanceTimersByTime(500);
+    // src never changes again because tick() short-circuits while inflight.
+    expect(img.src).toBe(initialSrc);
+
+    // Resolving the in-flight load lets a subsequent tick proceed.
+    img.dispatchEvent(new Event("load"));
+    vi.advanceTimersByTime(150);
+    expect(img.src).not.toBe(initialSrc);
     handle.destroy();
   });
 });

@@ -29,7 +29,7 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http, sensitive_allowed_for_connection
 from octowright.http.routes._common import _paginate, _parse_since
-from octowright.http.session_artifacts import session_artifact_cache
+from octowright.http.session_artifacts import iter_jsonl_entries, session_artifact_cache
 
 DASHBOARD_DISCONNECT_POLL_SECONDS = 0.05
 DASHBOARD_HEARTBEAT_SECONDS = 15.0
@@ -114,25 +114,12 @@ def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
     indexed = session_artifact_cache.read_console_index(jsonl_path)
     if indexed is not None:
         return indexed
-    out: list[dict[str, Any]] = []
-    if not jsonl_path.exists():
-        return out
-    try:
-        with jsonl_path.open(encoding="utf-8") as fh:
-            for raw in fh:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    entry = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                message = session_artifact_cache.console_row_from_entry(entry)
-                if message is not None:
-                    out.append(message)
-    except OSError:
-        return out
-    return out
+    rows: list[dict[str, Any]] = []
+    for entry in iter_jsonl_entries(jsonl_path):
+        message = session_artifact_cache.console_row_from_entry(entry)
+        if message is not None:
+            rows.append(message)
+    return rows
 
 
 def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
@@ -145,25 +132,12 @@ def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
     indexed = session_artifact_cache.read_downloads_index(jsonl_path)
     if indexed is not None:
         return indexed
-    out: list[dict[str, Any]] = []
-    if not jsonl_path.exists():
-        return out
-    try:
-        with jsonl_path.open(encoding="utf-8") as fh:
-            for raw in fh:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    entry = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                row = session_artifact_cache.download_row_from_entry(entry)
-                if row is not None:
-                    out.append(row)
-    except OSError:
-        return out
-    return out
+    rows: list[dict[str, Any]] = []
+    for entry in iter_jsonl_entries(jsonl_path):
+        row = session_artifact_cache.download_row_from_entry(entry)
+        if row is not None:
+            rows.append(row)
+    return rows
 
 
 async def session_console(request: Request) -> JSONResponse:

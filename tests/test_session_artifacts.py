@@ -10,12 +10,28 @@ from pathlib import Path
 
 import pytest
 
-from octowright.http.session_artifacts import SessionArtifactCache
+from octowright.http.session_artifacts import SessionArtifactCache, iter_jsonl_entries
 
 
 def _append_jsonl(path: Path, row: dict[str, object]) -> None:
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
+
+
+def test_iter_jsonl_entries_skips_blank_decode_errors_and_non_dicts(tmp_path: Path) -> None:
+    jsonl = tmp_path / "session.jsonl"
+    with jsonl.open("w", encoding="utf-8") as fh:
+        fh.write('{"action": "console", "level": "log", "text": "a"}\n')
+        fh.write("\n")  # blank
+        fh.write("not-json\n")
+        fh.write("[1, 2, 3]\n")  # JSON but not a dict
+        fh.write('{"action": "download_saved", "url": "u"}\n')
+    rows = list(iter_jsonl_entries(jsonl))
+    assert [r["action"] for r in rows] == ["console", "download_saved"]
+
+
+def test_iter_jsonl_entries_returns_empty_for_missing_file(tmp_path: Path) -> None:
+    assert list(iter_jsonl_entries(tmp_path / "does_not_exist.jsonl")) == []
 
 
 def test_read_index_returns_none_without_sidecar(tmp_path: Path) -> None:
