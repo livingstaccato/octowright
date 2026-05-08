@@ -242,7 +242,7 @@ async def session_downloads(request: Request) -> JSONResponse:
     annotated: list[dict[str, Any]] = []
     for d in downloads:
         path = d.get("path")
-        path_exists = isinstance(path, str) and session_artifact_cache.path_exists(path)
+        path_exists = isinstance(path, str) and Path(path).exists()
         annotated.append({**d, "path_exists": path_exists})
 
     sliced, total, cursor = _paginate(annotated, since)
