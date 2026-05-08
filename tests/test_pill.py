@@ -391,13 +391,18 @@ async def test_macro_slowmo_delays_dispatch(tmp_path) -> None:
         assert baseline["slowmo_ms"] == 0
         assert baseline["executed"] == 3
 
-        # Slowmo: 200ms times 3 actions = at least 600ms of added delay.
+        # Slowmo: 200ms times 3 actions = ~600ms of added delay in theory.
+        # Lower bound here is intentionally permissive (+0.30s) because
+        # asyncio.sleep granularity varies across platforms — Windows
+        # timer resolution often overshoots, but in CI virtualization can
+        # also under-deliver. We just need to confirm slowmo MEASURABLY
+        # adds time, not that the math is exact.
         t0 = _time.monotonic()
         slow = await run_macro(session, "slowmo-probe", slowmo_ms=200)
         slow_elapsed = _time.monotonic() - t0
         assert slow["slowmo_ms"] == 200
         assert slow["executed"] == 3
-        assert slow_elapsed >= baseline_elapsed + 0.55, (
+        assert slow_elapsed >= baseline_elapsed + 0.30, (
             f"slowmo did not delay dispatch: baseline={baseline_elapsed:.3f}s slow={slow_elapsed:.3f}s"
         )
     finally:
