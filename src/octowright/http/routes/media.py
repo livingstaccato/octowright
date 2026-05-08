@@ -73,7 +73,11 @@ async def session_frame(request: Request) -> Response:
                 status_code=500,
             )
 
-    return Response(content=cached.read_bytes(), media_type="image/png")
+    # FileResponse streams from disk via sendfile() instead of reading the
+    # full PNG into Python memory each request — frame scrubbing in the
+    # debugger timeline pulls these in tight loops, so the allocation
+    # difference adds up.
+    return FileResponse(path=str(cached), media_type="image/png")
 
 
 async def session_video(request: Request) -> Response:
