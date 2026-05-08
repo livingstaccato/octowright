@@ -116,6 +116,64 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves persona/macro DOM nodes across a sessions-scoped invalidation", async () => {
+    // Regression test for the partial-update render: a sessions-only
+    // invalidation must not rebuild the personas or macros panels, so
+    // their DOM nodes (and any listeners attached to them) survive.
+    apiMocks.getPersonas.mockResolvedValue([
+      { name: "p1", display_name: "P1", engines: ["chromium"], path: "/p1", mtime: 0, last_used: "" },
+    ]);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+
+    const personasPanelBefore = root.querySelector('[data-testid="panel-personas"]');
+    const personasBodyBefore = personasPanelBefore?.children[1];
+    const macrosPanelBefore = root.querySelector('[data-testid="panel-macros"]');
+    const macrosBodyBefore = macrosPanelBefore?.children[1];
+
+    // Attach a marker listener to the personas wrapper.
+    let personasClicks = 0;
+    personasPanelBefore?.addEventListener("click", () => {
+      personasClicks += 1;
+    });
+
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(
+      new MessageEvent("invalidate", { data: '{"scope":"sessions"}' }),
+    );
+    await flushPromises();
+
+    // Same wrapper, same body — no DOM rebuild.
+    expect(root.querySelector('[data-testid="panel-personas"]')).toBe(personasPanelBefore);
+    expect(personasPanelBefore?.children[1]).toBe(personasBodyBefore);
+    expect(root.querySelector('[data-testid="panel-macros"]')).toBe(macrosPanelBefore);
+    expect(macrosPanelBefore?.children[1]).toBe(macrosBodyBefore);
+
+    // Listener still attached.
+    personasPanelBefore?.dispatchEvent(new Event("click", { bubbles: true }));
+    expect(personasClicks).toBe(1);
+  });
+
+  it("rebuilds the live-browsers body on a sessions-scoped invalidation", async () => {
+    // Counterpart to the test above: the matching scope's body IS replaced.
+    apiMocks.getSessions
+      .mockResolvedValueOnce(emptySessions)
+      .mockResolvedValueOnce(sessionsWith("s1"));
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+
+    const liveBrowsersPanel = root.querySelector('[data-testid="panel-live-browsers"]');
+    const liveBrowsersBodyBefore = liveBrowsersPanel?.children[1];
+
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(
+      new MessageEvent("invalidate", { data: '{"scope":"sessions"}' }),
+    );
+    await flushPromises();
+
+    // Same wrapper, but body replaced.
+    expect(root.querySelector('[data-testid="panel-live-browsers"]')).toBe(liveBrowsersPanel);
+    expect(liveBrowsersPanel?.children[1]).not.toBe(liveBrowsersBodyBefore);
+  });
+
   it("refreshes only the requested scope for sessions invalidation", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     await dashboard.bootDashboard(root);
