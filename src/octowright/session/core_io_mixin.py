@@ -200,6 +200,7 @@ class SessionIOMixin(SessionLike):
         def _on_console(msg: ConsoleMessage) -> None:
             entry = {"level": msg.type, "text": msg.text}
             self.console.append(entry)
+            self.console_count += 1
             self.recorder.record("console", **entry)
 
         self.page.on("console", _on_console)
@@ -210,12 +211,14 @@ class SessionIOMixin(SessionLike):
 
         self.pages.append(page)
         page_index = len(self.pages) - 1
+        self.page_count = len(self.pages)
         self.recorder.record("popup_opened", page_index=page_index, url=page.url)
 
         # Attach console listener so logs from the new tab are collected.
         def _on_console(msg: ConsoleMessage) -> None:
             entry = {"level": msg.type, "text": msg.text, "page_index": page_index}
             self.console.append(entry)
+            self.console_count += 1
             self.recorder.record("console", **entry)
 
         page.on("console", _on_console)
