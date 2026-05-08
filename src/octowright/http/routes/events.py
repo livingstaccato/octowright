@@ -238,15 +238,15 @@ async def session_downloads(request: Request) -> JSONResponse:
             return JSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
         downloads = _read_downloads_from_jsonl(jsonl)
 
-    # Annotate each record with whether the file is still on disk.
-    annotated: list[dict[str, Any]] = []
-    for d in downloads:
-        path = d.get("path")
-        path_exists = isinstance(path, str) and Path(path).exists()
-        annotated.append({**d, "path_exists": path_exists})
-
-    sliced, total, cursor = _paginate(annotated, since)
-    return JSONResponse({"downloads": sliced, "cursor": cursor, "total": total})
+    # Paginate first, then stat-annotate only the visible slice. Stat-ing all N
+    # records before pagination would be O(total) syscalls per page even when
+    # the page only renders ~50 rows.
+    sliced, total, cursor = _paginate(downloads, since)
+    annotated = [
+        {**d, "path_exists": isinstance(d.get("path"), str) and session_artifact_cache.path_exists(d["path"])}
+        for d in sliced
+    ]
+    return JSONResponse({"downloads": annotated, "cursor": cursor, "total": total})
 
 
 # ---------------------------------------------------------------------------
