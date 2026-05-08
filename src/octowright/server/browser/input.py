@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .._state import mcp, pool
+from octowright.server._state import mcp, pool
+from octowright.server.browser.inspect import browser_brief
 
 
 @mcp.tool(
@@ -21,9 +22,13 @@ from .._state import mcp, pool
         "Don't use this to enter text — use browser_fill (instant) or browser_type (per-keystroke)."
     ),
 )
-async def browser_click(instance_id: str, selector: str) -> dict[str, Any]:
-    await pool.get(instance_id).click(selector)
-    return {"ok": True}
+async def browser_click(instance_id: str, selector: str, response_mode: str | None = None) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    await session.click(selector)
+    res: dict[str, Any] = {"ok": True}
+    if response_mode == "brief":
+        res["brief"] = await browser_brief(instance_id)
+    return res
 
 
 @mcp.tool(

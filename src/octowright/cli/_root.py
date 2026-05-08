@@ -21,7 +21,7 @@ def cli(ctx: click.Context) -> None:
     if ctx.invoked_subcommand is None:
         # Late import to avoid a circular: serve.py imports `cli` from here
         # at module import time, so we can't import serve at module top-level.
-        from .serve import serve
+        from octowright.cli.serve import serve
 
         ctx.invoke(serve)
 

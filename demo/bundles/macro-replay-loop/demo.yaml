@@ -1,0 +1,47 @@
+id: macro-replay-loop
+title: Macro Replay Loop
+summary: Capture a deterministic interaction once, replay it against the same local shape, and inspect the stable loop artifacts.
+hero: true
+audiences:
+  - evaluators
+  - users
+  - contributors
+tags:
+  - hero
+  - macros
+  - replay
+  - offline
+engines:
+  - webkit
+roles:
+  - player
+source_refs:
+  scenarios:
+    - examples/scenarios/solo.yaml
+  macros:
+    - demo/bundles/macro-replay-loop/macros/replay-loop-login.json
+artifact_expectations:
+  replay:
+    - artifacts/replay.jsonl
+    - artifacts/replay-roundtrip.jsonl
+  video:
+    - artifacts/demo.mp4
+    - artifacts/poster.png
+regen:
+  command: uv run python scripts/demos/record_demo.py macro-replay-loop
+tutorial_export:
+  include: exports/macro-replay-loop.json
+seed_refs:
+  - seed/form-stage.html
+  - seed/login-card.html
+recording:
+  primary_role: player
+  default_seed: seed/login-card.html
+  macros:
+    - name: replay-loop-login
+      role: player
+      args:
+        email: demo@example.com
+        password: swordfish
+  extras:
+    - replay-roundtrip

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ... import _format as fmt
-from ... import resolve as resolve_mod
-from .._state import mcp, pool
+from octowright import _format as fmt
+from octowright import resolve as resolve_mod
+from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.server._state import mcp, pool
 
 
 @mcp.tool(
@@ -55,9 +56,31 @@ from .._state import mcp, pool
     ),
 )
 async def browser_launch(
-    **options: Any,
+    kind: str = "chromium",
+    url: str | None = None,
+    headed: bool | None = None,
+    label: str | None = None,
+    profile: str | None = None,
+    viewport_w: int | None = None,
+    viewport_h: int | None = None,
+    stabilize: bool = False,
+    record_video: bool = False,
+    trace: bool = False,
+    har: bool = False,
+    har_path: str | None = None,
+    har_mode: str = "minimal",
+    har_url_filter: str | None = None,
+    har_content: str | None = None,
+    badge: bool = True,
+    badge_position: str = "bottom-right",
+    tile: bool = False,
+    ephemeral: bool = False,
+    session: bool = False,
 ) -> dict[str, Any]:
-    return await pool.launch(**options)
+    options = {k: v for k, v in locals().items() if k != "options"}
+    result = await pool.launch(**options)
+    publish_dashboard_invalidation_nowait("sessions")
+    return result
 
 
 @mcp.tool(
@@ -98,18 +121,35 @@ def browser_suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]
     ),
 )
 async def browser_quick_launch(
-    **options: Any,
+    url: str,
+    kind: str = "chromium",
+    headed: bool | None = None,
+    label: str | None = None,
+    profile: str | None = None,
+    viewport_w: int | None = None,
+    viewport_h: int | None = None,
+    stabilize: bool = False,
+    record_video: bool = False,
+    trace: bool = False,
+    har: bool = False,
+    har_path: str | None = None,
+    har_mode: str = "minimal",
+    har_url_filter: str | None = None,
+    har_content: str | None = None,
+    badge: bool = True,
+    badge_position: str = "bottom-right",
+    tile: bool = False,
+    ephemeral: bool = False,
+    session: bool = False,
 ) -> dict[str, Any]:
-    url = options.get("url")
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
-    launch_options: dict[str, Any] = dict(options)
-    launch_options.pop("url", None)
-    profile = launch_options.pop("profile", None)
-    kind = launch_options.get("kind", "chromium")
+
+    launch_options = {k: v for k, v in locals().items() if k not in ("url", "profile", "kind", "options")}
 
     if profile:
-        res = await pool.launch(url=url, profile=profile, **launch_options)
+        res = await pool.launch(url=url, profile=profile, kind=kind, **launch_options)
+        publish_dashboard_invalidation_nowait("sessions")
         return {**res, "profile_used": profile}
 
     # Internal suggest
@@ -130,8 +170,10 @@ async def browser_quick_launch(
     res = await pool.launch(
         url=url,
         profile=profile_to_use,
+        kind=kind,
         **launch_options,
     )
+    publish_dashboard_invalidation_nowait("sessions")
     return {**res, "profile_used": profile_to_use}
 
 
@@ -155,12 +197,16 @@ def browser_list() -> dict[str, Any]:
 
 @mcp.tool(structured_output=False, description="Close one browser instance by id.")
 async def browser_close(instance_id: str) -> dict[str, Any]:
-    return await pool.close(instance_id)
+    result = await pool.close(instance_id)
+    publish_dashboard_invalidation_nowait("sessions")
+    return result
 
 
 @mcp.tool(structured_output=False, description="Close every live browser instance.")
 async def browser_close_all() -> dict[str, Any]:
-    return await pool.close_all()
+    result = await pool.close_all()
+    publish_dashboard_invalidation_nowait("sessions")
+    return result
 
 
 @mcp.tool(

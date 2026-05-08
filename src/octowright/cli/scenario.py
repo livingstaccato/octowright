@@ -12,8 +12,8 @@ from typing import Any
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
-from ._root import cli
-from .watch import _format_watch_event
+from octowright.cli._root import cli
+from octowright.cli.watch import _format_watch_event
 
 
 @cli.group()
@@ -24,7 +24,7 @@ def scenario() -> None:
 @scenario.command("list")
 def scenario_list_cmd() -> None:
     """List scenario specs on disk."""
-    from .. import scenarios as _s
+    from octowright import scenarios as _s
 
     setup_telemetry()
     try:
@@ -44,8 +44,8 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
     import asyncio as _asyncio
     import signal
 
-    from .. import scenarios as _s
-    from ..pool import BrowserPool
+    from octowright import scenarios as _s
+    from octowright.browser_pool import BrowserPool
 
     setup_telemetry()
 
@@ -124,8 +124,8 @@ async def _run_verify_and_report(*, pool: Any, live: Any, out_path: str | None) 
     from datetime import UTC, datetime
     from pathlib import Path
 
-    from .. import macros as _m
-    from .. import runner as _r
+    from octowright import macros as _m
+    from octowright import runner as _r
 
     if not live.spec.verify:
         click.echo(f"scenario {live.name!r} has no verify macros", err=True)

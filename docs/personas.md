@@ -9,11 +9,12 @@ and a profile as *one engine-specific piece of that identity*.
 
 ## On-disk layout
 
-Personas live under `~/.config/octowright/profiles/` (override with
-`OCTOWRIGHT_PROFILES_DIR`):
+Personas live under the Octowright config dir. POSIX uses the XDG config dir
+`${XDG_CONFIG_HOME:-~/.config}/octowright/profiles/`; Windows uses
+`%APPDATA%\octowright\profiles\`. Override with `OCTOWRIGHT_PROFILES_DIR`:
 
 ```text
-~/.config/octowright/profiles/
+<octowright-config>/profiles/
 ├── dante/
 │   ├── profile.yaml          # persona metadata
 │   ├── webkit/               # dante's WebKit browser state
@@ -64,8 +65,15 @@ Credentials are stored as **references**, never secrets. Each entry uses one of
 two suffixes:
 
 - `<name>_env: VAR_NAME` — read from the named environment variable at use-time.
-- `<name>_cmd: "shell command"` — execute the command and capture stdout (typical
-  for password managers like `op`, `pass`, `bw`).
+- `<name>_cmd: "command argv-form"` — exec the command directly and capture
+  stdout (typical for password managers like `op`, `pass`, `bw`). The cmd
+  is `shlex.split` and run with `shell=False` — no `/bin/sh` is involved.
+
+  Pipes / redirection / subshells in the raw cmd are refused. To use a
+  pipeline, write the cmd as `bash -c "..."` — bash becomes a normal argv
+  token whose `-c` argument carries the shell logic the cmd author signed
+  off on. The trust boundary stays explicit because the persona YAML
+  itself names the shell binary.
 
 ### Pre-flight check
 

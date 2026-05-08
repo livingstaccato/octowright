@@ -15,7 +15,7 @@ repos:
         args: [--fix=lf]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+    rev: v0.15.12
     hooks:
       - id: ruff-format
         name: ruff format
@@ -46,6 +46,43 @@ repos:
         pass_filenames: false
         always_run: true
         types: [python]
+
+      - id: max-loc
+        name: max loc (500 lines)
+        entry: uv run --active python scripts/check_max_loc.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [python]
+
+      - id: agent-docs-sync
+        name: agent docs sync
+        entry: uv run --active python scripts/check_agent_docs_sync.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: vulture
+        name: vulture (dead code, baseline-ratchet)
+        entry: uv run --active python scripts/check_vulture.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [python]
+
+      - id: xenon
+        name: xenon (complexity, baseline-ratchet)
+        entry: uv run --active python scripts/check_xenon.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [python]
+
+      - id: detect-secrets
+        name: detect-secrets (baseline-anchored)
+        entry: uv run --active detect-secrets-hook --baseline .secrets.baseline
+        language: system
+        exclude: ^(\.secrets\.baseline|uv\.lock)$
 
       - id: pytest-quick
         name: pytest (unit tests, no live browsers)

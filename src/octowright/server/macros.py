@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import macros as macro_mod
-from ._state import mcp, pool
+import octowright.macros as macro_mod
+from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.server._state import mcp, pool
 
 
 @mcp.tool(
@@ -38,6 +39,7 @@ def macro_save(
         parameters=parameters,
         include_launch=include_launch,
     )
+    publish_dashboard_invalidation_nowait("macros")
     return {"saved": True, "name": name, "path": str(path)}
 
 
@@ -51,21 +53,26 @@ def macro_list() -> list[dict[str, Any]]:
     description=(
         "Replay a saved macro against a live browser instance. `args` supplies values "
         "for any {{placeholders}} the macro declares. Lifecycle actions (launch, close, "
-        "snapshot) are skipped. Returns {macro, executed, skipped, args_used}."
+        "snapshot) are skipped. Pass `slowmo_ms` to insert a per-action delay (after the "
+        "status pill updates, before the action dispatches) so a human can follow along; "
+        "default comes from OCTOWRIGHT_MACRO_SLOWMO_MS. Returns {macro, executed, skipped, "
+        "args_used, slowmo_ms}."
     ),
 )
 async def macro_run(
     instance_id: str,
     name: str,
     args: dict[str, Any] | None = None,
+    slowmo_ms: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
-    return await macro_mod.run_macro(session=session, name=name, args=args)
+    return await macro_mod.run_macro(session=session, name=name, args=args, slowmo_ms=slowmo_ms)
 
 
 @mcp.tool(structured_output=False, description="Delete a saved macro by name. Raises if the macro does not exist.")
 def macro_delete(name: str) -> dict[str, Any]:
     path = macro_mod.delete_macro(name)
+    publish_dashboard_invalidation_nowait("macros")
     return {"deleted": True, "name": name, "path": str(path)}
 
 
@@ -83,6 +90,7 @@ async def macro_run_sequence(
     names: list[str],
     args_list: list[dict[str, Any]] | None = None,
     stop_on_failure: bool = True,
+    slowmo_ms: int | None = None,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     return await macro_mod.run_sequence(
@@ -90,6 +98,7 @@ async def macro_run_sequence(
         names=names,
         args_list=args_list,
         stop_on_failure=stop_on_failure,
+        slowmo_ms=slowmo_ms,
     )
 
 
@@ -104,7 +113,7 @@ async def macro_run_sequence(
     ),
 )
 def macro_lint(name: str) -> dict[str, Any]:
-    from .. import macro_lint as _lint
+    from octowright.macros import lint as _lint
 
     macro = macro_mod.load_macro(name)  # raises FileNotFoundError if missing
     issues = _lint.lint_macro(macro)
@@ -124,26 +133,64 @@ def macro_lint(name: str) -> dict[str, Any]:
 @mcp.tool(
     structured_output=False,
     description=(
-        "Run all test macros in a directory, producing a JUnit XML report. A macro is "
-        "considered a test if its description starts with [test]. Spawns one ephemeral "
-        "browser per test (kind defaults to 'webkit'). Returns {passed, failed, total, "
-        "report_path, results: [per-test summary]}."
+        "Preview non-mutating repair suggestions for a saved macro. Returns selector-based "
+        "actions with stored semantic replacement candidates and manual review prompts; "
+        "does not edit or replay the macro."
+    ),
+)
+def macro_repair_preview(name: str) -> dict[str, Any]:
+    return macro_mod.repair_preview(name)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Compile a friendly YAML macro DSL document into canonical macro JSON. "
+        "By default this is a dry-run preview. Pass write=True to save the compiled "
+        "macro to the normal macro JSON location. The runtime still uses JSON macros."
+    ),
+)
+def macro_compile(
+    yaml_text: str,
+    name: str | None = None,
+    write: bool = False,
+    strict: bool = True,
+) -> dict[str, Any]:
+    from octowright.macros import dsl as macro_dsl
+
+    compiled = macro_dsl.compile_macro_yaml(yaml_text, name=name, strict=strict)
+    result: dict[str, Any] = {"compiled": compiled, "written": False}
+    if write:
+        path = macro_mod.write_macro(name=compiled["name"], macro=compiled)
+        publish_dashboard_invalidation_nowait("macros")
+        result.update({"written": True, "path": str(path)})
+    return result
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Run all `[test]`-tagged macros against ephemeral browsers and emit a JUnit "
+        "XML report. Discovery uses MACROS_DIR (override via OCTOWRIGHT_MACROS_DIR). "
+        "Spawns one browser per test (kind defaults to 'webkit') with up to "
+        "max_parallel running concurrently. Returns "
+        "{passed, failed, total, report_path, results: [per-test summary]}."
     ),
 )
 async def run_test_suite(
-    macros_dir: str | None = None,
     kind: str = "webkit",
     tag: str | None = None,
     out_path: str | None = None,
+    max_parallel: int = 1,
 ) -> dict[str, Any]:
-    from .. import runner
+    import octowright.runner as runner
 
     return await runner.run_suite(
-        macros_dir=macros_dir,
         kind=kind,
         tag=tag,
         out_path=out_path,
         pool=pool,
+        max_parallel=max_parallel,
     )
 
 
@@ -157,8 +204,8 @@ async def run_test_suite(
     ),
 )
 def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
-    from .. import recording_cleanup as _rc
-    from ..defaults import RECORDINGS_DIR
+    import octowright.recording_cleanup as _rc
+    from octowright.defaults import RECORDINGS_DIR
 
     stale = _rc.find_stale_files(RECORDINGS_DIR, days)
     summary = _rc.cleanup_stale(stale, dry_run=dry_run)
@@ -191,11 +238,11 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, An
     ),
 )
 def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
-    from .. import profile_cleanup as _pc
-    from ..defaults import PROFILES_DIR
+    import octowright.profile_cleanup as _pc
+    from octowright.defaults import PROFILES_DIR
 
     in_use_dirs: list[Any] = []
-    for session in pool._sessions.values():
+    for session in pool.iter_sessions():
         udd = getattr(session, "user_data_dir", None)
         if udd:
             from pathlib import Path as _Path

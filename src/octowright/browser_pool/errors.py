@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from ..engines import playwright_failure_sanity
+from octowright.engines import playwright_failure_sanity
 
 
 def maybe_wrap_playwright_error(exc: Exception, *, kind: str) -> Exception:

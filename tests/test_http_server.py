@@ -6,10 +6,10 @@
 """HTTP debugger sidecar tests.
 
 Uses Starlette's TestClient (sync) for endpoint coverage, including the
-WebSocket. Live state is faked by mutating ``_state.pool._sessions`` /
-``_state.scenario_pool._live`` with SimpleNamespace stand-ins; closed
-sessions are exercised by writing synthetic JSONL files to a tmp
-recordings dir and pointing ``RECORDINGS_DIR`` at it.
+WebSocket. Live state is faked with small pool doubles that expose the same
+public lookup/listing methods as the real pools; closed sessions are exercised
+by writing synthetic JSONL files to a tmp recordings dir and pointing
+``RECORDINGS_DIR`` at it.
 """
 
 from __future__ import annotations
@@ -35,6 +35,31 @@ from octowright.server import _state
 # ---------------------------------------------------------------------------
 
 
+class _FakeHttpPool:
+    def __init__(self) -> None:
+        self._sessions: dict[str, Any] = {}
+
+    def maybe_get(self, instance_id: str) -> Any | None:
+        return self._sessions.get(instance_id)
+
+    def has_session(self, instance_id: str) -> bool:
+        return instance_id in self._sessions
+
+    def iter_sessions(self) -> tuple[Any, ...]:
+        return tuple(self._sessions.values())
+
+
+class _FakeHttpScenarioPool:
+    def __init__(self) -> None:
+        self._live: dict[str, Any] = {}
+
+    def has_live(self, scenario_id: str) -> bool:
+        return scenario_id in self._live
+
+    def list_live(self) -> list[dict[str, Any]]:
+        return []
+
+
 @pytest.fixture
 def isolated_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point every RECORDINGS_DIR consumer in `http_server` at a fresh tmp dir."""
@@ -50,8 +75,8 @@ def empty_pool(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     Restored automatically by monkeypatch teardown.
     """
-    fake_pool = SimpleNamespace(_sessions={})
-    fake_spool = SimpleNamespace(list_live=lambda: [])
+    fake_pool = _FakeHttpPool()
+    fake_spool = _FakeHttpScenarioPool()
     monkeypatch.setattr(_state, "pool", fake_pool)
     monkeypatch.setattr(_state, "scenario_pool", fake_spool)
     return {"pool": fake_pool, "scenario_pool": fake_spool}
@@ -64,7 +89,13 @@ def client(isolated_recordings: Path, empty_pool: dict[str, Any]) -> TestClient:
     return TestClient(app)
 
 
-def _write_recording(rec_dir: Path, instance_id: str, *, kind: str = "chromium") -> Path:
+def _write_recording(
+    rec_dir: Path,
+    instance_id: str,
+    *,
+    kind: str = "chromium",
+    extra: list[dict[str, Any]] | None = None,
+) -> Path:
     """Synthesise a `<stamp>-<kind>-<id>.jsonl` recording with a launch + navigate + close.
 
     instance_id is what the http_server parses out of the filename (third dash-token).
@@ -83,6 +114,8 @@ def _write_recording(rec_dir: Path, instance_id: str, *, kind: str = "chromium")
         {"ts": "2026-01-01T00:00:01Z", "action": "navigate", "url": "https://example.com/login"},
         {"ts": "2026-01-01T00:00:02Z", "action": "close", "video_path": None, "trace_path": None},
     ]
+    if extra:
+        rows.extend(extra)
     p.write_text("".join(json.dumps(r) + "\n" for r in rows))
     return p
 
@@ -168,6 +201,33 @@ def test_list_sessions_with_live_session(
     assert all(s["id"] != "livethere01" for s in body["closed"])
 
 
+def test_list_sessions_live_session_uses_launch_timestamp(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = _write_recording(isolated_recordings, "livetstime01")
+    fake_session = SimpleNamespace(
+        instance_id="livetstime01",
+        kind="chromium",
+        label=None,
+        profile=None,
+        url="https://example.com/live",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[],
+        downloads=[],
+        pages=[None],
+    )
+    empty_pool["pool"]._sessions["livetstime01"] = fake_session
+
+    r = client.get("/api/sessions")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["live"][0]["started_at"] == "2026-01-01T00:00:00Z"
+
+
 # ---------------------------------------------------------------------------
 # session detail
 # ---------------------------------------------------------------------------
@@ -188,6 +248,24 @@ def test_session_detail_closed(client: TestClient, isolated_recordings: Path) ->
     assert body["markdown_path"] is None
     assert body["action_count"] == 3
     assert body["video_path"] is None
+
+
+def test_session_detail_counts_events_and_actions_separately(client: TestClient, isolated_recordings: Path) -> None:
+    _write_recording(
+        isolated_recordings,
+        "countsplit00",
+        extra=[
+            {"action": "console", "text": "hello"},
+            {"action": "download_saved", "path": "/tmp/file.txt"},
+        ],
+    )
+    r = client.get("/api/sessions/countsplit00")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["event_count"] == 5
+    assert body["action_count"] == 3
+    assert body["console_count"] == 1
+    assert body["download_count"] == 1
 
 
 def test_session_detail_closed_includes_markdown_path(client: TestClient, isolated_recordings: Path) -> None:
@@ -341,7 +419,7 @@ def test_session_events_partial_line(client: TestClient, isolated_recordings: Pa
     assert r.status_code == 200
     body = r.json()
     assert body["events"] == [{"action": "launch", "kind": "chromium"}]
-    assert body["cursor"] == len(first.encode("utf-8"))
+    assert body["cursor"] == p.read_bytes().find(fragment.encode("utf-8"))
     assert body["complete"] is False
 
 
@@ -531,13 +609,13 @@ def test_session_markdown_404_when_file_missing(client: TestClient, isolated_rec
 @pytest.mark.asyncio
 async def test_markdown_endpoint_roundtrip_live_and_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("playwright")
+    import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
     from octowright import http as _http
     from octowright import personas as _personas
-    from octowright import pool as _pool
     from octowright import profiles as _profiles
+    from octowright.browser_pool import BrowserPool
     from octowright.http import state as _http_state
-    from octowright.pool import BrowserPool
     from octowright.server import _state
 
     rec = tmp_path / "recordings"
@@ -971,8 +1049,7 @@ def test_console_since_cursor(
 
 
 def test_console_closed_session_returns_empty(client: TestClient, isolated_recordings: Path) -> None:
-    """attach_console doesn't persist console events to JSONL today, so the
-    closed-session view is currently always empty. Endpoint must still 200."""
+    """Closed-session console view is empty when the recording has no console rows."""
     _write_recording(isolated_recordings, "consclosed01x")
     r = client.get("/api/sessions/consclosed01x/console")
     assert r.status_code == 200
@@ -981,12 +1058,11 @@ def test_console_closed_session_returns_empty(client: TestClient, isolated_recor
 
 
 def test_console_closed_session_reads_persisted_rows(client: TestClient, isolated_recordings: Path) -> None:
-    """Forward-compat: if console events ARE persisted as action='console', the
-    endpoint reconstructs them with the same {level, text, page_index} shape."""
+    """Closed-session console view reconstructs persisted action='console' rows."""
     name = "20260101T000000Z-chromium-conspersist01"
     rows = [
         {"action": "launch", "kind": "chromium"},
-        {"action": "console", "level": "warn", "text": "deprecated API", "page_index": None},
+        {"action": "console", "level": "warn", "text": "deprecated API"},
         {"action": "console", "level": "error", "text": "oops", "page_index": 1},
     ]
     (isolated_recordings / f"{name}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -994,8 +1070,12 @@ def test_console_closed_session_reads_persisted_rows(client: TestClient, isolate
     assert r.status_code == 200
     body = r.json()
     assert body["total"] == 2
-    assert body["messages"][0] == {"level": "warn", "text": "deprecated API", "page_index": None}
+    assert body["messages"][0] == {"level": "warn", "text": "deprecated API"}
     assert body["messages"][1] == {"level": "error", "text": "oops", "page_index": 1}
+
+    filtered = client.get("/api/sessions/conspersist01/console?level=error").json()
+    assert filtered["total"] == 1
+    assert filtered["messages"] == [{"level": "error", "text": "oops", "page_index": 1}]
 
 
 # ---------------------------------------------------------------------------
@@ -1190,7 +1270,8 @@ def stub_frontend_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     return bundle
 
 
-def test_index_html_served_at_root(stub_frontend_bundle: Path) -> None:
+@pytest.mark.usefixtures("stub_frontend_bundle")
+def test_index_html_served_at_root() -> None:
     with TestClient(_http.build_app()) as client:
         r = client.get("/")
         assert r.status_code == 200
@@ -1198,14 +1279,16 @@ def test_index_html_served_at_root(stub_frontend_bundle: Path) -> None:
         assert r.headers["content-type"].startswith("text/html")
 
 
-def test_static_asset_served(stub_frontend_bundle: Path) -> None:
+@pytest.mark.usefixtures("stub_frontend_bundle")
+def test_static_asset_served() -> None:
     with TestClient(_http.build_app()) as client:
         r = client.get("/styles.css")
         assert r.status_code == 200
         assert "color: red" in r.text
 
 
-def test_session_deep_link_serves_session_html(stub_frontend_bundle: Path) -> None:
+@pytest.mark.usefixtures("stub_frontend_bundle")
+def test_session_deep_link_serves_session_html() -> None:
     """SPA fallback: /sessions/<id> must serve session.html (frontend reads id from URL)."""
     with TestClient(_http.build_app()) as client:
         r = client.get("/sessions/abc123")
@@ -1214,7 +1297,8 @@ def test_session_deep_link_serves_session_html(stub_frontend_bundle: Path) -> No
         assert r.headers["content-type"].startswith("text/html")
 
 
-def test_session_deep_link_with_complex_id(stub_frontend_bundle: Path) -> None:
+@pytest.mark.usefixtures("stub_frontend_bundle")
+def test_session_deep_link_with_complex_id() -> None:
     """The path catchall handles ids with arbitrary characters."""
     with TestClient(_http.build_app()) as client:
         for sid in ["abc-123", "ABC123def456", "id_with_underscores", "0123456789ab"]:

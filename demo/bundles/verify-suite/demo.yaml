@@ -1,0 +1,44 @@
+id: verify-suite
+title: Verify Suite
+summary: Run role-specific verification macros as a compact offline scenario suite and surface the replay plus test-report story together.
+hero: true
+audiences:
+  - evaluators
+  - contributors
+  - testers
+tags:
+  - hero
+  - verify
+  - testing
+  - junit
+engines:
+  - webkit
+roles:
+  - form
+  - counter
+  - arithmetic
+source_refs:
+  scenarios:
+    - examples/scenarios/verify-suite.yaml
+  macros:
+    - examples/macros/test-injected-form-fill.json
+    - examples/macros/test-click-counter.json
+    - examples/macros/test-assert-arithmetic.json
+artifact_expectations:
+  replay:
+    - artifacts/replay.jsonl
+    - artifacts/report.xml
+  video:
+    - artifacts/demo.mp4
+    - artifacts/poster.png
+regen:
+  command: uv run python scripts/demos/record_demo.py verify-suite
+tutorial_export:
+  include: exports/verify-suite.json
+seed_refs:
+  - seed/verify-stage.html
+  - seed/assertions.json
+recording:
+  primary_role: form
+  default_seed: seed/verify-stage.html
+  verify_report: artifacts/report.xml

@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import takeover as _takeover
-from ._state import mcp, pool, scenario_pool
+from octowright import takeover as _takeover
+from octowright.server._state import mcp, pool, scenario_pool
 
 
 @mcp.tool(
@@ -81,15 +81,15 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
     Reports `running: false` with an `error` field when the HTTP sidecar
     failed to bind (e.g., port collision, sidecar not started).
     """
-    from .. import http as _http
+    from octowright import http as _http
 
     status = _http.runtime_status()
     base_url = _http.runtime_url()
     deep = _http.runtime_session_url(session_id) if session_id else None
     closed_count = 0
-    live_count = len(pool._sessions)
+    live_count = pool.active_count()
     try:
-        from ..defaults import RECORDINGS_DIR
+        from octowright.defaults import RECORDINGS_DIR
 
         if RECORDINGS_DIR.exists():
             closed_count = sum(1 for _ in RECORDINGS_DIR.glob("*.jsonl"))
@@ -129,10 +129,11 @@ def octowright_status() -> dict[str, Any]:
     import os
     import time
 
-    from .. import http as _http
-    from .. import personas as _personas
-    from .. import singleton as _singleton
-    from ..defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
+    from octowright import http as _http
+    from octowright import personas as _personas
+    from octowright import session_manifest as _session_manifest
+    from octowright import singleton as _singleton
+    from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 
     lock = _singleton.read_lock()
     daemon_pid: int | None = None
@@ -145,6 +146,9 @@ def octowright_status() -> dict[str, Any]:
     persona_names = [p["name"] for p in persona_list]
 
     http_status = _http.runtime_status()
+    stale_sessions = _session_manifest.stale_entries(
+        live_session_ids={session.instance_id for session in pool.iter_sessions()}
+    )
 
     return {
         "daemon": {
@@ -165,8 +169,10 @@ def octowright_status() -> dict[str, Any]:
             "badge_position_default": "bottom-right",
         },
         "pool": {
-            "live_browsers": len(pool._sessions),
+            "live_browsers": pool.active_count(),
             "live_scenarios": len(scenario_pool.list_live()),
+            "stale_manifest_sessions": stale_sessions,
+            "stale_manifest_count": len(stale_sessions),
         },
         "personas": {
             "count": len(persona_names),

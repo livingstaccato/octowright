@@ -1,0 +1,23 @@
+# pip-audit ignore list. One CVE/GHSA id per line.
+#
+# Add an entry only with a justification comment immediately above it,
+# e.g. an upstream patch ETA, a downstream-controlled mitigation, or a
+# vulnerability that does not affect the import paths octowright uses.
+#
+# Format:
+#     # CVE-XXXX-NNNNN: <one-line why> (until: 2026-MM-DD)
+#     CVE-XXXX-NNNNN
+
+# CVE-2026-26007: cryptography 46.0.3 — fix in 46.0.5. Windows ARM64 wheel
+# coverage stops at 46.0.3 (no win_arm64 wheels shipped for 46.0.4+). Our
+# dev lockfile picks 46.0.3 to keep Windows ARM64 installable, but real
+# users on Linux / macOS / Windows-x64 pip-resolve to the latest 48.0.x
+# (CVE-free) since the win32-arm64 marker doesn't apply there.
+# Revisit when upstream cryptography resumes win_arm64 wheel coverage.
+CVE-2026-26007
+
+# CVE-2026-34073: cryptography 46.0.3 — same as above (fix in 46.0.6).
+CVE-2026-34073
+
+# CVE-2026-39892: cryptography 46.0.3 — same as above (fix in 46.0.7).
+CVE-2026-39892

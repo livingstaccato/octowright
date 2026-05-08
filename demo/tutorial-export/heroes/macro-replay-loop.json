@@ -1,0 +1,103 @@
+{
+  "artifact_manifest": {
+    "artifacts": {
+      "replay": {
+        "event_count": 9,
+        "path": "artifacts/replay.jsonl",
+        "python_export": "artifacts/replay.py",
+        "size_bytes": 2219,
+        "ts_export": "artifacts/replay.ts"
+      },
+      "supporting_videos": [],
+      "video": {
+        "duration_seconds": 4.6,
+        "height": 1080,
+        "path": "artifacts/demo.mp4",
+        "poster_path": "artifacts/poster.png",
+        "size_bytes": 51470,
+        "width": 1920
+      }
+    },
+    "bundle_id": "macro-replay-loop",
+    "composition": {
+      "canvas_height": 1080,
+      "canvas_width": 1920,
+      "mode": "single-clean",
+      "overlay": {
+        "panes": [
+          {
+            "height": 0,
+            "kind": "webkit",
+            "persona": "solo-player",
+            "role": "player",
+            "width": 0,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "subtitle": "",
+        "title": ""
+      },
+      "panes": [
+        {
+          "height": 0,
+          "kind": "webkit",
+          "persona": "solo-player",
+          "role": "player",
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "primary": {
+        "kind": "webkit",
+        "persona": "solo-player",
+        "role": "player"
+      }
+    },
+    "hero": true,
+    "participants": [
+      {
+        "kind": "webkit",
+        "persona": "solo-player",
+        "role": "player"
+      }
+    ],
+    "presentation": {
+      "mode": "single-clean",
+      "primary_asset": "hero_video"
+    },
+    "title": "Macro Replay Loop"
+  },
+  "assets": {
+    "replay": [
+      "artifacts/replay.jsonl",
+      "artifacts/replay-roundtrip.jsonl"
+    ],
+    "video": [
+      "artifacts/demo.mp4",
+      "artifacts/poster.png"
+    ]
+  },
+  "hero": true,
+  "id": "macro-replay-loop",
+  "media": {
+    "presentation": {
+      "mode": "single-clean",
+      "primary_asset": "hero_video"
+    },
+    "primary": {
+      "duration_seconds": 4.6,
+      "height": 1080,
+      "path": "artifacts/demo.mp4",
+      "poster_path": "artifacts/poster.png",
+      "size_bytes": 51470,
+      "width": 1920
+    },
+    "supporting": []
+  },
+  "regen_command": "uv run python scripts/demos/record_demo.py macro-replay-loop",
+  "summary": "Capture a deterministic interaction once, replay it against the same local shape, and inspect the stable loop artifacts.",
+  "title": "Macro Replay Loop",
+  "tutorial_export": "heroes/macro-replay-loop.json"
+}
