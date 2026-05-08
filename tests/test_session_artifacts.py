@@ -127,19 +127,65 @@ def test_read_index_rejects_sidecar_with_missing_source_signature(tmp_path: Path
     assert cache.read_console_index(jsonl) is None
 
 
+def test_row_extractors_filter_and_normalize() -> None:
+    entry_console = {"action": "console", "level": "warn", "text": "x", "page_index": 3}
+    entry_download = {
+        "action": "download_saved",
+        "url": "https://x.test/a",
+        "suggested_filename": "a.txt",
+        "path": "/tmp/a.txt",
+        "timestamp": "now",
+    }
+    assert SessionArtifactCache.console_row_from_entry(entry_console) == {
+        "level": "warn",
+        "text": "x",
+        "page_index": 3,
+    }
+    assert SessionArtifactCache.download_row_from_entry(entry_download) == {
+        "url": "https://x.test/a",
+        "suggested_filename": "a.txt",
+        "path": "/tmp/a.txt",
+        "timestamp": "now",
+    }
+    assert SessionArtifactCache.console_row_from_entry({"action": "click"}) is None
+    assert SessionArtifactCache.download_row_from_entry({"action": "navigate"}) is None
+
+
+def test_path_exists_cache_expires_after_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import octowright.http.session_artifacts as sa_mod
+
+    path = tmp_path / "artifact.bin"
+    path.write_text("ok", encoding="utf-8")
+    cache = SessionArtifactCache(path_exists_ttl_seconds=2.0)
+
+    fake_time = {"t": 1000.0}
+
+    def _now() -> float:
+        return fake_time["t"]
+
+    monkeypatch.setattr(sa_mod.time, "monotonic", _now)
+    assert cache.path_exists(str(path)) is True
+    path.unlink()
+    # Within TTL we still serve cached existence.
+    fake_time["t"] += 1.0
+    assert cache.path_exists(str(path)) is True
+    # After TTL expiry cache refreshes from filesystem.
+    fake_time["t"] += 1.5
+    assert cache.path_exists(str(path)) is False
+
+
 def test_index_cache_evicts_oldest_when_bound_exceeded(tmp_path: Path) -> None:
     """LRU bound prevents unbounded memory growth across many sessions."""
-    from octowright.http.session_artifacts import _MAX_ENTRIES
-
-    cache = SessionArtifactCache()
+    bound = 8
+    cache = SessionArtifactCache(max_entries=bound)
     paths = []
-    for i in range(_MAX_ENTRIES + 5):
+    for i in range(bound + 5):
         jsonl = tmp_path / f"s{i}.jsonl"
         _append_jsonl(jsonl, {"action": "console", "level": "log", "text": f"msg-{i}"})
         cache.write_event_indexes(jsonl)
         paths.append(jsonl)
 
-    assert len(cache._console_index_cache) == _MAX_ENTRIES
+    assert len(cache._console_index_cache) == bound
     # The five oldest entries should have been evicted.
     for old in paths[:5]:
         assert str(old) not in cache._console_index_cache
@@ -161,20 +207,10 @@ def test_evict_drops_all_caches_for_path(tmp_path: Path) -> None:
     assert key not in cache._artifact_cache
 
 
-def test_max_entries_is_env_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES propagates from env to module constant."""
-    import importlib
+def test_constructor_defaults_pull_from_module_defaults() -> None:
+    """Cache picks up defaults from octowright.defaults at construction time."""
+    from octowright.defaults import DOWNLOAD_PATH_EXISTS_TTL_SECONDS, SESSION_ARTIFACT_CACHE_MAX_ENTRIES
 
-    monkeypatch.setenv("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", "8")
-    import octowright.defaults as defaults_mod
-
-    importlib.reload(defaults_mod)
-    import octowright.http.session_artifacts as sa_mod
-
-    importlib.reload(sa_mod)
-    assert sa_mod._MAX_ENTRIES == 8
-
-    # Restore module state for subsequent tests in the same session.
-    monkeypatch.delenv("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", raising=False)
-    importlib.reload(defaults_mod)
-    importlib.reload(sa_mod)
+    cache = SessionArtifactCache()
+    assert cache._max_entries == SESSION_ARTIFACT_CACHE_MAX_ENTRIES
+    assert cache._path_exists_ttl_seconds == DOWNLOAD_PATH_EXISTS_TTL_SECONDS
