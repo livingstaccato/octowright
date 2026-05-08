@@ -130,8 +130,10 @@ def cleanup_stale(
     errors: list[dict[str, str]] = []
     touched_video_dirs: set[Path] = set()
 
+    from octowright.http.discovery import invalidate_recording_index
     from octowright.http.session_artifacts import session_artifact_cache
 
+    recording_dirs_touched: set[Path] = set()
     for entry in stale:
         if dry_run:
             continue
@@ -146,8 +148,15 @@ def cleanup_stale(
         # recording that happens to land at the same path can't see ghost rows.
         if entry.kind == "recording":
             session_artifact_cache.evict(entry.path)
+            recording_dirs_touched.add(entry.path.parent)
         if entry.kind == "video":
             touched_video_dirs.add(entry.path.parent)
+
+    # Drop the cached {instance_id → path} index for any dir we removed
+    # recordings from so subsequent lookups don't return paths to files
+    # that no longer exist.
+    for d in recording_dirs_touched:
+        invalidate_recording_index(d)
 
     # Best-effort empty-dir prune for video subdirs we touched. Walk up until
     # we leave the videos/ tree.
