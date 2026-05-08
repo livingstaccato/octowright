@@ -49,7 +49,6 @@ export interface SessionDetail extends SessionSummary {
   download_count: number;
   page_count: number;
   cache: CacheReport;
-  title: string | null;
   aria?: string;
   macro_intent?: string;
 }
