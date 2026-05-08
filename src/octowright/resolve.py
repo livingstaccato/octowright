@@ -30,6 +30,7 @@ from urllib.parse import urlparse
 
 from octowright import personas as _personas
 from octowright import profiles as _profiles
+from octowright.types import PersonaListEntry
 
 
 def _host_of(url: str | None) -> str:
@@ -65,7 +66,7 @@ def _persona_hosts(persona: Any) -> list[str]:
     return [str(h).lower() for h in app_hosts]
 
 
-def _resolve_engines(prow: dict[str, Any], kind: str | None) -> list[str]:
+def _resolve_engines(prow: PersonaListEntry, kind: str | None) -> list[str]:
     """Engines to score for this persona row.
 
     Empty engine list still yields a persona-level entry under "webkit"
@@ -79,7 +80,7 @@ def _resolve_engines(prow: dict[str, Any], kind: str | None) -> list[str]:
 
 def _score_persona_engine(
     host: str,
-    prow: dict[str, Any],
+    prow: PersonaListEntry,
     persona_hosts: list[str],
     default_host: str,
     engine_kind: str,
@@ -116,7 +117,7 @@ def _score_persona_engine(
 def _collect_candidates(
     host: str,
     kind: str | None,
-    persona_rows: list[dict[str, Any]],
+    persona_rows: list[PersonaListEntry],
     profile_index: dict[tuple[str, str], dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Walk each persona row x applicable engine, scoring against host."""
