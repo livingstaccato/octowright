@@ -16,7 +16,6 @@
     "block \"src/octowright/scenarios_pool.py:59 remap_participant\" has a rank of C",
     "block \"src/octowright/server/browser/lifecycle.py:123 browser_quick_launch\" has a rank of C",
     "block \"src/octowright/session/core_io_mixin.py:37 _append_websocket_cache\" has a rank of C",
-    "block \"src/octowright/session/core_network_mixin.py:53 get_network_requests\" has a rank of C",
     "block \"src/octowright/session/core_ops_mixin.py:388 close\" has a rank of C",
     "block \"src/octowright/session/frames.py:16 switch_frame_impl\" has a rank of C",
     "block \"src/octowright/takeover.py:264 apply_takeover\" has a rank of C"

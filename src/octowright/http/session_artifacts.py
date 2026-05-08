@@ -52,9 +52,9 @@ class SessionArtifactCache:
     def _signature(self, jsonl_path: Path) -> tuple[int, int] | None:
         try:
             stat = jsonl_path.stat()
-            return (stat.st_mtime_ns, stat.st_size)
         except OSError:
             return None
+        return (stat.st_mtime_ns, stat.st_size)
 
     def _lru_set(self, cache: OrderedDict[str, Any], key: str, value: Any) -> None:
         cache[key] = value
@@ -125,10 +125,11 @@ class SessionArtifactCache:
             "timestamp": entry.get("timestamp"),
         }
 
-    @staticmethod
-    def _parse_source_signature(raw: object) -> tuple[int, int] | None:
+    def _parse_source_signature(self, raw: object) -> tuple[int, int] | None:
         if not isinstance(raw, dict):
             return None
+        # `cast` is required for ty (which narrows to dict[Unknown, Unknown]
+        # after the isinstance guard). Mypy accepts the bare .get() call.
         raw_dict = cast(dict[str, object], raw)
         mtime_ns = raw_dict.get("mtime_ns")
         size = raw_dict.get("size")

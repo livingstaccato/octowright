@@ -16,9 +16,23 @@ and to give network-capture concerns a single home.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from octowright.session._protocols import SessionLike
+
+
+def _matches_url(url_filter: str) -> Callable[[dict[str, Any]], bool]:
+    return lambda r: url_filter in r.get("url", "")
+
+
+def _matches_method(method_filter: str) -> Callable[[dict[str, Any]], bool]:
+    target = method_filter.upper()
+    return lambda r: r.get("method", "").upper() == target
+
+
+def _matches_resource_type(resource_type_filter: str) -> Callable[[dict[str, Any]], bool]:
+    return lambda r: r.get("resource_type") == resource_type_filter
 
 
 class SessionNetworkMixin(SessionLike):
@@ -59,18 +73,20 @@ class SessionNetworkMixin(SessionLike):
     ) -> dict[str, Any]:
         retained = list(self._network_requests)
         retained_base = self._network_requests_dropped
-        next_cursor = retained_base + len(retained)
         start = 0 if since is None else max(0, since - retained_base)
-        sliced = retained[start:]
-        if url_filter:
-            sliced = [r for r in sliced if url_filter in r.get("url", "")]
-        if method_filter:
-            sliced = [r for r in sliced if r.get("method", "").upper() == method_filter.upper()]
-        if resource_type_filter:
-            sliced = [r for r in sliced if r.get("resource_type") == resource_type_filter]
+        predicates = [
+            pred(value)
+            for value, pred in (
+                (url_filter, _matches_url),
+                (method_filter, _matches_method),
+                (resource_type_filter, _matches_resource_type),
+            )
+            if value
+        ]
+        sliced = [r for r in retained[start:] if all(p(r) for p in predicates)]
         return {
             "requests": sliced,
-            "next_cursor": next_cursor,
+            "next_cursor": retained_base + len(retained),
             "total": len(retained),
             "total_retained": len(retained),
             "dropped": self._network_requests_dropped,
