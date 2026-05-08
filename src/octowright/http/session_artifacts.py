@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any, cast
 
 from octowright.defaults import DOWNLOAD_PATH_EXISTS_TTL_SECONDS, SESSION_ARTIFACT_CACHE_MAX_ENTRIES
-from octowright.http.artifacts import cache_report_for_recording, scan_recording_artifacts
+from octowright.http.artifacts import (
+    _build_cache_components,
+    apply_filesystem_fallbacks,
+    cache_report_for_recording,
+    empty_artifact_state,
+    ingest_entry,
+    instance_id_from_recording_name,
+    scan_recording_artifacts,
+)
 
 
 def iter_jsonl_entries(jsonl_path: Path) -> Iterator[dict[str, Any]]:
@@ -253,6 +261,62 @@ class SessionArtifactCache:
         if signature is not None:
             self._lru_set(self._downloads_index_cache, str(jsonl_path), (signature, rows))
         return rows
+
+    def warm_close(self, jsonl_path: Path) -> dict[str, Any]:
+        """Single-pass session-close warmup.
+
+        Folds the work that previously ran as two parallel JSONL scans
+        (``write_event_indexes`` + ``cache_report``) into one walk: per
+        entry we feed the artifact aggregator AND the row extractors, so
+        the cost is one parse instead of two.
+
+        Side effects on success:
+          - Writes ``.console.index.json`` and ``.downloads.index.json``
+            sidecars (atomic via tmp + os.replace).
+          - Populates the in-memory artifact, console-index, downloads-index,
+            and report caches keyed by JSONL signature.
+
+        Returns the cache report payload (same shape as ``cache_report``)
+        so the close handler can attach it to the response body.
+        """
+        counts, state = empty_artifact_state()
+        console_rows: list[dict[str, Any]] = []
+        download_rows: list[dict[str, Any]] = []
+        for entry in iter_jsonl_entries(jsonl_path):
+            ingest_entry(entry, state, counts)
+            console = self.console_row_from_entry(entry)
+            if console is not None:
+                console_rows.append(console)
+                continue
+            download = self.download_row_from_entry(entry)
+            if download is not None:
+                download_rows.append(download)
+        apply_filesystem_fallbacks(jsonl_path, state)
+        artifacts = {**counts, **state}
+
+        signature = self._signature(jsonl_path)
+        if signature is not None:
+            self._write_index_file(self._console_index_path(jsonl_path), console_rows, signature)
+            self._write_index_file(self._downloads_index_path(jsonl_path), download_rows, signature)
+            key = str(jsonl_path)
+            self._lru_set(self._artifact_cache, key, (signature, artifacts))
+            self._lru_set(self._console_index_cache, key, (signature, console_rows))
+            self._lru_set(self._downloads_index_cache, key, (signature, download_rows))
+
+        def _opt_path(value: Any) -> Path | None:
+            return Path(str(value)) if value else None
+
+        report = _build_cache_components(
+            session_id=instance_id_from_recording_name(jsonl_path.stem),
+            jsonl_path=jsonl_path,
+            markdown_path=_opt_path(artifacts["markdown_path"]),
+            trace_path=_opt_path(artifacts["trace_path"]),
+            video_path=_opt_path(artifacts["video_path"]),
+            websocket_path=_opt_path(artifacts["websocket_path"]),
+        )
+        if signature is not None:
+            self._lru_set(self._report_cache, str(jsonl_path), (signature, report))
+        return report
 
     def write_event_indexes(self, jsonl_path: Path) -> None:
         if not jsonl_path.exists():

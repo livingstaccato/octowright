@@ -257,10 +257,10 @@ async def session_close(request: Request) -> JSONResponse:
     if isinstance(log_path, str) and log_path:
         try:
             jsonl_path = Path(log_path)
-            _write_task = asyncio.to_thread(session_artifact_cache.write_event_indexes, jsonl_path)
-            _cache_task = asyncio.to_thread(session_artifact_cache.cache_report, jsonl_path)
-            _write_result, cache_report = await asyncio.gather(_write_task, _cache_task)
-            body["cache"] = cache_report
+            # Single-pass close: one JSONL walk produces the sidecars AND the
+            # cache report, instead of two parallel threads each scanning the
+            # full file.
+            body["cache"] = await asyncio.to_thread(session_artifact_cache.warm_close, jsonl_path)
         except Exception:
             state.log.warning(
                 "octowright.http.session_close_cache_report_failed",
