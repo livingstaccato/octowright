@@ -22,11 +22,17 @@ class Recorder:
         self.log_path = log_path
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = self.log_path.open("a", encoding="utf-8")
+        self._event_count = 0
 
     def record(self, action: str, **fields: Any) -> None:
         entry = {"ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "action": action, **fields}
         self._fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._fh.flush()
+        self._event_count += 1
+
+    @property
+    def event_count(self) -> int:
+        return self._event_count
 
     def close(self) -> None:
         if not self._fh.closed:

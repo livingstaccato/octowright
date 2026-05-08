@@ -20,7 +20,7 @@ from typing import Any
 
 from octowright.http import state
 from octowright.http.artifacts import instance_id_from_recording_name as _instance_id_from_recording_name
-from octowright.http.artifacts import scan_recording_artifacts as _scan_recording_artefacts
+from octowright.http.session_artifacts import session_artifact_cache
 from octowright.recorder import tail_log
 from octowright.server import _state
 
@@ -87,6 +87,10 @@ def _live_summary(session: Any) -> dict[str, Any]:
         "started_at": started_at,
         "live": True,
         "log_path": str(log_path),
+        "event_count": int(getattr(getattr(session, "recorder", None), "event_count", 0)),
+        "console_count": int(getattr(session, "console_count", len(getattr(session, "console", ())))),
+        "download_count": int(getattr(session, "download_count", len(getattr(session, "downloads", ())))),
+        "page_count": int(getattr(session, "page_count", len(getattr(session, "pages", ()) or (1,)))),
     }
 
 
@@ -137,7 +141,7 @@ def _resolve_video_path(session_id: str) -> Path | None:
     jsonl = _find_recording_for(session_id, state.RECORDINGS_DIR)
     if jsonl is None:
         return None
-    artefacts = _scan_recording_artefacts(jsonl)
+    artefacts = session_artifact_cache.scan_artifacts(jsonl)
     if artefacts["video_path"]:
         return Path(artefacts["video_path"])
     return None
@@ -150,7 +154,7 @@ def _resolve_trace_path(session_id: str) -> Path | None:
     jsonl = _find_recording_for(session_id, state.RECORDINGS_DIR)
     if jsonl is None:
         return None
-    artefacts = _scan_recording_artefacts(jsonl)
+    artefacts = session_artifact_cache.scan_artifacts(jsonl)
     if artefacts["trace_path"]:
         return Path(artefacts["trace_path"])
     return None
@@ -163,7 +167,7 @@ def _resolve_markdown_path(session_id: str) -> Path | None:
     jsonl = _find_recording_for(session_id, state.RECORDINGS_DIR)
     if jsonl is None:
         return None
-    artefacts = _scan_recording_artefacts(jsonl)
+    artefacts = session_artifact_cache.scan_artifacts(jsonl)
     if artefacts["markdown_path"]:
         return Path(artefacts["markdown_path"])
     return None

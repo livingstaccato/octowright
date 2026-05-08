@@ -189,6 +189,10 @@ def test_list_sessions_with_live_session(
         console=[],
         downloads=[],
         pages=[None],  # pages is a list; len() matters
+        recorder=SimpleNamespace(event_count=1),
+        console_count=0,
+        download_count=0,
+        page_count=1,
     )
     empty_pool["pool"]._sessions["livethere01"] = fake_session
 
@@ -219,6 +223,10 @@ def test_list_sessions_live_session_uses_launch_timestamp(
         console=[],
         downloads=[],
         pages=[None],
+        recorder=SimpleNamespace(event_count=3),
+        console_count=0,
+        download_count=0,
+        page_count=1,
     )
     empty_pool["pool"]._sessions["livetstime01"] = fake_session
 
@@ -226,6 +234,41 @@ def test_list_sessions_live_session_uses_launch_timestamp(
     assert r.status_code == 200
     body = r.json()
     assert body["live"][0]["started_at"] == "2026-01-01T00:00:00Z"
+
+
+def test_list_sessions_live_uses_rolling_counters_over_list_lengths(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    log_path = isolated_recordings / "20260101T000000Z-firefox-rolling0001.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "firefox"}) + "\n")
+    fake_session = SimpleNamespace(
+        instance_id="rolling0001",
+        kind="firefox",
+        label=None,
+        profile=None,
+        url="https://x.test",
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=[{"level": "log", "text": "tail"}],
+        downloads=[],
+        pages=[None],
+        recorder=SimpleNamespace(event_count=4096),
+        console_count=2400,
+        download_count=27,
+        page_count=4,
+    )
+    empty_pool["pool"]._sessions["rolling0001"] = fake_session
+
+    r = client.get("/api/sessions")
+    assert r.status_code == 200
+    summary = r.json()["live"][0]
+    assert summary["event_count"] == 4096
+    assert summary["console_count"] == 2400
+    assert summary["download_count"] == 27
+    assert summary["page_count"] == 4
 
 
 # ---------------------------------------------------------------------------
@@ -337,13 +380,19 @@ def test_session_detail_live(
         downloads=[],
         pages=[None, None],
         page=page,
+        recorder=SimpleNamespace(event_count=2048),
+        console_count=1200,
+        download_count=15,
+        page_count=2,
     )
     empty_pool["pool"]._sessions["detaillive00"] = fake
     r = client.get("/api/sessions/detaillive00")
     assert r.status_code == 200
     body = r.json()
     assert body["live"] is True
-    assert body["console_count"] == 1
+    assert body["event_count"] == 2048
+    assert body["console_count"] == 1200
+    assert body["download_count"] == 15
     assert body["page_count"] == 2
 
 
@@ -1078,6 +1127,24 @@ def test_console_closed_session_reads_persisted_rows(client: TestClient, isolate
     assert filtered["messages"] == [{"level": "error", "text": "oops", "page_index": 1}]
 
 
+def test_console_closed_session_uses_sidecar_index(client: TestClient, isolated_recordings: Path) -> None:
+    jsonl = isolated_recordings / "20260101T000000Z-chromium-conssidecar01.jsonl"
+    jsonl.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n", encoding="utf-8")
+    jsonl.with_suffix(".console.index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "rows": [{"level": "error", "text": "from-index", "page_index": 2}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    r = client.get("/api/sessions/conssidecar01/console")
+    assert r.status_code == 200
+    assert r.json()["messages"] == [{"level": "error", "text": "from-index", "page_index": 2}]
+
+
 # ---------------------------------------------------------------------------
 # /downloads
 # ---------------------------------------------------------------------------
@@ -1193,6 +1260,39 @@ def test_downloads_closed_session_reads_jsonl(client: TestClient, isolated_recor
     by_name = {d["suggested_filename"]: d for d in body["downloads"]}
     assert by_name["doc.pdf"]["path_exists"] is True
     assert by_name["old.pdf"]["path_exists"] is False
+
+
+def test_downloads_closed_session_uses_sidecar_index(
+    client: TestClient,
+    isolated_recordings: Path,
+    tmp_path: Path,
+) -> None:
+    existing = tmp_path / "ok.bin"
+    existing.write_bytes(b"ok")
+    jsonl = isolated_recordings / "20260101T000000Z-chromium-dlsidecar01.jsonl"
+    jsonl.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n", encoding="utf-8")
+    jsonl.with_suffix(".downloads.index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "rows": [
+                    {
+                        "url": "https://x.test/ok.bin",
+                        "suggested_filename": "ok.bin",
+                        "path": str(existing),
+                        "timestamp": "20260101T000001Z",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    r = client.get("/api/sessions/dlsidecar01/downloads")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["downloads"][0]["suggested_filename"] == "ok.bin"
+    assert body["downloads"][0]["path_exists"] is True
 
 
 def test_downloads_invalid_since(
