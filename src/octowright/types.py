@@ -195,3 +195,52 @@ MacroAction = (
     | SetDialogPolicyAction
     | SetInputFilesAction
 )
+
+
+class PlaywrightFailureHint(TypedDict):
+    category: str
+    probable_cause: str
+    recommended_actions: list[str]
+
+
+class PersonaListEntry(TypedDict):
+    name: str
+    display_name: str | None
+    engines: list[str]
+    path: str
+    mtime: float
+    last_used: str
+
+
+class CredentialCheckEntry(TypedDict):
+    name: str
+    source: str
+    reference: str
+    ok: bool
+    error: str | None
+
+
+class CredentialCheckReport(TypedDict):
+    persona: str
+    checked: list[CredentialCheckEntry]
+    ok: bool
+    summary: str
+
+
+class SessionManifestEntry(TypedDict, total=False):
+    session_id: str
+    kind: str
+    label: str | None
+    profile: str | None
+    user_data_dir: str | None
+    log_path: str
+    launched_at: str
+    updated_at: str
+    state: str
+    daemon_pid: int
+    reason: str  # added by stale_entries() for orphan reporting
+
+
+class SessionManifest(TypedDict):
+    schema_version: int
+    sessions: dict[str, SessionManifestEntry]
