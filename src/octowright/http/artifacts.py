@@ -41,23 +41,48 @@ def _path_size(path: Path | None) -> int:
 
 
 def _build_component(path: Path | None) -> dict[str, Any]:
-    exists = bool(path is not None and path.exists())
-    size_bytes = _path_size(path) if exists else 0
+    # One stat() call covers both existence and size — no separate exists()
+    # probe. Called for 5 components per cache report, so the syscall halving
+    # adds up on hot dashboard refreshes.
+    if path is None:
+        return {"size_bytes": 0, "size_human": _human_bytes(0), "path": None, "exists": False}
+    try:
+        size_bytes = path.stat().st_size
+        exists = True
+    except OSError:
+        size_bytes = 0
+        exists = False
     return {
         "size_bytes": size_bytes,
         "size_human": _human_bytes(size_bytes),
-        "path": str(path) if path else None,
+        "path": str(path),
         "exists": exists,
     }
 
 
 def _find_screenshot_entries(recording_dir: Path, session_id: str | None) -> tuple[list[str], int]:
+    """Sum + list every screenshot PNG produced for ``session_id`` in ``recording_dir``.
+
+    The two known producers name files as:
+      * ``{instance_id}-fail-{ts}.png`` — failure snapshots (``core_ops_mixin``).
+      * ``{log_path.stem}.png`` — explicit captures via ``inspect`` tools, where
+        ``log_path.stem`` always ends in ``-{instance_id}`` (see ``recorder.new_log_path``).
+
+    Match by exact token boundary on those two patterns rather than the loose
+    ``*{session_id}*.png`` glob, which would falsely match unrelated files
+    that happen to contain the 12-char hex id as a substring.
+    """
     if session_id is None:
         return [], 0
     total = 0
     entries: list[str] = []
-    for path in sorted(recording_dir.glob(f"*{session_id}*.png")):
+    leading = f"{session_id}-"
+    trailing = f"-{session_id}"
+    for path in sorted(recording_dir.glob("*.png")):
         if not path.is_file():
+            continue
+        stem = path.stem
+        if not (stem.startswith(leading) or stem.endswith(trailing)):
             continue
         entries.append(str(path))
         try:
@@ -164,27 +189,53 @@ def _tally_jsonl(jsonl_path: Path, state: dict[str, Any], counts: dict[str, int]
             _ingest_entry(entry, state, counts)
 
 
-def scan_recording_artifacts(jsonl_path: Path) -> dict[str, Any]:
+def _empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
     counts = {"event_count": 0, "action_count": 0, "console_count": 0, "download_count": 0, "page_count": 1}
     state: dict[str, Any] = {
-        "title": None,
         "url": None,
         "video_path": None,
         "trace_path": None,
         "markdown_path": None,
         "websocket_path": None,
     }
-    _tally_jsonl(jsonl_path, state, counts)
+    return counts, state
 
-    # Sidecar fallback: if the close event didn't record a path, probe the
-    # canonical filename next to the JSONL.
+
+def _apply_filesystem_fallbacks(jsonl_path: Path, state: dict[str, Any]) -> None:
+    """Probe the canonical sidecar filenames for any artefact path the close
+    event didn't record explicitly."""
     for field, suffix in _FILESYSTEM_FALLBACKS.items():
         if state[field] is None:
             candidate = jsonl_path.with_suffix(suffix)
             if candidate.exists():
                 state[field] = str(candidate)
 
+
+def scan_recording_artifacts(jsonl_path: Path) -> dict[str, Any]:
+    counts, state = _empty_artifact_state()
+    _tally_jsonl(jsonl_path, state, counts)
+    _apply_filesystem_fallbacks(jsonl_path, state)
     return {**counts, **state}
+
+
+def ingest_entry(entry: dict[str, Any], state: dict[str, Any], counts: dict[str, int]) -> None:
+    """Public alias for the per-entry ingestion step.
+
+    Exposed so `SessionArtifactCache.warm_close` can fold artifact aggregation
+    into the same JSONL walk that builds the row sidecars, instead of having
+    two threads parse the same file twice on session close.
+    """
+    _ingest_entry(entry, state, counts)
+
+
+def empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
+    """Public alias for the artifact-state initializer (see ``ingest_entry``)."""
+    return _empty_artifact_state()
+
+
+def apply_filesystem_fallbacks(jsonl_path: Path, state: dict[str, Any]) -> None:
+    """Public alias for the filesystem fallback step (see ``ingest_entry``)."""
+    _apply_filesystem_fallbacks(jsonl_path, state)
 
 
 def cache_report_for_recording(jsonl_path: Path) -> dict[str, Any]:

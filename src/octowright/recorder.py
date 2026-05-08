@@ -20,6 +20,14 @@ class Recorder:
 
     Each `record()` call writes a single line:
         {"ts": "<iso8601>", "action": "<name>", ...fields}
+
+    Concurrency contract: `record()` is synchronous and is intended to be
+    invoked only from a single asyncio event loop (the one that owns this
+    BrowserSession). It does not hold a lock — atomicity relies on the
+    write+flush pair completing without a context switch, which is true for
+    sync code on a single event loop. Calling `record()` from multiple
+    threads concurrently (e.g. via `asyncio.to_thread`) is not supported
+    and may interleave JSONL lines.
     """
 
     def __init__(self, log_path: Path) -> None:

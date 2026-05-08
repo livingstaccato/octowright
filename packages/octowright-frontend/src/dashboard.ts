@@ -1082,6 +1082,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   let source: EventSource | null = null;
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
   let currentState = EMPTY_STATE;
+  let streamHealthy = false;
 
   const tick = async (scopes: ReadonlySet<DashboardScope> | null = null): Promise<void> => {
     const generation = ++refreshGeneration;
@@ -1100,38 +1101,55 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
       macros: state.macros.length,
     });
   };
+  const stopPolling = (): void => {
+    if (intervalId !== null) {
+      window.clearInterval(intervalId);
+      intervalId = null;
+    }
+  };
+  const startPolling = (): void => {
+    if (intervalId !== null || disposed) return;
+    intervalId = window.setInterval(() => {
+      tick().catch((err: unknown) => {
+        log.warn({ event: "dashboard_refresh_failed", error: String(err) });
+      });
+    }, REFRESH_MS);
+  };
   await tick();
   if (typeof EventSource !== "undefined") {
     source = new EventSource(dashboardEventsUrl());
+    streamHealthy = true;
     const refreshFromStream = (event?: MessageEvent) => {
       const scopes = parseInvalidateScopes(event?.data);
       tick(scopes).catch((err: unknown) => {
         log.warn({ event: "dashboard_stream_refresh_failed", error: String(err) });
       });
     };
-    source.onmessage = refreshFromStream;
     source.addEventListener("invalidate", refreshFromStream);
+    source.addEventListener("hello", () => {
+      streamHealthy = true;
+      stopPolling();
+    });
     source.onerror = () => {
       log.warn({ event: "dashboard_stream_error" });
       source?.close();
       source = null;
+      streamHealthy = false;
+      startPolling();
     };
+  } else {
+    startPolling();
   }
-  intervalId = window.setInterval(() => {
-    tick().catch((err: unknown) => {
-      log.warn({ event: "dashboard_refresh_failed", error: String(err) });
-    });
-  }, REFRESH_MS);
+  if (!streamHealthy) {
+    startPolling();
+  }
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
     refreshGeneration++;
     source?.close();
     source = null;
-    if (intervalId !== null) {
-      window.clearInterval(intervalId);
-      intervalId = null;
-    }
+    stopPolling();
     if (dashboardRoot === root) {
       dashboardRoot = null;
     }

@@ -16,6 +16,7 @@ from playwright.async_api import Browser, BrowserContext, Page, Video
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
 from octowright.session.core_io_mixin import SessionIOMixin
+from octowright.session.core_network_mixin import SessionNetworkMixin
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
 
@@ -24,7 +25,7 @@ DEFAULT_PREVIEW_CHARS = 4000
 
 
 @dataclass
-class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin):
+class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin, SessionNetworkMixin):
     instance_id: str
     kind: str
     label: str | None
@@ -64,11 +65,16 @@ class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin):
     console_count: int = 0
     download_count: int = 0
     page_count: int = 1
+    started_at: str = ""
 
     def __post_init__(self) -> None:
         if self.page not in self.pages:
             self.pages.insert(0, self.page)
         self.page_count = len(self.pages)
+        if not self.started_at:
+            from datetime import UTC, datetime
+
+            self.started_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     def _target(self) -> Any:
         return self.active_frame if self.active_frame is not None else self.page
