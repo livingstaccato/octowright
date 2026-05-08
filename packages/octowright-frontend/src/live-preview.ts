@@ -46,9 +46,12 @@ const RATE_OPTIONS: Array<{ value: number; label: string }> = [
 ];
 
 const DEFAULT_INTERVAL_MS = 3000;
+const MAX_BACKOFF_INTERVAL_MS = 10000;
 
 interface InternalState {
   intervalMs: number;
+  effectiveIntervalMs: number;
+  consecutiveErrors: number;
   format: "png" | "jpeg";
   timer: ReturnType<typeof setInterval> | null;
   destroyed: boolean;
@@ -86,6 +89,8 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
 
   const state: InternalState = {
     intervalMs: opts.intervalMs ?? DEFAULT_INTERVAL_MS,
+    effectiveIntervalMs: opts.intervalMs ?? DEFAULT_INTERVAL_MS,
+    consecutiveErrors: 0,
     format: opts.format ?? "jpeg",
     timer: null,
     destroyed: false,
@@ -207,6 +212,14 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       tickLatencyHistogram.record(latency, { session_id: opts.sessionId });
       lastUpdate.textContent = fmtTimestamp(new Date());
       clearError();
+      state.consecutiveErrors = 0;
+      if (state.effectiveIntervalMs !== state.intervalMs) {
+        state.effectiveIntervalMs = state.intervalMs;
+        if (state.timer !== null) {
+          clearInterval(state.timer);
+          state.timer = setInterval(tick, state.effectiveIntervalMs);
+        }
+      }
       log.debug({
         event: "live_preview_tick",
         session_id: opts.sessionId,
@@ -216,6 +229,15 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       img.removeEventListener("error", onError);
     };
     const onError = (): void => {
+      state.consecutiveErrors += 1;
+      state.effectiveIntervalMs = Math.min(
+        MAX_BACKOFF_INTERVAL_MS,
+        state.intervalMs * Math.pow(2, state.consecutiveErrors),
+      );
+      if (state.timer !== null) {
+        clearInterval(state.timer);
+        state.timer = setInterval(tick, state.effectiveIntervalMs);
+      }
       log.warn({
         event: "live_preview_error",
         session_id: opts.sessionId,
@@ -232,7 +254,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
 
   const startPolling = (): void => {
     if (state.timer !== null) return;
-    state.timer = setInterval(tick, state.intervalMs);
+    state.timer = setInterval(tick, state.effectiveIntervalMs);
     setBadge("live");
     playBtn.textContent = "⏸";
     playBtn.setAttribute("aria-label", "Pause live preview");
@@ -274,6 +296,8 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     setInterval: (ms: number) => {
       if (state.destroyed) return;
       state.intervalMs = ms;
+      state.effectiveIntervalMs = ms;
+      state.consecutiveErrors = 0;
       rateSelect.value = String(ms);
       log.info({
         event: "live_preview_interval_changed",
@@ -282,7 +306,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       });
       if (state.timer !== null) {
         clearInterval(state.timer);
-        state.timer = setInterval(tick, ms);
+        state.timer = setInterval(tick, state.effectiveIntervalMs);
       }
     },
     markClosed: () => {
