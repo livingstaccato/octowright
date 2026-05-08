@@ -222,6 +222,38 @@ class SessionArtifactCache:
         self._lru_set(self._downloads_index_cache, key, (signature, rows))
         return rows
 
+    def get_console_rows(self, jsonl_path: Path) -> list[dict[str, Any]]:
+        """Return console rows for a recording, hitting in-memory cache → sidecar
+        → fresh JSONL scan in that order. The fallback scan populates the
+        in-memory cache so subsequent reads of the same recording (signature
+        unchanged) skip the scan. Read-only — never writes a sidecar file."""
+        from_index = self.read_console_index(jsonl_path)
+        if from_index is not None:
+            return from_index
+        signature = self._signature(jsonl_path)
+        rows = [
+            row for entry in iter_jsonl_entries(jsonl_path) if (row := self.console_row_from_entry(entry)) is not None
+        ]
+        if signature is not None:
+            self._lru_set(self._console_index_cache, str(jsonl_path), (signature, rows))
+        return rows
+
+    def get_download_rows(self, jsonl_path: Path) -> list[dict[str, Any]]:
+        """Return download rows for a recording, hitting in-memory cache → sidecar
+        → fresh JSONL scan in that order. The fallback scan populates the
+        in-memory cache so subsequent reads of the same recording (signature
+        unchanged) skip the scan. Read-only — never writes a sidecar file."""
+        from_index = self.read_downloads_index(jsonl_path)
+        if from_index is not None:
+            return from_index
+        signature = self._signature(jsonl_path)
+        rows = [
+            row for entry in iter_jsonl_entries(jsonl_path) if (row := self.download_row_from_entry(entry)) is not None
+        ]
+        if signature is not None:
+            self._lru_set(self._downloads_index_cache, str(jsonl_path), (signature, rows))
+        return rows
+
     def write_event_indexes(self, jsonl_path: Path) -> None:
         if not jsonl_path.exists():
             return
