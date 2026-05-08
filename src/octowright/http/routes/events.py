@@ -29,7 +29,7 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http, sensitive_allowed_for_connection
 from octowright.http.routes._common import _paginate, _parse_since
-from octowright.http.session_artifacts import iter_jsonl_entries, session_artifact_cache
+from octowright.http.session_artifacts import session_artifact_cache
 
 DASHBOARD_DISCONNECT_POLL_SECONDS = 0.05
 DASHBOARD_HEARTBEAT_SECONDS = 15.0
@@ -110,16 +110,13 @@ async def session_events(request: Request) -> JSONResponse:
 
 
 def _read_console_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
-    """Reconstruct console messages from persisted ``action: "console"`` rows."""
-    indexed = session_artifact_cache.read_console_index(jsonl_path)
-    if indexed is not None:
-        return indexed
-    rows: list[dict[str, Any]] = []
-    for entry in iter_jsonl_entries(jsonl_path):
-        message = session_artifact_cache.console_row_from_entry(entry)
-        if message is not None:
-            rows.append(message)
-    return rows
+    """Reconstruct console messages from persisted ``action: "console"`` rows.
+
+    Routes through ``SessionArtifactCache.get_console_rows`` so the result of
+    a fallback scan (when no sidecar exists yet) is cached in-memory by JSONL
+    signature. Subsequent requests against the same recording skip the scan.
+    """
+    return session_artifact_cache.get_console_rows(jsonl_path)
 
 
 def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
@@ -127,17 +124,10 @@ def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
 
     ``BrowserSession._handle_download`` → ``downloads.save_download`` records an
     ``action: "download_saved"`` row with the same field shape used in-memory
-    (``url``, ``suggested_filename``, ``path``, ``timestamp``).
+    (``url``, ``suggested_filename``, ``path``, ``timestamp``). Routes through
+    ``get_download_rows`` for the same in-memory caching as console rows.
     """
-    indexed = session_artifact_cache.read_downloads_index(jsonl_path)
-    if indexed is not None:
-        return indexed
-    rows: list[dict[str, Any]] = []
-    for entry in iter_jsonl_entries(jsonl_path):
-        row = session_artifact_cache.download_row_from_entry(entry)
-        if row is not None:
-            rows.append(row)
-    return rows
+    return session_artifact_cache.get_download_rows(jsonl_path)
 
 
 async def session_console(request: Request) -> JSONResponse:

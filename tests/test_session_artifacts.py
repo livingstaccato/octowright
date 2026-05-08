@@ -190,6 +190,79 @@ def test_path_exists_cache_expires_after_ttl(tmp_path: Path, monkeypatch: pytest
     assert cache.path_exists(str(path)) is False
 
 
+def test_get_console_rows_caches_fallback_scan_in_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a sidecar, the first call scans the JSONL; the second hits the in-memory cache."""
+    import octowright.http.session_artifacts as sa_mod
+
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "hello"})
+
+    cache = SessionArtifactCache()
+    scan_count = 0
+    real_iter = sa_mod.iter_jsonl_entries
+
+    def counting_iter(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal scan_count
+        scan_count += 1
+        yield from real_iter(path)
+
+    monkeypatch.setattr(sa_mod, "iter_jsonl_entries", counting_iter)
+
+    rows1 = cache.get_console_rows(jsonl)
+    rows2 = cache.get_console_rows(jsonl)
+    assert rows1 == [{"level": "log", "text": "hello"}]
+    assert rows2 == rows1
+    # Second call must not have re-scanned.
+    assert scan_count == 1
+
+
+def test_get_download_rows_caches_fallback_scan_in_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirror of the console test for the downloads path."""
+    import octowright.http.session_artifacts as sa_mod
+
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(
+        jsonl,
+        {
+            "action": "download_saved",
+            "url": "https://x.test/a",
+            "suggested_filename": "a.txt",
+            "path": "/tmp/a.txt",
+            "timestamp": "t",
+        },
+    )
+
+    cache = SessionArtifactCache()
+    scan_count = 0
+    real_iter = sa_mod.iter_jsonl_entries
+
+    def counting_iter(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal scan_count
+        scan_count += 1
+        yield from real_iter(path)
+
+    monkeypatch.setattr(sa_mod, "iter_jsonl_entries", counting_iter)
+
+    cache.get_download_rows(jsonl)
+    cache.get_download_rows(jsonl)
+    assert scan_count == 1
+
+
+def test_get_console_rows_invalidates_in_memory_cache_when_jsonl_changes(tmp_path: Path) -> None:
+    """A signature change (mtime/size) on the JSONL must force a fresh scan."""
+    jsonl = tmp_path / "session.jsonl"
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "first"})
+
+    cache = SessionArtifactCache()
+    assert cache.get_console_rows(jsonl) == [{"level": "log", "text": "first"}]
+
+    _append_jsonl(jsonl, {"action": "console", "level": "log", "text": "second"})
+    assert cache.get_console_rows(jsonl) == [
+        {"level": "log", "text": "first"},
+        {"level": "log", "text": "second"},
+    ]
+
+
 def test_index_cache_evicts_oldest_when_bound_exceeded(tmp_path: Path) -> None:
     """LRU bound prevents unbounded memory growth across many sessions."""
     bound = 8
