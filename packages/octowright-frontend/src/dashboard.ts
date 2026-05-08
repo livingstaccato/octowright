@@ -16,6 +16,8 @@ import {
   startScenario,
   updatePersonaYaml,
 } from "./api.js";
+import { mountPanels, updatePanels } from "./dashboard-panels.js";
+import type { PanelDef, PanelInstance } from "./dashboard-panels.js";
 import { formatDateTime, shortUrl } from "./format.js";
 import { getLogger, initTelemetry } from "./telemetry.js";
 import type {
@@ -682,52 +684,71 @@ function parseInvalidateScopes(data: string | null | undefined): ReadonlySet<Das
 
 // ─── render ───────────────────────────────────────────────────────────────────
 
-export function renderDashboard(root: HTMLElement, state: DashboardState): void {
-  const openPanels = new Map(
-    Array.from(root.querySelectorAll<HTMLDetailsElement>("details[data-testid]")).map((el) => [
-      el.dataset.testid ?? "",
-      el.open,
-    ]),
-  );
-  root.innerHTML = "";
-  root.append(
-    section("Live browsers", "live-browsers", renderSessionTable(state.sessions.live, true)),
-    section("Live scenarios", "live-scenarios", renderScenarioList(state.scenarios.live)),
-    section("Personas", "personas", renderPersonaGrid(state.personas)),
-    section(
-      "Saved scenarios",
-      "saved-scenarios",
-      renderSavedScenarios(state.scenarios.saved ?? []),
-    ),
-    section(
-      "Recent closed sessions",
-      "closed-sessions",
-      renderSessionTable(state.sessions.closed.slice(0, 20), false),
-    ),
-    section("Macros", "macros", renderMacroList(state), {
-      collapsible: true,
-      open: openPanels.get("panel-macros") ?? false,
-    }),
-  );
+// Scope-keyed panel registry — see ``dashboard-panels.ts`` for the generic
+// mount + partial-update mechanism.
+const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
+  {
+    scope: "sessions",
+    testid: "live-browsers",
+    title: "Live browsers",
+    buildBody: (s) => renderSessionTable(s.sessions.live, true),
+  },
+  {
+    scope: "scenarios",
+    testid: "live-scenarios",
+    title: "Live scenarios",
+    buildBody: (s) => renderScenarioList(s.scenarios.live),
+  },
+  {
+    scope: "personas",
+    testid: "personas",
+    title: "Personas",
+    buildBody: (s) => renderPersonaGrid(s.personas),
+  },
+  {
+    scope: "scenarios",
+    testid: "saved-scenarios",
+    title: "Saved scenarios",
+    buildBody: (s) => renderSavedScenarios(s.scenarios.saved ?? []),
+  },
+  {
+    scope: "sessions",
+    testid: "closed-sessions",
+    title: "Recent closed sessions",
+    buildBody: (s) => renderSessionTable(s.sessions.closed.slice(0, 20), false),
+  },
+  {
+    scope: "macros",
+    testid: "macros",
+    title: "Macros",
+    collapsible: true,
+    defaultOpen: false,
+    buildBody: renderMacroList,
+  },
+];
+
+export type DashboardPanel = PanelInstance<DashboardScope, DashboardState>;
+
+/**
+ * Mount the full dashboard tree under ``root`` and return the panel
+ * registry the caller can hand back to ``updateDashboard`` for partial
+ * refreshes. Open <details> state is preserved across re-mounts.
+ */
+export function renderDashboard(root: HTMLElement, state: DashboardState): DashboardPanel[] {
+  return mountPanels(root, PANEL_DEFS, state);
 }
 
-function section(
-  title: string,
-  testid: string,
-  body: HTMLElement,
-  opts: { collapsible?: boolean; open?: boolean } = {},
-): HTMLElement {
-  const wrapper = opts.collapsible ? document.createElement("details") : document.createElement("section");
-  wrapper.className = `panel panel--${testid}`;
-  wrapper.setAttribute("data-testid", `panel-${testid}`);
-  if (opts.collapsible && wrapper instanceof HTMLDetailsElement) {
-    wrapper.open = opts.open ?? false;
-  }
-  const heading = opts.collapsible ? document.createElement("summary") : document.createElement("h2");
-  heading.className = "panel__title";
-  heading.textContent = title;
-  wrapper.append(heading, body);
-  return wrapper;
+/**
+ * Re-render only the panels whose scope is in ``scopes`` (or every panel
+ * if ``scopes`` is null). Listeners on wrappers/headings and <details>
+ * open state are preserved.
+ */
+export function updateDashboard(
+  panels: ReadonlyArray<DashboardPanel>,
+  state: DashboardState,
+  scopes: ReadonlySet<DashboardScope> | null,
+): void {
+  updatePanels(panels, state, scopes);
 }
 
 function renderSessionTable(rows: SessionSummary[], live: boolean): HTMLElement {
@@ -1083,6 +1104,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
   let currentState = EMPTY_STATE;
   let streamHealthy = false;
+  let panels: DashboardPanel[] | null = null;
 
   const tick = async (scopes: ReadonlySet<DashboardScope> | null = null): Promise<void> => {
     const generation = ++refreshGeneration;
@@ -1091,7 +1113,18 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
       return;
     }
     currentState = state;
-    renderDashboard(root, state);
+    if (panels === null) {
+      // First tick (or post-dispose remount) — full mount.
+      panels = renderDashboard(root, state);
+    } else if (scopes === null) {
+      // Full refresh (poll fallback or initial post-mount tick): re-render
+      // every panel in place, but keep the panel roots — listeners on
+      // wrappers/headings survive.
+      updateDashboard(panels, state, null);
+    } else {
+      // Scoped invalidation: only the matching panels re-render.
+      updateDashboard(panels, state, scopes);
+    }
     log.debug({
       event: "dashboard_refresh",
       live_count: state.sessions.live.length,
