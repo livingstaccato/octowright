@@ -134,7 +134,7 @@ class ScenarioPlanResult(TypedDict):
     name: str
     description: str | None
     summary: str
-    participants: list[dict[str, Any]]
+    participants: list[ScenarioParticipant]
     fixtures: dict[str, Any]
     teardown_macro: str | None
     verify: dict[str, str]
@@ -144,13 +144,19 @@ class ScenarioPlanResult(TypedDict):
 class ScenarioStartResult(TypedDict):
     scenario_id: str
     name: str
-    participants: list[dict[str, Any]]
+    participants: list[ScenarioParticipant]
+
+
+class ScenarioStatusEntry(TypedDict):
+    scenario_id: str
+    name: str
+    participants: list[ScenarioParticipant]
 
 
 class ScenarioStatusResult(TypedDict):
     summary: str
     count: int
-    scenarios: list[dict[str, Any]]
+    scenarios: list[ScenarioStatusEntry]
 
 
 class ScenarioStopResult(TypedDict):
@@ -162,7 +168,7 @@ class ScenarioStopResult(TypedDict):
 class ScenarioParticipantsResult(TypedDict):
     summary: str
     count: int
-    participants: list[dict[str, Any]]
+    participants: list[ScenarioParticipant]
 
 
 class ScenarioRemapEntry(TypedDict):
@@ -213,7 +219,7 @@ class ScenarioTailEntry(TypedDict, total=False):
 
 class ScenarioTailResult(TypedDict):
     scenario_id: str
-    events: list[dict[str, Any]]
+    events: list[ScenarioTailEntry]
     cursors: dict[str, int]
 
 
@@ -250,8 +256,17 @@ class BrowserEvaluateResult(TypedDict, total=False):
     cap: int
 
 
+class ConsoleMessage(TypedDict, total=False):
+    """One entry in `BrowserSession.console`. `page_index` is only set when
+    the message originated from a popup, not the primary page."""
+
+    level: str
+    text: str
+    page_index: int
+
+
 class BrowserConsoleMessagesResult(TypedDict):
-    messages: list[dict[str, Any]]
+    messages: list[ConsoleMessage]
     next_cursor: int
     total: int
 
@@ -321,6 +336,14 @@ class BrowserBriefResult(TypedDict):
 # ─── cleanup tools (server/macros.py) ────────────────────────────────────────
 
 
+class ProfileCleanupDetail(TypedDict):
+    persona: str
+    engine: str
+    path: str
+    size_bytes: int
+    age_days: float
+
+
 class CleanupResult(TypedDict, total=False):
     """Shared shape for recordings_cleanup + profile_cleanup MCP returns."""
 
@@ -337,4 +360,4 @@ class CleanupResult(TypedDict, total=False):
     # profiles-specific
     profiles_dir: str
     skipped_in_use: int
-    details: list[dict[str, Any]]
+    details: list[ProfileCleanupDetail]

@@ -206,7 +206,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   disposeDashboard();
   dashboardRoot = root;
   log.info({ event: "dashboard_boot_start" });
-  initTelemetry();
+  initTelemetry({ pageName: "dashboard" });
   loadPersonaSizes();
   let disposed = false;
   let source: EventSource | null = null;

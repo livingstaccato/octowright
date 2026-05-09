@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json as _json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from octowright.export import export_script as _export_script
 from octowright.mcp_types import (
@@ -28,6 +28,7 @@ from octowright.mcp_types import (
     BrowserScreenshotResult,
     BrowserSnapshotResult,
     BrowserTailRecordingResult,
+    ConsoleMessage,
 )
 from octowright.recorder import tail_log
 from octowright.server._state import mcp, pool
@@ -128,7 +129,7 @@ def browser_console_messages(
     sliced = msgs[start:]
     filtered = [m for m in sliced if m.get("level") == level] if level else sliced
     return {
-        "messages": filtered,
+        "messages": cast("list[ConsoleMessage]", filtered),
         "next_cursor": len(msgs),
         "total": len(msgs),
     }
