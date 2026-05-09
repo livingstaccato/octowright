@@ -4,7 +4,7 @@
     "block \"src/octowright/browser_pool/pool.py:70 launch\" has a rank of D",
     "block \"src/octowright/engines.py:73 engine_status\" has a rank of C",
     "block \"src/octowright/goldens.py:128 _diff_nodes\" has a rank of C",
-    "block \"src/octowright/http/routes/media.py:122 session_screenshot_now\" has a rank of C",
+    "block \"src/octowright/http/routes/media.py:120 session_screenshot_now\" has a rank of C",
     "block \"src/octowright/http/routes/meta.py:117 persona_sizes_endpoint\" has a rank of C",
     "block \"src/octowright/http/routes/sessions.py:48 session_detail\" has a rank of C",
     "block \"src/octowright/macros/repair.py:57 replacement_preview\" has a rank of C",
@@ -16,7 +16,7 @@
     "block \"src/octowright/scenarios_pool.py:59 remap_participant\" has a rank of C",
     "block \"src/octowright/server/browser/lifecycle.py:123 browser_quick_launch\" has a rank of C",
     "block \"src/octowright/session/core_io_mixin.py:37 _append_websocket_cache\" has a rank of C",
-    "block \"src/octowright/session/core_ops_mixin.py:388 close\" has a rank of C",
+    "block \"src/octowright/session/core_ops_mixin.py:239 close\" has a rank of C",
     "block \"src/octowright/session/frames.py:16 switch_frame_impl\" has a rank of C",
     "block \"src/octowright/takeover.py:264 apply_takeover\" has a rank of C"
   ]

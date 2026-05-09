@@ -32,6 +32,13 @@ export function formatDateTime(iso: string): string {
   return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
+export function formatBytes(n: number): string {
+  if (n >= 1_073_741_824) return `${(n / 1_073_741_824).toFixed(1)} GB`;
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
+  if (n >= 1_024) return `${(n / 1_024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
 export type ActionColorKind = "navigate" | "click" | "fill" | "expect" | "error" | "default";
 
 export function colorForAction(action: string): ActionColorKind {

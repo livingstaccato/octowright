@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 
 class LaunchOptions(TypedDict, total=False):
@@ -244,3 +244,57 @@ class SessionManifestEntry(TypedDict, total=False):
 class SessionManifest(TypedDict):
     schema_version: int
     sessions: dict[str, SessionManifestEntry]
+
+
+# ─── MCP tool wire-facing return shapes ──────────────────────────────────────
+
+
+class MacroSaveResult(TypedDict):
+    saved: bool
+    name: str
+    path: str
+
+
+class MacroDeleteResult(TypedDict):
+    deleted: bool
+    name: str
+    path: str
+
+
+class MacroLintIssue(TypedDict):
+    severity: str
+    code: str
+    message: str
+    action_index: int | None
+
+
+class MacroLintResult(TypedDict):
+    macro: str
+    issues: list[MacroLintIssue]
+    summary: str
+    ok: bool
+
+
+class MacroCompileResult(TypedDict, total=False):
+    compiled: dict[str, Any]
+    written: bool
+    path: str
+
+
+class CleanupResult(TypedDict, total=False):
+    """Shared shape for recordings_cleanup + profile_cleanup MCP returns."""
+
+    days: float
+    dry_run: bool
+    found: int
+    removed: int
+    would_remove: int
+    freed_bytes: int
+    errors: list[dict[str, str]]
+    # recordings-specific
+    recordings_dir: str
+    by_kind: dict[str, int]
+    # profiles-specific
+    profiles_dir: str
+    skipped_in_use: int
+    details: list[dict[str, Any]]

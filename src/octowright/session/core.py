@@ -15,7 +15,9 @@ from playwright.async_api import Browser, BrowserContext, Page, Video
 
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
+from octowright.session.core_interaction_mixin import SessionInteractionMixin
 from octowright.session.core_io_mixin import SessionIOMixin
+from octowright.session.core_locator_mixin import SessionLocatorMixin
 from octowright.session.core_network_mixin import SessionNetworkMixin
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
@@ -25,7 +27,14 @@ DEFAULT_PREVIEW_CHARS = 4000
 
 
 @dataclass
-class BrowserSession(SessionIOMixin, SessionPageMixin, SessionOpsMixin, SessionNetworkMixin):
+class BrowserSession(
+    SessionIOMixin,
+    SessionPageMixin,
+    SessionOpsMixin,
+    SessionNetworkMixin,
+    SessionInteractionMixin,
+    SessionLocatorMixin,
+):
     instance_id: str
     kind: str
     label: str | None

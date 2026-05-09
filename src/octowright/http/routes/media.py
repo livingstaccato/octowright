@@ -19,10 +19,8 @@ from octowright.http import state
 from octowright.http.discovery import (
     _find_recording_for,
     _live_session_or_none,
+    _resolve_artifact_path,
     _resolve_log_path,
-    _resolve_markdown_path,
-    _resolve_trace_path,
-    _resolve_video_path,
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _parse_bool
@@ -42,7 +40,7 @@ async def session_frame(request: Request) -> Response:
     except ValueError:
         return JSONResponse({"error": f"invalid t={raw_t!r}, must be float"}, status_code=400)
 
-    video_path = _resolve_video_path(sid)
+    video_path = _resolve_artifact_path(sid, "video_path")
     if video_path is None or not video_path.exists():
         return JSONResponse(
             {"error": "no video recorded for this session"},
@@ -82,7 +80,7 @@ async def session_frame(request: Request) -> Response:
 
 async def session_video(request: Request) -> Response:
     sid = request.path_params["id"]
-    video_path = _resolve_video_path(sid)
+    video_path = _resolve_artifact_path(sid, "video_path")
     if video_path is None or not video_path.exists():
         return JSONResponse(
             {"error": "no video recorded for this session"},
@@ -94,7 +92,7 @@ async def session_video(request: Request) -> Response:
 
 async def session_trace(request: Request) -> Response:
     sid = request.path_params["id"]
-    trace_path = _resolve_trace_path(sid)
+    trace_path = _resolve_artifact_path(sid, "trace_path")
     if trace_path is None or not trace_path.exists():
         return JSONResponse(
             {"error": "no trace recorded for this session"},
@@ -246,7 +244,7 @@ async def session_markdown(request: Request) -> Response:
     live = _live_session_or_none(sid)
 
     if live is not None:
-        markdown_path = _resolve_markdown_path(sid)
+        markdown_path = _resolve_artifact_path(sid, "markdown_path")
         if markdown_path is None:
             # Opportunistically create the cache for live sessions if it hasn't
             # been generated yet (for first request after launch).
@@ -257,9 +255,9 @@ async def session_markdown(request: Request) -> Response:
                     {"error": f"could not generate markdown: {exc!r}"},
                     status_code=500,
                 )
-            markdown_path = _resolve_markdown_path(sid)
+            markdown_path = _resolve_artifact_path(sid, "markdown_path")
     else:
-        markdown_path = _resolve_markdown_path(sid)
+        markdown_path = _resolve_artifact_path(sid, "markdown_path")
 
     if markdown_path is None or not markdown_path.exists():
         return JSONResponse(
@@ -272,7 +270,7 @@ async def session_markdown(request: Request) -> Response:
 async def trace_open(request: Request) -> JSONResponse:
     """POST /api/sessions/{id}/trace/open — same payload as ``browser_open_trace``."""
     sid = request.path_params["id"]
-    trace_path = _resolve_trace_path(sid)
+    trace_path = _resolve_artifact_path(sid, "trace_path")
     if trace_path is None or not trace_path.exists():
         return JSONResponse(
             {"error": "no trace recorded for this session"},

@@ -7,13 +7,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
-
-if TYPE_CHECKING:
-    from octowright.session.core import BrowserSession
 
 DEFAULT_PREVIEW_CHARS = 4000
 
@@ -128,113 +125,6 @@ class SessionOpsMixin(SessionLike):
 
         return _frames.list_frames_impl(self.page, self.active_frame)
 
-    def _handle_download(self, download: Any) -> None:
-        """Registered as page.on('download', ...). Schedules an async save, appends a
-        record to self.downloads once the file lands on disk."""
-        import asyncio
-
-        from octowright.session import downloads as _downloads
-
-        # Fire-and-forget: Playwright dispatches downloads synchronously but saving is async.
-        # Task reference is kept on the session to prevent GC collecting it mid-flight (RUF006).
-        task = asyncio.create_task(_downloads.save_download(cast("BrowserSession", self), download))
-        self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
-
-    def list_downloads(self) -> list[dict[str, Any]]:
-        return list(self.downloads)
-
-    async def wait_for_download(self, timeout_ms: int = 15000) -> dict[str, Any]:
-        """Block until the next download completes (save-to-disk). Raises TimeoutError
-        if no download arrives within timeout_ms. Returns the new download record."""
-        from octowright.session import downloads as _downloads
-
-        return await _downloads.wait_for_download_impl(cast("BrowserSession", self), timeout_ms)
-
-    def _handle_dialog(self, dialog: Any) -> None:
-        """Registered as page.on('dialog', ...). Consults self._dialog_policy and acts
-        accordingly. Records 'dialog_handled' action with type, message, policy, response.
-        For 'manual' policy: do nothing (the test/user is expected to handle it).
-        accept/dismiss call dialog.accept()/dialog.dismiss(); accept with a prompt needs
-        the prompt_text."""
-        import asyncio
-
-        async def _act() -> None:
-            try:
-                if self._dialog_policy == "accept":
-                    if dialog.type == "prompt":
-                        await dialog.accept(self._dialog_prompt_text or "")
-                    else:
-                        await dialog.accept()
-                elif self._dialog_policy == "dismiss":
-                    await dialog.dismiss()
-                # manual: do nothing; test-code is expected to handle
-                self.recorder.record(
-                    "dialog_handled",
-                    dtype=dialog.type,
-                    message=dialog.message,
-                    policy=self._dialog_policy,
-                    prompt_text=self._dialog_prompt_text,
-                )
-            except Exception as e:
-                self.recorder.record("dialog_handler_error", error=repr(e))
-
-        task = asyncio.create_task(_act())
-        self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
-
-    def set_dialog_policy(self, policy: str, prompt_text: str | None = None) -> dict[str, Any]:
-        """Update the session's dialog-handling policy. policy in {accept, dismiss, manual}."""
-        if policy not in ("accept", "dismiss", "manual"):
-            raise ValueError(f"policy must be accept|dismiss|manual, got {policy!r}")
-        self._dialog_policy = policy
-        self._dialog_prompt_text = prompt_text
-        self.recorder.record("set_dialog_policy", policy=policy, prompt_text=prompt_text)
-        return {"ok": True, "policy": policy, "prompt_text": prompt_text}
-
-    async def mock_route(
-        self,
-        url_pattern: str,
-        *,
-        status: int = 200,
-        body: str | None = None,
-        content_type: str = "application/json",
-        headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Install a page.route handler that fulfills matching requests with the given
-        response. Store the handler in self._active_routes keyed by url_pattern so we can
-        remove it later."""
-
-        async def _handler(route: Any) -> None:
-            await route.fulfill(
-                status=status,
-                body=body or "",
-                content_type=content_type,
-                headers=headers or {},
-            )
-
-        if url_pattern in self._active_routes:
-            await self.page.unroute(url_pattern, self._active_routes[url_pattern])
-        await self.page.route(url_pattern, _handler)
-        self._active_routes[url_pattern] = _handler
-        self.recorder.record("mock_route", pattern=url_pattern, status=status, content_type=content_type)
-        return {"ok": True, "pattern": url_pattern, "status": status}
-
-    async def unmock_route(self, url_pattern: str) -> dict[str, Any]:
-        """Remove a previously-installed mock for url_pattern."""
-        handler = self._active_routes.pop(url_pattern, None)
-        if handler is None:
-            raise KeyError(f"no active mock for pattern {url_pattern!r}")
-        await self.page.unroute(url_pattern, handler)
-        self.recorder.record("unmock_route", pattern=url_pattern)
-        return {"ok": True, "pattern": url_pattern}
-
-    async def set_input_files(self, selector: str, paths: list[str]) -> dict[str, Any]:
-        """Upload one or more files into an <input type=file> element."""
-        await self.page.set_input_files(selector, paths)
-        self.recorder.record("set_input_files", selector=selector, paths=paths)
-        return {"ok": True, "selector": selector, "paths": paths}
-
     async def hover(self, selector: str) -> None:
         await self._target().hover(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("hover", selector=selector)
@@ -321,45 +211,6 @@ class SessionOpsMixin(SessionLike):
             "page_index": page_index,
             "url": new_page.url,
         }
-
-    # ------------------------------------------------------------------
-    # Role / label / text / test-id locator methods
-    # ------------------------------------------------------------------
-
-    def _locator(self, **finders: Any) -> Any:
-        """Return a Playwright Locator for the given finder kwargs.
-
-        Exactly one of role / label / text / test_id must be supplied. Routes
-        through _target() so this also works inside iframes when one is active.
-        """
-        from octowright.session import locators as _locators
-
-        return _locators.build_locator(self._target(), **finders)
-
-    async def click_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
-        """Click an element matched by role, label, text, or data-testid."""
-        locator = self._locator(**finders)
-        await locator.click(timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("click_by", **finders)
-        return {"ok": True}
-
-    async def fill_by(self, value: str, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
-        """Fill an input matched by role, label, or data-testid."""
-        locator = self._locator(**finders)
-        await locator.fill(value, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("fill_by", value=value, **finders)
-        return {"ok": True}
-
-    async def get_text_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
-        """Return the inner text of the matched element.
-
-        Useful for assertions that need a value rather than just a boolean match.
-        """
-        locator = self._locator(**finders)
-        await locator.wait_for(timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
-        result = await locator.inner_text()
-        self.recorder.record("get_text_by", result=result, **finders)
-        return {"ok": True, "text": result}
 
     async def _drain_background_tasks(self) -> None:
         import asyncio
