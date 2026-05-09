@@ -9,7 +9,7 @@ import asyncio
 import uuid as _uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from provide.telemetry import get_logger
 
@@ -19,6 +19,7 @@ from octowright.mcp_types import (
     ScenarioRemapResult,
     ScenarioRunMacroResult,
     ScenarioStopResult,
+    ScenarioTailEntry,
     ScenarioTailResult,
     ScenarioWaitForSyncResult,
 )
@@ -237,7 +238,11 @@ class ScenarioPool:
                 entry["persona"] = p["persona"]
                 entry["role"] = p["role"]
                 events.append(entry)
-        return {"scenario_id": scenario_id, "events": events, "cursors": new_cursors}
+        return {
+            "scenario_id": scenario_id,
+            "events": cast("list[ScenarioTailEntry]", events),
+            "cursors": new_cursors,
+        }
 
     async def run_macro(
         self,
