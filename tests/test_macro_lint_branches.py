@@ -246,3 +246,67 @@ def test_multi_action_indices_are_distinct_and_correct() -> None:
     issues = lint_macro(macro)
     field_errs = [i for i in issues if i.code == "missing_required_field"]
     assert [i.action_index for i in field_errs] == [0, 1, 2]
+
+
+# ─── Regression: malformed actions/branches values must not crash lint ──────
+
+
+class TestNonListBranchesDontCrashLint:
+    """Repro for the pre-fix bug: `_lint_try`/`_lint_try_each`/`_lint_if_selector`
+    fell through to `for sub in field or []:` which iterated truthy non-list values
+    (TypeError on int, char-by-char on string) instead of skipping them.
+    """
+
+    def test_try_actions_as_int_does_not_raise(self) -> None:
+        """try with actions=int — _check_try flags missing_actions; iteration must skip."""
+        macro = _macro([{"action": "try", "actions": 1}])
+        issues = lint_macro(macro)
+        codes = [i.code for i in issues]
+        assert "try_missing_actions" in codes  # validator caught it
+        # No TypeError, no extra child-action diagnostics.
+
+    def test_try_actions_as_string_does_not_iterate_chars(self) -> None:
+        """try with actions='oops' — formerly produced 4 spurious child diagnostics."""
+        macro = _macro([{"action": "try", "actions": "oops"}])
+        issues = lint_macro(macro)
+        codes = [i.code for i in issues]
+        assert "try_missing_actions" in codes
+        # No extra diagnostics from iterating the 4 characters.
+        assert codes.count("missing_required_field") == 0
+        assert codes.count("action_not_object") == 0
+
+    def test_try_each_branches_as_int_does_not_raise(self) -> None:
+        """try_each with branches=int — validator catches; iteration skipped."""
+        macro = _macro([{"action": "try_each", "branches": 7}])
+        issues = lint_macro(macro)
+        assert any(i.code == "try_each_missing_branches" for i in issues)
+
+    def test_try_each_branches_as_string_does_not_raise(self) -> None:
+        """try_each with branches='oops' — same as int but for a string."""
+        macro = _macro([{"action": "try_each", "branches": "oops"}])
+        issues = lint_macro(macro)
+        assert any(i.code == "try_each_missing_branches" for i in issues)
+
+    def test_if_selector_then_as_int_does_not_raise(self) -> None:
+        """if_selector with then=int — must not TypeError on `for sub in then`."""
+        macro = _macro([{"action": "if_selector", "selector": "#x", "then": 1}])
+        # Pre-fix: TypeError. Post-fix: silently skipped (no recursion into non-list).
+        lint_macro(macro)
+
+    def test_if_selector_else_as_string_no_char_recursion(self) -> None:
+        """if_selector with else='oops' — must not iterate chars."""
+        macro = _macro(
+            [
+                {
+                    "action": "if_selector",
+                    "selector": "#x",
+                    "then": [{"action": "click", "selector": "#a"}],
+                    "else": "oops",
+                }
+            ]
+        )
+        issues = lint_macro(macro)
+        # The valid then-branch contributed (one click action — no missing fields).
+        # No char-by-char iteration of 'oops'.
+        codes = [i.code for i in issues]
+        assert codes.count("action_not_object") == 0
