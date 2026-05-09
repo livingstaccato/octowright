@@ -19,6 +19,22 @@ from __future__ import annotations
 
 import os
 
+from provide.telemetry import get_logger
+
+log = get_logger("octowright.profiles")
+
+# Meta/diagnostic tools that are always registered regardless of the active
+# profile filter. The MCP server's instructions point the LLM at
+# ``octowright_status`` to discover the active profile when expected tools
+# are missing — filtering it out would defeat that self-awareness hint.
+ALWAYS_ON_TOOLS: frozenset[str] = frozenset(
+    {
+        "octowright_status",
+        "octowright_dashboard_url",
+        "octowright_check_takeover",
+    }
+)
+
 PROFILES: dict[str, list[str]] = {
     # Minimum tools needed to drive a browser end-to-end: launch, navigate,
     # interact, observe, close. Pick this when you want the smallest LLM
@@ -99,14 +115,23 @@ PROFILES: dict[str, list[str]] = {
 def build_allowed_set(profile_spec: str) -> set[str]:
     """Resolve a comma-separated profile spec to the set of allowed tool names.
 
-    Unknown profile names are silently ignored. An empty result keeps no
-    tools — callers that want "no filter" should detect that themselves
-    via :func:`active_filter` returning ``None``.
+    Unknown profile names are logged at WARNING and skipped — a typo in
+    the profile spec would otherwise silently produce an unexpectedly
+    narrow surface. An empty result keeps no tools beyond :data:`ALWAYS_ON_TOOLS`;
+    callers that want "no filter" should detect that themselves via
+    :func:`active_filter` returning ``None``.
     """
     names = [p.strip() for p in profile_spec.split(",") if p.strip()]
-    allowed: set[str] = set()
+    allowed: set[str] = set(ALWAYS_ON_TOOLS)
     for name in names:
-        allowed.update(PROFILES.get(name, []))
+        if name not in PROFILES:
+            log.warning(
+                "octowright.profile.unknown",
+                profile=name,
+                known=sorted(PROFILES.keys()),
+            )
+            continue
+        allowed.update(PROFILES[name])
     return allowed
 
 

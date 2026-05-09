@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
@@ -91,7 +91,7 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
                         return
                     cursors = result["cursors"]
                     for ev in result["events"]:
-                        line = _format_watch_event(ev)
+                        line = _format_watch_event(cast("dict[str, Any]", ev))
                         if line is not None:
                             click.echo(line)
                     await _asyncio.sleep(1.0)
