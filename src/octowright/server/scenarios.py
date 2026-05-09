@@ -17,6 +17,19 @@ from octowright import macros as macro_mod
 from octowright import runner as runner_mod
 from octowright import scenarios as scenario_mod
 from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.mcp_types import (
+    ScenarioParticipantsResult,
+    ScenarioPlanResult,
+    ScenarioRemapResult,
+    ScenarioRunAsTestResult,
+    ScenarioRunMacroResult,
+    ScenarioStartResult,
+    ScenarioStatusResult,
+    ScenarioStopResult,
+    ScenarioTailResult,
+    ScenarioWaitForSyncResult,
+    TestSuiteCaseResult,
+)
 from octowright.server._state import mcp, pool, scenario_pool
 
 
@@ -34,7 +47,7 @@ def scenario_list() -> list[dict[str, Any]]:
         "about to call scenario_start for the first time on a new spec."
     ),
 )
-def scenario_plan(name: str) -> dict[str, Any]:
+def scenario_plan(name: str) -> ScenarioPlanResult:
     spec = scenario_mod.load_scenario(name)
     participants: list[dict[str, Any]] = []
     for p in spec.participants:
@@ -66,7 +79,7 @@ def scenario_plan(name: str) -> dict[str, Any]:
         "runs startup_macros per-participant. Browsers stay open; returns the participant table."
     ),
 )
-async def scenario_start(name: str) -> dict[str, Any]:
+async def scenario_start(name: str) -> ScenarioStartResult:
     live = await scenario_pool.start(name=name, browser_pool=pool)
     publish_dashboard_invalidation_nowait("scenarios")
     publish_dashboard_invalidation_nowait("sessions")
@@ -84,7 +97,7 @@ async def scenario_start(name: str) -> dict[str, Any]:
         "using the provided `args`. Returns the participant table."
     ),
 )
-async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None) -> ScenarioStartResult:
     spec = scenario_mod.load_scenario_template(name, args or {})
     live = await scenario_pool.start(spec=spec, browser_pool=pool)
     publish_dashboard_invalidation_nowait("scenarios")
@@ -104,7 +117,7 @@ async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None)
         "player[dante]/webkit · monitor[ops]/firefox'); `scenarios` is the structured data."
     ),
 )
-def scenario_status() -> dict[str, Any]:
+def scenario_status() -> ScenarioStatusResult:
     live = scenario_pool.list_live()
     return {
         "summary": fmt.scenario_summary(live),
@@ -120,7 +133,7 @@ def scenario_status() -> dict[str, Any]:
         "participant browser. Returns close + teardown error summary."
     ),
 )
-async def scenario_stop(scenario_id: str) -> dict[str, Any]:
+async def scenario_stop(scenario_id: str) -> ScenarioStopResult:
     result = await scenario_pool.stop(scenario_id=scenario_id, browser_pool=pool)
     publish_dashboard_invalidation_nowait("scenarios")
     publish_dashboard_invalidation_nowait("sessions")
@@ -139,7 +152,7 @@ async def scenario_run_macro(
     macro: str,
     role: str | None = None,
     args: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> ScenarioRunMacroResult:
     result = await scenario_pool.run_macro(
         scenario_id=scenario_id,
         macro=macro,
@@ -166,7 +179,7 @@ async def scenario_wait_for_sync(
     text: str | None = None,
     url: str | None = None,
     timeout_ms: int | None = None,
-) -> dict[str, Any]:
+) -> ScenarioWaitForSyncResult:
     return await scenario_pool.wait_for_sync(
         scenario_id=scenario_id,
         browser_pool=pool,
@@ -184,7 +197,7 @@ async def scenario_wait_for_sync(
         "List participants of a live scenario, optionally filtered by role. Returns {summary, count, participants}."
     ),
 )
-def scenario_participants(scenario_id: str, role: str | None = None) -> dict[str, Any]:
+def scenario_participants(scenario_id: str, role: str | None = None) -> ScenarioParticipantsResult:
     live = scenario_pool.get(scenario_id)
     matched = [p for p in live.participants if role is None or p["role"] == role]
     return {
@@ -201,7 +214,7 @@ def scenario_participants(scenario_id: str, role: str | None = None) -> dict[str
         "Useful after browser handoff or relaunch. Optional `role` enforces role match."
     ),
 )
-def scenario_remap_participants(scenario_id: str, remaps: list[dict[str, Any]]) -> dict[str, Any]:
+def scenario_remap_participants(scenario_id: str, remaps: list[dict[str, Any]]) -> ScenarioRemapResult:
     return scenario_pool.remap_participants(scenario_id=scenario_id, remaps=remaps, browser_pool=pool)
 
 
@@ -216,12 +229,12 @@ def scenario_remap_participants(scenario_id: str, remaps: list[dict[str, Any]]) 
 async def scenario_run_as_test(
     scenario_id: str,
     out_path: str | None = None,
-) -> dict[str, Any]:
+) -> ScenarioRunAsTestResult:
     live = scenario_pool.get(scenario_id)
     if not live.spec.verify:
         raise RuntimeError(f"scenario {live.name!r} declares no verify macros")
 
-    results: list[dict[str, Any]] = []
+    results: list[TestSuiteCaseResult] = []
 
     async def _run(p: dict[str, Any]) -> None:
         macro = live.spec.verify.get(p["role"])
@@ -279,5 +292,5 @@ async def scenario_run_as_test(
 def scenario_tail(
     scenario_id: str,
     since_cursors: dict[str, int] | None = None,
-) -> dict[str, Any]:
+) -> ScenarioTailResult:
     return scenario_pool.tail(scenario_id=scenario_id, since_cursors=since_cursors)

@@ -11,15 +11,20 @@ from typing import Any
 
 import octowright.macros as macro_mod
 from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
-from octowright.server._state import mcp, pool
-from octowright.types import (
+from octowright.mcp_types import (
     CleanupResult,
     MacroCompileResult,
     MacroDeleteResult,
     MacroLintIssue,
     MacroLintResult,
+    MacroListEntry,
+    MacroRepairPreviewResult,
+    MacroRunResult,
     MacroSaveResult,
+    MacroSequenceResult,
+    TestSuiteResult,
 )
+from octowright.server._state import mcp, pool
 
 
 @mcp.tool(
@@ -52,7 +57,7 @@ def macro_save(
 
 
 @mcp.tool(structured_output=False, description="List saved macros with their parameters and metadata.")
-def macro_list() -> list[dict[str, Any]]:
+def macro_list() -> list[MacroListEntry]:
     return macro_mod.list_macros()
 
 
@@ -72,7 +77,7 @@ async def macro_run(
     name: str,
     args: dict[str, Any] | None = None,
     slowmo_ms: int | None = None,
-) -> dict[str, Any]:
+) -> MacroRunResult:
     session = pool.get(instance_id)
     return await macro_mod.run_macro(session=session, name=name, args=args, slowmo_ms=slowmo_ms)
 
@@ -99,7 +104,7 @@ async def macro_run_sequence(
     args_list: list[dict[str, Any]] | None = None,
     stop_on_failure: bool = True,
     slowmo_ms: int | None = None,
-) -> dict[str, Any]:
+) -> MacroSequenceResult:
     session = pool.get(instance_id)
     return await macro_mod.run_sequence(
         session=session,
@@ -146,7 +151,7 @@ def macro_lint(name: str) -> MacroLintResult:
         "does not edit or replay the macro."
     ),
 )
-def macro_repair_preview(name: str) -> dict[str, Any]:
+def macro_repair_preview(name: str) -> MacroRepairPreviewResult:
     return macro_mod.repair_preview(name)
 
 
@@ -191,7 +196,7 @@ async def run_test_suite(
     tag: str | None = None,
     out_path: str | None = None,
     max_parallel: int = 1,
-) -> dict[str, Any]:
+) -> TestSuiteResult:
     import octowright.runner as runner
 
     return await runner.run_suite(
