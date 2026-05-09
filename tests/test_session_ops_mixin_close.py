@@ -315,18 +315,31 @@ class TestDrainBackgroundTasks:
         assert task not in inst._bg_tasks
 
     @pytest.mark.anyio
-    async def test_current_task_excluded_from_drain(self, tmp_path: Path) -> None:
-        """The drain caller's own task isn't waited on (would deadlock)."""
+    async def test_current_task_excluded_drains_others(self, tmp_path: Path) -> None:
+        """Current task is filtered out of the drain set; sibling tasks still drain.
+
+        If exclusion broke, asyncio.wait would hang on the current task — the
+        test would block until pytest's session-level timeout, not the
+        per-call timeout (we can't safely wait_for around drain itself, as
+        wait_for wraps in a *new* task, sidestepping the exclusion).
+        """
         inst = _build(tmp_path)
-        # Inject the running task into _bg_tasks so the exclusion check kicks in.
         running = asyncio.current_task()
         assert running is not None
-        inst._bg_tasks.add(running)
 
-        # If exclusion failed, this would hang on asyncio.wait(self).
-        await asyncio.wait_for(inst._drain_background_tasks(), timeout=1.0)
-        # The current task is still in _bg_tasks (we never .discard()ed it).
+        async def _quick() -> None:
+            return None
+
+        other = asyncio.create_task(_quick())
+        await asyncio.sleep(0)  # let other complete
+        inst._bg_tasks.add(running)
+        inst._bg_tasks.add(other)
+
+        await inst._drain_background_tasks()
+
+        # Current task excluded → never discarded. Other task drained → discarded.
         assert running in inst._bg_tasks
+        assert other not in inst._bg_tasks
 
     @pytest.mark.anyio
     async def test_completed_cancelled_task_skipped_in_result_loop(self, tmp_path: Path) -> None:
