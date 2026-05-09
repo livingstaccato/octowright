@@ -29,7 +29,7 @@ from octowright.http.discovery import (
     _live_session_or_none,
     _live_summary,
     _read_first_launch,
-    _resolve_markdown_path,
+    _resolve_artifact_path,
     _summarise_recording,
 )
 from octowright.http.exposure import guard_sensitive_http
@@ -46,7 +46,7 @@ async def list_sessions(_request: Request) -> JSONResponse:
 
 
 def _resolve_live_markdown_path(live: Any) -> str | None:
-    live_markdown_path = _resolve_markdown_path(live.instance_id)
+    live_markdown_path = _resolve_artifact_path(live.instance_id, "markdown_path")
     if live.markdown_path is not None:
         return str(live.markdown_path)
     if live_markdown_path is not None:
