@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio as _asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from octowright import _format as fmt
 from octowright import macros as macro_mod
@@ -18,12 +18,14 @@ from octowright import runner as runner_mod
 from octowright import scenarios as scenario_mod
 from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.mcp_types import (
+    ScenarioParticipant,
     ScenarioParticipantsResult,
     ScenarioPlanResult,
     ScenarioRemapResult,
     ScenarioRunAsTestResult,
     ScenarioRunMacroResult,
     ScenarioStartResult,
+    ScenarioStatusEntry,
     ScenarioStatusResult,
     ScenarioStopResult,
     ScenarioTailResult,
@@ -64,7 +66,7 @@ def scenario_plan(name: str) -> ScenarioPlanResult:
         "name": spec.name,
         "description": spec.description,
         "summary": fmt.participant_summary(participants) or "0 participants",
-        "participants": participants,
+        "participants": cast("list[ScenarioParticipant]", participants),
         "fixtures": dict(spec.fixtures),
         "teardown_macro": spec.teardown_macro,
         "verify": dict(spec.verify),
@@ -86,7 +88,7 @@ async def scenario_start(name: str) -> ScenarioStartResult:
     return {
         "scenario_id": live.scenario_id,
         "name": live.name,
-        "participants": live.participants,
+        "participants": cast("list[ScenarioParticipant]", live.participants),
     }
 
 
@@ -105,7 +107,7 @@ async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None)
     return {
         "scenario_id": live.scenario_id,
         "name": live.name,
-        "participants": live.participants,
+        "participants": cast("list[ScenarioParticipant]", live.participants),
     }
 
 
@@ -122,7 +124,7 @@ def scenario_status() -> ScenarioStatusResult:
     return {
         "summary": fmt.scenario_summary(live),
         "count": len(live),
-        "scenarios": live,
+        "scenarios": cast("list[ScenarioStatusEntry]", live),
     }
 
 
@@ -203,7 +205,7 @@ def scenario_participants(scenario_id: str, role: str | None = None) -> Scenario
     return {
         "summary": fmt.participant_summary(matched) or "0 participants",
         "count": len(matched),
-        "participants": matched,
+        "participants": cast("list[ScenarioParticipant]", matched),
     }
 
 
