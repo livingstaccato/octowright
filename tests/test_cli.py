@@ -176,8 +176,11 @@ def test_persona_show_missing_persona_includes_next_step_hint(isolated_paths: di
 def test_scenario_list_empty(isolated_paths: dict[str, Path]) -> None:
     r = CliRunner().invoke(cli, ["scenario", "list"])
     assert r.exit_code == 0
-    # No scenarios on disk → blank output (ignoring OTEL noise) is fine.
-    clean_out = "\n".join(ln for ln in r.output.strip().splitlines() if "Provider is not allowed" not in ln)
+    # No scenarios on disk → blank output. Filter out OTEL/telemetry init
+    # noise that surfaces on some runner profiles (notably arm64) when the
+    # OpenTelemetry import path is not installed.
+    noise = ("Provider is not allowed", "otel.import.not_installed")
+    clean_out = "\n".join(ln for ln in r.output.strip().splitlines() if not any(n in ln for n in noise))
     assert clean_out == ""
 
 

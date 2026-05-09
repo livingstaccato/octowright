@@ -206,12 +206,27 @@ paths_to_mutate = [
 # etc.), so we point it at the targeted unit suites only.
 tests_dir = [
     "tests/test_personas.py",
+    "tests/test_personas_branches.py",
+    "tests/test_personas_loader.py",
     "tests/test_scenarios_unit.py",
+    "tests/test_scenarios_branches.py",
     "tests/test_macros.py",
+    "tests/test_macro_storage.py",
+    "tests/test_macro_storage_query.py",
     "tests/test_macro_lint.py",
+    "tests/test_macro_lint_branches.py",
+    "tests/test_macro_lint_helpers.py",
     "tests/test_macro_dsl.py",
+    "tests/test_macro_dsl_branches.py",
     "tests/test_macro_checks.py",
+    "tests/test_macro_checks_branches.py",
     "tests/test_macro_healing.py",
+    "tests/test_macro_repair_branches.py",
+    "tests/test_macro_substitution_branches.py",
+    "tests/test_macro_calls_branches.py",
+    "tests/test_macro_execution_branches.py",
+    "tests/test_macro_runtime_branches.py",
+    "tests/test_macro_recording_import_branches.py",
     "tests/test_hypo_parsers.py",
 ]
 do_not_mutate = ["*/__init__.py"]
@@ -219,4 +234,4 @@ pytest_add_cli_args = ["-x", "-q", "--no-cov"]
 # mutmut 3.x copies only the files in paths_to_mutate by default; the rest of
 # the src tree must be listed here or imports fail in the mutants/ workdir.
 # tools/ holds the out-of-wheel demo lib that tests/conftest.py adds to sys.path.
-also_copy = ["src/", "tools/", "demo/", "examples/"]
+also_copy = ["src/", "tools/", "demo/", "examples/", "conftest.py"]
