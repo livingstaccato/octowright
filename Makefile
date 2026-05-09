@@ -49,6 +49,9 @@ spdx-fix: ## Normalize SPDX headers in source files
 diagrams: ## Render docs/architecture/*.puml to SVG (requires `plantuml`)
 	bash scripts/render_diagrams.sh docs/architecture
 
+export-demos: ## Regenerate demo/tutorial-export/ from demo/bundles/ (no re-recording)
+	uv run --active python scripts/demos/sync_exports.py
+
 format: ## Apply ruff format + ruff --fix
 	uv run --active ruff format .
 	uv run --active ruff check --fix .
