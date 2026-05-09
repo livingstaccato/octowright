@@ -210,12 +210,13 @@ class TestSelftestCommand:
         import octowright.cli.selftest as _selftest_mod
 
         monkeypatch.setattr(_selftest_mod, "registered_tool_names", lambda: ["alpha", "beta"])
-        monkeypatch.setattr(_selftest_mod, "recordings_dir", lambda: Path("/tmp/recs"))
+        recs = Path("/tmp/recs")
+        monkeypatch.setattr(_selftest_mod, "recordings_dir", lambda: recs)
         monkeypatch.setattr(_selftest_mod, "active_filter", lambda: None)
         monkeypatch.delenv("OCTOWRIGHT_PROFILE", raising=False)
         result = runner.invoke(_root.cli, ["selftest"])
         assert result.exit_code == 0
-        assert "recordings dir: /tmp/recs" in result.output
+        assert f"recordings dir: {recs}" in result.output
         assert "active profile: all (no filter; full tool surface)" in result.output
         assert "2 tools registered:" in result.output
         assert "  - alpha" in result.output

@@ -142,7 +142,8 @@ class TestCodexDestination:
         monkeypatch.setenv("CODEX_HOME", "~/foo")
         result = _codex_destination()
         assert "~" not in str(result)
-        assert str(result).endswith(f"/foo/skills/{SKILL_NAME}")
+        # OS-agnostic: the tail must be foo/skills/<SKILL_NAME>.
+        assert result.parts[-3:] == ("foo", "skills", SKILL_NAME)
 
 
 class TestPluginDestinations:

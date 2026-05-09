@@ -26,7 +26,6 @@ that whichever Playwright actually fires first wins.
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -34,6 +33,41 @@ import pytest
 
 import octowright.browser_pool.pool as pool_module
 from octowright.browser_pool import BrowserPool
+
+
+class _LogCapture:
+    """Minimal stand-in for caplog that doesn't depend on stdlib-logging
+    routing. Patches `log.info` / `log.warning` on the listeners module so
+    eviction-log-emission tests are robust across runner platforms (notably
+    macOS arm64, where pytest's caplog occasionally fails to receive
+    provide.telemetry-routed records under the GH-Actions runner profile).
+    """
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict[str, Any]]] = []  # (level, event_name, kwargs)
+
+    def info(self, event: str, **kw: Any) -> None:
+        self.events.append(("info", event, kw))
+
+    def warning(self, event: str, **kw: Any) -> None:
+        self.events.append(("warning", event, kw))
+
+    def messages(self) -> list[str]:
+        return [name for _level, name, _kw in self.events]
+
+
+@pytest.fixture
+def listeners_log(monkeypatch: pytest.MonkeyPatch) -> _LogCapture:
+    """Replace the eviction-listener module's `log` (and the lifecycle
+    module's, which emits the explicit-close line) with a shared capture."""
+    from octowright.browser_pool import lifecycle as _lifecycle
+    from octowright.browser_pool import listeners as _listeners
+
+    cap = _LogCapture()
+    monkeypatch.setattr(_listeners, "log", cap)
+    monkeypatch.setattr(_lifecycle, "log", cap)
+    return cap
+
 
 # ---------------------------------------------------------------------------
 # Stubs
@@ -168,7 +202,7 @@ def _page_close_handlers(page: Any) -> list[Any]:
 
 
 @pytest.mark.anyio
-async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """Synthesize a context 'close' event and verify the session is evicted +
     the eviction log line is emitted."""
     _install_playwright_stub(monkeypatch)
@@ -189,20 +223,16 @@ async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, ca
     handlers = _close_handlers(session)
     assert handlers, "expected at least one context.on('close') handler"
 
-    with caplog.at_level(logging.INFO):
-        # Synthesize the OS-close event.
-        for cb in handlers:
-            cb()
+    # Synthesize the OS-close event.
+    for cb in handlers:
+        cb()
 
     assert iid not in pool._sessions
-    messages = [r.getMessage() for r in caplog.records]
-    assert any("evicted_externally" in m for m in messages), messages
+    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
 @pytest.mark.anyio
-async def test_browser_disconnected_evicts_session(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_browser_disconnected_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """When the underlying browser process dies, Playwright fires
     ``browser.on('disconnected', ...)`` — that signal must also evict."""
     _install_playwright_stub(monkeypatch)
@@ -226,19 +256,15 @@ async def test_browser_disconnected_evicts_session(
     handlers = _disconnect_handlers(session)
     assert handlers, "expected browser.on('disconnected') handler for ephemeral browser"
 
-    with caplog.at_level(logging.INFO):
-        for cb in handlers:
-            cb()
+    for cb in handlers:
+        cb()
 
     assert iid not in pool._sessions
-    messages = [r.getMessage() for r in caplog.records]
-    assert any("evicted_externally" in m for m in messages), messages
+    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
 @pytest.mark.anyio
-async def test_all_pages_closed_evicts_session(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_all_pages_closed_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """If every page on the session reports is_closed() True, that's a strong
     signal the user shut everything — evict."""
     _install_playwright_stub(monkeypatch)
@@ -259,12 +285,10 @@ async def test_all_pages_closed_evicts_session(
     handlers = _page_close_handlers(page)
     assert handlers, "expected page.on('close') handler installed by _wire_listeners"
 
-    with caplog.at_level(logging.INFO):
-        page.mark_closed()  # flips is_closed() True and fires the close event
+    page.mark_closed()  # flips is_closed() True and fires the close event
 
     assert iid not in pool._sessions
-    messages = [r.getMessage() for r in caplog.records]
-    assert any("evicted_externally" in m for m in messages), messages
+    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
 @pytest.mark.anyio
@@ -297,9 +321,7 @@ async def test_one_page_close_with_survivor_does_not_evict(monkeypatch: pytest.M
 
 
 @pytest.mark.anyio
-async def test_multiple_signals_only_evict_once(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_multiple_signals_only_evict_once(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """Real Playwright might fire context.close AND browser.disconnected for
     the same teardown. The eviction log line should appear at most once."""
     _install_playwright_stub(monkeypatch)
@@ -316,22 +338,21 @@ async def test_multiple_signals_only_evict_once(
     iid = result["instance_id"]
     session = pool._sessions[iid]
 
-    with caplog.at_level(logging.INFO):
-        # Fire all three signals, in arbitrary order.
-        for cb in _close_handlers(session):
-            cb()
-        for cb in _disconnect_handlers(session):
-            cb()
-        session.pages[0].mark_closed()
+    # Fire all three signals, in arbitrary order.
+    for cb in _close_handlers(session):
+        cb()
+    for cb in _disconnect_handlers(session):
+        cb()
+    session.pages[0].mark_closed()
 
     assert iid not in pool._sessions
-    evictions = [r for r in caplog.records if "evicted_externally" in r.getMessage()]
+    evictions = [m for m in listeners_log.messages() if "evicted_externally" in m]
     assert len(evictions) == 1, f"expected exactly one eviction log; got {len(evictions)}"
 
 
 @pytest.mark.anyio
 async def test_explicit_close_does_not_emit_external_log(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
 ) -> None:
     """`pool.close()` must remove the registry entry first; the close-event
     handler should then no-op silently. The 'closed' log line still fires."""
@@ -359,18 +380,17 @@ async def test_explicit_close_does_not_emit_external_log(
 
     session.context.close = AsyncMock(side_effect=_close_and_fire)
 
-    with caplog.at_level(logging.INFO):
-        await pool.close(iid)
+    await pool.close(iid)
 
     assert iid not in pool._sessions
-    messages = [r.getMessage() for r in caplog.records]
+    messages = listeners_log.messages()
     assert any("octowright.browser.closed" in m for m in messages), messages
     assert not any("evicted_externally" in m for m in messages), messages
 
 
 @pytest.mark.anyio
 async def test_external_close_after_explicit_close_is_noop(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
 ) -> None:
     """Replaying the close event after an explicit close must not crash and
     must not double-log."""
@@ -392,13 +412,12 @@ async def test_external_close_after_explicit_close_is_noop(
     await pool.close(iid)
     assert iid not in pool._sessions
 
-    caplog.clear()
-    with caplog.at_level(logging.INFO):
-        # Replay the close event a second time — must be a silent no-op.
-        for cb in handlers:
-            cb()
+    listeners_log.events.clear()
+    # Replay the close event a second time — must be a silent no-op.
+    for cb in handlers:
+        cb()
 
-    messages = [r.getMessage() for r in caplog.records]
+    messages = listeners_log.messages()
     assert not any("evicted_externally" in m for m in messages), messages
 
 

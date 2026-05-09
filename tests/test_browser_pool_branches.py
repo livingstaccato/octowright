@@ -476,18 +476,22 @@ class TestCloseBrowser:
     async def test_returns_paths_as_strings_when_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """video_path/trace_path/har_path are str()-coerced when present."""
         pool = BrowserPool()
-        sess = _fake_session(har_path=Path("/tmp/x.har"))
-        sess.video_path = Path("/tmp/v.webm")
-        sess.trace_path = Path("/tmp/t.zip")
+        video = Path("/tmp/v.webm")
+        trace = Path("/tmp/t.zip")
+        har = Path("/tmp/x.har")
+        sess = _fake_session(har_path=har)
+        sess.video_path = video
+        sess.trace_path = trace
         pool._sessions[sess.instance_id] = sess
 
         from octowright.browser_pool import lifecycle as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         result = await close_browser(pool, sess.instance_id)
-        assert result["video_path"] == "/tmp/v.webm"
-        assert result["trace_path"] == "/tmp/t.zip"
-        assert result["har_path"] == "/tmp/x.har"
+        # Compare via str(Path(...)) so Windows back-slashes match.
+        assert result["video_path"] == str(video)
+        assert result["trace_path"] == str(trace)
+        assert result["har_path"] == str(har)
 
     @pytest.mark.anyio
     async def test_returns_none_paths_when_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:

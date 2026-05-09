@@ -84,10 +84,12 @@ class TestRenderFindings:
         import click as _click
 
         monkeypatch.setattr(_click, "echo", lambda text="", **_kw: captured.append(text))
-        _cli_takeover._takeover_render_findings([_detection()])
+        config_path = Path("/tmp/.claude.json")
+        _cli_takeover._takeover_render_findings([_detection(config_path=config_path)])
         text = "\n".join(captured)
         assert "playwright" in text
-        assert "/tmp/.claude.json" in text
+        # Compare via str(Path(...)) so Windows backslashes match.
+        assert str(config_path) in text
         assert "name pattern matched" in text
         assert "command: npx playwright-mcp" in text
 

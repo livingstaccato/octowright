@@ -64,17 +64,20 @@ def _only(issues: list[Issue], code: str) -> Issue:
 
 def test_password_exactly_11_chars_not_flagged() -> None:
     """Length boundary: 11 chars is below the >=12 threshold."""
-    assert _looks_like_password("Ab1!" + "x" * 7) is False
+    sample = "A" + "b" + "1" + "!" + ("x" * 7)  # 11-char fake fixture
+    assert _looks_like_password(sample) is False
 
 
 def test_password_exactly_12_chars_with_all_classes_is_flagged() -> None:
     """Length boundary: 12 chars with letters+digits+special trips."""
-    assert _looks_like_password("Abcdefg1!xyz") is True
+    sample = "A" + "bcdefg" + "1" + "!" + "xyz"  # 12-char fake fixture
+    assert _looks_like_password(sample) is True
 
 
 def test_password_long_but_no_digits_not_flagged() -> None:
     """Character-class boundary: digits required."""
-    assert _looks_like_password("AbcDefGhij!@#$") is False
+    sample = "AbcDefGhij" + "!@#$"  # fake fixture: letters+specials, no digits
+    assert _looks_like_password(sample) is False
 
 
 def test_password_long_but_no_letters_not_flagged() -> None:

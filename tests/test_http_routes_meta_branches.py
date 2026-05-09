@@ -318,7 +318,7 @@ class TestPersonaDetail:
         p = isolated_profiles / "alice"
         p.mkdir()
         yaml_text = "name: alice\nemoji: 🦄\n"
-        (p / "profile.yaml").write_text(yaml_text)
+        (p / "profile.yaml").write_text(yaml_text, encoding="utf-8")
         # Add a chromium dir with a 50-byte file.
         chr_dir = p / "chromium"
         chr_dir.mkdir()

@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from octowright.http.session_artifacts import (
     _SIDECAR_FORMAT_VERSION,
     SessionArtifactCache,
@@ -469,14 +471,19 @@ class TestPathExistsTtl:
         # Within TTL — still cached as True.
         assert cache.path_exists(str(p)) is True
 
-    def test_after_ttl_re_stats(self, tmp_path: Path) -> None:
+    def test_after_ttl_re_stats(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """After TTL expires, lookup re-stats the filesystem."""
+        import time as _time
+
         p = tmp_path / "real.txt"
         p.write_text("x")
-        cache = SessionArtifactCache(path_exists_ttl_seconds=0.0)  # expire immediately
+        cache = SessionArtifactCache(path_exists_ttl_seconds=1.0)
+        # First call captures the cached time at clock=100.
+        monkeypatch.setattr(_time, "monotonic", lambda: 100.0)
         assert cache.path_exists(str(p)) is True
         p.unlink()
-        # TTL=0 → always re-stat → now False.
+        # Second call at clock=200 → 100s elapsed > 1s TTL → re-stat → False.
+        monkeypatch.setattr(_time, "monotonic", lambda: 200.0)
         assert cache.path_exists(str(p)) is False
 
     def test_negative_cache_for_missing_file(self, tmp_path: Path) -> None:

@@ -109,12 +109,14 @@ class TestDefaultPaths:
 
     def test_global_uses_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """`Path.home() / .claude.json` — mutating to /etc/ would touch the wrong file."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        # Path.home() uses USERPROFILE on Windows, HOME elsewhere — patch the
+        # function directly so the test is OS-agnostic.
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
         assert _default_global_config() == tmp_path / ".claude.json"
 
     def test_global_filename_is_dot_claude_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The filename is exactly `.claude.json`, not `claude.json` or `claude.config`."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
         assert _default_global_config().name == ".claude.json"
 
 

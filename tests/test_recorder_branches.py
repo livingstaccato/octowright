@@ -301,13 +301,15 @@ class TestTailLogExtras:
     def test_partial_trailing_line_cursor_stops_at_start_of_fragment(self, tmp_path: Path) -> None:
         """Trailing partial line's bytes are NOT consumed; next call re-reads them."""
         target = tmp_path / "rec.jsonl"
-        target.write_text('{"a":1}\n{"b":', encoding="utf-8")
+        # write_bytes avoids Windows' default '\n' → '\r\n' translation in text
+        # mode; the cursor positions in the JSONL recorder are byte offsets.
+        target.write_bytes(b'{"a":1}\n{"b":')
         events, cursor, _ = tail_log(target, 0)
         assert events == [{"a": 1}]
         # Cursor at exactly 8 (after `{"a":1}\n`).
         assert cursor == 8
         # Now finish the partial line and re-call.
-        target.write_text('{"a":1}\n{"b":2}\n', encoding="utf-8")
+        target.write_bytes(b'{"a":1}\n{"b":2}\n')
         events2, cursor2, _ = tail_log(target, cursor)
         assert events2 == [{"b": 2}]
         assert cursor2 == target.stat().st_size
