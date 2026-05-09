@@ -40,22 +40,31 @@ def test_active_filter_all_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_build_allowed_set_single_profile() -> None:
     allowed = profiles.build_allowed_set("core")
-    assert allowed == set(profiles.PROFILES["core"])
+    assert allowed == set(profiles.PROFILES["core"]) | set(profiles.ALWAYS_ON_TOOLS)
 
 
 def test_build_allowed_set_multiple_profiles_union() -> None:
     allowed = profiles.build_allowed_set("core,advanced")
-    assert allowed == set(profiles.PROFILES["core"]) | set(profiles.PROFILES["advanced"])
+    expected = set(profiles.PROFILES["core"]) | set(profiles.PROFILES["advanced"]) | set(profiles.ALWAYS_ON_TOOLS)
+    assert allowed == expected
 
 
 def test_build_allowed_set_unknown_profile_ignored() -> None:
     allowed = profiles.build_allowed_set("core,bogus")
-    assert allowed == set(profiles.PROFILES["core"])
+    assert allowed == set(profiles.PROFILES["core"]) | set(profiles.ALWAYS_ON_TOOLS)
 
 
-def test_build_allowed_set_empty_spec_yields_empty_set() -> None:
-    assert profiles.build_allowed_set("") == set()
-    assert profiles.build_allowed_set(",,,") == set()
+def test_build_allowed_set_empty_spec_yields_meta_tools_only() -> None:
+    assert profiles.build_allowed_set("") == set(profiles.ALWAYS_ON_TOOLS)
+    assert profiles.build_allowed_set(",,,") == set(profiles.ALWAYS_ON_TOOLS)
+
+
+def test_meta_tools_always_present_under_core_profile() -> None:
+    """`octowright_status` must remain reachable so the LLM can discover the
+    active profile when expected tools are missing."""
+    allowed = profiles.build_allowed_set("core")
+    assert "octowright_status" in allowed
+    assert "octowright_dashboard_url" in allowed
 
 
 def _registered_names_in_subprocess(env_value: str | None) -> set[str]:
