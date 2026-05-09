@@ -14,7 +14,7 @@
     "block \"src/octowright/recording_cleanup.py:113 cleanup_stale\" has a rank of C",
     "block \"src/octowright/scenarios_pool.py:144 start\" has a rank of C",
     "block \"src/octowright/scenarios_pool.py:69 remap_participant\" has a rank of C",
-    "block \"src/octowright/server/browser/lifecycle.py:123 browser_quick_launch\" has a rank of C",
+    "block \"src/octowright/server/browser/lifecycle.py:124 browser_quick_launch\" has a rank of C",
     "block \"src/octowright/session/core_io_mixin.py:37 _append_websocket_cache\" has a rank of C",
     "block \"src/octowright/session/core_ops_mixin.py:239 close\" has a rank of C",
     "block \"src/octowright/session/frames.py:16 switch_frame_impl\" has a rank of C",
