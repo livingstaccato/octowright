@@ -25,6 +25,7 @@ from octowright.macros.substitution import (
     strip_non_aria_noise,
     substitute,
 )
+from octowright.mcp_types import MacroRepairPreviewResult, MacroRunResult, MacroSequenceResult, MacroSequenceStep
 
 if TYPE_CHECKING:
     from octowright.session import BrowserSession
@@ -148,7 +149,7 @@ async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> t
     )
 
 
-def repair_preview(name: str) -> dict[str, Any]:
+def repair_preview(name: str) -> MacroRepairPreviewResult:
     return repair_preview_impl(name, load_macro=load_macro, semantic_keys=SEMANTIC_LOCATOR_KEYS)
 
 
@@ -158,7 +159,7 @@ async def run_macro(
     args: dict[str, Any] | None = None,
     *,
     slowmo_ms: int | None = None,
-) -> dict[str, Any]:
+) -> MacroRunResult:
     macro = load_macro(name)
     effective_args = args or {}
     actions = substitute(macro.get("actions", []), effective_args)
@@ -232,7 +233,7 @@ async def run_sequence(
     args_list: list[dict[str, Any]] | None = None,
     stop_on_failure: bool = True,
     slowmo_ms: int | None = None,
-) -> dict[str, Any]:
+) -> MacroSequenceResult:
     resolved_args: list[dict[str, Any]] = []
     for index in range(len(names)):
         if args_list is not None and index < len(args_list):
@@ -240,7 +241,7 @@ async def run_sequence(
         else:
             resolved_args.append({})
 
-    steps: list[dict[str, Any]] = []
+    steps: list[MacroSequenceStep] = []
     all_ok = True
     for name, step_args in zip(names, resolved_args, strict=True):
         try:

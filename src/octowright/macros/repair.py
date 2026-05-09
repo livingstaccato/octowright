@@ -11,6 +11,7 @@ import copy
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from octowright.mcp_types import MacroRepairPreviewResult, MacroRepairSuggestion
 from octowright.server.macro_semantic import summarize_action
 
 if TYPE_CHECKING:
@@ -71,11 +72,11 @@ def repair_preview(
     *,
     load_macro: Callable[[str], dict[str, Any]],
     semantic_keys: tuple[str, ...],
-) -> dict[str, Any]:
+) -> MacroRepairPreviewResult:
     """Return non-mutating repair suggestions for selector-based macro actions."""
     macro = load_macro(name)
     macro_name = macro.get("name") or name
-    suggestions: list[dict[str, Any]] = []
+    suggestions: list[MacroRepairSuggestion] = []
     for idx, action in enumerate(macro.get("actions", [])):
         if not isinstance(action, dict) or "selector" not in action:
             continue
