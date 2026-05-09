@@ -13,6 +13,22 @@ from pathlib import Path
 from typing import Any
 
 from octowright.export import export_script as _export_script
+from octowright.mcp_types import (
+    BrowserBriefResult,
+    BrowserCaptureAndCloseResult,
+    BrowserConsoleMessagesResult,
+    BrowserEvaluateResult,
+    BrowserExpectJsResult,
+    BrowserExpectSelectorResult,
+    BrowserExpectTextResult,
+    BrowserExpectUrlResult,
+    BrowserOkResult,
+    BrowserPathResult,
+    BrowserReadMarkdownResult,
+    BrowserScreenshotResult,
+    BrowserSnapshotResult,
+    BrowserTailRecordingResult,
+)
 from octowright.recorder import tail_log
 from octowright.server._state import mcp, pool
 from octowright.session import DEFAULT_PREVIEW_CHARS
@@ -22,7 +38,7 @@ from octowright.session import DEFAULT_PREVIEW_CHARS
     structured_output=False,
     description="Screenshot an instance to disk. If path omitted, writes next to the recording.",
 )
-async def browser_screenshot(instance_id: str, path: str | None = None) -> dict[str, Any]:
+async def browser_screenshot(instance_id: str, path: str | None = None) -> BrowserScreenshotResult:
     session = pool.get(instance_id)
     target = Path(path) if path else session.log_path.with_suffix(".png")
     out = await session.screenshot(target)
@@ -42,11 +58,11 @@ async def browser_snapshot(
     selector: str = "body",
     full: bool = False,
     max_chars: int | None = None,
-) -> dict[str, Any]:
+) -> BrowserSnapshotResult:
     session = pool.get(instance_id)
     aria = await session.page.locator(selector).aria_snapshot()
     cap = None if full else (max_chars or DEFAULT_PREVIEW_CHARS)
-    out: dict[str, Any] = {
+    out: BrowserSnapshotResult = {
         "url": session.page.url,
         "title": await session.page.title(),
     }
@@ -78,7 +94,7 @@ async def browser_evaluate(
     expression: str,
     max_chars: int | None = None,
     full: bool = False,
-) -> dict[str, Any]:
+) -> BrowserEvaluateResult:
     result = await pool.get(instance_id).evaluate(expression)
     cap = None if full else (max_chars or DEFAULT_PREVIEW_CHARS)
     rendered = result if isinstance(result, str | bytes) else _json.dumps(result, default=str)
@@ -106,7 +122,7 @@ def browser_console_messages(
     instance_id: str,
     level: str | None = None,
     since: int | None = None,
-) -> dict[str, Any]:
+) -> BrowserConsoleMessagesResult:
     msgs = list(pool.get(instance_id).console)
     start = since or 0
     sliced = msgs[start:]
@@ -134,13 +150,13 @@ async def browser_wait_for(
     selector: str | None = None,
     text: str | None = None,
     timeout_ms: int | None = None,
-) -> dict[str, Any]:
+) -> BrowserOkResult:
     await pool.get(instance_id).wait_for(selector, text, timeout_ms)
     return {"ok": True}
 
 
 @mcp.tool(structured_output=False, description="Path to the JSONL action log for an instance.")
-def browser_recording_path(instance_id: str) -> dict[str, Any]:
+def browser_recording_path(instance_id: str) -> BrowserPathResult:
     return {"path": str(pool.get(instance_id).log_path)}
 
 
@@ -157,7 +173,7 @@ async def browser_capture_and_close(
     instance_id: str,
     screenshot_path: str | None = None,
     snapshot: bool = True,
-) -> dict[str, Any]:
+) -> BrowserCaptureAndCloseResult:
     session = pool.get(instance_id)
     title = await session.page.title()
     url = session.page.url
@@ -175,7 +191,7 @@ async def browser_capture_and_close(
     # Close
     await pool.close(instance_id)
 
-    res = {
+    res: BrowserCaptureAndCloseResult = {
         "title": title,
         "url": url,
         "screenshot_path": str(target),
@@ -194,7 +210,7 @@ def browser_export_script(
     instance_id: str,
     format: str = "python",
     out_path: str | None = None,
-) -> dict[str, Any]:
+) -> BrowserPathResult:
     session = pool.get(instance_id)
     suffix = ".py" if format == "python" else ".ts"
     target = Path(out_path) if out_path else session.log_path.with_suffix(suffix)
@@ -215,7 +231,7 @@ async def browser_expect_url(
     instance_id: str,
     pattern: str,
     mode: str = "regex",
-) -> dict[str, Any]:
+) -> BrowserExpectUrlResult:
     session = pool.get(instance_id)
     actual = await session.expect_url(pattern, mode)
     return {"ok": True, "url": actual}
@@ -237,7 +253,7 @@ async def browser_expect_text(
     text: str,
     mode: str = "contains",
     timeout_ms: int | None = None,
-) -> dict[str, Any]:
+) -> BrowserExpectTextResult:
     session = pool.get(instance_id)
     actual = await session.expect_text(selector, text, mode, timeout_ms)
     return {"ok": True, "text": actual}
@@ -257,7 +273,7 @@ async def browser_expect_selector(
     selector: str,
     present: bool = True,
     timeout_ms: int | None = None,
-) -> dict[str, Any]:
+) -> BrowserExpectSelectorResult:
     session = pool.get(instance_id)
     await session.expect_selector(selector, present, timeout_ms)
     return {"ok": True, "selector": selector, "present": present}
@@ -274,7 +290,7 @@ async def browser_expect_js(
     instance_id: str,
     expression: str,
     equals: Any = None,
-) -> dict[str, Any]:
+) -> BrowserExpectJsResult:
     session = pool.get(instance_id)
     result = await session.expect_js(expression, equals)
     return {"ok": True, "result": result}
@@ -294,7 +310,7 @@ async def browser_expect_js(
 def browser_tail_recording(
     instance_id: str,
     since: int | None = None,
-) -> dict[str, Any]:
+) -> BrowserTailRecordingResult:
     session = pool.get(instance_id)
     log_path = Path(session.log_path)
     prev = since or 0
@@ -319,7 +335,7 @@ def browser_tail_recording(
 async def browser_read_markdown(
     instance_id: str,
     max_chars: int | None = None,
-) -> dict[str, Any]:
+) -> BrowserReadMarkdownResult:
     session = pool.get(instance_id)
     if max_chars is not None and max_chars < 0:
         raise ValueError("max_chars must be >= 0")
@@ -355,7 +371,7 @@ async def browser_read_markdown(
         "and highly truncated snapshot of actionable elements."
     ),
 )
-async def browser_brief(instance_id: str) -> dict[str, Any]:
+async def browser_brief(instance_id: str) -> BrowserBriefResult:
     session = pool.get(instance_id)
     title = await session.page.title()
     # Pull a tiny slice of the body snapshot to provide basic orientation

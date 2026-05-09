@@ -13,6 +13,16 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.mcp_types import (
+    ScenarioParticipantOutcome,
+    ScenarioRemapEntry,
+    ScenarioRemapResult,
+    ScenarioRunMacroResult,
+    ScenarioStopResult,
+    ScenarioTailResult,
+    ScenarioWaitForSyncResult,
+)
+
 log = get_logger(__name__)
 
 
@@ -50,7 +60,7 @@ class ScenarioPool:
     def has_live(self, scenario_id: str) -> bool:
         return scenario_id in self._live
 
-    def list_live(self) -> list[dict[str, Any]]:
+    def list_live(self) -> list[dict[str, Any]]:  # rendered shape has fields beyond ScenarioParticipant; left as dict
         return [
             {"scenario_id": ls.scenario_id, "name": ls.name, "participants": ls.participants}
             for ls in self._live.values()
@@ -64,7 +74,7 @@ class ScenarioPool:
         new_instance_id: str,
         role: str | None = None,
         browser_pool: Any | None = None,
-    ) -> dict[str, Any]:
+    ) -> ScenarioRemapEntry:
         live = self.get(scenario_id)
         matches = [p for p in live.participants if p.get("instance_id") == old_instance_id]
         if role is not None:
@@ -108,8 +118,8 @@ class ScenarioPool:
 
     def remap_participants(
         self, *, scenario_id: str, remaps: list[dict[str, Any]], browser_pool: Any | None = None
-    ) -> dict[str, Any]:
-        applied: list[dict[str, Any]] = []
+    ) -> ScenarioRemapResult:
+        applied: list[ScenarioRemapEntry] = []
         for item in remaps:
             old_instance_id = item.get("old_instance_id")
             new_instance_id = item.get("new_instance_id")
@@ -188,12 +198,12 @@ class ScenarioPool:
             raise
         return live
 
-    async def stop(self, *, scenario_id: str, browser_pool: Any) -> dict[str, Any]:
+    async def stop(self, *, scenario_id: str, browser_pool: Any) -> ScenarioStopResult:
         async with self._live_lock:
             live = self._live.pop(scenario_id, None)
         if live is None:
             raise KeyError(self._missing_scenario_message(scenario_id))
-        summary: dict[str, Any] = {"scenario_id": scenario_id, "teardown_errors": [], "closed": []}
+        summary: ScenarioStopResult = {"scenario_id": scenario_id, "teardown_errors": [], "closed": []}
         if live.spec.teardown_macro:
             from octowright import macros as _macros
 
@@ -211,7 +221,7 @@ class ScenarioPool:
                 summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
         return summary
 
-    def tail(self, *, scenario_id: str, since_cursors: dict[str, int] | None = None) -> dict[str, Any]:
+    def tail(self, *, scenario_id: str, since_cursors: dict[str, int] | None = None) -> ScenarioTailResult:
         from octowright.recorder import tail_log
 
         live = self.get(scenario_id)
@@ -237,7 +247,7 @@ class ScenarioPool:
         browser_pool: Any,
         role: str | None = None,
         args: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> ScenarioRunMacroResult:
         import asyncio as _asyncio
 
         from octowright import macros as _macros
@@ -245,7 +255,7 @@ class ScenarioPool:
         live = self.get(scenario_id)
         targets = [p for p in live.participants if role is None or p["role"] == role]
 
-        async def _run(p: dict[str, Any]) -> dict[str, Any]:
+        async def _run(p: dict[str, Any]) -> ScenarioParticipantOutcome:
             session = browser_pool.get(p["instance_id"])
             try:
                 await _macros.run_macro(session=session, name=macro, args=args or {})
@@ -272,14 +282,14 @@ class ScenarioPool:
         text: str | None = None,
         url: str | None = None,
         timeout_ms: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> ScenarioWaitForSyncResult:
         import asyncio as _asyncio
         import re as _re
 
         live = self.get(scenario_id)
         targets = [p for p in live.participants if role is None or p["role"] == role]
 
-        async def _wait(p: dict[str, Any]) -> dict[str, Any]:
+        async def _wait(p: dict[str, Any]) -> ScenarioParticipantOutcome:
             session = browser_pool.get(p["instance_id"])
             try:
                 if selector or text:

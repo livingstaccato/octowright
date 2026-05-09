@@ -14,6 +14,7 @@ from provide.telemetry import setup_telemetry, shutdown_telemetry
 
 from octowright.cli._root import cli
 from octowright.cli.watch import _format_watch_event
+from octowright.mcp_types import TestSuiteCaseResult
 
 
 @cli.group()
@@ -131,7 +132,7 @@ async def _run_verify_and_report(*, pool: Any, live: Any, out_path: str | None) 
         click.echo(f"scenario {live.name!r} has no verify macros", err=True)
         return 2
 
-    results: list[dict[str, Any]] = []
+    results: list[TestSuiteCaseResult] = []
     for p in live.participants:
         macro = live.spec.verify.get(p["role"])
         if not macro:
