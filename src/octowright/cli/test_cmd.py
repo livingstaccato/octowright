@@ -11,12 +11,11 @@ test-discovery does not accidentally collect it as a test module.
 
 from __future__ import annotations
 
-from typing import Any
-
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
 from octowright.cli._root import cli
+from octowright.mcp_types import TestSuiteResult
 
 
 @cli.command()
@@ -35,7 +34,7 @@ def test(kind: str, tag: str | None, out_path: str | None, max_parallel: int) ->
 
     setup_telemetry()
 
-    async def _run() -> dict[str, Any]:
+    async def _run() -> TestSuiteResult:
         # Pool + suite + shutdown all share one event loop. Calling asyncio.run
         # twice creates separate loops and the playwright objects on the pool
         # can't be torn down by a fresh loop ("Event loop is closed").

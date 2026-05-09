@@ -18,6 +18,7 @@ from provide.telemetry import get_logger
 from octowright.defaults import PROFILES_DIR
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
+from octowright.mcp_types import MacroListEntry
 
 log = get_logger(__name__)
 
@@ -81,10 +82,10 @@ def save_macro(
     return dest
 
 
-def list_macros() -> list[dict[str, Any]]:
+def list_macros() -> list[MacroListEntry]:
     if not MACROS_DIR.exists():
         return []
-    out: list[dict[str, Any]] = []
+    out: list[MacroListEntry] = []
     for path in MACROS_DIR.glob("*.json"):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
