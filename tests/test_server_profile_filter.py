@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-Comment: Part of octowright.
+#
+
+"""Capability-profile filter tests.
+
+Unit-level tests cover `build_allowed_set` / `active_filter` directly. The
+integration tests run a fresh subprocess so toggling `OCTOWRIGHT_PROFILE`
+does not destabilise the in-process server singletons that the rest of
+the suite relies on.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import textwrap
+
+import pytest
+
+from octowright.server import profiles
+
+
+def test_active_filter_unset_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OCTOWRIGHT_PROFILE", raising=False)
+    assert profiles.active_filter() is None
+
+
+def test_active_filter_all_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "all")
+    assert profiles.active_filter() is None
+
+
+def test_active_filter_all_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "ALL")
+    assert profiles.active_filter() is None
+
+
+def test_build_allowed_set_single_profile() -> None:
+    allowed = profiles.build_allowed_set("core")
+    assert allowed == set(profiles.PROFILES["core"])
+
+
+def test_build_allowed_set_multiple_profiles_union() -> None:
+    allowed = profiles.build_allowed_set("core,advanced")
+    assert allowed == set(profiles.PROFILES["core"]) | set(profiles.PROFILES["advanced"])
+
+
+def test_build_allowed_set_unknown_profile_ignored() -> None:
+    allowed = profiles.build_allowed_set("core,bogus")
+    assert allowed == set(profiles.PROFILES["core"])
+
+
+def test_build_allowed_set_empty_spec_yields_empty_set() -> None:
+    assert profiles.build_allowed_set("") == set()
+    assert profiles.build_allowed_set(",,,") == set()
+
+
+def _registered_names_in_subprocess(env_value: str | None) -> set[str]:
+    """Run a fresh Python interpreter, optionally setting OCTOWRIGHT_PROFILE,
+    import the server, and print its registered tool names as JSON. Avoids
+    the singleton-reload pitfalls of an in-process reload."""
+    code = textwrap.dedent(
+        """
+        import json
+        from octowright.server import registered_tool_names
+        print(json.dumps(sorted(registered_tool_names())))
+        """
+    )
+    env = {"PATH": __import__("os").environ.get("PATH", "")}
+    if env_value is not None:
+        env["OCTOWRIGHT_PROFILE"] = env_value
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    return set(json.loads(result.stdout))
+
+
+def test_profile_core_subprocess_filters_tools() -> None:
+    names = _registered_names_in_subprocess("core")
+    expected = set(profiles.PROFILES["core"])
+    assert expected.issubset(names), f"missing core tools: {expected - names}"
+    for absent in ("browser_snapshot", "scenario_start", "macro_save", "browser_screenshot"):
+        assert absent not in names, f"{absent} should not register under profile=core"
+
+
+def test_profile_unset_subprocess_registers_full_surface() -> None:
+    names = _registered_names_in_subprocess(None)
+    for tool in ("browser_snapshot", "scenario_start", "macro_save", "persona_list"):
+        assert tool in names, f"{tool} must register when no profile is set"
+
+
+def test_profile_all_subprocess_registers_full_surface() -> None:
+    names = _registered_names_in_subprocess("all")
+    for tool in ("browser_snapshot", "scenario_start", "macro_save", "persona_list"):
+        assert tool in names, f"{tool} must register when profile=all"
+
+
+def test_profile_core_advanced_subprocess_combines() -> None:
+    names = _registered_names_in_subprocess("core,advanced")
+    union = set(profiles.PROFILES["core"]) | set(profiles.PROFILES["advanced"])
+    assert union.issubset(names)
+    # Things outside both profiles still excluded.
+    assert "scenario_start" not in names
