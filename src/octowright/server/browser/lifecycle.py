@@ -13,6 +13,7 @@ from octowright import _format as fmt
 from octowright import resolve as resolve_mod
 from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import mcp, pool
+from octowright.server.browser.inspect import browser_brief
 
 
 @mcp.tool(
@@ -214,11 +215,21 @@ async def browser_close_all() -> dict[str, Any]:
     description=(
         "Navigate an instance to a URL. Use this to go to a new page; do NOT use for "
         "in-app routing that the SPA handles via clicks (use browser_click instead). "
-        "Equivalent to typing the URL in the address bar and hitting enter."
+        "Equivalent to typing the URL in the address bar and hitting enter. "
+        "Pass response_mode='brief' to also return a browser_brief snapshot (url, "
+        "title, top elements) in the same call — saves a round trip when you would "
+        "otherwise immediately call browser_brief next."
     ),
 )
-async def browser_navigate(instance_id: str, url: str) -> dict[str, Any]:
-    return await pool.get(instance_id).navigate(url)
+async def browser_navigate(
+    instance_id: str,
+    url: str,
+    response_mode: str | None = None,
+) -> dict[str, Any]:
+    res: dict[str, Any] = await pool.get(instance_id).navigate(url)
+    if response_mode == "brief":
+        res["brief"] = await browser_brief(instance_id)
+    return res
 
 
 @mcp.tool(
