@@ -86,7 +86,7 @@ def test_profile_core_subprocess_filters_tools() -> None:
     names = _registered_names_in_subprocess("core")
     expected = set(profiles.PROFILES["core"])
     assert expected.issubset(names), f"missing core tools: {expected - names}"
-    for absent in ("browser_snapshot", "scenario_start", "macro_save", "browser_screenshot"):
+    for absent in ("browser_snapshot", "scenario_start", "macro_save", "persona_list"):
         assert absent not in names, f"{absent} should not register under profile=core"
 
 
@@ -108,3 +108,25 @@ def test_profile_core_advanced_subprocess_combines() -> None:
     assert union.issubset(names)
     # Things outside both profiles still excluded.
     assert "scenario_start" not in names
+
+
+def test_profile_macros_subprocess_isolates_macros() -> None:
+    names = _registered_names_in_subprocess("macros")
+    assert set(profiles.PROFILES["macros"]).issubset(names)
+    # Browser surface stays excluded under macros-only.
+    assert "browser_launch" not in names
+    assert "scenario_start" not in names
+
+
+def test_profile_scenarios_subprocess_isolates_scenarios() -> None:
+    names = _registered_names_in_subprocess("scenarios")
+    assert set(profiles.PROFILES["scenarios"]).issubset(names)
+    assert "macro_save" not in names
+    assert "browser_launch" not in names
+
+
+def test_profile_personas_subprocess_isolates_personas() -> None:
+    names = _registered_names_in_subprocess("personas")
+    assert set(profiles.PROFILES["personas"]).issubset(names)
+    assert "browser_launch" not in names
+    assert "macro_save" not in names
