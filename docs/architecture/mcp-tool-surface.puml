@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml mcp-tool-surface
-title MCP tool inventory by concern (63 tools)
+title MCP tool inventory by concern (89 tools — slim with --profile=core etc.)
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -12,52 +12,67 @@ skinparam packageBackgroundColor #f9fafb
 skinparam noteBackgroundColor #fef3c7
 skinparam noteBorderColor #d1d5db
 
-package "browser lifecycle" #eff6ff {
+note as PROFILES_LEGEND #fef3c7
+  **Capability profiles** (set via OCTOWRIGHT_PROFILE / --profile=...)
+  • **core** (13) — minimum to drive a browser
+  • **advanced** (13) — inspection + assertions + ARIA locators
+  • **macros** (9) — record / replay / lint / repair
+  • **scenarios** (12) — multi-browser orchestration
+  • **personas** (8) — identity + on-disk profile management
+  Each box below is tagged with the profiles its tools belong to.
+  Tools NOT tagged stay registered only when no profile filter is active.
+end note
+
+package "browser lifecycle (core)" #eff6ff {
   rectangle "browser_launch\nbrowser_list / list_sessions\nbrowser_close / close_all\nbrowser_navigate" as LIFE
 }
 
-package "input" #ecfccb {
+package "input (core)" #ecfccb {
   rectangle "browser_click\nbrowser_type\nbrowser_fill\nbrowser_press_key\nbrowser_set_input_files" as INPUT
 }
 
-package "introspection (truncated by default)" #fef3c7 {
-  rectangle "browser_evaluate (max_chars / full)\nbrowser_snapshot (selector / max_chars)\nbrowser_read_markdown (max_chars)\nbrowser_console_messages (level / since)\nbrowser_screenshot\nbrowser_recording_path" as INTRO
+package "introspection (mixed: core + advanced)" #fef3c7 {
+  rectangle "browser_brief (core)\nbrowser_screenshot (core)\nbrowser_read_markdown (core)\nbrowser_evaluate (advanced)\nbrowser_snapshot (advanced)\nbrowser_console_messages (advanced)\nbrowser_recording_path (advanced)\nbrowser_tail_recording (advanced)" as INTRO
 }
 
-package "wait + assert" #fdf4ff {
-  rectangle "browser_wait_for\nbrowser_expect_url\nbrowser_expect_text\nbrowser_expect_selector\nbrowser_expect_js" as ASSERT
+package "wait + assert (mixed: core + advanced)" #fdf4ff {
+  rectangle "browser_wait_for (core)\nbrowser_expect_url (advanced)\nbrowser_expect_text (advanced)\nbrowser_expect_selector (advanced)\nbrowser_expect_js (advanced)" as ASSERT
 }
 
-package "locator-by-aria/text" #fef9c3 {
+package "locator-by-aria/text (advanced)" #fef9c3 {
   rectangle "browser_click_by\nbrowser_fill_by\nbrowser_get_text_by" as LOC
 }
 
-package "frames + tabs + popups" #f0fdf4 {
+package "frames + tabs + popups (no profile — all only)" #f0fdf4 {
   rectangle "browser_switch_frame / reset_frame / list_frames\npage_list / page_switch / page_close" as FRMTAB
 }
 
-package "network + dialogs + downloads" #fee2e2 {
+package "network + dialogs + downloads (no profile — all only)" #fee2e2 {
   rectangle "browser_mock_route / unmock_route\nbrowser_set_dialog_policy\nbrowser_downloads (after cursor)\nbrowser_wait_for_download" as NET
 }
 
-package "macros + replay" #e0f2fe {
-  rectangle "macro_save / list / run / delete\nmacro_run_sequence\nbrowser_export_script" as MAC
+package "macros + replay (macros)" #e0f2fe {
+  rectangle "macro_save / list / run / delete\nmacro_run_sequence\nmacro_lint / repair_preview\nmacro_compile / explain\nbrowser_export_script (advanced)" as MAC
 }
 
-package "personas + profiles" #fdf2f8 {
-  rectangle "persona_list / get / create / delete\nprofile_list / delete\nmigrate_profiles" as PERS
+package "personas + profiles (personas)" #fdf2f8 {
+  rectangle "persona_list / get / create / delete\npersona_credentials_check\nprofile_list / delete / cleanup" as PERS
 }
 
-package "scenarios" #f3e8ff {
-  rectangle "scenario_list / start / status / stop\nscenario_run_macro / participants\nscenario_run_as_test\nscenario_tail (cursor stream)\nbrowser_spawn_roster" as SCN
+package "scenarios (scenarios)" #f3e8ff {
+  rectangle "scenario_list / plan / start / status / stop\nscenario_participants / run_macro / wait_for_sync\nscenario_run_as_test / remap_participants\nscenario_tail (cursor stream)\nscenario_spawn_template" as SCN
 }
 
-package "goldens + video + trace" #ecfdf5 {
-  rectangle "golden_save / assert / list / delete\nbrowser_video_path / extract_frames\n(trace via browser_launch trace=True)" as ART
+package "goldens + video + trace (no profile — all only)" #ecfdf5 {
+  rectangle "golden_save / assert / list / delete / verify_loop\nbrowser_open_trace\n(trace via browser_launch trace=True)" as ART
 }
 
-package "test runner" #fffbeb {
+package "test runner (no profile — all only)" #fffbeb {
   rectangle "run_test_suite (CLI: octowright test)" as RUN
+}
+
+package "octowright meta (no profile — all only)" #f5f5f4 {
+  rectangle "octowright_status\noctowright_dashboard_url\noctowright_check_takeover\nrecordings_cleanup" as META
 }
 
 @enduml

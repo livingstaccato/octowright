@@ -128,6 +128,10 @@ After the pool sits empty for `OCTOWRIGHT_IDLE_GRACE` seconds (default 300s), th
 
 TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `src/types.ts` mirror the Python Pydantic/dataclass models.
 
+### Capability Profiles
+
+The full MCP tool surface is ~89 tools. When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface, 13 tools), `advanced` (inspection + assertions + ARIA-locator interactions), `macros`, `scenarios`, `personas`. Unset / `all` keeps every tool (default, back-compat). Example: `octowright serve --profile=core,macros` exposes 22 tools instead of 89.
+
 ## Env Var Configuration
 
 All defaults are in `src/octowright/defaults.py`. Key vars:
@@ -137,3 +141,4 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_PROFILES_DIR` — override profile storage root
 - `OCTOWRIGHT_MACROS_DIR` — override macro JSON storage root
 - `OCTOWRIGHT_MACRO_SLOWMO_MS` — default per-action delay during macro replay (0 disables)
+- `OCTOWRIGHT_PROFILE` — comma-separated capability-profile names to slim the LLM tool surface; unset or `all` registers everything (see "Capability Profiles" above)

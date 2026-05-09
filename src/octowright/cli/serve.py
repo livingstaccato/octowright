@@ -25,7 +25,6 @@ import click
 from provide.telemetry import get_logger, setup_telemetry, shutdown_telemetry
 
 from octowright.cli._root import cli
-from octowright.server import mcp
 
 _log = get_logger(__name__)
 
@@ -117,6 +116,15 @@ def _log_first_done(
     "Use DEBUG when investigating watchdog/shutdown behavior; daemon output "
     "lands in Octowright's user config directory.",
 )
+@click.option(
+    "--profile",
+    "profile",
+    default=None,
+    help="Restrict the MCP tool surface to the named capability profile(s) "
+    "(comma-separated, e.g. 'core' or 'core,advanced'). Sets OCTOWRIGHT_PROFILE "
+    "for this process and any spawned daemon. Use 'all' or omit for the full "
+    "tool surface (default). See octowright.server.profiles.PROFILES.",
+)
 def serve(
     http_port: int | None,
     http_host: str | None,
@@ -126,6 +134,7 @@ def serve(
     no_singleton: bool,
     daemon_mode: bool,
     log_level: str | None,
+    profile: str | None,
 ) -> None:
     """Run the MCP stdio server plus the HTTP debugger sidecar (default).
 
@@ -143,6 +152,11 @@ def serve(
     # os.environ.copy()).
     if log_level is not None:
         _os.environ["PROVIDE_LOG_LEVEL"] = log_level.upper()
+
+    # Same export rationale: must land before any tool module imports so
+    # the @mcp.tool filter sees it, and so the daemon child inherits it.
+    if profile is not None:
+        _os.environ["OCTOWRIGHT_PROFILE"] = profile
 
     setup_telemetry()
     try:
@@ -304,6 +318,7 @@ async def _run_leader(
         IDLE_POLL_SECONDS,
     )
     from octowright.idle_watchdog import idle_watchdog
+    from octowright.server import mcp
     from octowright.server._state import pool, scenario_pool
 
     grace = idle_grace if idle_grace is not None else IDLE_GRACE_SECONDS

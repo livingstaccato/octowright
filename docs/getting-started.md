@@ -78,6 +78,25 @@ Octowright ships a Click-based CLI. Useful subcommands:
 | `octowright takeover` | Detect and disable competing Playwright MCP plugins. |
 | `octowright test` | Run `[test]`-tagged macros and emit JUnit XML. |
 
+## Slimming the LLM tool surface
+
+The full MCP surface is ~89 tools. When a workflow only needs a slice (driving
+a browser, replaying macros, etc.), pass `--profile` to slim what the LLM
+sees at connection time:
+
+```bash
+octowright serve --profile=core              # 13 tools — minimum to drive a browser
+octowright serve --profile=core,macros       # 22 tools — browser + macro replay
+octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
+```
+
+The named profiles (`core`, `advanced`, `macros`, `scenarios`, `personas`)
+live in `src/octowright/server/profiles.py`. Omit `--profile` (or use `all`)
+to register every tool — that is the default.
+
+Setting the equivalent env var (`OCTOWRIGHT_PROFILE=core,macros`) works too
+and is what the daemon process inherits when `octowright serve` spawns one.
+
 ## Next steps
 
 - Open the dashboard at `http://127.0.0.1:8765/` while `octowright serve` is running.

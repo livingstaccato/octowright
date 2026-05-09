@@ -110,3 +110,29 @@ then a numbered diagnosis sequence.
 
 If a process other than Octowright owns the port, either kill it or set
 `OCTOWRIGHT_HTTP_PORT` to a free port and restart `octowright serve`.
+
+## "Tool not found" — capability profile filtering
+
+**Symptoms**
+
+- The LLM reports a tool it expected (e.g. `macro_save`, `scenario_start`)
+  is not available.
+- `octowright selftest` shows a smaller-than-usual tool count.
+
+**Diagnosis**
+
+1. Run `octowright selftest`. The first lines show `active profile:` and the
+   total tool count. If the active profile is anything other than `all`, the
+   filter is in play.
+
+2. From within an MCP session, call the `octowright_status` tool — its
+   `profile` block reports `active`, `filter_active`, `tool_count`, and the
+   list of `available_profiles`.
+
+3. To restore the full surface, unset `OCTOWRIGHT_PROFILE` (or set it to
+   `all`) and restart the daemon, OR add the missing profile to the spec
+   (e.g. `--profile=core,macros` to add macros back).
+
+The profile mapping lives at `src/octowright/server/profiles.py`. See the
+[Capability profiles](getting-started.md#slimming-the-llm-tool-surface)
+section in the getting-started guide for worked examples.
