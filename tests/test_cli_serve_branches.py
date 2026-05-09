@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import signal
-import sys
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -33,6 +32,36 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.cli import serve as _serve
+
+
+def _patch_sn_daemon(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    read_lock: Any = None,
+    is_stale: Any = None,
+    probe_http_alive: Any = None,
+    spawn_daemon: Any = None,
+    wait_for_daemon: Any = None,
+) -> None:
+    """Patch attributes on the REAL singleton + daemonize modules.
+
+    `from octowright import singleton as _sn` resolves through the package
+    attribute, not sys.modules. setitem(sys.modules, ...) silently misses;
+    setattr on the real module is what actually intercepts the call.
+    """
+    import octowright.daemonize as _daemonize_mod
+    import octowright.singleton as _sn_mod
+
+    if read_lock is not None:
+        monkeypatch.setattr(_sn_mod, "read_lock", read_lock)
+    if is_stale is not None:
+        monkeypatch.setattr(_sn_mod, "is_stale", is_stale)
+    if probe_http_alive is not None:
+        monkeypatch.setattr(_sn_mod, "probe_http_alive", probe_http_alive)
+    if spawn_daemon is not None:
+        monkeypatch.setattr(_daemonize_mod, "spawn_daemon", spawn_daemon)
+    if wait_for_daemon is not None:
+        monkeypatch.setattr(_daemonize_mod, "wait_for_daemon", wait_for_daemon)
 
 
 @pytest.fixture
@@ -445,19 +474,14 @@ class TestEnsureLeaderOrInline:
     async def test_existing_alive_leader_returned_directly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If lockfile exists + pid alive + http alive → return that LeaderInfo."""
         info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
-        fake_sn = SimpleNamespace(
+        _patch_sn_daemon(
+            monkeypatch,
             read_lock=lambda: info,
             is_stale=lambda _info: False,
             probe_http_alive=AsyncMock(return_value=True),
-        )
-        monkeypatch.setitem(sys.modules, "octowright.singleton", fake_sn)
-        # Daemonize shouldn't even be touched.
-        fake_daemon = SimpleNamespace(
             spawn_daemon=MagicMock(side_effect=AssertionError("should not be called")),
             wait_for_daemon=AsyncMock(),
         )
-        monkeypatch.setitem(sys.modules, "octowright.daemonize", fake_daemon)
-
         result = await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
         assert result is info
 
@@ -465,19 +489,15 @@ class TestEnsureLeaderOrInline:
     async def test_no_leader_spawns_daemon_and_returns_spawned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Missing lockfile → spawn daemon → wait_for_daemon returns info → return it."""
         spawned = SimpleNamespace(pid=99, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
-        fake_sn = SimpleNamespace(
+        spawn_daemon = MagicMock()
+        _patch_sn_daemon(
+            monkeypatch,
             read_lock=lambda: None,
             is_stale=lambda _i: False,
             probe_http_alive=AsyncMock(return_value=False),
-        )
-        spawn_daemon = MagicMock()
-        fake_daemon = SimpleNamespace(
             spawn_daemon=spawn_daemon,
             wait_for_daemon=AsyncMock(return_value=spawned),
         )
-        monkeypatch.setitem(sys.modules, "octowright.singleton", fake_sn)
-        monkeypatch.setitem(sys.modules, "octowright.daemonize", fake_daemon)
-
         result = await _serve._ensure_leader_or_inline({}, http_host="127.0.0.1", http_port=8765, idle_grace=None)
         assert result is spawned
         spawn_daemon.assert_called_once_with(http_host="127.0.0.1", http_port=8765, idle_grace=None)
@@ -485,17 +505,14 @@ class TestEnsureLeaderOrInline:
     @pytest.mark.anyio
     async def test_spawn_timeout_falls_back_to_inline(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """wait_for_daemon → None → call _run_leader inline and return None."""
-        fake_sn = SimpleNamespace(
+        _patch_sn_daemon(
+            monkeypatch,
             read_lock=lambda: None,
             is_stale=lambda _i: False,
             probe_http_alive=AsyncMock(return_value=False),
-        )
-        fake_daemon = SimpleNamespace(
             spawn_daemon=MagicMock(),
             wait_for_daemon=AsyncMock(return_value=None),
         )
-        monkeypatch.setitem(sys.modules, "octowright.singleton", fake_sn)
-        monkeypatch.setitem(sys.modules, "octowright.daemonize", fake_daemon)
 
         run_leader_calls: list[dict[str, Any]] = []
 
@@ -517,20 +534,16 @@ class TestEnsureLeaderOrInline:
     async def test_stale_pid_triggers_spawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Lock exists but is_stale=True → treat as no leader → spawn."""
         info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
-        fake_sn = SimpleNamespace(
-            read_lock=lambda: info,
-            is_stale=lambda _info: True,  # PID dead
-            probe_http_alive=AsyncMock(),  # not reached
-        )
         spawned = SimpleNamespace(mcp_url="new")
         spawn_daemon = MagicMock()
-        fake_daemon = SimpleNamespace(
+        _patch_sn_daemon(
+            monkeypatch,
+            read_lock=lambda: info,
+            is_stale=lambda _info: True,
+            probe_http_alive=AsyncMock(),
             spawn_daemon=spawn_daemon,
             wait_for_daemon=AsyncMock(return_value=spawned),
         )
-        monkeypatch.setitem(sys.modules, "octowright.singleton", fake_sn)
-        monkeypatch.setitem(sys.modules, "octowright.daemonize", fake_daemon)
-
         result = await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
         assert result is spawned
         spawn_daemon.assert_called_once()
@@ -539,20 +552,16 @@ class TestEnsureLeaderOrInline:
     async def test_alive_pid_dead_http_triggers_spawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Lock alive but probe_http_alive=False → spawn replacement."""
         info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
-        fake_sn = SimpleNamespace(
+        spawned = SimpleNamespace(mcp_url="new")
+        spawn_daemon = MagicMock()
+        _patch_sn_daemon(
+            monkeypatch,
             read_lock=lambda: info,
             is_stale=lambda _info: False,
             probe_http_alive=AsyncMock(return_value=False),
-        )
-        spawned = SimpleNamespace(mcp_url="new")
-        spawn_daemon = MagicMock()
-        fake_daemon = SimpleNamespace(
             spawn_daemon=spawn_daemon,
             wait_for_daemon=AsyncMock(return_value=spawned),
         )
-        monkeypatch.setitem(sys.modules, "octowright.singleton", fake_sn)
-        monkeypatch.setitem(sys.modules, "octowright.daemonize", fake_daemon)
-
         result = await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
         assert result is spawned
         spawn_daemon.assert_called_once()
@@ -604,16 +613,15 @@ class TestRespawnIfLeaderGone:
     async def test_no_spawn_when_leader_still_healthy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Recheck shows alive leader → echo + return without spawn."""
         info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
-        fake_sn = SimpleNamespace(
+        spawn_daemon = MagicMock(side_effect=AssertionError("should not spawn"))
+        _patch_sn_daemon(
+            monkeypatch,
             read_lock=lambda: info,
             is_stale=lambda _i: False,
             probe_http_alive=AsyncMock(return_value=True),
+            spawn_daemon=spawn_daemon,
+            wait_for_daemon=AsyncMock(),
         )
-        spawn_daemon = MagicMock(side_effect=AssertionError("should not spawn"))
-        fake_daemon = SimpleNamespace(spawn_daemon=spawn_daemon, wait_for_daemon=AsyncMock())
-        monkeypatch.setitem(sys.modules, "octowright.singleton", fake_sn)
-        monkeypatch.setitem(sys.modules, "octowright.daemonize", fake_daemon)
-
         captured: list[str] = []
         monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: captured.append(text))
         await _serve._respawn_if_leader_gone(http_host=None, http_port=None, idle_grace=None)
@@ -623,16 +631,15 @@ class TestRespawnIfLeaderGone:
     @pytest.mark.anyio
     async def test_spawns_when_leader_gone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Lockfile gone or stale → spawn replacement daemon."""
-        fake_sn = SimpleNamespace(
+        spawn_daemon = MagicMock()
+        _patch_sn_daemon(
+            monkeypatch,
             read_lock=lambda: None,
             is_stale=lambda _i: True,
             probe_http_alive=AsyncMock(return_value=False),
+            spawn_daemon=spawn_daemon,
+            wait_for_daemon=AsyncMock(),
         )
-        spawn_daemon = MagicMock()
-        fake_daemon = SimpleNamespace(spawn_daemon=spawn_daemon, wait_for_daemon=AsyncMock())
-        monkeypatch.setitem(sys.modules, "octowright.singleton", fake_sn)
-        monkeypatch.setitem(sys.modules, "octowright.daemonize", fake_daemon)
-
         captured: list[str] = []
         monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: captured.append(text))
         await _serve._respawn_if_leader_gone(http_host="0.0.0.0", http_port=9000, idle_grace=300.0)
@@ -643,16 +650,15 @@ class TestRespawnIfLeaderGone:
     async def test_spawns_when_pid_alive_but_http_dead(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """is_stale=False but probe_http_alive=False → still considered gone."""
         info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
-        fake_sn = SimpleNamespace(
+        spawn_daemon = MagicMock()
+        _patch_sn_daemon(
+            monkeypatch,
             read_lock=lambda: info,
             is_stale=lambda _i: False,
             probe_http_alive=AsyncMock(return_value=False),
+            spawn_daemon=spawn_daemon,
+            wait_for_daemon=AsyncMock(),
         )
-        spawn_daemon = MagicMock()
-        fake_daemon = SimpleNamespace(spawn_daemon=spawn_daemon, wait_for_daemon=AsyncMock())
-        monkeypatch.setitem(sys.modules, "octowright.singleton", fake_sn)
-        monkeypatch.setitem(sys.modules, "octowright.daemonize", fake_daemon)
-
         captured: list[str] = []
         monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: captured.append(text))
         await _serve._respawn_if_leader_gone(http_host=None, http_port=None, idle_grace=None)
