@@ -219,4 +219,4 @@ pytest_add_cli_args = ["-x", "-q", "--no-cov"]
 # mutmut 3.x copies only the files in paths_to_mutate by default; the rest of
 # the src tree must be listed here or imports fail in the mutants/ workdir.
 # tools/ holds the out-of-wheel demo lib that tests/conftest.py adds to sys.path.
-also_copy = ["src/", "tools/", "demo/", "examples/"]
+also_copy = ["src/", "tools/", "demo/", "examples/", "conftest.py"]
