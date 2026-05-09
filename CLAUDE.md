@@ -88,6 +88,8 @@ CLI (Click)
 | `src/octowright/resolve.py` | `suggest_for_url()` — persona ranking by URL |
 | `src/octowright/defaults.py` | All env-var-driven defaults (port, paths, timeouts) |
 | `tools/octowright_demos/` | **Out-of-wheel** demo-bundle generation (catalog, indexer, runtime, exports). Imported by `scripts/demos/*` and `tests/test_demos_*`; not part of the shipped package. |
+| `demo/bundles/` | Source-of-truth demo bundles (`demo.yaml` + recorded artifacts). Tracked in git. Re-recording requires browser sessions. |
+| `demo/tutorial-export/` | **Derived; gitignored.** Verbatim mirror of `demo/bundles/.../artifacts/` plus generated JSON manifests, consumed by `site-octowright-com`'s sync workflow. Regenerate with `make export-demos` (no browsers needed — just `shutil.copytree` + JSON writes). |
 | `docs/architecture/MCP-SHARED-CONTRACT.md` | HTTP API spec (endpoints, request/response shapes) |
 | `docs/architecture/` | PlantUML diagrams (render with `make diagrams`) |
 
