@@ -153,7 +153,7 @@ async def persona_detail_endpoint(request: Request) -> JSONResponse:
     if not yaml_path.exists():
         return JSONResponse({"error": f"persona {name!r} not found"}, status_code=404)
 
-    yaml_text = yaml_path.read_text()
+    yaml_text = yaml_path.read_text(encoding="utf-8")
 
     engine_bytes: dict[str, int] = {}
     for kind in SUPPORTED_KINDS:

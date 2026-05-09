@@ -269,24 +269,34 @@ def _check_try_each(action: dict[str, Any], outer_index: int, issues: list[Issue
 
 def _lint_if_selector(action: dict, idx: int, issues: list[Issue]) -> None:
     _check_if_selector(action, idx, issues)
-    for sub in action.get("then") or []:
-        _lint_action(sub, idx, issues)
-    for sub in action.get("else") or []:
-        _lint_action(sub, idx, issues)
+    # `or []` would fall through truthy-non-list values (e.g. then="x" iterates
+    # chars; then=1 raises TypeError). Walk only when the branch is a list.
+    then_branch = action.get("then")
+    if isinstance(then_branch, list):
+        for sub in then_branch:
+            _lint_action(sub, idx, issues)
+    else_branch = action.get("else")
+    if isinstance(else_branch, list):
+        for sub in else_branch:
+            _lint_action(sub, idx, issues)
 
 
 def _lint_try(action: dict, idx: int, issues: list[Issue]) -> None:
     _check_try(action, idx, issues)
-    for sub in action.get("actions") or []:
-        _lint_action(sub, idx, issues)
+    actions = action.get("actions")
+    if isinstance(actions, list):
+        for sub in actions:
+            _lint_action(sub, idx, issues)
 
 
 def _lint_try_each(action: dict, idx: int, issues: list[Issue]) -> None:
     _check_try_each(action, idx, issues)
-    for branch in action.get("branches") or []:
-        if isinstance(branch, list):
-            for sub in branch:
-                _lint_action(sub, idx, issues)
+    branches = action.get("branches")
+    if isinstance(branches, list):
+        for branch in branches:
+            if isinstance(branch, list):
+                for sub in branch:
+                    _lint_action(sub, idx, issues)
 
 
 # Per-action-kind linters that need recursion or specialized checks. Simple
