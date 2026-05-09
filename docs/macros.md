@@ -8,6 +8,13 @@ Macros live as JSON under the Octowright config dir: POSIX uses the XDG config
 dir `${XDG_CONFIG_HOME:-~/.config}/octowright/macros/`, and Windows uses
 `%APPDATA%\octowright\macros\`. Override with `OCTOWRIGHT_MACROS_DIR`.
 
+The macro tools (`macro_save`, `macro_run`, `macro_run_sequence`, `macro_list`,
+`macro_delete`, `macro_lint`, `macro_repair_preview`, `macro_compile`,
+`macro_explain`) belong to the `macros` capability profile. By default every
+tool registers; if your operator runs `octowright serve --profile=core`, add
+`macros` to the spec (`--profile=core,macros`) to keep these visible. See
+[getting-started.md](getting-started.md#slimming-the-llm-tool-surface).
+
 ## When to use a macro
 
 - **Login flows** that you want to re-run across multiple personas or sessions.

@@ -134,6 +134,8 @@ def octowright_status() -> dict[str, Any]:
     from octowright import session_manifest as _session_manifest
     from octowright import singleton as _singleton
     from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
+    from octowright.server.profiles import PROFILES, active_filter
+    from octowright.server.registry import registered_tool_names
 
     lock = _singleton.read_lock()
     daemon_pid: int | None = None
@@ -149,6 +151,23 @@ def octowright_status() -> dict[str, Any]:
     stale_sessions = _session_manifest.stale_entries(
         live_session_ids={session.instance_id for session in pool.iter_sessions()}
     )
+
+    raw_profile = os.environ.get("OCTOWRIGHT_PROFILE", "").strip()
+    profile_filter = active_filter()
+    if profile_filter is None:
+        profile_block: dict[str, Any] = {
+            "active": raw_profile or None,  # 'all', 'ALL' → echo; unset → None
+            "filter_active": False,
+            "tool_count": len(registered_tool_names()),
+            "available_profiles": sorted(PROFILES.keys()),
+        }
+    else:
+        profile_block = {
+            "active": raw_profile,
+            "filter_active": True,
+            "tool_count": len(registered_tool_names()),
+            "available_profiles": sorted(PROFILES.keys()),
+        }
 
     return {
         "daemon": {
@@ -178,5 +197,6 @@ def octowright_status() -> dict[str, Any]:
             "count": len(persona_names),
             "names": persona_names,
         },
+        "profile": profile_block,
         "dashboard_url": _http.runtime_url() if http_status["running"] else None,
     }
