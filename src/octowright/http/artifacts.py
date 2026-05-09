@@ -181,8 +181,13 @@ _FILESYSTEM_FALLBACKS: dict[str, str] = {
 }
 
 
-def _ingest_entry(entry: dict[str, Any], state: dict[str, Any], counts: dict[str, int]) -> None:
-    """Apply one JSONL entry's effects to the running state + counts."""
+def ingest_entry(entry: dict[str, Any], state: dict[str, Any], counts: dict[str, int]) -> None:
+    """Apply one JSONL entry's effects to the running state + counts.
+
+    Used both by ``scan_recording_artifacts`` (one walk producing the artifact
+    summary) and by ``SessionArtifactCache.warm_close`` (single-pass close
+    aggregation that folds artifact + row extraction into one walk).
+    """
     counts["event_count"] += 1
     action = entry.get("action")
     if action not in EVENT_ONLY_ACTIONS:
@@ -199,7 +204,7 @@ def _ingest_entry(entry: dict[str, Any], state: dict[str, Any], counts: dict[str
 
 
 def _tally_jsonl(jsonl_path: Path, state: dict[str, Any], counts: dict[str, int]) -> None:
-    """Walk one JSONL file and feed each entry to _ingest_entry."""
+    """Walk one JSONL file and feed each entry to ingest_entry."""
     try:
         fh = jsonl_path.open(encoding="utf-8")
     except OSError:
@@ -213,10 +218,10 @@ def _tally_jsonl(jsonl_path: Path, state: dict[str, Any], counts: dict[str, int]
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            _ingest_entry(entry, state, counts)
+            ingest_entry(entry, state, counts)
 
 
-def _empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
+def empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
     counts = {"event_count": 0, "action_count": 0, "console_count": 0, "download_count": 0, "page_count": 1}
     state: dict[str, Any] = {
         "url": None,
@@ -228,7 +233,7 @@ def _empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
     return counts, state
 
 
-def _apply_filesystem_fallbacks(jsonl_path: Path, state: dict[str, Any]) -> None:
+def apply_filesystem_fallbacks(jsonl_path: Path, state: dict[str, Any]) -> None:
     """Probe the canonical sidecar filenames for any artefact path the close
     event didn't record explicitly."""
     for field, suffix in _FILESYSTEM_FALLBACKS.items():
@@ -239,30 +244,10 @@ def _apply_filesystem_fallbacks(jsonl_path: Path, state: dict[str, Any]) -> None
 
 
 def scan_recording_artifacts(jsonl_path: Path) -> dict[str, Any]:
-    counts, state = _empty_artifact_state()
+    counts, state = empty_artifact_state()
     _tally_jsonl(jsonl_path, state, counts)
-    _apply_filesystem_fallbacks(jsonl_path, state)
+    apply_filesystem_fallbacks(jsonl_path, state)
     return {**counts, **state}
-
-
-def ingest_entry(entry: dict[str, Any], state: dict[str, Any], counts: dict[str, int]) -> None:
-    """Public alias for the per-entry ingestion step.
-
-    Exposed so `SessionArtifactCache.warm_close` can fold artifact aggregation
-    into the same JSONL walk that builds the row sidecars, instead of having
-    two threads parse the same file twice on session close.
-    """
-    _ingest_entry(entry, state, counts)
-
-
-def empty_artifact_state() -> tuple[dict[str, int], dict[str, Any]]:
-    """Public alias for the artifact-state initializer (see ``ingest_entry``)."""
-    return _empty_artifact_state()
-
-
-def apply_filesystem_fallbacks(jsonl_path: Path, state: dict[str, Any]) -> None:
-    """Public alias for the filesystem fallback step (see ``ingest_entry``)."""
-    _apply_filesystem_fallbacks(jsonl_path, state)
 
 
 def cache_report_for_recording(jsonl_path: Path) -> dict[str, Any]:
