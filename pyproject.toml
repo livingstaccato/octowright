@@ -213,6 +213,11 @@ tests_dir = [
     "tests/test_macro_checks.py",
     "tests/test_macro_healing.py",
     "tests/test_hypo_parsers.py",
+    # NOTE: 7 newer branches/loader/storage/helpers files exist (see tests/)
+    # but adding them here triggers a mutmut runner failure mode where workers
+    # die after ~133 mutants. The new tests still run via `make test` and
+    # protect against real regressions; the kill-rate measurement is just
+    # blind to them until the runner issue is sorted.
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]
