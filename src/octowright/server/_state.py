@@ -9,7 +9,8 @@ the same `mcp` and to share the same live state."""
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from mcp.server.fastmcp import FastMCP
 from provide.telemetry import get_logger
@@ -18,12 +19,68 @@ from octowright import scenarios as _scenarios
 from octowright.browser_pool import BrowserPool
 from octowright.server.profiles import active_filter
 
+if TYPE_CHECKING:
+    from mcp.types import Icon, ToolAnnotations
+
 log = get_logger("octowright.server")
 
 pool = BrowserPool()
 scenario_pool = _scenarios.ScenarioPool()
-mcp = FastMCP(
+
+
+class _ProfiledFastMCP(FastMCP):
+    """FastMCP subclass that honours OCTOWRIGHT_PROFILE at decoration time.
+
+    When ``allowed_tools`` is ``None`` (no profile active), behaviour is
+    identical to the parent class. When it is a set, ``tool()``-decorated
+    functions whose ``__name__`` is not in the set are returned unchanged
+    (and therefore never registered with the underlying FastMCP).
+    """
+
+    _allowed_tools: set[str] | None
+
+    def __init__(self, *args: Any, allowed_tools: set[str] | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._allowed_tools = allowed_tools
+
+    def tool(
+        self,
+        name: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        annotations: ToolAnnotations | None = None,
+        icons: list[Icon] | None = None,
+        meta: dict[str, Any] | None = None,
+        structured_output: bool | None = None,
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        decorator = super().tool(
+            name=name,
+            title=title,
+            description=description,
+            annotations=annotations,
+            icons=icons,
+            meta=meta,
+            structured_output=structured_output,
+        )
+        allowed = self._allowed_tools
+        if allowed is None:
+            return decorator
+
+        def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
+            # Plain `Callable` isn't guaranteed by the type system to carry
+            # `__name__`; in practice every @mcp.tool target is a `def` (or
+            # async def) which does. Use getattr so ty doesn't object.
+            if getattr(fn, "__name__", "") not in allowed:
+                return fn
+            return decorator(fn)
+
+        return wrap
+
+
+_allowed_tools = active_filter()
+mcp = _ProfiledFastMCP(
     "octowright",
+    allowed_tools=_allowed_tools,
     instructions=(
         "Launch and drive multiple headed Playwright browsers in parallel. "
         "Each browser has an instance_id; pass it to every per-browser tool. "
@@ -34,24 +91,5 @@ mcp = FastMCP(
         "`octowright_status` to see the active profile."
     ),
 )
-
-# Capability-profile filter (OCTOWRIGHT_PROFILE). Wraps mcp.tool so any tool
-# whose name is not in the active allow-list is skipped at decoration time
-# rather than registered with FastMCP. Zero overhead when no profile is set.
-_allowed_tools = active_filter()
 if _allowed_tools is not None:
-    _allowed: set[str] = _allowed_tools
-    _original_tool = mcp.tool
-
-    def _filtered_tool(*args: Any, **kwargs: Any) -> Any:
-        decorator = _original_tool(*args, **kwargs)
-
-        def wrap(fn: Any) -> Any:
-            if fn.__name__ not in _allowed:
-                return fn
-            return decorator(fn)
-
-        return wrap
-
-    mcp.tool = _filtered_tool  # type: ignore[method-assign]
-    log.info("octowright.profile.active", allowed=sorted(_allowed))
+    log.info("octowright.profile.active", allowed=sorted(_allowed_tools))
