@@ -15,6 +15,7 @@ by writing synthetic JSONL files to a tmp recordings dir and pointing
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -713,11 +714,21 @@ async def test_markdown_endpoint_roundtrip_live_and_closed(tmp_path: Path, monke
 
         sid = result["instance_id"]
         session = pool.get(sid)
-        # Markdown capture is now scheduled automatically on launch + navigation.
-        for _ in range(20):
+
+        # Markdown capture is scheduled in the background; on slow CI runners
+        # (notably Windows) the 1-second poll budget here was racing the
+        # extractor. Drain any in-flight task explicitly, then poll generously.
+        async def _drain_markdown_capture() -> None:
+            pending = session._pending_markdown_capture
+            if pending is not None and not pending.done():
+                with contextlib.suppress(Exception):
+                    await pending
+
+        await _drain_markdown_capture()
+        for _ in range(100):
             if session.markdown_path is not None and session.markdown_path.exists():
                 break
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
         assert session.markdown_path is not None
         assert session.markdown_path.exists()
 
@@ -726,12 +737,13 @@ async def test_markdown_endpoint_roundtrip_live_and_closed(tmp_path: Path, monke
         assert "Integration" in live_resp.text
 
         await session.navigate("data:text/html,<html><body><h1>Integration Two</h1></body></html>")
-        for _ in range(20):
+        await _drain_markdown_capture()
+        for _ in range(100):
             if session.markdown_path is not None and "Integration Two" in session.markdown_path.read_text(
                 encoding="utf-8"
             ):
                 break
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
         live_resp_two = client.get(f"/api/sessions/{sid}/markdown")
         assert live_resp_two.status_code == 200
         assert "Integration Two" in live_resp_two.text
