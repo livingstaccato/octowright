@@ -153,6 +153,57 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(personasClicks).toBe(1);
   });
 
+  it("serializes overlapping scoped invalidations so updates aren't lost", async () => {
+    // Regression test for an SSE race: two scoped invalidations firing close
+    // together used to each snapshot the same currentState and merge against
+    // it, with the second resolver overwriting the first's update.
+    // Serializing tick() via a shared promise chain means the second tick
+    // reads the first's committed state.
+    apiMocks.getPersonas
+      .mockResolvedValueOnce([]) // initial
+      .mockResolvedValueOnce([
+        { name: "p1", display_name: "P1", engines: ["chromium"], path: "/p1", mtime: 0, last_used: "" },
+      ]); // personas tick
+
+    const sessionsDeferred = deferred<SessionListResponse>();
+    apiMocks.getSessions
+      .mockResolvedValueOnce(emptySessions) // initial
+      .mockReturnValueOnce(sessionsDeferred.promise); // sessions tick — gated
+
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+
+    // Fire sessions invalidation FIRST (its fetch is gated and won't resolve yet).
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(
+      new MessageEvent("invalidate", { data: '{"scope":"sessions"}' }),
+    );
+    // Fire personas invalidation SECOND (its fetch resolves immediately on flush).
+    FakeEventSource.instances[0]?.listeners.invalidate?.[0]?.(
+      new MessageEvent("invalidate", { data: '{"scope":"personas"}' }),
+    );
+
+    // Let the personas tick try to run. With the race, it would resolve and
+    // overwrite currentState before the sessions tick lands. With serialization,
+    // it must wait for the sessions tick.
+    await flushPromises();
+    // Personas panel still shows the empty placeholder — personas tick is queued
+    // behind the gated sessions tick.
+    const personasBefore = root.querySelector('[data-testid="panel-personas"]')?.textContent ?? "";
+    expect(personasBefore).not.toContain("P1");
+
+    // Now release the sessions fetch.
+    sessionsDeferred.resolve(sessionsWith("session-after-race"));
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+
+    // Both updates should be visible: the sessions row AND the persona.
+    const liveRows = root.querySelectorAll('[data-testid="panel-live-browsers"] tbody tr');
+    expect(liveRows.length).toBe(1);
+    expect(liveRows[0]?.textContent).toContain("session-after-race");
+    expect(root.querySelector('[data-testid="panel-personas"]')?.textContent).toContain("P1");
+  });
+
   it("keeps the panel registry in sync after a user-action refresh + later SSE invalidation", async () => {
     // Regression test for a real bug: the action handlers (delete /
     // relaunch / start-scenario) used to call renderDashboard directly,
@@ -332,27 +383,34 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("suppresses stale refresh renders when an older request resolves last", async () => {
+  it("the latest invalidation wins regardless of fetch resolution timing", async () => {
+    // With serialized ticks, two invalidations fire requests sequentially —
+    // the second only starts after the first commits. Both are visible in
+    // their committed order; the visible end state reflects the last tick.
     vi.stubGlobal("EventSource", FakeEventSource);
-    const slow = deferred<SessionListResponse>();
-    const fast = deferred<SessionListResponse>();
+    const first = deferred<SessionListResponse>();
+    const second = deferred<SessionListResponse>();
     apiMocks.getSessions
       .mockResolvedValueOnce(emptySessions)
-      .mockImplementationOnce(() => slow.promise)
-      .mockImplementationOnce(() => fast.promise);
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
 
     await dashboard.bootDashboard(root);
     const source = FakeEventSource.instances[0];
 
     source?.listeners.invalidate?.[0]?.(new MessageEvent("invalidate"));
     source?.listeners.invalidate?.[0]?.(new MessageEvent("invalidate"));
-    fast.resolve(sessionsWith("newer"));
-    await flushPromises();
-    expect(root.textContent).toContain("newer");
 
-    slow.resolve(sessionsWith("older"));
+    // Resolve the second fetch BEFORE the first — it shouldn't matter.
+    second.resolve(sessionsWith("second-wins"));
+    first.resolve(sessionsWith("first"));
     await flushPromises();
-    expect(root.textContent).toContain("newer");
-    expect(root.textContent).not.toContain("older");
+    await flushPromises();
+    await flushPromises();
+
+    // End state is the second tick's payload (the latest invalidation).
+    const liveRows = root.querySelectorAll('[data-testid="panel-live-browsers"] tbody tr');
+    expect(liveRows.length).toBe(1);
+    expect(liveRows[0]?.textContent).toContain("second-wins");
   });
 });

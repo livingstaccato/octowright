@@ -12,6 +12,14 @@ from typing import Any
 import octowright.macros as macro_mod
 from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import mcp, pool
+from octowright.types import (
+    CleanupResult,
+    MacroCompileResult,
+    MacroDeleteResult,
+    MacroLintIssue,
+    MacroLintResult,
+    MacroSaveResult,
+)
 
 
 @mcp.tool(
@@ -30,7 +38,7 @@ def macro_save(
     description: str | None = None,
     parameters: dict[str, str] | None = None,
     include_launch: bool = False,
-) -> dict[str, Any]:
+) -> MacroSaveResult:
     session = pool.get(instance_id)
     path = macro_mod.save_macro(
         recording_path=session.log_path,
@@ -70,7 +78,7 @@ async def macro_run(
 
 
 @mcp.tool(structured_output=False, description="Delete a saved macro by name. Raises if the macro does not exist.")
-def macro_delete(name: str) -> dict[str, Any]:
+def macro_delete(name: str) -> MacroDeleteResult:
     path = macro_mod.delete_macro(name)
     publish_dashboard_invalidation_nowait("macros")
     return {"deleted": True, "name": name, "path": str(path)}
@@ -112,19 +120,19 @@ async def macro_run_sequence(
         "this whenever you hand-edit a macro JSON file."
     ),
 )
-def macro_lint(name: str) -> dict[str, Any]:
+def macro_lint(name: str) -> MacroLintResult:
     from octowright.macros import lint as _lint
 
     macro = macro_mod.load_macro(name)  # raises FileNotFoundError if missing
     issues = _lint.lint_macro(macro)
     errors = [i for i in issues if i.severity == "error"]
     warnings = [i for i in issues if i.severity == "warning"]
+    issue_rows: list[MacroLintIssue] = [
+        {"severity": i.severity, "code": i.code, "message": i.message, "action_index": i.action_index} for i in issues
+    ]
     return {
         "macro": name,
-        "issues": [
-            {"severity": i.severity, "code": i.code, "message": i.message, "action_index": i.action_index}
-            for i in issues
-        ],
+        "issues": issue_rows,
         "summary": f"{len(issues)} issues: {len(errors)} errors, {len(warnings)} warnings",
         "ok": len(errors) == 0,
     }
@@ -155,15 +163,16 @@ def macro_compile(
     name: str | None = None,
     write: bool = False,
     strict: bool = True,
-) -> dict[str, Any]:
+) -> MacroCompileResult:
     from octowright.macros import dsl as macro_dsl
 
     compiled = macro_dsl.compile_macro_yaml(yaml_text, name=name, strict=strict)
-    result: dict[str, Any] = {"compiled": compiled, "written": False}
+    result: MacroCompileResult = {"compiled": compiled, "written": False}
     if write:
         path = macro_mod.write_macro(name=compiled["name"], macro=compiled)
         publish_dashboard_invalidation_nowait("macros")
-        result.update({"written": True, "path": str(path)})
+        result["written"] = True
+        result["path"] = str(path)
     return result
 
 
@@ -203,7 +212,7 @@ async def run_test_suite(
         "breakdown so you can see what would be freed before committing."
     ),
 )
-def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
+def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
     import octowright.recording_cleanup as _rc
     from octowright.defaults import RECORDINGS_DIR
 
@@ -237,7 +246,7 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, An
         "size + age info so you can see what would be freed before committing."
     ),
 )
-def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> dict[str, Any]:
+def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
     import octowright.profile_cleanup as _pc
     from octowright.defaults import PROFILES_DIR
 

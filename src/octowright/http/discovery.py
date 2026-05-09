@@ -241,18 +241,6 @@ def _resolve_artifact_path(session_id: str, attr: str) -> Path | None:
     return Path(artefact) if artefact else None
 
 
-def _resolve_video_path(session_id: str) -> Path | None:
-    return _resolve_artifact_path(session_id, "video_path")
-
-
-def _resolve_trace_path(session_id: str) -> Path | None:
-    return _resolve_artifact_path(session_id, "trace_path")
-
-
-def _resolve_markdown_path(session_id: str) -> Path | None:
-    return _resolve_artifact_path(session_id, "markdown_path")
-
-
 # ---------------------------------------------------------------------------
 # JSONL tail (matches `browser_tail_recording` semantics so the WS payloads
 # look identical to the existing MCP tool — the frontend can speak one shape).
