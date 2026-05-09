@@ -62,6 +62,8 @@ def _registered_names_in_subprocess(env_value: str | None) -> set[str]:
     """Run a fresh Python interpreter, optionally setting OCTOWRIGHT_PROFILE,
     import the server, and print its registered tool names as JSON. Avoids
     the singleton-reload pitfalls of an in-process reload."""
+    import os
+
     code = textwrap.dedent(
         """
         import json
@@ -69,7 +71,10 @@ def _registered_names_in_subprocess(env_value: str | None) -> set[str]:
         print(json.dumps(sorted(registered_tool_names())))
         """
     )
-    env = {"PATH": __import__("os").environ.get("PATH", "")}
+    # Inherit the parent environment (Windows requires SYSTEMROOT, PATHEXT,
+    # TEMP, etc. for Python to even start), then set/unset OCTOWRIGHT_PROFILE.
+    env = os.environ.copy()
+    env.pop("OCTOWRIGHT_PROFILE", None)
     if env_value is not None:
         env["OCTOWRIGHT_PROFILE"] = env_value
     result = subprocess.run(
