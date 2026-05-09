@@ -28,7 +28,10 @@ mcp = FastMCP(
         "Launch and drive multiple headed Playwright browsers in parallel. "
         "Each browser has an instance_id; pass it to every per-browser tool. "
         "Every action is recorded to a JSONL log that can be exported as a Playwright script. "
-        "Use the `profile` arg on browser_launch to persist cookies/localStorage/IndexedDB across runs."
+        "Use the `profile` arg on browser_launch to persist cookies/localStorage/IndexedDB across runs. "
+        "The visible tool surface may be slimmed by OCTOWRIGHT_PROFILE / `octowright serve --profile=...`; "
+        "if a tool you expect is missing, the operator picked a narrower capability profile — call "
+        "`octowright_status` to see the active profile."
     ),
 )
 

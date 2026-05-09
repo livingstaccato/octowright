@@ -7,6 +7,13 @@ credential references, and free-form app metadata.
 Think of a persona as *"dante — my Discord power user across all three engines"*,
 and a profile as *one engine-specific piece of that identity*.
 
+The persona tools (`persona_create`, `persona_get`, `persona_list`,
+`persona_delete`, `persona_credentials_check`, `profile_list`, `profile_delete`,
+`profile_cleanup`) belong to the `personas` capability profile. By default
+every tool registers; under `--profile=core` they are not visible — combine
+with `--profile=core,personas` to keep them. See
+[getting-started.md](getting-started.md#slimming-the-llm-tool-surface).
+
 ## On-disk layout
 
 Personas live under the Octowright config dir. POSIX uses the XDG config dir

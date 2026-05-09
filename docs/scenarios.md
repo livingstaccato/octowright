@@ -9,6 +9,14 @@ Scenarios are the right abstraction whenever you need multiple coordinated
 browsers: load tests, multi-account validation, watching a feature from multiple
 viewing angles at once, or end-to-end verification flows.
 
+The scenario tools (`scenario_list`, `scenario_plan`, `scenario_start`,
+`scenario_status`, `scenario_stop`, `scenario_participants`, `scenario_run_macro`,
+`scenario_tail`, `scenario_wait_for_sync`, `scenario_run_as_test`,
+`scenario_remap_participants`, `scenario_spawn_template`) belong to the
+`scenarios` capability profile. By default every tool registers; under
+`--profile=core` they are not visible — combine with `--profile=core,scenarios`
+to keep them. See [getting-started.md](getting-started.md#slimming-the-llm-tool-surface).
+
 ## Where scenarios live
 
 Default location: POSIX uses the XDG config dir
