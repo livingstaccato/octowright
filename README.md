@@ -609,7 +609,7 @@ without going through Claude:
 
 | Command | What |
 |---|---|
-| `octowright serve` | Run the MCP stdio server + the dashboard HTTP server. This is the default when you invoke `octowright` with no subcommand. |
+| `octowright serve [--profile=<spec>]` | Run the MCP stdio server + the dashboard HTTP server. This is the default when you invoke `octowright` with no subcommand. Pass `--profile=core` (or `core,macros` etc.) to slim the LLM-visible MCP tool surface — see [Capability profiles](#capability-profiles) below. |
 | `octowright init [--force]` | First-run scaffolding: create the standard config dirs, drop a sample persona / scenario / macro, and print the `.mcp.json` registration block with your install path filled in. |
 | `octowright selftest` | Print the list of registered MCP tools without needing a live MCP client. Sanity check after install. |
 | `octowright test [<dir>] [--kind <engine>] [--tag <tag>] [--out <xml>]` | Run every `[test]`-tagged macro in a directory, emit JUnit XML. |
@@ -617,6 +617,35 @@ without going through Claude:
 | `octowright takeover [--apply --scope=session\|project\|global --name=<n>]` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json` and offer to disable them in favour of octowright. Default is read-only report; `--apply` rewrites the config (with timestamped backup). Reversible — rename back to re-enable. |
 | `octowright persona list\|show\|create\|delete` | Manage personas from the terminal. |
 | `octowright scenario list\|start [--test --out <xml>] [--watch]` | Start a scenario; `--watch` streams participant events to stdout in real-time; the command blocks until Ctrl-C. |
+
+## Capability profiles
+
+The full MCP tool surface is ~89 tools — every workflow Octowright supports
+(browser driving, macros, scenarios, persona management, etc.) shows up in
+the LLM's tool schema by default. When the LLM only needs a slice, set
+`OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
+more comma-separated profile names. Tools not listed in any active profile
+are skipped at registration time, so the LLM-visible schema shrinks.
+
+| Profile | What | Tool count |
+|---|---|---|
+| `core` | Minimum to drive a browser end-to-end (launch, navigate, click/type/fill, observe, close). | 13 |
+| `advanced` | Inspection + assertions + ARIA-locator interactions for stable test automation. | 13 |
+| `macros` | Macro record / list / run / lint / repair / compile. | 9 |
+| `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
+| `personas` | Persona + on-disk profile management. | 8 |
+| `all` (or unset) | Default — every tool registers. | 89 |
+
+```bash
+octowright serve --profile=core              # 13 tools — minimum to drive a browser
+octowright serve --profile=core,macros       # 22 tools — browser + macro replay
+octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
+```
+
+The active profile shows up in `octowright selftest` and in the
+`octowright_status` MCP tool's `profile` block. If a tool you expected is
+missing, that's where to look. The dict lives in
+`src/octowright/server/profiles.py` — extend it to add or rebalance groups.
 
 ## Telemetry
 

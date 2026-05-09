@@ -11,7 +11,7 @@ so GitHub renders the diagrams without needing PlantUML installed by readers.
 | Persona on-disk layout | [`persona-layout.puml`](persona-layout.puml) | [`persona-layout.svg`](persona-layout.svg) |
 | Macro record → save → replay | [`macro-lifecycle.puml`](macro-lifecycle.puml) | [`macro-lifecycle.svg`](macro-lifecycle.svg) |
 | Artifact flow | [`artifact-flow.puml`](artifact-flow.puml) | [`artifact-flow.svg`](artifact-flow.svg) |
-| MCP tool inventory | [`mcp-tool-surface.puml`](mcp-tool-surface.puml) | [`mcp-tool-surface.svg`](mcp-tool-surface.svg) |
+| MCP tool inventory (annotated by capability profile) | [`mcp-tool-surface.puml`](mcp-tool-surface.puml) | [`mcp-tool-surface.svg`](mcp-tool-surface.svg) |
 
 ## API contract
 
