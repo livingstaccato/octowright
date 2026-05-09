@@ -15,6 +15,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright import macros as macro_mod
+from octowright.mcp_types import TestSuiteCaseResult, TestSuiteResult
 
 log = get_logger(__name__)
 
@@ -42,7 +43,7 @@ async def run_suite(
     out_path: str | None = None,
     pool: Any,
     max_parallel: int = 1,
-) -> dict[str, Any]:
+) -> TestSuiteResult:
     """Discover test macros, run each in an ephemeral browser, collect results, write JUnit XML.
 
     Discovery uses the global MACROS_DIR from octowright.macros.storage; override
@@ -61,7 +62,7 @@ async def run_suite(
         if _is_test(full, tag):
             tests.append(full)
 
-    async def _run_test(t: dict[str, Any]) -> dict[str, Any]:
+    async def _run_test(t: dict[str, Any]) -> TestSuiteCaseResult:
         start = datetime.now(UTC)
         iid: str | None = None
         ok = True
@@ -103,7 +104,7 @@ async def run_suite(
 
     semaphore = asyncio.Semaphore(max_parallel)
 
-    async def _run_bounded(t: dict[str, Any]) -> dict[str, Any]:
+    async def _run_bounded(t: dict[str, Any]) -> TestSuiteCaseResult:
         async with semaphore:
             return await _run_test(t)
 
@@ -136,7 +137,7 @@ def _default_report_path() -> Path:
     return Path.cwd() / f"octowright-report-{stamp}.xml"
 
 
-def _write_junit(results: list[dict[str, Any]], path: Path, *, kind: str) -> None:
+def _write_junit(results: list[TestSuiteCaseResult], path: Path, *, kind: str) -> None:
     suite = ET.Element(
         "testsuite",
         {
