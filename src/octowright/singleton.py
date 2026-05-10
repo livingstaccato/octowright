@@ -59,7 +59,7 @@ def read_lock(path: Path = LOCK_PATH) -> LeaderInfo | None:
     if not path.exists():
         return None
     try:
-        return LeaderInfo.from_json(path.read_text())
+        return LeaderInfo.from_json(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, TypeError, KeyError):
         # Corrupt lockfile — treat as if no leader; the caller will overwrite it.
         return None
@@ -69,7 +69,7 @@ def write_lock(info: LeaderInfo, path: Path = LOCK_PATH) -> None:
     """Atomically replace the lockfile with ``info``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    tmp.write_text(info.to_json())
+    tmp.write_text(info.to_json(), encoding="utf-8")
     tmp.replace(path)
 
 

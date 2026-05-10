@@ -97,7 +97,7 @@ def load_persona(name: str) -> Persona:
         raise FileNotFoundError(
             f"no persona named {name!r} at {p}; list with `persona_list` or create with `persona_create name={name!r}`"
         )
-    raw = yaml.safe_load(p.read_text())
+    raw = yaml.safe_load(p.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raw = {}
     return Persona(
@@ -131,7 +131,7 @@ def list_personas() -> list[PersonaListEntry]:
             continue
         display_name = None
         try:
-            raw = yaml.safe_load(yaml_path.read_text()) or {}
+            raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
             display_name = raw.get("display_name")
         except Exception:
             log.warning("persona.yaml_parse_failed", path=str(yaml_path))
@@ -171,7 +171,7 @@ def create_persona(
         doc["display_name"] = display_name
     if default_url:
         doc["default_url"] = default_url
-    yaml_path.write_text(yaml.safe_dump(doc))
+    yaml_path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
     return pdir
 
 
