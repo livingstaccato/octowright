@@ -34,7 +34,7 @@ vi.mock("./api.js", async (importOriginal) => {
     })),
     validateMacro: vi.fn(async () => ({ ok: true, valid: true, issues: [] })),
     updateMacro: vi.fn(async () => ({ ok: true, name: "login" })),
-    validateSessionSelector: vi.fn(async () => ({ ok: true, present: true, selector: "#x", session_id: "L1" })),
+    validateSessionSelector: vi.fn(async () => ({ ok: true, found: true, count: 1, selector: "#x" })),
     getSessions: vi.fn(async () => ({ live: [], closed: [] })),
     getScenarios: vi.fn(async () => ({ live: [] })),
     getPersonas: vi.fn(async () => []),

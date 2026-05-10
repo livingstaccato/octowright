@@ -159,6 +159,22 @@ class TestCloseHappy:
         await inst.close()
         close_handle.close.assert_awaited_once()
 
+    @pytest.mark.anyio
+    async def test_close_handle_failure_does_not_skip_terminal_recorder_events(self, tmp_path: Path) -> None:
+        """If context.close() already terminated the browser, the captured
+        close_handle.close() call raises. The finally block must keep going so
+        the JSONL recording still gets its terminal 'close' event and the
+        recorder file handle is closed. Without the try/except inside the
+        finally, the JSONL would be left mid-stream and parsers downstream
+        (tail, replay, golden compare) would see a truncated session."""
+        close_handle = MagicMock()
+        close_handle.close = AsyncMock(side_effect=RuntimeError("target closed"))
+        inst = _build(tmp_path, browser=None, _browser_for_close=close_handle)
+        await inst.close()  # must NOT raise
+        kinds = [name for (name, _) in inst.recorder.events]
+        assert "close" in kinds, "terminal close event must still be recorded"
+        assert inst.recorder.closed is True, "recorder.close() must still run"
+
 
 # ─── close: trace branch ─────────────────────────────────────────────────────
 

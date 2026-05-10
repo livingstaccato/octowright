@@ -18,11 +18,21 @@ then a numbered diagnosis sequence.
    uv run playwright install webkit firefox chromium
    ```
 
-2. Call `browser_engine_status` to confirm the install succeeded and matches
-   the Playwright version Octowright is using.
+2. Confirm binaries are present for your Playwright version:
 
-3. If a single engine is broken, run `browser_engine_reinstall` against just
-   that one rather than blowing away all three.
+   ```bash
+   uv run playwright install --list
+   ```
+
+3. If a single engine is broken, reinstall just that one:
+
+   ```bash
+   uv run playwright install webkit
+   # or firefox / chromium
+   ```
+
+See [getting-started.md](getting-started.md#1-install) for the canonical
+engine install workflow and note on CLI-only engine management.
 
 ## Scenario / macro failures
 

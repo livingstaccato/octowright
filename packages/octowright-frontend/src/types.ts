@@ -139,9 +139,9 @@ export interface MacroUpdateResponse {
 export interface SelectorValidationResponse {
   ok: boolean;
   selector: string;
-  session_id: string;
-  present: boolean;
-  message?: string;
+  found: boolean;
+  count: number;
+  error?: string;
 }
 
 export interface MacroRepairSuggestion {

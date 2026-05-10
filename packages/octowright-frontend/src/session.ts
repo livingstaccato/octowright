@@ -349,7 +349,12 @@ export function renderHeader(target: HTMLElement, detail: SessionDetail): void {
   if (detail.macro_intent) {
     const intent = document.createElement("div");
     intent.className = "session-header__intent";
-    intent.innerHTML = `<strong>Intent:</strong> ${detail.macro_intent}`;
+    // macro_intent is derived from JSONL fields (selectors, fill values,
+    // URLs) — never trust it for innerHTML. Build the prefix via DOM so a
+    // crafted selector can't execute script in the dashboard.
+    const intentLabel = document.createElement("strong");
+    intentLabel.textContent = "Intent:";
+    intent.append(intentLabel, ` ${detail.macro_intent}`);
     meta.append(title, sub, when, intent);
   } else {
     meta.append(title, sub, when);
