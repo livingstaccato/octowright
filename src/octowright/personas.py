@@ -187,6 +187,17 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     argument carries the shell logic the cmd author has signed off on.
     """
     argv = _credential_cmd_argv(cmd_str, persona_name, cred_name)
+    # `bash -c "..."` is the documented escape hatch for pipelines, but it
+    # also lets the YAML author run arbitrary shell. Surface that at runtime
+    # so an operator running personas authored elsewhere notices.
+    if argv and argv[0] in {"bash", "sh", "zsh", "fish"} and len(argv) >= 3 and argv[1] == "-c":
+        log.warning(
+            "personas.credential_cmd_executes_shell_pipeline",
+            persona=persona_name,
+            field=cred_name,
+            shell=argv[0],
+            hint="treat persona YAML as trusted; bash -c is arbitrary code execution",
+        )
     try:
         result = subprocess.run(  # nosec B603 B607 — list-arg form, PATH-resolved
             argv, capture_output=True, text=True, check=False, timeout=30
