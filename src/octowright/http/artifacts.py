@@ -31,15 +31,6 @@ def _human_bytes(size_bytes: int) -> str:
     return "0 B"
 
 
-def _path_size(path: Path | None) -> int:
-    if path is None:
-        return 0
-    try:
-        return path.stat().st_size
-    except OSError:
-        return 0
-
-
 def _build_component(path: Path | None) -> dict[str, Any]:
     # One stat() call covers both existence and size — no separate exists()
     # probe. Called for 5 components per cache report, so the syscall halving

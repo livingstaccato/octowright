@@ -205,6 +205,51 @@ async def session_downloads(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+async def _close_for_unknown_or_closed_session(websocket: WebSocket, sid: str) -> None:
+    """Sub-1008/1003 handshake when the session isn't tail-able."""
+    jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
+    if jsonl is not None:
+        await websocket.close(
+            code=1003,
+            reason="closed sessions don't support tail; use GET /api/sessions/{id}/events instead",
+        )
+    else:
+        await websocket.close(code=1008, reason=f"no session with id {sid}")
+
+
+def _parse_since_cursor(raw_since: str | None) -> int:
+    """Honor `?since=N` to skip events the caller already fetched. Without
+    this, the first WS push replays everything from byte 0 and the dashboard
+    renders the launch event twice."""
+    try:
+        return int(raw_since) if raw_since is not None else 0
+    except ValueError:
+        return 0
+
+
+async def _stream_tail(websocket: WebSocket, sid: str, log_path: Path, cursor: int) -> None:
+    """Live-tail loop. Sends only when there's something new (events arrived
+    or the session transitioned live→closed); a TAIL_HEARTBEAT_SECONDS-bounded
+    keepalive frame goes out during quiet periods so the client can detect a
+    dead connection. Without the empty-frame skip, every poll tick pushed
+    serialization+network work for N idle dashboards."""
+    ticks_since_heartbeat = 0
+    heartbeat_every = max(1, int(state.TAIL_HEARTBEAT_SECONDS / state.TAIL_POLL_SECONDS))
+    while True:
+        snapshot = _tail_jsonl(log_path, cursor)
+        cursor = snapshot["cursor"]
+        still_live = _live_session_or_none(sid) is not None
+        ticks_since_heartbeat += 1
+        if snapshot["events"] or (not still_live) or ticks_since_heartbeat >= heartbeat_every:
+            await websocket.send_json({"events": snapshot["events"], "cursor": cursor, "complete": (not still_live)})
+            ticks_since_heartbeat = 0
+        if not still_live:
+            # Live → closed mid-connection: final push above, then close.
+            await websocket.close()
+            return
+        await asyncio.sleep(state.TAIL_POLL_SECONDS)
+
+
 class TailEndpoint(WebSocketEndpoint):
     """Push JSONL events as they're appended to a LIVE session's log.
 
@@ -232,43 +277,13 @@ class TailEndpoint(WebSocketEndpoint):
         sid = websocket.path_params["id"]
         live_session = _live_session_or_none(sid)
         if live_session is None:
-            # Either a closed session (recording present) or unknown.
-            jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
-            if jsonl is not None:
-                await websocket.close(
-                    code=1003,
-                    reason="closed sessions don't support tail; use GET /api/sessions/{id}/events instead",
-                )
-            else:
-                await websocket.close(code=1008, reason=f"no session with id {sid}")
+            await _close_for_unknown_or_closed_session(websocket, sid)
             return
 
         log_path = Path(live_session.log_path)
-        # Start where the caller's history fetch left off, if they pass it.
-        # Without this, the first WS push replays everything from byte 0 and
-        # the dashboard renders the launch event twice (once from the initial
-        # GET /events, once from the tail's first frame).
-        raw_since = websocket.query_params.get("since")
+        cursor = _parse_since_cursor(websocket.query_params.get("since"))
         try:
-            cursor = int(raw_since) if raw_since is not None else 0
-        except ValueError:
-            cursor = 0
-        try:
-            while True:
-                snapshot = _tail_jsonl(log_path, cursor)
-                cursor = snapshot["cursor"]
-                still_live = _live_session_or_none(sid) is not None
-                payload = {
-                    "events": snapshot["events"],
-                    "cursor": cursor,
-                    "complete": (not still_live),
-                }
-                await websocket.send_json(payload)
-                if not still_live:
-                    # Live → closed mid-connection: one final push then close.
-                    await websocket.close()
-                    return
-                await asyncio.sleep(state.TAIL_POLL_SECONDS)
+            await _stream_tail(websocket, sid, log_path, cursor)
         except WebSocketDisconnect:
             return
 
