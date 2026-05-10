@@ -195,7 +195,7 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
             "personas.credential_cmd_executes_shell_pipeline",
             persona=persona_name,
             field=cred_name,
-            shell=argv[0],
+            interpreter=argv[0],
             hint="treat persona YAML as trusted; bash -c is arbitrary code execution",
         )
     try:
