@@ -194,11 +194,20 @@ The manifest is diagnostic only; it is not a browser reattach registry.
 
 `/tail` is for LIVE sessions only.
 
-- **Live session**: `_tail_jsonl(log_path, cursor)` is polled every ~1s; the
-  server pushes `{"events": [...], "cursor": int, "complete": false}` on each
-  tick (even when `events` is empty) so the frontend can show liveness.
+- **Live session**: `_tail_jsonl(log_path, cursor)` is polled every
+  ``TAIL_POLL_SECONDS`` (~1s). To avoid steady empty-frame churn across N
+  idle dashboards, the server pushes
+  `{"events": [...], "cursor": int, "complete": false}` only when
+  `events` is non-empty OR a heartbeat tick fires. Heartbeat cadence is
+  bounded by ``TAIL_HEARTBEAT_SECONDS`` (default 15s) so a quiet stream
+  still produces an empty keepalive frame the client can use to detect a
+  dead connection.
 - **Live → closed mid-connection**: send one final message with
   `complete: true` and close the socket cleanly.
+- **`?since=` query param**: byte cursor into the JSONL log. Non-int and
+  negative values are silently coerced to `0` (the WS handshake doesn't
+  expose 4xx; the REST `/events` sibling 400s on non-int but identically
+  clamps negatives to `0`).
 - **Closed at connect time** (the recording exists on disk but the session is
   not in `pool._sessions`): the WebSocket is closed IMMEDIATELY with code
   `1003` (unsupported) and reason

@@ -34,17 +34,23 @@ async def _read_json_body(request: Request) -> tuple[Any, JSONResponse | None]:
 
 
 def _parse_since(request: Request) -> tuple[int | None, JSONResponse | None]:
-    """Parse the ``since`` query param. Returns (since, error_response_or_None)."""
+    """Parse the ``since`` query param. Returns (since, error_response_or_None).
+
+    Non-int → 400. Negative ints are clamped to 0; tail_log/_paginate both
+    treat negatives as ``OSError: Invalid argument`` (seek to negative
+    offset) or surprising slice behavior, so we normalize at the boundary.
+    """
     raw = request.query_params.get("since")
     if raw is None:
         return 0, None
     try:
-        return int(raw), None
+        value = int(raw)
     except ValueError:
         return None, JSONResponse(
             {"error": f"invalid since={raw!r}, must be int"},
             status_code=400,
         )
+    return max(0, value), None
 
 
 def _paginate(items: list[dict[str, Any]], since: int) -> tuple[list[dict[str, Any]], int, int]:
