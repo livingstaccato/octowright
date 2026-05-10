@@ -19,6 +19,10 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from octowright.defaults import (
+    DASHBOARD_DISCONNECT_POLL_SECONDS,
+    DASHBOARD_HEARTBEAT_SECONDS,
+)
 from octowright.http import state
 from octowright.http.dashboard_events import dashboard_events
 from octowright.http.discovery import (
@@ -30,9 +34,6 @@ from octowright.http.discovery import (
 from octowright.http.exposure import guard_sensitive_http, sensitive_allowed_for_connection
 from octowright.http.routes._common import _paginate, _parse_since
 from octowright.http.session_artifacts import session_artifact_cache
-
-DASHBOARD_DISCONNECT_POLL_SECONDS = 0.05
-DASHBOARD_HEARTBEAT_SECONDS = 15.0
 
 
 def _sse_frame(event: str, data: dict[str, Any]) -> bytes:
@@ -261,13 +262,21 @@ class TailEndpoint(WebSocketEndpoint):
 
     Connection semantics:
 
-    - LIVE session: push ``{events, cursor, complete}`` every ``TAIL_POLL_SECONDS``.
-      When the session transitions live → closed mid-connection, send one final
-      message with ``complete: true`` and close cleanly.
+    - LIVE session: poll the JSONL log every ``TAIL_POLL_SECONDS`` and push
+      ``{events, cursor, complete}`` only when there's something new (events
+      arrived, or the session transitioned live→closed). Quiet streams emit
+      an empty keepalive frame at most every ``TAIL_HEARTBEAT_SECONDS`` so
+      the client can detect a dead connection without burning CPU/network
+      on N idle dashboards. See ``_stream_tail`` for the loop.
+    - LIVE → CLOSED mid-connection: send one final message with
+      ``complete: true`` and close the socket cleanly.
     - CLOSED session (recording on disk, not in pool): close immediately with
       WS code 1003 and a "use GET /events instead" reason. No payload sent.
     - UNKNOWN session (no live, no recording): close immediately with code 1008
       and a "no session with id" reason.
+
+    ``?since=<int>`` skips events the caller already fetched. Non-int and
+    negative values clamp to 0 (the WS handshake can't return 4xx).
 
     The frontend opens this WS only for live sessions; closed/unknown rejection
     is a hard guarantee for callers that get the URL wrong.

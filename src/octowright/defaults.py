@@ -100,3 +100,25 @@ SESSION_ARTIFACT_CACHE_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_SESSION_ARTI
 # user manually deleting a download sees the UI catch up within a couple
 # refreshes.
 DOWNLOAD_PATH_EXISTS_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_DOWNLOAD_PATH_EXISTS_TTL_SECONDS", "2.0"))
+
+# WebSocket /tail (per-session JSONL stream) cadence.
+#
+# - TAIL_POLL_SECONDS: interval between filesystem polls. ~1 Hz feels live
+#   without hammering the file system.
+# - TAIL_HEARTBEAT_SECONDS: maximum gap between empty keepalive frames on a
+#   quiet stream. The loop only pushes when there's something new (events
+#   or a live→closed transition), so this bounds how long a quiet
+#   connection can stay silent before the client gets a liveness ping.
+TAIL_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_TAIL_POLL_SECONDS", "1.0"))
+TAIL_HEARTBEAT_SECONDS = float(os.environ.get("OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS", "15.0"))
+
+# SSE /api/dashboard/events cadence.
+#
+# - DASHBOARD_DISCONNECT_POLL_SECONDS: how often the streaming endpoint checks
+#   ``request.is_disconnected()`` so a closed browser tab tears the SSE down
+#   promptly. Sub-second to avoid stragglers in the test harness.
+# - DASHBOARD_HEARTBEAT_SECONDS: max silent interval before emitting an SSE
+#   ``: heartbeat`` comment. Under proxy idle-close (typically 60s) so the
+#   stream stays open through reverse proxies.
+DASHBOARD_DISCONNECT_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_DASHBOARD_DISCONNECT_POLL_SECONDS", "0.05"))
+DASHBOARD_HEARTBEAT_SECONDS = float(os.environ.get("OCTOWRIGHT_DASHBOARD_HEARTBEAT_SECONDS", "15.0"))
