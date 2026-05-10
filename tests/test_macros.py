@@ -43,6 +43,11 @@ def _import_macros(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
     # Force re-import so module-level constants pick up patched env vars.
+    # MACROS_DIR is now defined in octowright.defaults (and re-exported by
+    # macros.storage), so reload defaults first.
+    from octowright import defaults
+
+    importlib.reload(defaults)
     import octowright.macros.storage as _storage
 
     importlib.reload(_storage)
