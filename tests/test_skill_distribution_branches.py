@@ -123,14 +123,17 @@ class TestPackagedResources:
 
 class TestCodexDestination:
     def test_uses_codex_home_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """CODEX_HOME env var overrides ~/.codex default."""
-        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "custom"))
+        """CODEX_HOME env var (via defaults.CODEX_HOME) overrides ~/.codex default."""
+        from octowright import defaults as _defaults
+
+        monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / "custom"))
         assert _codex_destination() == tmp_path / "custom" / "skills" / SKILL_NAME
 
     def test_default_to_codex_dotdir(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without CODEX_HOME, falls back to ~/.codex/skills/<name>."""
-        monkeypatch.delenv("CODEX_HOME", raising=False)
-        # Path('~/.codex').expanduser() resolves at call time.
+        """defaults.CODEX_HOME='~/.codex' falls back to ~/.codex/skills/<name>."""
+        from octowright import defaults as _defaults
+
+        monkeypatch.setattr(_defaults, "CODEX_HOME", "~/.codex")
         result = _codex_destination()
         assert result.name == SKILL_NAME
         assert result.parent.name == "skills"
@@ -139,7 +142,9 @@ class TestCodexDestination:
 
     def test_codex_home_with_tilde_expands(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A CODEX_HOME=~/foo value still gets expanduser()'d."""
-        monkeypatch.setenv("CODEX_HOME", "~/foo")
+        from octowright import defaults as _defaults
+
+        monkeypatch.setattr(_defaults, "CODEX_HOME", "~/foo")
         result = _codex_destination()
         assert "~" not in str(result)
         # OS-agnostic: the tail must be foo/skills/<SKILL_NAME>.
@@ -171,9 +176,11 @@ class TestPluginDestinations:
 
 @pytest.fixture
 def codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Redirect CODEX_HOME to a writable tmp dir."""
+    """Redirect CODEX_HOME (via defaults.CODEX_HOME) to a writable tmp dir."""
+    from octowright import defaults as _defaults
+
     home = tmp_path / ".codex"
-    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setattr(_defaults, "CODEX_HOME", str(home))
     return home
 
 

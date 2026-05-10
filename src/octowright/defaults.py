@@ -30,6 +30,33 @@ SESSION_MANIFEST_PATH = Path(
     os.environ.get("OCTOWRIGHT_SESSION_MANIFEST", str(RECORDINGS_DIR / "session-manifest.json"))
 )
 
+# Macro JSON storage. Default sits next to PROFILES_DIR so the user-config
+# tree stays in one place. Override for per-test isolation.
+MACROS_DIR = Path(os.environ.get("OCTOWRIGHT_MACROS_DIR", str(PROFILES_DIR.parent / "macros")))
+
+# Golden snapshot storage (accessibility-tree golden assertions).
+GOLDENS_DIR = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(_CONFIG_DIR / "goldens")))
+
+# Singleton-leader lockfile. Override via OCTOWRIGHT_LOCK_PATH for hermetic
+# tests that spawn a real daemon without touching the user's actual lockfile.
+LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(_CONFIG_DIR / "octowright.lock")))
+
+# Codex CLI install root for the skill-distribution copy step. CODEX_HOME is
+# a Codex-defined env var, not OCTOWRIGHT_*; the resolved path is
+# expanduser()'d at consumer-call time so ~ in the env value still works.
+CODEX_HOME = os.environ.get("CODEX_HOME", "~/.codex")
+
+
+def active_profile_raw() -> str:
+    """Read OCTOWRIGHT_PROFILE's raw env value for diagnostic display.
+
+    Lives here so all OCTOWRIGHT_* env reads route through defaults.py.
+    Consumers (octowright_status, selftest) echo this back to the user as
+    the 'active profile' string. The actual filter logic lives in
+    server.profiles.active_filter() — this is just the unparsed input.
+    """
+    return os.environ.get("OCTOWRIGHT_PROFILE", "").strip()
+
 
 # Octowright defaults to HEADED mode. The whole point of this server is giving
 # humans a window they can watch (and sometimes drive by hand), so headless is
@@ -122,3 +149,19 @@ TAIL_HEARTBEAT_SECONDS = float(os.environ.get("OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS
 #   stream stays open through reverse proxies.
 DASHBOARD_DISCONNECT_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_DASHBOARD_DISCONNECT_POLL_SECONDS", "0.05"))
 DASHBOARD_HEARTBEAT_SECONDS = float(os.environ.get("OCTOWRIGHT_DASHBOARD_HEARTBEAT_SECONDS", "15.0"))
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    """Truthy/falsy bool parser for env-driven flags. Accepts the usual
+    spellings ('1'/'0', 'true'/'false', 'yes'/'no', 'on'/'off',
+    case-insensitive). Unset → default."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+# HTTP metrics middleware (Prometheus-style /api/metrics endpoint). On by
+# default; flip to 0/false/no/off to disable instrumentation in production
+# deployments where dashboard-only metric scraping isn't wanted.
+HTTP_METRICS_ENABLED = _parse_bool_env("OCTOWRIGHT_HTTP_METRICS", True)

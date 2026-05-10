@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -15,6 +14,8 @@ from dataclasses import dataclass
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
+
+from octowright import defaults
 
 
 @dataclass
@@ -76,7 +77,10 @@ HTTP_METRICS = HttpMetrics()
 
 
 def metrics_enabled() -> bool:
-    return os.getenv("OCTOWRIGHT_HTTP_METRICS", "1").strip().lower() not in {"0", "false", "no", "off"}
+    """Live-read from defaults so test patches via
+    ``monkeypatch.setattr(defaults, 'HTTP_METRICS_ENABLED', False)`` take
+    effect without reimporting this module."""
+    return defaults.HTTP_METRICS_ENABLED
 
 
 class HttpMetricsMiddleware(BaseHTTPMiddleware):

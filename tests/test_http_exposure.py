@@ -144,7 +144,9 @@ def test_is_loopback_host_rejects_remote_binds() -> None:
 
 
 def test_api_routes_are_explicitly_guarded_or_public(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OCTOWRIGHT_HTTP_METRICS", "1")
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "HTTP_METRICS_ENABLED", True)
     app = _http.build_app()
     api_routes: set[tuple[str, str]] = set()
     guarded: set[tuple[str, str]] = set()
