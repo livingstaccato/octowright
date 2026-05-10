@@ -365,6 +365,10 @@ def test_macro_lint_tool_wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
 
+    # MACROS_DIR is owned by defaults; reload it first.
+    from octowright import defaults
+
+    importlib.reload(defaults)
     import octowright.macros as macros_mod
     import octowright.macros.storage as macros_storage
 
@@ -406,6 +410,10 @@ def test_macro_lint_tool_wrapper_clean_macro(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
 
+    # MACROS_DIR is owned by defaults; reload it first.
+    from octowright import defaults
+
+    importlib.reload(defaults)
     import octowright.macros as macros_mod
     import octowright.macros.storage as macros_storage
 

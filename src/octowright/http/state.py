@@ -33,26 +33,22 @@ from provide.telemetry import get_logger
 from octowright import macros as _macros
 from octowright import personas as _personas
 from octowright import video as _video
-from octowright.defaults import RECORDINGS_DIR
+from octowright.defaults import (
+    RECORDINGS_DIR,
+    TAIL_HEARTBEAT_SECONDS,
+    TAIL_POLL_SECONDS,
+)
 
 log = get_logger("octowright.http")
 
 # Frontend bundle lives here (sibling subagent populates the directory).
 FRONTEND_DIR = Path(__file__).parent.parent / "server" / "frontend"
 
-# Polling interval for the WS /tail endpoint. ~1 Hz feels live without
-# hammering the file system.
-TAIL_POLL_SECONDS = 1.0
-
-# Maximum gap between WS tail heartbeats. The tail loop only sends a frame
-# when there's something new (events, or a live→closed transition); this
-# bounds how long a quiet stream can stay silent before sending an empty
-# keepalive so the dashboard knows the connection's still alive.
-TAIL_HEARTBEAT_SECONDS = 15.0
-
-# Re-exported so handlers reference `state.RECORDINGS_DIR`. Tests swap with
-# `monkeypatch.setattr(_http.state, "RECORDINGS_DIR", tmp_path)`.
+# Re-exported from defaults so handlers reference `state.<NAME>`. Tests swap
+# with `monkeypatch.setattr(_http.state, "X", value)`.
 RECORDINGS_DIR = RECORDINGS_DIR
+TAIL_POLL_SECONDS = TAIL_POLL_SECONDS
+TAIL_HEARTBEAT_SECONDS = TAIL_HEARTBEAT_SECONDS
 
 
 # ---------------------------------------------------------------------------

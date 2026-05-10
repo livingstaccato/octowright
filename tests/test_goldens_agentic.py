@@ -15,6 +15,10 @@ import octowright.goldens
 @pytest.fixture
 def temp_goldens(monkeypatch, tmp_path):
     monkeypatch.setenv("OCTOWRIGHT_GOLDENS_DIR", str(tmp_path / "goldens"))
+    # GOLDENS_DIR is owned by defaults; reload it first.
+    from octowright import defaults
+
+    importlib.reload(defaults)
     importlib.reload(octowright.goldens)
     return octowright.goldens.GOLDENS_DIR
 

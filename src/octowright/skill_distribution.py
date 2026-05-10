@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 from dataclasses import dataclass
 from importlib.resources import as_file, files
 from pathlib import Path
 
+from octowright import defaults
 from octowright.version import VERSION
 
 SKILL_NAME = "using-octowright"
@@ -58,7 +58,9 @@ def _packaged_manifest(name: str) -> str:
 
 
 def _codex_destination() -> Path:
-    codex_home = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
+    # Live-read from defaults so test patches via
+    # `monkeypatch.setattr(defaults, 'CODEX_HOME', '/tmp/x')` take effect.
+    codex_home = Path(defaults.CODEX_HOME).expanduser()
     return codex_home / "skills" / SKILL_NAME
 
 

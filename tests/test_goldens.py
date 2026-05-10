@@ -18,8 +18,15 @@ import pytest
 
 
 def _import_goldens(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """Reload goldens with a patched OCTOWRIGHT_GOLDENS_DIR pointing at tmp_path."""
+    """Reload goldens with a patched OCTOWRIGHT_GOLDENS_DIR pointing at tmp_path.
+
+    GOLDENS_DIR is owned by defaults; reload it first so goldens picks up
+    the fresh value.
+    """
     monkeypatch.setenv("OCTOWRIGHT_GOLDENS_DIR", str(tmp_path / "goldens"))
+    from octowright import defaults
+
+    importlib.reload(defaults)
     import octowright.goldens as _g
 
     importlib.reload(_g)

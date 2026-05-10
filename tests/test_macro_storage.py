@@ -22,9 +22,17 @@ import pytest
 
 
 def _import_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """Import storage with MACROS_DIR pinned at tmp_path/macros."""
+    """Import storage with MACROS_DIR pinned at tmp_path/macros.
+
+    MACROS_DIR is owned by octowright.defaults, so reload defaults first
+    to pick up the env var, then reload storage to refresh its
+    `MACROS_DIR = defaults.MACROS_DIR` re-export.
+    """
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
+    from octowright import defaults
+
+    importlib.reload(defaults)
     import octowright.macros.storage as _storage
 
     importlib.reload(_storage)
@@ -239,6 +247,9 @@ def test_save_macro_creates_intermediate_parent_dirs(monkeypatch: pytest.MonkeyP
     deep = tmp_path / "deep" / "nested"
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(deep))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
+    from octowright import defaults
+
+    importlib.reload(defaults)
     import octowright.macros.storage as _storage
 
     importlib.reload(_storage)
@@ -402,6 +413,9 @@ def test_write_macro_creates_parent_dirs(monkeypatch: pytest.MonkeyPatch, tmp_pa
     deep = tmp_path / "a" / "b" / "c"
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(deep))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
+    from octowright import defaults
+
+    importlib.reload(defaults)
     import octowright.macros.storage as _storage
 
     importlib.reload(_storage)

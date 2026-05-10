@@ -23,6 +23,7 @@ def tmp_octowright(tmp_path, monkeypatch):
         "octowright.personas",
         "octowright.profiles",
         "octowright.scenarios",
+        "octowright.macros.storage",
         "octowright.macros",
     ):
         if m in sys.modules:

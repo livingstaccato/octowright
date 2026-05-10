@@ -151,7 +151,9 @@ def test_metrics_endpoint_and_counters(client: TestClient) -> None:
 
 
 def test_metrics_endpoint_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OCTOWRIGHT_HTTP_METRICS", "0")
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "HTTP_METRICS_ENABLED", False)
     with TestClient(_http.build_app()) as local_client:
         assert local_client.get("/api/metrics").status_code == 404
 

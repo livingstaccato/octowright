@@ -388,16 +388,94 @@ class TestParseSinceCursor:
     def test_zero_string_parses(self) -> None:
         assert _events._parse_since_cursor("0") == 0
 
-    def test_negative_int_string_passes_through(self) -> None:
-        """Negative offsets are nonsensical for a cursor but the function is
-        a thin int() wrapper — let downstream normalize. Pinning behavior."""
-        assert _events._parse_since_cursor("-5") == -5
+    def test_negative_int_string_clamps_to_zero(self) -> None:
+        """Negative cursors → fh.seek(-N) raises OSError. Clamp at the
+        boundary so a malformed ?since=-1 query param doesn't 500 the WS."""
+        assert _events._parse_since_cursor("-5") == 0
+        assert _events._parse_since_cursor("-1") == 0
 
     def test_non_integer_falls_back_to_zero(self) -> None:
         assert _events._parse_since_cursor("not-an-int") == 0
 
     def test_empty_string_falls_back_to_zero(self) -> None:
         assert _events._parse_since_cursor("") == 0
+
+
+# ─── _parse_since (REST helper) — negative clamp ─────────────────────────────
+
+
+class TestParseSinceClampsNegative:
+    def test_rest_negative_clamps_to_zero(self, client: TestClient, isolated_recordings: Path) -> None:
+        """REST /events with ?since=-1 must not 500 (negative seek). Clamp."""
+        _write_recording(
+            isolated_recordings,
+            "negclmp001",
+            [
+                {"ts": "1", "action": "launch", "kind": "chromium"},
+            ],
+        )
+        r = client.get("/api/sessions/negclmp001/events?since=-1")
+        assert r.status_code == 200
+        # Same result as since=0 — full content.
+        assert len(r.json()["events"]) == 1
+
+    def test_rest_large_negative_clamps_to_zero(self, client: TestClient, isolated_recordings: Path) -> None:
+        """A wildly negative cursor still resolves to 0, not OSError."""
+        _write_recording(
+            isolated_recordings,
+            "negclmp002",
+            [{"ts": "1", "action": "launch", "kind": "chromium"}],
+        )
+        r = client.get("/api/sessions/negclmp002/events?since=-9999999")
+        assert r.status_code == 200
+
+    def test_rest_zero_unchanged(self, client: TestClient, isolated_recordings: Path) -> None:
+        """since=0 stays 0 — clamp doesn't shift the legit baseline."""
+        _write_recording(
+            isolated_recordings,
+            "negclmp003",
+            [{"ts": "1", "action": "launch"}],
+        )
+        r = client.get("/api/sessions/negclmp003/events?since=0")
+        assert r.status_code == 200
+        assert len(r.json()["events"]) == 1
+
+
+# ─── WS /tail negative ?since clamp ──────────────────────────────────────────
+
+
+class TestTailNegativeSince:
+    def test_negative_since_does_not_500(
+        self, client: TestClient, isolated_recordings: Path, empty_pool: dict[str, Any]
+    ) -> None:
+        """WS /tail?since=-1 must not raise OSError from fh.seek(-1)."""
+        log_path = isolated_recordings / "20260101T000000Z-chromium-tlneg00001.jsonl"
+        log_path.write_text(json.dumps({"ts": "1", "action": "launch", "kind": "chromium"}) + "\n")
+        fake_session = SimpleNamespace(
+            instance_id="tlneg00001",
+            kind="chromium",
+            log_path=log_path,
+            url="https://x",
+            label=None,
+            profile=None,
+            video_path=None,
+            trace_path=None,
+            console=[],
+            downloads=[],
+            pages=[None],
+            recorder=SimpleNamespace(event_count=1),
+            console_count=0,
+            download_count=0,
+            page_count=1,
+        )
+        empty_pool["pool"]._sessions["tlneg00001"] = fake_session
+
+        with client.websocket_connect("/api/sessions/tlneg00001/tail?since=-1") as ws:
+            payload = ws.receive_json()
+            # Clamped to 0 → first push has all events.
+            assert len(payload["events"]) == 1
+            assert payload["cursor"] > 0
+            ws.close()
 
 
 # ─── _stream_tail — heartbeat / empty-frame-skip behavior ────────────────────

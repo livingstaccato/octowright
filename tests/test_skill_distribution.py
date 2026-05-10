@@ -17,14 +17,18 @@ from octowright.version import VERSION
 
 
 def test_install_distributed_assets_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
     results = install_distributed_assets(target="all", dry_run=True, force=False, cwd=tmp_path)
     assert len(results) == 3
     assert all(item.reason == "dry_run" for item in results)
 
 
 def test_install_and_status_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
     results = install_distributed_assets(target="all", dry_run=False, force=False, cwd=tmp_path)
     assert len(results) == 3
     assert all(item.installed for item in results)
@@ -36,7 +40,9 @@ def test_install_and_status_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
 
 def test_status_detects_codex_skill_drift(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
     install_distributed_assets(target="codex", dry_run=False, force=False, cwd=tmp_path)
     skill_md = tmp_path / ".codex" / "skills" / SKILL_NAME / "SKILL.md"
     skill_md.write_text(skill_md.read_text(encoding="utf-8") + "\n# drift\n", encoding="utf-8")
@@ -48,7 +54,9 @@ def test_status_detects_codex_skill_drift(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 
 def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=str(tmp_path)):
         install_result = runner.invoke(

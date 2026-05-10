@@ -6,17 +6,19 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from octowright.config_paths import user_config_dir
+from octowright import defaults
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-GOLDENS_DIR: Path = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(user_config_dir() / "goldens")))
+# GOLDENS_DIR lives in defaults.py. Re-exported so tests that reload this
+# module (after setenv'ing OCTOWRIGHT_GOLDENS_DIR + reloading defaults) see
+# a fresh value here too.
+GOLDENS_DIR: Path = defaults.GOLDENS_DIR
 
 
 def _slug(name: str) -> str:

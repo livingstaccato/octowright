@@ -28,11 +28,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from octowright.config_paths import user_config_dir
+from octowright import defaults
 
-# Lockfile location. Override via OCTOWRIGHT_LOCK_PATH for hermetic tests
-# (lets a test spawn a real daemon without touching the user's actual lockfile).
-LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(user_config_dir() / "octowright.lock")))
+# LOCK_PATH lives in defaults.py — single source of truth for env-driven
+# config. Re-exported here so tests that reload(singleton) (or that
+# monkeypatch.setattr the singleton module directly) see a fresh value.
+LOCK_PATH = defaults.LOCK_PATH
 
 
 @dataclass

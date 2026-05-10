@@ -129,6 +129,7 @@ def octowright_status() -> dict[str, Any]:
     import os
     import time
 
+    from octowright import defaults
     from octowright import http as _http
     from octowright import personas as _personas
     from octowright import session_manifest as _session_manifest
@@ -152,7 +153,7 @@ def octowright_status() -> dict[str, Any]:
         live_session_ids={session.instance_id for session in pool.iter_sessions()}
     )
 
-    raw_profile = os.environ.get("OCTOWRIGHT_PROFILE", "").strip()
+    raw_profile = defaults.active_profile_raw()
     profile_filter = active_filter()
     if profile_filter is None:
         profile_block: dict[str, Any] = {
