@@ -30,6 +30,9 @@ uv run playwright install webkit firefox chromium    # install browser binaries
 uv run octowright init                               # print Claude registration block + scaffold config
 ```
 
+Engine-binary management is currently CLI-driven (`playwright install` /
+`playwright install --list`), not exposed as Octowright MCP tools.
+
 The last command prints a JSON block to paste into `.mcp.json` (project-scoped)
 or `~/.claude.json` (global). It also creates Octowright's user config directory
 with a sample persona, scenario, and macro so you have something to play with.

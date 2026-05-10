@@ -189,6 +189,25 @@ describe("renderHeader — macro_intent", () => {
     renderHeader(refs.header, makeDetail());
     expect(refs.header.querySelector(".session-header__intent")).toBeNull();
   });
+
+  it("does not inject HTML from macro_intent (XSS guard)", () => {
+    // macro_intent is derived from JSONL fields (selectors, fill values,
+    // URLs) — those are user-controllable. The renderer must use
+    // textContent / DOM construction, never innerHTML, or a crafted
+    // selector can execute script in the dashboard.
+    const refs = buildLayout(root);
+    const payload = '<img src=x onerror="window.__xss=true">click me';
+    renderHeader(refs.header, makeDetail({ macro_intent: payload }));
+    const intent = refs.header.querySelector(".session-header__intent");
+    expect(intent).not.toBeNull();
+    // The injected <img> must NOT exist as a real element.
+    expect(intent?.querySelector("img")).toBeNull();
+    // The literal text including the angle brackets is visible.
+    expect(intent?.textContent).toContain("<img");
+    expect(intent?.textContent).toContain("click me");
+    // The XSS sentinel must not have fired.
+    expect((window as unknown as { __xss?: boolean }).__xss).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

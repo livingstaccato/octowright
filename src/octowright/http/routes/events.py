@@ -309,5 +309,11 @@ def routes() -> list[Route | WebSocketRoute]:
         Route("/api/sessions/{id}/events", guard_sensitive_http(session_events), methods=["GET"]),
         Route("/api/sessions/{id}/console", guard_sensitive_http(session_console), methods=["GET"]),
         Route("/api/sessions/{id}/downloads", guard_sensitive_http(session_downloads), methods=["GET"]),
+        # WS routes have no route-level guard wrapper analogous to
+        # guard_sensitive_http; the exposure check lives inside
+        # TailEndpoint.on_connect via sensitive_allowed_for_connection,
+        # which closes with code 1008 before websocket.accept(). Keep the
+        # in-handler check authoritative — if you refactor the endpoint
+        # class, that check must move with it.
         WebSocketRoute("/api/sessions/{id}/tail", TailEndpoint),
     ]

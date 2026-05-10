@@ -158,6 +158,24 @@ class TestDispatchSimpleSkipPaths:
         result = await _dispatch_via_simple(s, {"action": "navigate", "url": "x"})
         assert result == (0, 1)
 
+    @pytest.mark.anyio
+    async def test_macro_call_in_simple_dispatch_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """`macro_call` needs the full _dispatch_one (with invocation_stack) in
+        macros/execution.py. If it reaches the simple dispatcher (e.g. via a
+        conditional's plain-action path), the runtime silently skips it —
+        producing wrong macro behaviour with no diagnostic. The warning
+        distinguishes "macro_call routed to the wrong dispatcher" from the
+        normal "unknown action kind" skip path."""
+        import logging
+
+        s = _full_session()
+        with caplog.at_level(logging.WARNING, logger="octowright.macros.runtime"):
+            result = await _dispatch_via_simple(s, {"action": "macro_call", "name": "inner"})
+        assert result == (0, 1)
+        assert any("macro_call_in_simple_dispatch" in rec.message for rec in caplog.records), [
+            rec.message for rec in caplog.records
+        ]
+
 
 # --------------------------------------------------------------------------
 # _dispatch_standard kwargs mutation

@@ -143,7 +143,7 @@ describe("typed wrappers", () => {
     expect(calls[0]?.init?.body).toBe(JSON.stringify({ macro }));
   });
   it("validateSessionSelector encodes session id", async () => {
-    const calls = installFetch({ ok: true, present: true, selector: "#x", session_id: "s/1" });
+    const calls = installFetch({ ok: true, found: true, count: 1, selector: "#x" });
     await validateSessionSelector("s/1", "#x");
     expect(calls[0]?.url).toBe("/api/sessions/s%2F1/selector/validate");
     expect(calls[0]?.init?.method).toBe("POST");

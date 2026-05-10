@@ -9,6 +9,10 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from provide.telemetry import get_logger
+
+log = get_logger(__name__)
+
 _REPLAY_SKIP = {"launch", "close", "snapshot"}
 _ACTION_MAP = {
     "navigate": "navigate",
@@ -102,6 +106,16 @@ async def dispatch_simple(
     if kind in _REPLAY_SKIP:
         return 0, 1
     if kind not in _ACTION_MAP:
+        # macro_call needs an invocation_stack — it only dispatches through
+        # the full _dispatch_one path in macros/execution.py. Reaching the
+        # simple dispatcher means a caller routed the wrong way (e.g. via
+        # dispatch_plain_action from inside a conditional). Surface that
+        # because silently skipping it produces wrong macro behaviour.
+        if kind == "macro_call":
+            log.warning(
+                "octowright.macros.macro_call_in_simple_dispatch",
+                hint="macro_call requires the full _dispatch_one with invocation_stack; this caller skipped it",
+            )
         return 0, 1
 
     kwargs = strip_non_aria_noise(kind, action_kwargs(action))

@@ -9,8 +9,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from provide.telemetry import get_logger
+
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+
+log = get_logger(__name__)
 
 DEFAULT_PREVIEW_CHARS = 4000
 
@@ -184,9 +188,14 @@ class SessionOpsMixin(SessionLike):
             new_page = await self.context.new_page()
             try:
                 await new_page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
-            except Exception:
+            except Exception as exc:
                 # Surface what we have even if the navigation timed out.
-                pass
+                log.debug(
+                    "octowright.open_url.nav_timeout",
+                    target="tab",
+                    url=url,
+                    error=repr(exc),
+                )
         else:
             async with self.page.expect_popup(timeout=DEFAULT_NAV_TIMEOUT_MS) as popup_info:
                 await self.page.evaluate(
@@ -196,8 +205,13 @@ class SessionOpsMixin(SessionLike):
             new_page = await popup_info.value
             try:
                 await new_page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_NAV_TIMEOUT_MS)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug(
+                    "octowright.open_url.nav_timeout",
+                    target="window",
+                    url=url,
+                    error=repr(exc),
+                )
 
         # _register_popup adds the page to self.pages on the context "page"
         # event; if a race left it absent, append it ourselves.
@@ -257,7 +271,18 @@ class SessionOpsMixin(SessionLike):
         finally:
             close_handle = getattr(self, "_browser_for_close", None) or self.browser
             if close_handle is not None:
-                await close_handle.close()
+                # context.close() may have already terminated the underlying
+                # browser process (persistent contexts in particular). A
+                # second .close() then raises and bypasses the recorder
+                # terminal-event write below — log and continue.
+                try:
+                    await close_handle.close()
+                except Exception as exc:
+                    log.debug(
+                        "octowright.session.browser_close_after_context_close_failed",
+                        instance_id=getattr(self, "instance_id", None),
+                        error=repr(exc),
+                    )
             self.recorder.record(
                 "close",
                 video_path=str(self.video_path) if self.video_path else None,

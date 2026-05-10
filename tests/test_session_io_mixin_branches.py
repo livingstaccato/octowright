@@ -315,6 +315,32 @@ class TestExtractMarkdownFallback:
         result = await subj._extract_markdown("<p>fallback</p>")
         assert "fallback" in result
 
+    @pytest.mark.anyio
+    async def test_markitdown_failure_logged_at_debug(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A failing markitdown release shouldn't be invisible. The fallback
+        path runs as before, but the exception is logged at debug so it's
+        visible during development without spamming production."""
+
+        class _BoomMarkItDown:
+            def convert(self, html: str) -> str:
+                raise RuntimeError("markitdown bug")
+
+        fake_mod = SimpleNamespace(MarkItDown=_BoomMarkItDown)
+        monkeypatch.setitem(sys.modules, "markitdown", fake_mod)
+
+        from octowright.session import core_io_mixin as _io
+
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            _io,
+            "log",
+            SimpleNamespace(debug=lambda event, **kw: events.append((event, kw))),
+        )
+
+        subj = _make_subject(tmp_path)
+        await subj._extract_markdown("<p>x</p>")
+        assert any("markitdown_failed" in name for name, _ in events)
+
 
 # ─── capture_markdown ────────────────────────────────────────────────────────
 

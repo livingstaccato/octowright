@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from pathlib import Path
 from typing import Any
@@ -83,9 +82,19 @@ def _attach_macro_intent(detail: dict[str, Any], log_path: Path) -> None:
     from octowright.macros import load_macro_from_recording
     from octowright.server.macro_semantic import get_semantic_intent
 
-    with contextlib.suppress(Exception):
+    try:
         actions = load_macro_from_recording(log_path)
         detail["macro_intent"] = get_semantic_intent(actions)
+    except Exception as exc:
+        # The intent string is purely informational on the dashboard. If
+        # the JSONL is half-written or the semantic resolver hits an
+        # unknown action shape, drop the field and surface the reason at
+        # debug level instead of failing the request.
+        state.log.debug(
+            "octowright.http.macro_intent_failed",
+            log_path=str(log_path),
+            error=repr(exc),
+        )
 
 
 async def _live_session_detail_response(live: Any) -> JSONResponse:
@@ -93,8 +102,14 @@ async def _live_session_detail_response(live: Any) -> JSONResponse:
     detail = _build_live_session_detail(live, markdown_path)
     log_path = Path(live.log_path)
     detail["action_count"] = int(getattr(getattr(live, "recorder", None), "action_count", 0))
-    with contextlib.suppress(Exception):
+    try:
         detail["aria"] = await live.page.locator("html").aria_snapshot()
+    except Exception as exc:
+        state.log.debug(
+            "octowright.http.live_aria_snapshot_failed",
+            instance_id=getattr(live, "instance_id", None),
+            error=repr(exc),
+        )
     if log_path.exists():
         _attach_macro_intent(detail, log_path)
     return JSONResponse(detail)

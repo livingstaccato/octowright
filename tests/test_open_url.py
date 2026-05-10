@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -109,6 +110,64 @@ async def test_open_url_tab_swallows_navigation_failure(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert result["target"] == "tab"
     assert result["page_index"] == 1
+
+
+class _DebugCapture:
+    """provide.telemetry routes through stdlib logging but the dashboard's
+    caplog level filter does not always pick up DEBUG records under the
+    GH-Actions runner profile. Patching the module's `log` attribute is
+    the same pattern test_pool_disconnect uses for cross-platform parity."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def debug(self, event: str, **kw: Any) -> None:
+        self.events.append((event, kw))
+
+
+@pytest.mark.anyio
+async def test_open_url_tab_logs_debug_on_nav_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A swallowed goto() failure must be surfaced at debug level. Without
+    the log, the user sees a successful response but the new tab is still
+    on about:blank — diagnostics depend on this trail."""
+    from octowright.session import core_ops_mixin as _ops
+
+    cap = _DebugCapture()
+    monkeypatch.setattr(_ops, "log", cap)
+
+    session = _make_session(tmp_path)
+    new_page = _make_page("about:blank")
+    new_page.goto = AsyncMock(side_effect=TimeoutError("nav timeout"))
+    session.context.new_page = AsyncMock(return_value=new_page)
+
+    await session.open_url("https://slow.example.com", target="tab")
+
+    events = [name for name, _ in cap.events]
+    assert "octowright.open_url.nav_timeout" in events
+
+
+@pytest.mark.anyio
+async def test_open_url_window_logs_debug_on_load_state_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The window branch's wait_for_load_state failure must also log."""
+    from octowright.session import core_ops_mixin as _ops
+
+    cap = _DebugCapture()
+    monkeypatch.setattr(_ops, "log", cap)
+
+    session = _make_session(tmp_path)
+    popup = _make_page("https://popup.example.com")
+    popup.wait_for_load_state = AsyncMock(side_effect=TimeoutError("load state timeout"))
+    session.page.expect_popup = MagicMock(return_value=_FakePopupCtx(popup))
+
+    await session.open_url("https://popup.example.com", target="window")
+
+    events = [name for name, _ in cap.events]
+    assert "octowright.open_url.nav_timeout" in events
+    # window-branch kwargs identify which branch fired.
+    matching = [kw for name, kw in cap.events if name == "octowright.open_url.nav_timeout"]
+    assert any(kw.get("target") == "window" for kw in matching)
 
 
 # ---------------------------------------------------------------------------

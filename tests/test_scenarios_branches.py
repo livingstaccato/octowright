@@ -251,6 +251,17 @@ class TestYamlNonDictRoot:
         assert s.name == "blank"
         assert s.participants == []
 
+    def test_yaml_non_mapping_root_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A list/scalar at the YAML root is almost certainly a hand-edit
+        mistake. Silently resetting to {} produced cryptic 'no participants'
+        errors downstream. The fallback must warn so the operator can find
+        the real cause."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="octowright.scenarios"):
+            load_yaml_scenario(yaml.safe_dump([1, 2, 3]), "list-root")
+        assert any("scenarios.yaml_not_mapping" in rec.message for rec in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # _validate_scenario exact messages
