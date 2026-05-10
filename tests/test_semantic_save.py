@@ -25,6 +25,13 @@ def _write_recording(tmp_path: Path, lines: list[dict[str, Any]]) -> Path:
 def _import_macros(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
+    # MACROS_DIR is owned by defaults; reload it first.
+    from octowright import defaults
+
+    importlib.reload(defaults)
+    import octowright.macros.storage as _storage
+
+    importlib.reload(_storage)
     import octowright.macros as _m
 
     importlib.reload(_m)
