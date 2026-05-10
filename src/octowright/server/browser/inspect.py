@@ -138,12 +138,19 @@ def browser_console_messages(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Block until a selector appears, a text becomes visible, or the network goes idle. "
-        "Use this when you need to PAUSE before the next action (e.g. wait for a "
-        "spinner to disappear, wait for a list to load). For making an ASSERTION "
-        "about page state, use browser_expect_selector / expect_text / expect_url instead — "
-        "those record a check, not a wait. Provide exactly one of selector or text, "
-        "or neither for network-idle."
+        "Block until a condition is met. Use this when you need to PAUSE before the "
+        "next action — e.g. wait for a spinner to disappear, a list to load, or a "
+        "compound state like 'spinner gone AND table has > 0 rows'. For making an "
+        "ASSERTION about page state, use browser_expect_selector / expect_text / "
+        "expect_url instead — those record a check, not a wait.\n\n"
+        "Provide exactly one of:\n"
+        "  - `selector`: wait until the selector matches at least one element.\n"
+        "  - `text`:     wait until document.body.innerText contains this string.\n"
+        "  - `expression`: a JS expression that's polled inside the page until it "
+        "returns truthy. Use for compound conditions a selector can't express, "
+        "e.g. `\"!document.querySelector('.spinner') && document.querySelectorAll('tbody tr').length > 0\"`.\n"
+        "  - none of the above → wait for network-idle.\n"
+        "Passing more than one is a 400-equivalent error."
     ),
 )
 async def browser_wait_for(
@@ -151,8 +158,9 @@ async def browser_wait_for(
     selector: str | None = None,
     text: str | None = None,
     timeout_ms: int | None = None,
+    expression: str | None = None,
 ) -> BrowserOkResult:
-    await pool.get(instance_id).wait_for(selector, text, timeout_ms)
+    await pool.get(instance_id).wait_for(selector, text, timeout_ms, expression=expression)
     return {"ok": True}
 
 

@@ -421,6 +421,54 @@ class TestWaitFor:
         await subj.wait_for("#x", None, None)
         target.wait_for_selector.assert_awaited_once_with("#x", timeout=DEFAULT_ACTION_TIMEOUT_MS)
 
+    @pytest.mark.anyio
+    async def test_expression_branch(self, tmp_path: Path) -> None:
+        """expression= → target.wait_for_function with the JS expression
+        polled in-page, no `arg=` (caller's expression is self-contained)."""
+        subj = _make_subject(tmp_path)
+        target = MagicMock()
+        target.wait_for_function = AsyncMock()
+        subj._target = lambda: target  # type: ignore[attr-defined]
+        expr = "() => document.querySelectorAll('tbody tr').length > 0"
+        await subj.wait_for(None, None, 250, expression=expr)
+        target.wait_for_function.assert_awaited_once_with(expr, timeout=250)
+        subj.recorder.record.assert_called_once_with("wait_for", expression=expr, timeout_ms=250)
+
+    @pytest.mark.anyio
+    async def test_expression_default_timeout(self, tmp_path: Path) -> None:
+        """expression= with timeout=None → DEFAULT_ACTION_TIMEOUT_MS."""
+        subj = _make_subject(tmp_path)
+        target = MagicMock()
+        target.wait_for_function = AsyncMock()
+        subj._target = lambda: target  # type: ignore[attr-defined]
+        await subj.wait_for(None, None, None, expression="true")
+        target.wait_for_function.assert_awaited_once_with("true", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+
+    @pytest.mark.anyio
+    async def test_selector_and_text_both_set_raises(self, tmp_path: Path) -> None:
+        """Conflicting inputs are a programmer error — surface immediately."""
+        subj = _make_subject(tmp_path)
+        with pytest.raises(ValueError, match="at most one of"):
+            await subj.wait_for("#x", "hello", None)
+
+    @pytest.mark.anyio
+    async def test_selector_and_expression_both_set_raises(self, tmp_path: Path) -> None:
+        subj = _make_subject(tmp_path)
+        with pytest.raises(ValueError, match="at most one of"):
+            await subj.wait_for("#x", None, None, expression="true")
+
+    @pytest.mark.anyio
+    async def test_text_and_expression_both_set_raises(self, tmp_path: Path) -> None:
+        subj = _make_subject(tmp_path)
+        with pytest.raises(ValueError, match="at most one of"):
+            await subj.wait_for(None, "hello", None, expression="true")
+
+    @pytest.mark.anyio
+    async def test_all_three_set_raises(self, tmp_path: Path) -> None:
+        subj = _make_subject(tmp_path)
+        with pytest.raises(ValueError, match="at most one of"):
+            await subj.wait_for("#x", "hello", None, expression="true")
+
 
 # ─── expect_url ─────────────────────────────────────────────────────────────
 
