@@ -44,6 +44,12 @@ FRONTEND_DIR = Path(__file__).parent.parent / "server" / "frontend"
 # hammering the file system.
 TAIL_POLL_SECONDS = 1.0
 
+# Maximum gap between WS tail heartbeats. The tail loop only sends a frame
+# when there's something new (events, or a live→closed transition); this
+# bounds how long a quiet stream can stay silent before sending an empty
+# keepalive so the dashboard knows the connection's still alive.
+TAIL_HEARTBEAT_SECONDS = 15.0
+
 # Re-exported so handlers reference `state.RECORDINGS_DIR`. Tests swap with
 # `monkeypatch.setattr(_http.state, "RECORDINGS_DIR", tmp_path)`.
 RECORDINGS_DIR = RECORDINGS_DIR
@@ -86,6 +92,7 @@ def runtime_status() -> dict[str, Any]:
 __all__ = [
     "FRONTEND_DIR",
     "RECORDINGS_DIR",
+    "TAIL_HEARTBEAT_SECONDS",
     "TAIL_POLL_SECONDS",
     "_RUNTIME_ERROR",
     "_RUNTIME_HOST",

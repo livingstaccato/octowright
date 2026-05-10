@@ -56,7 +56,12 @@ from octowright.server.browser.lifecycle import (
     browser_spawn_roster,
     browser_suggest_for_url,
 )
-from octowright.server.browser.network import browser_mock_route, browser_set_dialog_policy, browser_unmock_route
+from octowright.server.browser.network import (
+    browser_mock_route,
+    browser_network_requests,
+    browser_set_dialog_policy,
+    browser_unmock_route,
+)
 from octowright.server.browser.trace import browser_open_trace
 from octowright.server.browser.views import (
     browser_downloads,
@@ -91,6 +96,7 @@ __all__ = [
     "browser_list_frames",
     "browser_mock_route",
     "browser_navigate",
+    "browser_network_requests",
     "browser_open_trace",
     "browser_press_key",
     "browser_read_markdown",
