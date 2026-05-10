@@ -14,11 +14,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from playwright.async_api import ConsoleMessage, Page
+from provide.telemetry import get_logger
 
 from octowright.session._protocols import SessionLike
 
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
+
+log = get_logger(__name__)
 
 
 def _looks_like_binary_text(payload: Any) -> bool:
@@ -111,8 +114,11 @@ class SessionIOMixin(SessionLike):
                     if text.strip():
                         return text
             return str(rendered)
-        except Exception:
-            pass
+        except Exception as exc:
+            # markitdown is optional. Log the failure so a real bug (e.g. a
+            # bad markitdown release) is visible during development, but
+            # still fall through to the regex stripper below.
+            log.debug("octowright.markdown.markitdown_failed", error=repr(exc))
 
         # Fallback: strip tags for non-structured content rather than returning
         # nothing when optional dependency is missing.
@@ -174,8 +180,11 @@ class SessionIOMixin(SessionLike):
         try:
             if existing is not None and not existing.done():
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug(
+                "octowright.markdown.pending_task_check_failed",
+                error=repr(exc),
+            )
 
         import asyncio
         import contextlib
