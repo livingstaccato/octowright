@@ -373,3 +373,245 @@ class TestModuleConstants:
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+# ─── _parse_since_cursor — unit tests ────────────────────────────────────────
+
+
+class TestParseSinceCursor:
+    def test_none_returns_zero(self) -> None:
+        assert _events._parse_since_cursor(None) == 0
+
+    def test_valid_int_string_parses(self) -> None:
+        assert _events._parse_since_cursor("123") == 123
+
+    def test_zero_string_parses(self) -> None:
+        assert _events._parse_since_cursor("0") == 0
+
+    def test_negative_int_string_passes_through(self) -> None:
+        """Negative offsets are nonsensical for a cursor but the function is
+        a thin int() wrapper — let downstream normalize. Pinning behavior."""
+        assert _events._parse_since_cursor("-5") == -5
+
+    def test_non_integer_falls_back_to_zero(self) -> None:
+        assert _events._parse_since_cursor("not-an-int") == 0
+
+    def test_empty_string_falls_back_to_zero(self) -> None:
+        assert _events._parse_since_cursor("") == 0
+
+
+# ─── _stream_tail — heartbeat / empty-frame-skip behavior ────────────────────
+
+
+class _FakeWebSocket:
+    """Records every send_json + close call for assertion."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.closed = False
+        self.close_code: int | None = None
+        self.close_reason: str | None = None
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        self.sent.append(payload)
+
+    async def close(self, code: int | None = None, reason: str | None = None) -> None:
+        self.closed = True
+        self.close_code = code
+        self.close_reason = reason
+
+
+def _patch_stream_tail_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    snapshots: list[dict[str, Any]],
+    live_after_tick: list[bool],
+) -> None:
+    """Wire `_tail_jsonl`, `_live_session_or_none`, `asyncio.sleep` so the
+    stream loop terminates deterministically.
+
+    `snapshots[i]` is returned on the ith call to `_tail_jsonl`.
+    `live_after_tick[i]` is the result of `_live_session_or_none` on the
+    ith call (False ends the loop). Both lists must be the same length.
+    `asyncio.sleep` is no-op'd so the loop runs at full speed.
+    """
+    snapshot_iter = iter(snapshots)
+    live_iter = iter(live_after_tick)
+
+    def _fake_tail_jsonl(_path: Path, _cursor: int) -> dict[str, Any]:
+        return next(snapshot_iter)
+
+    def _fake_live(_sid: str) -> Any:
+        return SimpleNamespace() if next(live_iter) else None
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_events, "_tail_jsonl", _fake_tail_jsonl)
+    monkeypatch.setattr(_events, "_live_session_or_none", _fake_live)
+    monkeypatch.setattr(_events.asyncio, "sleep", _fake_sleep)
+
+
+class TestStreamTailHeartbeat:
+    @pytest.mark.anyio
+    async def test_skips_empty_frames_during_quiet_period(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty snapshots while still_live → no send_json before heartbeat tick."""
+        # Heartbeat = 100s, poll = 1s → 100 quiet ticks before a heartbeat fires.
+        monkeypatch.setattr(_http_state, "TAIL_POLL_SECONDS", 1.0)
+        monkeypatch.setattr(_http_state, "TAIL_HEARTBEAT_SECONDS", 100.0)
+        # 5 quiet ticks then the session goes away, ending the loop.
+        _patch_stream_tail_loop(
+            monkeypatch,
+            snapshots=[{"events": [], "cursor": 0}] * 6,
+            live_after_tick=[True] * 5 + [False],
+        )
+        ws = _FakeWebSocket()
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        # Only the live→closed transition should have triggered a send.
+        assert len(ws.sent) == 1
+        assert ws.sent[0]["events"] == []
+        assert ws.sent[0]["complete"] is True
+        assert ws.closed is True
+
+    @pytest.mark.anyio
+    async def test_event_arrival_pushes_immediately(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-empty snapshot pushes that frame on the same tick."""
+        monkeypatch.setattr(_http_state, "TAIL_POLL_SECONDS", 1.0)
+        monkeypatch.setattr(_http_state, "TAIL_HEARTBEAT_SECONDS", 100.0)
+        events_payload = [{"ts": "1", "action": "navigate"}]
+        # Tick 0: event arrives. Tick 1: live=False → final empty push.
+        _patch_stream_tail_loop(
+            monkeypatch,
+            snapshots=[
+                {"events": events_payload, "cursor": 42},
+                {"events": [], "cursor": 42},
+            ],
+            live_after_tick=[True, False],
+        )
+        ws = _FakeWebSocket()
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        # Two sends: events + close-with-complete.
+        assert len(ws.sent) == 2
+        assert ws.sent[0]["events"] == events_payload
+        assert ws.sent[0]["cursor"] == 42
+        assert ws.sent[0]["complete"] is False
+        assert ws.sent[1]["events"] == []
+        assert ws.sent[1]["complete"] is True
+
+    @pytest.mark.anyio
+    async def test_heartbeat_fires_at_configured_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """After heartbeat_every empty ticks, an empty frame goes out."""
+        # Heartbeat = 3s, poll = 1s → heartbeat_every=3.
+        monkeypatch.setattr(_http_state, "TAIL_POLL_SECONDS", 1.0)
+        monkeypatch.setattr(_http_state, "TAIL_HEARTBEAT_SECONDS", 3.0)
+        # 3 quiet ticks → heartbeat on tick 3. Then session closes.
+        _patch_stream_tail_loop(
+            monkeypatch,
+            snapshots=[{"events": [], "cursor": 0}] * 4,
+            live_after_tick=[True, True, True, False],
+        )
+        ws = _FakeWebSocket()
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        # 1 heartbeat (tick 3) + 1 closing push (tick 4) = 2 sends.
+        assert len(ws.sent) == 2
+        assert all(s["events"] == [] for s in ws.sent)
+        assert ws.sent[0]["complete"] is False  # heartbeat while live
+        assert ws.sent[1]["complete"] is True  # closing push
+
+    @pytest.mark.anyio
+    async def test_event_resets_heartbeat_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pushing an events frame resets the tick counter — no immediate
+        heartbeat right after."""
+        monkeypatch.setattr(_http_state, "TAIL_POLL_SECONDS", 1.0)
+        monkeypatch.setattr(_http_state, "TAIL_HEARTBEAT_SECONDS", 3.0)
+        # Tick 0: 2 quiet ticks. Tick 2: events arrive (resets counter).
+        # Tick 3-4: 2 more quiet ticks (still < 3 since reset). Tick 5: close.
+        _patch_stream_tail_loop(
+            monkeypatch,
+            snapshots=[
+                {"events": [], "cursor": 0},
+                {"events": [], "cursor": 0},
+                {"events": [{"a": 1}], "cursor": 7},
+                {"events": [], "cursor": 7},
+                {"events": [], "cursor": 7},
+                {"events": [], "cursor": 7},
+            ],
+            live_after_tick=[True, True, True, True, True, False],
+        )
+        ws = _FakeWebSocket()
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        # Sends: events frame at tick 2 + close frame at tick 5. No heartbeat
+        # fired in between since counter was reset.
+        assert len(ws.sent) == 2
+        assert ws.sent[0]["events"] == [{"a": 1}]
+        assert ws.sent[1]["complete"] is True
+
+    @pytest.mark.anyio
+    async def test_heartbeat_every_clamps_to_at_least_one_tick(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If heartbeat_seconds < poll_seconds the integer ratio rounds to 0;
+        the loop must still fire — clamped to 1 tick — instead of never sending."""
+        # Heartbeat = 0.1s, poll = 1s → ratio 0 → clamps to 1.
+        monkeypatch.setattr(_http_state, "TAIL_POLL_SECONDS", 1.0)
+        monkeypatch.setattr(_http_state, "TAIL_HEARTBEAT_SECONDS", 0.1)
+        _patch_stream_tail_loop(
+            monkeypatch,
+            snapshots=[
+                {"events": [], "cursor": 0},
+                {"events": [], "cursor": 0},
+            ],
+            live_after_tick=[True, False],
+        )
+        ws = _FakeWebSocket()
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        # heartbeat_every=1 → heartbeat on every tick → 2 sends.
+        assert len(ws.sent) == 2
+
+    @pytest.mark.anyio
+    async def test_session_closed_on_first_tick_pushes_complete(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Session disappears between connect and first poll → one final
+        push with complete=True, then close."""
+        monkeypatch.setattr(_http_state, "TAIL_POLL_SECONDS", 1.0)
+        monkeypatch.setattr(_http_state, "TAIL_HEARTBEAT_SECONDS", 100.0)
+        _patch_stream_tail_loop(
+            monkeypatch,
+            snapshots=[{"events": [], "cursor": 0}],
+            live_after_tick=[False],
+        )
+        ws = _FakeWebSocket()
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        assert len(ws.sent) == 1
+        assert ws.sent[0]["complete"] is True
+        assert ws.closed is True
+
+
+# ─── _close_for_unknown_or_closed_session — handshake codes ──────────────────
+
+
+class TestCloseUnknownOrClosed:
+    @pytest.mark.anyio
+    async def test_closed_session_emits_1003_with_redirect_hint(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Recording on disk → WS code 1003 + 'use GET /events instead'."""
+        monkeypatch.setattr(_http_state, "RECORDINGS_DIR", tmp_path)
+        monkeypatch.setattr(_events, "_find_recording_for", lambda _sid, _dir: tmp_path / "x.jsonl")
+        ws = _FakeWebSocket()
+        await _events._close_for_unknown_or_closed_session(ws, "sid42")
+        assert ws.closed is True
+        assert ws.close_code == 1003
+        assert ws.close_reason is not None
+        assert "GET" in ws.close_reason
+
+    @pytest.mark.anyio
+    async def test_unknown_session_emits_1008_with_id_in_reason(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No recording → WS code 1008 + reason includes the requested id."""
+        monkeypatch.setattr(_http_state, "RECORDINGS_DIR", tmp_path)
+        monkeypatch.setattr(_events, "_find_recording_for", lambda _sid, _dir: None)
+        ws = _FakeWebSocket()
+        await _events._close_for_unknown_or_closed_session(ws, "ghostid")
+        assert ws.closed is True
+        assert ws.close_code == 1008
+        assert ws.close_reason is not None
+        assert "ghostid" in ws.close_reason

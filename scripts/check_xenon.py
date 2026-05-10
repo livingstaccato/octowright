@@ -24,6 +24,10 @@ def _load_baseline(path: Path) -> set[str]:
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# Strip the ":<lineno> " portion from a xenon block reference so adding an
+# import (which shifts every function down by 1) doesn't break the baseline.
+# Matches: `path/to/file.py:123 funcname` → `path/to/file.py funcname`.
+_LINENO_RE = re.compile(r'("[^"]*?\.py):\d+( [^"\s]+")')
 
 
 def _strip_ansi(text: str) -> str:
@@ -35,7 +39,11 @@ def _normalize_violation(line: str) -> str:
     if text.startswith("ERROR:xenon:"):
         text = text.removeprefix("ERROR:xenon:").strip()
     # act/log wrappers can inject extra spacing; compare canonicalized text.
-    return " ".join(text.split())
+    text = " ".join(text.split())
+    # Drop line numbers so cosmetic diffs (added imports, comments) don't
+    # require baseline rebumps. The (file, function, rank) triple is what
+    # matters for tracking complexity drift over time.
+    return _LINENO_RE.sub(r"\1\2", text)
 
 
 def main() -> int:
