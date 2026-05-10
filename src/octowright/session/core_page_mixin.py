@@ -132,7 +132,28 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("evaluate", expression=expression)
         return result
 
-    async def wait_for(self, selector: str | None, text: str | None, timeout_ms: int | None) -> None:
+    async def wait_for(
+        self,
+        selector: str | None,
+        text: str | None,
+        timeout_ms: int | None,
+        expression: str | None = None,
+    ) -> None:
+        """Block until one of the supplied conditions becomes true.
+
+        Exactly one of ``selector`` / ``text`` / ``expression`` may be set;
+        with all three None the call waits for ``networkidle``. ``expression``
+        is evaluated repeatedly inside the page (Playwright's
+        ``page.wait_for_function``) until it returns truthy — useful for
+        compound conditions like "spinner removed AND table has rows" that
+        a single selector can't express.
+        """
+        provided = sum(1 for x in (selector, text, expression) if x is not None)
+        if provided > 1:
+            raise ValueError(
+                "wait_for accepts at most one of selector / text / expression; "
+                f"got selector={bool(selector)}, text={bool(text)}, expression={bool(expression)}"
+            )
         timeout = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
         target = self._target()
         if selector:
@@ -145,6 +166,9 @@ class SessionPageMixin(SessionLike):
                 timeout=timeout,
             )
             self.recorder.record("wait_for", text=text, timeout_ms=timeout)
+        elif expression:
+            await target.wait_for_function(expression, timeout=timeout)
+            self.recorder.record("wait_for", expression=expression, timeout_ms=timeout)
         else:
             await self.page.wait_for_load_state("networkidle", timeout=timeout)
             self.recorder.record("wait_for", timeout_ms=timeout)

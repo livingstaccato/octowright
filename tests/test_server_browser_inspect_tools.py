@@ -126,6 +126,38 @@ async def test_snapshot_default_selector(_patch_pool: MagicMock) -> None:
 
 
 @pytest.mark.anyio
+async def test_browser_wait_for_expression_passes_through(_patch_pool: MagicMock) -> None:
+    """browser_wait_for(expression=...) forwards the JS predicate to the
+    session's wait_for under the new keyword arg."""
+    s = _session()
+    _patch_pool.get.return_value = s
+    expr = "() => document.querySelectorAll('tr').length > 0"
+    out = await _inspect.browser_wait_for("i", expression=expr, timeout_ms=500)
+    assert out["ok"] is True
+    s.wait_for.assert_awaited_once_with(None, None, 500, expression=expr)
+
+
+@pytest.mark.anyio
+async def test_browser_wait_for_selector_still_works(_patch_pool: MagicMock) -> None:
+    """Regression: selector-only calls keep their original keyword shape
+    and don't inadvertently set expression=."""
+    s = _session()
+    _patch_pool.get.return_value = s
+    await _inspect.browser_wait_for("i", selector="#x", timeout_ms=200)
+    s.wait_for.assert_awaited_once_with("#x", None, 200, expression=None)
+
+
+@pytest.mark.anyio
+async def test_browser_wait_for_no_args_networkidle(_patch_pool: MagicMock) -> None:
+    """Regression: bare browser_wait_for(instance_id) routes to the
+    networkidle branch (selector=None, text=None, expression=None)."""
+    s = _session()
+    _patch_pool.get.return_value = s
+    await _inspect.browser_wait_for("i")
+    s.wait_for.assert_awaited_once_with(None, None, None, expression=None)
+
+
+@pytest.mark.anyio
 async def test_browser_read_markdown(_patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     s = _session()
     _patch_pool.get.return_value = s
