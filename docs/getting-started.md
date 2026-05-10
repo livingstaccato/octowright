@@ -18,6 +18,9 @@ line downloads the actual browser binaries Playwright drives.
 
 > Octowright uses `uv` exclusively — there are no `pip install` instructions
 > because Octowright depends on `uv.lock` for reproducible dependency resolution.
+>
+> Engine management is currently CLI-only (Playwright install/list commands),
+> not exposed as Octowright MCP tools.
 
 ## 2. Register with Claude Code
 
@@ -60,7 +63,7 @@ A four-call smoke test that exercises launch, drive, list, and close:
 If all four succeed, the install, Playwright runtime, and MCP wiring are healthy.
 
 If something fails, jump to [troubleshooting.md](troubleshooting.md) — most failures
-are engine-binary install problems caught by `browser_engine_status`.
+are engine-binary install problems fixed by reinstalling Playwright browsers.
 
 ## CLI surface
 

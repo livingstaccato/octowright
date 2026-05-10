@@ -147,7 +147,9 @@ export function renderMacroSelectorTools(
     validateStatus.classList.remove("macro-selector-tools__status--error");
     validateSessionSelector(sessionId, selector)
       .then((result) => {
-        validateStatus.textContent = `Selector ${result.present ? "found" : "not found"} in session ${sessionId}.`;
+        const where = `in session ${sessionId}`;
+        const detail = result.found ? `found (${result.count} match${result.count === 1 ? "" : "es"})` : "not found";
+        validateStatus.textContent = `Selector ${detail} ${where}.`;
       })
       .catch((err: unknown) => {
         validateStatus.textContent = `Validation failed: ${String(err)}`;
