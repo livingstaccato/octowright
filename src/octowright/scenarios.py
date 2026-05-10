@@ -56,6 +56,15 @@ def _validate_scenario(s: Scenario) -> None:
 def load_yaml_scenario(content: str, name: str) -> Scenario:
     raw = yaml.safe_load(content)
     if not isinstance(raw, dict):
+        # Scenario YAML must be a mapping; a list or scalar at top level is
+        # almost certainly a hand-edit mistake. Reset to {} so the caller
+        # gets a "no participants" error rather than an AttributeError, but
+        # warn so the operator sees what actually happened.
+        log.warning(
+            "scenarios.yaml_not_mapping",
+            name=name,
+            got=type(raw).__name__,
+        )
         raw = {}
     participants = [
         Participant(

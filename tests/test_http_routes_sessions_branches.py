@@ -581,6 +581,103 @@ class TestSessionDetailLiveEdges:
         assert r.status_code == 200
         assert r.json()["aria"] == "- button 'OK'"
 
+    def test_aria_failure_logs_at_debug(
+        self,
+        client: TestClient,
+        fakes: dict[str, Any],
+        isolated_recordings: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The swallowed aria_snapshot exception must hit the log so an
+        operator can see why the 'aria' field is missing from a live
+        session response. Previously the contextlib.suppress made it
+        invisible — that violated the project's silent-swallow policy."""
+        log_path = _write_recording(isolated_recordings, "arialog00001")
+        live = self._live_session("arialog00001", log_path)
+        live.page.locator = MagicMock(
+            return_value=SimpleNamespace(aria_snapshot=AsyncMock(side_effect=RuntimeError("aria boom")))
+        )
+        pool: _FakePool = fakes["pool"]
+        pool._sessions["arialog00001"] = live
+
+        # state.log is the structured logger sessions.py emits through;
+        # patch its .debug to capture the call without relying on
+        # provide.telemetry's stdlib propagation (which is flaky on some
+        # CI runners — see test_pool_disconnect._LogCapture).
+        from octowright.http import state as _http_state
+
+        events: list[tuple[str, dict]] = []
+
+        class _LogProxy:
+            """Capture .debug calls; delegate everything else to the real
+            logger so unrelated log lines emitted during the request still
+            flow through provide.telemetry."""
+
+            def __init__(self, real: Any) -> None:
+                self._real = real
+
+            def debug(self, event: str, **kw: Any) -> None:
+                events.append((event, kw))
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._real, name)
+
+        monkeypatch.setattr(_http_state, "log", _LogProxy(_http_state.log))
+
+        r = client.get("/api/sessions/arialog00001")
+        assert r.status_code == 200
+        assert any("live_aria_snapshot_failed" in name for name, _ in events)
+
+    def test_macro_intent_failure_logs_at_debug(
+        self,
+        client: TestClient,
+        fakes: dict[str, Any],
+        isolated_recordings: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If load_macro_from_recording or get_semantic_intent raises, the
+        macro_intent field is dropped from the response (it's purely
+        informational) — but the failure must be visible at debug level so
+        a real bug (e.g. a semantic resolver crash on a new action shape)
+        doesn't sit silently in production."""
+        log_path = _write_recording(isolated_recordings, "intfail00001")
+        live = self._live_session("intfail00001", log_path)
+        pool: _FakePool = fakes["pool"]
+        pool._sessions["intfail00001"] = live
+
+        from octowright.server import macro_semantic as _ms
+
+        def _boom(_actions: Any) -> str:
+            raise RuntimeError("semantic boom")
+
+        monkeypatch.setattr(_ms, "get_semantic_intent", _boom)
+
+        from octowright.http import state as _http_state
+
+        events: list[tuple[str, dict]] = []
+
+        class _LogProxy:
+            """Capture .debug calls; delegate everything else to the real
+            logger so unrelated log lines emitted during the request still
+            flow through provide.telemetry."""
+
+            def __init__(self, real: Any) -> None:
+                self._real = real
+
+            def debug(self, event: str, **kw: Any) -> None:
+                events.append((event, kw))
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._real, name)
+
+        monkeypatch.setattr(_http_state, "log", _LogProxy(_http_state.log))
+
+        r = client.get("/api/sessions/intfail00001")
+        assert r.status_code == 200
+        body = r.json()
+        assert "macro_intent" not in body
+        assert any("macro_intent_failed" in name for name, _ in events)
+
 
 # ─── _live_summary_from_launch helper ───────────────────────────────────────
 

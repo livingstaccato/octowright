@@ -36,7 +36,9 @@ async def golden_save(
     structured_output=False,
     description=(
         "Compare the current page's accessibility tree against a saved golden. "
-        "Raises RuntimeError with a diff summary on mismatch."
+        "Returns {ok: false, golden, diffs, diff_count} on mismatch and "
+        "{ok: true, diffs: 0} on match. Callers that want a hard failure on "
+        "drift should check `ok` themselves."
     ),
 )
 async def golden_assert(instance_id: str, name: str) -> dict[str, Any]:
@@ -45,7 +47,12 @@ async def golden_assert(instance_id: str, name: str) -> dict[str, Any]:
     expected = goldens_mod.load_golden(name)["tree"]
     diffs = goldens_mod.diff_trees(expected, actual)
     if diffs:
-        raise RuntimeError({"golden": name, "diffs": diffs[:20], "diff_count": len(diffs)})
+        return {
+            "ok": False,
+            "golden": name,
+            "diffs": diffs[:20],
+            "diff_count": len(diffs),
+        }
     return {"ok": True, "diffs": 0}
 
 
