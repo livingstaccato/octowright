@@ -199,7 +199,7 @@ async def persona_update_endpoint(request: Request) -> JSONResponse:
     except _yaml.YAMLError as e:
         return JSONResponse({"error": f"invalid YAML: {e}"}, status_code=400)
 
-    yaml_path.write_text(yaml_text)
+    yaml_path.write_text(yaml_text, encoding="utf-8")
     await publish_dashboard_invalidation("personas")
     return JSONResponse({"ok": True, "name": name})
 

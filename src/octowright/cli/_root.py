@@ -11,7 +11,19 @@ it so they appear as ``octowright <subcommand>``.
 
 from __future__ import annotations
 
+import logging
+
 import click
+
+# `provide.telemetry._otel.has_otel()` emits a `_logger.debug` whenever the
+# probe finds opentelemetry isn't installed. On runner profiles where the
+# default logging level resolves to DEBUG (we've seen this on linux arm64
+# GH-Actions), that diagnostic message leaks into the CLI's stdout/stderr
+# and pollutes output that callers parse (e.g. `scenario list`). Pinning
+# the specific module logger to WARNING silences the probe's diagnostic
+# without dropping anything semantically meaningful — `has_otel()`'s
+# decision is reflected in the return value, not in the log line.
+logging.getLogger("provide.telemetry._otel").setLevel(logging.WARNING)
 
 
 @click.group(invoke_without_command=True, context_settings={"help_option_names": ["-h", "--help"]})

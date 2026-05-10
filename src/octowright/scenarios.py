@@ -115,7 +115,7 @@ def load_scenario(name: str) -> Scenario:
             log.warning("scenarios.both_forms_present_py_wins", name=name)
         return load_python_scenario(py_path)
     if yaml_path.exists():
-        return load_yaml_scenario(yaml_path.read_text(), name)
+        return load_yaml_scenario(yaml_path.read_text(encoding="utf-8"), name)
     raise FileNotFoundError(
         f"no scenario named {name!r} in {SCENARIOS_DIR}; list available with `scenario_list` "
         f"or drop a {name}.yaml file in that directory"
@@ -126,7 +126,7 @@ def load_scenario_template(name: str, args: dict[str, Any]) -> Scenario:
     path = SCENARIO_TEMPLATES_DIR / f"{name}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"no scenario template named {name!r} in {SCENARIO_TEMPLATES_DIR}")
-    content = path.read_text()
+    content = path.read_text(encoding="utf-8")
     # Simple jinja-style substitution if args are provided.
     for k, v in args.items():
         content = content.replace(f"{{{{{k}}}}}", str(v))
