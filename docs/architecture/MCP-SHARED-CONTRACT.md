@@ -22,6 +22,7 @@ DELETE /api/sessions/{id}                        → SessionCloseResponse (200);
   SessionCloseResponse: {"closed": true, "instance_id": str, "log_path": str, "video_path": str|null, "trace_path": str|null, "cache": CacheReport}
 DELETE /api/sessions/{id}/recording              → {"deleted": true, "session_id": str, "files_removed": int} (200); 404 if no recording on disk; 409 if the session is still live
 POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live
+POST   /api/sessions/{id}/relaunch                → SessionSummary (201) for a NEW instance_id launched with the same kind/profile/label/url/viewport as the original. 404 if no recording on disk; 409 if the session is still live; 422 if the JSONL has no parseable launch record.
 GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
 GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
 GET    /api/sessions/{id}/downloads?since=N      → {"downloads": [DownloadRecord, ...], "cursor": int, "total": int}
@@ -29,6 +30,7 @@ WS     /api/sessions/{id}/tail                   → server pushes {"events": [.
 GET    /api/sessions/{id}/frame?t=<seconds>      → image/png bytes (extracted at the requested timestamp). 404 if no video for this session.
 GET    /api/sessions/{id}/video                  → video bytes (HTTP range supported via FileResponse). 404 if missing.
 GET    /api/sessions/{id}/trace                  → application/zip download. 404 if missing.
+GET    /api/sessions/{id}/markdown                → text/markdown bytes (the cached markdown rendering of the page). For LIVE sessions, transparently triggers `capture_markdown()` on first request if the cache is missing. 404 if no live session and no cached markdown on disk; 500 if generation fails.
 GET    /api/sessions/{id}/screenshots            → {"screenshots": [{"path": str, "filename": str, "ts": float, "size_bytes": int}, ...]}
 GET    /api/sessions/{id}/screenshots/{filename} → image/png bytes
 GET    /api/sessions/{id}/screenshot/now?format=png|jpeg&quality=N&full_page=bool → image/png|jpeg bytes (live page only). Defaults: format=png, quality=80 (jpeg only), full_page=false. Cache-Control: no-store. 404 closed/unknown, 503 if page.screenshot() raises.
@@ -41,8 +43,13 @@ GET    /api/personas/sizes                       → {<persona_name>: <bytes>, .
 GET    /api/personas/{name}                      → PersonaDetail; 404 if no `profile.yaml` for that persona
 PUT    /api/personas/{name}                      → {"ok": true, "name": str} (200); 400 if `yaml` field missing/non-string or fails `yaml.safe_load`; 404 if persona not found
 GET    /api/macros                               → [MacroSummary, ...]
+GET    /api/macros/{name:path}                   → MacroDetail (the full macro JSON: name, description, parameters, actions, created_at, updated_at). 404 if not found.
+PUT    /api/macros/{name:path}                   → {"ok": true, "name": str} (200) on save. 400 if `macro` field missing/non-object or fails validation (response includes the validation issue list); 404 if not found.
+GET    /api/macros/{name:path}/repair_preview    → {"original": [...], "repaired": [...], "diff": [...]} preview of auto-repair suggestions without applying them. 404 if not found.
+POST   /api/macros/{name:path}/validate          → {"error_count": int, "warning_count": int, "issues": [LintIssue, ...]} for the supplied macro body. 400 if `macro` field missing/non-object.
 POST   /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
 GET    /api/health                               → {"ok": true, "version": str}
+GET    /api/metrics                               → text/plain Prometheus exposition format (counters: octowright_http_requests_total{route, status_class}; histograms: octowright_http_request_duration_seconds{route}). Only registered when `OCTOWRIGHT_HTTP_METRICS` is enabled (default on; set to `0`/`false`/`no`/`off` to disable; tests patch `defaults.HTTP_METRICS_ENABLED`). Returns 404 when disabled.
 ```
 
 ## Write-endpoint request bodies
@@ -215,6 +222,12 @@ The manifest is diagnostic only; it is not a browser reattach registry.
   No payload is sent — clients should fall back to the REST `/events` endpoint.
 - **Unknown at connect time** (no live session, no recording): close with code
   `1008` (policy violation) and reason `"no session with id <id>"`.
+- **Payload asymmetry vs REST `/events`**: the WS frame is
+  `{events, cursor, complete}` — it deliberately omits `total_bytes` (which
+  REST returns) because the WS receiver is consuming a continuous stream
+  and the file-size figure has no client-side use during the connection.
+  Clients that need it should call REST `/events` once, then upgrade to WS
+  using the returned cursor.
 
 ## `/api/sessions/{id}/frame` caching
 

@@ -38,6 +38,12 @@ uv run playwright install webkit firefox chromium
 uv run octowright serve          # start MCP + HTTP dashboard
 uv run octowright selftest       # list MCP tools without a client
 uv run octowright scenario list  # list loaded scenarios
+uv run octowright persona list   # list saved personas (also: persona create/show/delete)
+uv run octowright cleanup        # prune stale recordings + abandoned profiles
+uv run octowright init           # scaffold a starter octowright project tree
+uv run octowright skill          # install/inspect the using-octowright agent skill
+uv run octowright takeover       # detect + disable competing Playwright MCP plugins
+uv run octowright test           # run the JSONL-driven test suite (CI-friendly)
 ```
 
 ## Architecture
@@ -74,7 +80,13 @@ CLI (Click)
 
 | Path | Role |
 |------|------|
-| `src/octowright/browser_pool/pool.py` | `BrowserPool` — all browser lifecycle |
+| `src/octowright/browser_pool/pool.py` | `BrowserPool` — top-level lifecycle entry points |
+| `src/octowright/browser_pool/lifecycle.py` | Per-session launch / close / handoff logic |
+| `src/octowright/browser_pool/listeners.py` | External-close eviction (context.close, browser.disconnected, page.close) |
+| `src/octowright/browser_pool/options.py` | Launch-kwargs assembly + tile placement |
+| `src/octowright/browser_pool/roster.py` | `browser_spawn_roster` parallel launch coordination |
+| `src/octowright/browser_pool/launch_helpers.py` | Shared per-launch wiring (recorder, listeners, init scripts) |
+| `src/octowright/browser_pool/errors.py` | Pool-specific exception types |
 | `src/octowright/browser_pool/visuals.py` | Emoji badges, title injection, macro-status pill helpers |
 | `src/octowright/browser_pool/_assets/*.js` | Init scripts injected into every page (title tag, corner badge, macro pill) |
 | `src/octowright/session/core.py` | `BrowserSession` dataclass |
@@ -132,12 +144,16 @@ TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octo
 
 ### Capability Profiles
 
-The full MCP tool surface is ~89 tools. When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface, 13 tools), `advanced` (inspection + assertions + ARIA-locator interactions), `macros`, `scenarios`, `personas`. Unset / `all` keeps every tool (default, back-compat). Example: `octowright serve --profile=core,macros` exposes 22 tools instead of 89.
+The full MCP tool surface is ~89 tools. When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface, 13 tools), `advanced` (inspection + assertions + ARIA-locator interactions), `macros`, `scenarios`, `personas`. Unset / `all` keeps every tool (default, back-compat). The five named profiles together cover 55 distinct tools — the remaining 34 (snapshots, a handful of less-common views, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,personas` is **not** equivalent to no filter. Example: `octowright serve --profile=core,macros` exposes 25 tools instead of 89.
+
+**Always-on meta tools.** Three diagnostic/meta tools are exempt from the profile filter and register under any profile (or no profile): `octowright_status`, `octowright_dashboard_url`, `octowright_check_takeover`. These give the LLM a way to inspect the active profile, find the dashboard URL, and detect competing MCP plugins regardless of filter. The list is `ALWAYS_ON_TOOLS` in `src/octowright/server/profiles.py`.
 
 ## Env Var Configuration
 
 All defaults are in `src/octowright/defaults.py`. Key vars:
-- `OCTOWRIGHT_PORT` — HTTP dashboard port (default 8765, auto-bumps if busy)
+- `OCTOWRIGHT_HTTP_PORT` — HTTP dashboard port (default 8765, auto-bumps if busy)
+- `OCTOWRIGHT_HTTP_HOST` — HTTP dashboard bind host (default 127.0.0.1)
+- `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD` — set to `1` to allow non-loopback access to sensitive dashboard/MCP endpoints. **Warning:** there is no auth layer; combining a non-loopback `OCTOWRIGHT_HTTP_HOST` with this flag exposes RCE-equivalent surface (the MCP transport drives browsers) to the network. Use only behind your own auth gateway.
 - `OCTOWRIGHT_HEADLESS` — force headless mode
 - `OCTOWRIGHT_IDLE_GRACE` — seconds before auto-exit (default 300)
 - `OCTOWRIGHT_PROFILES_DIR` — override profile storage root

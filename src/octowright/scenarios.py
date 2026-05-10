@@ -89,6 +89,17 @@ def load_python_scenario(path: Path) -> Scenario:
     import importlib.util
     import sys
 
+    # `*.py` scenarios execute arbitrary Python at module import — anything
+    # at top level runs with the daemon's privileges. Treat the scenarios
+    # dir like trusted local config (your own files, not random downloads
+    # or shared-repo contributions). The warning makes the trust boundary
+    # explicit at runtime so an operator who didn't realize the scenarios
+    # dir was on shared storage notices.
+    log.warning(
+        "scenarios.python_load_executes_arbitrary_code",
+        path=str(path),
+        hint="treat scenarios dir as trusted local config",
+    )
     spec = importlib.util.spec_from_file_location(
         f"octowright._scenario_{path.stem}",
         path,
