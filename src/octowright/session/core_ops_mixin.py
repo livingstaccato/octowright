@@ -255,8 +255,9 @@ class SessionOpsMixin(SessionLike):
                 except Exception:
                     pass
         finally:
-            if self.browser is not None:
-                await self.browser.close()
+            close_handle = getattr(self, "_browser_for_close", None) or self.browser
+            if close_handle is not None:
+                await close_handle.close()
             self.recorder.record(
                 "close",
                 video_path=str(self.video_path) if self.video_path else None,

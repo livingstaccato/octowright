@@ -53,6 +53,7 @@ class BrowserSession(
     video_path: Path | None = None
     trace_path: Path | None = None
     _video: Video | None = field(default=None, repr=False)
+    _browser_for_close: Browser | None = field(default=None, repr=False)
     pages: list[Page] = field(default_factory=list)
     _dialog_policy: str = "dismiss"
     _dialog_prompt_text: str | None = None
@@ -77,6 +78,8 @@ class BrowserSession(
     started_at: str = ""
 
     def __post_init__(self) -> None:
+        if self._browser_for_close is None and self.browser is not None:
+            self._browser_for_close = self.browser
         if self.page not in self.pages:
             self.pages.insert(0, self.page)
         self.page_count = len(self.pages)

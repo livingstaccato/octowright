@@ -150,6 +150,15 @@ class TestCloseHappy:
         await inst.close()
         browser.close.assert_awaited_once()
 
+    @pytest.mark.anyio
+    async def test_browser_for_close_handle_is_used_when_browser_none(self, tmp_path: Path) -> None:
+        """Persistent contexts may expose a browser handle separately; close() uses it."""
+        close_handle = MagicMock()
+        close_handle.close = AsyncMock()
+        inst = _build(tmp_path, browser=None, _browser_for_close=close_handle)
+        await inst.close()
+        close_handle.close.assert_awaited_once()
+
 
 # ─── close: trace branch ─────────────────────────────────────────────────────
 

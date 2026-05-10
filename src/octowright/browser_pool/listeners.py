@@ -126,9 +126,11 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
 
     session.context.on("close", _evict)
     # Ephemeral browsers fire 'disconnected' on the Browser when the underlying
-    # process dies. Persistent contexts have no Browser handle.
-    if session.browser is not None:
-        session.browser.on("disconnected", _evict)
+    # process dies. Some Playwright builds also expose a Browser handle on
+    # persistent contexts; wire it when present for extra resilience.
+    close_handle = getattr(session, "_browser_for_close", None) or session.browser
+    if close_handle is not None:
+        close_handle.on("disconnected", _evict)
 
 
 def _wire_user_navigation_logger(session: BrowserSession) -> None:
