@@ -96,11 +96,10 @@ async def session_events(request: Request) -> JSONResponse:
     log_path = _resolve_log_path(sid)
     if log_path is None:
         return JSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
-    raw_since = request.query_params.get("since")
-    try:
-        since = int(raw_since) if raw_since is not None else 0
-    except ValueError:
-        return JSONResponse({"error": f"invalid since={raw_since!r}, must be int"}, status_code=400)
+    since, err = _parse_since(request)
+    if err is not None:
+        return err
+    assert since is not None  # narrow for type-checker
     return JSONResponse(_tail_jsonl(log_path, since))
 
 
@@ -220,11 +219,18 @@ async def _close_for_unknown_or_closed_session(websocket: WebSocket, sid: str) -
 def _parse_since_cursor(raw_since: str | None) -> int:
     """Honor `?since=N` to skip events the caller already fetched. Without
     this, the first WS push replays everything from byte 0 and the dashboard
-    renders the launch event twice."""
+    renders the launch event twice.
+
+    Non-int / missing → 0 (WS can't return a 400; coerce silently). Negative
+    values clamp to 0 because ``tail_log`` does ``fh.seek(cursor)``, and a
+    negative seek raises ``OSError: Invalid argument`` — a 500 from a
+    malformed query param.
+    """
     try:
-        return int(raw_since) if raw_since is not None else 0
+        value = int(raw_since) if raw_since is not None else 0
     except ValueError:
         return 0
+    return max(0, value)
 
 
 async def _stream_tail(websocket: WebSocket, sid: str, log_path: Path, cursor: int) -> None:
