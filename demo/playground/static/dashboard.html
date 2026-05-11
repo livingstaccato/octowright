@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Monitor dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="dashboard-root">
+  <header>
+    <h1>Monitor dashboard</h1>
+    <p>Read-only view of form-step events from <code>/api/form-step</code>. New rows appear as the player posts.</p>
+  </header>
+  <table class="event-table">
+    <thead>
+      <tr><th>#</th><th>Step</th><th>Label</th><th>Value</th></tr>
+    </thead>
+    <tbody id="rows">
+      <tr class="empty"><td colspan="4">Waiting for events&hellip;</td></tr>
+    </tbody>
+  </table>
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>

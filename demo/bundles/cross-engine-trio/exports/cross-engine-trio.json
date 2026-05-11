@@ -2,10 +2,10 @@
   "artifact_manifest": {
     "artifacts": {
       "replay": {
-        "event_count": 58,
+        "event_count": 72,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 14623,
+        "size_bytes": 24926,
         "ts_export": "artifacts/replay.ts"
       },
       "supporting_videos": [
@@ -29,21 +29,14 @@
           "path": "artifacts/supporting/cx-webkit.mp4",
           "poster_path": "artifacts/supporting/cx-webkit.png",
           "role": "player"
-        },
-        {
-          "id": "cx-monitor",
-          "kind": "chromium",
-          "path": "artifacts/supporting/cx-monitor.mp4",
-          "poster_path": "artifacts/supporting/cx-monitor.png",
-          "role": "monitor"
         }
       ],
       "video": {
-        "duration_seconds": 11.52,
+        "duration_seconds": 9.2,
         "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 899717,
+        "size_bytes": 1030243,
         "width": 1920
       }
     },
@@ -83,15 +76,6 @@
             "width": 960,
             "x": 0,
             "y": 540
-          },
-          {
-            "height": 540,
-            "kind": "chromium",
-            "persona": "cx-monitor",
-            "role": "monitor",
-            "width": 960,
-            "x": 960,
-            "y": 540
           }
         ],
         "subtitle": "",
@@ -124,15 +108,6 @@
           "width": 960,
           "x": 0,
           "y": 540
-        },
-        {
-          "height": 540,
-          "kind": "chromium",
-          "persona": "cx-monitor",
-          "role": "monitor",
-          "width": 960,
-          "x": 960,
-          "y": 540
         }
       ],
       "supporting_videos": [
@@ -159,14 +134,6 @@
           "persona": "cx-webkit",
           "poster_path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-webkit.png",
           "role": "player"
-        },
-        {
-          "id": "cx-monitor",
-          "kind": "chromium",
-          "path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-monitor.mp4",
-          "persona": "cx-monitor",
-          "poster_path": "demo/bundles/cross-engine-trio/artifacts/supporting/cx-monitor.png",
-          "role": "monitor"
         }
       ]
     },
@@ -186,11 +153,6 @@
         "kind": "webkit",
         "persona": "cx-webkit",
         "role": "player"
-      },
-      {
-        "kind": "chromium",
-        "persona": "cx-monitor",
-        "role": "monitor"
       }
     ],
     "presentation": {
@@ -216,11 +178,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 11.52,
+      "duration_seconds": 9.2,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 899717,
+      "size_bytes": 1030243,
       "width": 1920
     },
     "supporting": [
@@ -244,18 +206,11 @@
         "path": "artifacts/supporting/cx-webkit.mp4",
         "poster_path": "artifacts/supporting/cx-webkit.png",
         "role": "player"
-      },
-      {
-        "id": "cx-monitor",
-        "kind": "chromium",
-        "path": "artifacts/supporting/cx-monitor.mp4",
-        "poster_path": "artifacts/supporting/cx-monitor.png",
-        "role": "monitor"
       }
     ]
   },
   "regen_command": "uv run python scripts/demos/record_demo.py cross-engine-trio",
-  "summary": "Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.",
+  "summary": "Three engines run the same Wikipedia search in parallel. Watch where they agree and where timing differs.",
   "title": "Cross-Engine Trio",
   "tutorial_export": "exports/cross-engine-trio.json"
 }

@@ -2,10 +2,10 @@
   "artifact_manifest": {
     "artifacts": {
       "replay": {
-        "event_count": 64,
+        "event_count": 95,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 16096,
+        "size_bytes": 21369,
         "ts_export": "artifacts/replay.ts"
       },
       "supporting_videos": [
@@ -25,7 +25,7 @@
         },
         {
           "id": "spectator",
-          "kind": "webkit",
+          "kind": "chromium",
           "path": "artifacts/supporting/spectator.mp4",
           "poster_path": "artifacts/supporting/spectator.png",
           "role": "main-site"
@@ -43,21 +43,14 @@
           "path": "artifacts/supporting/p3.mp4",
           "poster_path": "artifacts/supporting/p3.png",
           "role": "player"
-        },
-        {
-          "id": "sm-monitor",
-          "kind": "chromium",
-          "path": "artifacts/supporting/sm-monitor.mp4",
-          "poster_path": "artifacts/supporting/sm-monitor.png",
-          "role": "monitor"
         }
       ],
       "video": {
-        "duration_seconds": 32.52,
+        "duration_seconds": 18.4,
         "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 575923,
+        "size_bytes": 134217,
         "width": 1920
       }
     },
@@ -88,7 +81,7 @@
           },
           {
             "height": 360,
-            "kind": "webkit",
+            "kind": "chromium",
             "persona": "spectator",
             "role": "main-site",
             "width": 640,
@@ -111,15 +104,6 @@
             "role": "player",
             "width": 640,
             "x": 640,
-            "y": 720
-          },
-          {
-            "height": 360,
-            "kind": "chromium",
-            "persona": "sm-monitor",
-            "role": "monitor",
-            "width": 640,
-            "x": 1280,
             "y": 720
           }
         ],
@@ -147,7 +131,7 @@
         },
         {
           "height": 360,
-          "kind": "webkit",
+          "kind": "chromium",
           "persona": "spectator",
           "role": "main-site",
           "width": 640,
@@ -171,15 +155,6 @@
           "width": 640,
           "x": 640,
           "y": 720
-        },
-        {
-          "height": 360,
-          "kind": "chromium",
-          "persona": "sm-monitor",
-          "role": "monitor",
-          "width": 640,
-          "x": 1280,
-          "y": 720
         }
       ],
       "supporting_videos": [
@@ -201,7 +176,7 @@
         },
         {
           "id": "spectator",
-          "kind": "webkit",
+          "kind": "chromium",
           "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/spectator.mp4",
           "persona": "spectator",
           "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/spectator.png",
@@ -222,14 +197,6 @@
           "persona": "p3",
           "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.png",
           "role": "player"
-        },
-        {
-          "id": "sm-monitor",
-          "kind": "chromium",
-          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/sm-monitor.mp4",
-          "persona": "sm-monitor",
-          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/sm-monitor.png",
-          "role": "monitor"
         }
       ]
     },
@@ -276,14 +243,9 @@
         "role": "monitor"
       },
       {
-        "kind": "webkit",
+        "kind": "chromium",
         "persona": "spectator",
         "role": "main-site"
-      },
-      {
-        "kind": "chromium",
-        "persona": "sm-monitor",
-        "role": "monitor"
       }
     ],
     "presentation": {
@@ -310,11 +272,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 32.52,
+      "duration_seconds": 18.4,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 575923,
+      "size_bytes": 134217,
       "width": 1920
     },
     "supporting": [
@@ -334,7 +296,7 @@
       },
       {
         "id": "spectator",
-        "kind": "webkit",
+        "kind": "chromium",
         "path": "artifacts/supporting/spectator.mp4",
         "poster_path": "artifacts/supporting/spectator.png",
         "role": "main-site"
@@ -352,18 +314,11 @@
         "path": "artifacts/supporting/p3.mp4",
         "poster_path": "artifacts/supporting/p3.png",
         "role": "player"
-      },
-      {
-        "id": "sm-monitor",
-        "kind": "chromium",
-        "path": "artifacts/supporting/sm-monitor.mp4",
-        "poster_path": "artifacts/supporting/sm-monitor.png",
-        "role": "monitor"
       }
     ]
   },
-  "regen_command": "uv run python scripts/demos/record_demo.py seven-mix-orchestration",
-  "summary": "Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.",
+  "regen_command": "uv run python scripts/demos/with_playground.py seven-mix-orchestration",
+  "summary": "Seven players claim tiles on a shared canvas while an operator watches the aggregate live. Nine browsers actually coordinating \u2014 not nine empty tabs.",
   "title": "Seven Mix Orchestration",
   "tutorial_export": "exports/seven-mix-orchestration.json"
 }

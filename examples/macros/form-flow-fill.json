@@ -1,0 +1,19 @@
+{
+  "name": "form-flow-fill",
+  "description": "[demo] Drive the playground's three-step form. Each Next/Submit click posts to /api/form-step, which fans out to every connected window via SSE — so the monitor dashboard sees rows appear live.",
+  "parameters": [],
+  "created_at": "2026-05-11T00:00:00Z",
+  "updated_at": "2026-05-11T00:00:00Z",
+  "actions": [
+    {"action": "wait_for", "selector": "#name", "timeout_ms": 5000},
+    {"action": "fill", "selector": "#name", "value": "Octavia Wright"},
+    {"action": "click", "selector": "#next-1"},
+    {"action": "wait_for", "selector": ".step--active #email", "timeout_ms": 5000},
+    {"action": "fill", "selector": "#email", "value": "octavia@example.com"},
+    {"action": "click", "selector": "#next-2"},
+    {"action": "wait_for", "selector": ".step--active #notes", "timeout_ms": 5000},
+    {"action": "fill", "selector": "#notes", "value": "Demo run — replay this to see the dashboard fill again."},
+    {"action": "click", "selector": "#submit"},
+    {"action": "expect_text", "selector": "#status", "text": "submitted", "mode": "contains"}
+  ]
+}

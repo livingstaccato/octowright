@@ -1,6 +1,6 @@
 id: verify-suite
 title: Verify Suite
-summary: Run role-specific verification macros as a compact offline scenario suite and surface the replay plus test-report story together.
+summary: Three roles each run their own verify macros against the same scenario. Each asserts what its role should see.
 hero: true
 audiences:
   - evaluators

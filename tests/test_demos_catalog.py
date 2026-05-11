@@ -235,12 +235,25 @@ def test_load_demo_bundle_rejects_invalid_hero_string(tmp_path: Path) -> None:
 
 
 def test_hero_demo_manifests_exist() -> None:
+    """Every hero bundle resolves on disk with valid macro refs.
+
+    Five bundles after the demo-rebuild:
+        - cross-engine-trio + macro-replay-loop target real Wikipedia
+          (no bundled seed HTML)
+        - seven-mix-orchestration + role-based-duo target the demo playground
+          at 127.0.0.1:7900 (no bundled seed HTML)
+        - verify-suite keeps its synthetic seed (unchanged)
+    """
+    real_site_or_playground = {
+        "cross-engine-trio",
+        "macro-replay-loop",
+        "seven-mix-orchestration",
+        "role-based-duo",
+    }
     ids = [
-        "first-run-session",
         "macro-replay-loop",
         "cross-engine-trio",
         "role-based-duo",
-        "fixture-lab",
         "verify-suite",
         "seven-mix-orchestration",
     ]
@@ -251,13 +264,18 @@ def test_hero_demo_manifests_exist() -> None:
         payload = yaml.safe_load(manifest.read_text(encoding="utf-8"))
         assert payload["hero"] is True
         macro_refs = payload["source_refs"]["macros"]
-        seed_refs = payload["seed_refs"]
         assert macro_refs, demo_id
-        assert seed_refs, demo_id
         for rel_path in macro_refs:
             assert Path(rel_path).exists(), f"{demo_id}: missing macro ref {rel_path}"
-        for rel_path in seed_refs:
-            assert (bundle_dir / rel_path).exists(), f"{demo_id}: missing seed ref {rel_path}"
+        if demo_id in real_site_or_playground:
+            assert "seed_refs" not in payload or not payload.get("seed_refs"), (
+                f"{demo_id} hits a real site or the playground; seed_refs should be absent"
+            )
+        else:
+            seed_refs = payload["seed_refs"]
+            assert seed_refs, demo_id
+            for rel_path in seed_refs:
+                assert (bundle_dir / rel_path).exists(), f"{demo_id}: missing seed ref {rel_path}"
 
         bundle = load_demo_bundle(bundle_dir)
 
@@ -265,35 +283,18 @@ def test_hero_demo_manifests_exist() -> None:
         assert bundle.hero is True
         assert bundle.scenarios
         assert bundle.macro_refs, demo_id
-        assert bundle.seed_refs, demo_id
         assert bundle.recording.primary_role, demo_id
-        if demo_id == "role-based-duo":
-            assert bundle.recording.role_seeds, demo_id
-        else:
-            assert bundle.recording.default_seed, demo_id
         if demo_id == "macro-replay-loop":
-            assert bundle.macro_refs == ["demo/bundles/macro-replay-loop/macros/replay-loop-login.json"]
+            assert bundle.macro_refs == ["examples/macros/wikipedia-toc-tour.json"]
 
 
 @pytest.mark.parametrize(
     ("rel_path", "markers"),
     [
-        (
-            "demo/bundles/cross-engine-trio/seed/engine-grid.html",
-            ['data-surface="engine-grid"', 'data-engine="chromium"', 'data-engine="firefox"', 'data-engine="webkit"'],
-        ),
-        # trio-board.html intentionally NOT in this list: it was redesigned into
-        # an interactive flight-booking form (see commit 82e1dd6) instead of a
-        # static surface board with data-surface markers. Its peers in the trio
-        # — engine-grid.html — still uses the marker pattern and is checked here.
-        (
-            "demo/bundles/role-based-duo/seed/control-room.html",
-            ['data-surface="control-room"', 'data-role="monitor"'],
-        ),
-        (
-            "demo/bundles/role-based-duo/seed/duo-board.html",
-            ['data-surface="duo-board"', 'data-role="player"'],
-        ),
+        # Seed-page checks only apply to bundles that still ship bundled HTML.
+        # cross-engine-trio + macro-replay-loop now target real Wikipedia;
+        # seven-mix-orchestration + role-based-duo target the demo playground
+        # at 127.0.0.1:7900. Only verify-suite keeps a synthetic seed.
         (
             "demo/bundles/verify-suite/seed/verify-stage.html",
             ['data-surface="verify-stage"', 'data-role="form"', 'data-role="counter"', 'data-role="arithmetic"'],

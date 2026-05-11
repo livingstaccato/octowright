@@ -16,14 +16,48 @@ const resolveBundleUrl = (raw: string): string => {
   let ctx!: BrowserContext;
   let page!: Page;
 
-  browser = await webkit.launch({ headless: true });
+  browser = await chromium.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/control-room.html?persona=duo-monitor&role=monitor&kind=webkit&slot=1"));
-  browser = await webkit.launch({ headless: true });
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/dashboard.html"));
+  browser = await chromium.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/duo-board.html?persona=duo-player&role=player&kind=webkit&slot=0"));
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/form-flow.html"));
+  await page.waitForSelector("#name");
+  try {
+    await page.getByRole("player", { name: "Full name" }).fill("Octavia Wright");
+  } catch {
+    await page.fill("#name", "Octavia Wright");
+  }
+  try {
+    await page.getByRole("player", { name: "Next" }).click();
+  } catch {
+    await page.click("#next-1");
+  }
+  await page.waitForSelector(".step--active #email");
+  try {
+    await page.getByRole("player", { name: "Email" }).fill("octavia@example.com");
+  } catch {
+    await page.fill("#email", "octavia@example.com");
+  }
+  try {
+    await page.getByRole("player", { name: "Next" }).click();
+  } catch {
+    await page.click("#next-2");
+  }
+  await page.waitForSelector(".step--active #notes");
+  try {
+    await page.getByRole("player", { name: "Notes" }).fill("Demo run \u2014 replay this to see the dashboard fill again.");
+  } catch {
+    await page.fill("#notes", "Demo run \u2014 replay this to see the dashboard fill again.");
+  }
+  try {
+    await page.getByRole("player", { name: "Submit" }).click();
+  } catch {
+    await page.click("#submit");
+  }
+  await page.waitForLoadState('networkidle');
   if (browser !== null) {
     await browser.close();
   } else {

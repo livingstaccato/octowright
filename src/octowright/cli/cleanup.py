@@ -16,8 +16,22 @@ from octowright.cli._root import cli
 @cli.command()
 @click.option("--days", default=30.0, type=float, help="Files older than this many days are eligible.")
 @click.option("--apply", is_flag=True, help="Actually delete (default is dry-run).")
-def cleanup(days: float, apply: bool) -> None:
-    """Prune old recordings/screenshots/videos/traces under RECORDINGS_DIR."""
+@click.option(
+    "--browsers",
+    is_flag=True,
+    help=(
+        "Also reap stray playwright-managed browser processes "
+        "(ms-playwright/{chromium,firefox,webkit}) left behind by crashed "
+        "daemons or recording scripts. Affects every octowright session on "
+        "this machine, not just yours."
+    ),
+)
+def cleanup(days: float, apply: bool, browsers: bool) -> None:
+    """Prune old recordings/screenshots/videos/traces under RECORDINGS_DIR.
+
+    Pass ``--browsers`` to also reap orphaned playwright browser processes
+    so they don't pile up in the Dock between sessions.
+    """
     from octowright import recording_cleanup as _rc
     from octowright.defaults import RECORDINGS_DIR
 
@@ -47,5 +61,26 @@ def cleanup(days: float, apply: bool) -> None:
                     click.echo(f"  {err['path']}: {err['error']}", err=True)
         else:
             click.echo("(dry-run, pass --apply to actually delete)")
+
+        if browsers:
+            _report_browser_reap(apply=apply)
     finally:
         shutdown_telemetry()
+
+
+def _report_browser_reap(*, apply: bool) -> None:
+    """Run the all-scope browser reap and echo a per-stage summary."""
+    from octowright.process_reaper import reap_orphan_browsers
+
+    click.echo("")
+    click.echo("browsers: scanning for stray ms-playwright/* processes")
+    summary = reap_orphan_browsers(scope="all", dry_run=not apply)
+    if apply:
+        click.echo(f"  killed:      {len(summary['killed']):4d} process(es) {summary['killed']}")
+        if summary["still_alive"]:
+            click.echo(f"  still alive: {len(summary['still_alive']):4d} {summary['still_alive']}", err=True)
+        for err in summary["errors"]:
+            click.echo(f"    pid={err['pid']} stage={err['stage']}: {err['error']}", err=True)
+        return
+    click.echo(f"  would kill:  {len(summary['still_alive']):4d} process(es) {summary['still_alive']}")
+    click.echo("  (dry-run, pass --apply to actually kill)")

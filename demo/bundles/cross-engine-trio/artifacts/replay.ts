@@ -19,121 +19,45 @@ const resolveBundleUrl = (raw: string): string => {
   browser = await chromium.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/trio-board.html?persona=cx-chromium&role=player&kind=chromium&slot=0"));
-  browser = await chromium.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:8765/"));
+  await page.goto(resolveBundleUrl("https://en.wikipedia.org/"));
   browser = await webkit.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/trio-board.html?persona=cx-webkit&role=player&kind=webkit&slot=2"));
+  await page.goto(resolveBundleUrl("https://en.wikipedia.org/"));
   browser = await firefox.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/trio-board.html?persona=cx-firefox&role=player&kind=firefox&slot=1"));
+  await page.goto(resolveBundleUrl("https://en.wikipedia.org/"));
+  await page.waitForSelector("input[name=\"search\"]");
+  await page.waitForSelector("input[name=\"search\"]");
+  await page.waitForSelector("input[name=\"search\"]");
   try {
-    await page.getByRole("player", { name: "Full name\":\n  - /placeholder: Octavia Wright" }).fill("Octavia Wright");
+    await page.getByRole("player").fill("Playwright (software)");
   } catch {
-    await page.fill("#name", "Octavia Wright");
+    await page.fill("input[name=\"search\"]", "Playwright (software)");
   }
   try {
-    await page.getByRole("player", { name: "Email\":\n  - /placeholder: o.wright@example.com" }).fill("octavia@example.com");
+    await page.getByRole("player").fill("Playwright (software)");
   } catch {
-    await page.fill("#email", "octavia@example.com");
+    await page.fill("input[name=\"search\"]", "Playwright (software)");
   }
   try {
-    await page.getByRole("player", { name: "Full name\":\n  - /placeholder: Octavia Wright" }).fill("Octavia Wright");
+    await page.getByRole("player").fill("Playwright (software)");
   } catch {
-    await page.fill("#name", "Octavia Wright");
+    await page.fill("input[name=\"search\"]", "Playwright (software)");
   }
-  try {
-    await page.getByRole("player", { name: "Email\":\n  - /placeholder: o.wright@example.com" }).fill("octavia@example.com");
-  } catch {
-    await page.fill("#email", "octavia@example.com");
-  }
-  try {
-    await page.getByRole("player", { name: "Full name\":\n  - /placeholder: Octavia Wright" }).fill("Octavia Wright");
-  } catch {
-    await page.fill("#name", "Octavia Wright");
-  }
-  try {
-    await page.getByRole("player", { name: "Departure\": 2026-06-12" }).click();
-  } catch {
-    await page.click("#depart");
-  }
-  await page.keyboard.press("Escape");
-  await page.evaluate("(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()");
-  await page.evaluate("(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()");
-  await page.evaluate("(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()");
-  try {
-    await page.getByRole("player", { name: "Email\":\n  - /placeholder: o.wright@example.com" }).fill("octavia@example.com");
-  } catch {
-    await page.fill("#email", "octavia@example.com");
-  }
-  try {
-    await page.getByRole("player", { name: "Meal preference" }).click();
-  } catch {
-    await page.click("#opt-meal");
-  }
-  try {
-    await page.getByRole("player", { name: "Departure\": 2026-06-12" }).click();
-  } catch {
-    await page.click("#depart");
-  }
-  await page.keyboard.press("Escape");
-  await page.evaluate("(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()");
-  await page.evaluate("(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()");
-  try {
-    await page.getByRole("player", { name: "Window seat" }).click();
-  } catch {
-    await page.click("#opt-window");
-  }
-  try {
-    await page.getByRole("player", { name: "Departure\": 2026-06-12" }).click();
-  } catch {
-    await page.click("#depart");
-  }
-  await page.evaluate("(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()");
-  await page.keyboard.press("Escape");
-  await page.evaluate("(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()");
-  await page.evaluate("(()=>{var s=document.getElementById('budget');s.value='5400';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()");
-  try {
-    await page.getByRole("player", { name: "Confirm booking" }).click();
-  } catch {
-    await page.click("#confirm");
-  }
-  await page.evaluate("(()=>{var s=document.getElementById('cabin');s.value='First';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()");
-  try {
-    await page.getByRole("player", { name: "Meal preference" }).click();
-  } catch {
-    await page.click("#opt-meal");
-  }
-  try {
-    await page.getByRole("player", { name: "Window seat" }).click();
-  } catch {
-    await page.click("#opt-window");
-  }
-  try {
-    await page.getByRole("player", { name: "Meal preference" }).click();
-  } catch {
-    await page.click("#opt-meal");
-  }
-  try {
-    await page.getByRole("player", { name: "Confirm booking" }).click();
-  } catch {
-    await page.click("#confirm");
-  }
-  try {
-    await page.getByRole("player", { name: "Window seat" }).click();
-  } catch {
-    await page.click("#opt-window");
-  }
-  try {
-    await page.getByRole("player", { name: "Confirm booking" }).click();
-  } catch {
-    await page.click("#confirm");
-  }
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector("h1#firstHeading");
+  await page.waitForSelector("h1#firstHeading");
+  await page.waitForSelector("h1#firstHeading");
+  await page.evaluate("window.scrollBy(0, 600); window.scrollY");
+  await page.evaluate("window.scrollBy(0, 600); window.scrollY");
+  await page.evaluate("window.scrollBy(0, 600); window.scrollY");
+  await page.evaluate("window.scrollBy(0, 600); window.scrollY");
+  await page.evaluate("window.scrollBy(0, 600); window.scrollY");
+  await page.evaluate("window.scrollBy(0, 600); window.scrollY");
   if (browser !== null) {
     await browser.close();
   } else {

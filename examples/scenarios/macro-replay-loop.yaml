@@ -1,0 +1,18 @@
+name: macro-replay-loop
+description: |
+  Two chromium browsers running the same wikipedia-toc-tour macro: one as
+  the "recorder" (Phase A in the video), one as the "replayer" (Phase B).
+  Same macro, same selectors, same real site — proof that captured macros
+  survive across sessions.
+participants:
+  - persona: replay-recorder
+    kind: chromium
+    role: recorder
+    url: "https://en.wikipedia.org/wiki/Playwright_(software)"
+  - persona: replay-replayer
+    kind: chromium
+    role: replayer
+    url: "https://en.wikipedia.org/wiki/Playwright_(software)"
+verify:
+  recorder: "wikipedia-toc-tour"
+  replayer: "wikipedia-toc-tour"

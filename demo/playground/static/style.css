@@ -1,0 +1,147 @@
+/* Octowright playground — minimal styling. The point is the recorded demo,
+   not the playground itself, so visual treatment is restrained. */
+
+:root {
+  --bg: #f7f7f9;
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --accent: #0f62fe;
+  --border: #d1d5db;
+  --row-alt: #f3f4f6;
+  --tile-empty: #e5e7eb;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+main {
+  max-width: 760px;
+  margin: 32px auto;
+  padding: 24px;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0 0 8px;
+}
+
+p, ol, ul, table { margin: 12px 0; }
+
+a { color: var(--accent); }
+
+.footnote {
+  color: var(--muted);
+  font-size: 14px;
+  margin-top: 32px;
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* Canvas grid */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  margin: 16px 0;
+  max-width: 480px;
+}
+.tile {
+  aspect-ratio: 1 / 1;
+  background: var(--tile-empty);
+  border: 0;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: transform 0.08s ease;
+}
+.tile[data-claimed]:hover { transform: none; }
+.tile:hover { transform: scale(1.05); }
+.tile[data-claimed] { cursor: default; }
+
+#role-label {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: white;
+  font-size: 13px;
+}
+
+/* Form */
+.steps {
+  list-style: none;
+  padding: 0;
+}
+.step {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  margin: 12px 0;
+  opacity: 0.4;
+  pointer-events: none;
+}
+.step--active { opacity: 1; pointer-events: auto; }
+.step--done { opacity: 0.7; }
+
+label { display: block; font-weight: 600; margin: 8px 0 4px; font-size: 14px; }
+input[type=text], input[type=email], textarea {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+}
+textarea { min-height: 80px; }
+button {
+  margin-top: 12px;
+  padding: 8px 16px;
+  font-size: 14px;
+  background: var(--accent);
+  color: white;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+button:disabled { background: var(--muted); cursor: default; }
+
+.status {
+  font-size: 14px;
+  color: var(--muted);
+  min-height: 1.4em;
+}
+.status--success { color: #15803d; }
+
+/* Dashboard */
+.event-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.event-table th, .event-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.event-table th {
+  background: var(--row-alt);
+  font-weight: 600;
+}
+.event-table tr:last-child td { border-bottom: 0; }
+.event-table tr.empty td { color: var(--muted); font-style: italic; }
