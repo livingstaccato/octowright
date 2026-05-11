@@ -148,13 +148,20 @@ class SessionPageMixin(SessionLike):
         compound conditions like "spinner removed AND table has rows" that
         a single selector can't express.
         """
-        provided = sum(1 for x in (selector, text, expression) if x is not None)
+        # Truthiness, not `is not None`: an empty string from a hand-edited
+        # macro shouldn't count as "selector provided" — and the if/elif
+        # chain below already routes via truthiness, so the validation needs
+        # to match to keep the error message consistent with reality.
+        provided = sum(1 for x in (selector, text, expression) if x)
         if provided > 1:
             raise ValueError(
                 "wait_for accepts at most one of selector / text / expression; "
                 f"got selector={bool(selector)}, text={bool(text)}, expression={bool(expression)}"
             )
-        timeout = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+        # Distinguish "no timeout supplied" (None → fall back to default) from
+        # "wait forever" (0 → Playwright's documented sentinel). The old
+        # `timeout_ms or DEFAULT` collapsed both to default.
+        timeout = DEFAULT_ACTION_TIMEOUT_MS if timeout_ms is None else timeout_ms
         target = self._target()
         if selector:
             await target.wait_for_selector(selector, timeout=timeout)

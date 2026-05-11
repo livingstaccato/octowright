@@ -39,6 +39,52 @@ from octowright.session import BrowserSession
 log = get_logger(__name__)
 
 
+async def _safe_close(target: Any | None) -> None:
+    """Best-effort close on any object exposing async close(). No-op on None."""
+    if target is None:
+        return
+    try:
+        await target.close()
+    except Exception:
+        pass
+
+
+def _remove_empty_video_dir(video_dir: Path | None) -> None:
+    """Drop an empty per-launch video_dir so failed launches don't leak
+    RECORDINGS_DIR/videos/<hex>/. Non-empty dirs (partial recordings) are
+    preserved in case the artefact is useful for debugging."""
+    if video_dir is None:
+        return
+    try:
+        video_dir.rmdir()
+    except OSError:
+        pass
+
+
+async def _safe_cleanup_on_launch_failure(
+    *,
+    context: Any | None,
+    browser: Any | None,
+    video_dir: Path | None,
+) -> None:
+    """Best-effort teardown shared by both launch() failure paths.
+
+    Order: context first (also reaps persistent-context browser process),
+    standalone browser handle next, persistent-context browser handle
+    last as a fallback (mirrors BrowserSession.close() — see PR #20:
+    context.close() alone isn't guaranteed to reap the persistent
+    browser across all Playwright versions). Finally, drop the empty
+    per-launch video_dir.
+    """
+    await _safe_close(context)
+    await _safe_close(browser)
+    # Persistent-context fallback: standalone browser is None on that
+    # launch path; the Browser handle sits on the context.
+    persistent_browser = getattr(context, "browser", None) if browser is None else None
+    await _safe_close(persistent_browser)
+    _remove_empty_video_dir(video_dir)
+
+
 class BrowserPool:
     """Owns a single Playwright driver and a dict of active BrowserSession objects.
 
@@ -140,16 +186,7 @@ class BrowserPool:
                 launch_kwargs=launch_kwargs,
             )
         except Exception as exc:
-            if context is not None:
-                try:
-                    await context.close()
-                except Exception:
-                    pass
-            if browser is not None:
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
+            await _safe_cleanup_on_launch_failure(context=context, browser=browser, video_dir=video_dir)
             wrapped = maybe_wrap_playwright_error(exc, kind=kind)
             if wrapped is exc:
                 raise
@@ -272,16 +309,7 @@ class BrowserPool:
             return result
         except Exception as exc:
             if not registered:
-                if context is not None:
-                    try:
-                        await context.close()
-                    except Exception:
-                        pass
-                if browser is not None:
-                    try:
-                        await browser.close()
-                    except Exception:
-                        pass
+                await _safe_cleanup_on_launch_failure(context=context, browser=browser, video_dir=video_dir)
                 if recorder is not None:
                     try:
                         recorder.close()

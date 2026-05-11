@@ -190,7 +190,10 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     # `bash -c "..."` is the documented escape hatch for pipelines, but it
     # also lets the YAML author run arbitrary shell. Surface that at runtime
     # so an operator running personas authored elsewhere notices.
-    if argv and argv[0] in {"bash", "sh", "zsh", "fish"} and len(argv) >= 3 and argv[1] == "-c":
+    # Match by basename so absolute paths (`/bin/bash -c ...`,
+    # `/usr/local/bin/zsh -c ...`) trip the warning too.
+    interpreter_name = Path(argv[0]).name if argv else ""
+    if interpreter_name in {"bash", "sh", "zsh", "fish"} and len(argv) >= 3 and argv[1] == "-c":
         log.warning(
             "personas.credential_cmd_executes_shell_pipeline",
             persona=persona_name,

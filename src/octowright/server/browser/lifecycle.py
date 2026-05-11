@@ -78,8 +78,31 @@ async def browser_launch(
     ephemeral: bool = False,
     session: bool = False,
 ) -> dict[str, Any]:
-    options = {k: v for k, v in locals().items() if k != "options"}
-    result = await pool.launch(**options)
+    # Explicit dict beats `locals()` spray: a future signature change here that
+    # adds a kwarg pool.launch doesn't know about would raise TypeError at call
+    # time instead of being statically auditable.
+    result = await pool.launch(
+        kind=kind,
+        url=url,
+        headed=headed,
+        label=label,
+        profile=profile,
+        viewport_w=viewport_w,
+        viewport_h=viewport_h,
+        stabilize=stabilize,
+        record_video=record_video,
+        trace=trace,
+        har=har,
+        har_path=har_path,
+        har_mode=har_mode,
+        har_url_filter=har_url_filter,
+        har_content=har_content,
+        badge=badge,
+        badge_position=badge_position,
+        tile=tile,
+        ephemeral=ephemeral,
+        session=session,
+    )
     publish_dashboard_invalidation_nowait("sessions")
     return result
 

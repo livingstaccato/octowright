@@ -722,6 +722,107 @@ class TestShutdownPool:
 # ─── Concurrency / lock guarantees ───────────────────────────────────────────
 
 
+class TestSafeCleanupOnLaunchFailure:
+    """_safe_cleanup_on_launch_failure is the shared best-effort teardown
+    for both launch() failure paths. PR #20 fixed the happy-path persistent-
+    context browser leak; the same fallback (`getattr(context, 'browser',
+    None)`) needs to fire on launch-failure cleanup, and the empty per-
+    launch video_dir under RECORDINGS_DIR/videos/<hex>/ needs to be removed
+    so failed launches don't leak directories."""
+
+    @pytest.mark.anyio
+    async def test_empty_video_dir_removed(self, tmp_path: Path) -> None:
+        """A failed launch with record_video=True must remove the empty
+        video_dir it created — otherwise the recordings tree accumulates
+        an orphan hex-named directory per failed launch."""
+        from octowright.browser_pool.pool import _safe_cleanup_on_launch_failure
+
+        video_dir = tmp_path / "videos" / "abc12345"
+        video_dir.mkdir(parents=True)
+        await _safe_cleanup_on_launch_failure(context=None, browser=None, video_dir=video_dir)
+        assert not video_dir.exists()
+
+    @pytest.mark.anyio
+    async def test_non_empty_video_dir_preserved(self, tmp_path: Path) -> None:
+        """A partial launch that managed to record SOME video must keep
+        the directory — the user may still want the partial artefact for
+        debugging. Only empty dirs are removed."""
+        from octowright.browser_pool.pool import _safe_cleanup_on_launch_failure
+
+        video_dir = tmp_path / "videos" / "def67890"
+        video_dir.mkdir(parents=True)
+        (video_dir / "page.webm").write_bytes(b"\x00fake")
+        await _safe_cleanup_on_launch_failure(context=None, browser=None, video_dir=video_dir)
+        assert video_dir.exists()
+        assert (video_dir / "page.webm").exists()
+
+    @pytest.mark.anyio
+    async def test_video_dir_none_no_op(self) -> None:
+        """video_dir=None (record_video=False launches) is a no-op."""
+        from octowright.browser_pool.pool import _safe_cleanup_on_launch_failure
+
+        await _safe_cleanup_on_launch_failure(context=None, browser=None, video_dir=None)
+
+    @pytest.mark.anyio
+    async def test_persistent_context_browser_fallback(self) -> None:
+        """When browser is None (persistent-context launch path) the cleanup
+        must still close `context.browser` — PR #20 established this is the
+        only way to reliably reap the persistent browser process across all
+        Playwright versions. Without the fallback, a launch that fails mid-
+        wire-up leaks the browser process."""
+        from octowright.browser_pool.pool import _safe_cleanup_on_launch_failure
+
+        persistent_browser = MagicMock()
+        persistent_browser.close = AsyncMock()
+        context = MagicMock()
+        context.close = AsyncMock()
+        context.browser = persistent_browser
+
+        await _safe_cleanup_on_launch_failure(context=context, browser=None, video_dir=None)
+        context.close.assert_awaited_once()
+        persistent_browser.close.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_standalone_browser_closed_directly(self) -> None:
+        """Ephemeral launches: both context and browser handles are present;
+        each gets its own close call. The persistent fallback must NOT fire
+        when browser is already set (we'd double-close)."""
+        from octowright.browser_pool.pool import _safe_cleanup_on_launch_failure
+
+        context = MagicMock()
+        context.close = AsyncMock()
+        # context.browser would normally be the same Browser as `browser`
+        # for ephemeral contexts. Set it to a distinct mock to detect the
+        # accidental double-close case.
+        context.browser = MagicMock()
+        context.browser.close = AsyncMock()
+        browser = MagicMock()
+        browser.close = AsyncMock()
+
+        await _safe_cleanup_on_launch_failure(context=context, browser=browser, video_dir=None)
+        context.close.assert_awaited_once()
+        browser.close.assert_awaited_once()
+        # Persistent-fallback path skipped because browser is non-None.
+        context.browser.close.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_close_errors_swallowed(self, tmp_path: Path) -> None:
+        """All close calls are best-effort — the caller is already
+        propagating the launch exception, so cleanup errors must not
+        replace or mask it."""
+        from octowright.browser_pool.pool import _safe_cleanup_on_launch_failure
+
+        context = MagicMock()
+        context.close = AsyncMock(side_effect=RuntimeError("ctx boom"))
+        browser = MagicMock()
+        browser.close = AsyncMock(side_effect=RuntimeError("browser boom"))
+        video_dir = tmp_path / "videos" / "x"
+        video_dir.mkdir(parents=True)
+
+        # Must not raise.
+        await _safe_cleanup_on_launch_failure(context=context, browser=browser, video_dir=video_dir)
+
+
 class TestSessionsLock:
     @pytest.mark.anyio
     async def test_close_browser_acquires_sessions_lock(self) -> None:

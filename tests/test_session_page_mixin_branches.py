@@ -469,6 +469,34 @@ class TestWaitFor:
         with pytest.raises(ValueError, match="at most one of"):
             await subj.wait_for("#x", "hello", None, expression="true")
 
+    @pytest.mark.anyio
+    async def test_empty_string_selector_treated_as_unprovided(self, tmp_path: Path) -> None:
+        """An empty string selector from a hand-edited macro must not count
+        as "selector provided" — the if/elif chain routes via truthiness,
+        so an empty string with text=hello would otherwise raise a
+        confusing "two values set" error where bool(selector) is False."""
+        subj = _make_subject(tmp_path)
+        target = MagicMock()
+        target.wait_for_function = AsyncMock()
+        subj._target = lambda: target  # type: ignore[attr-defined]
+        # selector="" + text="hello": validation should treat "" as
+        # unprovided and dispatch the text branch.
+        await subj.wait_for("", "hello", 200)
+        target.wait_for_function.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_timeout_ms_zero_means_wait_forever(self, tmp_path: Path) -> None:
+        """Playwright treats timeout=0 as 'no timeout'. The old
+        `timeout_ms or DEFAULT` collapsed both None and 0 to DEFAULT, so
+        callers couldn't request 'wait forever'. timeout=0 must now reach
+        Playwright as 0."""
+        subj = _make_subject(tmp_path)
+        target = MagicMock()
+        target.wait_for_selector = AsyncMock()
+        subj._target = lambda: target  # type: ignore[attr-defined]
+        await subj.wait_for("#x", None, 0)
+        target.wait_for_selector.assert_awaited_once_with("#x", timeout=0)
+
 
 # ─── expect_url ─────────────────────────────────────────────────────────────
 
