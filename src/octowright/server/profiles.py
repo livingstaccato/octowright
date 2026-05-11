@@ -117,12 +117,18 @@ def build_allowed_set(profile_spec: str) -> set[str]:
 
     Unknown profile names are logged at WARNING and skipped — a typo in
     the profile spec would otherwise silently produce an unexpectedly
-    narrow surface. An empty result keeps no tools beyond :data:`ALWAYS_ON_TOOLS`;
-    callers that want "no filter" should detect that themselves via
+    narrow surface. If EVERY name was unknown (so the resolved set is
+    exactly :data:`ALWAYS_ON_TOOLS` despite a non-empty spec), an
+    additional ERROR-level log fires so the operator notices the
+    daemon-is-healthy-but-LLM-has-no-tools failure mode instead of
+    chasing a "why does Claude not see browser_launch?" thread.
+
+    Callers that want "no filter" should detect that themselves via
     :func:`active_filter` returning ``None``.
     """
     names = [p.strip() for p in profile_spec.split(",") if p.strip()]
     allowed: set[str] = set(ALWAYS_ON_TOOLS)
+    matched_any = False
     for name in names:
         if name not in PROFILES:
             log.warning(
@@ -131,7 +137,19 @@ def build_allowed_set(profile_spec: str) -> set[str]:
                 known=sorted(PROFILES.keys()),
             )
             continue
+        matched_any = True
         allowed.update(PROFILES[name])
+    if names and not matched_any:
+        log.error(
+            "octowright.profile.all_unknown",
+            profile_spec=profile_spec,
+            known=sorted(PROFILES.keys()),
+            hint=(
+                "every profile name was unknown — the daemon will start "
+                "with only ALWAYS_ON_TOOLS (no browser tools at all). "
+                "Set OCTOWRIGHT_PROFILE to a known profile or unset for the full surface."
+            ),
+        )
     return allowed
 
 
