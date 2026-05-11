@@ -1,25 +1,22 @@
 name: cross-engine
 description: |
-  One instance per engine — chromium, firefox, webkit — plus a fourth pane
-  showing the live Octowright dashboard. The three players run the same
-  showroom flow against the deterministic seed; the dashboard pane just
-  watches the recording happen in real time.
+  One instance per engine — Chromium, Firefox, WebKit — each running the
+  same Wikipedia search in parallel. The point: three real browsers, same
+  real site, same task. Timing differences are real; result differences (if
+  any) are real. Replaces the previous offline showroom because synthetic
+  HTML undersold the "watch three real browsers" pitch.
 participants:
   - persona: cx-chromium
     kind: chromium
     role: player
-    url: about:blank
+    url: https://en.wikipedia.org/
   - persona: cx-firefox
     kind: firefox
     role: player
-    url: about:blank
+    url: https://en.wikipedia.org/
   - persona: cx-webkit
     kind: webkit
     role: player
-    url: about:blank
-  - persona: cx-monitor
-    kind: chromium
-    role: monitor
-    url: http://127.0.0.1:8765/
+    url: https://en.wikipedia.org/
 verify:
-  player: "cross-engine-showroom"
+  player: "wikipedia-search"

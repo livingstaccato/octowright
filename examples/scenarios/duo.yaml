@@ -1,13 +1,20 @@
 name: duo
 description: |
-  Two WebKit instances, role-tagged player + monitor. Demonstrates per-participant
-  roles for filtering with scenario_run_macro role=...
+  Two browsers, different roles, shared state. The player drives a three-
+  step form on the playground; the monitor watches a dashboard table fill
+  with the step events in real time via SSE. Demonstrates per-role macros:
+  the player runs form-flow-fill, the monitor runs dashboard-watch.
+
+  Run via: uv run python scripts/demos/with_playground.py role-based-duo
 participants:
   - persona: duo-player
-    kind: webkit
+    kind: chromium
     role: player
-    url: about:blank
+    url: "http://127.0.0.1:7900/form-flow.html"
   - persona: duo-monitor
-    kind: webkit
+    kind: chromium
     role: monitor
-    url: about:blank
+    url: "http://127.0.0.1:7900/dashboard.html"
+verify:
+  player: "form-flow-fill"
+  monitor: "dashboard-watch"

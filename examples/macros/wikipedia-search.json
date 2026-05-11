@@ -1,0 +1,17 @@
+{
+  "name": "wikipedia-search",
+  "description": "[demo] Search Wikipedia for 'Playwright (software)', open the article, scroll into the History section. Uses ARIA role + text selectors that survive Wikipedia layout changes.",
+  "parameters": [],
+  "created_at": "2026-05-11T00:00:00Z",
+  "updated_at": "2026-05-11T00:00:00Z",
+  "actions": [
+    {"action": "wait_for", "selector": "input[name=\"search\"]", "timeout_ms": 10000},
+    {"action": "fill", "selector": "input[name=\"search\"]", "value": "Playwright (software)"},
+    {"action": "press_key", "key": "Enter"},
+    {"action": "wait_for", "selector": "h1#firstHeading", "timeout_ms": 10000},
+    {"action": "expect_url", "pattern": "Playwright", "mode": "contains"},
+    {"action": "evaluate", "expression": "window.scrollBy(0, 600); window.scrollY"},
+    {"action": "evaluate", "expression": "window.scrollBy(0, 600); window.scrollY"},
+    {"action": "screenshot"}
+  ]
+}

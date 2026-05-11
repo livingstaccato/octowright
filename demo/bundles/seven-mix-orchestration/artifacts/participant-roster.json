@@ -2,7 +2,7 @@
   "participants": [
     {
       "har": false,
-      "instance_id": "a3d700e9e411",
+      "instance_id": "c40b1ec8ed7a",
       "kind": "webkit",
       "label": null,
       "persona": "p1",
@@ -10,11 +10,11 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=p1&role=player&kind=webkit&slot=0"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935"
     },
     {
       "har": false,
-      "instance_id": "55c5e9d2d04d",
+      "instance_id": "5c135fca56fb",
       "kind": "webkit",
       "label": null,
       "persona": "p2",
@@ -22,11 +22,11 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=p2&role=player&kind=webkit&slot=1"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"
     },
     {
       "har": false,
-      "instance_id": "77de027e6c2f",
+      "instance_id": "7d1d4bf1e07b",
       "kind": "webkit",
       "label": null,
       "persona": "p3",
@@ -34,11 +34,11 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=p3&role=player&kind=webkit&slot=2"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p3&colour=%23fdd835"
     },
     {
       "har": false,
-      "instance_id": "03b99e65acbc",
+      "instance_id": "2b7e708af1e1",
       "kind": "firefox",
       "label": null,
       "persona": "p4",
@@ -46,11 +46,11 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=p4&role=player&kind=firefox&slot=3"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p4&colour=%2343a047"
     },
     {
       "har": false,
-      "instance_id": "f7fa1c2f3192",
+      "instance_id": "cf7aa6a4a6a1",
       "kind": "firefox",
       "label": null,
       "persona": "p5",
@@ -58,11 +58,11 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=p5&role=player&kind=firefox&slot=4"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p5&colour=%2300acc1"
     },
     {
       "har": false,
-      "instance_id": "9aa7b2b2eb29",
+      "instance_id": "91acbb3150ae",
       "kind": "chromium",
       "label": null,
       "persona": "p6",
@@ -70,11 +70,11 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=p6&role=player&kind=chromium&slot=5"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p6&colour=%231e88e5"
     },
     {
       "har": false,
-      "instance_id": "423dd7bb0bbb",
+      "instance_id": "a5af6c5ffab0",
       "kind": "chromium",
       "label": null,
       "persona": "p7",
@@ -82,11 +82,11 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=p7&role=player&kind=chromium&slot=6"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p7&colour=%238e24aa"
     },
     {
       "har": false,
-      "instance_id": "a2e71a5d34d7",
+      "instance_id": "fd2bbb9d3f81",
       "kind": "webkit",
       "label": null,
       "persona": "ops",
@@ -94,32 +94,20 @@
       "record_video": true,
       "role": "monitor",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=ops&role=monitor&kind=webkit&slot=7"
+      "url": "http://127.0.0.1:7900/canvas.html?role=operator&colour=%23000"
     },
     {
       "har": false,
-      "instance_id": "19f0005de107",
-      "kind": "webkit",
+      "instance_id": "59e2ca66fd0a",
+      "kind": "chromium",
       "label": null,
       "persona": "spectator",
       "profile": "spectator",
       "record_video": true,
       "role": "main-site",
       "trace": false,
-      "url": "bundle://seed/orchestration-stage.html?persona=spectator&role=main-site&kind=webkit&slot=8"
-    },
-    {
-      "har": false,
-      "instance_id": "3670dc1b010f",
-      "kind": "chromium",
-      "label": null,
-      "persona": "sm-monitor",
-      "profile": "sm-monitor",
-      "record_video": true,
-      "role": "monitor",
-      "trace": false,
-      "url": "http://127.0.0.1:8765/"
+      "url": "http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"
     }
   ],
-  "scenario_id": "ec953abfb15e"
+  "scenario_id": "cb970f0fe187"
 }

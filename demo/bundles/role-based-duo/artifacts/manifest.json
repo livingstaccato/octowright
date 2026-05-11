@@ -1,34 +1,34 @@
 {
   "artifacts": {
     "replay": {
-      "event_count": 10,
+      "event_count": 22,
       "path": "artifacts/replay.jsonl",
       "python_export": "artifacts/replay.py",
-      "size_bytes": 2747,
+      "size_bytes": 5094,
       "ts_export": "artifacts/replay.ts"
     },
     "supporting_videos": [
       {
         "id": "duo-player",
-        "kind": "webkit",
+        "kind": "chromium",
         "path": "artifacts/supporting/duo-player.mp4",
         "poster_path": "artifacts/supporting/duo-player.png",
         "role": "player"
       },
       {
         "id": "duo-monitor",
-        "kind": "webkit",
+        "kind": "chromium",
         "path": "artifacts/supporting/duo-monitor.mp4",
         "poster_path": "artifacts/supporting/duo-monitor.png",
         "role": "monitor"
       }
     ],
     "video": {
-      "duration_seconds": 8.8,
+      "duration_seconds": 9.92,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 135908,
+      "size_bytes": 66340,
       "width": 1920
     }
   },
@@ -44,7 +44,7 @@
       "panes": [
         {
           "height": 1080,
-          "kind": "webkit",
+          "kind": "chromium",
           "persona": "duo-player",
           "role": "player",
           "width": 960,
@@ -53,7 +53,7 @@
         },
         {
           "height": 1080,
-          "kind": "webkit",
+          "kind": "chromium",
           "persona": "duo-monitor",
           "role": "monitor",
           "width": 960,
@@ -67,7 +67,7 @@
     "panes": [
       {
         "height": 1080,
-        "kind": "webkit",
+        "kind": "chromium",
         "persona": "duo-player",
         "role": "player",
         "width": 960,
@@ -76,7 +76,7 @@
       },
       {
         "height": 1080,
-        "kind": "webkit",
+        "kind": "chromium",
         "persona": "duo-monitor",
         "role": "monitor",
         "width": 960,
@@ -87,7 +87,7 @@
     "supporting_videos": [
       {
         "id": "duo-player",
-        "kind": "webkit",
+        "kind": "chromium",
         "path": "demo/bundles/role-based-duo/artifacts/supporting/duo-player.mp4",
         "persona": "duo-player",
         "poster_path": "demo/bundles/role-based-duo/artifacts/supporting/duo-player.png",
@@ -95,7 +95,7 @@
       },
       {
         "id": "duo-monitor",
-        "kind": "webkit",
+        "kind": "chromium",
         "path": "demo/bundles/role-based-duo/artifacts/supporting/duo-monitor.mp4",
         "persona": "duo-monitor",
         "poster_path": "demo/bundles/role-based-duo/artifacts/supporting/duo-monitor.png",
@@ -106,12 +106,12 @@
   "hero": true,
   "participants": [
     {
-      "kind": "webkit",
+      "kind": "chromium",
       "persona": "duo-player",
       "role": "player"
     },
     {
-      "kind": "webkit",
+      "kind": "chromium",
       "persona": "duo-monitor",
       "role": "monitor"
     }
