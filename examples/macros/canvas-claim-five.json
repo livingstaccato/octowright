@@ -1,0 +1,16 @@
+{
+  "name": "canvas-claim-five",
+  "description": "[demo] Each player claims five tiles on the shared canvas. Players race for tiles; last write wins on the server, which produces an organic mosaic across the nine windows. Each player's URL carries its colour query param; the canvas page handles the actual POST so claims show up live in every connected window via SSE.",
+  "parameters": [],
+  "created_at": "2026-05-11T00:00:00Z",
+  "updated_at": "2026-05-11T00:00:00Z",
+  "actions": [
+    {"action": "wait_for", "selector": "[data-testid=\"tile-0-0\"]", "timeout_ms": 5000},
+    {"action": "click", "selector": "[data-testid=\"tile-2-2\"]"},
+    {"action": "click", "selector": "[data-testid=\"tile-3-5\"]"},
+    {"action": "click", "selector": "[data-testid=\"tile-5-7\"]"},
+    {"action": "click", "selector": "[data-testid=\"tile-7-3\"]"},
+    {"action": "click", "selector": "[data-testid=\"tile-8-8\"]"},
+    {"action": "evaluate", "expression": "document.querySelectorAll('.tile[data-claimed]').length"}
+  ]
+}

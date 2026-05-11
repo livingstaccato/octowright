@@ -1,6 +1,6 @@
 id: macro-replay-loop
 title: Macro Replay Loop
-summary: Capture a deterministic interaction once, replay it against the same local shape, and inspect the stable loop artifacts.
+summary: Record a macro on Wikipedia. Replay it cleanly later. Proof that selectors survive.
 hero: true
 audiences:
   - evaluators
@@ -10,16 +10,17 @@ tags:
   - hero
   - macros
   - replay
-  - offline
+  - real-site
 engines:
-  - webkit
+  - chromium
 roles:
-  - player
+  - recorder
+  - replayer
 source_refs:
   scenarios:
-    - examples/scenarios/solo.yaml
+    - examples/scenarios/macro-replay-loop.yaml
   macros:
-    - demo/bundles/macro-replay-loop/macros/replay-loop-login.json
+    - examples/macros/wikipedia-toc-tour.json
 artifact_expectations:
   replay:
     - artifacts/replay.jsonl
@@ -31,17 +32,12 @@ regen:
   command: uv run python scripts/demos/record_demo.py macro-replay-loop
 tutorial_export:
   include: exports/macro-replay-loop.json
-seed_refs:
-  - seed/form-stage.html
-  - seed/login-card.html
 recording:
-  primary_role: player
-  default_seed: seed/login-card.html
+  primary_role: recorder
   macros:
-    - name: replay-loop-login
-      role: player
-      args:
-        email: demo@example.com
-        password: swordfish
+    - name: wikipedia-toc-tour
+      role: recorder
+    - name: wikipedia-toc-tour
+      role: replayer
   extras:
     - replay-roundtrip

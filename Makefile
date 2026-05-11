@@ -52,6 +52,19 @@ diagrams: ## Render docs/architecture/*.puml to SVG (requires `plantuml`)
 export-demos: ## Regenerate demo/tutorial-export/ from demo/bundles/ (no re-recording)
 	uv run --active python scripts/demos/sync_exports.py
 
+# Default per-macro-action delay used when re-recording. Slower playback is
+# easier to follow by eye in the captured video. Override with e.g.
+# `make rerecord-real-site-demos RERECORD_SLOWMO_MS=0` for native speed.
+RERECORD_SLOWMO_MS ?= 500
+
+rerecord-real-site-demos: ## Re-record the Wikipedia-targeted bundles (cross-engine-trio, macro-replay-loop). Needs Playwright browsers + network.
+	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run --active python scripts/demos/record_demo.py cross-engine-trio
+	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run --active python scripts/demos/record_demo.py macro-replay-loop
+
+rerecord-playground-demos: ## Re-record the playground-targeted bundles (seven-mix-orchestration, role-based-duo). Needs Playwright browsers.
+	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run --active python scripts/demos/with_playground.py seven-mix-orchestration
+	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run --active python scripts/demos/with_playground.py role-based-duo
+
 format: ## Apply ruff format + ruff --fix
 	uv run --active ruff format .
 	uv run --active ruff check --fix .

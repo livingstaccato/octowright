@@ -1,19 +1,19 @@
 {
   "artifacts": {
     "replay": {
-      "event_count": 9,
+      "event_count": 30,
       "path": "artifacts/replay.jsonl",
       "python_export": "artifacts/replay.py",
-      "size_bytes": 2219,
+      "size_bytes": 7506,
       "ts_export": "artifacts/replay.ts"
     },
     "supporting_videos": [],
     "video": {
-      "duration_seconds": 4.6,
+      "duration_seconds": 8.92,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 51470,
+      "size_bytes": 837321,
       "width": 1920
     }
   },
@@ -26,9 +26,9 @@
       "panes": [
         {
           "height": 0,
-          "kind": "webkit",
-          "persona": "solo-player",
-          "role": "player",
+          "kind": "chromium",
+          "persona": "replay-recorder",
+          "role": "recorder",
           "width": 0,
           "x": 0,
           "y": 0
@@ -40,26 +40,31 @@
     "panes": [
       {
         "height": 0,
-        "kind": "webkit",
-        "persona": "solo-player",
-        "role": "player",
+        "kind": "chromium",
+        "persona": "replay-recorder",
+        "role": "recorder",
         "width": 0,
         "x": 0,
         "y": 0
       }
     ],
     "primary": {
-      "kind": "webkit",
-      "persona": "solo-player",
-      "role": "player"
+      "kind": "chromium",
+      "persona": "replay-recorder",
+      "role": "recorder"
     }
   },
   "hero": true,
   "participants": [
     {
-      "kind": "webkit",
-      "persona": "solo-player",
-      "role": "player"
+      "kind": "chromium",
+      "persona": "replay-recorder",
+      "role": "recorder"
+    },
+    {
+      "kind": "chromium",
+      "persona": "replay-replayer",
+      "role": "replayer"
     }
   ],
   "presentation": {

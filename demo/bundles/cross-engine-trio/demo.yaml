@@ -1,6 +1,6 @@
 id: cross-engine-trio
 title: Cross-Engine Trio
-summary: Launch Chromium, Firefox, and WebKit against the same deterministic offline target to compare engine behavior at a glance.
+summary: Three engines run the same Wikipedia search in parallel. Watch where they agree and where timing differs.
 hero: true
 audiences:
   - evaluators
@@ -10,7 +10,7 @@ tags:
   - hero
   - engines
   - scenarios
-  - smoke
+  - real-site
 engines:
   - chromium
   - firefox
@@ -21,7 +21,7 @@ source_refs:
   scenarios:
     - examples/scenarios/cross-engine.yaml
   macros:
-    - examples/macros/cross-engine-showroom.json
+    - examples/macros/wikipedia-search.json
 artifact_expectations:
   replay:
     - artifacts/replay.jsonl
@@ -47,12 +47,8 @@ presentation:
     - id: engines
       roles:
         - player
-seed_refs:
-  - seed/engine-grid.html
-  - seed/trio-board.html
 recording:
   primary_role: player
-  default_seed: seed/trio-board.html
   macros:
-    - name: cross-engine-showroom
+    - name: wikipedia-search
       role: player

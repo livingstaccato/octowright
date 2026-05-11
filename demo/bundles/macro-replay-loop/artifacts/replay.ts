@@ -16,25 +16,24 @@ const resolveBundleUrl = (raw: string): string => {
   let ctx!: BrowserContext;
   let page!: Page;
 
-  browser = await webkit.launch({ headless: true });
+  browser = await chromium.launch({ headless: true });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/login-card.html?persona=solo-player&role=player&kind=webkit&slot=0"));
-  try {
-    await page.getByRole("player", { name: "Email" }).fill("demo@example.com");
-  } catch {
-    await page.fill("#email", "demo@example.com");
-  }
-  try {
-    await page.getByRole("player", { name: "Password" }).fill("swordfish");
-  } catch {
-    await page.fill("#password", "swordfish");
-  }
-  try {
-    await page.getByRole("player", { name: "Log in" }).click();
-  } catch {
-    await page.click("#submit");
-  }
+  await page.goto(resolveBundleUrl("https://en.wikipedia.org/wiki/Playwright_(software)"));
+  browser = await chromium.launch({ headless: true });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("https://en.wikipedia.org/wiki/Playwright_(software)"));
+  await page.waitForSelector("h1#firstHeading");
+  await page.getByRole("recorder", { name: "History", exact: true }).click();
+  await page.waitForLoadState('networkidle');
+  await page.getByRole("recorder", { name: "References", exact: true }).click();
+  await page.waitForLoadState('networkidle');
+  await page.waitForSelector("h1#firstHeading");
+  await page.getByRole("replayer", { name: "History", exact: true }).click();
+  await page.waitForLoadState('networkidle');
+  await page.getByRole("replayer", { name: "References", exact: true }).click();
+  await page.waitForLoadState('networkidle');
   if (browser !== null) {
     await browser.close();
   } else {

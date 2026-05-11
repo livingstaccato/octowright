@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shared canvas</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="canvas-root">
+  <header>
+    <h1>Shared canvas</h1>
+    <p>
+      <span id="role-label">spectator</span>
+      &middot;
+      <span id="claim-counter">0</span> tiles claimed
+    </p>
+  </header>
+  <div id="grid" class="grid" role="grid" aria-label="claim grid"></div>
+  <p class="footnote">
+    Set the role via <code>?role=player-N&amp;colour=hex</code>. Player roles get a Claim button; spectator just watches.
+  </p>
+</main>
+<script src="/canvas.js"></script>
+</body>
+</html>
