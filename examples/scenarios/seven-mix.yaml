@@ -1,48 +1,50 @@
 name: seven-mix
 description: |
-  Seven players + one monitor + one main-site spectator (the "Discord raid"
-  shape from the docs/design spec). Engines distributed: 3 webkit, 2 firefox,
-  2 chromium for players. About:blank for offline runs; switch URLs to taste.
+  Seven players + one operator + one spectator on a shared canvas hosted by
+  the demo playground at http://127.0.0.1:7900/. Each player has its own
+  colour query param; tile claims are broadcast to every connected window
+  via SSE. The point: nine browsers visibly coordinating in real time, not
+  nine tabs doing nothing.
+
+  Run via: uv run python scripts/demos/with_playground.py seven-mix-orchestration
 participants:
   - persona: p1
     kind: webkit
     role: player
-    url: about:blank
+    url: "http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935"
   - persona: p2
     kind: webkit
     role: player
-    url: about:blank
+    url: "http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"
   - persona: p3
     kind: webkit
     role: player
-    url: about:blank
+    url: "http://127.0.0.1:7900/canvas.html?role=p3&colour=%23fdd835"
   - persona: p4
     kind: firefox
     role: player
-    url: about:blank
+    url: "http://127.0.0.1:7900/canvas.html?role=p4&colour=%2343a047"
   - persona: p5
     kind: firefox
     role: player
-    url: about:blank
+    url: "http://127.0.0.1:7900/canvas.html?role=p5&colour=%2300acc1"
   - persona: p6
     kind: chromium
     role: player
-    url: about:blank
+    url: "http://127.0.0.1:7900/canvas.html?role=p6&colour=%231e88e5"
   - persona: p7
     kind: chromium
     role: player
-    url: about:blank
+    url: "http://127.0.0.1:7900/canvas.html?role=p7&colour=%238e24aa"
   - persona: ops
     kind: webkit
     role: monitor
-    url: about:blank
+    url: "http://127.0.0.1:7900/canvas.html?role=operator&colour=%23000"
   - persona: spectator
-    kind: webkit
-    role: main-site
-    url: about:blank
-  - persona: sm-monitor
     kind: chromium
-    role: monitor
-    url: http://127.0.0.1:8765/
+    role: main-site
+    url: "http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"
 fixtures:
   dialog_policy: dismiss
+verify:
+  player: "canvas-claim-five"

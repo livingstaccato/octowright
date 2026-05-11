@@ -1,6 +1,6 @@
 id: seven-mix-orchestration
 title: Seven Mix Orchestration
-summary: Showcase the flagship mixed-engine multi-window scenario with seven players, an operator, and a spectator in one deterministic offline bundle.
+summary: Seven players claim tiles on a shared canvas while an operator watches the aggregate live. Nine browsers actually coordinating — not nine empty tabs.
 hero: true
 audiences:
   - evaluators
@@ -23,7 +23,7 @@ source_refs:
   scenarios:
     - examples/scenarios/seven-mix.yaml
   macros:
-    - examples/macros/test-smoke-page-ready.json
+    - examples/macros/canvas-claim-five.json
 artifact_expectations:
   replay:
     - artifacts/replay.jsonl
@@ -32,7 +32,7 @@ artifact_expectations:
     - artifacts/demo.mp4
     - artifacts/poster.png
 regen:
-  command: uv run python scripts/demos/record_demo.py seven-mix-orchestration
+  command: uv run python scripts/demos/with_playground.py seven-mix-orchestration
 tutorial_export:
   include: exports/seven-mix-orchestration.json
 presentation:
@@ -52,14 +52,10 @@ presentation:
         - player
         - monitor
         - main-site
-seed_refs:
-  - seed/orchestration-stage.html
-  - seed/roster.json
 recording:
   primary_role: player
-  default_seed: seed/orchestration-stage.html
   macros:
-    - name: test-smoke-page-ready
+    - name: canvas-claim-five
       role: player
   extras:
     - participant-roster
