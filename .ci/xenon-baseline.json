@@ -1,7 +1,7 @@
 {
   "allow_violations": [
     "block \"src/octowright/browser_pool/lifecycle.py:49 handoff_browser\" has a rank of C",
-    "block \"src/octowright/browser_pool/pool.py:70 launch\" has a rank of D",
+    "block \"src/octowright/browser_pool/pool.py:118 launch\" has a rank of C",
     "block \"src/octowright/engines.py:73 engine_status\" has a rank of C",
     "block \"src/octowright/goldens.py:128 _diff_nodes\" has a rank of C",
     "block \"src/octowright/http/routes/media.py:120 session_screenshot_now\" has a rank of C",

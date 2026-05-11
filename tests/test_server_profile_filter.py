@@ -59,6 +59,32 @@ def test_build_allowed_set_empty_spec_yields_meta_tools_only() -> None:
     assert profiles.build_allowed_set(",,,") == set(profiles.ALWAYS_ON_TOOLS)
 
 
+def test_build_allowed_set_all_unknown_emits_error_log(caplog: pytest.LogCaptureFixture) -> None:
+    """When EVERY profile name in the spec is unknown, the resolved set is
+    just ALWAYS_ON_TOOLS — the daemon starts healthy but the LLM sees zero
+    browser tools. An ERROR-level log distinguishes that footgun from a
+    deliberate `OCTOWRIGHT_PROFILE=""` (which the empty-spec test above
+    pins as the "meta tools only" path)."""
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="octowright.server.profiles"):
+        allowed = profiles.build_allowed_set("bogus1,bogus2")
+    assert allowed == set(profiles.ALWAYS_ON_TOOLS)
+    assert any("octowright.profile.all_unknown" in rec.message for rec in caplog.records)
+
+
+def test_build_allowed_set_partial_unknown_does_not_trigger_all_unknown_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One known + one unknown produces the per-name WARNING but NOT the
+    all-unknown ERROR — the resolved set still has a real profile in it."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="octowright.server.profiles"):
+        profiles.build_allowed_set("core,bogus")
+    assert not any("octowright.profile.all_unknown" in rec.message for rec in caplog.records)
+
+
 def test_meta_tools_always_present_under_core_profile() -> None:
     """`octowright_status` must remain reachable so the LLM can discover the
     active profile when expected tools are missing."""
