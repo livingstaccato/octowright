@@ -228,6 +228,10 @@ class PlaygroundServer:
 
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                # SO_REUSEADDR matches uvicorn's default so a TIME_WAIT socket
+                # from a previous run on the same port doesn't fail the probe
+                # while staying conservative against an actual LISTEN conflict.
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind((self.host, self.port))
         except OSError as exc:
             raise RuntimeError(

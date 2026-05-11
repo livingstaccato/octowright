@@ -20,24 +20,24 @@ def _resolve_bundle_url(raw: str) -> str:
 
 async def main() -> None:
     async with async_playwright() as p:
-        browser = await p.webkit.launch(headless=True)
+        browser = await p.chromium.launch(headless=True)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
-        await page.goto(
-            _resolve_bundle_url("bundle://seed/login-card.html?persona=solo-player&role=player&kind=webkit&slot=0")
-        )
-        try:
-            await page.get_by_role("player", name="Email").fill("demo@example.com")
-        except Exception:
-            await page.fill("#email", "demo@example.com")
-        try:
-            await page.get_by_role("player", name="Password").fill("swordfish")
-        except Exception:
-            await page.fill("#password", "swordfish")
-        try:
-            await page.get_by_role("player", name="Log in").click()
-        except Exception:
-            await page.click("#submit")
+        await page.goto(_resolve_bundle_url("https://en.wikipedia.org/wiki/Playwright_(software)"))
+        browser = await p.chromium.launch(headless=True)
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = await ctx.new_page()
+        await page.goto(_resolve_bundle_url("https://en.wikipedia.org/wiki/Playwright_(software)"))
+        await page.wait_for_selector("h1#firstHeading")
+        await page.get_by_role("recorder", name="History", exact=True).click()
+        await page.wait_for_load_state("networkidle")
+        await page.get_by_role("recorder", name="References", exact=True).click()
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_selector("h1#firstHeading")
+        await page.get_by_role("replayer", name="History", exact=True).click()
+        await page.wait_for_load_state("networkidle")
+        await page.get_by_role("replayer", name="References", exact=True).click()
+        await page.wait_for_load_state("networkidle")
         if browser is not None:
             await browser.close()
         else:
