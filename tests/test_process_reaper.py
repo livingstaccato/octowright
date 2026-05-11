@@ -104,10 +104,12 @@ def test_reap_orphan_browsers_sigterm_then_sigkill(
 
     out = process_reaper.reap_orphan_browsers("all", grace_seconds=0.0)
 
-    assert (2000, signal.SIGTERM) in sent
-    assert (2001, signal.SIGTERM) in sent
-    assert (2000, process_reaper.KILL_SIGNAL) in sent
-    assert (2001, process_reaper.KILL_SIGNAL) not in sent  # already gone after sigterm
+    # Survivor (2000) gets two signals (SIGTERM then KILL_SIGNAL); the pid
+    # that died on SIGTERM (2001) gets one. On Windows KILL_SIGNAL == SIGTERM
+    # so we count signals per pid rather than asserting exact tuples.
+    signals_per_pid = {pid: [s for p, s in sent if p == pid] for pid in (2000, 2001)}
+    assert signals_per_pid[2000] == [signal.SIGTERM, process_reaper.KILL_SIGNAL]
+    assert signals_per_pid[2001] == [signal.SIGTERM]
     assert set(out["killed"]) == {2000, 2001}
     assert out["still_alive"] == []
     assert out["errors"] == []
