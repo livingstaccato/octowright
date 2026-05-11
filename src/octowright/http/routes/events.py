@@ -101,7 +101,10 @@ async def session_events(request: Request) -> JSONResponse:
     if err is not None:
         return err
     assert since is not None  # narrow for type-checker
-    return JSONResponse(_tail_jsonl(log_path, since))
+    # _tail_jsonl opens + seeks + reads the JSONL synchronously; running it on
+    # the event loop blocks every other request and WS push for the duration.
+    payload = await asyncio.to_thread(_tail_jsonl, log_path, since)
+    return JSONResponse(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +246,9 @@ async def _stream_tail(websocket: WebSocket, sid: str, log_path: Path, cursor: i
     ticks_since_heartbeat = 0
     heartbeat_every = max(1, int(state.TAIL_HEARTBEAT_SECONDS / state.TAIL_POLL_SECONDS))
     while True:
-        snapshot = _tail_jsonl(log_path, cursor)
+        # to_thread so JSONL seek+read doesn't block the event loop when N
+        # dashboards are tailing concurrently.
+        snapshot = await asyncio.to_thread(_tail_jsonl, log_path, cursor)
         cursor = snapshot["cursor"]
         still_live = _live_session_or_none(sid) is not None
         ticks_since_heartbeat += 1
