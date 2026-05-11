@@ -322,6 +322,55 @@ def test_persona_dir_uses_slug_under_profiles_dir(tmp_path, fresh_personas):
     assert fresh_personas.persona_dir("Alice Smith") == tmp_path / "Alice-Smith"
 
 
+# ---------------------------------------------------------------------------
+# bash-c trust-boundary warning — basename match (PR #18 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_credential_cmd_bare_bash_dash_c_warns(monkeypatch, caplog):
+    """Bare interpreter name (`bash -c '...'`) trips the warning. Pin the
+    existing behaviour."""
+    from octowright import personas as _p
+
+    def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake)
+    with caplog.at_level(logging.WARNING):
+        _p._exec_credential_cmd("bash -c 'echo hi | tr h H'", "dante", "token")
+    assert any("personas.credential_cmd_executes_shell_pipeline" in rec.message for rec in caplog.records)
+
+
+def test_credential_cmd_absolute_path_bash_dash_c_warns(monkeypatch, caplog):
+    """Absolute-path interpreter (`/bin/bash -c '...'`) ALSO trips the warning.
+    The PR #18 implementation matched the bare token only, so a YAML author
+    using an absolute path quietly evaded the trust-boundary signal —
+    `shell=False` still kept execution safe, but the operator no longer saw
+    the heads-up. Pin the basename-match fix."""
+    from octowright import personas as _p
+
+    def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake)
+    with caplog.at_level(logging.WARNING):
+        _p._exec_credential_cmd("/bin/bash -c 'echo hi | tr h H'", "dante", "token")
+    assert any("personas.credential_cmd_executes_shell_pipeline" in rec.message for rec in caplog.records)
+
+
+def test_credential_cmd_non_shell_does_not_warn(monkeypatch, caplog):
+    """A non-shell interpreter (`op read ...`) must NOT trip the warning."""
+    from octowright import personas as _p
+
+    def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake)
+    with caplog.at_level(logging.WARNING):
+        _p._exec_credential_cmd("op read op://vault/item/password", "dante", "password")
+    assert not any("personas.credential_cmd_executes_shell_pipeline" in rec.message for rec in caplog.records)
+
+
 def test_persona_dir_empty_slug_propagates_error(fresh_personas):
     """If the name slugs to empty, persona_dir should raise (not return PROFILES_DIR)."""
     with pytest.raises(ValueError, match="produced an empty slug"):
