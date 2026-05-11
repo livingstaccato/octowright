@@ -106,8 +106,8 @@ def test_reap_orphan_browsers_sigterm_then_sigkill(
 
     assert (2000, signal.SIGTERM) in sent
     assert (2001, signal.SIGTERM) in sent
-    assert (2000, signal.SIGKILL) in sent
-    assert (2001, signal.SIGKILL) not in sent  # already gone after sigterm
+    assert (2000, process_reaper.KILL_SIGNAL) in sent
+    assert (2001, process_reaper.KILL_SIGNAL) not in sent  # already gone after sigterm
     assert set(out["killed"]) == {2000, 2001}
     assert out["still_alive"] == []
     assert out["errors"] == []

@@ -33,9 +33,14 @@ import os
 import signal
 import subprocess
 import time
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 Scope = Literal["descendants", "all"]
+
+# Windows has no SIGKILL — TerminateProcess is invoked for any signum, so
+# SIGTERM is the strongest available signal. POSIX keeps the SIGTERM →
+# grace → SIGKILL escalation.
+KILL_SIGNAL: int = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 class ReapSummary(TypedDict):
@@ -148,7 +153,7 @@ def reap_orphan_browsers(
     errors = _signal_pids(pids, signal.SIGTERM, "sigterm")
     time.sleep(grace_seconds)
     survivors = [pid for pid in pids if pid in find_browser_pids(scope, root_pid=root_pid)]
-    errors.extend(_signal_pids(survivors, signal.SIGKILL, "sigkill"))
+    errors.extend(_signal_pids(survivors, KILL_SIGNAL, "sigkill"))
 
     final = find_browser_pids(scope, root_pid=root_pid)
     return ReapSummary(
@@ -158,23 +163,23 @@ def reap_orphan_browsers(
     )
 
 
-async def reap_descendant_browsers_on_shutdown(pool: object, *, log: object) -> None:
+async def reap_descendant_browsers_on_shutdown(pool: Any, *, log: Any) -> None:
     """Daemon shutdown hook. Close pool sessions, then sweep descendants.
 
     Restricted to descendants of the current PID so a concurrent daemon's
     browsers aren't touched. Best-effort; logs but never raises.
     """
     try:
-        await pool.close_all()  # type: ignore[attr-defined]
+        await pool.close_all()
     except Exception as exc:
-        log.warning("octowright.shutdown.pool_close_failed", error=repr(exc))  # type: ignore[attr-defined]
+        log.warning("octowright.shutdown.pool_close_failed", error=repr(exc))
     try:
         summary = reap_orphan_browsers(scope="descendants", root_pid=os.getpid())
     except Exception as exc:
-        log.warning("octowright.shutdown.browser_reap_failed", error=repr(exc))  # type: ignore[attr-defined]
+        log.warning("octowright.shutdown.browser_reap_failed", error=repr(exc))
         return
     if summary["killed"] or summary["still_alive"] or summary["errors"]:
-        log.info(  # type: ignore[attr-defined]
+        log.info(
             "octowright.shutdown.browsers_reaped",
             killed=summary["killed"],
             still_alive=summary["still_alive"],
