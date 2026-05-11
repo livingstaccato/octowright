@@ -1,0 +1,16 @@
+{
+  "name": "wikipedia-toc-tour",
+  "description": "[demo] Navigate Wikipedia's Playwright article via the table of contents. Click Architecture, then References. Uses link-text selectors that are stable across Wikipedia's article-page rewrites.",
+  "parameters": [],
+  "created_at": "2026-05-11T00:00:00Z",
+  "updated_at": "2026-05-11T00:00:00Z",
+  "actions": [
+    {"action": "wait_for", "selector": "h1#firstHeading", "timeout_ms": 10000},
+    {"action": "expect_url", "pattern": "Playwright", "mode": "contains"},
+    {"action": "click_by", "role": "link", "name": "Architecture"},
+    {"action": "wait_for", "expression": "location.hash.includes('Architecture') || document.querySelector('h2#Architecture, h3#Architecture')", "timeout_ms": 5000},
+    {"action": "click_by", "role": "link", "name": "References"},
+    {"action": "wait_for", "expression": "location.hash.includes('References') || document.querySelector('h2#References, h3#References, span#References')", "timeout_ms": 5000},
+    {"action": "screenshot"}
+  ]
+}

@@ -52,6 +52,14 @@ diagrams: ## Render docs/architecture/*.puml to SVG (requires `plantuml`)
 export-demos: ## Regenerate demo/tutorial-export/ from demo/bundles/ (no re-recording)
 	uv run --active python scripts/demos/sync_exports.py
 
+rerecord-real-site-demos: ## Re-record the Wikipedia-targeted bundles (cross-engine-trio, macro-replay-loop). Needs Playwright browsers + network.
+	uv run --active python scripts/demos/record_demo.py cross-engine-trio
+	uv run --active python scripts/demos/record_demo.py macro-replay-loop
+
+rerecord-playground-demos: ## Re-record the playground-targeted bundles (seven-mix-orchestration, role-based-duo). Needs Playwright browsers.
+	uv run --active python scripts/demos/with_playground.py seven-mix-orchestration
+	uv run --active python scripts/demos/with_playground.py role-based-duo
+
 format: ## Apply ruff format + ruff --fix
 	uv run --active ruff format .
 	uv run --active ruff check --fix .

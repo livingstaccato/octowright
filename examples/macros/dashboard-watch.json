@@ -1,0 +1,12 @@
+{
+  "name": "dashboard-watch",
+  "description": "[demo] Monitor role: wait until three event rows have appeared on the playground dashboard (one per form step from the player). No interaction — the value is watching shared state arrive over SSE.",
+  "parameters": [],
+  "created_at": "2026-05-11T00:00:00Z",
+  "updated_at": "2026-05-11T00:00:00Z",
+  "actions": [
+    {"action": "wait_for", "expression": "document.querySelectorAll('#rows tr:not(.empty)').length >= 3", "timeout_ms": 15000},
+    {"action": "expect_js", "expression": "document.querySelectorAll('#rows tr:not(.empty)').length >= 3", "equals": true},
+    {"action": "screenshot"}
+  ]
+}
