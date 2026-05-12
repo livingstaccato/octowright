@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from octowright.video_overlay import DEFAULT_OVERLAY_BOX, MAGENTA, render_overlay_image
+from octowright.video_overlay import DEFAULT_OVERLAY_BOX, TRANSPARENT, render_overlay_image
 
 # ---------------------------------------------------------------------------
 # Helpers — reload video module with patched shutil.which
@@ -64,23 +64,37 @@ def _import_video_mock_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return _v, captured_cmds
 
 
-def _read_ppm_pixel(path: Path, x: int, y: int) -> tuple[int, int, int]:
-    with path.open("rb") as handle:
-        magic = handle.readline().strip()
-        if magic != b"P6":
-            raise AssertionError(f"unexpected ppm header: {magic!r}")
-        width, _height = (int(part) for part in handle.readline().split())
-        max_value = handle.readline().strip()
-        if max_value != b"255":
-            raise AssertionError(f"unexpected ppm max value: {max_value!r}")
-        payload = handle.read()
-    offset = ((y * width) + x) * 3
-    return tuple(payload[offset : offset + 3])  # type: ignore[return-value]
+def _read_png_pixel(path: Path, x: int, y: int) -> tuple[int, int, int, int]:
+    """Decode one RGBA pixel from a PNG written by video_overlay._write_png.
 
+    Pure stdlib (struct + zlib). Assumes 8-bit RGBA, no interlacing, filter
+    type 0 on every scanline — the constraints _write_png itself enforces.
+    """
+    import struct
+    import zlib
 
-def _blend(base: tuple[int, int, int], overlay: tuple[int, int, int, int]) -> tuple[int, int, int]:
-    alpha = overlay[3] / 255.0
-    return tuple(round((base[index] * (1.0 - alpha)) + (overlay[index] * alpha)) for index in range(3))
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise AssertionError(f"not a PNG: {data[:8]!r}")
+    pos = 8
+    width = 0
+    idat_chunks: list[bytes] = []
+    while pos < len(data):
+        (chunk_len,) = struct.unpack(">I", data[pos : pos + 4])
+        tag = data[pos + 4 : pos + 8]
+        chunk = data[pos + 8 : pos + 8 + chunk_len]
+        pos += 8 + chunk_len + 4
+        if tag == b"IHDR":
+            width, _height, _bd, _ct, *_ = struct.unpack(">IIBBBBB", chunk)
+        elif tag == b"IDAT":
+            idat_chunks.append(chunk)
+        elif tag == b"IEND":
+            break
+    decompressed = zlib.decompress(b"".join(idat_chunks))
+    stride = width * 4 + 1  # +1 for the filter byte at the start of each row
+    row_start = y * stride + 1  # skip the filter byte
+    offset = row_start + x * 4
+    return tuple(decompressed[offset : offset + 4])  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +346,7 @@ def test_apply_video_overlay_builds_overlay_pipeline(monkeypatch: pytest.MonkeyP
     cmd = cmds[0]
     assert cmd.count("-i") == 2
     filter_complex = cmd[cmd.index("-filter_complex") + 1]
-    assert filter_complex == "[1:v]colorkey=0xFF00FF:0.01:0.0[ol];[0:v][ol]overlay=0:0[v]"
+    assert filter_complex == "[0:v][1:v]overlay=0:0[v]"
     assert cmd[-2] == str(out)
 
 
@@ -355,13 +369,13 @@ def test_probe_video_reads_dimensions_and_duration(monkeypatch: pytest.MonkeyPat
     assert metadata == {"width": 1920, "height": 1080, "duration_seconds": 3.5}
 
 
-def test_render_overlay_image_uses_translucent_safe_area_defaults(tmp_path: Path) -> None:
+def test_render_overlay_image_writes_rgba_png_with_transparent_canvas(tmp_path: Path) -> None:
     title = "Alpha"
     subtitle = "Quiet metadata"
     canvas_width = 1920
     canvas_height = 1080
     path = render_overlay_image(
-        tmp_path / "overlay.ppm",
+        tmp_path / "overlay.png",
         title=title,
         subtitle=subtitle,
         panes=[],
@@ -375,18 +389,20 @@ def test_render_overlay_image_uses_translucent_safe_area_defaults(tmp_path: Path
     box_height = (7 * 2) + 7 + (DEFAULT_OVERLAY_BOX.padding * 2) + 8
     x0 = DEFAULT_OVERLAY_BOX.margin
     y0 = canvas_height - DEFAULT_OVERLAY_BOX.margin - box_height
-    expected_background = _blend(MAGENTA, DEFAULT_OVERLAY_BOX.background_rgba)
 
     assert path.exists()
-    assert _read_ppm_pixel(path, 40, 40) == MAGENTA
-    assert _read_ppm_pixel(path, x0 + 4, y0 + 4) == expected_background
-    assert _read_ppm_pixel(path, x0 + box_width + 8, y0 + 8) == MAGENTA
-    assert _read_ppm_pixel(path, x0 + 8, y0 - 8) == MAGENTA
+    # Outside the label box: stays transparent (alpha == 0).
+    assert _read_png_pixel(path, 40, 40) == TRANSPARENT
+    assert _read_png_pixel(path, x0 + box_width + 8, y0 + 8) == TRANSPARENT
+    assert _read_png_pixel(path, x0 + 8, y0 - 8) == TRANSPARENT
+    # Inside the label box: alpha matches the default overlay background.
+    pixel = _read_png_pixel(path, x0 + 4, y0 + 4)
+    assert pixel[3] == DEFAULT_OVERLAY_BOX.background_rgba[3]
 
 
 def test_render_overlay_image_skips_large_title_card_when_text_is_empty(tmp_path: Path) -> None:
     path = render_overlay_image(
-        tmp_path / "overlay.ppm",
+        tmp_path / "overlay.png",
         title="",
         subtitle="",
         panes=[
@@ -396,7 +412,9 @@ def test_render_overlay_image_skips_large_title_card_when_text_is_empty(tmp_path
         canvas_height=1080,
     )
 
-    expected_label_background = _blend(MAGENTA, DEFAULT_OVERLAY_BOX.background_rgba)
-
-    assert _read_ppm_pixel(path, 24, 24) == MAGENTA
-    assert _read_ppm_pixel(path, 24, 508) == expected_label_background
+    # Far from the pane label: transparent. Inside the pane label box: tinted
+    # at the default alpha (the exact x,y here is inside the label rect that
+    # _draw_pane_label paints near the bottom-left of pane 1).
+    assert _read_png_pixel(path, 24, 24) == TRANSPARENT
+    label_pixel = _read_png_pixel(path, 24, 508)
+    assert label_pixel[3] == DEFAULT_OVERLAY_BOX.background_rgba[3]

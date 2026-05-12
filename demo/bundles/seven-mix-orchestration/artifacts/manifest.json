@@ -73,11 +73,11 @@
       }
     ],
     "video": {
-      "duration_seconds": 25.8,
+      "duration_seconds": 25.4,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 261705,
+      "size_bytes": 255243,
       "width": 1920
     }
   },
