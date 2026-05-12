@@ -36,17 +36,23 @@ _SYNC_MULTI_PRESETS: dict[str, RenderPlan] = {
 }
 
 _HERO_COMPOSITE_PRESETS: dict[str, RenderPlan] = {
+    # 3x3 evenly-tiled grid of all nine seven-mix participants. Every cell
+    # shows a real browser; no slot dangles unmatched. 640x360 per cell at
+    # 1920x1080 canvas.
     "seven-mix-orchestration": RenderPlan(
         kind="hero-composite",
         canvas_width=1920,
         canvas_height=1080,
         placements=(
-            CompositePlacement("p1", 0, 0, 1280, 720),
-            CompositePlacement("ops", 1280, 0, 640, 360),
-            CompositePlacement("spectator", 1280, 360, 640, 360),
-            CompositePlacement("p2", 0, 720, 640, 360),
-            CompositePlacement("p3", 640, 720, 640, 360),
-            CompositePlacement("sm-monitor", 1280, 720, 640, 360),
+            CompositePlacement("p1", 0, 0, 640, 360),
+            CompositePlacement("p2", 640, 0, 640, 360),
+            CompositePlacement("p3", 1280, 0, 640, 360),
+            CompositePlacement("p4", 0, 360, 640, 360),
+            CompositePlacement("p5", 640, 360, 640, 360),
+            CompositePlacement("p6", 1280, 360, 640, 360),
+            CompositePlacement("p7", 0, 720, 640, 360),
+            CompositePlacement("ops", 640, 720, 640, 360),
+            CompositePlacement("spectator", 1280, 720, 640, 360),
         ),
     )
 }
