@@ -314,7 +314,7 @@ def apply_video_overlay(
     target_path.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="octowright-video-overlay-"))
     overlay_path = render_overlay_image(
-        temp_dir / "overlay.ppm",
+        temp_dir / "overlay.png",
         title=title,
         subtitle=subtitle,
         panes=panes,
@@ -329,7 +329,9 @@ def apply_video_overlay(
             "-i",
             str(overlay_path),
             "-filter_complex",
-            "[1:v]colorkey=0xFF00FF:0.01:0.0[ol];[0:v][ol]overlay=0:0[v]",
+            # PNG carries its own alpha; overlay composites it on the source
+            # natively (no chroma-key dance, no magenta bleeding through).
+            "[0:v][1:v]overlay=0:0[v]",
             "-map",
             "[v]",
             "-an",
