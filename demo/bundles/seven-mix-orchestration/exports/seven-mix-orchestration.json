@@ -2,10 +2,10 @@
   "artifact_manifest": {
     "artifacts": {
       "replay": {
-        "event_count": 95,
+        "event_count": 98,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 21369,
+        "size_bytes": 22035,
         "ts_export": "artifacts/replay.ts"
       },
       "supporting_videos": [
@@ -14,6 +14,48 @@
           "kind": "webkit",
           "path": "artifacts/supporting/p1.mp4",
           "poster_path": "artifacts/supporting/p1.png",
+          "role": "player"
+        },
+        {
+          "id": "p2",
+          "kind": "webkit",
+          "path": "artifacts/supporting/p2.mp4",
+          "poster_path": "artifacts/supporting/p2.png",
+          "role": "player"
+        },
+        {
+          "id": "p3",
+          "kind": "webkit",
+          "path": "artifacts/supporting/p3.mp4",
+          "poster_path": "artifacts/supporting/p3.png",
+          "role": "player"
+        },
+        {
+          "id": "p4",
+          "kind": "firefox",
+          "path": "artifacts/supporting/p4.mp4",
+          "poster_path": "artifacts/supporting/p4.png",
+          "role": "player"
+        },
+        {
+          "id": "p5",
+          "kind": "firefox",
+          "path": "artifacts/supporting/p5.mp4",
+          "poster_path": "artifacts/supporting/p5.png",
+          "role": "player"
+        },
+        {
+          "id": "p6",
+          "kind": "chromium",
+          "path": "artifacts/supporting/p6.mp4",
+          "poster_path": "artifacts/supporting/p6.png",
+          "role": "player"
+        },
+        {
+          "id": "p7",
+          "kind": "chromium",
+          "path": "artifacts/supporting/p7.mp4",
+          "poster_path": "artifacts/supporting/p7.png",
           "role": "player"
         },
         {
@@ -29,28 +71,14 @@
           "path": "artifacts/supporting/spectator.mp4",
           "poster_path": "artifacts/supporting/spectator.png",
           "role": "main-site"
-        },
-        {
-          "id": "p2",
-          "kind": "webkit",
-          "path": "artifacts/supporting/p2.mp4",
-          "poster_path": "artifacts/supporting/p2.png",
-          "role": "player"
-        },
-        {
-          "id": "p3",
-          "kind": "webkit",
-          "path": "artifacts/supporting/p3.mp4",
-          "poster_path": "artifacts/supporting/p3.png",
-          "role": "player"
         }
       ],
       "video": {
-        "duration_seconds": 18.4,
+        "duration_seconds": 18.16,
         "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 134217,
+        "size_bytes": 187805,
         "width": 1920
       }
     },
@@ -62,13 +90,67 @@
       "overlay": {
         "panes": [
           {
-            "height": 720,
+            "height": 360,
             "kind": "webkit",
             "persona": "p1",
             "role": "player",
-            "width": 1280,
+            "width": 640,
             "x": 0,
             "y": 0
+          },
+          {
+            "height": 360,
+            "kind": "webkit",
+            "persona": "p2",
+            "role": "player",
+            "width": 640,
+            "x": 640,
+            "y": 0
+          },
+          {
+            "height": 360,
+            "kind": "webkit",
+            "persona": "p3",
+            "role": "player",
+            "width": 640,
+            "x": 1280,
+            "y": 0
+          },
+          {
+            "height": 360,
+            "kind": "firefox",
+            "persona": "p4",
+            "role": "player",
+            "width": 640,
+            "x": 0,
+            "y": 360
+          },
+          {
+            "height": 360,
+            "kind": "firefox",
+            "persona": "p5",
+            "role": "player",
+            "width": 640,
+            "x": 640,
+            "y": 360
+          },
+          {
+            "height": 360,
+            "kind": "chromium",
+            "persona": "p6",
+            "role": "player",
+            "width": 640,
+            "x": 1280,
+            "y": 360
+          },
+          {
+            "height": 360,
+            "kind": "chromium",
+            "persona": "p7",
+            "role": "player",
+            "width": 640,
+            "x": 0,
+            "y": 720
           },
           {
             "height": 360,
@@ -76,8 +158,8 @@
             "persona": "ops",
             "role": "monitor",
             "width": 640,
-            "x": 1280,
-            "y": 0
+            "x": 640,
+            "y": 720
           },
           {
             "height": 360,
@@ -86,24 +168,6 @@
             "role": "main-site",
             "width": 640,
             "x": 1280,
-            "y": 360
-          },
-          {
-            "height": 360,
-            "kind": "webkit",
-            "persona": "p2",
-            "role": "player",
-            "width": 640,
-            "x": 0,
-            "y": 720
-          },
-          {
-            "height": 360,
-            "kind": "webkit",
-            "persona": "p3",
-            "role": "player",
-            "width": 640,
-            "x": 640,
             "y": 720
           }
         ],
@@ -112,36 +176,63 @@
       },
       "panes": [
         {
-          "height": 720,
+          "height": 360,
           "kind": "webkit",
           "persona": "p1",
           "role": "player",
-          "width": 1280,
+          "width": 640,
           "x": 0,
           "y": 0
         },
         {
           "height": 360,
           "kind": "webkit",
-          "persona": "ops",
-          "role": "monitor",
+          "persona": "p2",
+          "role": "player",
+          "width": 640,
+          "x": 640,
+          "y": 0
+        },
+        {
+          "height": 360,
+          "kind": "webkit",
+          "persona": "p3",
+          "role": "player",
           "width": 640,
           "x": 1280,
           "y": 0
         },
         {
           "height": 360,
+          "kind": "firefox",
+          "persona": "p4",
+          "role": "player",
+          "width": 640,
+          "x": 0,
+          "y": 360
+        },
+        {
+          "height": 360,
+          "kind": "firefox",
+          "persona": "p5",
+          "role": "player",
+          "width": 640,
+          "x": 640,
+          "y": 360
+        },
+        {
+          "height": 360,
           "kind": "chromium",
-          "persona": "spectator",
-          "role": "main-site",
+          "persona": "p6",
+          "role": "player",
           "width": 640,
           "x": 1280,
           "y": 360
         },
         {
           "height": 360,
-          "kind": "webkit",
-          "persona": "p2",
+          "kind": "chromium",
+          "persona": "p7",
           "role": "player",
           "width": 640,
           "x": 0,
@@ -150,10 +241,19 @@
         {
           "height": 360,
           "kind": "webkit",
-          "persona": "p3",
-          "role": "player",
+          "persona": "ops",
+          "role": "monitor",
           "width": 640,
           "x": 640,
+          "y": 720
+        },
+        {
+          "height": 360,
+          "kind": "chromium",
+          "persona": "spectator",
+          "role": "main-site",
+          "width": 640,
+          "x": 1280,
           "y": 720
         }
       ],
@@ -164,6 +264,54 @@
           "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p1.mp4",
           "persona": "p1",
           "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p1.png",
+          "role": "player"
+        },
+        {
+          "id": "p2",
+          "kind": "webkit",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p2.mp4",
+          "persona": "p2",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p2.png",
+          "role": "player"
+        },
+        {
+          "id": "p3",
+          "kind": "webkit",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.mp4",
+          "persona": "p3",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.png",
+          "role": "player"
+        },
+        {
+          "id": "p4",
+          "kind": "firefox",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p4.mp4",
+          "persona": "p4",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p4.png",
+          "role": "player"
+        },
+        {
+          "id": "p5",
+          "kind": "firefox",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p5.mp4",
+          "persona": "p5",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p5.png",
+          "role": "player"
+        },
+        {
+          "id": "p6",
+          "kind": "chromium",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p6.mp4",
+          "persona": "p6",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p6.png",
+          "role": "player"
+        },
+        {
+          "id": "p7",
+          "kind": "chromium",
+          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p7.mp4",
+          "persona": "p7",
+          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p7.png",
           "role": "player"
         },
         {
@@ -181,22 +329,6 @@
           "persona": "spectator",
           "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/spectator.png",
           "role": "main-site"
-        },
-        {
-          "id": "p2",
-          "kind": "webkit",
-          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p2.mp4",
-          "persona": "p2",
-          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p2.png",
-          "role": "player"
-        },
-        {
-          "id": "p3",
-          "kind": "webkit",
-          "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.mp4",
-          "persona": "p3",
-          "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/p3.png",
-          "role": "player"
         }
       ]
     },
@@ -272,11 +404,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 18.4,
+      "duration_seconds": 18.16,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 134217,
+      "size_bytes": 187805,
       "width": 1920
     },
     "supporting": [
@@ -285,6 +417,48 @@
         "kind": "webkit",
         "path": "artifacts/supporting/p1.mp4",
         "poster_path": "artifacts/supporting/p1.png",
+        "role": "player"
+      },
+      {
+        "id": "p2",
+        "kind": "webkit",
+        "path": "artifacts/supporting/p2.mp4",
+        "poster_path": "artifacts/supporting/p2.png",
+        "role": "player"
+      },
+      {
+        "id": "p3",
+        "kind": "webkit",
+        "path": "artifacts/supporting/p3.mp4",
+        "poster_path": "artifacts/supporting/p3.png",
+        "role": "player"
+      },
+      {
+        "id": "p4",
+        "kind": "firefox",
+        "path": "artifacts/supporting/p4.mp4",
+        "poster_path": "artifacts/supporting/p4.png",
+        "role": "player"
+      },
+      {
+        "id": "p5",
+        "kind": "firefox",
+        "path": "artifacts/supporting/p5.mp4",
+        "poster_path": "artifacts/supporting/p5.png",
+        "role": "player"
+      },
+      {
+        "id": "p6",
+        "kind": "chromium",
+        "path": "artifacts/supporting/p6.mp4",
+        "poster_path": "artifacts/supporting/p6.png",
+        "role": "player"
+      },
+      {
+        "id": "p7",
+        "kind": "chromium",
+        "path": "artifacts/supporting/p7.mp4",
+        "poster_path": "artifacts/supporting/p7.png",
         "role": "player"
       },
       {
@@ -300,20 +474,6 @@
         "path": "artifacts/supporting/spectator.mp4",
         "poster_path": "artifacts/supporting/spectator.png",
         "role": "main-site"
-      },
-      {
-        "id": "p2",
-        "kind": "webkit",
-        "path": "artifacts/supporting/p2.mp4",
-        "poster_path": "artifacts/supporting/p2.png",
-        "role": "player"
-      },
-      {
-        "id": "p3",
-        "kind": "webkit",
-        "path": "artifacts/supporting/p3.mp4",
-        "poster_path": "artifacts/supporting/p3.png",
-        "role": "player"
       }
     ]
   },
