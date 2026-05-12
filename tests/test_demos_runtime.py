@@ -345,8 +345,20 @@ def test_site_facing_render_plans_use_readable_canvases() -> None:
 
     assert seven_mix.kind == "hero-composite"
     assert (seven_mix.canvas_width, seven_mix.canvas_height) == (1920, 1080)
-    # 6 placements after commit c019c08 added the live Octowright dashboard
-    # (sm-monitor) to fill the previously-empty composition cell.
-    assert len(seven_mix.placements) == 6
+    # 3x3 grid of all nine seven-mix participants (p1-p7, ops, spectator).
+    # Replaces the prior 6-slot layout that referenced a non-existent
+    # sm-monitor persona, which left one cell permanently empty.
+    assert len(seven_mix.placements) == 9
+    assert {slot.persona for slot in seven_mix.placements} == {
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "ops",
+        "spectator",
+    }
     assert min(slot.width for slot in seven_mix.placements) >= 640
     assert min(slot.height for slot in seven_mix.placements) >= 360
