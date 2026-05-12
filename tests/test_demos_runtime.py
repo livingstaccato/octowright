@@ -338,8 +338,10 @@ def test_site_facing_render_plans_use_readable_canvases() -> None:
     seven_mix = select_render_plan(load_demo_bundle(Path("demo/bundles/seven-mix-orchestration")))
 
     assert cross_engine.kind == "sync-multi"
-    # 3 columns so all three engines fit a single row with no empty cell.
-    assert (cross_engine.columns, cross_engine.cell_width, cross_engine.cell_height) == (3, 640, 360)
+    # 2x2 grid at 16:9 cell aspect. 3 inputs fill 3 cells; the 4th renders
+    # black via xstack fill=black in compose_video_grid. Keeps each pane
+    # large enough to read when the composite is scaled to a page column.
+    assert (cross_engine.columns, cross_engine.cell_width, cross_engine.cell_height) == (2, 960, 540)
 
     assert role_based.kind == "sync-multi"
     # 540 cell_height matches the 16:9 source aspect ratio so the two

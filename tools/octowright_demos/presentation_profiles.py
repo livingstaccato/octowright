@@ -31,10 +31,12 @@ class RenderPlan:
 
 
 _SYNC_MULTI_PRESETS: dict[str, RenderPlan] = {
-    # 3 engines in a single row so all three cells are filled. The prior
-    # 2-column layout left cell [1,1] empty, which ffmpeg's xstack rendered
-    # as a saturated green panel in the published video.
-    "cross-engine-trio": RenderPlan(kind="sync-multi", columns=3, cell_width=640, cell_height=360),
+    # 2 columns x 540 (16:9 cells) keeps each browser readable when the
+    # composite video is scaled down to a page column. A 3-wide layout
+    # crushes each pane to ~193px on a 580px-wide demo page. The 4th cell
+    # in this 2x2 grid is unused but renders black via xstack's fill=black
+    # safety net in compose_video_grid().
+    "cross-engine-trio": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=540),
     # 2 browsers side-by-side at 16:9. The prior 960x1080 cells letterboxed
     # the 1280x720 sources with large black bars top and bottom.
     "role-based-duo": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=540),
