@@ -11,7 +11,7 @@
 - Regen: `uv run python scripts/demos/record_demo.py cross-engine-trio`
 - Artifacts: replay 1/1, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-11 21:59:18 UTC
+- Last generated: 2026-05-12 01:36:03 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`; declared `artifacts/replay.jsonl`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
@@ -24,7 +24,7 @@
 - Regen: `uv run python scripts/demos/record_demo.py macro-replay-loop`
 - Artifacts: replay 2/2, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-11 22:00:37 UTC
+- Last generated: 2026-05-12 01:36:17 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/replay-roundtrip.jsonl`; declared `artifacts/replay.jsonl`, `artifacts/replay-roundtrip.jsonl`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
@@ -37,7 +37,7 @@
 - Regen: `uv run python scripts/demos/with_playground.py role-based-duo`
 - Artifacts: replay 1/1, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-11 22:02:41 UTC
+- Last generated: 2026-05-12 01:37:15 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`; declared `artifacts/replay.jsonl`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
@@ -50,7 +50,7 @@
 - Regen: `uv run python scripts/demos/with_playground.py seven-mix-orchestration`
 - Artifacts: replay 2/2, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-12 00:09:37 UTC
+- Last generated: 2026-05-12 01:37:00 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/participant-roster.json`; declared `artifacts/replay.jsonl`, `artifacts/participant-roster.json`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 

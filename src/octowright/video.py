@@ -221,7 +221,11 @@ def compose_video_grid(
         layouts.append(f"{col * cell_width}_{row * cell_height}")
 
     filter_complex = ";".join(filters) + ";" + "".join(f"[v{index}]" for index in range(len(source_paths)))
-    filter_complex += f"xstack=inputs={len(source_paths)}:layout={'|'.join(layouts)}[v]"
+    # fill=black: when the chosen columns x rows leaves uncovered cells
+    # (e.g. 3 inputs in a 2-column grid), ffmpeg's default xstack canvas
+    # color is build-dependent and tends toward a saturated green on macOS.
+    # Pinning fill=black keeps any sparse layout visually neutral.
+    filter_complex += f"xstack=inputs={len(source_paths)}:layout={'|'.join(layouts)}:fill=black[v]"
     cmd = [
         ffmpeg,
         *inputs,
@@ -271,7 +275,10 @@ def compose_video_layout(
         layouts.append(f"{x}_{y}")
 
     filter_complex = ";".join(filters) + ";" + "".join(f"[v{index}]" for index in range(len(placements)))
-    filter_complex += f"xstack=inputs={len(placements)}:layout={'|'.join(layouts)}[v]"
+    # fill=black: see compose_video_grid above. Hero-composite placements
+    # don't always cover the full canvas (a participant may be missing or
+    # the layout intentionally leaves gaps), so pin the background.
+    filter_complex += f"xstack=inputs={len(placements)}:layout={'|'.join(layouts)}:fill=black[v]"
     cmd = [
         ffmpeg,
         *inputs,
