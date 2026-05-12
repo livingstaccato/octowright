@@ -24,6 +24,8 @@ source_refs:
     - examples/scenarios/seven-mix.yaml
   macros:
     - examples/macros/canvas-claim-five.json
+    - examples/macros/canvas-monitor-watch.json
+    - examples/macros/canvas-spectator-watch.json
 artifact_expectations:
   replay:
     - artifacts/replay.jsonl
@@ -57,5 +59,9 @@ recording:
   macros:
     - name: canvas-claim-five
       role: player
+    - name: canvas-monitor-watch
+      role: monitor
+    - name: canvas-spectator-watch
+      role: main-site
   extras:
     - participant-roster

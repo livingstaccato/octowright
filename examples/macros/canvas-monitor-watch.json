@@ -1,0 +1,14 @@
+{
+  "name": "canvas-monitor-watch",
+  "description": "[demo] Operator role: scroll the grid into view, scroll the page through several positions to show 'supervising', screenshot.",
+  "parameters": [],
+  "created_at": "2026-05-12T00:00:00Z",
+  "updated_at": "2026-05-12T00:00:00Z",
+  "actions": [
+    {"action": "wait_for", "selector": "#grid", "timeout_ms": 10000},
+    {"action": "evaluate", "expression": "document.querySelector('#grid').scrollIntoView({block: 'center', behavior: 'smooth'}); window.scrollY"},
+    {"action": "evaluate", "expression": "window.scrollBy({top: 200, behavior: 'smooth'}); window.scrollY"},
+    {"action": "evaluate", "expression": "window.scrollTo({top: 0, behavior: 'smooth'}); window.scrollY"},
+    {"action": "screenshot"}
+  ]
+}
