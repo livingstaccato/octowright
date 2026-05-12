@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,7 +14,9 @@ from typing import Any
 Color = tuple[int, int, int]
 ColorAlpha = tuple[int, int, int, int]
 
-MAGENTA: Color = (255, 0, 255)
+# Fully transparent base. The overlay PNG carries alpha straight to ffmpeg's
+# overlay filter, so we no longer need a chroma-key sentinel colour.
+TRANSPARENT: ColorAlpha = (0, 0, 0, 0)
 
 
 @dataclass(frozen=True)
@@ -72,9 +76,13 @@ FONT_5X7: dict[str, tuple[str, ...]] = {
 
 DEFAULT_OVERLAY_BOX = OverlayBox(
     anchor="bottom-left",
-    background_rgba=(12, 16, 24, 88),
-    title_rgba=(245, 247, 250, 188),
-    subtitle_rgba=(203, 213, 225, 164),
+    # Low-key dark pill with real alpha. Pre-PNG (PPM + chroma-key), low
+    # alphas blended with magenta producing the hot-pink labels users
+    # complained about. With proper RGBA PNG output the alpha is now the
+    # alpha you actually see in the composited video.
+    background_rgba=(18, 22, 30, 130),
+    title_rgba=(232, 235, 240, 220),
+    subtitle_rgba=(200, 206, 216, 200),
     padding=12,
     margin=18,
 )
@@ -89,7 +97,7 @@ def render_overlay_image(
     canvas_width: int,
     canvas_height: int,
 ) -> Path:
-    pixels = [list([MAGENTA] * canvas_width) for _ in range(canvas_height)]
+    pixels = [list([TRANSPARENT] * canvas_width) for _ in range(canvas_height)]
     normalized_title = title.strip().upper()
     normalized_subtitle = subtitle.strip().upper()
     if normalized_title or normalized_subtitle:
@@ -102,11 +110,11 @@ def render_overlay_image(
         )
     for pane in panes:
         _draw_pane_label(pixels, pane)
-    _write_ppm(target_path, pixels)
+    _write_png(target_path, pixels)
     return target_path
 
 
-def _draw_pane_label(pixels: list[list[Color]], pane: dict[str, Any]) -> None:
+def _draw_pane_label(pixels: list[list[ColorAlpha]], pane: dict[str, Any]) -> None:
     label_parts = [str(pane["persona"]).upper()]
     role = str(pane["role"]).upper()
     kind = str(pane["kind"]).upper()
@@ -133,7 +141,7 @@ def _draw_pane_label(pixels: list[list[Color]], pane: dict[str, Any]) -> None:
 
 
 def _draw_overlay_box(
-    pixels: list[list[Color]],
+    pixels: list[list[ColorAlpha]],
     *,
     title: str,
     subtitle: str,
@@ -172,7 +180,7 @@ def _measure_text(text: str, *, scale: int) -> int:
     return sum((5 * scale) + scale for _ in text)
 
 
-def _draw_text(pixels: list[list[Color]], x: int, y: int, text: str, *, scale: int, color: ColorAlpha) -> None:
+def _draw_text(pixels: list[list[ColorAlpha]], x: int, y: int, text: str, *, scale: int, color: ColorAlpha) -> None:
     cursor = x
     for char in text:
         glyph = FONT_5X7.get(char, FONT_5X7["?"])
@@ -191,7 +199,7 @@ def _draw_text(pixels: list[list[Color]], x: int, y: int, text: str, *, scale: i
         cursor += (5 * scale) + scale
 
 
-def _blend_rect(pixels: list[list[Color]], x0: int, y0: int, x1: int, y1: int, color: ColorAlpha) -> None:
+def _blend_rect(pixels: list[list[ColorAlpha]], x0: int, y0: int, x1: int, y1: int, color: ColorAlpha) -> None:
     height = len(pixels)
     width = len(pixels[0]) if pixels else 0
     left = max(0, x0)
@@ -204,20 +212,49 @@ def _blend_rect(pixels: list[list[Color]], x0: int, y0: int, x1: int, y1: int, c
             line[col] = _blend_pixel(line[col], color)
 
 
-def _blend_pixel(base: Color, overlay: ColorAlpha) -> Color:
-    alpha = overlay[3] / 255.0
-    r = round((base[0] * (1.0 - alpha)) + (overlay[0] * alpha))
-    g = round((base[1] * (1.0 - alpha)) + (overlay[1] * alpha))
-    b = round((base[2] * (1.0 - alpha)) + (overlay[2] * alpha))
-    return (r, g, b)
+def _blend_pixel(base: ColorAlpha, overlay: ColorAlpha) -> ColorAlpha:
+    """Standard "source over" RGBA compositing. Pre-multiplied output alpha
+    lets stacked semi-transparent rects (label rect + text on top) combine
+    correctly, and the final PNG carries that alpha to ffmpeg's overlay
+    filter which composites it on the video natively."""
+    src_a = overlay[3] / 255.0
+    dst_a = base[3] / 255.0
+    out_a = src_a + dst_a * (1.0 - src_a)
+    if out_a <= 0.0:
+        return (0, 0, 0, 0)
+    inv = 1.0 - src_a
+    r = round(((overlay[0] * src_a) + (base[0] * dst_a * inv)) / out_a)
+    g = round(((overlay[1] * src_a) + (base[1] * dst_a * inv)) / out_a)
+    b = round(((overlay[2] * src_a) + (base[2] * dst_a * inv)) / out_a)
+    return (r, g, b, round(out_a * 255))
 
 
-def _write_ppm(target_path: Path, pixels: list[list[Color]]) -> None:
+def _write_png(target_path: Path, pixels: list[list[ColorAlpha]]) -> None:
+    """Write an RGBA PNG using stdlib only (zlib + struct).
+
+    The format is the simplest legal PNG: a single IHDR (8-bit RGBA), one
+    IDAT with filter-type 0 (no filter) per scanline, and an IEND. Good
+    enough for an overlay sprite — no Pillow needed.
+    """
     target_path.parent.mkdir(parents=True, exist_ok=True)
     height = len(pixels)
     width = len(pixels[0]) if pixels else 0
+
+    raw = bytearray()
+    for row in pixels:
+        raw.append(0)  # filter type: None
+        for r, g, b, a in row:
+            raw.extend((r, g, b, a))
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)  # 8-bit, RGBA
+    idat = zlib.compress(bytes(raw), 6)
+
     with target_path.open("wb") as handle:
-        handle.write(f"P6\n{width} {height}\n255\n".encode("ascii"))
-        for row in pixels:
-            for red, green, blue in row:
-                handle.write(bytes((red, green, blue)))
+        handle.write(b"\x89PNG\r\n\x1a\n")
+        handle.write(_chunk(b"IHDR", ihdr))
+        handle.write(_chunk(b"IDAT", idat))
+        handle.write(_chunk(b"IEND", b""))
