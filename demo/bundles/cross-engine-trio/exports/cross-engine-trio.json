@@ -32,50 +32,50 @@
         }
       ],
       "video": {
-        "duration_seconds": 9.32,
-        "height": 360,
+        "duration_seconds": 8.68,
+        "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 451254,
+        "size_bytes": 961551,
         "width": 1920
       }
     },
     "bundle_id": "cross-engine-trio",
     "composition": {
-      "canvas_height": 360,
+      "canvas_height": 1080,
       "canvas_width": 1920,
-      "cell_height": 360,
-      "cell_width": 640,
-      "columns": 3,
+      "cell_height": 540,
+      "cell_width": 960,
+      "columns": 2,
       "mode": "sync-multi",
       "overlay": {
         "panes": [
           {
-            "height": 360,
+            "height": 540,
             "kind": "chromium",
             "persona": "cx-chromium",
             "role": "player",
-            "width": 640,
+            "width": 960,
             "x": 0,
             "y": 0
           },
           {
-            "height": 360,
+            "height": 540,
             "kind": "firefox",
             "persona": "cx-firefox",
             "role": "player",
-            "width": 640,
-            "x": 640,
+            "width": 960,
+            "x": 960,
             "y": 0
           },
           {
-            "height": 360,
+            "height": 540,
             "kind": "webkit",
             "persona": "cx-webkit",
             "role": "player",
-            "width": 640,
-            "x": 1280,
-            "y": 0
+            "width": 960,
+            "x": 0,
+            "y": 540
           }
         ],
         "subtitle": "",
@@ -83,31 +83,31 @@
       },
       "panes": [
         {
-          "height": 360,
+          "height": 540,
           "kind": "chromium",
           "persona": "cx-chromium",
           "role": "player",
-          "width": 640,
+          "width": 960,
           "x": 0,
           "y": 0
         },
         {
-          "height": 360,
+          "height": 540,
           "kind": "firefox",
           "persona": "cx-firefox",
           "role": "player",
-          "width": 640,
-          "x": 640,
+          "width": 960,
+          "x": 960,
           "y": 0
         },
         {
-          "height": 360,
+          "height": 540,
           "kind": "webkit",
           "persona": "cx-webkit",
           "role": "player",
-          "width": 640,
-          "x": 1280,
-          "y": 0
+          "width": 960,
+          "x": 0,
+          "y": 540
         }
       ],
       "supporting_videos": [
@@ -178,11 +178,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 9.32,
-      "height": 360,
+      "duration_seconds": 8.68,
+      "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 451254,
+      "size_bytes": 961551,
       "width": 1920
     },
     "supporting": [
