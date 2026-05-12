@@ -31,8 +31,13 @@ class RenderPlan:
 
 
 _SYNC_MULTI_PRESETS: dict[str, RenderPlan] = {
-    "cross-engine-trio": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=540),
-    "role-based-duo": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=1080),
+    # 3 engines in a single row so all three cells are filled. The prior
+    # 2-column layout left cell [1,1] empty, which ffmpeg's xstack rendered
+    # as a saturated green panel in the published video.
+    "cross-engine-trio": RenderPlan(kind="sync-multi", columns=3, cell_width=640, cell_height=360),
+    # 2 browsers side-by-side at 16:9. The prior 960x1080 cells letterboxed
+    # the 1280x720 sources with large black bars top and bottom.
+    "role-based-duo": RenderPlan(kind="sync-multi", columns=2, cell_width=960, cell_height=540),
 }
 
 _HERO_COMPOSITE_PRESETS: dict[str, RenderPlan] = {
