@@ -25,26 +25,26 @@
         }
       ],
       "video": {
-        "duration_seconds": 9.92,
-        "height": 1080,
+        "duration_seconds": 9.44,
+        "height": 540,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 66340,
+        "size_bytes": 58020,
         "width": 1920
       }
     },
     "bundle_id": "role-based-duo",
     "composition": {
-      "canvas_height": 1080,
+      "canvas_height": 540,
       "canvas_width": 1920,
-      "cell_height": 1080,
+      "cell_height": 540,
       "cell_width": 960,
       "columns": 2,
       "mode": "sync-multi",
       "overlay": {
         "panes": [
           {
-            "height": 1080,
+            "height": 540,
             "kind": "chromium",
             "persona": "duo-player",
             "role": "player",
@@ -53,7 +53,7 @@
             "y": 0
           },
           {
-            "height": 1080,
+            "height": 540,
             "kind": "chromium",
             "persona": "duo-monitor",
             "role": "monitor",
@@ -67,7 +67,7 @@
       },
       "panes": [
         {
-          "height": 1080,
+          "height": 540,
           "kind": "chromium",
           "persona": "duo-player",
           "role": "player",
@@ -76,7 +76,7 @@
           "y": 0
         },
         {
-          "height": 1080,
+          "height": 540,
           "kind": "chromium",
           "persona": "duo-monitor",
           "role": "monitor",
@@ -140,11 +140,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 9.92,
-      "height": 1080,
+      "duration_seconds": 9.44,
+      "height": 540,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 66340,
+      "size_bytes": 58020,
       "width": 1920
     },
     "supporting": [
