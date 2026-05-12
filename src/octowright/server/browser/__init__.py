@@ -12,6 +12,7 @@ to make every browser_* tool callable.
 
 from __future__ import annotations
 
+from octowright.server.browser import each as _each  # noqa: F401
 from octowright.server.browser import input as _input  # noqa: F401
 from octowright.server.browser import inspect as _inspect  # noqa: F401
 from octowright.server.browser import lifecycle as _lifecycle  # noqa: F401
