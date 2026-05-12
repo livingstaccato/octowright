@@ -2,7 +2,7 @@
   "participants": [
     {
       "har": false,
-      "instance_id": "14789db8bad1",
+      "instance_id": "32647fb264dc",
       "kind": "webkit",
       "label": null,
       "persona": "p1",
@@ -14,7 +14,7 @@
     },
     {
       "har": false,
-      "instance_id": "35f2327b6fb6",
+      "instance_id": "d9b6e0f2e0b3",
       "kind": "webkit",
       "label": null,
       "persona": "p2",
@@ -26,7 +26,7 @@
     },
     {
       "har": false,
-      "instance_id": "8265b3d276ca",
+      "instance_id": "e45399fdd9b6",
       "kind": "webkit",
       "label": null,
       "persona": "p3",
@@ -38,7 +38,7 @@
     },
     {
       "har": false,
-      "instance_id": "2fe23f5ee117",
+      "instance_id": "a1b0b70fb878",
       "kind": "firefox",
       "label": null,
       "persona": "p4",
@@ -50,7 +50,7 @@
     },
     {
       "har": false,
-      "instance_id": "3c785bf536e8",
+      "instance_id": "4f6b6d050050",
       "kind": "firefox",
       "label": null,
       "persona": "p5",
@@ -62,7 +62,7 @@
     },
     {
       "har": false,
-      "instance_id": "890bd9878fb8",
+      "instance_id": "5573815b13d9",
       "kind": "chromium",
       "label": null,
       "persona": "p6",
@@ -74,7 +74,7 @@
     },
     {
       "har": false,
-      "instance_id": "e562d566bc96",
+      "instance_id": "a6969e05a754",
       "kind": "chromium",
       "label": null,
       "persona": "p7",
@@ -86,7 +86,7 @@
     },
     {
       "har": false,
-      "instance_id": "9e375ab2e4c0",
+      "instance_id": "d2c6df2fe632",
       "kind": "webkit",
       "label": null,
       "persona": "ops",
@@ -98,7 +98,7 @@
     },
     {
       "har": false,
-      "instance_id": "7eb0cdb75127",
+      "instance_id": "e9717dabaa5c",
       "kind": "chromium",
       "label": null,
       "persona": "spectator",
@@ -109,5 +109,5 @@
       "url": "http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"
     }
   ],
-  "scenario_id": "8ad57217fdc9"
+  "scenario_id": "236669af759a"
 }

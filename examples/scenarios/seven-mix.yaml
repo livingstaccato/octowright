@@ -48,3 +48,5 @@ fixtures:
   dialog_policy: dismiss
 verify:
   player: "canvas-claim-five"
+  monitor: "canvas-monitor-watch"
+  main-site: "canvas-spectator-watch"

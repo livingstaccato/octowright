@@ -11,7 +11,7 @@
 - Regen: `uv run python scripts/demos/record_demo.py cross-engine-trio`
 - Artifacts: replay 1/1, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-12 02:02:36 UTC
+- Last generated: 2026-05-12 02:11:24 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`; declared `artifacts/replay.jsonl`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
@@ -50,7 +50,7 @@
 - Regen: `uv run python scripts/demos/with_playground.py seven-mix-orchestration`
 - Artifacts: replay 2/2, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-12 01:45:52 UTC
+- Last generated: 2026-05-12 16:24:05 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/participant-roster.json`; declared `artifacts/replay.jsonl`, `artifacts/participant-roster.json`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
