@@ -60,7 +60,7 @@ Field reference:
 |---|---|
 | `name` | Slug used for the directory and CLI lookups. Must match the parent dir name. |
 | `display_name` | Human-readable label shown in dashboard cards and window titles. |
-| `default_url` | URL `browser_launch persona=dante` opens when no `url` is given. |
+| `default_url` | URL `browser_launch profile=dante` opens when no `url` is given. |
 | `default_macros` | List of macro names to run automatically after launch (e.g. login flow). |
 | `emoji` | Override for the auto-picked title-bar persona emoji. |
 | `credentials` | References to env vars (`*_env`) or shell commands (`*_cmd`) — never the secrets themselves. |
