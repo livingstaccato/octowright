@@ -55,10 +55,13 @@ function buildPanelInstance<Scope, State>(
   state: State,
   openPanels: Map<string, boolean>,
 ): PanelInstance<Scope, State> {
-  const wrapper = panelSection(def.title, def.testid, def.buildBody(state), {
-    collapsible: def.collapsible,
+  const opts: { collapsible?: boolean; open?: boolean } = {
     open: openPanels.get(`panel-${def.testid}`) ?? def.defaultOpen ?? false,
-  });
+  };
+  if (def.collapsible !== undefined) {
+    opts.collapsible = def.collapsible;
+  }
+  const wrapper = panelSection(def.title, def.testid, def.buildBody(state), opts);
   return { scope: def.scope, testid: def.testid, root: wrapper, buildBody: def.buildBody };
 }
 

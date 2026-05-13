@@ -15,7 +15,11 @@ from __future__ import annotations
 from typing import Any
 
 from octowright import takeover as _takeover
+from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 from octowright.server._state import mcp, pool, scenario_pool
+from octowright.server.registry import registered_tool_names
+
+_STATUS_STALE_LIMIT = 20
 
 
 @mcp.tool(
@@ -134,9 +138,7 @@ def octowright_status() -> dict[str, Any]:
     from octowright import personas as _personas
     from octowright import session_manifest as _session_manifest
     from octowright import singleton as _singleton
-    from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
     from octowright.server.profiles import PROFILES, active_filter
-    from octowright.server.registry import registered_tool_names
 
     lock = _singleton.read_lock()
     daemon_pid: int | None = None
@@ -152,6 +154,8 @@ def octowright_status() -> dict[str, Any]:
     stale_sessions = _session_manifest.stale_entries(
         live_session_ids={session.instance_id for session in pool.iter_sessions()}
     )
+    stale_count = len(stale_sessions)
+    stale_preview = stale_sessions[:_STATUS_STALE_LIMIT]
 
     raw_profile = defaults.active_profile_raw()
     profile_filter = active_filter()
@@ -191,8 +195,9 @@ def octowright_status() -> dict[str, Any]:
         "pool": {
             "live_browsers": pool.active_count(),
             "live_scenarios": len(scenario_pool.list_live()),
-            "stale_manifest_sessions": stale_sessions,
-            "stale_manifest_count": len(stale_sessions),
+            "stale_manifest_sessions": stale_preview,
+            "stale_manifest_count": stale_count,
+            "stale_manifest_list_truncated": stale_count > len(stale_preview),
         },
         "personas": {
             "count": len(persona_names),

@@ -1,6 +1,6 @@
 # octowright-frontend
 
-TypeScript-only web debugger UI for octowright. Compiled with `tsc` directly to
+TypeScript web debugger UI for octowright. Built with Vite into
 the Python server's static-file directory (`src/octowright/server/frontend/`).
 
 ## Layout
@@ -17,12 +17,13 @@ npm install
 npm run typecheck    # tsc --noEmit
 npm run lint         # biome lint
 npm run test         # vitest run
-npm run build        # tsc + cp static/* into the server frontend dir
+npm run build        # vite build into src/octowright/server/frontend/
 npm run fix          # biome check --write --unsafe
 ```
 
-The `build` script copies `static/*` into `../../src/octowright/server/frontend/`
-which is the directory the Python Starlette server mounts.
+The `build` script uses Vite multi-entry HTML input from `static/` and emits
+flattened bundle assets into `../../src/octowright/server/frontend/`, which is
+the directory the Python Starlette server mounts.
 
 ## API contract
 

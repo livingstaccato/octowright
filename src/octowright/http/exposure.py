@@ -63,6 +63,19 @@ def sensitive_allowed_for_connection(connection: HTTPConnection) -> bool:
     return _sensitive_allowed_for_app(connection.app)
 
 
+def _cross_origin_blocked(request: Request) -> bool:
+    """Block browser-driven unsafe cross-origin requests to localhost dashboard APIs."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return False
+    origin = request.headers.get("origin")
+    if origin:
+        same_origin = f"{request.url.scheme}://{request.headers.get('host', '')}"
+        if origin != same_origin:
+            return True
+    sec_fetch_site = (request.headers.get("sec-fetch-site") or "").lower()
+    return sec_fetch_site in {"cross-site", "same-site"}
+
+
 def guard_sensitive_http(
     handler: Callable[[Request], Awaitable[ResponseT]],
 ) -> Callable[[Request], Awaitable[Response]]:
@@ -70,6 +83,8 @@ def guard_sensitive_http(
     async def guarded(request: Request) -> Response:
         if not sensitive_allowed_for_request(request):
             return JSONResponse(_REMOTE_DISABLED_BODY, status_code=403)
+        if _cross_origin_blocked(request):
+            return JSONResponse({"error": "cross-origin dashboard request is blocked"}, status_code=403)
         return await handler(request)
 
     return guarded

@@ -83,7 +83,7 @@ Octowright ships a Click-based CLI. Useful subcommands:
 
 ## Slimming the LLM tool surface
 
-The full MCP surface is ~89 tools. When a workflow only needs a slice (driving
+The full MCP surface is currently 94 tools. When a workflow only needs a slice (driving
 a browser, replaying macros, etc.), pass `--profile` to slim what the LLM
 sees at connection time:
 

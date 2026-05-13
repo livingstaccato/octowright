@@ -213,6 +213,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
   let currentState = EMPTY_STATE;
   let streamHealthy = false;
+  let refreshErrorShown = false;
   // Serialize tick() so concurrent SSE invalidations don't lose updates.
   let pendingTick: Promise<void> = Promise.resolve();
 
@@ -236,11 +237,16 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
       personas: state.personas.length,
       macros: state.macros.length,
     });
+    refreshErrorShown = false;
   };
 
   const tick = (scopes: ReadonlySet<DashboardScope> | null = null): Promise<void> => {
     pendingTick = pendingTick.then(() => runTick(scopes)).catch((err: unknown) => {
       log.warn({ event: "dashboard_tick_failed", error: String(err) });
+      if (!refreshErrorShown) {
+        showSnackbar(`Dashboard refresh failed: ${String(err)}`, true);
+        refreshErrorShown = true;
+      }
     });
     return pendingTick;
   };
@@ -298,4 +304,20 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   };
   activeDashboardDisposer = dispose;
   return dispose;
+}
+
+export function bootDashboardFromDom(doc: Document = document): void {
+  const root = doc.getElementById("app");
+  if (!root) {
+    log.warn({ event: "dashboard_root_missing" });
+    return;
+  }
+  bootDashboard(root).catch((err: unknown) => {
+    log.error({ event: "dashboard_boot_failed", error: String(err) });
+    root.textContent = `Dashboard failed to load: ${String(err)}`;
+  });
+}
+
+if (typeof document !== "undefined") {
+  bootDashboardFromDom(document);
 }

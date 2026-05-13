@@ -18,16 +18,9 @@ Install the engine binaries that match your installed Playwright version:
 uv run playwright install webkit firefox chromium
 ```
 
-When a launch fails immediately, suspect the engine binary first. The
-following MCP tools surface exactly what's installed and let you reinstall
-without leaving Claude:
-
-- `browser_engine_status` — reports installed engines and Playwright version drift.
-- `browser_engine_install` — installs a specific engine.
-- `browser_engine_reinstall` — wipes and reinstalls a specific engine.
-
-Run these *before* blaming higher-level macro or scenario logic for a
-launch failure.
+When a launch fails immediately, suspect the engine binary first. Today
+engine management is CLI-driven (`playwright install`, `playwright install --list`);
+Octowright does not currently expose dedicated MCP tools for install/reinstall.
 
 ## Launch mode (headed vs headless)
 
@@ -60,8 +53,9 @@ The persona/profile preserves practical continuity (cookies, localStorage,
 service workers) without requiring Octowright to mutate a running Playwright
 process.
 
-The `browser_handoff` tool exists for transitioning from automated flow to
-human takeover specifically — not for mode-switching.
+The `browser_handoff` behavior is implemented through close/relaunch semantics:
+preserve state by reusing the same profile between launches instead of mutating
+an existing Playwright process.
 
 ## Safari caveat
 

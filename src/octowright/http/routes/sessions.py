@@ -216,6 +216,16 @@ async def session_launch(request: Request) -> JSONResponse:
         "stabilize": payload.get("stabilize", False),
         "record_video": payload.get("record_video", False),
         "trace": payload.get("trace", False),
+        "har": payload.get("har", False),
+        "har_path": payload.get("har_path"),
+        "har_mode": payload.get("har_mode", "minimal"),
+        "har_url_filter": payload.get("har_url_filter"),
+        "har_content": payload.get("har_content"),
+        "badge": payload.get("badge", True),
+        "badge_position": payload.get("badge_position", "bottom-right"),
+        "tile": payload.get("tile", False),
+        "ephemeral": payload.get("ephemeral", False),
+        "session": payload.get("session", False),
     }
 
     pool = _state.pool
@@ -420,6 +430,16 @@ async def session_relaunch(request: Request) -> JSONResponse:
         "stabilize": launch.get("stabilize", False),
         "record_video": bool(launch.get("video_dir")),
         "trace": launch.get("trace", False),
+        "har": bool(launch.get("har_path") or launch.get("har")),
+        "har_path": launch.get("har_path"),
+        "har_mode": launch.get("har_mode", "minimal"),
+        "har_url_filter": launch.get("har_url_filter"),
+        "har_content": launch.get("har_content"),
+        "badge": launch.get("badge", True),
+        "badge_position": launch.get("badge_position", "bottom-right"),
+        "tile": launch.get("tile", False),
+        "ephemeral": launch.get("ephemeral", False),
+        "session": launch.get("session", False),
     }
 
     try:

@@ -73,3 +73,25 @@ def test_status_reports_stale_manifest_sessions(monkeypatch, tmp_path: Path) -> 
 
     assert snap["pool"]["stale_manifest_count"] == 1
     assert snap["pool"]["stale_manifest_sessions"][0]["session_id"] == "status-stale"
+
+
+def test_status_caps_returned_stale_manifest_list(monkeypatch, tmp_path: Path) -> None:
+    from octowright import session_manifest as _manifest
+
+    manifest_path = tmp_path / "recordings" / "session-manifest.json"
+    monkeypatch.setattr(_manifest, "SESSION_MANIFEST_PATH", manifest_path)
+    for idx in range(40):
+        _manifest.record_launch(
+            session_id=f"status-stale-{idx:02d}",
+            kind="chromium",
+            label=f"status-{idx}",
+            profile=None,
+            user_data_dir=None,
+            log_path=tmp_path / "recordings" / f"status-stale-{idx:02d}.jsonl",
+        )
+
+    snap = octowright_status()
+
+    assert snap["pool"]["stale_manifest_count"] == 40
+    assert len(snap["pool"]["stale_manifest_sessions"]) == 20
+    assert snap["pool"]["stale_manifest_list_truncated"] is True
