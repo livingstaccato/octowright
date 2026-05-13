@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadState, renderDashboard } from "./dashboard.js";
+import { bootDashboardFromDom, loadState, renderDashboard } from "./dashboard.js";
 import * as api from "./api.js";
 import type {
   LiveScenario,
@@ -39,6 +39,7 @@ vi.mock("./api.js", async (importOriginal) => {
     getScenarios: vi.fn(async () => ({ live: [] })),
     getPersonas: vi.fn(async () => []),
     getMacros: vi.fn(async () => []),
+    getPersonaSizes: vi.fn(async () => ({})),
   };
 });
 
@@ -49,6 +50,16 @@ beforeEach(() => {
   root = document.createElement("div");
   document.body.append(root);
 });
+
+async function waitForElement(selector: string, maxTicks = 20): Promise<Element | null> {
+  for (let i = 0; i < maxTicks; i++) {
+    const el = document.querySelector(selector);
+    if (el) return el;
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return document.querySelector(selector);
+}
 
 const sessions: SessionListResponse = {
   live: [
@@ -230,5 +241,24 @@ describe("loadState", () => {
       personas: [],
       macros: [],
     });
+  });
+});
+
+describe("bootDashboardFromDom", () => {
+  it("mounts dashboard when #app exists", async () => {
+    const app = document.createElement("main");
+    app.id = "app";
+    document.body.append(app);
+    vi.mocked(api.getSessions).mockResolvedValueOnce(sessions);
+    vi.mocked(api.getScenarios).mockResolvedValueOnce(scenarios);
+    vi.mocked(api.getPersonas).mockResolvedValueOnce(personas);
+    vi.mocked(api.getMacros).mockResolvedValueOnce(macros);
+
+    bootDashboardFromDom(document);
+    const panel = await waitForElement('[data-testid="panel-live-browsers"]');
+
+    expect(vi.mocked(api.getSessions)).toHaveBeenCalled();
+    expect(panel).not.toBeNull();
+    app.remove();
   });
 });

@@ -235,6 +235,68 @@ def test_health_route_is_unguarded_on_remote_bind(monkeypatch: pytest.MonkeyPatc
     assert response.json()["ok"] is True
 
 
+def test_cross_origin_unsafe_api_request_is_rejected() -> None:
+    with TestClient(_http.build_app()) as client:
+        response = client.post(
+            "/api/sessions",
+            json={"kind": "chromium"},
+            headers={"origin": "https://evil.example"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "cross-origin dashboard request is blocked"
+
+
+def test_same_origin_unsafe_api_request_is_allowed() -> None:
+    with TestClient(_http.build_app()) as client:
+        response = client.post(
+            "/api/sessions/s1/navigate",
+            json={"url": "https://example.com"},
+            headers={"origin": "http://testserver"},
+        )
+
+    assert response.status_code != 403
+
+
+@pytest.mark.parametrize(
+    ("host", "origin", "expected_blocked"),
+    [
+        ("localhost:8765", "http://localhost:8765", False),
+        ("127.0.0.1:8765", "http://127.0.0.1:8765", False),
+        ("localhost:8765", "http://localhost:9999", True),
+        ("127.0.0.1:8765", "http://localhost:8765", True),
+    ],
+)
+def test_origin_host_and_port_matching_for_unsafe_requests(
+    host: str,
+    origin: str,
+    expected_blocked: bool,
+) -> None:
+    with TestClient(_http.build_app()) as client:
+        response = client.post(
+            "/api/sessions/s1/navigate",
+            json={"url": "https://example.com"},
+            headers={"origin": origin, "host": host},
+        )
+    if expected_blocked:
+        assert response.status_code == 403
+        assert response.json()["error"] == "cross-origin dashboard request is blocked"
+    else:
+        assert response.status_code != 403
+
+
+def test_fetch_metadata_cross_site_unsafe_api_request_is_rejected() -> None:
+    with TestClient(_http.build_app()) as client:
+        response = client.post(
+            "/api/sessions",
+            json={"kind": "chromium"},
+            headers={"sec-fetch-site": "cross-site"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "cross-origin dashboard request is blocked"
+
+
 def test_public_static_assets_are_unguarded_on_remote_bind(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -297,6 +297,16 @@ def test_post_sessions_forwards_all_optional_kwargs(
         "stabilize": True,
         "record_video": True,
         "trace": True,
+        "har": True,
+        "har_path": "captures/a.har",
+        "har_mode": "full",
+        "har_url_filter": "example.com",
+        "har_content": "embed",
+        "badge": False,
+        "badge_position": "top-left",
+        "tile": True,
+        "ephemeral": True,
+        "session": False,
     }
     r = client.post("/api/sessions", json=payload)
     assert r.status_code == 201, r.text
@@ -313,6 +323,16 @@ def test_post_sessions_forwards_all_optional_kwargs(
         "stabilize",
         "record_video",
         "trace",
+        "har",
+        "har_path",
+        "har_mode",
+        "har_url_filter",
+        "har_content",
+        "badge",
+        "badge_position",
+        "tile",
+        "ephemeral",
+        "session",
     ):
         assert call[key] == payload[key], f"mismatch on {key}: {call[key]!r} vs {payload[key]!r}"
 
@@ -327,6 +347,18 @@ def test_post_sessions_default_url_when_omitted(
     assert r.status_code == 201, r.text
     assert pool.launch_calls[0]["url"] == _http.DEFAULT_URL
     assert pool.launch_calls[0]["headed"] is None
+
+
+def test_post_sessions_rejects_non_json_content_type(
+    client: TestClient,
+) -> None:
+    r = client.post(
+        "/api/sessions",
+        content=b'{"kind":"chromium"}',
+        headers={"content-type": "text/plain"},
+    )
+    assert r.status_code == 415
+    assert "application/json" in r.json()["error"]
 
 
 def test_post_sessions_preserves_explicit_headed_false(
@@ -810,6 +842,54 @@ def test_post_session_relaunch_happy_path(
     assert pool.launch_calls[0]["profile"] == "microdosing"
     assert pool.launch_calls[0]["viewport_w"] == 1280
     assert pool.launch_calls[0]["viewport_h"] == 800
+
+
+def test_post_session_relaunch_preserves_extended_launch_fields(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    _write_recording(
+        isolated_recordings,
+        "relaunchext01",
+        {
+            "kind": "chromium",
+            "url": "https://example.com",
+            "profile": "dante",
+            "label": "qa",
+            "viewport": {"w": 1440, "h": 900},
+            "stabilize": True,
+            "trace": True,
+            "video_dir": "/tmp/video-dir",
+            "har": True,
+            "har_path": "/tmp/demo.har",
+            "har_mode": "full",
+            "har_url_filter": "example.com",
+            "har_content": "embed",
+            "badge": False,
+            "badge_position": "top-left",
+            "tile": True,
+            "ephemeral": True,
+            "session": False,
+        },
+    )
+    r = client.post("/api/sessions/relaunchext01/relaunch")
+    assert r.status_code == 201
+    call = pool.launch_calls[0]
+    assert call["stabilize"] is True
+    assert call["trace"] is True
+    assert call["record_video"] is True
+    assert call["har"] is True
+    assert call["har_path"] == "/tmp/demo.har"
+    assert call["har_mode"] == "full"
+    assert call["har_url_filter"] == "example.com"
+    assert call["har_content"] == "embed"
+    assert call["badge"] is False
+    assert call["badge_position"] == "top-left"
+    assert call["tile"] is True
+    assert call["ephemeral"] is True
+    assert call["session"] is False
 
 
 def test_post_session_relaunch_409_when_live(

@@ -24,6 +24,12 @@ async def _read_json_body(request: Request) -> tuple[Any, JSONResponse | None]:
     raw = await request.body()
     if not raw:
         return {}, None
+    content_type = (request.headers.get("content-type") or "").lower()
+    if not content_type.startswith("application/json"):
+        return None, JSONResponse(
+            {"error": "content-type must be application/json for JSON request bodies"},
+            status_code=415,
+        )
     try:
         return json.loads(raw), None
     except json.JSONDecodeError as e:
