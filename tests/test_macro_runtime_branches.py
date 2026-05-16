@@ -106,15 +106,24 @@ class TestConstantTables:
             ("set_input_files", "set_input_files"),
             ("click_by", "click_by"),
             ("fill_by", "fill_by"),
+            ("hover", "hover"),
+            ("select_option", "select_option"),
+            ("drag", "drag"),
+            ("navigate_back", "navigate_back"),
+            ("resize", "resize"),
+            ("open_url", "open_url"),
+            ("switch_page", "switch_page"),
+            ("close_page", "close_page"),
+            ("reset_frame", "reset_frame"),
         ],
     )
     def test_action_map_pins_every_action_to_session_method(self, kind: str, method: str) -> None:
         """_ACTION_MAP must keep its kind→method-name binding stable."""
         assert _ACTION_MAP[kind] == method
 
-    def test_action_map_size_is_exactly_18(self) -> None:
+    def test_action_map_size_is_exactly_27(self) -> None:
         """Adding/removing keys to _ACTION_MAP is a contract change — fail loudly."""
-        assert len(_ACTION_MAP) == 18
+        assert len(_ACTION_MAP) == 27
 
     def test_type_kind_maps_to_type_text_not_type(self) -> None:
         """Pin the rename from 'type' kind → session.type_text method (not session.type)."""
@@ -614,3 +623,129 @@ class TestDispatchOneRouting:
         )
         assert result == (1, 0)
         s.navigate.assert_awaited_once_with(url="x")
+
+
+# --------------------------------------------------------------------------
+# Newly-replayable actions (previously recorded but absent from _ACTION_MAP)
+# --------------------------------------------------------------------------
+
+
+class TestNewlyReplayableActions:
+    @pytest.mark.anyio
+    async def test_hover_dispatches_to_session_hover_with_selector(self) -> None:
+        s = MagicMock()
+        s.hover = AsyncMock()
+        result = await _dispatch_via_simple(s, {"action": "hover", "selector": "#btn"})
+        assert result == (1, 0)
+        s.hover.assert_awaited_once_with(selector="#btn")
+
+    @pytest.mark.anyio
+    async def test_select_option_passes_through_kwargs(self) -> None:
+        s = MagicMock()
+        s.select_option = AsyncMock()
+        result = await _dispatch_via_simple(
+            s,
+            {"action": "select_option", "selector": "#sel", "value": "v1"},
+        )
+        assert result == (1, 0)
+        s.select_option.assert_awaited_once_with(selector="#sel", value="v1")
+
+    @pytest.mark.anyio
+    async def test_drag_renames_source_and_target_to_method_signature(self) -> None:
+        """Recorder writes ``source``/``target``; method takes ``source_selector``/``target_selector``."""
+        s = MagicMock()
+        s.drag = AsyncMock()
+        result = await _dispatch_via_simple(
+            s,
+            {"action": "drag", "source": "#a", "target": "#b"},
+        )
+        assert result == (1, 0)
+        s.drag.assert_awaited_once_with(source_selector="#a", target_selector="#b")
+
+    @pytest.mark.anyio
+    async def test_navigate_back_drops_recorded_url_field(self) -> None:
+        """``navigate_back`` records the resulting URL but the method takes no args."""
+        s = MagicMock()
+        s.navigate_back = AsyncMock()
+        result = await _dispatch_via_simple(
+            s,
+            {"action": "navigate_back", "url": "https://prev.example/"},
+        )
+        assert result == (1, 0)
+        s.navigate_back.assert_awaited_once_with()
+
+    @pytest.mark.anyio
+    async def test_resize_dispatches_with_width_and_height(self) -> None:
+        s = MagicMock()
+        s.resize = AsyncMock()
+        result = await _dispatch_via_simple(
+            s,
+            {"action": "resize", "width": 1280, "height": 720},
+        )
+        assert result == (1, 0)
+        s.resize.assert_awaited_once_with(width=1280, height=720)
+
+    @pytest.mark.anyio
+    async def test_open_url_dispatches_with_recorded_kwargs(self) -> None:
+        s = MagicMock()
+        s.open_url = AsyncMock()
+        result = await _dispatch_via_simple(
+            s,
+            {"action": "open_url", "url": "https://x.example/", "target": "tab", "page_index": 1},
+        )
+        assert result == (1, 0)
+        s.open_url.assert_awaited_once_with(url="https://x.example/", target="tab", page_index=1)
+
+    @pytest.mark.anyio
+    async def test_switch_page_drops_recorded_url(self) -> None:
+        s = MagicMock()
+        s.switch_page = AsyncMock()
+        result = await _dispatch_via_simple(
+            s,
+            {"action": "switch_page", "index": 2, "url": "https://second/"},
+        )
+        assert result == (1, 0)
+        s.switch_page.assert_awaited_once_with(index=2)
+
+    @pytest.mark.anyio
+    async def test_close_page_drops_recorded_was_active(self) -> None:
+        s = MagicMock()
+        s.close_page = AsyncMock()
+        result = await _dispatch_via_simple(
+            s,
+            {"action": "close_page", "index": 0, "was_active": True},
+        )
+        assert result == (1, 0)
+        s.close_page.assert_awaited_once_with(index=0)
+
+    @pytest.mark.anyio
+    async def test_reset_frame_dispatches_with_no_kwargs(self) -> None:
+        s = MagicMock()
+        s.reset_frame = AsyncMock()
+        result = await _dispatch_via_simple(s, {"action": "reset_frame"})
+        assert result == (1, 0)
+        s.reset_frame.assert_awaited_once_with()
+
+
+class TestPassiveEventsAndUnknownActions:
+    @pytest.mark.anyio
+    async def test_passive_console_event_skips_without_counting_error(self) -> None:
+        """Page-emitted events must be skipped silently (0, 0), not counted as errors."""
+        s = MagicMock()
+        result = await _dispatch_via_simple(
+            s,
+            {"action": "console", "text": "page log line"},
+        )
+        assert result == (0, 0)
+
+    @pytest.mark.anyio
+    async def test_unknown_action_kind_logs_warning_and_counts_error(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Truly unknown kinds (not skip, not passive, not in map) now log a warning."""
+        s = MagicMock()
+        with caplog.at_level("WARNING"):
+            result = await _dispatch_via_simple(s, {"action": "totally_made_up"})
+        assert result == (0, 1)
+        assert any("unknown_action_kind" in r.message for r in caplog.records)
