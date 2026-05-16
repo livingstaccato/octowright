@@ -19,6 +19,13 @@ def main() -> None:
         "octowright/skills/using-octowright/skill.json",
         "octowright/skills/manifests/claude-plugin.json",
         "octowright/skills/manifests/codex-plugin.json",
+        # Built SPA — the wheel must include the dashboard the HTTP app
+        # serves at "/", or packaged installs ship a server with no UI.
+        "octowright/server/frontend/index.html",
+        "octowright/server/frontend/index.js",
+        "octowright/server/frontend/session.html",
+        "octowright/server/frontend/session.js",
+        "octowright/server/frontend/format.css",
     }
     with zipfile.ZipFile(wheels[0]) as zf:
         names = set(zf.namelist())
