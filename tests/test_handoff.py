@@ -86,8 +86,8 @@ async def test_handoff_rejects_keep_original_for_persistent() -> None:
     pool._sessions["old03"] = SimpleNamespace(
         instance_id="old03",
         kind="firefox",
-        profile="ops",
-        label="ops",
+        profile="mortimer",
+        label="mortimer",
         url="https://example.com",
         user_data_dir="/tmp/ops",
         har_path=None,

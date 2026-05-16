@@ -42,7 +42,7 @@ and resolve its credentials at use-time:
 
 ```yaml
 name: dante
-display_name: Dante Alighieri
+display_name: Dinosaur Dante
 default_url: https://discord.com/app
 default_macros: [discord-login]
 emoji: 🐬                         # optional title-bar override

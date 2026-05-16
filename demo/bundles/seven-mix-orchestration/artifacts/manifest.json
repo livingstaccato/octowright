@@ -58,7 +58,7 @@
         "role": "player"
       },
       {
-        "id": "ops",
+        "id": "mortimer",
         "kind": "webkit",
         "path": "artifacts/supporting/ops.mp4",
         "poster_path": "artifacts/supporting/ops.png",
@@ -154,7 +154,7 @@
         {
           "height": 360,
           "kind": "webkit",
-          "persona": "ops",
+          "persona": "mortimer",
           "role": "monitor",
           "width": 640,
           "x": 640,
@@ -240,7 +240,7 @@
       {
         "height": 360,
         "kind": "webkit",
-        "persona": "ops",
+        "persona": "mortimer",
         "role": "monitor",
         "width": 640,
         "x": 640,
@@ -314,10 +314,10 @@
         "role": "player"
       },
       {
-        "id": "ops",
+        "id": "mortimer",
         "kind": "webkit",
         "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/ops.mp4",
-        "persona": "ops",
+        "persona": "mortimer",
         "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/ops.png",
         "role": "monitor"
       },
@@ -370,7 +370,7 @@
     },
     {
       "kind": "webkit",
-      "persona": "ops",
+      "persona": "mortimer",
       "role": "monitor"
     },
     {

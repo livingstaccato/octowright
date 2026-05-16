@@ -236,28 +236,28 @@ class TestDrawPaneLabel:
 
     def test_with_full_pane_paints_label(self) -> None:
         pixels = self._canvas()
-        pane = {"persona": "alice", "role": "player", "kind": "chromium", "x": 0, "y": 0, "height": 100}
+        pane = {"persona": "cosmo", "role": "player", "kind": "chromium", "x": 0, "y": 0, "height": 100}
         _vo._draw_pane_label(pixels, pane)
         assert any(p != TRANSPARENT for row in pixels for p in row)
 
     def test_missing_height_treated_as_zero(self) -> None:
         pixels = self._canvas()
-        pane = {"persona": "alice", "role": "player", "kind": "chromium", "x": 0, "y": 0}
+        pane = {"persona": "cosmo", "role": "player", "kind": "chromium", "x": 0, "y": 0}
         _vo._draw_pane_label(pixels, pane)  # must not raise
 
     def test_empty_role_omitted_from_label(self) -> None:
         pixels = self._canvas()
-        pane = {"persona": "alice", "role": "", "kind": "chromium", "x": 0, "y": 0, "height": 100}
+        pane = {"persona": "cosmo", "role": "", "kind": "chromium", "x": 0, "y": 0, "height": 100}
         _vo._draw_pane_label(pixels, pane)
 
     def test_empty_kind_omitted_from_label(self) -> None:
         pixels = self._canvas()
-        pane = {"persona": "alice", "role": "player", "kind": "", "x": 0, "y": 0, "height": 100}
+        pane = {"persona": "cosmo", "role": "player", "kind": "", "x": 0, "y": 0, "height": 100}
         _vo._draw_pane_label(pixels, pane)
 
     def test_persona_uppercased(self) -> None:
         pixels = self._canvas()
-        pane = {"persona": "alice", "role": "p", "kind": "c", "x": 0, "y": 0, "height": 100}
+        pane = {"persona": "cosmo", "role": "p", "kind": "c", "x": 0, "y": 0, "height": 100}
         _vo._draw_pane_label(pixels, pane)
         assert any(p != TRANSPARENT for row in pixels for p in row)
 
@@ -320,7 +320,7 @@ class TestRenderOverlayImage:
     def test_panes_get_labels(self, tmp_path: Path) -> None:
         out = tmp_path / "ov.png"
         panes: list[dict[str, Any]] = [
-            {"persona": "alice", "role": "player", "kind": "chromium", "x": 10, "y": 10, "height": 80}
+            {"persona": "cosmo", "role": "player", "kind": "chromium", "x": 10, "y": 10, "height": 80}
         ]
         _vo.render_overlay_image(out, title="", subtitle="", panes=panes, canvas_width=200, canvas_height=200)
         width, _height, raw = _decode_png(out)

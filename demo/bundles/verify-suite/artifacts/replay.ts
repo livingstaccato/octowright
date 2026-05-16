@@ -30,9 +30,9 @@ const resolveBundleUrl = (raw: string): string => {
   await page.goto(resolveBundleUrl("bundle://seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2"));
   await page.evaluate("document.body.innerHTML = '<input id=user><input id=pass type=password>'");
   try {
-    await page.getByRole("form", { name: "" }).fill("alice");
+    await page.getByRole("form", { name: "" }).fill("cosmo");
   } catch {
-    await page.fill("#user", "alice");
+    await page.fill("#user", "cosmo");
   }
   try {
     await page.getByRole("form", { name: "" }).fill("hunter2");

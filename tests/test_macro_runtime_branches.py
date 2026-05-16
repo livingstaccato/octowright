@@ -250,7 +250,7 @@ class TestDispatchStandardKwargs:
                 "action": "navigate",
                 "ts": "2026-01-01T00:00:00Z",
                 "kind": "chromium",
-                "profile": "alice",
+                "profile": "cosmo",
                 "instance_id": "deadbeef",
                 "url": "https://example.com",
             },
