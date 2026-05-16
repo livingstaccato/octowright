@@ -37,6 +37,10 @@ MACROS_DIR = Path(os.environ.get("OCTOWRIGHT_MACROS_DIR", str(PROFILES_DIR.paren
 # Golden snapshot storage (accessibility-tree golden assertions).
 GOLDENS_DIR = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(_CONFIG_DIR / "goldens")))
 
+# Octowright Advisor local state: preferences, lightweight usage summaries,
+# and suggestion cooldown data. Override for tests or isolated deployments.
+ADVISOR_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_ADVISOR_STATE", str(_CONFIG_DIR / "advisor.json")))
+
 # Singleton-leader lockfile. Override via OCTOWRIGHT_LOCK_PATH for hermetic
 # tests that spawn a real daemon without touching the user's actual lockfile.
 LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(_CONFIG_DIR / "octowright.lock")))

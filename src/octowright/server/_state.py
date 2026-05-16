@@ -9,6 +9,8 @@ the same `mcp` and to share the same live state."""
 
 from __future__ import annotations
 
+import functools
+import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +28,35 @@ log = get_logger("octowright.server")
 
 pool = BrowserPool()
 scenario_pool = _scenarios.ScenarioPool()
+
+
+def _track_advisor_usage(fn: Callable[..., Any]) -> Callable[..., Any]:
+    tool_name = getattr(fn, "__name__", "")
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapped(*args: Any, **kwargs: Any) -> Any:
+            _record_advisor_tool_call(tool_name)
+            return await fn(*args, **kwargs)
+
+        return async_wrapped
+
+    @functools.wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        _record_advisor_tool_call(tool_name)
+        return fn(*args, **kwargs)
+
+    return wrapped
+
+
+def _record_advisor_tool_call(tool_name: str) -> None:
+    try:
+        from octowright import advisor as _advisor
+
+        _advisor.record_tool_call(tool_name)
+    except Exception as exc:
+        log.debug("octowright.advisor.record_tool_call_failed", tool=tool_name, error=str(exc))
 
 
 class _ProfiledFastMCP(FastMCP):
@@ -64,7 +95,11 @@ class _ProfiledFastMCP(FastMCP):
         )
         allowed = self._allowed_tools
         if allowed is None:
-            return decorator
+
+            def wrap_all(fn: Callable[..., Any]) -> Callable[..., Any]:
+                return decorator(_track_advisor_usage(fn))
+
+            return wrap_all
 
         def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
             # Plain `Callable` isn't guaranteed by the type system to carry
@@ -72,7 +107,7 @@ class _ProfiledFastMCP(FastMCP):
             # async def) which does. Use getattr so ty doesn't object.
             if getattr(fn, "__name__", "") not in allowed:
                 return fn
-            return decorator(fn)
+            return decorator(_track_advisor_usage(fn))
 
         return wrap
 

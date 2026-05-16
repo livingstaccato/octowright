@@ -303,6 +303,39 @@ class TestPersonaSizes:
         )
         assert client.get("/api/personas/sizes").json() == {}
 
+    def test_du_runs_in_worker_thread_not_event_loop(
+        self,
+        client: TestClient,
+        isolated_profiles: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A slow ``du`` must not block the asyncio event loop. If the
+        handler ever regresses to a synchronous ``subprocess.run(...)``,
+        a fake that sleeps inside the call would freeze the loop and the
+        request would only finish after that sleep — but more importantly,
+        the call would happen on the loop thread instead of a worker.
+
+        Capture the thread the fake ``run`` executes on and assert it
+        differs from the test's own thread, which is the same thread the
+        TestClient drives the loop on.
+        """
+        import threading
+
+        (isolated_profiles / "dante-davis").mkdir()
+        observed: dict[str, int] = {}
+
+        def fake_run(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+            observed["thread_id"] = threading.get_ident()
+            return SimpleNamespace(stdout=f"42\t{isolated_profiles / 'dante-davis'}\n")
+
+        monkeypatch.setattr(_http_state.subprocess, "run", fake_run)
+
+        r = client.get("/api/personas/sizes")
+        assert r.status_code == 200
+        assert r.json() == {"dante-davis": 42 * 1024}
+        assert "thread_id" in observed
+        assert observed["thread_id"] != threading.get_ident()
+
 
 # ─── persona_detail_endpoint ────────────────────────────────────────────────
 

@@ -31,9 +31,6 @@ packages/octowright-frontend/coverage/
 .codex-plugin/
 .gemini/
 memray.bin
-/using-octowright/
-verify_macro_explain.py
-scripts/profile_benchmarks.py
 
 .DS_Store
 .superpowers/
