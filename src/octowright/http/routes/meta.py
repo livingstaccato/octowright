@@ -22,6 +22,30 @@ from octowright.http.dashboard_events import publish_dashboard_invalidation
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _read_json_body
 from octowright.macros.lint import lint_macro
+from octowright.personas import _slug as _persona_slug
+
+
+def _resolve_persona_dir(name: str) -> tuple[Path | None, JSONResponse | None]:
+    """Map a path-param name to its profile dir, with containment validation.
+
+    The route's ``{name}`` is URL-decoded by Starlette and may carry traversal
+    payloads like ``%2E%2E``. Apply the slug regex to reject empty/dotted
+    names, then verify the resolved path stays under the module-level
+    ``PROFILES_DIR`` (which the test suite monkeypatches).
+    """
+    try:
+        slug = _persona_slug(name)
+    except ValueError:
+        return None, JSONResponse({"error": f"invalid persona name {name!r}"}, status_code=400)
+    candidate = PROFILES_DIR / slug
+    try:
+        resolved = candidate.resolve()
+        root = PROFILES_DIR.resolve()
+    except OSError:
+        return None, JSONResponse({"error": f"persona {name!r} not found"}, status_code=404)
+    if resolved != root and root not in resolved.parents:
+        return None, JSONResponse({"error": f"invalid persona name {name!r}"}, status_code=400)
+    return candidate, None
 
 
 async def list_personas_endpoint(_request: Request) -> JSONResponse:
@@ -148,7 +172,9 @@ async def persona_sizes_endpoint(_request: Request) -> JSONResponse:
 async def persona_detail_endpoint(request: Request) -> JSONResponse:
     """GET /api/personas/{name} — YAML content + per-engine disk usage."""
     name = request.path_params["name"]
-    p_dir = PROFILES_DIR / name
+    p_dir, err = _resolve_persona_dir(name)
+    if err is not None or p_dir is None:
+        return err if err is not None else JSONResponse({"error": "bad request"}, status_code=400)
     yaml_path = p_dir / "profile.yaml"
     if not yaml_path.exists():
         return JSONResponse({"error": f"persona {name!r} not found"}, status_code=404)
@@ -181,7 +207,9 @@ async def persona_detail_endpoint(request: Request) -> JSONResponse:
 async def persona_update_endpoint(request: Request) -> JSONResponse:
     """PUT /api/personas/{name} — update persona YAML."""
     name = request.path_params["name"]
-    p_dir = PROFILES_DIR / name
+    p_dir, err = _resolve_persona_dir(name)
+    if err is not None or p_dir is None:
+        return err if err is not None else JSONResponse({"error": "bad request"}, status_code=400)
     yaml_path = p_dir / "profile.yaml"
     if not yaml_path.exists():
         return JSONResponse({"error": f"persona {name!r} not found"}, status_code=404)
