@@ -12,7 +12,7 @@
     {
       "action": "fill",
       "selector": "#user",
-      "value": "alice"
+      "value": "cosmo"
     },
     {
       "action": "fill",
@@ -22,7 +22,7 @@
     {
       "action": "expect_js",
       "expression": "document.querySelector('#user').value",
-      "equals": "alice"
+      "equals": "cosmo"
     },
     {
       "action": "expect_js",

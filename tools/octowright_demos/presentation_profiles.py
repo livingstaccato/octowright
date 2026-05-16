@@ -58,7 +58,7 @@ _HERO_COMPOSITE_PRESETS: dict[str, RenderPlan] = {
             CompositePlacement("p5", 640, 360, 640, 360),
             CompositePlacement("p6", 1280, 360, 640, 360),
             CompositePlacement("p7", 0, 720, 640, 360),
-            CompositePlacement("ops", 640, 720, 640, 360),
+            CompositePlacement("mortimer", 640, 720, 640, 360),
             CompositePlacement("spectator", 1280, 720, 640, 360),
         ),
     )
