@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from subprocess import CompletedProcess
+from typing import Any, cast
 
 import yaml as _yaml
 from starlette.requests import Request
@@ -139,18 +141,31 @@ async def macro_update_endpoint(request: Request) -> JSONResponse:
 
 
 async def persona_sizes_endpoint(_request: Request) -> JSONResponse:
-    """GET /api/personas/sizes — bulk disk-size scan via du."""
+    """GET /api/personas/sizes — bulk disk-size scan via du.
+
+    ``du`` can take several seconds on a populous profile root, so the call
+    runs on a worker thread to keep the event loop responsive — otherwise
+    every concurrent HTTP request, WebSocket JSONL tail, and SSE dashboard
+    event stalls for the duration of the scan (up to the 15 s timeout).
+    """
     if not PROFILES_DIR.exists():
         return JSONResponse({})
     entries = [e for e in PROFILES_DIR.iterdir() if e.is_dir()]
     if not entries:
         return JSONResponse({})
     try:
-        result = state.subprocess.run(
-            ["du", "-sk"] + [str(e) for e in entries],
-            capture_output=True,
-            text=True,
-            timeout=15,
+        # text=True makes subprocess.run return CompletedProcess[str], but
+        # asyncio.to_thread can't propagate that overload narrowing through
+        # the call wrapper — cast back to keep the str-typed CompletedProcess.
+        result = cast(
+            "CompletedProcess[str]",
+            await asyncio.to_thread(
+                state.subprocess.run,
+                ["du", "-sk", "--", *(str(e) for e in entries)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            ),
         )
         sizes: dict[str, Any] = {}
         for line in result.stdout.splitlines():

@@ -29,6 +29,9 @@ log = get_logger("octowright.profiles")
 # are missing — filtering it out would defeat that self-awareness hint.
 ALWAYS_ON_TOOLS: frozenset[str] = frozenset(
     {
+        "octowright_advisor_record_macro_observation",
+        "octowright_advisor_set_preference",
+        "octowright_advisor_status",
         "octowright_status",
         "octowright_dashboard_url",
         "octowright_check_takeover",
