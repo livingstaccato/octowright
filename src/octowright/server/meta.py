@@ -12,8 +12,9 @@ browsers.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+from octowright import advisor as _advisor
 from octowright import takeover as _takeover
 from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 from octowright.server._state import mcp, pool, scenario_pool
@@ -118,6 +119,64 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
 @mcp.tool(
     structured_output=False,
     description=(
+        "Return Octowright Advisor status: local preferences, recent usage summary, "
+        "and current suggestions. Use this when deciding whether to ask the user "
+        "about saving repeated workflows as macros or changing OCTOWRIGHT_PROFILE."
+    ),
+)
+def octowright_advisor_status() -> dict[str, Any]:
+    """Return the local Octowright Advisor status snapshot."""
+    return _advisor.status()
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Set an Octowright Advisor preference. suggestion_type must be "
+        "`macro_candidate` or `profile_change`; preference must be `yes`, `no`, "
+        "or `automatic`. `automatic` may automate profile-change suggestions, "
+        "but macro candidates still require user approval before saving."
+    ),
+)
+def octowright_advisor_set_preference(suggestion_type: str, preference: str) -> dict[str, Any]:
+    """Persist an Advisor preference and return updated status."""
+    _advisor.set_preference(
+        cast(_advisor.SuggestionType, suggestion_type),
+        cast(_advisor.Preference, preference),
+    )
+    return {
+        "ok": True,
+        "advisor": _advisor.status(),
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Record an Advisor macro observation when a repeated workflow is noticed. "
+        "Call this with source=`llm` when you, the agent, notice repeated steps; "
+        "server-side detections may use source=`server`. Repeated matching "
+        "signatures produce a macro_candidate suggestion, but never auto-save a macro."
+    ),
+)
+def octowright_advisor_record_macro_observation(source: str, signature: str, summary: str) -> dict[str, Any]:
+    """Record a repeated-workflow observation and return updated Advisor status."""
+    if not signature.strip():
+        raise ValueError("signature must not be empty")
+    _advisor.record_macro_observation(
+        source=source.strip() or "unknown",
+        signature=signature.strip(),
+        summary=summary.strip(),
+    )
+    return {
+        "ok": True,
+        "advisor": _advisor.status(),
+    }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "First-touch status snapshot for octowright. WHEN TO INVOKE: call this "
         "ONCE per Claude Code session, the first time octowright comes up — before "
         "the first browser_launch — and present a brief banner to the user with "
@@ -204,5 +263,6 @@ def octowright_status() -> dict[str, Any]:
             "names": persona_names,
         },
         "profile": profile_block,
+        "advisor": _advisor.status(),
         "dashboard_url": _http.runtime_url() if http_status["running"] else None,
     }

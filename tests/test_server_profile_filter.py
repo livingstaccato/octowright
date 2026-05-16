@@ -91,6 +91,9 @@ def test_meta_tools_always_present_under_core_profile() -> None:
     allowed = profiles.build_allowed_set("core")
     assert "octowright_status" in allowed
     assert "octowright_dashboard_url" in allowed
+    assert "octowright_advisor_status" in allowed
+    assert "octowright_advisor_set_preference" in allowed
+    assert "octowright_advisor_record_macro_observation" in allowed
 
 
 def _registered_names_in_subprocess(env_value: str | None) -> set[str]:
@@ -126,6 +129,9 @@ def test_profile_core_subprocess_filters_tools() -> None:
     names = _registered_names_in_subprocess("core")
     expected = set(profiles.PROFILES["core"])
     assert expected.issubset(names), f"missing core tools: {expected - names}"
+    assert "octowright_advisor_status" in names
+    assert "octowright_advisor_set_preference" in names
+    assert "octowright_advisor_record_macro_observation" in names
     for absent in ("browser_snapshot", "scenario_start", "macro_save", "persona_list"):
         assert absent not in names, f"{absent} should not register under profile=core"
 
