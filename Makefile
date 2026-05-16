@@ -92,4 +92,7 @@ ci: lint audit test ## Local equivalent of CI: lint + pip-audit + tests
 
 clean: ## Remove caches + recordings + build artifacts
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage .coverage.* .hypothesis dist build *.egg-info
-	rm -rf recordings profiles .ci
+	rm -rf recordings profiles
+	# Only the CI-runtime scratch subdirs under .ci/ — the *-baseline.json and
+	# pip-audit-allow.txt files at the .ci/ root are tracked and must survive.
+	rm -rf .ci/recordings .ci/profiles .ci/scenarios .ci/macros .ci/goldens .ci/codex-home
