@@ -203,3 +203,19 @@ def test_middleware_request_without_session_header_does_not_create_entry() -> No
     _run_middleware(mw, method="GET", headers=[])
 
     assert tracker.active_count() == 0
+
+
+def test_middleware_ignores_non_ascii_session_id_bytes() -> None:
+    """Mcp-Session-Id is spec'd as ASCII. If a client sends non-ASCII bytes
+    we fail closed (skip the entry) rather than crash — the UnicodeDecodeError
+    branch in _extract_session_id_from_headers must be exercised."""
+    tracker = McpSessionTracker()
+    mw = McpSessionTrackingMiddleware(_passthrough_app, tracker)
+
+    _run_middleware(
+        mw,
+        method="POST",
+        headers=[(b"mcp-session-id", b"\xff\xfe\xfdnot-ascii")],
+    )
+
+    assert tracker.active_count() == 0
