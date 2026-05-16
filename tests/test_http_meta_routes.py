@@ -37,6 +37,25 @@ def test_persona_detail_404_when_missing(client: TestClient) -> None:
     assert r.status_code == 404
 
 
+def test_persona_detail_rejects_url_encoded_dotdot_traversal(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Plant a profile.yaml *outside* PROFILES_DIR; the endpoint must not
+    serve it via %2E%2E."""
+    decoy = tmp_path / "profile.yaml"
+    decoy.write_text("name: should-not-be-read\n")
+    r = client.get("/api/personas/%2E%2E")
+    assert r.status_code == 400
+    assert "invalid persona name" in r.json()["error"]
+
+
+def test_persona_update_rejects_url_encoded_dotdot_traversal(client: TestClient) -> None:
+    r = client.put("/api/personas/%2E%2E", json={"yaml": "name: pwned\n"})
+    assert r.status_code == 400
+    assert "invalid persona name" in r.json()["error"]
+
+
 def test_persona_update_rejects_bad_yaml(client: TestClient, tmp_path: Path) -> None:
     pdir = _meta_routes.PROFILES_DIR / "alice"
     pdir.mkdir(parents=True)
