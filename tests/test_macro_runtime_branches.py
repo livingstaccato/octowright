@@ -686,15 +686,31 @@ class TestNewlyReplayableActions:
         s.resize.assert_awaited_once_with(width=1280, height=720)
 
     @pytest.mark.anyio
-    async def test_open_url_dispatches_with_recorded_kwargs(self) -> None:
+    async def test_open_url_drops_recorded_page_index(self) -> None:
+        """open_url records the resulting page_index alongside the inputs, but
+        the method signature is ``open_url(url, target='tab', width=1024,
+        height=768)`` — page_index must be stripped before dispatch or replay
+        raises TypeError. Use a real async function (not AsyncMock) so wrong
+        kwargs surface as TypeError rather than silently passing through.
+        """
+        captured: dict[str, Any] = {}
+
+        async def real_open_url(url: str, target: str = "tab", width: int = 1024, height: int = 768) -> None:
+            captured.update({"url": url, "target": target, "width": width, "height": height})
+
         s = MagicMock()
-        s.open_url = AsyncMock()
+        s.open_url = real_open_url
         result = await _dispatch_via_simple(
             s,
             {"action": "open_url", "url": "https://x.example/", "target": "tab", "page_index": 1},
         )
         assert result == (1, 0)
-        s.open_url.assert_awaited_once_with(url="https://x.example/", target="tab", page_index=1)
+        assert captured == {
+            "url": "https://x.example/",
+            "target": "tab",
+            "width": 1024,
+            "height": 768,
+        }
 
     @pytest.mark.anyio
     async def test_switch_page_drops_recorded_url(self) -> None:
