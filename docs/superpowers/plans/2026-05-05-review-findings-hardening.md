@@ -30,7 +30,7 @@ async def test_start_cleans_up_and_fails_when_startup_macro_fails(monkeypatch: p
         async def spawn_roster(self, _specs: list[dict[str, object]]) -> dict[str, object]:
             return {
                 "launched": [
-                    {"instance_id": "i1", "log_path": "/tmp/i1.jsonl", "kind": "chromium", "profile": "alice"},
+                    {"instance_id": "i1", "log_path": "/tmp/i1.jsonl", "kind": "chromium", "profile": "cosmo"},
                 ],
                 "errors": [],
             }
@@ -45,7 +45,7 @@ async def test_start_cleans_up_and_fails_when_startup_macro_fails(monkeypatch: p
     browser_pool = FakeBrowserPool()
     spec = Scenario(
         name="demo",
-        participants=[Participant(persona="alice", kind="chromium", role="player", startup_macros=["login"])],
+        participants=[Participant(persona="cosmo", kind="chromium", role="player", startup_macros=["login"])],
     )
 
     monkeypatch.setattr("octowright.scenarios.resolve_launch_kwargs", lambda p: {"kind": p.kind, "profile": p.persona})
@@ -124,7 +124,7 @@ def test_remap_participant_rejects_unknown_replacement_instance() -> None:
         scenario_id="s1",
         name="demo",
         spec=object(),
-        participants=[{"instance_id": "old", "persona": "alice", "role": "player", "kind": "chromium"}],
+        participants=[{"instance_id": "old", "persona": "cosmo", "role": "player", "kind": "chromium"}],
     )
     pool._live["s1"] = live
 
@@ -147,11 +147,11 @@ def test_remap_participant_rejects_kind_mismatch() -> None:
         scenario_id="s1",
         name="demo",
         spec=object(),
-        participants=[{"instance_id": "old", "persona": "alice", "role": "player", "kind": "chromium"}],
+        participants=[{"instance_id": "old", "persona": "cosmo", "role": "player", "kind": "chromium"}],
     )
     pool._live["s1"] = live
 
-    replacement = SimpleNamespace(instance_id="new", kind="firefox", profile="alice")
+    replacement = SimpleNamespace(instance_id="new", kind="firefox", profile="cosmo")
 
     class FakeBrowserPool:
         def maybe_get(self, instance_id: str) -> object | None:
@@ -172,11 +172,11 @@ def test_remap_participant_rejects_profile_mismatch() -> None:
         scenario_id="s1",
         name="demo",
         spec=object(),
-        participants=[{"instance_id": "old", "persona": "alice", "role": "player", "kind": "chromium"}],
+        participants=[{"instance_id": "old", "persona": "cosmo", "role": "player", "kind": "chromium"}],
     )
     pool._live["s1"] = live
 
-    replacement = SimpleNamespace(instance_id="new", kind="chromium", profile="bob")
+    replacement = SimpleNamespace(instance_id="new", kind="chromium", profile="ziggy")
 
     class FakeBrowserPool:
         def maybe_get(self, instance_id: str) -> object | None:

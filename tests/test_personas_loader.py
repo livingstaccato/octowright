@@ -131,9 +131,9 @@ def test_list_personas_returns_empty_when_dir_missing(tmp_path, monkeypatch):
 def test_list_personas_skips_files_at_top_level(tmp_path, fresh_personas):
     """A stray file in PROFILES_DIR is not a persona dir."""
     (tmp_path / "stray.txt").write_text("not a persona")
-    _write_persona(tmp_path, "alice", {"name": "alice"})
+    _write_persona(tmp_path, "cosmo", {"name": "cosmo"})
     names = [p["name"] for p in fresh_personas.list_personas()]
-    assert names == ["alice"]
+    assert names == ["cosmo"]
 
 
 def test_list_personas_skips_dirs_without_profile_yaml(tmp_path, fresh_personas):
@@ -176,9 +176,9 @@ def test_list_personas_unparsable_yaml_logs_warning_and_keeps_entry(tmp_path, fr
 
 def test_list_personas_engines_only_includes_supported_kinds(tmp_path, fresh_personas):
     """Mutation: removing the SUPPORTED_KINDS filter would surface stray dirs as engines."""
-    pdir = tmp_path / "alice"
+    pdir = tmp_path / "cosmo"
     pdir.mkdir()
-    (pdir / "profile.yaml").write_text(yaml.safe_dump({"name": "alice"}))
+    (pdir / "profile.yaml").write_text(yaml.safe_dump({"name": "cosmo"}))
     (pdir / "chromium").mkdir()
     (pdir / "firefox").mkdir()
     (pdir / "webkit").mkdir()
@@ -189,9 +189,9 @@ def test_list_personas_engines_only_includes_supported_kinds(tmp_path, fresh_per
 
 def test_list_personas_skips_files_inside_persona_dir(tmp_path, fresh_personas):
     """Files inside the persona dir aren't engines."""
-    pdir = tmp_path / "alice"
+    pdir = tmp_path / "cosmo"
     pdir.mkdir()
-    (pdir / "profile.yaml").write_text(yaml.safe_dump({"name": "alice"}))
+    (pdir / "profile.yaml").write_text(yaml.safe_dump({"name": "cosmo"}))
     (pdir / "chromium").mkdir()
     (pdir / "notes.txt").write_text("hi")
     entry = fresh_personas.list_personas()[0]
@@ -199,7 +199,7 @@ def test_list_personas_skips_files_inside_persona_dir(tmp_path, fresh_personas):
 
 
 def test_list_personas_sorts_most_recent_mtime_first(tmp_path, fresh_personas):
-    """Mutation: flipping ``reverse=True`` to False would sort oldest-first."""
+    """Non-pinned personas still sort most-recent-first."""
     import os
     import time
 
@@ -218,9 +218,26 @@ def test_list_personas_sorts_most_recent_mtime_first(tmp_path, fresh_personas):
     assert names == ["newest", "newer", "old"]
 
 
+def test_list_personas_pins_dante_and_tim_first(tmp_path, fresh_personas):
+    """Dante and Tim are first-party examples and should stay easy to find."""
+    import os
+    import time
+
+    _write_persona(tmp_path, "newest", {"name": "newest"})
+    _write_persona(tmp_path, "tim", {"name": "tim", "display_name": "Tanooki Tim"})
+    _write_persona(tmp_path, "dante", {"name": "dante", "display_name": "Dinosaur Dante"})
+    now = time.time()
+    os.utime(tmp_path / "dante", (now - 300, now - 300))
+    os.utime(tmp_path / "tim", (now - 200, now - 200))
+    os.utime(tmp_path / "newest", (now, now))
+
+    names = [p["name"] for p in fresh_personas.list_personas()]
+    assert names == ["dante", "tim", "newest"]
+
+
 def test_list_personas_last_used_iso_format_matches_mtime(tmp_path, fresh_personas):
     """Mutation: removing the ``replace('+00:00', 'Z')`` would surface +00:00."""
-    _write_persona(tmp_path, "alice", {"name": "alice"})
+    _write_persona(tmp_path, "cosmo", {"name": "cosmo"})
     entry = fresh_personas.list_personas()[0]
     assert entry["last_used"].endswith("Z")
     assert "+00:00" not in entry["last_used"]
@@ -233,41 +250,41 @@ def test_list_personas_last_used_iso_format_matches_mtime(tmp_path, fresh_person
 
 def test_create_persona_minimal_writes_yaml_and_returns_dir(tmp_path, fresh_personas):
     """Mutation: returning the wrong path or skipping the yaml write would fail."""
-    pdir = fresh_personas.create_persona("alice")
-    assert pdir == tmp_path / "alice"
+    pdir = fresh_personas.create_persona("cosmo")
+    assert pdir == tmp_path / "cosmo"
     assert (pdir / "profile.yaml").exists()
     doc = yaml.safe_load((pdir / "profile.yaml").read_text())
-    assert doc == {"name": "alice"}
+    assert doc == {"name": "cosmo"}
 
 
 def test_create_persona_with_display_name_and_default_url(tmp_path, fresh_personas):
     """Mutation: dropping the ``if display_name`` / ``if default_url`` branch
     would either always include or always exclude the fields."""
-    pdir = fresh_personas.create_persona("bob", display_name="Bob the Builder", default_url="https://example.com")
+    pdir = fresh_personas.create_persona("ziggy", display_name="Zazzle Ziggy", default_url="https://example.com")
     doc = yaml.safe_load((pdir / "profile.yaml").read_text())
-    assert doc["display_name"] == "Bob the Builder"
+    assert doc["display_name"] == "Zazzle Ziggy"
     assert doc["default_url"] == "https://example.com"
 
 
 def test_create_persona_existing_yaml_raises_with_path(tmp_path, fresh_personas):
     """Mutation: removing the FileExistsError raise would silently overwrite."""
-    fresh_personas.create_persona("alice")
+    fresh_personas.create_persona("cosmo")
     with pytest.raises(FileExistsError) as exc:
-        fresh_personas.create_persona("alice")
-    assert "alice" in str(exc.value)
+        fresh_personas.create_persona("cosmo")
+    assert "cosmo" in str(exc.value)
     assert "profile.yaml" in str(exc.value)
 
 
 def test_create_persona_slugs_the_name_field(tmp_path, fresh_personas):
     """The yaml doc's name is the slugged form, not the raw input."""
-    pdir = fresh_personas.create_persona("alice and bob")
+    pdir = fresh_personas.create_persona("cosmo and ziggy")
     doc = yaml.safe_load((pdir / "profile.yaml").read_text())
-    assert doc["name"] == "alice-and-bob"
-    assert pdir.name == "alice-and-bob"
+    assert doc["name"] == "cosmo-and-ziggy"
+    assert pdir.name == "cosmo-and-ziggy"
 
 
 def test_create_persona_empty_display_name_omits_field(tmp_path, fresh_personas):
     """``if display_name:`` is falsy for empty string — field should NOT be written."""
-    pdir = fresh_personas.create_persona("alice", display_name="")
+    pdir = fresh_personas.create_persona("cosmo", display_name="")
     doc = yaml.safe_load((pdir / "profile.yaml").read_text())
     assert "display_name" not in doc

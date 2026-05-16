@@ -74,8 +74,8 @@ class TestListPersonasShape:
         """Only name/display_name/engines/last_used flow through to JSON output."""
         rows = [
             {
-                "name": "alice",
-                "display_name": "Alice",
+                "name": "cosmo",
+                "display_name": "Crumpet Cosmo",
                 "engines": ["chromium"],
                 "last_used": "2026-01-01",
                 "extraneous_field": "should-be-dropped",
@@ -85,14 +85,21 @@ class TestListPersonasShape:
         result = client.get("/api/personas")
         assert result.status_code == 200
         body = result.json()
-        assert body == [{"name": "alice", "display_name": "Alice", "engines": ["chromium"], "last_used": "2026-01-01"}]
+        assert body == [
+            {
+                "name": "cosmo",
+                "display_name": "Crumpet Cosmo",
+                "engines": ["chromium"],
+                "last_used": "2026-01-01",
+            }
+        ]
 
     def test_defaults_for_missing_fields(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """Missing display_name/engines/last_used → None / [] / None."""
-        rows = [{"name": "bob"}]
+        rows = [{"name": "ziggy"}]
         monkeypatch.setattr(_http_state._personas, "list_personas", lambda: rows)
         body = client.get("/api/personas").json()
-        assert body == [{"name": "bob", "display_name": None, "engines": [], "last_used": None}]
+        assert body == [{"name": "ziggy", "display_name": None, "engines": [], "last_used": None}]
 
     def test_empty_list(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """No personas → empty array."""
@@ -276,20 +283,20 @@ class TestPersonaSizes:
         self, client: TestClient, isolated_profiles: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Tab-separated 'kb<TAB>path' lines → {persona: bytes}."""
-        (isolated_profiles / "alice").mkdir()
-        (isolated_profiles / "bob").mkdir()
+        (isolated_profiles / "cosmo").mkdir()
+        (isolated_profiles / "ziggy").mkdir()
         # Mock subprocess.run to return canned du output.
-        result = SimpleNamespace(stdout=f"100\t{isolated_profiles / 'alice'}\n200\t{isolated_profiles / 'bob'}\n")
+        result = SimpleNamespace(stdout=f"100\t{isolated_profiles / 'cosmo'}\n200\t{isolated_profiles / 'ziggy'}\n")
         monkeypatch.setattr(_http_state.subprocess, "run", MagicMock(return_value=result))
         body = client.get("/api/personas/sizes").json()
-        assert body == {"alice": 100 * 1024, "bob": 200 * 1024}
+        assert body == {"cosmo": 100 * 1024, "ziggy": 200 * 1024}
 
     def test_skips_malformed_du_lines(
         self, client: TestClient, isolated_profiles: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Lines without TAB or with non-int size silently skipped."""
-        (isolated_profiles / "alice").mkdir()
-        result = SimpleNamespace(stdout=f"not-a-number\t{isolated_profiles / 'alice'}\nno-tab-line\n")
+        (isolated_profiles / "cosmo").mkdir()
+        result = SimpleNamespace(stdout=f"not-a-number\t{isolated_profiles / 'cosmo'}\nno-tab-line\n")
         monkeypatch.setattr(_http_state.subprocess, "run", MagicMock(return_value=result))
         assert client.get("/api/personas/sizes").json() == {}
 
@@ -297,7 +304,7 @@ class TestPersonaSizes:
         self, client: TestClient, isolated_profiles: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Exception (e.g. timeout) is logged + empty dict returned."""
-        (isolated_profiles / "alice").mkdir()
+        (isolated_profiles / "cosmo").mkdir()
         monkeypatch.setattr(
             _http_state.subprocess, "run", MagicMock(side_effect=subprocess.TimeoutExpired(cmd="du", timeout=15))
         )
@@ -321,18 +328,18 @@ class TestPersonaSizes:
         """
         import threading
 
-        (isolated_profiles / "dante-davis").mkdir()
+        (isolated_profiles / "dante-pemberton").mkdir()
         observed: dict[str, int] = {}
 
         def fake_run(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
             observed["thread_id"] = threading.get_ident()
-            return SimpleNamespace(stdout=f"42\t{isolated_profiles / 'dante-davis'}\n")
+            return SimpleNamespace(stdout=f"42\t{isolated_profiles / 'dante-pemberton'}\n")
 
         monkeypatch.setattr(_http_state.subprocess, "run", fake_run)
 
         r = client.get("/api/personas/sizes")
         assert r.status_code == 200
-        assert r.json() == {"dante-davis": 42 * 1024}
+        assert r.json() == {"dante-pemberton": 42 * 1024}
         assert "thread_id" in observed
         assert observed["thread_id"] != threading.get_ident()
 
@@ -348,9 +355,9 @@ class TestPersonaDetail:
 
     def test_returns_yaml_and_disk_breakdown(self, client: TestClient, isolated_profiles: Path) -> None:
         """yaml + per-engine bytes + total."""
-        p = isolated_profiles / "alice"
+        p = isolated_profiles / "cosmo"
         p.mkdir()
-        yaml_text = "name: alice\nemoji: 🦄\n"
+        yaml_text = "name: cosmo\nemoji: 🦄\n"
         # write_bytes() avoids Windows' default '\n' -> '\r\n' translation
         # so disk_bytes (counted by stat()) matches the utf-8 byte length.
         (p / "profile.yaml").write_bytes(yaml_text.encode("utf-8"))
@@ -358,19 +365,19 @@ class TestPersonaDetail:
         chr_dir = p / "chromium"
         chr_dir.mkdir()
         (chr_dir / "Cookies").write_bytes(b"x" * 50)
-        body = client.get("/api/personas/alice").json()
-        assert body["name"] == "alice"
+        body = client.get("/api/personas/cosmo").json()
+        assert body["name"] == "cosmo"
         assert body["yaml"] == yaml_text
         assert body["engine_bytes"]["chromium"] == 50
         assert body["disk_bytes"] == 50 + len(yaml_text.encode("utf-8"))
 
     def test_engines_without_dirs_omitted(self, client: TestClient, isolated_profiles: Path) -> None:
         """Engines whose dir doesn't exist are NOT in engine_bytes."""
-        p = isolated_profiles / "alice"
+        p = isolated_profiles / "cosmo"
         p.mkdir()
-        (p / "profile.yaml").write_text("name: alice\n")
+        (p / "profile.yaml").write_text("name: cosmo\n")
         # No engine dirs created.
-        body = client.get("/api/personas/alice").json()
+        body = client.get("/api/personas/cosmo").json()
         assert body["engine_bytes"] == {}
 
 
@@ -385,18 +392,18 @@ class TestPersonaUpdate:
 
     def test_yaml_not_string_400(self, client: TestClient, isolated_profiles: Path) -> None:
         """yaml field isn't a str → 400."""
-        p = isolated_profiles / "alice"
+        p = isolated_profiles / "cosmo"
         p.mkdir()
-        (p / "profile.yaml").write_text("name: alice\n")
-        r = client.put("/api/personas/alice", json={"yaml": ["not", "a", "string"]})
+        (p / "profile.yaml").write_text("name: cosmo\n")
+        r = client.put("/api/personas/cosmo", json={"yaml": ["not", "a", "string"]})
         assert r.status_code == 400
 
     def test_invalid_yaml_400(self, client: TestClient, isolated_profiles: Path) -> None:
         """YAML parser raises → 400 with message."""
-        p = isolated_profiles / "alice"
+        p = isolated_profiles / "cosmo"
         p.mkdir()
-        (p / "profile.yaml").write_text("name: alice\n")
-        r = client.put("/api/personas/alice", json={"yaml": "key: : : :"})
+        (p / "profile.yaml").write_text("name: cosmo\n")
+        r = client.put("/api/personas/cosmo", json={"yaml": "key: : : :"})
         assert r.status_code == 400
         assert "invalid YAML" in r.json()["error"]
 
@@ -404,10 +411,10 @@ class TestPersonaUpdate:
         self, client: TestClient, isolated_profiles: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Valid YAML → file rewritten + publish_dashboard_invalidation('personas')."""
-        p = isolated_profiles / "alice"
+        p = isolated_profiles / "cosmo"
         p.mkdir()
         yaml_path = p / "profile.yaml"
-        yaml_path.write_text("name: alice\n")
+        yaml_path.write_text("name: cosmo\n")
         published: list[str] = []
         from octowright.http.routes import meta as _meta_mod
 
@@ -415,16 +422,16 @@ class TestPersonaUpdate:
             published.append(scope)
 
         monkeypatch.setattr(_meta_mod, "publish_dashboard_invalidation", fake_publish)
-        new_yaml = "name: alice\ndefault_url: https://x\n"
-        r = client.put("/api/personas/alice", json={"yaml": new_yaml})
+        new_yaml = "name: cosmo\ndefault_url: https://x\n"
+        r = client.put("/api/personas/cosmo", json={"yaml": new_yaml})
         assert r.status_code == 200
         assert yaml_path.read_text() == new_yaml
         assert published == ["personas"]
 
     def test_invalid_json_body_400(self, client: TestClient, isolated_profiles: Path) -> None:
         """Body must be JSON; non-JSON → 400."""
-        p = isolated_profiles / "alice"
+        p = isolated_profiles / "cosmo"
         p.mkdir()
-        (p / "profile.yaml").write_text("name: alice\n")
-        r = client.put("/api/personas/alice", content="{ broken", headers={"content-type": "application/json"})
+        (p / "profile.yaml").write_text("name: cosmo\n")
+        r = client.put("/api/personas/cosmo", content="{ broken", headers={"content-type": "application/json"})
         assert r.status_code == 400

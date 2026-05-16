@@ -134,7 +134,7 @@ def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch,
     import octowright.defaults as defaults_mod
     import octowright.profile_cleanup as cleanup_mod
 
-    stale = MagicMock(persona="alice", engine="webkit", path=tmp_path / "p", size_bytes=12, age_days=4.2)
+    stale = MagicMock(persona="cosmo", engine="webkit", path=tmp_path / "p", size_bytes=12, age_days=4.2)
     monkeypatch.setattr(cleanup_mod, "find_stale_profiles", MagicMock(return_value=[stale]))
     monkeypatch.setattr(cleanup_mod, "cleanup_stale", MagicMock(return_value={"removed_count": 1, "removed_bytes": 12}))
     monkeypatch.setattr(defaults_mod, "PROFILES_DIR", tmp_path)

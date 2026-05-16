@@ -57,10 +57,10 @@ def test_persona_update_rejects_url_encoded_dotdot_traversal(client: TestClient)
 
 
 def test_persona_update_rejects_bad_yaml(client: TestClient, tmp_path: Path) -> None:
-    pdir = _meta_routes.PROFILES_DIR / "dante-davis"
+    pdir = _meta_routes.PROFILES_DIR / "crumpet-cosmo"
     pdir.mkdir(parents=True)
-    (pdir / "profile.yaml").write_text("name: Dante Davis\n")
-    r = client.put("/api/personas/dante-davis", json={"yaml": "name: [broken"})
+    (pdir / "profile.yaml").write_text("name: Crumpet Cosmo\n")
+    r = client.put("/api/personas/crumpet-cosmo", json={"yaml": "name: [broken"})
     assert r.status_code == 400
     assert "invalid YAML" in r.json()["error"]
 

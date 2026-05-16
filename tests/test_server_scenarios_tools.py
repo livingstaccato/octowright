@@ -106,8 +106,8 @@ async def test_scenario_run_as_test_success_and_missing_macro(
     _patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     participants = [
-        {"role": "player", "persona": "alice", "instance_id": "i1"},
-        {"role": "observer", "persona": "bob", "instance_id": "i2"},
+        {"role": "player", "persona": "cosmo", "instance_id": "i1"},
+        {"role": "observer", "persona": "ziggy", "instance_id": "i2"},
     ]
     live = SimpleNamespace(
         name="demo",
