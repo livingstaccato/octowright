@@ -75,6 +75,13 @@ artifacts = [
     "src/octowright/skills/**/*.json",
     "src/octowright/skills/**/*.md",
     "src/octowright/browser_pool/_assets/*.js",
+    # Built SPA assets served by http/frontend.py. Without these the wheel
+    # ships a dashboard server with no UI to serve. Regenerate from
+    # packages/octowright-frontend/ via ``npm run build``.
+    "src/octowright/server/frontend/*.html",
+    "src/octowright/server/frontend/*.css",
+    "src/octowright/server/frontend/*.js",
+    "src/octowright/server/frontend/*.js.map",
 ]
 
 [tool.hatch.build.targets.sdist]
