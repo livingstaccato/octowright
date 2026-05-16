@@ -216,3 +216,52 @@ def test_kill_pid_windows_returns_error_on_nonzero_taskkill(monkeypatch: pytest.
     ok, err = process_reaper._kill_pid(9999, signum=signal.SIGTERM)
     assert ok is False
     assert err is not None and "Access denied" in err
+
+
+def _powershell_csv(monkeypatch: pytest.MonkeyPatch, stdout: str) -> None:
+    """Pin platform to Windows + scripted PowerShell stdout."""
+    monkeypatch.setattr(process_reaper, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        process_reaper.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+    )
+
+
+def test_list_processes_windows_empty_stdout_returns_empty_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If PowerShell prints nothing (no header, no rows) the parser must
+    fail closed with an empty list instead of raising StopIteration."""
+    _powershell_csv(monkeypatch, "")
+    assert process_reaper._list_processes() == []
+
+
+def test_list_processes_windows_missing_header_columns_returns_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Header without ProcessId/ParentProcessId/CommandLine → bail out."""
+    _powershell_csv(monkeypatch, '"Name","Status"\r\n"chrome","Running"\r\n')
+    assert process_reaper._list_processes() == []
+
+
+def test_list_processes_windows_skips_short_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CSV rows shorter than the max column index must be skipped, not crash."""
+    csv_stdout = (
+        '"ProcessId","ParentProcessId","CommandLine"\r\n'
+        '"100","1"\r\n'  # short row — missing CommandLine cell
+        '"2000","1","ms-playwright/chromium-1217/chrome --headless"\r\n'
+    )
+    _powershell_csv(monkeypatch, csv_stdout)
+    pids = {pid for pid, _ppid, _cmd in process_reaper._list_processes()}
+    assert pids == {2000}
+
+
+def test_list_processes_windows_skips_non_numeric_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row with a non-integer PID is skipped (ValueError → continue)."""
+    csv_stdout = (
+        '"ProcessId","ParentProcessId","CommandLine"\r\n'
+        '"abc","1","junk"\r\n'
+        '"2000","1","ms-playwright/chromium-1217/chrome"\r\n'
+    )
+    _powershell_csv(monkeypatch, csv_stdout)
+    pids = {pid for pid, _ppid, _cmd in process_reaper._list_processes()}
+    assert pids == {2000}

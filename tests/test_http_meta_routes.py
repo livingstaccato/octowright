@@ -57,12 +57,32 @@ def test_persona_update_rejects_url_encoded_dotdot_traversal(client: TestClient)
 
 
 def test_persona_update_rejects_bad_yaml(client: TestClient, tmp_path: Path) -> None:
-    pdir = _meta_routes.PROFILES_DIR / "alice"
+    pdir = _meta_routes.PROFILES_DIR / "dante-davis"
     pdir.mkdir(parents=True)
-    (pdir / "profile.yaml").write_text("name: alice\n")
-    r = client.put("/api/personas/alice", json={"yaml": "name: [broken"})
+    (pdir / "profile.yaml").write_text("name: Dante Davis\n")
+    r = client.put("/api/personas/dante-davis", json={"yaml": "name: [broken"})
     assert r.status_code == 400
     assert "invalid YAML" in r.json()["error"]
+
+
+def test_persona_detail_rejects_symlink_that_escapes_profiles_dir(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Plant a symlink inside PROFILES_DIR that points to a directory outside
+    the tree. After resolve(), the candidate path is no longer contained by
+    PROFILES_DIR — the containment check must reject with 400."""
+    outside_dir = tmp_path / "outside-tree"
+    outside_dir.mkdir()
+    (outside_dir / "profile.yaml").write_text("name: should-not-be-served\n")
+
+    _meta_routes.PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    link = _meta_routes.PROFILES_DIR / "escapee"
+    link.symlink_to(outside_dir)
+
+    r = client.get("/api/personas/escapee")
+    assert r.status_code == 400
+    assert "invalid persona name" in r.json()["error"]
 
 
 def test_macro_repair_preview_endpoint_returns_preview(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
