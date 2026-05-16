@@ -20,27 +20,29 @@ from octowright.http import lifespan as _http_lifespan
 from octowright.http import state as _http_state
 
 
-def test_get_mcp_active_session_count_handles_none_and_missing_attr() -> None:
-    _http_app._mcp_session_manager = None
-    assert _http_app.get_mcp_active_session_count() == 0
-
-    _http_app._mcp_session_manager = object()
+def test_get_mcp_active_session_count_returns_zero_when_tracker_is_none() -> None:
+    _http_app._session_tracker = None
     assert _http_app.get_mcp_active_session_count() == 0
 
 
-def test_get_mcp_active_session_count_reads_server_instances_len() -> None:
-    _http_app._mcp_session_manager = types.SimpleNamespace(_server_instances={"a": object(), "b": object()})
-    assert _http_app.get_mcp_active_session_count() == 2
+def test_get_mcp_active_session_count_returns_tracker_count() -> None:
+    from octowright.http.mcp_session_tracker import McpSessionTracker
+
+    tracker = McpSessionTracker()
+    tracker.mark_active("a")
+    tracker.mark_active("b")
+    _http_app._session_tracker = tracker
+    try:
+        assert _http_app.get_mcp_active_session_count() == 2
+    finally:
+        _http_app._session_tracker = None
 
 
 def test_build_app_mcp_leader_mounts_mcp_and_sets_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeMcpSettings:
         streamable_http_path = "unchanged"
 
-    fake_session_manager = types.SimpleNamespace(_server_instances={"x": object()})
-    fake_transport = types.SimpleNamespace(session_manager=fake_session_manager)
     fake_mcp_app = Starlette(routes=[Route("/", lambda _req: JSONResponse({"ok": True}))])
-    fake_mcp_app.routes[0].app = fake_transport  # type: ignore[attr-defined]
 
     fake_mcp_module = types.SimpleNamespace(
         settings=_FakeMcpSettings(),
@@ -53,27 +55,16 @@ def test_build_app_mcp_leader_mounts_mcp_and_sets_lifespan(monkeypatch: pytest.M
     assert fake_mcp_module.settings.streamable_http_path == "/"
     assert app.router.lifespan_context == fake_mcp_app.router.lifespan_context
     assert any(getattr(route, "path", None) == "/mcp" for route in app.routes)
-    assert _http_app.get_mcp_active_session_count() == 1
+    # Fresh tracker has no sessions yet — the count rises when middleware sees
+    # an Mcp-Session-Id header on a real request.
+    assert _http_app.get_mcp_active_session_count() == 0
 
 
-def test_build_app_mcp_leader_tolerates_missing_mcp_route_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _FakeMcpSettings:
-        streamable_http_path = "unchanged"
+def test_build_app_non_leader_clears_session_tracker() -> None:
+    from octowright.http.mcp_session_tracker import McpSessionTracker
 
-    fake_mcp_app = Starlette(routes=[])
-    fake_mcp_module = types.SimpleNamespace(
-        settings=_FakeMcpSettings(),
-        streamable_http_app=lambda: fake_mcp_app,
-    )
-    monkeypatch.setattr("octowright.server.mcp", fake_mcp_module)
-
-    app = _http_app.build_app(mcp_leader=True)
-
-    assert app.router.lifespan_context == fake_mcp_app.router.lifespan_context
-
-
-def test_build_app_non_leader_clears_stale_mcp_session_manager() -> None:
-    _http_app._mcp_session_manager = types.SimpleNamespace(_server_instances={"stale": object()})
+    _http_app._session_tracker = McpSessionTracker()
+    _http_app._session_tracker.mark_active("stale")
 
     _http_app.build_app(mcp_leader=False)
 
