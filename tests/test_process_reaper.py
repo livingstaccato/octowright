@@ -28,12 +28,18 @@ def _ps_completed(stdout: str) -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture
 def fake_ps(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Replace ``subprocess.run`` so successive calls return scripted output."""
+    """Replace ``subprocess.run`` so successive calls return scripted output.
+
+    Pins the platform shim to POSIX so the fixture's ``ps`` output is parsed
+    by ``_list_processes_posix`` even when these tests run on Windows
+    runners. The Windows code path has its own dedicated tests below.
+    """
     scripts: list[str] = []
 
     def _run(args: list[str], **_kw: Any) -> subprocess.CompletedProcess[str]:
         return _ps_completed(scripts.pop(0) if scripts else "")
 
+    monkeypatch.setattr(process_reaper, "_is_windows", lambda: False)
     monkeypatch.setattr(process_reaper.subprocess, "run", _run)
     return scripts
 
