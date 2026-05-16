@@ -51,12 +51,20 @@ jobs:
         run: uv run --active ruff check .
       - name: Ruff format check
         run: uv run --active ruff format --check .
+      # Mirror `make lint` — mypy, codespell, and the LOC gate were
+      # previously local-only, which let bigger regressions slip past CI.
+      - name: mypy
+        run: uv run --active mypy src/octowright
       - name: ty check
         run: uv run --active ty check src/octowright
       - name: Bandit
         run: uv run --active bandit -q -r src/octowright -s B101,B110,B112,B404,B405,B603,B607
+      - name: codespell
+        run: uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
       - name: SPDX headers
         run: uv run --active python scripts/check_spdx_headers.py
+      - name: Max LOC per file (<=500)
+        run: uv run --active python scripts/check_max_loc.py
       - name: Agent docs sync
         run: uv run --active python scripts/check_agent_docs_sync.py
       - name: Vulture (dead code)
@@ -67,6 +75,27 @@ jobs:
         run: bash ci/run_detect_secrets.sh
       - name: pip-audit (deps)
         run: uv run --active python scripts/check_pip_audit.py
+
+  frontend:
+    name: 🧪 Frontend tests
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: packages/octowright-frontend
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+      # No lockfile in the workspace — use `npm install` (slightly slower,
+      # but reproducible enough for the test job). Switch to `npm ci` once a
+      # package-lock.json is committed.
+      - name: Install dependencies
+        run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Tests (vitest with coverage)
+        run: npm test
 
   select-test-matrix:
     name: 🧭 Select test matrix
