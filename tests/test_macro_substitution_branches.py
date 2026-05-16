@@ -191,7 +191,7 @@ class TestActionKwargs:
             "action": "click",
             "ts": "2026-01-01T00:00:00Z",
             "kind": "chromium",
-            "profile": "alice",
+            "profile": "cosmo",
             "instance_id": "abc",
             "selector": "#btn",
             "timeout_ms": 1000,

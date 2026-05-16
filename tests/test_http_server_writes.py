@@ -290,7 +290,7 @@ def test_post_sessions_forwards_all_optional_kwargs(
         "kind": "firefox",
         "url": "https://x.test",
         "label": "lab",
-        "profile": "alice",
+        "profile": "cosmo",
         "viewport_w": 1024,
         "viewport_h": 768,
         "headed": False,
@@ -619,7 +619,7 @@ def test_post_scenario_start_happy_path(
         scenario_id="scenABC00001",
         name="demo",
         participants=[
-            {"role": "player", "persona": "alice", "kind": "chromium", "instance_id": "iid000abc"},
+            {"role": "player", "persona": "cosmo", "kind": "chromium", "instance_id": "iid000abc"},
         ],
     )
     r = client.post("/api/scenarios/demo/start")

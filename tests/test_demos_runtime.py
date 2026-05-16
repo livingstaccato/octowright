@@ -362,7 +362,7 @@ def test_site_facing_render_plans_use_readable_canvases() -> None:
         "p5",
         "p6",
         "p7",
-        "ops",
+        "mortimer",
         "spectator",
     }
     assert min(slot.width for slot in seven_mix.placements) >= 640

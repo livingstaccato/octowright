@@ -251,9 +251,9 @@ def test_substitute_replaces_placeholders(monkeypatch: pytest.MonkeyPatch, tmp_p
         {"action": "fill", "selector": "input[name=pw]", "value": "{{password}}"},
         {"action": "click", "selector": "button"},
     ]
-    result = m.substitute(actions, {"email": "alice@example.com", "password": "s3cr3t"})
+    result = m.substitute(actions, {"email": "cosmo@example.com", "password": "s3cr3t"})
 
-    assert result[0]["value"] == "alice@example.com"
+    assert result[0]["value"] == "cosmo@example.com"
     assert result[1]["value"] == "s3cr3t"
     assert result[2]["selector"] == "button"
 
@@ -333,7 +333,7 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     result = await m.run_macro(
         fake,  # type: ignore[arg-type]
         "replay-test",
-        args={"email": "alice@example.com", "password": "pass123"},
+        args={"email": "cosmo@example.com", "password": "pass123"},
     )
 
     assert result["macro"] == "replay-test"
@@ -349,7 +349,7 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     # fill calls used substituted values
     fill_calls = [(name, args) for name, args, _ in calls if name == "fill"]
     fill_values = [args[1] for _, args in fill_calls]
-    assert "alice@example.com" in fill_values
+    assert "cosmo@example.com" in fill_values
     assert "pass123" in fill_values
 
     # click was called (button[type=submit])

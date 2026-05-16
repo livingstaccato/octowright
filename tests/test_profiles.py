@@ -59,11 +59,11 @@ def test_list_profiles_returns_empty_when_dir_empty(tmp_profiles_dir: Path) -> N
 def test_list_profiles_reports_each_engine(tmp_profiles_dir: Path) -> None:
     _make_profile(tmp_profiles_dir, "dante", "webkit")
     _make_profile(tmp_profiles_dir, "dante", "firefox")
-    _make_profile(tmp_profiles_dir, "ops", "chromium")
+    _make_profile(tmp_profiles_dir, "mortimer", "chromium")
 
     rows = _profiles.list_profiles()
     by_key = {(r["name"], r["kind"]) for r in rows}
-    assert by_key == {("dante", "webkit"), ("dante", "firefox"), ("ops", "chromium")}
+    assert by_key == {("dante", "webkit"), ("dante", "firefox"), ("mortimer", "chromium")}
 
     for r in rows:
         assert r["size_bytes"] > 0
@@ -90,7 +90,7 @@ def test_list_profiles_skips_files_at_top_level(tmp_profiles_dir: Path) -> None:
 
 def test_list_profiles_sorted_most_recent_first(tmp_profiles_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     older = _make_profile(tmp_profiles_dir, "dante", "webkit")
-    newer = _make_profile(tmp_profiles_dir, "ops", "firefox")
+    newer = _make_profile(tmp_profiles_dir, "mortimer", "firefox")
     # Force a known mtime ordering: older 1000, newer 2000.
     import os
 
@@ -98,7 +98,7 @@ def test_list_profiles_sorted_most_recent_first(tmp_profiles_dir: Path, monkeypa
     os.utime(newer, (2000, 2000))
 
     rows = _profiles.list_profiles()
-    assert [r["name"] for r in rows] == ["ops", "dante"]
+    assert [r["name"] for r in rows] == ["mortimer", "dante"]
 
 
 # ---------------------------------------------------------------------------

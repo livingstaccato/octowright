@@ -57,14 +57,14 @@ def test_slug_replaces_runs_of_bad_chars_with_single_dash(fresh_personas):
 
 def test_slug_strips_leading_and_trailing_dashes_and_dots(fresh_personas):
     """Mutation: removing the .strip("-.") would leave decorations."""
-    assert fresh_personas._slug("--alice--") == "alice"
-    assert fresh_personas._slug("...bob...") == "bob"
+    assert fresh_personas._slug("--cosmo--") == "cosmo"
+    assert fresh_personas._slug("...ziggy...") == "ziggy"
     assert fresh_personas._slug(".-mix-.") == "mix"
 
 
 def test_slug_strips_outer_whitespace_before_substitution(fresh_personas):
     """Mutation: removing the .strip() before sub would emit dashes for spaces."""
-    assert fresh_personas._slug("  alice  ") == "alice"
+    assert fresh_personas._slug("  cosmo  ") == "cosmo"
 
 
 def test_slug_empty_input_raises_with_exact_message(fresh_personas):
@@ -90,21 +90,21 @@ def test_slug_keeps_underscores_dots_dashes(fresh_personas):
 def test_engine_profile_dir_unsupported_kind_raises(fresh_personas):
     """Mutation: removing the kind validation would let invalid engines through."""
     with pytest.raises(ValueError, match="kind must be one of"):
-        fresh_personas.engine_profile_dir("alice", "safari")
+        fresh_personas.engine_profile_dir("cosmo", "safari")
 
 
 def test_engine_profile_dir_each_supported_kind_resolves(fresh_personas, tmp_path):
     """Mutation: changing the path composition would produce wrong directories."""
     for kind in ("chromium", "firefox", "webkit"):
-        path = fresh_personas.engine_profile_dir("alice", kind)
-        assert path == tmp_path / "alice" / kind
+        path = fresh_personas.engine_profile_dir("cosmo", kind)
+        assert path == tmp_path / "cosmo" / kind
 
 
 def test_engine_profile_dir_kind_check_is_strict_string_match(fresh_personas):
     """Empty / whitespace / case-mismatched kinds are rejected."""
     for bad in ("", "Chromium", "CHROMIUM", "firefoxx"):
         with pytest.raises(ValueError, match="kind must be one of"):
-            fresh_personas.engine_profile_dir("alice", bad)
+            fresh_personas.engine_profile_dir("cosmo", bad)
 
 
 # ---------------------------------------------------------------------------
@@ -136,27 +136,27 @@ def test_credential_cmd_argv_rejects_each_shell_operator(fresh_personas, bad_cmd
     the recommended way to express command substitution and is covered above.
     """
     with pytest.raises(fresh_personas.MissingCredential, match="shell semantics"):
-        fresh_personas._credential_cmd_argv(bad_cmd, "alice", "token")
+        fresh_personas._credential_cmd_argv(bad_cmd, "cosmo", "token")
 
 
 def test_credential_cmd_argv_rejects_dollar_paren_prefix(fresh_personas):
     """`$(foo)` produces a token starting with `$(` — covered by startswith branch."""
     with pytest.raises(fresh_personas.MissingCredential, match="shell semantics"):
-        fresh_personas._credential_cmd_argv("echo $(whoami)", "alice", "token")
+        fresh_personas._credential_cmd_argv("echo $(whoami)", "cosmo", "token")
 
 
 def test_credential_cmd_argv_empty_after_split_raises(fresh_personas):
     """Mutation: removing the ``if not argv`` guard would return an empty argv list."""
     with pytest.raises(fresh_personas.MissingCredential, match="cmd is empty after parsing"):
-        fresh_personas._credential_cmd_argv("   ", "alice", "token")
+        fresh_personas._credential_cmd_argv("   ", "cosmo", "token")
     with pytest.raises(fresh_personas.MissingCredential, match="cmd is empty after parsing"):
-        fresh_personas._credential_cmd_argv("", "alice", "token")
+        fresh_personas._credential_cmd_argv("", "cosmo", "token")
 
 
 def test_credential_cmd_argv_parse_failure_raises_friendly(fresh_personas):
     """An unclosed quote raises shlex.ValueError -> MissingCredential."""
     with pytest.raises(fresh_personas.MissingCredential, match="cmd parse failure"):
-        fresh_personas._credential_cmd_argv("echo 'unterminated", "alice", "token")
+        fresh_personas._credential_cmd_argv("echo 'unterminated", "cosmo", "token")
 
 
 def test_credential_cmd_argv_error_includes_persona_and_field_names(fresh_personas):
@@ -170,13 +170,13 @@ def test_credential_cmd_argv_error_includes_persona_and_field_names(fresh_person
 
 def test_credential_cmd_argv_returns_argv_for_valid_cmd(fresh_personas):
     """The happy path returns a real argv list — mutating to ``[]`` would fail this."""
-    argv = fresh_personas._credential_cmd_argv("op read op://Vault/Item", "alice", "token")
+    argv = fresh_personas._credential_cmd_argv("op read op://Vault/Item", "cosmo", "token")
     assert argv == ["op", "read", "op://Vault/Item"]
 
 
 def test_credential_cmd_argv_quoted_metachar_is_allowed(fresh_personas):
     """Quoted shell metachars are folded into one argv token — must NOT raise."""
-    argv = fresh_personas._credential_cmd_argv("printf 'a|b'", "alice", "token")
+    argv = fresh_personas._credential_cmd_argv("printf 'a|b'", "cosmo", "token")
     assert argv == ["printf", "a|b"]
 
 
@@ -319,7 +319,7 @@ def test_exec_credential_cmd_uses_argv_form_no_shell(monkeypatch):
 
 def test_persona_dir_uses_slug_under_profiles_dir(tmp_path, fresh_personas):
     """Mutation: dropping the ``_slug(name)`` call would expose raw user input."""
-    assert fresh_personas.persona_dir("Alice Smith") == tmp_path / "Alice-Smith"
+    assert fresh_personas.persona_dir("Cosmo Smith") == tmp_path / "Cosmo-Smith"
 
 
 # ---------------------------------------------------------------------------

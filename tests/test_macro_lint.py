@@ -132,7 +132,7 @@ def test_unknown_action_is_warning() -> None:
 
 
 def test_macro_call_is_valid() -> None:
-    action = {"action": "macro_call", "name": "other", "args": {"email": "alice"}}
+    action = {"action": "macro_call", "name": "other", "args": {"email": "cosmo"}}
     issues = lint_macro(_macro([action]))
     assert issues == []
 

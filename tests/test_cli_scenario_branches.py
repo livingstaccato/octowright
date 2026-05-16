@@ -102,7 +102,7 @@ class TestScenarioStartBasic:
         live = _live(
             participants=[
                 {"role": "player", "persona": "dante", "kind": "webkit", "instance_id": "i1", "url": "https://x"},
-                {"role": "monitor", "persona": "ops", "kind": "firefox", "instance_id": "i2", "url": "https://y"},
+                {"role": "monitor", "persona": "mortimer", "kind": "firefox", "instance_id": "i2", "url": "https://y"},
             ]
         )
         patched_pools["spool"].start.return_value = live
@@ -118,7 +118,7 @@ class TestScenarioStartBasic:
         assert result.exit_code == 0
         assert "scenario_id: sc-1" in result.output
         assert "dante" in result.output
-        assert "ops" in result.output
+        assert "mortimer" in result.output
         assert "https://x" in result.output
         # Verify pool/spool lifecycle.
         patched_pools["spool"].start.assert_awaited_once()
@@ -319,7 +319,7 @@ class TestScenarioStartTestMode:
         """Verify dict has a key, but not for THIS participant's role → ok=False."""
         live = _live(
             participants=[
-                {"role": "monitor", "persona": "ops", "kind": "firefox", "instance_id": "i1"},
+                {"role": "monitor", "persona": "mortimer", "kind": "firefox", "instance_id": "i1"},
             ],
             verify={"player": "verify-macro"},  # no 'monitor' entry
         )

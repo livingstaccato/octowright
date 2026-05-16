@@ -178,8 +178,8 @@ class TestScalarShorthand:
 class TestMappingShorthand:
     def test_fill_mapping(self) -> None:
         """`{fill: {selector,value}}` → `{action: fill, ...}`."""
-        compiled = compile_macro_yaml("name: x\nactions:\n  - fill:\n      selector: '#u'\n      value: bob\n")
-        assert compiled["actions"] == [{"action": "fill", "selector": "#u", "value": "bob"}]
+        compiled = compile_macro_yaml("name: x\nactions:\n  - fill:\n      selector: '#u'\n      value: ziggy\n")
+        assert compiled["actions"] == [{"action": "fill", "selector": "#u", "value": "ziggy"}]
 
     def test_if_selector_mapping(self) -> None:
         """`{if_selector: {selector, then, else}}` expands."""
@@ -418,7 +418,7 @@ class TestValidateRequiredSimple:
 
     def test_fill_missing_selector_raises(self) -> None:
         """fill with value but no selector → missing-field error."""
-        text = "name: x\nactions:\n  - action: fill\n    value: 'bob'\n"
+        text = "name: x\nactions:\n  - action: fill\n    value: 'ziggy'\n"
         with pytest.raises(ValueError, match="fill is missing required field 'selector'"):
             compile_macro_yaml(text, strict=True)
 

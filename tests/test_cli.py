@@ -229,7 +229,7 @@ class TestFormatWatchEvent:
         ev = {
             "action": "click",
             "ts": "2026-04-24T01:02:03Z",
-            "persona": "ops",
+            "persona": "mortimer",
             "role": "monitor",
             "selector": "#submit",
         }

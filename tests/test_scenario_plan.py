@@ -78,7 +78,7 @@ def test_multi_participant_mixed_engines(scenarios_dir: Path) -> None:
         [
             {"persona": "a", "kind": "webkit", "role": "player"},
             {"persona": "b", "kind": "firefox", "role": "monitor"},
-            {"persona": "c", "kind": "chromium", "role": "ops"},
+            {"persona": "c", "kind": "chromium", "role": "mortimer"},
         ],
     )
     plan = scenario_plan(name="mixed")
@@ -86,7 +86,7 @@ def test_multi_participant_mixed_engines(scenarios_dir: Path) -> None:
     rows = plan["participants"]
     assert [r["kind"] for r in rows] == ["webkit", "firefox", "chromium"]
     assert [r["persona"] for r in rows] == ["a", "b", "c"]
-    assert [r["role"] for r in rows] == ["player", "monitor", "ops"]
+    assert [r["role"] for r in rows] == ["player", "monitor", "mortimer"]
     # Each row carries its own launch_kwargs.
     assert rows[0]["launch_kwargs"]["kind"] == "webkit"
     assert rows[1]["launch_kwargs"]["kind"] == "firefox"
@@ -215,11 +215,11 @@ def test_summary_is_participant_summary_one_liner(scenarios_dir: Path) -> None:
         "sumtest",
         [
             {"persona": "dante", "kind": "webkit", "role": "player"},
-            {"persona": "ops", "kind": "firefox", "role": "monitor"},
+            {"persona": "mortimer", "kind": "firefox", "role": "monitor"},
         ],
     )
     plan = scenario_plan(name="sumtest")
-    assert plan["summary"] == "player[dante]/webkit · monitor[ops]/firefox"
+    assert plan["summary"] == "player[dante]/webkit · monitor[mortimer]/firefox"
 
 
 @pytest.mark.usefixtures("empty_personas_dir")

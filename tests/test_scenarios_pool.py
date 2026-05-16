@@ -73,8 +73,8 @@ def _live() -> LiveScenario:
     return LiveScenario(
         scenario_id="sid",
         name="demo",
-        spec=_Spec("demo", [_ParticipantSpec("alice", "r1")], fixtures={}),
-        participants=[{"instance_id": "a", "persona": "alice", "role": "r1", "kind": "chromium", "log_path": "a.log"}],
+        spec=_Spec("demo", [_ParticipantSpec("cosmo", "r1")], fixtures={}),
+        participants=[{"instance_id": "a", "persona": "cosmo", "role": "r1", "kind": "chromium", "log_path": "a.log"}],
     )
 
 
@@ -86,7 +86,7 @@ def test_get_list_and_remap_errors() -> None:
     live = _live()
     sp._live[live.scenario_id] = live
     sp._browser_pool = SimpleNamespace(
-        maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="alice") if instance_id == "x" else None
+        maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="cosmo") if instance_id == "x" else None
     )
     assert sp.list_live()[0]["scenario_id"] == "sid"
 
@@ -113,7 +113,7 @@ def test_remap_participants_validation() -> None:
     live = _live()
     sp._live[live.scenario_id] = live
     browser_pool = SimpleNamespace(
-        maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="alice") if instance_id == "b" else None
+        maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="cosmo") if instance_id == "b" else None
     )
 
     result = sp.remap_participants(
@@ -153,7 +153,7 @@ def test_remap_participant_rejects_kind_mismatch() -> None:
             new_instance_id="b",
             browser_pool=SimpleNamespace(
                 maybe_get=lambda instance_id: (
-                    SimpleNamespace(kind="firefox", profile="alice") if instance_id == "b" else None
+                    SimpleNamespace(kind="firefox", profile="cosmo") if instance_id == "b" else None
                 )
             ),
         )
@@ -164,14 +164,14 @@ def test_remap_participant_rejects_profile_mismatch() -> None:
     live = _live()
     sp._live[live.scenario_id] = live
 
-    with pytest.raises(ValueError, match="expected 'alice'"):
+    with pytest.raises(ValueError, match="expected 'cosmo'"):
         sp.remap_participant(
             scenario_id="sid",
             old_instance_id="a",
             new_instance_id="b",
             browser_pool=SimpleNamespace(
                 maybe_get=lambda instance_id: (
-                    SimpleNamespace(kind="chromium", profile="bob") if instance_id == "b" else None
+                    SimpleNamespace(kind="chromium", profile="ziggy") if instance_id == "b" else None
                 )
             ),
         )
@@ -186,7 +186,7 @@ async def test_start_stop_tail_macro_sync(monkeypatch: pytest.MonkeyPatch) -> No
     pool = _Pool()
     spec = _Spec(
         name="demo",
-        participants=[_ParticipantSpec("alice", "r1"), _ParticipantSpec("bob", "r2")],
+        participants=[_ParticipantSpec("cosmo", "r1"), _ParticipantSpec("ziggy", "r2")],
         fixtures={"dialog_policy": "dismiss", "mock_routes": [{"pattern": "**/api"}]},
         teardown_macro="bye",
     )
@@ -235,7 +235,7 @@ async def test_start_launch_failure_closes_partials(monkeypatch: pytest.MonkeyPa
     pool.spawn_error = True
     spec = _Spec(
         name="demo",
-        participants=[_ParticipantSpec("alice", "r1"), _ParticipantSpec("bob", "r2")],
+        participants=[_ParticipantSpec("cosmo", "r1"), _ParticipantSpec("ziggy", "r2")],
         fixtures={},
     )
 
@@ -257,7 +257,7 @@ async def test_startup_macro_failure_closes_participants(monkeypatch: pytest.Mon
     pool = _Pool()
     spec = _Spec(
         name="demo",
-        participants=[_ParticipantSpec("alice", "r1"), _ParticipantSpec("bob", "r2")],
+        participants=[_ParticipantSpec("cosmo", "r1"), _ParticipantSpec("ziggy", "r2")],
         fixtures={},
     )
 

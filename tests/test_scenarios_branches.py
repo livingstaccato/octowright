@@ -381,8 +381,8 @@ class TestLoadScenarioTemplate:
                 }
             )
         )
-        s = load_scenario_template("tpl", {"user": "alice"})
-        assert s.participants[0].persona == "alice"
+        s = load_scenario_template("tpl", {"user": "cosmo"})
+        assert s.participants[0].persona == "cosmo"
 
     def test_missing_arg_leaves_placeholder_unsubstituted(self, templates_dir: Path) -> None:
         """No arg for `{{name}}` — placeholder remains literally in the parsed YAML."""
@@ -413,7 +413,7 @@ class TestLoadScenarioTemplate:
                 }
             )
         )
-        s = load_scenario_template("single", {"user": "alice"})
+        s = load_scenario_template("single", {"user": "cosmo"})
         assert s.participants[0].persona == "{user}"
 
 

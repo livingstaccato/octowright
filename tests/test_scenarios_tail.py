@@ -23,8 +23,8 @@ def _make_live(tmp_path: Path) -> tuple[ScenarioPool, Path, Path]:
         name="t",
         spec=spec,
         participants=[
-            {"instance_id": "i-a", "persona": "alice", "role": "player", "log_path": str(log_a)},
-            {"instance_id": "i-b", "persona": "bob", "role": "monitor", "log_path": str(log_b)},
+            {"instance_id": "i-a", "persona": "cosmo", "role": "player", "log_path": str(log_a)},
+            {"instance_id": "i-b", "persona": "ziggy", "role": "monitor", "log_path": str(log_b)},
         ],
     )
     pool._live["abc123"] = live
@@ -46,7 +46,7 @@ def test_empty_cursor_returns_all(tmp_path: Path) -> None:
     assert actions == ["click", "navigate"]
     # personas attached
     persona_by_action = {e["action"]: e["persona"] for e in out["events"]}
-    assert persona_by_action == {"navigate": "alice", "click": "bob"}
+    assert persona_by_action == {"navigate": "cosmo", "click": "ziggy"}
     assert out["cursors"]["i-a"] == log_a.stat().st_size
     assert out["cursors"]["i-b"] == log_b.stat().st_size
 
@@ -90,9 +90,9 @@ def test_multi_participant_events_tagged(tmp_path: Path) -> None:
     _append(log_b, {"ts": "T2", "action": "click", "selector": "#btn"})
     out = pool.tail(scenario_id="abc123")
     events_by_iid = {e["instance_id"]: e for e in out["events"]}
-    assert events_by_iid["i-a"]["persona"] == "alice"
+    assert events_by_iid["i-a"]["persona"] == "cosmo"
     assert events_by_iid["i-a"]["role"] == "player"
-    assert events_by_iid["i-b"]["persona"] == "bob"
+    assert events_by_iid["i-b"]["persona"] == "ziggy"
     assert events_by_iid["i-b"]["role"] == "monitor"
 
 

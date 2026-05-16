@@ -59,9 +59,9 @@ def test_summarize_try_each():
 
 
 def test_summarize_macro_call():
-    action = {"action": "macro_call", "name": "login", "args": {"email": "alice", "password": "secret"}}
+    action = {"action": "macro_call", "name": "login", "args": {"email": "cosmo", "password": "secret"}}
     summary = summarize_action(action)
-    assert summary == "Call macro 'login' with args { email='alice', password='secret' }"
+    assert summary == "Call macro 'login' with args { email='cosmo', password='secret' }"
 
 
 def test_summarize_macro_call_without_args():
@@ -73,13 +73,13 @@ def test_summarize_macro_call_without_args():
 def test_get_semantic_intent():
     actions = [
         {"action": "navigate", "url": "https://example.com/login"},
-        {"action": "fill", "selector": "#user", "value": "bob"},
+        {"action": "fill", "selector": "#user", "value": "ziggy"},
         {"action": "fill", "selector": "#pass", "value": "secret"},
         {"action": "click", "selector": "button#submit"},
     ]
     intent = get_semantic_intent(actions)
     assert "login" in intent.lower()
-    assert "bob" in intent
+    assert "ziggy" in intent
 
 
 async def test_macro_explain():

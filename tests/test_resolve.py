@@ -52,7 +52,7 @@ def populated_profiles_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> P
 
     # Two discord-default personas (dante on webkit+firefox, ops on firefox).
     _make("dante", default_url="https://discord.com/app", hosts=None, engines=["webkit", "firefox"])
-    _make("ops", default_url="https://discord.com/monitor", hosts=None, engines=["firefox"])
+    _make("mortimer", default_url="https://discord.com/monitor", hosts=None, engines=["firefox"])
     # A persona using app.hosts for explicit host membership (TradeWars on chromium).
     _make("commander", default_url=None, hosts=["tradewars.com"], engines=["chromium"])
     # A persona with no engine profile yet (only metadata).
@@ -132,12 +132,12 @@ def test_ambiguous_when_multiple_personas_share_host() -> None:
     assert result["ephemeral_ok"] is False
 
     persona_names = {m["persona"] for m in result["matches"]}
-    assert {"dante", "ops"}.issubset(persona_names)
+    assert {"dante", "mortimer"}.issubset(persona_names)
 
     rec = result["recommendation"]
     assert "AMBIGUOUS" in rec
     assert "dante" in rec
-    assert "ops" in rec
+    assert "mortimer" in rec
 
 
 @pytest.mark.usefixtures("populated_profiles_dir")
@@ -158,7 +158,7 @@ def test_kind_filter_can_still_be_ambiguous() -> None:
     result = _resolve.suggest_for_url("https://discord.com/", kind="firefox")
     assert result["kind_filter"] == "firefox"
     persona_names = {m["persona"] for m in result["matches"]}
-    assert persona_names == {"dante", "ops"}
+    assert persona_names == {"dante", "mortimer"}
     assert result["ambiguous"] is True
 
 
@@ -196,7 +196,7 @@ def test_subdomain_url_matches_parent_host_default() -> None:
     """app.discord.com should still resolve dante/ops who declared discord.com."""
     result = _resolve.suggest_for_url("https://app.discord.com/")
     persona_names = {m["persona"] for m in result["matches"]}
-    assert {"dante", "ops"}.issubset(persona_names)
+    assert {"dante", "mortimer"}.issubset(persona_names)
 
 
 @pytest.mark.usefixtures("populated_profiles_dir")

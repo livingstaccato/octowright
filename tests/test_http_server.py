@@ -189,7 +189,7 @@ def test_list_sessions_with_live_session(
         instance_id="livethere01",
         kind="firefox",
         label="qa",
-        profile="alice",
+        profile="cosmo",
         url="https://x.test",
         log_path=log_path,
         video_path=None,
@@ -844,12 +844,19 @@ def test_personas_listing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         _http_state._personas,
         "list_personas",
-        lambda: [{"name": "alice", "display_name": "Alice", "engines": ["chromium"], "last_used": "2026-01-01"}],
+        lambda: [
+            {
+                "name": "cosmo",
+                "display_name": "Crumpet Cosmo",
+                "engines": ["chromium"],
+                "last_used": "2026-01-01",
+            }
+        ],
     )
     r = client.get("/api/personas")
     assert r.status_code == 200
     body = r.json()
-    assert body[0]["name"] == "alice"
+    assert body[0]["name"] == "cosmo"
     assert body[0]["engines"] == ["chromium"]
 
 

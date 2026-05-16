@@ -42,9 +42,9 @@ async def main() -> None:
         )
         await page.evaluate("document.body.innerHTML = '<input id=user><input id=pass type=password>'")
         try:
-            await page.get_by_role("form", name="").fill("alice")
+            await page.get_by_role("form", name="").fill("cosmo")
         except Exception:
-            await page.fill("#user", "alice")
+            await page.fill("#user", "cosmo")
         try:
             await page.get_by_role("form", name="").fill("hunter2")
         except Exception:

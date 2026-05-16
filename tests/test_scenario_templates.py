@@ -47,14 +47,14 @@ def test_load_scenario_template(fresh_scenarios):
         )
     )
 
-    s = scenarios.load_scenario_template("collaboration", {"persona_1": "alice", "persona_2": "bob"})
+    s = scenarios.load_scenario_template("collaboration", {"persona_1": "cosmo", "persona_2": "ziggy"})
 
     assert s.name == "Collaboration Template"
     assert len(s.participants) == 2
-    assert s.participants[0].persona == "alice"
+    assert s.participants[0].persona == "cosmo"
     assert s.participants[0].kind == "chromium"
     assert s.participants[0].role == "editor"
-    assert s.participants[1].persona == "bob"
+    assert s.participants[1].persona == "ziggy"
     assert s.participants[1].kind == "firefox"
     assert s.participants[1].role == "viewer"
 

@@ -336,7 +336,7 @@ def test_apply_video_overlay_builds_overlay_pipeline(monkeypatch: pytest.MonkeyP
         subtitle="seven-mix-orchestration | flagship hero",
         panes=[
             {"persona": "p1", "role": "player", "kind": "chromium", "x": 0, "y": 0},
-            {"persona": "ops", "role": "monitor", "kind": "webkit", "x": 960, "y": 720},
+            {"persona": "mortimer", "role": "monitor", "kind": "webkit", "x": 960, "y": 720},
         ],
         canvas_width=1920,
         canvas_height=1080,

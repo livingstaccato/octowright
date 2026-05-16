@@ -708,7 +708,7 @@ class TestLiveSummaryFromLaunch:
             "instance_id": "iid67890",
             "kind": "firefox",
             "label": "qa",
-            "profile": "alice",
+            "profile": "cosmo",
             "url": "https://y",
             "log_path": str(tmp_path / "missing.jsonl"),
         }
@@ -716,7 +716,7 @@ class TestLiveSummaryFromLaunch:
         # Must not raise; started_at must be present.
         assert "T" in summary["started_at"]
         assert summary["label"] == "qa"
-        assert summary["profile"] == "alice"
+        assert summary["profile"] == "cosmo"
 
     def test_default_counts_for_freshly_launched(self, tmp_path: Path) -> None:
         """A just-launched session has event_count=1 (the launch row), zeros elsewhere."""

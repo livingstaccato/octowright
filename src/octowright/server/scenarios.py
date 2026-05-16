@@ -116,7 +116,7 @@ async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None)
     description=(
         "List live scenarios and their participants. Returns {summary, count, scenarios}: "
         "`summary` is a one-line gist (e.g. 'scenario \\'mini\\' (2 participants): "
-        "player[dante]/webkit · monitor[ops]/firefox'); `scenarios` is the structured data."
+        "player[dante]/webkit · monitor[mortimer]/firefox'); `scenarios` is the structured data."
     ),
 )
 def scenario_status() -> ScenarioStatusResult:

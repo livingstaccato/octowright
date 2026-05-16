@@ -265,10 +265,10 @@ class TestProfileInUse:
     def test_match_on_kind_and_profile(self) -> None:
         """profile_in_use is True only when BOTH kind and profile match."""
         pool = BrowserPool()
-        pool._sessions["a"] = _fake_session(instance_id="a", kind="webkit", profile="alice")
-        assert pool.profile_in_use(kind="webkit", profile="alice") is True
-        assert pool.profile_in_use(kind="chromium", profile="alice") is False
-        assert pool.profile_in_use(kind="webkit", profile="bob") is False
+        pool._sessions["a"] = _fake_session(instance_id="a", kind="webkit", profile="cosmo")
+        assert pool.profile_in_use(kind="webkit", profile="cosmo") is True
+        assert pool.profile_in_use(kind="chromium", profile="cosmo") is False
+        assert pool.profile_in_use(kind="webkit", profile="ziggy") is False
 
     def test_empty_pool_returns_false(self) -> None:
         """Empty pool → never in use."""
@@ -526,7 +526,7 @@ class TestHandoffBrowser:
     async def test_persistent_close_original_false_rejected(self) -> None:
         """Persistent (has profile) + close_original=False → exact ValueError."""
         pool = BrowserPool()
-        sess = _fake_session(profile="alice", user_data_dir=Path("/tmp/x"))
+        sess = _fake_session(profile="cosmo", user_data_dir=Path("/tmp/x"))
         pool._sessions[sess.instance_id] = sess
         with pytest.raises(ValueError, match=r"persistent handoff requires close_original=True"):
             await handoff_browser(pool, sess.instance_id, close_original=False)
@@ -627,7 +627,7 @@ class TestSpawnRoster:
                     "kind": "firefox",
                     "url": "https://x",
                     "label": "lbl",
-                    "profile": "alice",
+                    "profile": "cosmo",
                     "viewport_w": 800,
                     "viewport_h": 600,
                     "stabilize": True,
@@ -639,7 +639,7 @@ class TestSpawnRoster:
         assert captured["kind"] == "firefox"
         assert captured["url"] == "https://x"
         assert captured["label"] == "lbl"
-        assert captured["profile"] == "alice"
+        assert captured["profile"] == "cosmo"
         assert captured["viewport_w"] == 800
         assert captured["viewport_h"] == 600
         assert captured["stabilize"] is True

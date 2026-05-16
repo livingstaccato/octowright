@@ -110,10 +110,10 @@ class TestParticipantSummary:
     def test_renders_role_persona_kind(self) -> None:
         ps = [
             {"role": "player", "persona": "dante", "kind": "webkit"},
-            {"role": "monitor", "persona": "ops", "kind": "firefox"},
+            {"role": "monitor", "persona": "mortimer", "kind": "firefox"},
         ]
         out = participant_summary(ps)
-        assert out == "player[dante]/webkit · monitor[ops]/firefox"
+        assert out == "player[dante]/webkit · monitor[mortimer]/firefox"
 
 
 class TestScenarioSummary:
@@ -126,14 +126,14 @@ class TestScenarioSummary:
                 "name": "mini",
                 "participants": [
                     {"role": "player", "persona": "dante", "kind": "webkit"},
-                    {"role": "monitor", "persona": "ops", "kind": "firefox"},
+                    {"role": "monitor", "persona": "mortimer", "kind": "firefox"},
                 ],
             }
         ]
         out = scenario_summary(scenarios)
         assert out.startswith("scenario 'mini' (2 participants):")
         assert "player[dante]/webkit" in out
-        assert "monitor[ops]/firefox" in out
+        assert "monitor[mortimer]/firefox" in out
         # No newline for the single-scenario case.
         assert "\n" not in out
 
