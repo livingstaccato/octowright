@@ -86,7 +86,14 @@ from octowright.server.macros import (
     recordings_cleanup,
     run_test_suite,
 )
-from octowright.server.meta import octowright_check_takeover, octowright_dashboard_url, octowright_status
+from octowright.server.meta import (
+    octowright_advisor_record_macro_observation,
+    octowright_advisor_set_preference,
+    octowright_advisor_status,
+    octowright_check_takeover,
+    octowright_dashboard_url,
+    octowright_status,
+)
 from octowright.server.personas import (
     persona_create,
     persona_credentials_check,
@@ -163,6 +170,9 @@ __all__ = [
     "macro_run_sequence",
     "macro_save",
     "mcp",
+    "octowright_advisor_record_macro_observation",
+    "octowright_advisor_set_preference",
+    "octowright_advisor_status",
     "octowright_check_takeover",
     "octowright_dashboard_url",
     "octowright_status",
