@@ -153,3 +153,60 @@ def test_reap_orphan_browsers_handles_already_dead(
     # ProcessLookupError is treated as success — pid already gone.
     assert out["killed"] == [2000]
     assert out["errors"] == []
+
+
+def test_is_browser_command_matches_windows_backslash_paths() -> None:
+    cmd = r"C:\Users\tim\AppData\Local\ms-playwright\chromium-1217\chrome-win\chrome.exe --headless"
+    assert process_reaper._is_browser_command(cmd) is True
+
+
+def test_is_browser_command_matches_case_insensitively() -> None:
+    assert process_reaper._is_browser_command("MS-Playwright/Chromium-1217/foo") is True
+
+
+def test_list_processes_windows_parses_csv_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    csv_stdout = (
+        '"ProcessId","ParentProcessId","CommandLine"\r\n'
+        '"100","1","C:\\Windows\\System32\\services.exe"\r\n'
+        '"2000","100","\\"C:\\Users\\tim\\ms-playwright\\chromium-1217\\chrome.exe\\" --headless"\r\n'
+        '"2001","2000","chrome.exe --type=renderer"\r\n'
+        '"3000","1",""\r\n'
+    )
+    monkeypatch.setattr(process_reaper, "_is_windows", lambda: True)
+
+    def _fake_run(args: list[str], **_kw: Any) -> subprocess.CompletedProcess[str]:
+        assert args[0] == "powershell"
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=csv_stdout, stderr="")
+
+    monkeypatch.setattr(process_reaper.subprocess, "run", _fake_run)
+
+    rows = process_reaper._list_processes()
+    pids = {row[0] for row in rows}
+    assert pids == {100, 2000, 2001, 3000}
+    # Browser-path detection should still find the Playwright chrome process
+    pids_browser = process_reaper.find_browser_pids("all")
+    assert pids_browser == [2000]
+
+
+def test_kill_pid_windows_treats_not_found_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_reaper, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        process_reaper.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(args=[], returncode=128, stdout="", stderr=""),
+    )
+    ok, err = process_reaper._kill_pid(9999, signum=signal.SIGTERM)
+    assert ok is True
+    assert err is None
+
+
+def test_kill_pid_windows_returns_error_on_nonzero_taskkill(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(process_reaper, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        process_reaper.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="Access denied"),
+    )
+    ok, err = process_reaper._kill_pid(9999, signum=signal.SIGTERM)
+    assert ok is False
+    assert err is not None and "Access denied" in err
