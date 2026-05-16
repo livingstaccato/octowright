@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml mcp-tool-surface
-title MCP tool inventory by concern (89 tools — slim with --profile=core etc.)
+title MCP tool inventory by concern (97 tools — slim with --profile=core etc.)
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -19,8 +19,9 @@ note as PROFILES_LEGEND #fef3c7
   • **macros** (9) — record / replay / lint / repair
   • **scenarios** (12) — multi-browser orchestration
   • **personas** (8) — identity + on-disk profile management
-  Each box below is tagged with the profiles its tools belong to.
-  Tools NOT tagged stay registered only when no profile filter is active.
+  • **always-on** (6) — status, dashboard, takeover, Advisor
+  Each box below is tagged with profile, always-on, or all-only behavior.
+  All-only tools register only when no profile filter is active.
 end note
 
 package "browser lifecycle (core)" #eff6ff {
@@ -71,8 +72,12 @@ package "test runner (no profile — all only)" #fffbeb {
   rectangle "run_test_suite (CLI: octowright test)" as RUN
 }
 
-package "octowright meta (no profile — all only)" #f5f5f4 {
-  rectangle "octowright_status\noctowright_dashboard_url\noctowright_check_takeover\nrecordings_cleanup" as META
+package "always-on meta + Advisor" #f5f5f4 {
+  rectangle "octowright_status\noctowright_dashboard_url\noctowright_check_takeover\noctowright_advisor_status\noctowright_advisor_set_preference\noctowright_advisor_record_macro_observation" as META
+}
+
+package "cleanup (no profile — all only)" #f5f5f4 {
+  rectangle "recordings_cleanup" as CLEAN
 }
 
 @enduml

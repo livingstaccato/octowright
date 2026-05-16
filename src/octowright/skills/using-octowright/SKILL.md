@@ -15,7 +15,9 @@ Octowright is a high-observability browser orchestrator. It uses a **Leader-Foll
 
 ```dot
 graph TD
-    Start[Task Start] --> Suggest[browser_suggest_for_url]
+    Start[Task Start] --> Status[octowright_status]
+    Status --> Advisor[Inspect advisor block]
+    Advisor --> Suggest[browser_suggest_for_url]
     Suggest --> Launch[browser_launch with Persona]
     Launch --> Act[Perform Actions]
     Act --> Success{Success?}
@@ -26,6 +28,19 @@ graph TD
 ```
 
 ## Rules of Engagement
+
+### 0. Advisor Check
+Octowright Advisor is a local guidance layer that reports preferences, recent
+tool usage, and suggestions.
+- **REQUIRED**: Call `octowright_status` once when Octowright first comes up and
+  inspect its `advisor` block.
+- **CHECK**: Call `octowright_advisor_status` when deciding whether to suggest
+  saving repeated work as a macro or changing `OCTOWRIGHT_PROFILE`.
+- **OBSERVE**: When you notice the same workflow repeated, call
+  `octowright_advisor_record_macro_observation(source="llm", signature=..., summary=...)`.
+  Two matching signatures produce a macro-candidate suggestion.
+- **RESPECT**: Advisor preferences can suppress suggestion types. Macro
+  candidates are always prompt-only; never save a macro without user approval.
 
 ### 1. The Launch Protocol
 Never "guess" a persona or launch a raw browser without checking for existing state.
@@ -47,6 +62,8 @@ When an action fails (e.g., selector not found):
 ### 4. Macro Management
 - **REUSE**: Check `macro_list` before manually implementing a common flow (like login).
 - **EVOLVE**: If a macro fails, update it using `macro_save` after identifying the correct new selectors. Don't just patch the current session.
+- **NOMINATE**: If a manual workflow repeats, record an Advisor macro observation
+  so the user can decide whether it should become a saved macro.
 
 ## Common Mistakes
 
@@ -77,6 +94,8 @@ If you catch yourself doing these, you are violating the Octowright workflow:
 | Task | Tool |
 | :--- | :--- |
 | Find best persona | `browser_suggest_for_url` |
+| Check Advisor guidance | `octowright_advisor_status` |
+| Record repeated workflow | `octowright_advisor_record_macro_observation` |
 | Start session | `browser_launch(kind, profile, ...)` |
 | Robust interaction | `browser_click(..., wait_for="visible")` |
 | Fix failing macro | `browser_snapshot` -> `macro_save` |

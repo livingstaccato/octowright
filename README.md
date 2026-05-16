@@ -622,12 +622,14 @@ without going through Claude:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 94 tools — every workflow Octowright supports
+The full MCP tool surface is currently 97 tools — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
 more comma-separated profile names. Tools not listed in any active profile
-are skipped at registration time, so the LLM-visible schema shrinks.
+are skipped at registration time, so the LLM-visible schema shrinks. Six
+meta/Advisor tools are always registered so agents can inspect Octowright,
+find the dashboard, and surface local guidance even under narrow profiles.
 
 | Profile | What | Tool count |
 |---|---|---|
@@ -636,11 +638,12 @@ are skipped at registration time, so the LLM-visible schema shrinks.
 | `macros` | Macro record / list / run / lint / repair / compile. | 9 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
 | `personas` | Persona + on-disk profile management. | 8 |
-| `all` (or unset) | Default — every tool registers. | 94 |
+| always-on | Status, dashboard, takeover detection, and Advisor tools registered under every profile. | 6 |
+| `all` (or unset) | Default — every tool registers. | 97 |
 
 ```bash
-octowright serve --profile=core              # 13 tools — minimum to drive a browser
-octowright serve --profile=core,macros       # 22 tools — browser + macro replay
+octowright serve --profile=core              # 19 tools — core + always-on
+octowright serve --profile=core,macros       # 28 tools — browser + macro replay + always-on
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 
@@ -648,6 +651,29 @@ The active profile shows up in `octowright selftest` and in the
 `octowright_status` MCP tool's `profile` block. If a tool you expected is
 missing, that's where to look. The dict lives in
 `src/octowright/server/profiles.py` — extend it to add or rebalance groups.
+
+## Octowright Advisor
+
+Octowright Advisor is a local, deterministic guidance layer exposed through
+always-on MCP tools. `octowright_status` includes an `advisor` block, and
+`octowright_advisor_status` returns the same Advisor snapshot directly:
+preferences, recent usage summary, and current suggestions.
+
+Advisor currently suggests two things:
+
+- **Macro candidates**: agents call
+  `octowright_advisor_record_macro_observation` when they notice repeated
+  workflows. Two observations with the same signature produce a
+  `macro_candidate` suggestion. Advisor never auto-saves a macro.
+- **Profile changes**: recent MCP tool usage can suggest narrowing or expanding
+  `OCTOWRIGHT_PROFILE`. Profile-change suggestions can be prompt-only or marked
+  `auto_apply` when the `profile_change` preference is `automatic`.
+
+Agents should check Advisor status after first-touch status and before asking a
+user whether repeated work should become a macro. Preferences are persisted in
+the local Advisor state file and can be changed with
+`octowright_advisor_set_preference`. Set `OCTOWRIGHT_ADVISOR_STATE` to isolate
+that JSON state file for tests or separate deployments.
 
 ## Telemetry
 
