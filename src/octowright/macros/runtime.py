@@ -69,6 +69,9 @@ _REPLAY_DROP_KEYS: dict[str, tuple[str, ...]] = {
     "navigate_back": ("url",),
     "switch_page": ("url",),
     "close_page": ("was_active",),
+    # open_url records the resulting page index alongside the inputs; the
+    # method signature only accepts (url, target, width, height).
+    "open_url": ("page_index",),
 }
 
 # Recorded keys that need renaming to match the method's parameter names.
