@@ -25,24 +25,27 @@ from starlette.routing import Mount
 
 from octowright.http.exposure import guard_sensitive_asgi_app
 from octowright.http.frontend import _frontend_routes
+from octowright.http.mcp_session_tracker import (
+    McpSessionTracker,
+    McpSessionTrackingMiddleware,
+)
 from octowright.http.metrics import HttpMetricsMiddleware, metrics_enabled
 from octowright.http.routes import all_routes
 
 log = get_logger(__name__)
 
-# Set by build_app(mcp_leader=True); used by idle_watchdog to count active
-# HTTP-MCP proxy sessions so the daemon doesn't exit while followers are live.
-_mcp_session_manager: Any = None
+# Tracker covering active streamable-HTTP MCP sessions; reset on every
+# build_app() so the count belongs to the most recently built leader app.
+# Idle watchdog reads through get_mcp_active_session_count() so it doesn't
+# exit while followers are connected.
+_session_tracker: McpSessionTracker | None = None
 
 
 def get_mcp_active_session_count() -> int:
     """Return the number of active HTTP-MCP sessions, or 0 if not applicable."""
-    if _mcp_session_manager is None:
+    if _session_tracker is None:
         return 0
-    try:
-        return len(_mcp_session_manager._server_instances)
-    except AttributeError:
-        return 0
+    return _session_tracker.active_count()
 
 
 def build_app(*, mcp_leader: bool = False) -> Starlette:
@@ -51,12 +54,12 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
     When ``mcp_leader`` is True, mount FastMCP's streamable-HTTP transport at
     ``/mcp`` and inherit its lifespan. Otherwise return the debugger UI alone.
     """
-    global _mcp_session_manager
+    global _session_tracker
 
     routes: list[Any] = list(all_routes())
 
     lifespan = None
-    _mcp_session_manager = None
+    _session_tracker = None
     if mcp_leader:
         from octowright.server import mcp as _mcp
 
@@ -64,20 +67,12 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
         # endpoint at "/mcp" exactly (not "/mcp/mcp").
         _mcp.settings.streamable_http_path = "/"
         mcp_app = _mcp.streamable_http_app()
-        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(mcp_app)))
+
+        _session_tracker = McpSessionTracker()
+        tracked_app = McpSessionTrackingMiddleware(mcp_app, _session_tracker)
+        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(tracked_app)))
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
-        # Capture for get_mcp_active_session_count() — path verified against
-        # mcp SDK 1.27.0: routes[0].app is StreamableHTTPASGIApp.
-        try:
-            first_route: Any = mcp_app.routes[0]
-            route_app: Any = getattr(first_route, "app", None)
-            _mcp_session_manager = route_app.session_manager if route_app is not None else None
-        except (AttributeError, IndexError) as exc:
-            # Best-effort: probes a path through the MCP SDK that we know is
-            # version-fragile. Falling back to None disables the
-            # session-count gauge but leaves the rest of the app working.
-            log.warning("octowright.mcp.session_manager_probe_failed", error=repr(exc))
 
     routes.extend(_frontend_routes())
     app = Starlette(routes=routes, lifespan=lifespan)
