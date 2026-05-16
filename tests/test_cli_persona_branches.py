@@ -24,16 +24,16 @@ class TestPersonaList:
         from octowright import personas as _p
 
         rows = [
-            {"name": "alice", "engines": ["chromium", "firefox"], "display_name": "Alice"},
-            {"name": "bob", "engines": ["webkit"], "display_name": None},
+            {"name": "cosmo", "engines": ["chromium", "firefox"], "display_name": "Crumpet Cosmo"},
+            {"name": "ziggy", "engines": ["webkit"], "display_name": None},
         ]
         monkeypatch.setattr(_p, "list_personas", lambda: rows)
         result = CliRunner().invoke(cli, ["persona", "list"])
         assert result.exit_code == 0
-        assert "alice" in result.output
+        assert "cosmo" in result.output
         assert "chromium,firefox" in result.output
-        assert "Alice" in result.output
-        assert "bob" in result.output
+        assert "Crumpet Cosmo" in result.output
+        assert "ziggy" in result.output
 
     def test_empty_engines_shows_dash(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Empty engines list → '-' placeholder."""
@@ -73,18 +73,18 @@ class TestPersonaShow:
         from octowright import personas as _p
 
         persona = SimpleNamespace(
-            name="alice",
-            display_name="Alice",
+            name="cosmo",
+            display_name="Crumpet Cosmo",
             default_url="https://x",
             default_macros=["login"],
             credentials={"email": {"env": "EMAIL"}},
             app={"foo": "bar"},
         )
         monkeypatch.setattr(_p, "load_persona", lambda _name: persona)
-        result = CliRunner().invoke(cli, ["persona", "show", "alice"])
+        result = CliRunner().invoke(cli, ["persona", "show", "cosmo"])
         assert result.exit_code == 0
-        assert "alice" in result.output
-        assert "Alice" in result.output
+        assert "cosmo" in result.output
+        assert "Crumpet Cosmo" in result.output
         assert "https://x" in result.output
         assert "['login']" in result.output
         assert "['email']" in result.output
@@ -116,12 +116,12 @@ class TestPersonaCreate:
             captured["name"] = name
             captured["display_name"] = display_name
             captured["default_url"] = default_url
-            return tmp_path / "alice"
+            return tmp_path / "cosmo"
 
         monkeypatch.setattr(_p, "create_persona", fake_create)
-        result = CliRunner().invoke(cli, ["persona", "create", "alice"])
+        result = CliRunner().invoke(cli, ["persona", "create", "cosmo"])
         assert result.exit_code == 0
-        assert captured == {"name": "alice", "display_name": None, "default_url": None}
+        assert captured == {"name": "cosmo", "display_name": None, "default_url": None}
         assert "created" in result.output
 
     def test_creates_persona_with_options(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
@@ -133,22 +133,24 @@ class TestPersonaCreate:
         def fake_create(name: str, *, display_name: str | None, default_url: str | None) -> Any:
             captured["display_name"] = display_name
             captured["default_url"] = default_url
-            return tmp_path / "alice"
+            return tmp_path / "cosmo"
 
         monkeypatch.setattr(_p, "create_persona", fake_create)
-        result = CliRunner().invoke(cli, ["persona", "create", "alice", "--display", "Alice A.", "--url", "https://x"])
+        result = CliRunner().invoke(
+            cli, ["persona", "create", "cosmo", "--display", "Crumpet Cosmo", "--url", "https://x"]
+        )
         assert result.exit_code == 0
-        assert captured == {"display_name": "Alice A.", "default_url": "https://x"}
+        assert captured == {"display_name": "Crumpet Cosmo", "default_url": "https://x"}
 
     def test_exists_error_returns_exit_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FileExistsError → SystemExit(1) with message on stderr."""
         from octowright import personas as _p
 
         def boom(*_args: Any, **_kw: Any) -> Any:
-            raise FileExistsError("persona 'alice' already exists")
+            raise FileExistsError("persona 'cosmo' already exists")
 
         monkeypatch.setattr(_p, "create_persona", boom)
-        result = CliRunner().invoke(cli, ["persona", "create", "alice"])
+        result = CliRunner().invoke(cli, ["persona", "create", "cosmo"])
         assert result.exit_code == 1
         # Click captures stderr into result.output by default.
         assert "already exists" in result.output
@@ -162,13 +164,13 @@ class TestPersonaDelete:
         """delete_persona path printed back to user."""
         from octowright import profiles as _profiles
 
-        target = tmp_path / "alice"
+        target = tmp_path / "cosmo"
 
         def fake_delete(name: str) -> Any:
             return target
 
         monkeypatch.setattr(_profiles, "delete_persona", fake_delete)
-        result = CliRunner().invoke(cli, ["persona", "delete", "alice"])
+        result = CliRunner().invoke(cli, ["persona", "delete", "cosmo"])
         assert result.exit_code == 0
         assert "deleted" in result.output
         assert str(target) in result.output

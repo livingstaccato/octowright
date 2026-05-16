@@ -94,6 +94,37 @@ class TestValidateScenario:
         )
         _validate_scenario(s)  # does not raise
 
+    def test_distinct_personas_in_one_scenario_ok(self) -> None:
+        """Multiple distinct persona identities share a single scenario.
+
+        Validates that the (persona, kind) uniqueness rule lets two truly
+        different personas coexist — the primary multi-tenant case
+        (e.g. Dante vs Mortimer vs Cosmo all logging in side-by-side).
+        """
+        s = Scenario(
+            name="three-tenants",
+            participants=[
+                Participant(persona="dante", kind="webkit", role="player"),
+                Participant(persona="mortimer", kind="firefox", role="monitor"),
+                Participant(persona="cosmo", kind="chromium", role="spectator"),
+            ],
+        )
+        _validate_scenario(s)  # does not raise
+        assert {p.persona for p in s.participants} == {"dante", "mortimer", "cosmo"}
+        assert {p.role for p in s.participants} == {"player", "monitor", "spectator"}
+
+    def test_distinct_personas_same_engine_ok(self) -> None:
+        """Two different personas on the same engine is allowed —
+        (persona, kind) only collides when both fields match."""
+        s = Scenario(
+            name="two-on-webkit",
+            participants=[
+                Participant(persona="dante", kind="webkit", role="a"),
+                Participant(persona="ziggy", kind="webkit", role="b"),
+            ],
+        )
+        _validate_scenario(s)  # does not raise
+
 
 # ---------------------------------------------------------------------------
 # YAML loader

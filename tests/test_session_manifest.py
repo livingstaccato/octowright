@@ -129,14 +129,14 @@ def isolated_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Brow
 async def test_launch_writes_session_manifest(isolated_pool: tuple[BrowserPool, Path]) -> None:
     pool, manifest_path = isolated_pool
 
-    result = await pool.launch(kind="chromium", url="https://example.test", headed=False, label="ops")
+    result = await pool.launch(kind="chromium", url="https://example.test", headed=False, label="mortimer")
 
     body = json.loads(manifest_path.read_text())
     entry = body["sessions"][result["instance_id"]]
     assert entry["session_id"] == result["instance_id"]
     assert entry["kind"] == "chromium"
-    assert entry["label"] == "ops"
-    assert entry["profile"] == "ops"
+    assert entry["label"] == "mortimer"
+    assert entry["profile"] == "mortimer"
     assert entry["user_data_dir"]
     assert entry["log_path"] == result["log_path"]
     assert entry["state"] == "open"

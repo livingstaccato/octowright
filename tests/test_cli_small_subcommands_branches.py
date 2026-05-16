@@ -447,7 +447,7 @@ class TestFormatHeadline:
 class TestFormatExtras:
     def test_empty_when_only_hidden_fields(self) -> None:
         """All hidden → empty string."""
-        ev = {"ts": "2026", "instance_id": "x", "persona": "alice"}
+        ev = {"ts": "2026", "instance_id": "x", "persona": "cosmo"}
         assert watch._format_extras(ev) == ""
 
     def test_empty_when_only_headline_fields(self) -> None:
@@ -478,7 +478,7 @@ class TestFormatWatchEvent:
         """Combines ts/persona/role/action/headline/extras."""
         ev = {
             "ts": "2026-01-01T12:34:56Z",
-            "persona": "alice",
+            "persona": "cosmo",
             "role": "player",
             "action": "click",
             "selector": "#submit",
@@ -486,7 +486,7 @@ class TestFormatWatchEvent:
         out = watch._format_watch_event(ev)
         assert out is not None
         assert out.startswith("[12:34:56] ")
-        assert "alice/player" in out
+        assert "cosmo/player" in out
         assert "click" in out
         assert "#submit" in out
 

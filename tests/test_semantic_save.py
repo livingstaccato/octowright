@@ -56,19 +56,19 @@ def test_save_macro_parameterizes_semantic_fields(monkeypatch: pytest.MonkeyPatc
             "selector": "input#user",
             "role": "textbox",
             "role_name": "Username",
-            "value": "alice",
+            "value": "cosmo",
         },
     ]
     rec_path = _write_recording(tmp_path, recording)
 
-    # We want to parameterize 'Login' and 'Username' and 'alice'
+    # We want to parameterize 'Login' and 'Username' and 'cosmo'
     path = m.save_macro(
         recording_path=rec_path,
         name="semantic-test",
         parameters={
             "login_text": "Login",
             "user_label": "Username",
-            "user_val": "alice",
+            "user_val": "cosmo",
         },
     )
 
@@ -135,7 +135,7 @@ def test_save_macro_keeps_semantic_and_selector_fields(monkeypatch: pytest.Monke
             "selector": "input[name=user]",
             "role": "textbox",
             "role_name": "Username",
-            "value": "alice",
+            "value": "cosmo",
             "label": "Username field",
         },
     ]

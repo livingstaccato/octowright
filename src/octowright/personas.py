@@ -23,6 +23,7 @@ from octowright.types import CredentialCheckEntry, CredentialCheckReport, Person
 log = get_logger(__name__)
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_PINNED_PERSONA_ORDER = {"dante": 0, "tim": 1}
 
 # Tokens that shlex.split surfaces as standalone — i.e. the cmd is asking
 # for shell semantics (pipes, redirection, subshells, command separators,
@@ -113,7 +114,8 @@ def load_persona(name: str) -> Persona:
 
 def list_personas() -> list[PersonaListEntry]:
     """Return [{name, display_name, engines, path, mtime, last_used}, ...]
-    sorted most-recent-mtime first. Empty list if PROFILES_DIR missing.
+    sorted with pinned first-party personas first, then most-recent-mtime.
+    Empty list if PROFILES_DIR missing.
 
     Only directories with a ``profile.yaml`` are reported — orphan profile
     folders left behind by tests or interrupted launches are skipped, since
@@ -147,7 +149,12 @@ def list_personas() -> list[PersonaListEntry]:
                 "last_used": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat().replace("+00:00", "Z"),
             }
         )
-    out.sort(key=lambda p: p["mtime"], reverse=True)
+    out.sort(
+        key=lambda p: (
+            _PINNED_PERSONA_ORDER.get(str(p["name"]), len(_PINNED_PERSONA_ORDER)),
+            -float(p["mtime"]),
+        )
+    )
     return out
 
 

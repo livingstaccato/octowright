@@ -42,9 +42,9 @@ def test_load_yaml_scenario(fresh_scenarios):
             "name": "raid",
             "description": "two players plus a monitor",
             "participants": [
-                {"persona": "alice", "kind": "webkit", "role": "player"},
-                {"persona": "bob", "kind": "firefox", "role": "player", "startup_macros": ["login"]},
-                {"persona": "ops", "kind": "chromium", "role": "monitor", "url": "https://ops.example.com"},
+                {"persona": "cosmo", "kind": "webkit", "role": "player"},
+                {"persona": "ziggy", "kind": "firefox", "role": "player", "startup_macros": ["login"]},
+                {"persona": "mortimer", "kind": "chromium", "role": "monitor", "url": "https://ops.example.com"},
             ],
             "fixtures": {"mock_routes": [{"pattern": "**/api/time", "status": 200, "body": "{}"}]},
             "teardown": {"macro": "cleanup"},
@@ -54,7 +54,7 @@ def test_load_yaml_scenario(fresh_scenarios):
     s = scenarios.load_scenario("raid")
     assert s.name == "raid"
     assert len(s.participants) == 3
-    assert s.participants[1].persona == "bob"
+    assert s.participants[1].persona == "ziggy"
     assert s.participants[1].startup_macros == ["login"]
     assert s.participants[2].url == "https://ops.example.com"
     assert s.fixtures["mock_routes"][0]["pattern"] == "**/api/time"
@@ -125,21 +125,21 @@ def test_resolve_launch_kwargs_defaults(fresh_scenarios, tmp_path):
     from octowright import personas as _p
 
     # Create a persona with defaults
-    pdir = _p.persona_dir("alice")
+    pdir = _p.persona_dir("cosmo")
     pdir.mkdir(parents=True)
     (pdir / "profile.yaml").write_text(
         yaml.safe_dump(
             {
-                "name": "alice",
-                "default_url": "https://alice-home.example",
+                "name": "cosmo",
+                "default_url": "https://cosmo-home.example",
                 "default_macros": ["login"],
             }
         )
     )
-    pov = scenarios.Participant(persona="alice", kind="webkit", role="player", url="https://override.example")
+    pov = scenarios.Participant(persona="cosmo", kind="webkit", role="player", url="https://override.example")
     kwargs = scenarios.resolve_launch_kwargs(pov)
     assert kwargs["url"] == "https://override.example"
-    assert kwargs["profile"] == "alice"
+    assert kwargs["profile"] == "cosmo"
     assert kwargs["kind"] == "webkit"
     assert "role" not in kwargs
     assert "startup_macros" not in kwargs
