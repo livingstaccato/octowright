@@ -5,13 +5,13 @@
 
 """Find and kill orphaned Playwright-managed browser processes.
 
-Playwright launches `ms-playwright/<engine>-<rev>/...` subprocesses for each
+Playwright launches ``ms-playwright/<engine>-<rev>/...`` subprocesses for each
 browser. Under normal teardown the asyncio listeners in
 ``browser_pool.listeners`` evict each session and Playwright closes its own
 subprocesses. When the parent Python process dies abruptly — daemon SIGKILL,
 recording-script crash, OS sleep, etc. — those subprocesses get reparented
-to launchd/init and persist as orphans. They accumulate over a session,
-eating RAM and (more visibly) cluttering the macOS Dock.
+to init/services.exe and persist as orphans. They accumulate over a session,
+eating RAM and (more visibly) cluttering the macOS Dock or Windows tray.
 
 Two entry points:
 
@@ -23,23 +23,27 @@ Two entry points:
 * ``reap_orphan_browsers(scope, dry_run=False, root_pid=None)`` does the
   kill, returns a summary suitable for both the CLI and the daemon log.
 
-No psutil dependency — pure ``ps``/``kill`` so this works in any environment
-the daemon itself runs in.
+No psutil dependency — uses ``ps`` + ``os.kill`` on POSIX and ``tasklist`` +
+``taskkill`` on Windows, both of which ship with the OS.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import os
 import signal
 import subprocess
+import sys
 import time
 from typing import Any, Literal, TypedDict
 
 Scope = Literal["descendants", "all"]
 
-# Windows has no SIGKILL — TerminateProcess is invoked for any signum, so
-# SIGTERM is the strongest available signal. POSIX keeps the SIGTERM →
-# grace → SIGKILL escalation.
+# Windows has no SIGKILL; on POSIX the daemon-shutdown path uses SIGTERM →
+# grace → SIGKILL escalation. KILL_SIGNAL exists for the POSIX escalation;
+# on Windows the platform-specific killer ignores the signum and always
+# issues a forced taskkill, so the constant is irrelevant there.
 KILL_SIGNAL: int = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
@@ -56,9 +60,25 @@ _BROWSER_PATH_SUBSTRINGS = (
 )
 
 
-def _ps_pid_ppid_cmd() -> list[tuple[int, int, str]]:
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _is_browser_command(command: str) -> bool:
+    # Playwright command lines use ``/`` on POSIX and ``\`` on Windows;
+    # normalize so a single substring list catches both.
+    normalized = command.replace("\\", "/").lower()
+    return any(needle in normalized for needle in _BROWSER_PATH_SUBSTRINGS)
+
+
+def _list_processes() -> list[tuple[int, int, str]]:
     """Return ``[(pid, ppid, command_line), ...]`` for every live process."""
-    # -A: all processes; -o: custom format with ppid + full args.
+    if _is_windows():
+        return _list_processes_windows()
+    return _list_processes_posix()
+
+
+def _list_processes_posix() -> list[tuple[int, int, str]]:
     out = subprocess.run(
         ["ps", "-A", "-o", "pid=,ppid=,command="],
         check=False,
@@ -79,8 +99,44 @@ def _ps_pid_ppid_cmd() -> list[tuple[int, int, str]]:
     return rows
 
 
-def _is_browser_command(command: str) -> bool:
-    return any(needle in command for needle in _BROWSER_PATH_SUBSTRINGS)
+def _list_processes_windows() -> list[tuple[int, int, str]]:
+    # PowerShell CSV: ProcessId,ParentProcessId,CommandLine. ``wmic`` is
+    # deprecated on recent Windows; ``Get-CimInstance`` is the current way.
+    # ConvertTo-Csv -NoTypeInformation drops the leading type line, leaving
+    # header + one row per process.
+    script = (
+        "Get-CimInstance Win32_Process | "
+        "Select-Object ProcessId,ParentProcessId,CommandLine | "
+        "ConvertTo-Csv -NoTypeInformation"
+    )
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    rows: list[tuple[int, int, str]] = []
+    reader = csv.reader(io.StringIO(out.stdout))
+    try:
+        header = next(reader)
+    except StopIteration:
+        return rows
+    try:
+        pid_idx = header.index("ProcessId")
+        ppid_idx = header.index("ParentProcessId")
+        cmd_idx = header.index("CommandLine")
+    except ValueError:
+        return rows
+    for row in reader:
+        if len(row) <= max(pid_idx, ppid_idx, cmd_idx):
+            continue
+        try:
+            pid = int(row[pid_idx])
+            ppid = int(row[ppid_idx])
+        except ValueError:
+            continue
+        rows.append((pid, ppid, row[cmd_idx] or ""))
+    return rows
 
 
 def _descendants_of(root_pid: int, table: list[tuple[int, int, str]]) -> set[int]:
@@ -105,7 +161,7 @@ def find_browser_pids(scope: Scope, *, root_pid: int | None = None) -> list[int]
 
     ``descendants`` requires ``root_pid``; ``all`` ignores it.
     """
-    table = _ps_pid_ppid_cmd()
+    table = _list_processes()
     candidate_pids = [pid for pid, _ppid, cmd in table if _is_browser_command(cmd)]
     if scope == "all":
         return candidate_pids
@@ -116,6 +172,8 @@ def find_browser_pids(scope: Scope, *, root_pid: int | None = None) -> list[int]
 
 
 def _kill_pid(pid: int, *, signum: int) -> tuple[bool, str | None]:
+    if _is_windows():
+        return _kill_pid_windows(pid)
     try:
         os.kill(pid, signum)
     except ProcessLookupError:
@@ -126,6 +184,21 @@ def _kill_pid(pid: int, *, signum: int) -> tuple[bool, str | None]:
     except OSError as exc:
         return False, repr(exc)
     return True, None
+
+
+def _kill_pid_windows(pid: int) -> tuple[bool, str | None]:
+    # taskkill exit codes: 0 success; 128 = process not found (treat as
+    # ProcessLookupError-equivalent). Anything else is a real failure.
+    out = subprocess.run(
+        ["taskkill", "/F", "/PID", str(pid)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode == 0 or out.returncode == 128:
+        return True, None
+    message = (out.stderr or out.stdout or "").strip() or f"taskkill exit {out.returncode}"
+    return False, message
 
 
 def _signal_pids(pids: list[int], signum: int, stage: str) -> list[dict[str, str]]:
@@ -145,7 +218,12 @@ def reap_orphan_browsers(
     dry_run: bool = False,
     grace_seconds: float = 0.4,
 ) -> ReapSummary:
-    """Send SIGTERM, wait briefly, then SIGKILL anything still alive."""
+    """Send SIGTERM, wait briefly, then SIGKILL anything still alive.
+
+    On Windows there is no graceful equivalent for opaque subprocesses, so
+    both stages issue a forced ``taskkill /F``. The two-pass shape is kept
+    for diagnostic parity (the ``errors`` list still labels each stage).
+    """
     pids = find_browser_pids(scope, root_pid=root_pid)
     if dry_run or not pids:
         return ReapSummary(killed=[], still_alive=pids, errors=[])
