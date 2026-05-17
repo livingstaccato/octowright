@@ -63,6 +63,10 @@ def _read_lock(path: Path) -> dict | None:
 
 
 @pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="SIGKILL-based parent-survives test is POSIX-only; Windows uses TerminateProcess",
+)
+@pytest.mark.skipif(
     not Path(OCTOWRIGHT).exists(),
     reason="octowright entry point not installed in expected venv",
 )
