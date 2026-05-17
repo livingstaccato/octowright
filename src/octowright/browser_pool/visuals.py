@@ -126,7 +126,7 @@ _BADGE_POSITIONS: dict[str, dict[str, str]] = {
 _BADGE_POSITION_DEFAULT = "bottom-right"
 
 
-_BADGE_ALPHA = 0.7  # translucent so page content shows through; raise for opacity
+_BADGE_ALPHA = 0.45  # translucent so page content shows through; adjust for opacity
 
 
 def _badge_color_for(seed: str) -> str:

@@ -77,6 +77,13 @@ def test_badge_color_is_translucent_hsla() -> None:
     assert 0 < alpha < 1
 
 
+def test_badge_alpha_is_subtle() -> None:
+    """Corner badge should be readable but visually secondary to the page."""
+    color = _badge_color_for("anything")
+    alpha = float(color.rstrip(")").rsplit(",", 1)[1].strip())
+    assert alpha == pytest.approx(0.45)
+
+
 def test_badge_color_is_persona_stable_across_engines() -> None:
     """The color seed is the persona name only — same seed → same color regardless of engine."""
     # The launch path uses ``profile or label or instance_id[:6]`` as the seed
