@@ -168,13 +168,15 @@ def render_report(report: dict[str, Any], stream: Any = None) -> None:
         marker = {"created": "+", "overwritten": "*", "exists": "·"}[info["status"]]
         print(f"  {marker} {name:10s} {info['path']}  ({info['status']})", file=out)
     print(
-        "\nNext step — register octowright with Claude Code by adding this to "
-        "the `mcpServers` block of `.mcp.json` (in any repo) or `~/.claude.json` (globally):\n",
+        "\nNext step — register octowright with your MCP client by adding this "
+        "to the `mcpServers` block of `.mcp.json` (project-scoped) or, for "
+        "Claude Code, `~/.claude.json` (globally):\n",
         file=out,
     )
     print(report["mcp_block"], file=out)
     print(
-        "\nThen reload Claude. Verify with `octowright selftest` (lists every "
-        "registered MCP tool) or by asking Claude 'what octowright tools do you have?'.",
+        "\nThen reload your MCP client. Verify with `octowright selftest` "
+        "(lists every registered MCP tool) or by asking the client "
+        "'what octowright tools do you have?'.",
         file=out,
     )

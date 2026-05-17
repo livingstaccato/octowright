@@ -3,8 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Takeover: detect competing Playwright MCP plugins in the user's Claude Code
-config files, and offer to disable them in favour of octowright.
+"""Takeover: detect competing Playwright MCP plugins in MCP config files.
 
 Two scopes are supported:
 
@@ -19,11 +18,11 @@ The "disable" mechanism is a deliberately reversible key rename:
 
     "playwright" -> "_playwright_disabled_by_octowright"
 
-Claude Code skips servers it doesn't recognise, so the entry stays in the file
-(visible, intact) but is no longer registered. The user can rename the key
-back at any time to re-enable. This avoids destroying the original entry
-(safer than deletion) and avoids having to invent a new "enabled: false"
-schema that Claude Code itself doesn't read.
+MCP clients that read the ``mcpServers`` map skip unknown server names, so the
+entry stays in the file (visible, intact) but is no longer registered. The user
+can rename the key back at any time to re-enable. This avoids destroying the
+original entry (safer than deletion) and avoids having to invent a new
+"enabled: false" schema.
 """
 
 from __future__ import annotations
@@ -269,8 +268,8 @@ def apply_takeover(
     """Modify the config file to disable the competing server.
 
     Strategy: rename the key from ``<name>`` to
-    ``_<name>_disabled_by_octowright``. Claude Code skips unknown server
-    names, so the entry effectively stops registering — but it stays in the
+    ``_<name>_disabled_by_octowright``. MCP clients skip unknown server names,
+    so the entry effectively stops registering — but it stays in the
     file (intact, visible) so the user can rename it back to re-enable.
 
     Always writes a backup at ``<config>.bak.<timestamp>`` first when

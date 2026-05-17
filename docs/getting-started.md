@@ -22,9 +22,10 @@ line downloads the actual browser binaries Playwright drives.
 > Engine management is currently CLI-only (Playwright install/list commands),
 > not exposed as Octowright MCP tools.
 
-## 2. Register with Claude Code
+## 2. Register with an MCP Client
 
-Add to your `.mcp.json` (project-scoped) or `~/.claude.json` (global):
+Add Octowright to your MCP client configuration. For project-scoped clients, that
+is often `.mcp.json`; for Claude Code's global config, use `~/.claude.json`:
 
 ```json
 {
@@ -38,8 +39,8 @@ Add to your `.mcp.json` (project-scoped) or `~/.claude.json` (global):
 ```
 
 Replace `<absolute-path-to-octowright>` with the expanded path on your machine.
-Then reload Claude — the tools should appear as `mcp__octowright__browser_launch`,
-`mcp__octowright__browser_click`, etc.
+Then reload your MCP client — the tools should appear as
+`mcp__octowright__browser_launch`, `mcp__octowright__browser_click`, etc.
 
 The shortcut:
 
@@ -55,7 +56,7 @@ Octowright's user config directory.
 
 A four-call smoke test that exercises launch, drive, list, and close:
 
-1. Ask Claude to call `browser_launch` with `kind=webkit` and `url=https://example.com`.
+1. Ask your MCP client to call `browser_launch` with `kind=webkit` and `url=https://example.com`.
 2. Call `browser_click_by` on the link text "More information".
 3. Call `browser_list` and confirm exactly one live instance.
 4. Call `browser_close` with the `instance_id` from step 1.
@@ -83,13 +84,13 @@ Octowright ships a Click-based CLI. Useful subcommands:
 
 ## Slimming the LLM tool surface
 
-The full MCP surface is currently 94 tools. When a workflow only needs a slice (driving
+The full MCP surface is currently 103 tools. When a workflow only needs a slice (driving
 a browser, replaying macros, etc.), pass `--profile` to slim what the LLM
 sees at connection time:
 
 ```bash
-octowright serve --profile=core              # 13 tools — minimum to drive a browser
-octowright serve --profile=core,macros       # 22 tools — browser + macro replay
+octowright serve --profile=core              # 20 tools — browser core + always-on diagnostics
+octowright serve --profile=core,macros       # 29 tools — browser + macro replay + always-on diagnostics
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 
