@@ -36,6 +36,7 @@ uv run playwright install webkit firefox chromium
 
 # CLI
 uv run octowright serve          # start MCP + HTTP dashboard
+uv run octowright restart        # stop the daemon, reap orphans, start a fresh one
 uv run octowright selftest       # list MCP tools without a client
 uv run octowright scenario list  # list loaded scenarios
 uv run octowright persona list   # list saved personas (also: persona create/show/delete)
