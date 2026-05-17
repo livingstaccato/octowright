@@ -5,10 +5,13 @@
     const MODAL_ID = "__octowright_viewport_modal__";
     const INITIAL = __VIEWPORT_INFO__;
     const CLICK_MODIFIER = "altKey";
+    const ALT_HOLD_MS = 1000;
     const FRAME_TOLERANCE_W = 24;
     const FRAME_TOLERANCE_H = 80;
 
     let modifierActive = false;
+    let modifierHeld = false;
+    let modifierTimer = null;
     let current = { ...INITIAL };
 
     const measure = () => ({
@@ -45,10 +48,10 @@
     const applyInteractive = () => {
         const root = document.getElementById(ROOT_ID);
         if (!root) return;
-        root.style.pointerEvents = modifierActive ? "auto" : "none";
-        root.style.cursor = modifierActive ? "pointer" : "";
-        root.style.outline = modifierActive ? "1px solid rgba(255, 255, 255, 0.45)" : "";
-        root.style.outlineOffset = modifierActive ? "1px" : "";
+        root.style.pointerEvents = modifierHeld ? "auto" : "none";
+        root.style.cursor = modifierHeld ? "pointer" : "";
+        root.style.outline = modifierHeld ? "1px solid rgba(255, 255, 255, 0.45)" : "";
+        root.style.outlineOffset = modifierHeld ? "1px" : "";
     };
 
     const render = () => {
@@ -56,7 +59,7 @@
         if (!root) return;
         root.textContent = labelFor();
         root.style.background = colorFor();
-        root.style.opacity = current.mode === "fluid" && !modifierActive ? "0.45" : "0.78";
+        root.style.opacity = current.mode === "fluid" && !modifierHeld ? "0.45" : "0.78";
     };
 
     const closeModal = () => {
@@ -197,7 +200,14 @@
     window.addEventListener(
         "keydown",
         (event) => {
-            modifierActive = !!event[CLICK_MODIFIER];
+            if (!event[CLICK_MODIFIER] || modifierActive) return;
+            modifierActive = true;
+            if (modifierTimer) clearTimeout(modifierTimer);
+            modifierTimer = setTimeout(() => {
+                modifierHeld = true;
+                applyInteractive();
+                render();
+            }, ALT_HOLD_MS);
             applyInteractive();
             render();
         },
@@ -206,7 +216,13 @@
     window.addEventListener(
         "keyup",
         (event) => {
-            modifierActive = !!event[CLICK_MODIFIER];
+            if (event[CLICK_MODIFIER]) return;
+            modifierActive = false;
+            modifierHeld = false;
+            if (modifierTimer) {
+                clearTimeout(modifierTimer);
+                modifierTimer = null;
+            }
             applyInteractive();
             render();
         },
@@ -214,6 +230,11 @@
     );
     window.addEventListener("blur", () => {
         modifierActive = false;
+        modifierHeld = false;
+        if (modifierTimer) {
+            clearTimeout(modifierTimer);
+            modifierTimer = null;
+        }
         applyInteractive();
         render();
     });
