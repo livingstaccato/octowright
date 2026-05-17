@@ -20,6 +20,7 @@ _ASSETS = Path(__file__).with_name("_assets")
 _TITLE_TAG_SCRIPT = (_ASSETS / "title_tag.js").read_text(encoding="utf-8")
 _BADGE_SCRIPT = (_ASSETS / "badge.js").read_text(encoding="utf-8")
 _MACRO_STATUS_SCRIPT = (_ASSETS / "macro_pill.js").read_text(encoding="utf-8")
+_VIEWPORT_PILL_SCRIPT = (_ASSETS / "viewport_pill.js").read_text(encoding="utf-8")
 
 
 # Curated emoji pool for per-persona/per-label visual identity. 33 picks: mostly
@@ -246,6 +247,9 @@ async def wire_init_scripts(
     badge: bool,
     badge_position: str,
     stabilize: bool,
+    viewport_mode: str = "unknown",
+    viewport_width: int | None = None,
+    viewport_height: int | None = None,
 ) -> None:
     """Inject title-tag, badge, macro-pill, and (optional) stabilize scripts."""
     import json as _json
@@ -279,6 +283,14 @@ async def wire_init_scripts(
         "__ID_COLOR__", _json.dumps(chip_color)
     )
     await context.add_init_script(script=pill_script)
+
+    viewport_payload = {
+        "mode": viewport_mode,
+        "width": viewport_width,
+        "height": viewport_height,
+    }
+    viewport_script = _VIEWPORT_PILL_SCRIPT.replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
+    await context.add_init_script(script=viewport_script)
 
     if stabilize:
         await context.add_init_script(script=render_stabilize_script())

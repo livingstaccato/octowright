@@ -153,6 +153,26 @@ def test_python_export_uses_default_viewport_when_omitted(tmp_path: Path) -> Non
     assert "viewport={'width': 1280, 'height': 800}" in out.read_text()
 
 
+def test_python_export_uses_default_viewport_when_fluid_recorded(tmp_path: Path) -> None:
+    log = tmp_path / "fluid.jsonl"
+    log.write_text(
+        json.dumps(
+            {
+                "ts": "2026-01-01T00:00:00Z",
+                "action": "launch",
+                "kind": "chromium",
+                "url": "https://example.com",
+                "viewport": {"mode": "fluid"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.py"
+    export_script(log, out, fmt="python")
+    assert "viewport={'width': 1280, 'height': 800}" in out.read_text()
+
+
 def test_python_export_skips_blank_and_unknown_lines(tmp_path: Path) -> None:
     """Blank lines, unknown actions, and lifecycle entries we don't translate
     must not break export and must not appear in output."""
@@ -316,6 +336,26 @@ def test_ts_export_default_viewport(tmp_path: Path) -> None:
         [{"action": "launch", "kind": "chromium", "url": "https://x", "headed": True}],
     )
     out = export_script(log, tmp_path / "out.ts", fmt="ts")
+    assert "viewport: { width: 1280, height: 800 }" in out.read_text()
+
+
+def test_ts_export_uses_default_viewport_when_fluid_recorded(tmp_path: Path) -> None:
+    log = tmp_path / "fluid-ts.jsonl"
+    log.write_text(
+        json.dumps(
+            {
+                "ts": "2026-01-01T00:00:00Z",
+                "action": "launch",
+                "kind": "chromium",
+                "url": "https://example.com",
+                "viewport": {"mode": "fluid"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.ts"
+    export_script(log, out, fmt="ts")
     assert "viewport: { width: 1280, height: 800 }" in out.read_text()
 
 
