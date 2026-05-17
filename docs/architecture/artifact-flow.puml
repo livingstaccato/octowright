@@ -69,7 +69,7 @@ FFMPEG --> FRAMES : browser_extract_frames
 [runner.py / scenario_run_as_test] ..> JUNIT : pass/fail per [test] or per role
 
 note right of REC
-  Default: ./recordings/ in repo (gitignored).
+  Default: <octowright-state>/sessions/.
   OCTOWRIGHT_RECORDINGS overrides.
 end note
 

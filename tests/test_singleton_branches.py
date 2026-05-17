@@ -348,17 +348,17 @@ class TestMakeLeaderInfo:
 
 
 class TestLockPathDefault:
-    def test_default_under_user_config(self) -> None:
-        """LOCK_PATH lives under the user config dir by default."""
+    def test_default_under_user_state(self) -> None:
+        """LOCK_PATH lives under the user state dir by default."""
         from octowright import singleton as _sg
-        from octowright.config_paths import user_config_dir
+        from octowright.config_paths import user_state_dir
 
         # The runtime constant was initialised from env or default at import.
         # We don't override OCTOWRIGHT_LOCK_PATH in this test, so it should be
-        # under user_config_dir() OR the env value if a prior test set one.
+        # under user_state_dir() OR the env value if a prior test set one.
         env_override = os.environ.get("OCTOWRIGHT_LOCK_PATH")
         if env_override:
             assert str(_sg.LOCK_PATH) == env_override
         else:
-            assert _sg.LOCK_PATH.parent == user_config_dir()
+            assert _sg.LOCK_PATH.parent == user_state_dir()
             assert _sg.LOCK_PATH.name == "octowright.lock"

@@ -33,6 +33,7 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset(
         "octowright_advisor_set_preference",
         "octowright_advisor_status",
         "octowright_status",
+        "octowright_storage_report",
         "octowright_dashboard_url",
         "octowright_check_takeover",
     }
@@ -60,6 +61,11 @@ PROFILES: dict[str, list[str]] = {
     # Inspection + assertions + ARIA-locator interactions for stable test
     # automation. Layer on top of `core`.
     "advanced": [
+        "capture_cleanup",
+        "capture_create",
+        "capture_get",
+        "capture_list",
+        "capture_search",
         "browser_click_by",
         "browser_console_messages",
         "browser_evaluate",
@@ -124,7 +130,7 @@ def build_allowed_set(profile_spec: str) -> set[str]:
     exactly :data:`ALWAYS_ON_TOOLS` despite a non-empty spec), an
     additional ERROR-level log fires so the operator notices the
     daemon-is-healthy-but-LLM-has-no-tools failure mode instead of
-    chasing a "why does Claude not see browser_launch?" thread.
+    chasing a "why does my MCP client not see browser_launch?" thread.
 
     Callers that want "no filter" should detect that themselves via
     :func:`active_filter` returning ``None``.
