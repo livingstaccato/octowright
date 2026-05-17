@@ -54,10 +54,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/provide-io/octowright"
+Homepage = "https://github.com/livingstaccato/octowright"
 Documentation = "https://foundry.provide.io/octowright/"
-Repository = "https://github.com/provide-io/octowright"
-Issues = "https://github.com/provide-io/octowright/issues"
+Repository = "https://github.com/livingstaccato/octowright"
+Issues = "https://github.com/livingstaccato/octowright/issues"
 
 [project.scripts]
 octowright = "octowright.cli:main"

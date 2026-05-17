@@ -1,4 +1,4 @@
-![octowright](https://raw.githubusercontent.com/provide-io/octowright/main/docs/images/octowright-banner.png)
+![octowright](https://raw.githubusercontent.com/livingstaccato/octowright/main/docs/images/octowright-banner.png)
 
 # Octowright
 
@@ -22,7 +22,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Then, from any directory you'd like Octowright to live under (e.g. `~/code/`):
 
 ```bash
-git clone https://github.com/provide-io/octowright.git
+git clone https://github.com/livingstaccato/octowright.git
 cd octowright
 uv sync                                              # install Python deps
 uv run playwright install webkit firefox chromium    # install browser binaries
@@ -235,7 +235,7 @@ free-form domain metadata. Think of a persona as "dante — my Discord power
 user across all three engines", and a profile as one engine-specific piece
 of that identity. You launch it with `browser_launch profile=dante`;
 the resolver (`browser_suggest_for_url`) works out which persona to reuse
-when the URL is ambiguous. See [docs/personas.md](https://github.com/provide-io/octowright/blob/main/docs/personas.md)
+when the URL is ambiguous. See [docs/personas.md](https://github.com/livingstaccato/octowright/blob/main/docs/personas.md)
 for the full `profile.yaml` shape.
 
 **4. Scenario.** A *pre-declared group of personas to launch together*, each
@@ -246,7 +246,7 @@ participants in parallel, applies shared fixtures (dialog policy, mock
 routes), runs each participant's startup macros. You can then broadcast a
 macro across all participants (`scenario_run_macro`), role-filter
 (`role=player`), or drive a single participant by its `instance_id`. See
-[docs/scenarios.md](https://github.com/provide-io/octowright/blob/main/docs/scenarios.md) for the full spec shape.
+[docs/scenarios.md](https://github.com/livingstaccato/octowright/blob/main/docs/scenarios.md) for the full spec shape.
 
 **5. Dashboard.** The web UI bundled with `octowright serve` is the visual
 projection of everything above. The dashboard page lists every live browser,
@@ -457,7 +457,7 @@ plus per-field `ok`/`error` — the resolved secret is never included. Use
 this to avoid the classic "logged in 6 of 7 windows, then discovered the
 env var was unset on #7" failure mode.
 
-Full reference: [docs/personas.md](https://github.com/provide-io/octowright/blob/main/docs/personas.md).
+Full reference: [docs/personas.md](https://github.com/livingstaccato/octowright/blob/main/docs/personas.md).
 
 ## Macros — reusable parameterized action sequences
 
@@ -527,7 +527,7 @@ These nest freely — `if_selector` inside `try_each` inside `try` works as you
 would expect. See `examples/macros/conditional-discord-modal-dismiss.json` for
 a real-world pattern.
 
-Full reference: [docs/macros.md](https://github.com/provide-io/octowright/blob/main/docs/macros.md).
+Full reference: [docs/macros.md](https://github.com/livingstaccato/octowright/blob/main/docs/macros.md).
 
 ## Scenarios — coordinated multi-browser orchestration
 
@@ -579,7 +579,7 @@ Lifecycle:
 CLI: `octowright scenario list|start [--test --out <xml>]`; the `start`
 command blocks until Ctrl-C, then runs teardown and exits.
 
-Full reference: [docs/scenarios.md](https://github.com/provide-io/octowright/blob/main/docs/scenarios.md).
+Full reference: [docs/scenarios.md](https://github.com/livingstaccato/octowright/blob/main/docs/scenarios.md).
 
 ## Configuration
 
@@ -761,14 +761,14 @@ Prints the list of registered tools without needing a live MCP client.
 
 ## Documentation
 
-- [docs/README.md](https://github.com/provide-io/octowright/blob/main/docs/README.md): full documentation index.
-- [docs/getting-started.md](https://github.com/provide-io/octowright/blob/main/docs/getting-started.md): install, registration, and first successful run.
-- [docs/engines.md](https://github.com/provide-io/octowright/blob/main/docs/engines.md): engine install/status/reinstall and launch-mode behavior.
-- [docs/personas.md](https://github.com/provide-io/octowright/blob/main/docs/personas.md): persona/profile lifecycle and credential preflight.
-- [docs/macros.md](https://github.com/provide-io/octowright/blob/main/docs/macros.md): macro record/replay, linting, and test execution.
-- [docs/scenarios.md](https://github.com/provide-io/octowright/blob/main/docs/scenarios.md): multi-browser orchestration lifecycle.
-- [docs/goldens.md](https://github.com/provide-io/octowright/blob/main/docs/goldens.md): baseline capture vs verify policy.
-- [docs/ci-quality.md](https://github.com/provide-io/octowright/blob/main/docs/ci-quality.md): quality gates and local CI parity commands.
-- [docs/troubleshooting.md](https://github.com/provide-io/octowright/blob/main/docs/troubleshooting.md): fast diagnosis for common failures.
-- [docs/architecture/](https://github.com/provide-io/octowright/tree/main/docs/architecture/): system diagrams and architecture references.
-- [CHANGELOG.md](https://github.com/provide-io/octowright/blob/main/CHANGELOG.md): release summaries.
+- [docs/README.md](https://github.com/livingstaccato/octowright/blob/main/docs/README.md): full documentation index.
+- [docs/getting-started.md](https://github.com/livingstaccato/octowright/blob/main/docs/getting-started.md): install, registration, and first successful run.
+- [docs/engines.md](https://github.com/livingstaccato/octowright/blob/main/docs/engines.md): engine install/status/reinstall and launch-mode behavior.
+- [docs/personas.md](https://github.com/livingstaccato/octowright/blob/main/docs/personas.md): persona/profile lifecycle and credential preflight.
+- [docs/macros.md](https://github.com/livingstaccato/octowright/blob/main/docs/macros.md): macro record/replay, linting, and test execution.
+- [docs/scenarios.md](https://github.com/livingstaccato/octowright/blob/main/docs/scenarios.md): multi-browser orchestration lifecycle.
+- [docs/goldens.md](https://github.com/livingstaccato/octowright/blob/main/docs/goldens.md): baseline capture vs verify policy.
+- [docs/ci-quality.md](https://github.com/livingstaccato/octowright/blob/main/docs/ci-quality.md): quality gates and local CI parity commands.
+- [docs/troubleshooting.md](https://github.com/livingstaccato/octowright/blob/main/docs/troubleshooting.md): fast diagnosis for common failures.
+- [docs/architecture/](https://github.com/livingstaccato/octowright/tree/main/docs/architecture/): system diagrams and architecture references.
+- [CHANGELOG.md](https://github.com/livingstaccato/octowright/blob/main/CHANGELOG.md): release summaries.
