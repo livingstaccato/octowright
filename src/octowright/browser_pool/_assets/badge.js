@@ -17,6 +17,7 @@
             font: "bold 12px ui-monospace, Menlo, monospace",
             borderRadius: "4px", boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
             textShadow: "0 0 2px rgba(0,0,0,0.7)",
+            opacity: "0.72",
             pointerEvents: "none", userSelect: "none",
         };
         styles[POS.vertical] = "8px";
