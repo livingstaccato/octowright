@@ -47,6 +47,11 @@ from octowright.process_reaper import reap_orphan_browsers
 # Poll interval while waiting for graceful shutdown or health-probe success.
 _POLL_INTERVAL_S = 0.25
 
+# Windows has no SIGKILL — TerminateProcess is invoked for any non-SIGTERM
+# signum, so SIGTERM is the strongest available signal. Matches the
+# escalation pattern in ``process_reaper.KILL_SIGNAL``.
+_FORCE_KILL: int = getattr(signal, "SIGKILL", signal.SIGTERM)
+
 
 def _resolve_octowright_entry() -> str:
     """Path to the installed ``octowright`` console script for this interpreter."""
@@ -136,7 +141,7 @@ def _stop_leader(timeout: float) -> tuple[int, int]:
     if survivors:
         click.echo(f"  escalating to SIGKILL on {survivors}")
         for pid in survivors:
-            _send_signal(pid, signal.SIGKILL)
+            _send_signal(pid, _FORCE_KILL)
             _wait_for_pid_exit(pid, 2.0)
 
     singleton.remove_lock()

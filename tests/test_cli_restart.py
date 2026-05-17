@@ -150,7 +150,9 @@ def test_stop_escalates_to_sigkill_on_holdouts(
     assert result.exit_code == 0, result.output
     sigs_sent_to_pid = [sig for pid, sig in sent_signals if pid == 12345]
     assert signal.SIGTERM in sigs_sent_to_pid
-    assert signal.SIGKILL in sigs_sent_to_pid
+    # Windows has no SIGKILL — restart.py falls back to SIGTERM as the
+    # "force" signal there, matching process_reaper.KILL_SIGNAL.
+    assert _restart_mod._FORCE_KILL in sigs_sent_to_pid
     assert "escalating to SIGKILL" in result.output
 
 
