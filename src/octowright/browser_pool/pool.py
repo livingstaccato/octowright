@@ -160,7 +160,9 @@ class BrowserPool:
         target_url = url or DEFAULT_URL
         log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
 
-        viewport_kwargs, log_viewport, explicit_size = _build_viewport_kwargs(headless, viewport_w, viewport_h)
+        viewport_kwargs, log_viewport, explicit_size, viewport_info = _build_viewport_kwargs(
+            headless, viewport_w, viewport_h
+        )
         ctx_video_kwargs, video_dir = _build_video_kwargs(record_video, headless, explicit_size, viewport_w, viewport_h)
         har_path, ctx_har_kwargs = _build_har_kwargs(
             har=har,
@@ -232,12 +234,16 @@ class BrowserPool:
                 stabilize=stabilize,
                 trace=trace,
                 har_path=har_path,
+                viewport_mode=viewport_info.mode.value,
+                viewport_width=viewport_info.width,
+                viewport_height=viewport_info.height,
                 _browser_for_close=(browser if browser is not None else getattr(context, "browser", None)),
             )
             # Wire up video tracking — page.video is only non-None when record_video_dir was set.
             if record_video and page.video is not None:
                 new_session._video = page.video
             new_session.attach_console()
+            await self._expose_viewport_binding(context, new_session)
             # Order matters: the close-evictor and user-nav logger publish handler
             # factories on the session so that subsequent _wire_listeners calls
             # (for popup pages) pick them up automatically. Install them BEFORE
@@ -256,6 +262,9 @@ class BrowserPool:
                 badge=badge,
                 badge_position=badge_position,
                 stabilize=stabilize,
+                viewport_mode=new_session.viewport_mode,
+                viewport_width=new_session.viewport_width,
+                viewport_height=new_session.viewport_height,
             )
 
             if trace:
@@ -296,6 +305,7 @@ class BrowserPool:
                 "record_video": record_video,
                 "trace": trace,
                 "har": bool(har_path),
+                "viewport": log_viewport,
             }
             if video_dir is not None:
                 result["video_dir"] = str(video_dir)
@@ -359,6 +369,51 @@ class BrowserPool:
             }
             for s in self._sessions.values()
         ]
+
+    async def _expose_viewport_binding(self, context: Any, session: BrowserSession) -> None:
+        expose_binding = getattr(context, "expose_binding", None)
+        if expose_binding is None:
+            return
+
+        async def _viewport_action(_source: Any, payload: dict[str, Any]) -> dict[str, Any]:
+            action = payload.get("action")
+            if action == "sync":
+                return await session.viewport_sync()
+            if action == "relaunch-fluid":
+                return await self.relaunch_fluid(session.instance_id)
+            raise ValueError(f"unknown viewport action: {action!r}")
+
+        await expose_binding("__octowright_viewport_action", _viewport_action)
+
+    async def relaunch_fluid(self, instance_id: str) -> dict[str, Any]:
+        source = self.get(instance_id)
+        target_url = getattr(source.page, "url", None) or source.url
+        session_scoped = source.profile is None and source.user_data_dir is not None
+        stateless = source.profile is None and source.user_data_dir is None
+        launch_kwargs = {
+            "kind": source.kind,
+            "url": target_url,
+            "headed": True,
+            "label": source.label,
+            "profile": source.profile,
+            "stabilize": source.stabilize,
+            "trace": source.trace,
+            "har": bool(source.har_path),
+            "har_path": str(source.har_path) if source.har_path else None,
+            "badge": True,
+            "ephemeral": stateless,
+            "session": session_scoped,
+        }
+        close_result = await self.close(instance_id)
+        result = await self.launch(**launch_kwargs)
+        return {
+            "ok": True,
+            "old_instance_id": instance_id,
+            "new_instance_id": result["instance_id"],
+            "old_closed": bool(close_result.get("closed")),
+            "mode": "fluid",
+            "launch": result,
+        }
 
     def profile_in_use(self, kind: str, profile: str) -> bool:
         return any(s.kind == kind and s.profile == profile for s in self._sessions.values())

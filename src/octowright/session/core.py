@@ -13,6 +13,7 @@ from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
+from octowright.browser_pool.viewport import ViewportMode
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
 from octowright.session.core_interaction_mixin import SessionInteractionMixin
@@ -49,6 +50,9 @@ class BrowserSession(
     stabilize: bool = False
     trace: bool = False
     har_path: Path | None = None
+    viewport_mode: str = ViewportMode.UNKNOWN.value
+    viewport_width: int | None = None
+    viewport_height: int | None = None
     console: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=1000))
     video_path: Path | None = None
     trace_path: Path | None = None

@@ -36,6 +36,9 @@ class SessionLike(Protocol):
     trace: bool
     trace_path: Path | None
     har_path: Path | None
+    viewport_mode: str
+    viewport_width: int | None
+    viewport_height: int | None
     video_path: Path | None
     markdown_path: Path | None
     websocket_path: Path | None

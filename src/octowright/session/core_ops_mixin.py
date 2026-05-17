@@ -27,6 +27,9 @@ class SessionOpsMixin(SessionLike):
     active_frame: Any | None
     video_path: Path | None
     trace_path: Path | None
+    viewport_mode: str
+    viewport_width: int | None
+    viewport_height: int | None
     _BG_TASK_DRAIN_TIMEOUT_SECONDS = 1.0
 
     async def diagnostic_bundle(
@@ -166,6 +169,55 @@ class SessionOpsMixin(SessionLike):
         await self.page.set_viewport_size({"width": width, "height": height})
         self.recorder.record("resize", width=width, height=height)
         return {"ok": True, "width": width, "height": height}
+
+    async def viewport_status(self) -> dict[str, Any]:
+        measured = await self.page.evaluate(
+            """() => ({
+                innerWidth: window.innerWidth,
+                innerHeight: window.innerHeight,
+                outerWidth: window.outerWidth,
+                outerHeight: window.outerHeight,
+                devicePixelRatio: window.devicePixelRatio
+            })"""
+        )
+        page = {
+            "width": int(measured.get("innerWidth") or 0),
+            "height": int(measured.get("innerHeight") or 0),
+        }
+        outer = {
+            "width": int(measured.get("outerWidth") or 0),
+            "height": int(measured.get("outerHeight") or 0),
+        }
+        mismatch = (
+            self.viewport_mode == "fixed"
+            and outer["width"] > 0
+            and outer["height"] > 0
+            and (abs(outer["width"] - page["width"]) > 24 or abs(outer["height"] - page["height"]) > 80)
+        )
+        return {
+            "mode": self.viewport_mode,
+            "fixed": self.viewport_mode == "fixed",
+            "fluid": self.viewport_mode == "fluid",
+            "configured": {"width": self.viewport_width, "height": self.viewport_height},
+            "page": page,
+            "outer": outer,
+            "device_pixel_ratio": measured.get("devicePixelRatio"),
+            "mismatch": mismatch,
+        }
+
+    async def viewport_sync(self) -> dict[str, Any]:
+        status = await self.viewport_status()
+        outer = status["outer"]
+        width = int(outer["width"] or status["page"]["width"])
+        height = int(outer["height"] or status["page"]["height"])
+        if width <= 0 or height <= 0:
+            raise ValueError("unable to measure a usable viewport size")
+        await self.page.set_viewport_size({"width": width, "height": height})
+        self.viewport_mode = "fixed"
+        self.viewport_width = width
+        self.viewport_height = height
+        self.recorder.record("resize", width=width, height=height)
+        return {"ok": True, "mode": "fixed", "width": width, "height": height}
 
     async def open_url(
         self,
