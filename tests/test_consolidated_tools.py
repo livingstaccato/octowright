@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright.browser_pool import BrowserPool
 from octowright.server.browser import inspect as _inspect
 from octowright.server.browser import lifecycle as _lifecycle
 
@@ -133,6 +134,40 @@ async def test_browser_capture_and_close(_patch_state: dict[str, MagicMock]) -> 
     assert "aria" in result
     session.screenshot.assert_awaited_once()
     pool.close.assert_awaited_once_with("inst-1")
+
+
+@pytest.mark.anyio
+async def test_browser_relaunch_fluid_preserves_state_without_viewport() -> None:
+    pool = BrowserPool()
+    session = MagicMock()
+    session.kind = "chromium"
+    session.label = "player"
+    session.profile = "profile-a"
+    session.stabilize = True
+    session.trace = False
+    session.har_path = None
+    session.user_data_dir = None
+    session.url = "https://example.com/original"
+    session.page = MagicMock()
+    session.page.url = "https://example.com/current"
+    pool._sessions["old-id"] = session
+    pool.close = AsyncMock(return_value={"closed": True})
+    pool.launch = AsyncMock(return_value={"instance_id": "new-id"})
+
+    result = await pool.relaunch_fluid("old-id")
+
+    pool.close.assert_awaited_once_with("old-id")
+    pool.launch.assert_awaited_once()
+    _, kwargs = pool.launch.call_args
+    assert kwargs["url"] == "https://example.com/current"
+    assert kwargs["kind"] == "chromium"
+    assert kwargs["label"] == "player"
+    assert kwargs["profile"] == "profile-a"
+    assert kwargs["headed"] is True
+    assert "viewport_w" not in kwargs
+    assert "viewport_h" not in kwargs
+    assert result["old_instance_id"] == "old-id"
+    assert result["new_instance_id"] == "new-id"
 
 
 @pytest.fixture

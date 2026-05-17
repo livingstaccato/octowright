@@ -120,12 +120,19 @@ def _ts_semantic_with_fallback(semantic_call: str, fallback_call: str) -> str:
     return f"  try {{\n    {semantic_call}\n  }} catch {{\n    {fallback_call}\n  }}"
 
 
+def _launch_viewport(entry: dict) -> dict[str, int]:
+    vp = entry.get("viewport")
+    if isinstance(vp, dict) and isinstance(vp.get("w"), int) and isinstance(vp.get("h"), int):
+        return {"w": vp["w"], "h": vp["h"]}
+    return {"w": 1280, "h": 800}
+
+
 # --- Python emitter: per-action handlers + dispatch table ----------------
 
 
 def _py_launch(entry: dict) -> str:
     kind = entry["kind"]
-    vp = entry.get("viewport") or {"w": 1280, "h": 800}
+    vp = _launch_viewport(entry)
     headed = entry.get("headed", True)
     url = entry["url"]
     user_data_dir = entry.get("user_data_dir")
@@ -244,7 +251,7 @@ def _py_line(entry: dict) -> str | None:
 
 def _ts_launch(entry: dict) -> str:
     kind = entry["kind"]
-    vp = entry.get("viewport") or {"w": 1280, "h": 800}
+    vp = _launch_viewport(entry)
     headed = entry.get("headed", True)
     url = entry["url"]
     user_data_dir = entry.get("user_data_dir")
