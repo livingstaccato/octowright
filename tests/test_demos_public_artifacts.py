@@ -18,6 +18,15 @@ def test_sanitize_public_artifacts_strips_absolute_local_paths(tmp_path: Path) -
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     replay_path = artifacts_dir / "replay.jsonl"
     roster_path = artifacts_dir / "participant-roster.json"
+
+    # Fake checkout root that lives inside tmp_path — that way the sanitizer
+    # actually has an absolute path to strip without coupling the test to any
+    # one developer's home directory. The assertions verify that string never
+    # appears in the sanitized output.
+    fake_root = tmp_path / "fake-checkout" / "octowright"
+    fake_home = tmp_path / "fake-home"
+    bundle_seed_url = f"file://{fake_root}/demo/bundles/alpha-demo/seed/welcome.html?slot=0"
+
     replay_path.write_text(
         "\n".join(
             [
@@ -25,22 +34,22 @@ def test_sanitize_public_artifacts_strips_absolute_local_paths(tmp_path: Path) -
                     {
                         "action": "launch",
                         "kind": "webkit",
-                        "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/alpha-demo/seed/welcome.html?slot=0",
-                        "user_data_dir": "/Users/tim/.config/octowright/profiles/alpha/webkit",
-                        "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/abc123",
+                        "url": bundle_seed_url,
+                        "user_data_dir": f"{fake_home}/.config/octowright/profiles/alpha/webkit",
+                        "video_dir": f"{fake_root}/recordings/videos/abc123",
                     }
                 ),
                 json.dumps(
                     {
                         "action": "markdown_cached",
-                        "path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260507T000000Z-webkit-alpha.markdown.md",
+                        "path": f"{fake_root}/recordings/20260507T000000Z-webkit-alpha.markdown.md",
                     }
                 ),
                 json.dumps(
                     {
                         "action": "close",
-                        "video_path": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/abc123/out.webm",
-                        "markdown_path": "/Users/tim/code/gh/provide-io/octowright/recordings/20260507T000000Z-webkit-alpha.markdown.md",
+                        "video_path": f"{fake_root}/recordings/videos/abc123/out.webm",
+                        "markdown_path": f"{fake_root}/recordings/20260507T000000Z-webkit-alpha.markdown.md",
                     }
                 ),
             ]
@@ -58,9 +67,9 @@ def test_sanitize_public_artifacts_strips_absolute_local_paths(tmp_path: Path) -
                         "persona": "alpha",
                         "role": "player",
                         "kind": "webkit",
-                        "log_path": "/Users/tim/code/gh/provide-io/octowright/recordings/alpha.jsonl",
-                        "url": "file:///Users/tim/code/gh/provide-io/octowright/demo/bundles/alpha-demo/seed/welcome.html?slot=0",
-                        "video_dir": "/Users/tim/code/gh/provide-io/octowright/recordings/videos/abc123",
+                        "log_path": f"{fake_root}/recordings/alpha.jsonl",
+                        "url": bundle_seed_url,
+                        "video_dir": f"{fake_root}/recordings/videos/abc123",
                     }
                 ],
             },
@@ -80,10 +89,16 @@ def test_sanitize_public_artifacts_strips_absolute_local_paths(tmp_path: Path) -
     sanitize_public_artifacts(bundle)
 
     replay_text = replay_path.read_text(encoding="utf-8")
-    roster = json.loads(roster_path.read_text(encoding="utf-8"))
-    assert "/Users/tim" not in replay_text
-    assert "file:///Users/tim" not in replay_text
+    roster_text = roster_path.read_text(encoding="utf-8")
+    roster = json.loads(roster_text)
+
+    # No trace of the fake-checkout or fake-home prefixes should survive.
+    assert str(fake_root) not in replay_text
+    assert str(fake_home) not in replay_text
+    assert str(fake_root) not in roster_text
+    assert "file://" not in replay_text
     assert "bundle://seed/welcome.html?slot=0" in replay_text
+
     launch_event = json.loads(replay_text.splitlines()[0])
     assert "user_data_dir" not in launch_event
     assert "video_dir" not in launch_event

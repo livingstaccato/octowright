@@ -47,9 +47,9 @@ def fake_ps(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_find_browser_pids_all_filters_to_ms_playwright(fake_ps: list[str]) -> None:
     fake_ps.append(
         "1000 1 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n"
-        "2000 1 /Users/tim/Library/Caches/ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome --headless\n"
-        "2001 2000 /Users/tim/Library/Caches/ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome --type=renderer\n"
-        "3000 1 /Users/tim/.cache/puppeteer/chrome-headless-shell --type=gpu-process\n"
+        "2000 1 /tmp/ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome --headless\n"
+        "2001 2000 /tmp/ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome --type=renderer\n"
+        "3000 1 /tmp/puppeteer-cache/chrome-headless-shell --type=gpu-process\n"
     )
     pids = process_reaper.find_browser_pids("all")
     assert pids == [2000, 2001]
