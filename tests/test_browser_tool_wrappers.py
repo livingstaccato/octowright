@@ -70,6 +70,43 @@ async def test_browser_resize_forwards_dimensions(_patch_pool: MagicMock) -> Non
 
 
 @pytest.mark.anyio
+async def test_browser_viewport_status_forwards_to_session(_patch_pool: MagicMock) -> None:
+    expected = {"mode": "fixed", "mismatch": True}
+    session = _stub_session("viewport_status", expected)
+    _patch_pool.get = MagicMock(return_value=session)
+
+    result = await _lifecycle.browser_viewport_status("inst-1")
+
+    _patch_pool.get.assert_called_once_with("inst-1")
+    session.viewport_status.assert_awaited_once_with()
+    assert result == expected
+
+
+@pytest.mark.anyio
+async def test_browser_viewport_sync_forwards_to_session(_patch_pool: MagicMock) -> None:
+    expected = {"ok": True, "width": 1512, "height": 930}
+    session = _stub_session("viewport_sync", expected)
+    _patch_pool.get = MagicMock(return_value=session)
+
+    result = await _lifecycle.browser_viewport_sync("inst-1")
+
+    _patch_pool.get.assert_called_once_with("inst-1")
+    session.viewport_sync.assert_awaited_once_with()
+    assert result == expected
+
+
+@pytest.mark.anyio
+async def test_browser_relaunch_fluid_calls_pool(_patch_pool: MagicMock) -> None:
+    expected = {"ok": True, "new_instance_id": "new"}
+    _patch_pool.relaunch_fluid = AsyncMock(return_value=expected)
+
+    result = await _lifecycle.browser_relaunch_fluid("inst-1")
+
+    _patch_pool.relaunch_fluid.assert_awaited_once_with("inst-1")
+    assert result == expected
+
+
+@pytest.mark.anyio
 async def test_browser_open_url_defaults_to_tab(_patch_pool: MagicMock) -> None:
     expected = {"ok": True, "target": "tab", "page_index": 1, "url": "https://x"}
     session = _stub_session("open_url", expected)

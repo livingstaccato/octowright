@@ -285,6 +285,32 @@ async def browser_resize(instance_id: str, width: int, height: int) -> dict[str,
 
 @mcp.tool(
     structured_output=False,
+    description="Return fixed/fluid viewport status and measured page/window dimensions.",
+)
+async def browser_viewport_status(instance_id: str) -> dict[str, Any]:
+    return await pool.get(instance_id).viewport_status()
+
+
+@mcp.tool(
+    structured_output=False,
+    description="Resize a fixed Playwright viewport once to the current measured browser window size.",
+)
+async def browser_viewport_sync(instance_id: str) -> dict[str, Any]:
+    return await pool.get(instance_id).viewport_sync()
+
+
+@mcp.tool(
+    structured_output=False,
+    description="Close and relaunch a session as a headed fluid viewport using no_viewport=True.",
+)
+async def browser_relaunch_fluid(instance_id: str) -> dict[str, Any]:
+    result = await pool.relaunch_fluid(instance_id)
+    publish_dashboard_invalidation_nowait("sessions")
+    return result
+
+
+@mcp.tool(
+    structured_output=False,
     description=(
         "Open a URL in a new tab or new window of an existing instance. "
         "target='tab' (default) opens a new page in the same browser context — "

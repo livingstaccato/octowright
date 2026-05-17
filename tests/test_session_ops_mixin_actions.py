@@ -50,6 +50,9 @@ def _build(tmp_path: Path, *, page: Any = None, context: Any = None, **overrides
     inst.markdown_path = None
     inst.websocket_path = None
     inst.trace = False
+    inst.viewport_mode = "unknown"
+    inst.viewport_width = None
+    inst.viewport_height = None
     inst._video = None
     inst._bg_tasks = set()
     inst.instance_id = "abc123"
@@ -237,6 +240,52 @@ class TestNavigateBackResize:
         assert page.set_viewport_size.await_args.args == ({"width": 800, "height": 600},)
         assert out == {"ok": True, "width": 800, "height": 600}
         assert inst.recorder.events[0] == ("resize", {"width": 800, "height": 600})
+
+    @pytest.mark.anyio
+    async def test_viewport_status_reports_fixed_mismatch(self, tmp_path: Path) -> None:
+        page = MagicMock()
+        page.evaluate = AsyncMock(
+            return_value={
+                "innerWidth": 1280,
+                "innerHeight": 800,
+                "outerWidth": 1512,
+                "outerHeight": 930,
+                "devicePixelRatio": 2,
+            }
+        )
+        inst = _build(tmp_path, page=page, viewport_mode="fixed", viewport_width=1280, viewport_height=800)
+
+        status = await inst.viewport_status()
+
+        assert status["mode"] == "fixed"
+        assert status["page"] == {"width": 1280, "height": 800}
+        assert status["outer"] == {"width": 1512, "height": 930}
+        assert status["configured"] == {"width": 1280, "height": 800}
+        assert status["device_pixel_ratio"] == 2
+        assert status["mismatch"] is True
+
+    @pytest.mark.anyio
+    async def test_viewport_sync_uses_measured_outer_size(self, tmp_path: Path) -> None:
+        page = MagicMock()
+        page.evaluate = AsyncMock(
+            return_value={
+                "innerWidth": 1280,
+                "innerHeight": 800,
+                "outerWidth": 1512,
+                "outerHeight": 930,
+                "devicePixelRatio": 2,
+            }
+        )
+        page.set_viewport_size = AsyncMock()
+        inst = _build(tmp_path, page=page, viewport_mode="fixed", viewport_width=1280, viewport_height=800)
+
+        result = await inst.viewport_sync()
+
+        page.set_viewport_size.assert_awaited_once_with({"width": 1512, "height": 930})
+        assert result == {"ok": True, "mode": "fixed", "width": 1512, "height": 930}
+        assert inst.viewport_width == 1512
+        assert inst.viewport_height == 930
+        assert inst.recorder.events[0] == ("resize", {"width": 1512, "height": 930})
 
 
 # ─── open_url ──────────────────────────────────────────────────────────────
