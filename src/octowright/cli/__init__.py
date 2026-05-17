@@ -20,6 +20,7 @@ from __future__ import annotations
 from octowright.cli import cleanup as _cleanup  # noqa: F401
 from octowright.cli import init_cmd as _init_cmd  # noqa: F401
 from octowright.cli import persona as _persona  # noqa: F401
+from octowright.cli import restart as _restart  # noqa: F401
 from octowright.cli import scenario as _scenario  # noqa: F401
 from octowright.cli import selftest as _selftest  # noqa: F401
 from octowright.cli import serve as _serve  # noqa: F401
