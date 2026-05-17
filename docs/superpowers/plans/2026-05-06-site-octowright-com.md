@@ -115,7 +115,7 @@ enableRobotsTXT = true
 
 [params]
   description = "Launch multiple browsers, record every action, and turn runnable scenarios into website-ready demos."
-  github = "https://github.com/provide-io/octowright"
+  github = "https://github.com/livingstaccato/octowright"
 ```
 
 ```html
