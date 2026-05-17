@@ -16,6 +16,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.browser_pool.viewport import ViewportInfo, ViewportMode
 from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, RECORDINGS_DIR
 from octowright.profiles import profile_dir
 from octowright.recorder import Recorder
@@ -26,7 +27,7 @@ log = get_logger(__name__)
 
 def _build_viewport_kwargs(
     headless: bool, viewport_w: int | None, viewport_h: int | None
-) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
+) -> tuple[dict[str, Any], dict[str, Any], bool, ViewportInfo]:
     """Headed launches with no explicit size let Playwright adopt the OS
     window via no_viewport=True. Headless and explicit-size launches pin a
     fixed viewport. Returns (kwargs, recorder_payload, explicit_size_flag)."""
@@ -34,8 +35,10 @@ def _build_viewport_kwargs(
     if headless or explicit_size:
         vw = viewport_w or DEFAULT_VIEWPORT_W
         vh = viewport_h or DEFAULT_VIEWPORT_H
-        return {"viewport": {"width": vw, "height": vh}}, {"w": vw, "h": vh}, explicit_size
-    return {"no_viewport": True}, None, explicit_size
+        info = ViewportInfo(mode=ViewportMode.FIXED, width=vw, height=vh)
+        return {"viewport": {"width": vw, "height": vh}}, info.to_recording(), explicit_size, info
+    info = ViewportInfo(mode=ViewportMode.FLUID)
+    return {"no_viewport": True}, info.to_recording(), explicit_size, info
 
 
 def _build_video_kwargs(

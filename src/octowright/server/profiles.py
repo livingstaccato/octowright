@@ -76,9 +76,13 @@ PROFILES: dict[str, list[str]] = {
         "browser_export_script",
         "browser_fill_by",
         "browser_get_text_by",
+        "browser_relaunch_fluid",
+        "browser_resize",
         "browser_recording_path",
         "browser_snapshot",
         "browser_tail_recording",
+        "browser_viewport_status",
+        "browser_viewport_sync",
     ],
     # Macro recording, replay, lint, repair, compile.
     "macros": [

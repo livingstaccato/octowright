@@ -634,7 +634,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 103 tools — every workflow Octowright supports
+The full MCP tool surface is currently 106 tools — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
@@ -646,12 +646,12 @@ find the dashboard, and surface local guidance even under narrow profiles.
 | Profile | What | Tool count |
 |---|---|---|
 | `core` | Minimum to drive a browser end-to-end (launch, navigate, click/type/fill, observe, close). | 13 |
-| `advanced` | Inspection, cached captures, assertions, and ARIA-locator interactions for stable test automation. | 18 |
+| `advanced` | Inspection, cached captures, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 22 |
 | `macros` | Macro record / list / run / lint / repair / compile. | 9 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
 | `personas` | Persona + on-disk profile management. | 8 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
-| `all` (or unset) | Default — every tool registers. | 103 |
+| `all` (or unset) | Default — every tool registers. | 106 |
 
 ```bash
 octowright serve --profile=core              # 20 tools — core + always-on
