@@ -6,8 +6,8 @@
 """Compact human-readable summaries for live-state tool results.
 
 Each MCP tool that returns a list of live entities (browsers, scenarios,
-participants) prefixes its payload with a short `summary` string so Claude
-sees a one-line gist before the structured data.
+participants) prefixes its payload with a short `summary` string so the MCP
+client sees a one-line gist before the structured data.
 """
 
 from __future__ import annotations

@@ -26,8 +26,8 @@ _STATUS_STALE_LIMIT = 20
 @mcp.tool(
     structured_output=False,
     description=(
-        "Detect competing Playwright MCP plugins registered in the user's Claude Code "
-        "config files (project-level .mcp.json and global ~/.claude.json). "
+        "Detect competing Playwright MCP plugins registered in the user's MCP "
+        "config files (project-level .mcp.json and Claude Code global ~/.claude.json). "
         "Returns the matching servers with scope, file path, server name, command, and "
         "the reason each one matched. WHEN TO INVOKE: call once per session if the "
         "user mentions Playwright tooling, OR when you notice you have access to both "
@@ -39,7 +39,7 @@ _STATUS_STALE_LIMIT = 20
 def octowright_check_takeover() -> dict[str, Any]:
     """Detect competing Playwright MCP plugins.
 
-    Returns the Detection list structured for Claude to surface to the user.
+    Returns the Detection list structured for the MCP client to surface to the user.
     """
     detections = _takeover.detect_competing_servers()
     if detections:
@@ -178,7 +178,7 @@ def octowright_advisor_record_macro_observation(source: str, signature: str, sum
     structured_output=False,
     description=(
         "First-touch status snapshot for octowright. WHEN TO INVOKE: call this "
-        "ONCE per Claude Code session, the first time octowright comes up — before "
+        "ONCE per MCP client session, the first time octowright comes up — before "
         "the first browser_launch — and present a brief banner to the user with "
         "the daemon's identity, current persistence default (persistent vs ephemeral), "
         "live browser/scenario counts, available personas, and the dashboard URL. "
