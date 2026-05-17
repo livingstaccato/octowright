@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from octowright.config_paths import user_config_dir
+from octowright.config_paths import user_cache_dir, user_config_dir, user_state_dir
 from octowright.defaults import _detect_headless_default
 
 
@@ -112,3 +112,39 @@ class TestConfigDir:
         monkeypatch.delenv("APPDATA", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         assert user_config_dir() == tmp_path / "AppData" / "Roaming" / "octowright"
+
+
+class TestStateDir:
+    def test_posix_uses_xdg_state_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("platform.system", lambda: "Linux")
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+        assert user_state_dir() == tmp_path / "state" / "octowright"
+
+    def test_posix_falls_back_to_home_dot_local_state(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert user_state_dir() == tmp_path / ".local" / "state" / "octowright"
+
+    def test_windows_uses_localappdata_state(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        assert user_state_dir() == tmp_path / "Local" / "octowright" / "State"
+
+
+class TestCacheDir:
+    def test_posix_uses_xdg_cache_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("platform.system", lambda: "Linux")
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        assert user_cache_dir() == tmp_path / "cache" / "octowright"
+
+    def test_posix_falls_back_to_home_dot_cache(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert user_cache_dir() == tmp_path / ".cache" / "octowright"
+
+    def test_windows_uses_localappdata_cache(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        assert user_cache_dir() == tmp_path / "Local" / "octowright" / "Cache"

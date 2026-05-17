@@ -9,7 +9,7 @@ import os
 import platform
 from pathlib import Path
 
-from octowright.config_paths import user_config_dir
+from octowright.config_paths import user_cache_dir, user_config_dir, user_state_dir
 
 DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://example.com")
 
@@ -18,7 +18,9 @@ DEFAULT_VIEWPORT_H = int(os.environ.get("OCTOWRIGHT_VIEWPORT_H", "800"))
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = user_config_dir()
-_DEFAULT_RECORDINGS = _REPO_ROOT / "recordings"
+_STATE_DIR = user_state_dir()
+_CACHE_DIR = user_cache_dir()
+_DEFAULT_RECORDINGS = _STATE_DIR / "sessions"
 _DEFAULT_PROFILES = _CONFIG_DIR / "profiles"
 _DEFAULT_SCENARIOS = _CONFIG_DIR / "scenarios"
 
@@ -26,9 +28,10 @@ RECORDINGS_DIR = Path(os.environ.get("OCTOWRIGHT_RECORDINGS", str(_DEFAULT_RECOR
 PROFILES_DIR = Path(os.environ.get("OCTOWRIGHT_PROFILES_DIR", str(_DEFAULT_PROFILES)))
 SCENARIOS_DIR = Path(os.environ.get("OCTOWRIGHT_SCENARIOS_DIR", str(_DEFAULT_SCENARIOS)))
 SCENARIO_TEMPLATES_DIR = SCENARIOS_DIR / "templates"
-SESSION_MANIFEST_PATH = Path(
-    os.environ.get("OCTOWRIGHT_SESSION_MANIFEST", str(RECORDINGS_DIR / "session-manifest.json"))
-)
+CAPTURES_DIR = Path(os.environ.get("OCTOWRIGHT_CAPTURES_DIR", str(_CACHE_DIR / "captures")))
+CAPTURE_MAX_TOTAL_BYTES = int(os.environ.get("OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES", str(50 * 1024 * 1024)))
+CAPTURE_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_CAPTURE_TTL_SECONDS", str(7 * 86400)))
+SESSION_MANIFEST_PATH = Path(os.environ.get("OCTOWRIGHT_SESSION_MANIFEST", str(_STATE_DIR / "session-manifest.json")))
 
 # Macro JSON storage. Default sits next to PROFILES_DIR so the user-config
 # tree stays in one place. Override for per-test isolation.
@@ -43,7 +46,7 @@ ADVISOR_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_ADVISOR_STATE", str(_CONFIG
 
 # Singleton-leader lockfile. Override via OCTOWRIGHT_LOCK_PATH for hermetic
 # tests that spawn a real daemon without touching the user's actual lockfile.
-LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(_CONFIG_DIR / "octowright.lock")))
+LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(_STATE_DIR / "octowright.lock")))
 
 # Codex CLI install root for the skill-distribution copy step. CODEX_HOME is
 # a Codex-defined env var, not OCTOWRIGHT_*; the resolved path is

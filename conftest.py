@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 _here = Path(__file__).resolve().parent
 _mutants_src = _here / "src"
 _running_under_mutmut = _here.name == "mutants" and _mutants_src.exists()
@@ -57,3 +59,18 @@ if _running_under_mutmut:
             pass
 
     _os.register_at_fork(after_in_child=_noop_setproctitle_in_child)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_session_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep tests from writing stale browser entries to the user's manifest.
+
+    Individual tests that assert manifest behavior can still monkeypatch this
+    path again after the autouse fixture runs.
+    """
+    from octowright import defaults as _defaults
+    from octowright import session_manifest as _manifest
+
+    manifest_path = tmp_path / "session-manifest.json"
+    monkeypatch.setattr(_defaults, "SESSION_MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(_manifest, "SESSION_MANIFEST_PATH", manifest_path)

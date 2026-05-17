@@ -93,6 +93,27 @@ async def test_browser_quick_launch_with_recommendation(_patch_state: dict[str, 
 
 
 @pytest.mark.anyio
+async def test_browser_quick_launch_with_resolver_match(_patch_state: dict[str, MagicMock]) -> None:
+    pool = _patch_state["pool"]
+    resolve = _patch_state["resolve"]
+    pool.launch = AsyncMock(return_value={"instance_id": "inst-1"})
+    resolve.suggest_for_url.return_value = {
+        "ambiguous": False,
+        "recommendation": "exactly one match: 'real/chromium'",
+        "ephemeral_ok": False,
+        "matches": [{"persona": "real", "kind": "chromium", "score": 3.0}],
+    }
+
+    result = await _lifecycle.browser_quick_launch(url="https://x.com")
+
+    assert result["instance_id"] == "inst-1"
+    assert result["profile_used"] == "real"
+    _, kwargs = pool.launch.call_args
+    assert kwargs["profile"] == "real"
+    assert kwargs["kind"] == "chromium"
+
+
+@pytest.mark.anyio
 async def test_browser_quick_launch_missing_url(_patch_state: dict[str, MagicMock]) -> None:
     with pytest.raises(ValueError, match="url is required"):
         await _lifecycle.browser_quick_launch(url="")

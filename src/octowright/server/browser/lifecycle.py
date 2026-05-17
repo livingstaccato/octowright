@@ -181,15 +181,17 @@ async def browser_quick_launch(
     if suggest.get("ambiguous"):
         return {"ambiguous": True, "matches": suggest["matches"], "url": url}
 
-    # Use recommendation if available
     profile_to_use = None
-    if suggest.get("recommendation"):
-        profile_to_use = suggest["recommendation"]["persona"]
+    recommendation = suggest.get("recommendation")
+    if isinstance(recommendation, dict):
+        # Back-compat for older resolver tests/clients; the real resolver now
+        # returns a human-readable recommendation string.
+        profile_to_use = recommendation.get("persona")
     elif not suggest.get("ephemeral_ok") and suggest["matches"]:
-        # Pick the top match if it's high enough score
         top = suggest["matches"][0]
-        if top["score"] >= 80:
+        if top["score"] >= 2:
             profile_to_use = top["persona"]
+            kind = top["kind"]
 
     res = await pool.launch(
         url=url,

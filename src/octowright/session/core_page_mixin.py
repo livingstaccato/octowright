@@ -5,12 +5,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from pathlib import Path
 from typing import Any
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+
+_WAIT_FOR_POLL_SECONDS = 0.05
+
+
+async def _body_contains_text(body: Any, text: str) -> bool:
+    return text in await body.inner_text(timeout=1000)
+
+
+async def _evaluate_truthy(target: Any, expression: str) -> bool:
+    return bool(await target.evaluate(expression))
 
 
 class SessionPageMixin(SessionLike):
@@ -132,6 +144,25 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("evaluate", expression=expression)
         return result
 
+    async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None:
+        deadline = None if timeout_ms == 0 else time.monotonic() + (timeout_ms / 1000)
+        last_error: Exception | None = None
+        while True:
+            try:
+                if await predicate():
+                    return
+                last_error = None
+            except Exception as exc:
+                last_error = exc
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    detail = f": {last_error}" if last_error is not None else ""
+                    raise TimeoutError(f"condition not met within {timeout_ms}ms: {label}{detail}") from last_error
+                await asyncio.sleep(min(_WAIT_FOR_POLL_SECONDS, remaining))
+            else:
+                await asyncio.sleep(_WAIT_FOR_POLL_SECONDS)
+
     async def wait_for(
         self,
         selector: str | None,
@@ -143,10 +174,11 @@ class SessionPageMixin(SessionLike):
 
         Exactly one of ``selector`` / ``text`` / ``expression`` may be set;
         with all three None the call waits for ``networkidle``. ``expression``
-        is evaluated repeatedly inside the page (Playwright's
-        ``page.wait_for_function``) until it returns truthy — useful for
+        is evaluated repeatedly with ``evaluate`` until it returns truthy — useful for
         compound conditions like "spinner removed AND table has rows" that
-        a single selector can't express.
+        a single selector can't express. The text and expression branches avoid
+        ``wait_for_function`` because CSP-protected sites can reject its injected
+        eval path even when normal page reads and evaluates work.
         """
         # Truthiness, not `is not None`: an empty string from a hand-edited
         # macro shouldn't count as "selector provided" — and the if/elif
@@ -167,14 +199,11 @@ class SessionPageMixin(SessionLike):
             await target.wait_for_selector(selector, timeout=timeout)
             self.recorder.record("wait_for", selector=selector, timeout_ms=timeout)
         elif text:
-            await target.wait_for_function(
-                "t => document.body && document.body.innerText.includes(t)",
-                arg=text,
-                timeout=timeout,
-            )
+            body = target.locator("body")
+            await self._poll_until(timeout, lambda: _body_contains_text(body, text), f"text={text!r}")
             self.recorder.record("wait_for", text=text, timeout_ms=timeout)
         elif expression:
-            await target.wait_for_function(expression, timeout=timeout)
+            await self._poll_until(timeout, lambda: _evaluate_truthy(target, expression), f"expression={expression!r}")
             self.recorder.record("wait_for", expression=expression, timeout_ms=timeout)
         else:
             await self.page.wait_for_load_state("networkidle", timeout=timeout)

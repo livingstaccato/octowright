@@ -24,15 +24,19 @@ def isolated_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from octowright import defaults as _defaults
     from octowright import personas as _personas
     from octowright import profiles as _profiles
+    from octowright import session_manifest as _manifest
     from octowright.browser_pool import BrowserPool
 
     rec = tmp_path / "rec"
     profiles = tmp_path / "profiles"
+    manifest_path = rec / "session-manifest.json"
     rec.mkdir()
     profiles.mkdir()
 
     monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(_defaults, "SESSION_MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(_pool, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(_manifest, "SESSION_MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(_defaults, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_personas, "PROFILES_DIR", profiles)
     monkeypatch.setattr(_profiles, "PROFILES_DIR", profiles)

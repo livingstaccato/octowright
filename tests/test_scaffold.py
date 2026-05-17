@@ -149,7 +149,7 @@ def test_render_report_writes_to_passed_stream(tmp_path: Path) -> None:
     # MCP block must be present in the rendered output.
     assert '"mcpServers"' in text
     # Next-step nudge.
-    assert "Reload Claude" in text or "reload Claude" in text.lower() or "octowright selftest" in text
+    assert "reload your mcp client" in text.lower() or "octowright selftest" in text
 
 
 # ---------------------------------------------------------------------------

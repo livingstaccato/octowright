@@ -4,7 +4,7 @@ This file provides guidance to coding agents when working with code in this repo
 
 ## What This Project Is
 
-**Octowright** is an MCP (Model Context Protocol) server that lets Claude Code drive multiple parallel Playwright browsers (Chromium, Firefox, WebKit) simultaneously. It records every browser action to JSONL, supports persistent browser profiles with saved login state, and includes a web dashboard for debugging/monitoring.
+**Octowright** is an MCP (Model Context Protocol) server that lets agentic coding clients drive multiple parallel Playwright browsers (Chromium, Firefox, WebKit) simultaneously. It records every browser action to JSONL, supports persistent browser profiles with saved login state, and includes a web dashboard for debugging/monitoring.
 
 ## Commands
 
@@ -145,9 +145,9 @@ TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octo
 
 ### Capability Profiles
 
-The full MCP tool surface is 97 tools. When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface, 13 tools), `advanced` (inspection + assertions + ARIA-locator interactions), `macros`, `scenarios`, `personas`. Unset / `all` keeps every tool (default, back-compat). The five named profiles together cover 55 profile-scoped tools plus 6 always-on meta/Advisor tools — the remaining 36 (snapshots, a handful of less-common views, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,personas` is **not** equivalent to no filter. Example: `octowright serve --profile=core,macros` exposes 28 tools instead of 97.
+The full MCP tool surface is 103 tools. When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface, 13 tools), `advanced` (inspection + cached captures + assertions + ARIA-locator interactions), `macros`, `scenarios`, `personas`. Unset / `all` keeps every tool (default, back-compat). The five named profiles together cover 60 profile-scoped tools plus 7 always-on meta/Advisor tools — the remaining 36 (snapshots, a handful of less-common views, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,personas` is **not** equivalent to no filter. Example: `octowright serve --profile=core,macros` exposes 29 tools instead of 103.
 
-**Always-on meta and Advisor tools.** Six diagnostic/guidance tools are exempt from the profile filter and register under any profile (or no profile): `octowright_status`, `octowright_dashboard_url`, `octowright_check_takeover`, `octowright_advisor_status`, `octowright_advisor_set_preference`, and `octowright_advisor_record_macro_observation`. These give the LLM a way to inspect the active profile, find the dashboard URL, detect competing MCP plugins, and surface local Advisor guidance regardless of filter. The list is `ALWAYS_ON_TOOLS` in `src/octowright/server/profiles.py`.
+**Always-on meta and Advisor tools.** Seven diagnostic/guidance tools are exempt from the profile filter and register under any profile (or no profile): `octowright_status`, `octowright_storage_report`, `octowright_dashboard_url`, `octowright_check_takeover`, `octowright_advisor_status`, `octowright_advisor_set_preference`, and `octowright_advisor_record_macro_observation`. These give the LLM a way to inspect the active profile, inspect storage paths, find the dashboard URL, detect competing MCP plugins, and surface local Advisor guidance regardless of filter. The list is `ALWAYS_ON_TOOLS` in `src/octowright/server/profiles.py`.
 
 ### Octowright Advisor
 

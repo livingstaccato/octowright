@@ -75,7 +75,7 @@ independently. Diagnose correctly *before* killing anything.
 ```dot
 graph TD
     Symptom["MCP tool call returns 'Transport closed'<br/>or hangs"] --> Health{"curl http://127.0.0.1:8765/api/health<br/>returns 200?"}
-    Health -- "Yes — daemon is alive" --> ClientFix["Your MCP client lost its stdio bridge.<br/>RESTART YOUR AGENT (Claude Code /<br/>Codex CLI). Do NOT touch the daemon."]
+    Health -- "Yes — daemon is alive" --> ClientFix["Your MCP client lost its stdio bridge.<br/>RESTART YOUR AGENT (for example,<br/>Claude Code or Codex CLI). Do NOT touch the daemon."]
     Health -- "No — port doesn't answer" --> DaemonFix["The daemon itself is gone or wedged.<br/>Run: octowright restart"]
     DaemonFix --> Verify["Verify: curl /api/health → 200"]
     Verify --> ClientFix
@@ -83,7 +83,7 @@ graph TD
 
 ### What 'Transport closed' actually means
 
-The MCP transport between your agent (Claude Code, Codex CLI) and the
+The MCP transport between your agent and the
 Octowright daemon is **stdio-based, established once at MCP-client startup,
 and does not auto-reconnect**. When you see ``Transport closed``:
 

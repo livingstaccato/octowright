@@ -391,16 +391,18 @@ class TestWaitFor:
 
     @pytest.mark.anyio
     async def test_text_branch(self, tmp_path: Path) -> None:
-        """text= → target.wait_for_function (matches body text)."""
+        """text= polls body text without wait_for_function, so CSP cannot block it."""
         subj = _make_subject(tmp_path)
         target = MagicMock()
-        target.wait_for_function = AsyncMock()
+        target.wait_for_function = AsyncMock(side_effect=AssertionError("wait_for_function should not be used"))
+        body = MagicMock()
+        body.inner_text = AsyncMock(return_value="well hello there")
+        target.locator = MagicMock(return_value=body)
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.wait_for(None, "hello", 200)
-        target.wait_for_function.assert_awaited_once()
-        kwargs = target.wait_for_function.call_args.kwargs
-        assert kwargs["arg"] == "hello"
-        assert kwargs["timeout"] == 200
+        target.locator.assert_called_with("body")
+        body.inner_text.assert_awaited_once()
+        target.wait_for_function.assert_not_awaited()
         subj.recorder.record.assert_called_once_with("wait_for", text="hello", timeout_ms=200)
 
     @pytest.mark.anyio
@@ -423,15 +425,16 @@ class TestWaitFor:
 
     @pytest.mark.anyio
     async def test_expression_branch(self, tmp_path: Path) -> None:
-        """expression= → target.wait_for_function with the JS expression
-        polled in-page, no `arg=` (caller's expression is self-contained)."""
+        """expression= polls with evaluate, not wait_for_function, so CSP cannot block it."""
         subj = _make_subject(tmp_path)
         target = MagicMock()
-        target.wait_for_function = AsyncMock()
+        target.wait_for_function = AsyncMock(side_effect=AssertionError("wait_for_function should not be used"))
+        target.evaluate = AsyncMock(side_effect=[False, True])
         subj._target = lambda: target  # type: ignore[attr-defined]
         expr = "() => document.querySelectorAll('tbody tr').length > 0"
         await subj.wait_for(None, None, 250, expression=expr)
-        target.wait_for_function.assert_awaited_once_with(expr, timeout=250)
+        assert target.evaluate.await_count == 2
+        target.wait_for_function.assert_not_awaited()
         subj.recorder.record.assert_called_once_with("wait_for", expression=expr, timeout_ms=250)
 
     @pytest.mark.anyio
@@ -439,10 +442,10 @@ class TestWaitFor:
         """expression= with timeout=None → DEFAULT_ACTION_TIMEOUT_MS."""
         subj = _make_subject(tmp_path)
         target = MagicMock()
-        target.wait_for_function = AsyncMock()
+        target.evaluate = AsyncMock(return_value=True)
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.wait_for(None, None, None, expression="true")
-        target.wait_for_function.assert_awaited_once_with("true", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.evaluate.assert_awaited_once_with("true")
 
     @pytest.mark.anyio
     async def test_selector_and_text_both_set_raises(self, tmp_path: Path) -> None:
@@ -477,12 +480,14 @@ class TestWaitFor:
         confusing "two values set" error where bool(selector) is False."""
         subj = _make_subject(tmp_path)
         target = MagicMock()
-        target.wait_for_function = AsyncMock()
+        body = MagicMock()
+        body.inner_text = AsyncMock(return_value="hello")
+        target.locator = MagicMock(return_value=body)
         subj._target = lambda: target  # type: ignore[attr-defined]
         # selector="" + text="hello": validation should treat "" as
         # unprovided and dispatch the text branch.
         await subj.wait_for("", "hello", 200)
-        target.wait_for_function.assert_awaited_once()
+        target.locator.assert_called_with("body")
 
     @pytest.mark.anyio
     async def test_timeout_ms_zero_means_wait_forever(self, tmp_path: Path) -> None:

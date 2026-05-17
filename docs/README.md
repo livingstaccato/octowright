@@ -5,7 +5,7 @@ see the [top-level README](../README.md); come here for deep-dives on specific f
 
 ## Start Here
 
-- [getting-started.md](getting-started.md) — install, register with Claude, first successful run
+- [getting-started.md](getting-started.md) — install, register an MCP client, first successful run
 - [engines.md](engines.md) — browser engine install, status, reinstall, and launch-mode behavior
 
 ## Core Features
