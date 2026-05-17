@@ -16,15 +16,36 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import httpx
 import pytest
 
-OCTOWRIGHT = "/Users/tim/code/gh/provide-io/octowright/.venv/bin/octowright"
+
+def _resolve_octowright_entry() -> str:
+    """Resolve the ``octowright`` console script for the current interpreter.
+
+    uv (and pip) install entry-point scripts next to the interpreter, so the
+    venv's ``bin/octowright`` is the canonical companion to ``sys.executable``.
+    Falls back to ``shutil.which`` so a globally-installed shim still works
+    (e.g. when a contributor uses pipx). Hardcoding an absolute path was the
+    previous approach — that only worked on one developer's machine.
+    """
+    venv_bin = Path(sys.executable).parent / "octowright"
+    if venv_bin.exists():
+        return str(venv_bin)
+    on_path = shutil.which("octowright")
+    if on_path:
+        return on_path
+    return str(venv_bin)  # the skipif below will mark the test as skipped
+
+
+OCTOWRIGHT = _resolve_octowright_entry()
 
 
 def _kill_pid(pid: int) -> None:
