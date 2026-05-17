@@ -19,6 +19,7 @@ from __future__ import annotations
 # Submodule imports trigger @mcp.tool registration via decorator side effects.
 # Order does not matter; F401 ignored intentionally.
 from octowright.server import browser as _browser  # noqa: F401
+from octowright.server import captures as _captures  # noqa: F401
 from octowright.server import goldens as _goldens  # noqa: F401
 from octowright.server import macro_semantic as _macro_semantic  # noqa: F401
 from octowright.server import macros as _macros  # noqa: F401
@@ -71,6 +72,14 @@ from octowright.server.browser import (
     page_close,
     page_list,
     page_switch,
+)
+from octowright.server.captures import (
+    capture_cleanup,
+    capture_create,
+    capture_get,
+    capture_list,
+    capture_search,
+    octowright_storage_report,
 )
 from octowright.server.goldens import golden_assert, golden_delete, golden_list, golden_save
 from octowright.server.macro_semantic import macro_explain
@@ -156,6 +165,11 @@ __all__ = [
     "browser_unmock_route",
     "browser_wait_for",
     "browser_wait_for_download",
+    "capture_cleanup",
+    "capture_create",
+    "capture_get",
+    "capture_list",
+    "capture_search",
     "golden_assert",
     "golden_delete",
     "golden_list",
@@ -176,6 +190,7 @@ __all__ = [
     "octowright_check_takeover",
     "octowright_dashboard_url",
     "octowright_status",
+    "octowright_storage_report",
     "page_close",
     "page_list",
     "page_switch",

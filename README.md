@@ -2,9 +2,10 @@
 
 # Octowright
 
-An MCP server that lets Claude Code drive **many headed Playwright browsers in parallel**
-with a **mix of engines** (Chromium, Firefox, WebKit), recording every action to a JSONL
-log so a session can later be exported as a standalone Playwright script.
+An MCP server that lets agentic coding clients drive **many headed Playwright browsers
+in parallel** with a **mix of engines** (Chromium, Firefox, WebKit), recording every
+action to a JSONL log so a session can later be exported as a standalone Playwright
+script.
 
 Octowright is optimized for multi-session, mixed-engine browser orchestration with
 persistent profiles, structured recordings, and a local debugger dashboard.
@@ -26,15 +27,16 @@ git clone https://github.com/livingstaccato/octowright.git
 cd octowright
 uv sync                                              # install Python deps
 uv run playwright install webkit firefox chromium    # install browser binaries
-uv run octowright init                               # print Claude registration block + scaffold config
+uv run octowright init                               # print MCP registration block + scaffold config
 ```
 
 Engine-binary management is currently CLI-driven (`playwright install` /
 `playwright install --list`), not exposed as Octowright MCP tools.
 
-The last command prints a JSON block to paste into `.mcp.json` (project-scoped)
-or `~/.claude.json` (global). It also creates Octowright's user config directory
-with a sample persona, scenario, and macro so you have something to play with.
+The last command prints a JSON block to paste into an MCP client config, commonly
+`.mcp.json` for a project or `~/.claude.json` for Claude Code. It also creates
+Octowright's user config directory with a sample persona, scenario, and macro so
+you have something to play with.
 
 The block it prints looks like this — `init` substitutes your install path
 into `<absolute-path-to-octowright>`:
@@ -56,22 +58,23 @@ into `<absolute-path-to-octowright>`:
 }
 ```
 
-Reload Claude. The tools appear as `mcp__octowright__browser_launch`, etc.
+Reload your MCP client. The tools appear as `mcp__octowright__browser_launch`, etc.
 
-Verify in 30 seconds: ask Claude to launch a webkit browser at `example.com`,
-click a link, list browsers, then close. The next section walks through that
-same flow as a tour of what Octowright actually does.
+Verify in 30 seconds: ask your client to launch a webkit browser at `example.com`,
+click a link, list browsers, then close. The next section walks through that same
+flow as a tour of what Octowright actually does.
 
 ## Your first 5 minutes
 
-Once installed and registered, ask Claude to walk through these in order. Each step
-builds on the previous one and shows you what Octowright actually does.
+Once installed and registered, ask your MCP client to walk through these in order.
+Each step builds on the previous one and shows you what Octowright actually does.
 
-**1. Open a browser.** Ask Claude: *"launch a webkit browser at example.com"*. Claude
+**1. Open a browser.** Ask: *"launch a webkit browser at example.com"*. The client
 calls `browser_launch kind=webkit url=https://example.com`. A real WebKit window opens
-on your desktop. The result includes the `instance_id` — Claude tracks it for you.
+on your desktop. The result includes the `instance_id` so the client can target later
+actions.
 
-**2. Drive it.** Ask: *"click the 'More information' link"*. Claude calls
+**2. Drive it.** Ask: *"click the 'More information' link"*. The client calls
 `browser_click_by text="More information"`. The window navigates. Every action lands
 in a JSONL recording on disk.
 
@@ -79,7 +82,8 @@ in a JSONL recording on disk.
 one-line summary like `1 browser: 8a3f.../webkit @ iana.org/help/example-domains`.
 
 **4. Save the session as a macro.** Ask: *"save the last few clicks as a macro called
-example-tour"*. Claude calls `macro_save`. Now `macro_run name=example-tour` replays it.
+example-tour"*. The client calls `macro_save`. Now `macro_run name=example-tour`
+replays it.
 
 **5. Close the browser, then launch a *named* one.** Ask: *"close that browser, then
 launch a chromium browser with profile=demo at github.com"*. The window opens, you log
@@ -120,7 +124,7 @@ uv run python scripts/demos/record_heroes.py
 ## Distributed Skill Pack
 
 Octowright ships a packaged skill named `using-octowright` for Codex and
-project-local plugin manifests for Claude/Codex runtimes.
+project-local plugin manifests for compatible runtimes such as Claude Code and Codex.
 
 Install everything:
 
@@ -150,11 +154,11 @@ Notes:
 ## Dashboard
 
 `octowright serve` boots two things in one process: the MCP stdio server (what
-Claude talks to) and a Starlette HTTP server on `http://127.0.0.1:8765/` (what
+your client talks to) and a Starlette HTTP server on `http://127.0.0.1:8765/` (what
 *you* look at). One stable URL, pinned in your browser, replaces the old dance
 of copying log paths and shelling out to `npx playwright show-trace` by hand.
 
-Ask Claude `"give me the octowright dashboard URL"` (it'll call the
+Ask your MCP client `"give me the octowright dashboard URL"` (it'll call the
 `octowright_dashboard_url` MCP tool), or just open the URL directly. You get:
 
 - **Top-level dashboard** — every live browser, every live scenario, recent
@@ -261,7 +265,7 @@ the other four layers observable.
 named profile when you want login state to survive. A persona when that
 identity is worth metadata and credential references. A scenario when you
 need N coordinated browsers as a single unit. The dashboard whenever you
-want to *see* what's happening rather than ask Claude.
+want to *see* what's happening rather than ask your MCP client.
 
 ## Tools
 
@@ -586,15 +590,23 @@ Full reference: [docs/scenarios.md](https://github.com/livingstaccato/octowright
 All defaults live in `src/octowright/defaults.py` and can be overridden via environment
 variables:
 
-On POSIX systems, Octowright uses the XDG config dir
-`${XDG_CONFIG_HOME:-~/.config}/octowright/`. On Windows, it uses
-`%APPDATA%\octowright\`, falling back to
-`%USERPROFILE%\AppData\Roaming\octowright\` if `APPDATA` is unset.
+On POSIX systems, Octowright follows the XDG Base Directory split:
+
+- Config: `${XDG_CONFIG_HOME:-~/.config}/octowright/` for durable user-authored data.
+- State: `${XDG_STATE_HOME:-~/.local/state}/octowright/` for session history, logs, and manifests.
+- Cache: `${XDG_CACHE_HOME:-~/.cache}/octowright/` for rebuildable analysis captures.
+
+On Windows, config uses `%APPDATA%\octowright\`, while state and cache use
+`%LOCALAPPDATA%\octowright\State\` and `%LOCALAPPDATA%\octowright\Cache\`.
 
 | Variable | Default | Description |
 |---|---|---|
 | `OCTOWRIGHT_DEFAULT_URL` | `https://example.com` | Fallback `url` when `browser_launch` omits it. |
-| `OCTOWRIGHT_RECORDINGS` | `./recordings/` | Where JSONL logs land. |
+| `OCTOWRIGHT_RECORDINGS` | POSIX: `${XDG_STATE_HOME:-~/.local/state}/octowright/sessions/`; Windows: `%LOCALAPPDATA%\octowright\State\sessions\` | Where session artifacts land: JSONL action logs, traces, screenshots, videos, downloads, and markdown captures. |
+| `OCTOWRIGHT_CAPTURES_DIR` | POSIX: `${XDG_CACHE_HOME:-~/.cache}/octowright/captures/`; Windows: `%LOCALAPPDATA%\octowright\Cache\captures\` | Where large cached analysis payloads live. |
+| `OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES` | `52428800` | Size cap for cached analysis captures before oldest captures are pruned. |
+| `OCTOWRIGHT_CAPTURE_TTL_SECONDS` | `604800` | Age cap for cached analysis captures. |
+| `OCTOWRIGHT_SESSION_MANIFEST` | POSIX: `${XDG_STATE_HOME:-~/.local/state}/octowright/session-manifest.json`; Windows: `%LOCALAPPDATA%\octowright\State\session-manifest.json` | Live-session manifest used for crash recovery/status. |
 | `OCTOWRIGHT_PROFILES_DIR` | POSIX: `${XDG_CONFIG_HOME:-~/.config}/octowright/profiles/`; Windows: `%APPDATA%\octowright\profiles\` | Where persistent profiles live. |
 | `OCTOWRIGHT_MACROS_DIR` | POSIX: `${XDG_CONFIG_HOME:-~/.config}/octowright/macros/`; Windows: `%APPDATA%\octowright\macros\` | Where saved macros live. |
 | `OCTOWRIGHT_SCENARIOS_DIR` | POSIX: `${XDG_CONFIG_HOME:-~/.config}/octowright/scenarios/`; Windows: `%APPDATA%\octowright\scenarios\` | Where scenario specs live. |
@@ -607,7 +619,7 @@ On POSIX systems, Octowright uses the XDG config dir
 ## CLI
 
 `octowright` is a Click-based CLI; subcommands let you do common housekeeping
-without going through Claude:
+without going through an MCP client:
 
 | Command | What |
 |---|---|
@@ -622,28 +634,28 @@ without going through Claude:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 97 tools — every workflow Octowright supports
+The full MCP tool surface is currently 103 tools — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
 more comma-separated profile names. Tools not listed in any active profile
-are skipped at registration time, so the LLM-visible schema shrinks. Six
+are skipped at registration time, so the LLM-visible schema shrinks. Seven
 meta/Advisor tools are always registered so agents can inspect Octowright,
 find the dashboard, and surface local guidance even under narrow profiles.
 
 | Profile | What | Tool count |
 |---|---|---|
 | `core` | Minimum to drive a browser end-to-end (launch, navigate, click/type/fill, observe, close). | 13 |
-| `advanced` | Inspection + assertions + ARIA-locator interactions for stable test automation. | 13 |
+| `advanced` | Inspection, cached captures, assertions, and ARIA-locator interactions for stable test automation. | 18 |
 | `macros` | Macro record / list / run / lint / repair / compile. | 9 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
 | `personas` | Persona + on-disk profile management. | 8 |
-| always-on | Status, dashboard, takeover detection, and Advisor tools registered under every profile. | 6 |
-| `all` (or unset) | Default — every tool registers. | 97 |
+| always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
+| `all` (or unset) | Default — every tool registers. | 103 |
 
 ```bash
-octowright serve --profile=core              # 19 tools — core + always-on
-octowright serve --profile=core,macros       # 28 tools — browser + macro replay + always-on
+octowright serve --profile=core              # 20 tools — core + always-on
+octowright serve --profile=core,macros       # 29 tools — browser + macro replay + always-on
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 

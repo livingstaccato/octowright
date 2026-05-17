@@ -189,8 +189,8 @@ async def _serve_async(
 
     With singleton coordination on (the default), a fresh invocation that
     finds no live leader spawns a **detached daemon** and becomes a follower
-    of it. This way the leader is never a child of Claude Code (or any
-    other MCP launcher), so SIGKILL on the launcher's child can't reach it.
+    of it. This way the leader is never a child of the MCP launcher, so
+    SIGKILL on the launcher's child can't reach it.
     """
     leader_kwargs: dict[str, Any] = {
         "http_host": http_host,
@@ -363,7 +363,7 @@ async def _run_leader(
         )
 
     # Discoverable leader: HTTP-MCP at /mcp/ is up AND we wrote the lockfile.
-    # Followers can find and connect to us, so a stdio EOF (e.g. Claude Code
+    # Followers can find and connect to us, so a stdio EOF (e.g. MCP client
     # closes) doesn't mean we're useless — keep serving until the watchdog
     # fires or a sidecar fails.
     discoverable = not no_http and not no_singleton

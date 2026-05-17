@@ -5,15 +5,15 @@
 
 """Spawn a detached background leader so the leader survives parent close.
 
-Why this exists: an MCP client like Claude Code launches ``octowright serve``
+Why this exists: an MCP client launches ``octowright serve``
 as a stdio child. When the client closes, it sends SIGTERM and (after a
 brief grace) SIGKILL. SIGTERM we can catch (see ``cli.serve``); SIGKILL we
 can't. Browsers die with the leader.
 
 The fix: when a ``serve`` invocation decides it should become the leader,
 it instead **forks a fully-detached background process** that becomes the
-real leader. The original Claude-Code-launched process becomes a follower
-bridging to the daemon. Closing Claude Code kills the bridge but the
+real leader. The original client-launched process becomes a follower
+bridging to the daemon. Closing the MCP client kills the bridge but the
 daemon — running in its own session, with stdin/out/err pointed at
 ``/dev/null`` — is unaffected.
 
@@ -32,12 +32,12 @@ import time
 from typing import IO
 
 import octowright.singleton as _sn
-from octowright.config_paths import user_config_dir
+from octowright.config_paths import user_state_dir
 
 # Daemon stderr goes here so we have something to investigate when the daemon
 # misbehaves. Rotated by file size on each spawn (truncated above 1 MB) to
 # avoid unbounded growth on dev machines.
-_DAEMON_LOG = user_config_dir() / "octowright-daemon.log"
+_DAEMON_LOG = user_state_dir() / "logs" / "octowright-daemon.log"
 _DAEMON_LOG_MAX_BYTES = 1_000_000
 
 
