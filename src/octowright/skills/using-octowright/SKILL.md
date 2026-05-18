@@ -75,30 +75,25 @@ independently. Diagnose correctly *before* killing anything.
 ```dot
 graph TD
     Symptom["MCP tool call returns 'Transport closed'<br/>or hangs"] --> Health{"curl http://127.0.0.1:8765/api/health<br/>returns 200?"}
-    Health -- "Yes — daemon is alive" --> ClientFix["Your MCP client lost its stdio bridge.<br/>RESTART YOUR AGENT (for example,<br/>Claude Code or Codex CLI). Do NOT touch the daemon."]
+    Health -- "Yes — daemon is alive" --> Retry["Retry one Octowright MCP call.<br/>The follower bridge should fail fast<br/>and reconnect for the next call."]
+    Retry --> Smoke["If the same client handle still fails,<br/>run scripts/bridge_reconnect_smoke.py<br/>to separate client-handle failure<br/>from daemon failure."]
     Health -- "No — port doesn't answer" --> DaemonFix["The daemon itself is gone or wedged.<br/>Run: octowright restart"]
     DaemonFix --> Verify["Verify: curl /api/health → 200"]
-    Verify --> ClientFix
+    Verify --> Retry
 ```
 
-### What 'Transport closed' actually means
+### Transport Recovery
 
-The MCP transport between your agent and the
-Octowright daemon is **stdio-based, established once at MCP-client startup,
-and does not auto-reconnect**. When you see ``Transport closed``:
+If an Octowright MCP call returns `Transport closed` or times out:
 
-- **First, probe the daemon directly:** ``curl http://127.0.0.1:8765/api/health``.
-  If it returns ``{"ok":true,"version":"..."}`` the daemon is fine.
-- **If the daemon is healthy, restarting it will NOT help** — the broken
-  thing is your agent's MCP client connection, which only reconnects when
-  your agent process restarts. Killing the daemon makes things worse: the
-  agent's stale stdio handle still won't reconnect, *and* you've also lost
-  the only entity that knows what browsers were live.
-- **If the daemon is unreachable, then restart it:** ``octowright restart``.
-  That command stops every ``octowright serve`` it finds, reaps orphan
-  Playwright browsers, spawns a fresh daemon, and probes ``/api/health``
-  until it answers — done correctly and atomically, not as a sequence of
-  ``pgrep`` / ``kill`` / ``serve`` shell calls.
+1. Check daemon health with `curl http://127.0.0.1:8765/api/health`.
+2. If health is good, retry one Octowright MCP call. The follower bridge should
+   now fail fast and reconnect for the next call.
+3. If the same client handle still fails, run
+   `uv run --active python scripts/bridge_reconnect_smoke.py` to distinguish a
+   broken client handle from a broken daemon.
+4. Do not run `octowright restart` unless daemon health fails or the user
+   explicitly asks for a restart.
 
 ### `octowright restart`
 
@@ -160,4 +155,4 @@ If you catch yourself doing these, you are violating the Octowright workflow:
 | Cleanup | `browser_close` |
 | Probe daemon health | `curl http://127.0.0.1:8765/api/health` |
 | Daemon is wedged | `octowright restart` (shell, not MCP) |
-| MCP `Transport closed` | Restart your agent, not the daemon |
+| MCP `Transport closed` | Probe health, retry once, then run `scripts/bridge_reconnect_smoke.py` |
