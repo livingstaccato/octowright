@@ -192,7 +192,7 @@ def octowright_status() -> dict[str, Any]:
     import os
     import time
 
-    from octowright import defaults
+    from octowright import bridge_state, defaults
     from octowright import http as _http
     from octowright import personas as _personas
     from octowright import session_manifest as _session_manifest
@@ -264,5 +264,9 @@ def octowright_status() -> dict[str, Any]:
         },
         "profile": profile_block,
         "advisor": _advisor.status(),
+        "bridge": {
+            "state_path": str(defaults.BRIDGE_STATE_PATH),
+            **bridge_state.read_state(defaults.BRIDGE_STATE_PATH),
+        },
         "dashboard_url": _http.runtime_url() if http_status["running"] else None,
     }

@@ -23,7 +23,7 @@ from octowright.server.meta import (
 def test_status_returns_required_top_level_blocks() -> None:
     """The status snapshot must include daemon, defaults, pool, personas, dashboard_url."""
     snap = octowright_status()
-    for key in ("daemon", "defaults", "pool", "personas", "dashboard_url", "advisor"):
+    for key in ("daemon", "defaults", "pool", "personas", "dashboard_url", "advisor", "bridge"):
         assert key in snap, f"missing top-level field {key!r}: {snap}"
 
 
@@ -36,6 +36,30 @@ def test_status_includes_octowright_advisor_block(monkeypatch, tmp_path: Path) -
     assert snap["advisor"]["name"] == "Octowright Advisor"
     assert snap["advisor"]["preferences"]["macro_candidate"] == "yes"
     assert isinstance(snap["advisor"]["suggestions"], list)
+
+
+def test_status_includes_bridge_diagnostics(monkeypatch, tmp_path: Path) -> None:
+    from octowright import bridge_state, defaults
+
+    state_path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", state_path)
+    bridge_state.record_snapshot(
+        path=state_path,
+        follower_pid=321,
+        remote_url="http://127.0.0.1:8765/mcp/",
+        remote_session_id="sid-321",
+        last_error="remote leader session reset",
+        in_flight=2,
+        reconnect_attempts=4,
+        request_timeouts=1,
+    )
+
+    snap = octowright_status()
+
+    assert snap["bridge"]["state_path"] == str(state_path)
+    assert snap["bridge"]["followers"]["321"]["remote_session_id"] == "sid-321"
+    assert snap["bridge"]["followers"]["321"]["in_flight"] == 2
+    assert snap["bridge"]["events"][-1]["last_error"] == "remote leader session reset"
 
 
 def test_advisor_status_tool_returns_named_status(monkeypatch, tmp_path: Path) -> None:
