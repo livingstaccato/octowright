@@ -26,7 +26,6 @@ Existing tests/test_proxy_bridge.py already covers the core watchdog cancel
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import anyio
 import httpx
@@ -248,107 +247,35 @@ async def test_pump_propagates_other_exceptions() -> None:
 
 
 @pytest.mark.anyio
-async def test_run_proxy_passes_url_to_streamable_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """leader_mcp_url is the argument given to streamablehttp_client."""
-    captured: dict[str, Any] = {}
+async def test_run_proxy_delegates_default_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default run_proxy arguments are passed through to the supervisor."""
+    calls: list[dict[str, object]] = []
 
-    class FakeStreamCM:
-        def __init__(self, url: str) -> None:
-            captured["url"] = url
+    async def fake_run_supervised_proxy(**kwargs: object) -> None:
+        calls.append(dict(kwargs))
 
-        async def __aenter__(self) -> tuple[Any, Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock()), MagicMock()
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    class FakeStdioCM:
-        async def __aenter__(self) -> tuple[Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock())
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    monkeypatch.setattr(_bridge, "streamablehttp_client", lambda url: FakeStreamCM(url))
-    monkeypatch.setattr(_bridge, "stdio_server", lambda: FakeStdioCM())
+    monkeypatch.setattr(_bridge, "run_supervised_proxy", fake_run_supervised_proxy)
 
     await _bridge.run_proxy("http://leader.example/mcp/")
-    assert captured["url"] == "http://leader.example/mcp/"
+    assert calls == [
+        {
+            "leader_mcp_url": "http://leader.example/mcp/",
+            "health_url": None,
+            "heartbeat_interval": 10.0,
+            "heartbeat_max_failures": 3,
+        }
+    ]
 
 
 @pytest.mark.anyio
-async def test_run_proxy_skips_heartbeat_when_health_url_none(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """health_url=None → _heartbeat is never started."""
-    heartbeat_calls: list[Any] = []
+async def test_run_proxy_delegates_custom_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Custom health and heartbeat settings are passed through to supervisor."""
+    calls: list[dict[str, object]] = []
 
-    class FakeStreamCM:
-        async def __aenter__(self) -> tuple[Any, Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock()), MagicMock()
+    async def fake_run_supervised_proxy(**kwargs: object) -> None:
+        calls.append(dict(kwargs))
 
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    class FakeStdioCM:
-        async def __aenter__(self) -> tuple[Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock())
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    async def fake_heartbeat(*args: Any, **kwargs: Any) -> None:
-        heartbeat_calls.append((args, kwargs))
-
-    monkeypatch.setattr(_bridge, "streamablehttp_client", lambda url: FakeStreamCM())
-    monkeypatch.setattr(_bridge, "stdio_server", lambda: FakeStdioCM())
-    monkeypatch.setattr(_bridge, "_heartbeat", fake_heartbeat)
-
-    await _bridge.run_proxy("http://leader/mcp/", health_url=None)
-    assert heartbeat_calls == []
-
-
-@pytest.mark.anyio
-async def test_run_proxy_starts_heartbeat_when_health_url_provided(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """health_url='...' → _heartbeat runs with that URL."""
-    heartbeat_calls: list[Any] = []
-
-    class FakeStreamCM:
-        async def __aenter__(self) -> tuple[Any, Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock()), MagicMock()
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    class FakeStdioCM:
-        async def __aenter__(self) -> tuple[Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock())
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    async def fake_heartbeat(*args: Any, **kwargs: Any) -> None:
-        heartbeat_calls.append(args)
-
-    monkeypatch.setattr(_bridge, "streamablehttp_client", lambda url: FakeStreamCM())
-    monkeypatch.setattr(_bridge, "stdio_server", lambda: FakeStdioCM())
-    monkeypatch.setattr(_bridge, "_heartbeat", fake_heartbeat)
+    monkeypatch.setattr(_bridge, "run_supervised_proxy", fake_run_supervised_proxy)
 
     await _bridge.run_proxy(
         "http://leader/mcp/",
@@ -356,78 +283,11 @@ async def test_run_proxy_starts_heartbeat_when_health_url_provided(
         heartbeat_interval=2.0,
         heartbeat_max_failures=5,
     )
-    assert len(heartbeat_calls) == 1
-    args = heartbeat_calls[0]
-    # args = (cancel_scope, health_url, interval, max_failures)
-    assert args[1] == "http://leader/api/health"
-    assert args[2] == 2.0
-    assert args[3] == 5
-
-
-@pytest.mark.anyio
-async def test_run_proxy_default_heartbeat_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default interval=10.0 and max_failures=3 from the signature."""
-    heartbeat_args: list[Any] = []
-
-    class FakeStreamCM:
-        async def __aenter__(self) -> tuple[Any, Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock()), MagicMock()
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    class FakeStdioCM:
-        async def __aenter__(self) -> tuple[Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock())
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    async def fake_heartbeat(*args: Any, **kwargs: Any) -> None:
-        heartbeat_args.append(args)
-
-    monkeypatch.setattr(_bridge, "streamablehttp_client", lambda url: FakeStreamCM())
-    monkeypatch.setattr(_bridge, "stdio_server", lambda: FakeStdioCM())
-    monkeypatch.setattr(_bridge, "_heartbeat", fake_heartbeat)
-
-    await _bridge.run_proxy("http://leader/mcp/", health_url="http://h")
-    args = heartbeat_args[0]
-    assert args[2] == 10.0  # default interval
-    assert args[3] == 3  # default max_failures
-
-
-@pytest.mark.anyio
-async def test_run_proxy_returns_when_either_pump_finishes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Both pumps end (stdio + streamable) → run_proxy returns cleanly."""
-
-    class FakeStreamCM:
-        async def __aenter__(self) -> tuple[Any, Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock()), MagicMock()
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    class FakeStdioCM:
-        async def __aenter__(self) -> tuple[Any, Any]:
-            send, recv = anyio.create_memory_object_stream[object](1)
-            await send.aclose()
-            return recv, MagicMock(send=AsyncMock())
-
-        async def __aexit__(self, *a: Any) -> None:
-            return None
-
-    monkeypatch.setattr(_bridge, "streamablehttp_client", lambda url: FakeStreamCM())
-    monkeypatch.setattr(_bridge, "stdio_server", lambda: FakeStdioCM())
-
-    # Must return without hanging.
-    with anyio.move_on_after(2.0) as scope:
-        await _bridge.run_proxy("http://leader/mcp/")
-    assert not scope.cancel_called
+    assert calls == [
+        {
+            "leader_mcp_url": "http://leader/mcp/",
+            "health_url": "http://leader/api/health",
+            "heartbeat_interval": 2.0,
+            "heartbeat_max_failures": 5,
+        }
+    ]
