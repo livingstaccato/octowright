@@ -69,6 +69,78 @@ async def test_viewport_pill_requires_one_second_alt_hold() -> None:
         await pool.close_all()
 
 
+@pytest.mark.asyncio
+async def test_viewport_pill_is_quiet_bottom_indicator_with_compact_popover() -> None:
+    pytest.importorskip("playwright")
+    from octowright.browser_pool import BrowserPool
+
+    pool = BrowserPool()
+    try:
+        result = await pool.launch(
+            kind="chromium",
+            url="data:text/html,<html><body><h1>viewport</h1></body></html>",
+            headed=False,
+            ephemeral=True,
+            label="viewport-ui",
+            viewport_w=640,
+            viewport_h=420,
+            badge=False,
+        )
+        page = pool.get(result["instance_id"]).page
+        pill = page.locator("#__octowright_viewport_status__")
+
+        idle = await pill.evaluate(
+            """(node) => {
+                const style = getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                return {
+                    text: node.textContent,
+                    opacity: node.style.opacity,
+                    left: node.style.left,
+                    bottom: node.style.bottom,
+                    top: node.style.top,
+                    transform: node.style.transform,
+                    boxShadow: node.style.boxShadow,
+                    x: rect.x,
+                    y: rect.y,
+                };
+            }"""
+        )
+        assert idle["text"] == "fixed 640x420"
+        assert float(idle["opacity"]) == pytest.approx(0.18)
+        assert idle["left"] == "12px"
+        assert idle["bottom"] == "12px"
+        assert idle["top"] == ""
+        assert idle["transform"] == ""
+        assert idle["boxShadow"] == "none"
+        assert idle["x"] < 24
+        assert idle["y"] > 360
+
+        box = await pill.bounding_box()
+        assert box is not None
+        await page.keyboard.down("Alt")
+        await page.wait_for_timeout(1100)
+        await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+        popover = page.locator("#__octowright_viewport_modal__")
+        assert await popover.count() == 1
+        text = await popover.text_content()
+        assert text is not None
+        assert "Viewport" not in text
+        assert "Sync" in text
+        assert "Fluid" in text
+        assert "Relaunch" not in text
+        assert "Page" not in text
+        assert await popover.locator("button").evaluate_all("(nodes) => nodes.map((n) => n.textContent)") == [
+            "Sync",
+            "Fluid",
+        ]
+        await page.keyboard.up("Alt")
+        assert await popover.count() == 0
+    finally:
+        await pool.close_all()
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"

@@ -33,16 +33,16 @@
     };
 
     const labelFor = () => {
-        if (current.mode === "fluid") return "viewport - fluid";
-        if (isMismatch()) return "viewport - fixed mismatch";
-        if (current.width && current.height) return `viewport - fixed ${current.width}x${current.height}`;
-        return "viewport - fixed";
+        if (current.mode === "fluid") return "fluid";
+        if (isMismatch()) return "fixed mismatch";
+        if (current.width && current.height) return `fixed ${current.width}x${current.height}`;
+        return "fixed";
     };
 
     const colorFor = () => {
-        if (current.mode === "fluid") return "rgba(22, 163, 74, 0.78)";
-        if (isMismatch()) return "rgba(180, 83, 9, 0.85)";
-        return "rgba(75, 85, 99, 0.78)";
+        if (current.mode === "fluid") return "rgba(22, 101, 52, 0.6)";
+        if (isMismatch()) return "rgba(146, 64, 14, 0.72)";
+        return "rgba(31, 41, 55, 0.62)";
     };
 
     const applyInteractive = () => {
@@ -50,7 +50,7 @@
         if (!root) return;
         root.style.pointerEvents = modifierHeld ? "auto" : "none";
         root.style.cursor = modifierHeld ? "pointer" : "";
-        root.style.outline = modifierHeld ? "1px solid rgba(255, 255, 255, 0.45)" : "";
+        root.style.outline = modifierHeld ? "1px solid rgba(255, 255, 255, 0.28)" : "";
         root.style.outlineOffset = modifierHeld ? "1px" : "";
     };
 
@@ -59,7 +59,7 @@
         if (!root) return;
         root.textContent = labelFor();
         root.style.background = colorFor();
-        root.style.opacity = current.mode === "fluid" && !modifierHeld ? "0.45" : "0.78";
+        root.style.opacity = modifierHeld ? "0.56" : "0.18";
     };
 
     const closeModal = () => {
@@ -84,9 +84,9 @@
             if (name === "sync") {
                 current = { mode: "fixed", width: result.width, height: result.height };
                 render();
-                setModalMessage(`Synced to ${result.width}x${result.height}.`, true);
+                setModalMessage(`${result.width}x${result.height}`, true);
             } else if (name === "relaunch-fluid") {
-                setModalMessage(`Relaunched as ${result.new_instance_id || "a fluid session"}.`, true);
+                setModalMessage(result.new_instance_id || "fluid", true);
             }
         } catch (err) {
             setModalMessage(String((err && err.message) || err || "Viewport action failed."), false);
@@ -120,33 +120,28 @@
         modal.id = MODAL_ID;
         Object.assign(modal.style, {
             position: "fixed",
-            top: "44px",
-            left: "50%",
-            transform: "translateX(-50%)",
+            left: "12px",
+            bottom: "40px",
             zIndex: "2147483647",
-            background: "rgba(20, 20, 24, 0.96)",
+            background: "rgba(15, 23, 42, 0.86)",
             color: "white",
-            border: "1px solid rgba(255, 255, 255, 0.12)",
-            borderRadius: "8px",
-            padding: "10px",
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+            borderRadius: "6px",
+            padding: "8px",
             font: "12px system-ui, sans-serif",
-            boxShadow: "0 12px 32px rgba(0, 0, 0, 0.42)",
-            minWidth: "320px",
+            boxShadow: "0 8px 18px rgba(0, 0, 0, 0.18)",
+            minWidth: "0",
         });
 
         const body = document.createElement("div");
-        body.innerHTML = `
-            <strong>Viewport ${current.mode}</strong><br>
-            Page: ${measured.innerWidth}x${measured.innerHeight}<br>
-            Window: ${measured.outerWidth}x${measured.outerHeight}
-        `;
+        body.textContent = `${measured.innerWidth}x${measured.innerHeight} / ${measured.outerWidth}x${measured.outerHeight}`;
+        Object.assign(body.style, { color: "rgba(255, 255, 255, 0.78)", whiteSpace: "nowrap" });
 
         const row = document.createElement("div");
-        Object.assign(row.style, { display: "flex", gap: "8px", marginTop: "10px", flexWrap: "wrap" });
+        Object.assign(row.style, { display: "flex", gap: "6px", marginTop: "7px", flexWrap: "wrap" });
         row.append(
-            makeButton("Sync once", () => action("sync"), true),
-            makeButton("Relaunch fluid", () => action("relaunch-fluid"), false),
-            makeButton("Close", closeModal, false),
+            makeButton("Sync", () => action("sync"), true),
+            makeButton("Fluid", () => action("relaunch-fluid"), false),
         );
 
         const message = document.createElement("div");
@@ -165,15 +160,14 @@
         root.id = ROOT_ID;
         Object.assign(root.style, {
             position: "fixed",
-            left: "50%",
-            top: "12px",
-            transform: "translateX(-50%)",
+            left: "12px",
+            bottom: "12px",
             zIndex: "2147483646",
             color: "white",
-            borderRadius: "12px",
-            padding: "4px 8px",
-            font: "12px ui-monospace, Menlo, Consolas, monospace",
-            boxShadow: "0 1px 8px rgba(0, 0, 0, 0.35)",
+            borderRadius: "5px",
+            padding: "2px 5px",
+            font: "11px ui-monospace, Menlo, Consolas, monospace",
+            boxShadow: "none",
             pointerEvents: "none",
             userSelect: "none",
             transition: "background 160ms ease, opacity 160ms ease",
@@ -223,6 +217,7 @@
                 clearTimeout(modifierTimer);
                 modifierTimer = null;
             }
+            closeModal();
             applyInteractive();
             render();
         },
@@ -235,6 +230,7 @@
             clearTimeout(modifierTimer);
             modifierTimer = null;
         }
+        closeModal();
         applyInteractive();
         render();
     });
