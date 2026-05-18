@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import anyio
+import pytest
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 
@@ -55,3 +59,122 @@ def test_bridge_error_message_shape() -> None:
     assert root.id == "abc"
     assert root.error.code == -32000
     assert root.error.message == "Octowright bridge error: remote request timed out"
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_request_timeout_returns_bridge_error() -> None:
+    local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    remote_send, remote_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    outgoing_send, outgoing_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    supervisor_obj = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=outgoing_send,
+        request_timeout_seconds=0.05,
+    )
+
+    await local_send.send(_request("tools/call", "timeout-id"))
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(supervisor_obj.forward_local_to_remote, remote_send)
+        tg.start_soon(supervisor_obj.watch_deadlines)
+        forwarded = await remote_recv.receive()
+        assert supervisor.message_request_id(forwarded) == "timeout-id"
+        error = await outgoing_recv.receive()
+        root = error.message.root
+        assert isinstance(root, JSONRPCError)
+        assert root.id == "timeout-id"
+        assert "timed out" in root.error.message
+        tg.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+async def test_remote_response_clears_in_flight() -> None:
+    local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    outgoing_send, outgoing_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    remote_write_send, remote_write_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    supervisor_obj = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=outgoing_send,
+        request_timeout_seconds=1.0,
+    )
+
+    await local_send.send(_request("tools/call", "ok-id"))
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(supervisor_obj.forward_local_to_remote, remote_write_send)
+        forwarded = await remote_write_recv.receive()
+        assert supervisor.message_request_id(forwarded) == "ok-id"
+        await supervisor_obj.forward_remote_message(_response("ok-id"))
+        response = await outgoing_recv.receive()
+        assert supervisor.message_request_id(response) == "ok-id"
+        assert supervisor_obj.in_flight_count == 0
+        tg.cancel_scope.cancel()
+
+
+class FakeRemoteConnector:
+    def __init__(self) -> None:
+        self.sessions: list[tuple[Any, Any]] = []
+        self.connect_count = 0
+
+    async def connect(self) -> tuple[Any, Any, str | None]:
+        self.connect_count += 1
+        client_to_remote_send, client_to_remote_recv = anyio.create_memory_object_stream[SessionMessage](10)
+        remote_to_client_send, remote_to_client_recv = anyio.create_memory_object_stream[SessionMessage](10)
+        self.sessions.append((client_to_remote_recv, remote_to_client_send))
+        return remote_to_client_recv, client_to_remote_send, f"session-{self.connect_count}"
+
+
+@pytest.mark.anyio
+async def test_initialize_is_replayed_after_reconnect() -> None:
+    local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    local_out_send, local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    connector = FakeRemoteConnector()
+    supervisor_obj = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=local_out_send,
+        request_timeout_seconds=1.0,
+    )
+
+    await local_send.send(_request("initialize", "init-1"))
+    _remote_read, remote_write, _sid = await connector.connect()
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(supervisor_obj.forward_local_to_remote, remote_write)
+        first_remote_recv, _first_remote_send = connector.sessions[0]
+        init_msg = await first_remote_recv.receive()
+        assert supervisor.message_method(init_msg) == "initialize"
+        await supervisor_obj.forward_remote_message(_response("init-1"))
+        assert supervisor.message_request_id(await local_out_recv.receive()) == "init-1"
+        await supervisor_obj.replay_initialize(remote_write)
+        replayed = await first_remote_recv.receive()
+        assert supervisor.message_method(replayed) == "initialize"
+        tg.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+async def test_remote_failure_fails_in_flight() -> None:
+    local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    local_out_send, local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    remote_write_send, remote_write_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    supervisor_obj = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=local_out_send,
+        request_timeout_seconds=1.0,
+    )
+
+    await local_send.send(_request("tools/call", "lost-id"))
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(supervisor_obj.forward_local_to_remote, remote_write_send)
+        assert supervisor.message_request_id(await remote_write_recv.receive()) == "lost-id"
+        await supervisor_obj.fail_all_in_flight("remote leader stream closed")
+        error = await local_out_recv.receive()
+        root = error.message.root
+        assert isinstance(root, JSONRPCError)
+        assert root.id == "lost-id"
+        assert "remote leader stream closed" in root.error.message
+        tg.cancel_scope.cancel()
