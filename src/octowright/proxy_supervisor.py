@@ -10,8 +10,18 @@ from dataclasses import dataclass
 from typing import Any
 
 import anyio
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
 from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
+
+from octowright import bridge_state, singleton
+from octowright.defaults import (
+    BRIDGE_CONNECT_TIMEOUT_SECONDS,
+    BRIDGE_RECONNECT_MAX_SECONDS,
+    BRIDGE_REQUEST_TIMEOUT_SECONDS,
+    BRIDGE_STATE_PATH,
+)
 
 BRIDGE_ERROR_CODE = -32000
 BRIDGE_ERROR_PREFIX = "Octowright bridge error:"
@@ -133,3 +143,97 @@ class BridgeSupervisor:
         self.last_error = reason
         for item in pending:
             await self.local_write.send(bridge_error(item.request_id, reason))
+
+
+def resolve_leader_url(fallback_url: str) -> str:
+    info = singleton.read_lock()
+    if info is not None and not singleton.is_stale(info):
+        return info.mcp_url
+    return fallback_url
+
+
+def reconnect_delay(attempt: int, *, max_delay: float) -> float:
+    if attempt >= 4:
+        return max_delay
+    base = 0.25 * (2**attempt)
+    return min(base, max_delay)
+
+
+async def run_supervised_proxy(
+    *,
+    leader_mcp_url: str,
+    health_url: str | None = None,
+    heartbeat_interval: float = 10.0,
+    heartbeat_max_failures: int = 3,
+) -> None:
+    del health_url, heartbeat_interval, heartbeat_max_failures
+    async with stdio_server() as (local_read, local_write):
+        supervisor_obj = BridgeSupervisor(
+            local_read=local_read,
+            local_write=local_write,
+            request_timeout_seconds=BRIDGE_REQUEST_TIMEOUT_SECONDS,
+        )
+        async with anyio.create_task_group() as local_tg:
+            remote_write_box: dict[str, Any] = {}
+
+            async def _local_forwarder() -> None:
+                async for message in local_read:
+                    remote_write = remote_write_box.get("remote_write")
+                    request_id = message_request_id(message)
+                    if remote_write is None:
+                        if is_request(message) and request_id is not None:
+                            await local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
+                        continue
+                    supervisor_obj.track_local_message(message)
+                    await remote_write.send(message)
+                local_tg.cancel_scope.cancel()
+
+            async def _remote_supervisor() -> None:
+                attempt = 0
+                while True:
+                    remote_url = resolve_leader_url(leader_mcp_url)
+                    try:
+                        with anyio.fail_after(BRIDGE_CONNECT_TIMEOUT_SECONDS):
+                            async with streamablehttp_client(remote_url) as (remote_read, remote_write, get_sid):
+                                remote_write_box["remote_write"] = remote_write
+                                try:
+                                    supervisor_obj.remote_session_id = get_sid()
+                                except Exception:
+                                    supervisor_obj.remote_session_id = None
+                                supervisor_obj.reconnect_attempts = attempt
+                                bridge_state.record_snapshot(
+                                    path=BRIDGE_STATE_PATH,
+                                    follower_pid=__import__("os").getpid(),
+                                    remote_url=remote_url,
+                                    remote_session_id=supervisor_obj.remote_session_id,
+                                    last_error=supervisor_obj.last_error,
+                                    in_flight=supervisor_obj.in_flight_count,
+                                    reconnect_attempts=supervisor_obj.reconnect_attempts,
+                                    request_timeouts=supervisor_obj.request_timeouts,
+                                )
+                                await supervisor_obj.replay_initialize(remote_write)
+                                attempt = 0
+                                async for message in remote_read:
+                                    if isinstance(message, Exception):
+                                        raise message
+                                    await supervisor_obj.forward_remote_message(message)
+                    except Exception as exc:
+                        remote_write_box.pop("remote_write", None)
+                        await supervisor_obj.fail_all_in_flight(f"remote leader session reset: {exc!r}")
+                        supervisor_obj.last_error = repr(exc)
+                        bridge_state.record_snapshot(
+                            path=BRIDGE_STATE_PATH,
+                            follower_pid=__import__("os").getpid(),
+                            remote_url=remote_url,
+                            remote_session_id=supervisor_obj.remote_session_id,
+                            last_error=supervisor_obj.last_error,
+                            in_flight=supervisor_obj.in_flight_count,
+                            reconnect_attempts=attempt,
+                            request_timeouts=supervisor_obj.request_timeouts,
+                        )
+                        await anyio.sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
+                        attempt += 1
+
+            local_tg.start_soon(_local_forwarder)
+            local_tg.start_soon(_remote_supervisor)
+            local_tg.start_soon(supervisor_obj.watch_deadlines)
