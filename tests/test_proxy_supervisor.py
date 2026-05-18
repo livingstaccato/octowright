@@ -178,3 +178,14 @@ async def test_remote_failure_fails_in_flight() -> None:
         assert root.id == "lost-id"
         assert "remote leader stream closed" in root.error.message
         tg.cancel_scope.cancel()
+
+
+def test_backoff_sequence_caps_at_max() -> None:
+    assert [supervisor.reconnect_delay(i, max_delay=5.0) for i in range(6)] == [
+        0.25,
+        0.5,
+        1.0,
+        2.0,
+        5.0,
+        5.0,
+    ]
