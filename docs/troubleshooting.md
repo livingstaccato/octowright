@@ -146,3 +146,35 @@ If a process other than Octowright owns the port, either kill it or set
 The profile mapping lives at `src/octowright/server/profiles.py`. See the
 [Capability profiles](getting-started.md#slimming-the-llm-tool-surface)
 section in the getting-started guide for worked examples.
+
+## MCP transport closed or timed out
+
+**Symptoms**
+
+- An MCP client reports `Transport closed`.
+- A browser launch or status call times out even though the dashboard may still
+  answer.
+
+**Diagnosis**
+
+1. Check daemon health directly:
+
+   ```bash
+   curl http://127.0.0.1:8765/api/health
+   ```
+
+2. If health is good, retry one Octowright MCP call. The follower bridge keeps
+   the local stdio process alive, fails broken in-flight calls with explicit
+   JSON-RPC bridge errors, and reconnects later calls to the current leader.
+
+3. If the same client handle still fails, run the fresh-client smoke proof:
+
+   ```bash
+   uv run --active python scripts/bridge_reconnect_smoke.py
+   ```
+
+   If this succeeds, the daemon and a new MCP client are healthy; the remaining
+   failure is isolated to the already-attached client handle.
+
+4. Run `octowright restart` only if daemon health fails or you intentionally
+   want to discard the current daemon and orphan browser state.
