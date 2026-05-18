@@ -13,6 +13,7 @@ command rather than running real daemons.
 from __future__ import annotations
 
 import signal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -156,6 +157,27 @@ def test_stop_escalates_to_sigkill_on_holdouts(
     assert "escalating to SIGKILL" in result.output
 
 
+def test_process_fallback_skips_bare_follower_transports(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restart must not kill bare ``serve`` followers owned by MCP clients."""
+
+    def fake_run(*_a: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            stdout="\n".join(
+                [
+                    "101 /Users/tim/.venv/bin/python /bin/octowright serve",
+                    "202 /Users/tim/.venv/bin/python /bin/octowright serve --daemon-mode",
+                    "303 uv run octowright serve --http-host 127.0.0.1 --http-port 8765",
+                    "404 /Users/tim/.venv/bin/python /bin/octowright restart",
+                    "505 /Users/tim/.venv/bin/python /bin/octowright serve --profile core",
+                ]
+            )
+        )
+
+    monkeypatch.setattr(_restart_mod.subprocess, "run", fake_run)
+
+    assert _restart_mod._leader_pids_from_pgrep() == [202, 303]
+
+
 @pytest.mark.usefixtures("stub_no_leader")
 def test_spawn_passes_http_host_and_port_through(
     runner: CliRunner,
@@ -178,7 +200,8 @@ def test_spawn_passes_http_host_and_port_through(
         "reap_orphan_browsers",
         lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
     )
-    monkeypatch.setattr(_restart_mod, "_wait_for_health", lambda *_a, **_kw: True)
+    monkeypatch.setattr(_restart_mod, "_wait_for_health", lambda *_a, **_kw: "http://127.0.0.1:9876/")
+    monkeypatch.setattr(_restart_mod, "_wait_for_port_free", lambda *_a, **_kw: True)
 
     result = runner.invoke(
         cli,
@@ -207,12 +230,64 @@ def test_health_probe_failure_returns_nonzero(
         lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
     )
     monkeypatch.setattr(_restart_mod, "_spawn_daemon", lambda *_a, **_kw: 9999)
-    monkeypatch.setattr(_restart_mod, "_wait_for_health", lambda *_a, **_kw: False)
+    monkeypatch.setattr(_restart_mod, "_wait_for_health", lambda *_a, **_kw: None)
+    monkeypatch.setattr(_restart_mod, "_wait_for_port_free", lambda *_a, **_kw: True)
 
     result = runner.invoke(cli, ["restart", "--timeout", "1"])
 
     assert result.exit_code == 1
     assert "did not become healthy" in result.output
+
+
+@pytest.mark.usefixtures("stub_no_leader")
+def test_restart_refuses_fallback_port_when_requested_port_busy(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _restart_mod,
+        "reap_orphan_browsers",
+        lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
+    )
+    monkeypatch.setattr(_restart_mod, "_wait_for_port_free", lambda *_a, **_kw: False)
+    monkeypatch.setattr(
+        _restart_mod,
+        "_spawn_daemon",
+        lambda *_a, **_kw: pytest.fail("must not spawn on fallback port when requested port is busy"),
+    )
+
+    result = runner.invoke(cli, ["restart", "--timeout", "1"])
+
+    assert result.exit_code == 1
+    assert "not starting a daemon on a fallback port" in result.output
+
+
+def test_wait_for_health_follows_lockfile_auto_bumped_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the daemon auto-bumps its port, restart must probe the lockfile URL."""
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        _restart_mod.singleton,
+        "read_lock",
+        lambda *_a, **_kw: SimpleNamespace(pid=123, http_host="127.0.0.1", http_port=8766),
+    )
+    monkeypatch.setattr(_restart_mod.singleton, "pid_is_alive", lambda _pid: True)
+
+    class _Response:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    def fake_get(url: str, **_kw: Any) -> _Response:
+        calls.append(url)
+        return _Response(200 if url == "http://127.0.0.1:8766/api/health" else 503)
+
+    monkeypatch.setattr("httpx.get", fake_get)
+
+    assert _restart_mod._wait_for_health("127.0.0.1", 8765, timeout=1) == "http://127.0.0.1:8766/"
+    assert calls[:2] == [
+        "http://127.0.0.1:8765/api/health",
+        "http://127.0.0.1:8766/api/health",
+    ]
 
 
 def test_resolve_octowright_entry_prefers_venv_neighbour(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
