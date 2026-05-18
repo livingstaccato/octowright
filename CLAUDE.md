@@ -75,7 +75,9 @@ CLI (Click)
 
 **Singleton leader-election**: first `octowright serve` becomes leader (MCP stdio + HTTP + HTTP-MCP proxy at `/mcp`). Additional instances become followers that bridge stdin/stdout to leader's HTTP endpoint. Override with `--no-singleton`.
 
-**Follower watchdog**: `proxy_bridge.run_proxy(..., health_url=...)` polls `GET /api/health` every 10s (timeout 5s) and tears the bridge down after 3 consecutive failures, so a dead leader can't hang followers indefinitely.
+**Follower bridge reliability**: `proxy_bridge.run_proxy(..., health_url=...)` delegates to a supervised bridge. The local stdio follower stays alive while the remote HTTP-MCP leader session is disposable. If the leader stream closes, hangs, or times out, in-flight calls get explicit JSON-RPC bridge errors and later calls reconnect to the current lockfile leader URL. Bridge health snapshots are written to `OCTOWRIGHT_BRIDGE_STATE` and included in `octowright_status()["bridge"]`.
+
+**Transport recovery**: If an Octowright MCP call returns `Transport closed` or times out, first check daemon health with `curl http://127.0.0.1:8765/api/health`. If health is good, retry one Octowright MCP call; the follower bridge should fail fast and reconnect for the next call. If the same client handle still fails, run `uv run --active python scripts/bridge_reconnect_smoke.py` to distinguish a broken client handle from a broken daemon. Do not run `octowright restart` unless daemon health fails or the user explicitly asks for a restart.
 
 ### Key Files
 
