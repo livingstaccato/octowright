@@ -98,6 +98,14 @@ DEFAULT_ACTION_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_ACTION_TIMEOUT_MS", "
 # timeout.
 BROWSER_LAUNCH_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BROWSER_LAUNCH_TIMEOUT_SECONDS", "90"))
 
+# Follower bridge protection. These defaults are intentionally below common MCP
+# client tool-call deadlines so bridge failures return explicit JSON-RPC errors
+# instead of leaving the host to time out at ~120s.
+BRIDGE_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_REQUEST_TIMEOUT_SECONDS", "20"))
+BRIDGE_CONNECT_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_CONNECT_TIMEOUT_SECONDS", "10"))
+BRIDGE_RECONNECT_MAX_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_RECONNECT_MAX_SECONDS", "5"))
+BRIDGE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_BRIDGE_STATE", str(_STATE_DIR / "bridge-state.json")))
+
 # Per-action delay applied to macros, useful for visually following execution.
 # Sleep happens AFTER pushing status to the pill and BEFORE dispatching the
 # action, so the pill reflects the upcoming action while the user gets time
