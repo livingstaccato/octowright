@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -118,6 +119,24 @@ async def test_browser_quick_launch_with_resolver_match(_patch_state: dict[str, 
 async def test_browser_quick_launch_missing_url(_patch_state: dict[str, MagicMock]) -> None:
     with pytest.raises(ValueError, match="url is required"):
         await _lifecycle.browser_quick_launch(url="")
+
+
+@pytest.mark.anyio
+async def test_browser_launch_returns_before_mcp_timeout(
+    _patch_state: dict[str, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _patch_state["pool"]
+
+    async def _hung_launch(**_kwargs: object) -> dict[str, object]:
+        await asyncio.sleep(10)
+        return {"instance_id": "late"}
+
+    pool.launch = AsyncMock(side_effect=_hung_launch)
+    monkeypatch.setattr(_lifecycle, "BROWSER_LAUNCH_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(TimeoutError, match=r"browser launch exceeded 0\.0s"):
+        await _lifecycle.browser_launch(url="https://x.com", ephemeral=True)
 
 
 @pytest.mark.anyio

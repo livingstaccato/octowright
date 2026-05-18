@@ -7,13 +7,28 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from octowright import _format as fmt
 from octowright import resolve as resolve_mod
+from octowright.defaults import BROWSER_LAUNCH_TIMEOUT_SECONDS
 from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import mcp, pool
 from octowright.server.browser.inspect import browser_brief
+
+
+async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
+    timeout = BROWSER_LAUNCH_TIMEOUT_SECONDS
+    try:
+        return await asyncio.wait_for(pool.launch(**kwargs), timeout=timeout)
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"browser launch exceeded {timeout:.1f}s before a session was ready; "
+            "Octowright cancelled the launch so the MCP client stays connected. "
+            "Retry with ephemeral=True or a different profile, or raise "
+            "OCTOWRIGHT_BROWSER_LAUNCH_TIMEOUT_SECONDS if the site/browser is expected to start slowly."
+        ) from exc
 
 
 @mcp.tool(
@@ -81,7 +96,7 @@ async def browser_launch(
     # Explicit dict beats `locals()` spray: a future signature change here that
     # adds a kwarg pool.launch doesn't know about would raise TypeError at call
     # time instead of being statically auditable.
-    result = await pool.launch(
+    result = await _pool_launch_with_deadline(
         kind=kind,
         url=url,
         headed=headed,
@@ -172,7 +187,7 @@ async def browser_quick_launch(
     launch_options = {k: v for k, v in locals().items() if k not in ("url", "profile", "kind", "options")}
 
     if profile:
-        res = await pool.launch(url=url, profile=profile, kind=kind, **launch_options)
+        res = await _pool_launch_with_deadline(url=url, profile=profile, kind=kind, **launch_options)
         publish_dashboard_invalidation_nowait("sessions")
         return {**res, "profile_used": profile}
 
@@ -193,7 +208,7 @@ async def browser_quick_launch(
             profile_to_use = top["persona"]
             kind = top["kind"]
 
-    res = await pool.launch(
+    res = await _pool_launch_with_deadline(
         url=url,
         profile=profile_to_use,
         kind=kind,

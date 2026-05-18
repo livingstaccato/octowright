@@ -92,6 +92,11 @@ SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
 DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))
 DEFAULT_ACTION_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_ACTION_TIMEOUT_MS", "15000"))
+# Total wall-clock budget for a browser launch MCP tool call. This must stay
+# below common MCP client call deadlines (120s) so a wedged Playwright launch
+# returns a normal tool error instead of making the client report a transport
+# timeout.
+BROWSER_LAUNCH_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BROWSER_LAUNCH_TIMEOUT_SECONDS", "90"))
 
 # Per-action delay applied to macros, useful for visually following execution.
 # Sleep happens AFTER pushing status to the pill and BEFORE dispatching the
