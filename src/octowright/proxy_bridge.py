@@ -25,8 +25,8 @@ from typing import Any
 
 import anyio
 import httpx
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.server.stdio import stdio_server
+
+from octowright.proxy_supervisor import run_supervised_proxy
 
 
 async def run_proxy(
@@ -46,21 +46,12 @@ async def run_proxy(
     ``cli.serve`` is expected to catch and fall back to leader mode if the
     leader has died.
     """
-    async with (
-        streamablehttp_client(leader_mcp_url) as (remote_read, remote_write, _get_sid),
-        stdio_server() as (local_read, local_write),
-        anyio.create_task_group() as tg,
-    ):
-        tg.start_soon(_pump, local_read, remote_write)
-        tg.start_soon(_pump, remote_read, local_write)
-        if health_url is not None:
-            tg.start_soon(
-                _heartbeat,
-                tg.cancel_scope,
-                health_url,
-                heartbeat_interval,
-                heartbeat_max_failures,
-            )
+    await run_supervised_proxy(
+        leader_mcp_url=leader_mcp_url,
+        health_url=health_url,
+        heartbeat_interval=heartbeat_interval,
+        heartbeat_max_failures=heartbeat_max_failures,
+    )
 
 
 async def _pump(source: Any, sink: Any) -> None:
