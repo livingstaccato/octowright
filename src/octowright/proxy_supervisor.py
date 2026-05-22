@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import anyio
+import httpx
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
@@ -103,6 +104,20 @@ class BridgeSupervisor:
             self.track_local_message(message)
             await remote_write.send(message)
 
+    async def forward_one_local_message(self, message: SessionMessage, remote_write_box: dict[str, Any]) -> None:
+        remote_write = remote_write_box.get("remote_write")
+        request_id = message_request_id(message)
+        if remote_write is None:
+            if is_request(message) and request_id is not None:
+                await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
+            return
+        self.track_local_message(message)
+        try:
+            await remote_write.send(message)
+        except Exception:
+            remote_write_box.pop("remote_write", None)
+            await self.fail_all_in_flight("leader session unavailable; retry")
+
     def track_local_message(self, message: SessionMessage) -> None:
         request_id = message_request_id(message)
         if is_request(message) and message_method(message) == "initialize":
@@ -159,6 +174,30 @@ def reconnect_delay(attempt: int, *, max_delay: float) -> float:
     return min(base, max_delay)
 
 
+async def monitor_leader_health(
+    cancel_scope: anyio.CancelScope,
+    health_url: str,
+    interval: float,
+    max_failures: int,
+) -> None:
+    failures = 0
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        while True:
+            await anyio.sleep(interval)
+            try:
+                response = await client.get(health_url)
+                ok = response.status_code == 200
+            except (httpx.HTTPError, OSError):
+                ok = False
+            if ok:
+                failures = 0
+                continue
+            failures += 1
+            if failures >= max_failures:
+                cancel_scope.cancel()
+                return
+
+
 async def run_supervised_proxy(
     *,
     leader_mcp_url: str,
@@ -166,7 +205,6 @@ async def run_supervised_proxy(
     heartbeat_interval: float = 10.0,
     heartbeat_max_failures: int = 3,
 ) -> None:
-    del health_url, heartbeat_interval, heartbeat_max_failures
     async with stdio_server() as (local_read, local_write):
         supervisor_obj = BridgeSupervisor(
             local_read=local_read,
@@ -178,14 +216,7 @@ async def run_supervised_proxy(
 
             async def _local_forwarder() -> None:
                 async for message in local_read:
-                    remote_write = remote_write_box.get("remote_write")
-                    request_id = message_request_id(message)
-                    if remote_write is None:
-                        if is_request(message) and request_id is not None:
-                            await local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
-                        continue
-                    supervisor_obj.track_local_message(message)
-                    await remote_write.send(message)
+                    await supervisor_obj.forward_one_local_message(message, remote_write_box)
                 local_tg.cancel_scope.cancel()
 
             async def _remote_supervisor() -> None:
@@ -213,10 +244,23 @@ async def run_supervised_proxy(
                                 )
                                 await supervisor_obj.replay_initialize(remote_write)
                                 attempt = 0
-                                async for message in remote_read:
-                                    if isinstance(message, Exception):
-                                        raise message
-                                    await supervisor_obj.forward_remote_message(message)
+                                async with anyio.create_task_group() as remote_tg:
+
+                                    async def _remote_reader() -> None:
+                                        async for message in remote_read:
+                                            if isinstance(message, Exception):
+                                                raise message
+                                            await supervisor_obj.forward_remote_message(message)
+
+                                    remote_tg.start_soon(_remote_reader)
+                                    if health_url is not None:
+                                        remote_tg.start_soon(
+                                            monitor_leader_health,
+                                            remote_tg.cancel_scope,
+                                            health_url,
+                                            heartbeat_interval,
+                                            heartbeat_max_failures,
+                                        )
                     except Exception as exc:
                         remote_write_box.pop("remote_write", None)
                         await supervisor_obj.fail_all_in_flight(f"remote leader session reset: {exc!r}")
