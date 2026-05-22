@@ -35,10 +35,14 @@ from pathlib import Path
 from typing import Any
 
 # Anything case-insensitive-matching one of these in the server *name* counts.
+# Word boundaries (\b) guard against false positives on unrelated server names.
+# The negative lookahead on `chromium` excludes `chromium-extension*` style
+# names (helpers that ship Chrome extensions, not headed-browser drivers) —
+# `chromium-mcp` / `chromium-driver` still match.
 COMPETING_NAME_PATTERNS: list[str] = [
-    r"playwright",
-    r"chromium",
-    r"browser-use",
+    r"\bplaywright\b",
+    r"\bchromium\b(?!-extension)",
+    r"\bbrowser-use\b",
 ]
 
 # Anything case-insensitive-matching one of these in the joined command/args

@@ -34,17 +34,31 @@ def patched_npx(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return captured
 
 
-def test_open_trace_with_explicit_path_invokes_npx(patched_npx: dict[str, Any], tmp_path: Path) -> None:
+def _confine_recordings_to(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    """Point defaults.RECORDINGS_DIR at the test's tmp_path so browser_open_trace's
+    allowlist check accepts a trace file written under it."""
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "RECORDINGS_DIR", root)
+
+
+def test_open_trace_with_explicit_path_invokes_npx(
+    patched_npx: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _confine_recordings_to(monkeypatch, tmp_path)
     trace = tmp_path / "trace.zip"
     trace.write_bytes(b"\x00")
 
     result = _server.browser_open_trace(path=str(trace))
 
-    assert result["path"] == str(trace)
+    # `.resolve()` may rewrite /var → /private/var on macOS; compare against the
+    # resolved form so the test stays portable.
+    resolved = str(trace.resolve())
+    assert result["path"] == resolved
     assert result["pid"] == 4242
     assert patched_npx["calls"] == [
         {
-            "args": ["npx", "playwright", "show-trace", str(trace)],
+            "args": ["npx", "playwright", "show-trace", resolved],
             "kwargs": {
                 "stdout": -3,  # subprocess.DEVNULL
                 "stderr": -3,
@@ -54,8 +68,11 @@ def test_open_trace_with_explicit_path_invokes_npx(patched_npx: dict[str, Any], 
     ]
 
 
-def test_open_trace_missing_file_raises_with_hint(patched_npx: dict[str, Any], tmp_path: Path) -> None:
+def test_open_trace_missing_file_raises_with_hint(
+    patched_npx: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """File doesn't exist on disk — better to fail loud than to spawn the viewer on nothing."""
+    _confine_recordings_to(monkeypatch, tmp_path)
     bogus = tmp_path / "never-recorded.zip"
     with pytest.raises(FileNotFoundError, match="no trace file at"):
         _server.browser_open_trace(path=str(bogus))
@@ -69,6 +86,7 @@ def test_open_trace_without_instance_or_path_is_a_value_error(patched_npx: dict[
 
 def test_open_trace_when_npx_missing_raises_with_hint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """No npx on PATH — error message must point the user at install / fallback command."""
+    _confine_recordings_to(monkeypatch, tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: None)
     trace = tmp_path / "t.zip"
     trace.write_bytes(b"\x00")

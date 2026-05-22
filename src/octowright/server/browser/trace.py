@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from octowright import defaults
 from octowright.server._state import log, mcp, pool
 
 
@@ -41,6 +42,23 @@ def browser_open_trace(
     else:
         raise ValueError("supply either instance_id (with trace=True at launch) or an explicit path")
 
+    # Normalize the LLM-supplied path and confine subprocess invocation to the
+    # recordings root. `.resolve()` collapses symlinks so a symlink under
+    # RECORDINGS_DIR pointing elsewhere (e.g. /etc/passwd) is rejected here
+    # before we spawn `npx playwright show-trace` on it.
+    try:
+        target = target.expanduser().resolve()
+    except OSError as exc:
+        raise ValueError(f"trace path {str(target)!r} could not be resolved: {exc}") from exc
+    recordings_root = defaults.RECORDINGS_DIR.expanduser().resolve()
+    try:
+        target.relative_to(recordings_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"trace path {str(target)!r} is outside the recordings root {str(recordings_root)!r}; "
+            f"only traces under OCTOWRIGHT_RECORDINGS may be opened"
+        ) from exc
+
     if not target.exists():
         raise FileNotFoundError(f"no trace file at {target}; close the instance first to flush, or check the path")
 
@@ -50,7 +68,8 @@ def browser_open_trace(
             "(or invoke the viewer manually: `python -m playwright show-trace <path>`)"
         )
 
-    proc = subprocess.Popen(
+    # Fixed argv; trace path is recordings-root confined above.
+    proc = subprocess.Popen(  # nosec B603 B607
         ["npx", "playwright", "show-trace", str(target)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

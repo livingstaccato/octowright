@@ -91,7 +91,8 @@ def _leader_pids_from_pgrep() -> list[int]:
     lines and avoid killing bare follower transports attached to MCP clients.
     """
     try:
-        out = subprocess.run(
+        # Fixed `ps` argv, PATH-resolved system binary, no shell.
+        out = subprocess.run(  # nosec B603 B607
             ["ps", "-axo", "pid=,command="],
             capture_output=True,
             text=True,
@@ -185,7 +186,10 @@ def _stop_leader(timeout: float) -> tuple[int, int]:
         pids.add(locked)
     pids.update(_leader_pids_from_pgrep())
     if not pids:
-        click.echo("no running octowright daemon found")
+        # Route to stderr so an agent driving restart can distinguish
+        # "nothing was running" from "stopped N processes" — the success
+        # message that follows on stdout reflects the actual end-state.
+        click.echo("no running octowright daemon found", err=True)
         return 0, 0
 
     click.echo(f"stopping {len(pids)} octowright process(es): {sorted(pids)}")
@@ -221,7 +225,8 @@ def _spawn_daemon(http_host: str, http_port: int) -> int:
     if it was busy, leaving the probe target out of sync.
     """
     octowright = _resolve_octowright_entry()
-    proc = subprocess.Popen(
+    # Resolved entrypoint path + literal flags, no shell.
+    proc = subprocess.Popen(  # nosec B603
         [octowright, "serve", "--http-host", http_host, "--http-port", str(http_port)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -329,9 +334,16 @@ def restart(
         )
         ctx.exit(1)
 
-    _spawn_daemon(http_host, http_port)
+    launcher_pid = _spawn_daemon(http_host, http_port)
     healthy_url = _wait_for_health(http_host, http_port, timeout)
     if healthy_url is not None:
+        if stopped == 0 and killed == 0:
+            # Nothing was running before — be explicit so an agent invoking
+            # restart as a recovery action can see that no prior daemon was
+            # found and a fresh one was started.
+            click.echo(f"no prior daemon; started new one at PID {launcher_pid}")
+        else:
+            click.echo(f"restarted daemon (stopped={stopped} sigkilled={killed}; new launcher PID {launcher_pid})")
         click.echo(f"daemon healthy at {healthy_url}")
     else:
         click.echo(

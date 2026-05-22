@@ -20,6 +20,7 @@ from octowright.browser_pool.launch_helpers import (
     _build_har_kwargs,
     _build_video_kwargs,
     _build_viewport_kwargs,
+    _next_har_path,
     _open_browser_context,
     _record_launch_event,
     _safe_manifest_record,
@@ -57,8 +58,10 @@ class BrowserPool:
         # Monotonic counter for window-tile slot assignment. Reading
         # len(_sessions) at launch time would race when N launches run in
         # parallel — they'd all see the same count and grab the same slot.
-        # The counter is incremented synchronously at the start of launch().
+        # _tile_lock guards the read+increment so concurrent spawn_roster
+        # coroutines don't both observe the same slot before either bumps it.
         self._tile_counter: int = 0
+        self._tile_lock = asyncio.Lock()
         # session=True profile dirs: tmpdirs that live for the daemon's
         # lifetime. Keyed by (session_key, kind) so the same label across
         # engines gets independent jars (matching real persistent semantics).
@@ -129,7 +132,7 @@ class BrowserPool:
             har_content=har_content,
             log_path=log_path,
         )
-        launch_kwargs = self._build_launch_kwargs(tile=tile, kind=kind, headless=headless)
+        launch_kwargs = await self._build_launch_kwargs(tile=tile, kind=kind, headless=headless)
         user_data_dir: str | None = None
 
         try:
@@ -359,6 +362,8 @@ class BrowserPool:
         target_url = getattr(source.page, "url", None) or source.url
         session_scoped = source.profile is None and source.user_data_dir is not None
         stateless = source.profile is None and source.user_data_dir is None
+        # Don't overwrite the prior HAR — relaunch gets a sibling path.
+        next_har = _next_har_path(source.har_path) if source.har_path else None
         launch_kwargs = {
             "kind": source.kind,
             "url": target_url,
@@ -368,7 +373,7 @@ class BrowserPool:
             "stabilize": source.stabilize,
             "trace": source.trace,
             "har": bool(source.har_path),
-            "har_path": str(source.har_path) if source.har_path else None,
+            "har_path": str(next_har) if next_har else None,
             "badge": True,
             "ephemeral": stateless,
             "session": session_scoped,
@@ -428,14 +433,16 @@ class BrowserPool:
     async def shutdown(self) -> None:
         await shutdown_pool(self)
 
-    def _build_launch_kwargs(self, *, tile: bool, kind: str, headless: bool) -> dict[str, Any]:
-        """Chromium-only window tiling. Increments _tile_counter under the
-        synchronous part of launch() so parallel launches don't share slots.
-        No-op for firefox/webkit (no equivalent CLI hook) and headless runs."""
+    async def _build_launch_kwargs(self, *, tile: bool, kind: str, headless: bool) -> dict[str, Any]:
+        """Chromium-only window tiling. Holds ``_tile_lock`` only for the
+        read+increment of ``_tile_counter`` so parallel spawn_roster launches
+        don't share the same slot. No-op for firefox/webkit (no equivalent CLI
+        hook) and headless runs."""
         out: dict[str, Any] = {}
         if tile and kind == "chromium" and not headless:
-            tile_index = self._tile_counter
-            self._tile_counter += 1
+            async with self._tile_lock:
+                tile_index = self._tile_counter
+                self._tile_counter += 1
             out["args"] = _tile_args_for_chromium(tile_index)
         return out
 
