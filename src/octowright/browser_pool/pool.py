@@ -20,10 +20,10 @@ from octowright.browser_pool.launch_helpers import (
     _build_har_kwargs,
     _build_video_kwargs,
     _build_viewport_kwargs,
-    _next_har_path,
     _open_browser_context,
     _record_launch_event,
     _safe_manifest_record,
+    next_har_path,
 )
 from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
 from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
@@ -177,6 +177,11 @@ class BrowserPool:
                 har_mode=har_mode,
                 har_url_filter=har_url_filter,
                 har_content=har_content,
+                badge=badge,
+                badge_position=badge_position,
+                tile=tile,
+                ephemeral=launch_options.ephemeral,
+                session=session,
             )
 
             # NOTE: this local was named ``session`` for years, but ``session`` is
@@ -363,7 +368,7 @@ class BrowserPool:
         session_scoped = source.profile is None and source.user_data_dir is not None
         stateless = source.profile is None and source.user_data_dir is None
         # Don't overwrite the prior HAR — relaunch gets a sibling path.
-        next_har = _next_har_path(source.har_path) if source.har_path else None
+        next_har = next_har_path(source.har_path) if source.har_path else None
         launch_kwargs = {
             "kind": source.kind,
             "url": target_url,

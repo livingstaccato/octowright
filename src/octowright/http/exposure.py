@@ -67,9 +67,14 @@ def sensitive_allowed_for_connection(connection: HTTPConnection) -> bool:
     return _sensitive_allowed_for_app(connection.app)
 
 
-def _cross_origin_blocked(request: Request) -> bool:
-    """Block browser-driven unsafe cross-origin requests to localhost dashboard APIs."""
-    if request.method in {"GET", "HEAD", "OPTIONS"}:
+def _cross_origin_blocked(request: Request, *, side_effect_get: bool) -> bool:
+    """Block browser-driven unsafe cross-origin requests to localhost dashboard
+    APIs. ``side_effect_get`` opts a GET/HEAD route into the same protection
+    as POST/PUT/DELETE — use it for endpoints whose handler triggers work on
+    the live browser (live screenshot, live markdown capture, etc.)."""
+    if request.method in {"GET", "HEAD", "OPTIONS"} and not side_effect_get:
+        return False
+    if request.method == "OPTIONS":
         return False
     origin = request.headers.get("origin")
     if origin:
@@ -82,12 +87,19 @@ def _cross_origin_blocked(request: Request) -> bool:
 
 def guard_sensitive_http(
     handler: Callable[[Request], Awaitable[ResponseT]],
+    *,
+    side_effect_get: bool = False,
 ) -> Callable[[Request], Awaitable[Response]]:
+    """Wrap a handler with the bind-host + cross-origin guard. Pass
+    ``side_effect_get=True`` at the route definition for GET endpoints that
+    drive the live browser; this keeps the policy decision next to the route
+    rather than in a separate path-matcher that can drift."""
+
     @functools.wraps(handler)
     async def guarded(request: Request) -> Response:
         if not sensitive_allowed_for_request(request):
             return JSONResponse(_REMOTE_DISABLED_BODY, status_code=403)
-        if _cross_origin_blocked(request):
+        if _cross_origin_blocked(request, side_effect_get=side_effect_get):
             return JSONResponse({"error": "cross-origin dashboard request is blocked"}, status_code=403)
         return await handler(request)
 

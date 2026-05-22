@@ -18,6 +18,7 @@ from starlette.routing import Route
 
 import octowright.http.state as state
 import octowright.server._state as _state
+from octowright.browser_pool.launch_helpers import next_har_path
 from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
 from octowright.http.artifacts import _build_cache_components
 from octowright.http.dashboard_events import publish_dashboard_invalidation
@@ -387,6 +388,44 @@ async def recording_delete(request: Request) -> JSONResponse:
     return JSONResponse({"deleted": True, "session_id": sid, "files_removed": len(deleted)})
 
 
+def _relaunch_kwargs_from_record(launch: dict[str, Any]) -> dict[str, Any]:
+    """Translate a JSONL ``launch`` record into ``pool.launch`` kwargs.
+
+    Rotates the HAR target so the relaunch doesn't clobber the prior recording
+    (or reuses the same path if it has since been deleted). Only string
+    ``har_path`` values are honoured; ill-typed values fall through to
+    autogeneration. ``ephemeral`` / ``session`` / ``tile`` may be missing from
+    pre-this-schema recordings — defaults match the original launch defaults.
+    """
+    viewport = launch.get("viewport") if isinstance(launch.get("viewport"), dict) else None
+    prior_har_path = launch.get("har_path")
+    rotated_har_path: str | None = None
+    if isinstance(prior_har_path, str) and prior_har_path:
+        rotated_har_path = str(next_har_path(Path(prior_har_path)))
+    return {
+        "kind": launch["kind"],
+        "url": launch.get("url") or DEFAULT_URL,
+        "label": launch.get("label"),
+        "profile": launch.get("profile"),
+        "viewport_w": viewport.get("w") if viewport else None,
+        "viewport_h": viewport.get("h") if viewport else None,
+        "headed": launch.get("headed", True),
+        "stabilize": launch.get("stabilize", False),
+        "record_video": bool(launch.get("video_dir")),
+        "trace": launch.get("trace", False),
+        "har": bool(rotated_har_path) or bool(launch.get("har")),
+        "har_path": rotated_har_path,
+        "har_mode": launch.get("har_mode", "minimal"),
+        "har_url_filter": launch.get("har_url_filter"),
+        "har_content": launch.get("har_content"),
+        "badge": launch.get("badge", True),
+        "badge_position": launch.get("badge_position", "bottom-right"),
+        "tile": launch.get("tile", False),
+        "ephemeral": launch.get("ephemeral", False),
+        "session": launch.get("session", False),
+    }
+
+
 async def session_relaunch(request: Request) -> JSONResponse:
     """POST /api/sessions/{id}/relaunch — start a fresh session with the same launch params.
 
@@ -418,29 +457,7 @@ async def session_relaunch(request: Request) -> JSONResponse:
             status_code=422,
         )
 
-    viewport = launch.get("viewport") if isinstance(launch.get("viewport"), dict) else None
-    launch_kwargs: dict[str, Any] = {
-        "kind": launch["kind"],
-        "url": launch.get("url") or DEFAULT_URL,
-        "label": launch.get("label"),
-        "profile": launch.get("profile"),
-        "viewport_w": viewport.get("w") if viewport else None,
-        "viewport_h": viewport.get("h") if viewport else None,
-        "headed": launch.get("headed", True),
-        "stabilize": launch.get("stabilize", False),
-        "record_video": bool(launch.get("video_dir")),
-        "trace": launch.get("trace", False),
-        "har": bool(launch.get("har_path") or launch.get("har")),
-        "har_path": launch.get("har_path"),
-        "har_mode": launch.get("har_mode", "minimal"),
-        "har_url_filter": launch.get("har_url_filter"),
-        "har_content": launch.get("har_content"),
-        "badge": launch.get("badge", True),
-        "badge_position": launch.get("badge_position", "bottom-right"),
-        "tile": launch.get("tile", False),
-        "ephemeral": launch.get("ephemeral", False),
-        "session": launch.get("session", False),
-    }
+    launch_kwargs = _relaunch_kwargs_from_record(launch)
 
     try:
         result = await pool.launch(**launch_kwargs)
