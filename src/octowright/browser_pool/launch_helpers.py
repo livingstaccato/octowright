@@ -64,19 +64,25 @@ def _build_video_kwargs(
     return out, video_dir
 
 
-def _next_har_path(p: Path) -> Path:
-    """Mint a fresh HAR sibling so a relaunch/handoff doesn't clobber the
-    previous recording. Suffixes the stem with ``.{n}`` and bumps ``n`` until
-    we find a non-existent path (e.g. ``foo.har`` -> ``foo.1.har``)."""
+_MAX_HAR_ROTATIONS = 10_000
+
+
+def next_har_path(p: Path) -> Path:
+    """Pick a HAR path that won't clobber an existing recording. Returns ``p``
+    itself if it doesn't exist; otherwise suffixes the stem with ``.{n}`` and
+    bumps ``n`` until a free sibling is found (e.g. ``foo.har`` -> ``foo.1.har``).
+    Raises ``RuntimeError`` after ``_MAX_HAR_ROTATIONS`` siblings to avoid an
+    unbounded ``stat()`` loop on a pathologically full directory."""
+    if not p.exists():
+        return p
     parent = p.parent
     stem = p.stem
     suffix = p.suffix
-    n = 1
-    while True:
+    for n in range(1, _MAX_HAR_ROTATIONS + 1):
         candidate = parent / f"{stem}.{n}{suffix}"
         if not candidate.exists():
             return candidate
-        n += 1
+    raise RuntimeError(f"exhausted {_MAX_HAR_ROTATIONS} HAR rotations for {p}")
 
 
 def _build_har_kwargs(
@@ -176,6 +182,11 @@ def _record_launch_event(
     har_mode: str,
     har_url_filter: str | None,
     har_content: str | None,
+    badge: bool,
+    badge_position: str,
+    tile: bool,
+    ephemeral: bool,
+    session: bool,
 ) -> None:
     """Emit the JSONL `launch` event with all the conditional fields. Pulled
     out of launch() to keep its complexity rank below the gate."""
@@ -198,6 +209,11 @@ def _record_launch_event(
         har_mode=har_mode if har_path else None,
         har_url_filter=har_url_filter if har_path else None,
         har_content=har_content if har_path else None,
+        badge=badge,
+        badge_position=badge_position,
+        tile=tile,
+        ephemeral=ephemeral,
+        session=session,
     )
 
 

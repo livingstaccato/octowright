@@ -850,6 +850,8 @@ def test_post_session_relaunch_preserves_extended_launch_fields(
     isolated_recordings: Path,
 ) -> None:
     pool: _FakePool = fakes["pool"]
+    har_path = isolated_recordings / "demo.har"
+    har_path.write_text("prior HAR", encoding="utf-8")
     _write_recording(
         isolated_recordings,
         "relaunchext01",
@@ -863,7 +865,7 @@ def test_post_session_relaunch_preserves_extended_launch_fields(
             "trace": True,
             "video_dir": "/tmp/video-dir",
             "har": True,
-            "har_path": "/tmp/demo.har",
+            "har_path": str(har_path),
             "har_mode": "full",
             "har_url_filter": "example.com",
             "har_content": "embed",
@@ -881,7 +883,7 @@ def test_post_session_relaunch_preserves_extended_launch_fields(
     assert call["trace"] is True
     assert call["record_video"] is True
     assert call["har"] is True
-    assert call["har_path"] == "/tmp/demo.har"
+    assert call["har_path"] == str(isolated_recordings / "demo.1.har")
     assert call["har_mode"] == "full"
     assert call["har_url_filter"] == "example.com"
     assert call["har_content"] == "embed"
