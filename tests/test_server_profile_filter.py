@@ -129,6 +129,8 @@ def test_profile_core_subprocess_filters_tools() -> None:
     names = _registered_names_in_subprocess("core")
     expected = set(profiles.PROFILES["core"])
     assert expected.issubset(names), f"missing core tools: {expected - names}"
+    assert "browser_suggest_for_url" in names
+    assert "browser_quick_launch" in names
     assert "octowright_advisor_status" in names
     assert "octowright_advisor_set_preference" in names
     assert "octowright_advisor_record_macro_observation" in names

@@ -85,10 +85,11 @@ artifacts = [
 ]
 
 [tool.hatch.build.targets.sdist]
-# Default: hatch auto-includes everything tracked by version control under
-# src/. Don't restrict — the prior `include = ["src/octowright/skills/**"]`
-# truncated sdists to just the skills directory, which then produced a
-# 22 KB wheel containing no source code.
+# Explicit include list: VCS-tracked sources, tests, docs, examples, and the
+# repo-root files needed to build from sdist. A prior bug used
+# `include = ["src/octowright/skills/**"]`, which truncated sdists to just the
+# skills tree and produced a 22 KB wheel with no source code — kept explicit
+# here so any future narrowing is visible in review.
 include = [
     "src/**",
     "tests/**",
@@ -99,6 +100,14 @@ include = [
     "REUSE.toml",
     "Makefile",
     "pyproject.toml",
+]
+# `artifacts` picks up gitignored built assets (the SPA bundle) that `include`
+# would otherwise skip because they aren't tracked by VCS.
+artifacts = [
+    "src/octowright/server/frontend/*.html",
+    "src/octowright/server/frontend/*.css",
+    "src/octowright/server/frontend/*.js",
+    "src/octowright/server/frontend/*.js.map",
 ]
 
 [dependency-groups]
