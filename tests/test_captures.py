@@ -63,6 +63,56 @@ def test_cleanup_captures_prunes_by_age_and_size(tmp_path: Path) -> None:
     assert size_prune["removed_count"] == 1
 
 
+def test_capture_get_and_search_enforce_response_caps(tmp_path: Path) -> None:
+    saved = captures.save_capture(
+        kind="text",
+        content="a" * 20_000,
+        root=tmp_path,
+        max_total_bytes=100_000,
+        ttl_seconds=3600,
+    )
+
+    sliced = captures.get_capture_slice(saved["capture_id"], limit=1_000_000, root=tmp_path)
+    assert len(sliced["content"]) == captures.MAX_SLICE_CHARS
+    assert sliced["limit"] == captures.MAX_SLICE_CHARS
+    assert sliced["truncated"] is True
+
+    found = captures.search_capture(
+        saved["capture_id"],
+        "a",
+        context_chars=1_000_000,
+        limit=1_000_000,
+        root=tmp_path,
+    )
+    assert found["count"] == captures.MAX_SEARCH_MATCHES
+    assert all(len(match["context"]) <= (captures.MAX_SEARCH_CONTEXT_CHARS * 2) + 1 for match in found["matches"])
+
+
+def test_save_capture_prunes_after_write_to_enforce_total_size(tmp_path: Path) -> None:
+    first = captures.save_capture(
+        kind="text",
+        content="older" * 120,
+        root=tmp_path,
+        max_total_bytes=10_000,
+        ttl_seconds=3600,
+    )
+    first_path = Path(first["path"])
+    old_time = time.time() - 10
+    os.utime(first_path, (old_time, old_time))
+
+    second = captures.save_capture(
+        kind="text",
+        content="x" * 100,
+        root=tmp_path,
+        max_total_bytes=900,
+        ttl_seconds=3600,
+    )
+
+    assert not first_path.exists()
+    assert Path(second["path"]).exists()
+    assert captures.cleanup_captures(root=tmp_path, ttl_seconds=3600, max_total_bytes=900)["eligible_count"] == 0
+
+
 def test_storage_report_counts_known_roots(tmp_path: Path) -> None:
     recordings = tmp_path / "state" / "sessions"
     config = tmp_path / "config"

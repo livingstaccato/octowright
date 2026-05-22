@@ -249,7 +249,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       state.consecutiveErrors += 1;
       state.effectiveIntervalMs = Math.min(
         MAX_BACKOFF_INTERVAL_MS,
-        state.intervalMs * Math.pow(2, state.consecutiveErrors),
+        state.intervalMs * 2 ** state.consecutiveErrors,
       );
       if (state.timer !== null) {
         clearInterval(state.timer);

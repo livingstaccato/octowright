@@ -170,6 +170,12 @@ def test_api_routes_are_explicitly_guarded_or_public(monkeypatch: pytest.MonkeyP
     assert guarded == SENSITIVE_ROUTE_PATTERNS
 
 
+def test_frontend_ci_runs_biome_lint() -> None:
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "npm run lint" in workflow
+
+
 @pytest.mark.parametrize(("method", "path"), SENSITIVE_HTTP_ROUTES)
 def test_sensitive_http_routes_denied_on_remote_bind_without_opt_in(
     monkeypatch: pytest.MonkeyPatch,
