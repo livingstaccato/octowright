@@ -98,8 +98,9 @@ async def test_open_url_tab_records_open_event(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_open_url_tab_swallows_navigation_failure(tmp_path: Path) -> None:
-    """If goto times out we still report the new tab — the page exists."""
+async def test_open_url_tab_reports_navigation_failure(tmp_path: Path) -> None:
+    """If goto fails, ok=False with the error message — page is still tracked
+    so the caller can decide whether to recover or close."""
     session = _make_session(tmp_path)
     new_page = _make_page("about:blank")
     new_page.goto = AsyncMock(side_effect=TimeoutError("nav timeout"))
@@ -107,16 +108,17 @@ async def test_open_url_tab_swallows_navigation_failure(tmp_path: Path) -> None:
 
     result = await session.open_url("https://slow.example.com", target="tab")
 
-    assert result["ok"] is True
+    assert result["ok"] is False
+    assert "nav timeout" in result["error"]
     assert result["target"] == "tab"
     assert result["page_index"] == 1
 
 
 class _DebugCapture:
     """provide.telemetry routes through stdlib logging but the dashboard's
-    caplog level filter does not always pick up DEBUG records under the
-    GH-Actions runner profile. Patching the module's `log` attribute is
-    the same pattern test_pool_disconnect uses for cross-platform parity."""
+    caplog level filter does not always pick up records under the GH-Actions
+    runner profile. Patching the module's `log` attribute is the same pattern
+    test_pool_disconnect uses for cross-platform parity."""
 
     def __init__(self) -> None:
         self.events: list[tuple[str, dict[str, Any]]] = []
@@ -124,12 +126,18 @@ class _DebugCapture:
     def debug(self, event: str, **kw: Any) -> None:
         self.events.append((event, kw))
 
+    def warning(self, event: str, **kw: Any) -> None:
+        self.events.append((event, kw))
+
+    def info(self, event: str, **kw: Any) -> None:
+        self.events.append((event, kw))
+
 
 @pytest.mark.anyio
-async def test_open_url_tab_logs_debug_on_nav_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A swallowed goto() failure must be surfaced at debug level. Without
-    the log, the user sees a successful response but the new tab is still
-    on about:blank — diagnostics depend on this trail."""
+async def test_open_url_tab_logs_warning_on_nav_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed goto() must be surfaced at warning level (user-action path).
+    Without the log, the user sees ok=False but no trail of why — diagnostics
+    depend on this."""
     from octowright.session import core_ops_mixin as _ops
 
     cap = _DebugCapture()
@@ -143,14 +151,14 @@ async def test_open_url_tab_logs_debug_on_nav_timeout(tmp_path: Path, monkeypatc
     await session.open_url("https://slow.example.com", target="tab")
 
     events = [name for name, _ in cap.events]
-    assert "octowright.open_url.nav_timeout" in events
+    assert "octowright.open_url.nav_failed" in events
 
 
 @pytest.mark.anyio
-async def test_open_url_window_logs_debug_on_load_state_timeout(
+async def test_open_url_window_logs_warning_on_load_state_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The window branch's wait_for_load_state failure must also log."""
+    """The window branch's wait_for_load_state failure must also log at warning."""
     from octowright.session import core_ops_mixin as _ops
 
     cap = _DebugCapture()
@@ -164,9 +172,9 @@ async def test_open_url_window_logs_debug_on_load_state_timeout(
     await session.open_url("https://popup.example.com", target="window")
 
     events = [name for name, _ in cap.events]
-    assert "octowright.open_url.nav_timeout" in events
+    assert "octowright.open_url.nav_failed" in events
     # window-branch kwargs identify which branch fired.
-    matching = [kw for name, kw in cap.events if name == "octowright.open_url.nav_timeout"]
+    matching = [kw for name, kw in cap.events if name == "octowright.open_url.nav_failed"]
     assert any(kw.get("target") == "window" for kw in matching)
 
 

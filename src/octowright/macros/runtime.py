@@ -142,9 +142,15 @@ async def _dispatch_click_or_fill(
         try:
             await semantic_method(**semantic_kwargs)
             return 1, 0
-        except Exception:
+        except Exception as exc:
             if "selector" not in kwargs:
                 raise
+            log.debug(
+                "octowright.macros.semantic_fallback",
+                kind=kind,
+                error=str(exc),
+                hint="semantic locator path failed, falling back to CSS selector",
+            )
 
     fallback_kwargs = {k: v for k, v in kwargs.items() if k not in semantic_keys}
     fallback_kwargs.pop("timeout_ms", None)

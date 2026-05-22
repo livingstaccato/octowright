@@ -292,43 +292,49 @@ class TestEvictSessionNowait:
 
 
 class TestBuildLaunchKwargs:
-    def test_chromium_tile_headed_returns_args(self) -> None:
+    @pytest.mark.anyio
+    async def test_chromium_tile_headed_returns_args(self) -> None:
         """tile=True + chromium + headless=False → 'args' key with positional flags."""
         pool = BrowserPool()
-        out = pool._build_launch_kwargs(tile=True, kind="chromium", headless=False)
+        out = await pool._build_launch_kwargs(tile=True, kind="chromium", headless=False)
         assert "args" in out
         assert isinstance(out["args"], list)
 
-    def test_increments_tile_counter(self) -> None:
+    @pytest.mark.anyio
+    async def test_increments_tile_counter(self) -> None:
         """Each headed-chromium tile launch advances _tile_counter."""
         pool = BrowserPool()
-        pool._build_launch_kwargs(tile=True, kind="chromium", headless=False)
-        pool._build_launch_kwargs(tile=True, kind="chromium", headless=False)
+        await pool._build_launch_kwargs(tile=True, kind="chromium", headless=False)
+        await pool._build_launch_kwargs(tile=True, kind="chromium", headless=False)
         assert pool._tile_counter == 2
 
-    def test_no_args_when_tile_false(self) -> None:
+    @pytest.mark.anyio
+    async def test_no_args_when_tile_false(self) -> None:
         """tile=False → no args."""
         pool = BrowserPool()
-        out = pool._build_launch_kwargs(tile=False, kind="chromium", headless=False)
+        out = await pool._build_launch_kwargs(tile=False, kind="chromium", headless=False)
         assert out == {}
 
-    def test_no_args_for_firefox(self) -> None:
+    @pytest.mark.anyio
+    async def test_no_args_for_firefox(self) -> None:
         """Tiling is chromium-only; firefox returns empty dict."""
         pool = BrowserPool()
-        out = pool._build_launch_kwargs(tile=True, kind="firefox", headless=False)
+        out = await pool._build_launch_kwargs(tile=True, kind="firefox", headless=False)
         assert out == {}
         assert pool._tile_counter == 0  # not advanced
 
-    def test_no_args_for_webkit(self) -> None:
+    @pytest.mark.anyio
+    async def test_no_args_for_webkit(self) -> None:
         """Tiling is chromium-only; webkit returns empty dict."""
         pool = BrowserPool()
-        out = pool._build_launch_kwargs(tile=True, kind="webkit", headless=False)
+        out = await pool._build_launch_kwargs(tile=True, kind="webkit", headless=False)
         assert out == {}
 
-    def test_no_args_when_headless(self) -> None:
+    @pytest.mark.anyio
+    async def test_no_args_when_headless(self) -> None:
         """Headless tile is meaningless — short-circuits."""
         pool = BrowserPool()
-        out = pool._build_launch_kwargs(tile=True, kind="chromium", headless=True)
+        out = await pool._build_launch_kwargs(tile=True, kind="chromium", headless=True)
         assert out == {}
         assert pool._tile_counter == 0
 

@@ -40,6 +40,13 @@ MACROS_DIR = Path(os.environ.get("OCTOWRIGHT_MACROS_DIR", str(PROFILES_DIR.paren
 # Golden snapshot storage (accessibility-tree golden assertions).
 GOLDENS_DIR = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(_CONFIG_DIR / "goldens")))
 
+# Upload staging directory: the only filesystem location an LLM-driven
+# browser_set_input_files call may read from by default. Additional roots can
+# be allowlisted via OCTOWRIGHT_UPLOAD_ROOTS (os.pathsep-separated). The
+# current working directory is always permitted so test fixtures resolve.
+UPLOAD_STAGING_DIR = Path(os.environ.get("OCTOWRIGHT_UPLOAD_STAGING_DIR", str(_CONFIG_DIR / "uploads")))
+UPLOAD_EXTRA_ROOTS_RAW = os.environ.get("OCTOWRIGHT_UPLOAD_ROOTS", "")
+
 # Octowright Advisor local state: preferences, lightweight usage summaries,
 # and suggestion cooldown data. Override for tests or isolated deployments.
 ADVISOR_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_ADVISOR_STATE", str(_CONFIG_DIR / "advisor.json")))
@@ -140,6 +147,12 @@ IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
 # is independently capped at this many entries so the global singleton can't
 # grow indefinitely as more sessions are processed.
 SESSION_ARTIFACT_CACHE_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", "256"))
+
+# Per-cache LRU bound on the closed-session discovery caches in
+# `octowright.http.discovery` (per-file launch-summary cache + per-dir
+# recording-index cache). Bounds memory growth across long-running daemons
+# that accumulate large recording histories.
+DISCOVERY_CACHE_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_DISCOVERY_CACHE_MAX_ENTRIES", "512"))
 
 # TTL on the path-exists cache used by /downloads to avoid stat'ing every
 # referenced file on every page load. Sized to dedupe stats within a single

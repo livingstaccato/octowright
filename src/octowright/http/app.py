@@ -48,11 +48,17 @@ def get_mcp_active_session_count() -> int:
     return _session_tracker.active_count()
 
 
-def build_app(*, mcp_leader: bool = False) -> Starlette:
+def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette:
     """Build the Starlette ASGI app. Stateless — safe to call from tests.
 
     When ``mcp_leader`` is True, mount FastMCP's streamable-HTTP transport at
     ``/mcp`` and inherit its lifespan. Otherwise return the debugger UI alone.
+
+    ``host`` is the bind host the dashboard will serve on. It's used by the
+    ASGI-mount guard, which must capture the host at wrap time because
+    ``scope["app"]`` inside a Starlette ``Mount`` resolves to the inner
+    mounted app rather than the outer app where ``octowright_http_host`` is
+    stored.
     """
     global _session_tracker
 
@@ -70,13 +76,13 @@ def build_app(*, mcp_leader: bool = False) -> Starlette:
 
         _session_tracker = McpSessionTracker()
         tracked_app = McpSessionTrackingMiddleware(mcp_app, _session_tracker)
-        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(tracked_app)))
+        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(tracked_app, host=host)))
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
 
     routes.extend(_frontend_routes())
     app = Starlette(routes=routes, lifespan=lifespan)
-    app.state.octowright_http_host = "127.0.0.1"
+    app.state.octowright_http_host = host
     if metrics_enabled():
         app.add_middleware(HttpMetricsMiddleware)
     return app

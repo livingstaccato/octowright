@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from importlib.resources import as_file, files
 from pathlib import Path
@@ -105,9 +107,24 @@ def install_skill_to_codex(*, dry_run: bool = False, force: bool = False) -> Ins
         )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # Stage into a sibling temp dir so a mid-copy failure can't leave a
+    # corrupted skill on disk. mkdtemp returns a path that already exists;
+    # copytree requires the destination *not* to exist, so we point it at
+    # a child path inside the staging dir.
+    staging_parent = Path(tempfile.mkdtemp(prefix=f".{SKILL_NAME}.", dir=str(destination.parent)))
+    staging_dir = staging_parent / SKILL_NAME
+    try:
+        shutil.copytree(source, staging_dir)
+    except Exception:
+        shutil.rmtree(staging_parent, ignore_errors=True)
+        raise
     if destination.exists():
         shutil.rmtree(destination)
-    shutil.copytree(source, destination)
+    try:
+        os.replace(staging_dir, destination)
+    finally:
+        # Drop the now-empty (or stale on error) staging parent.
+        shutil.rmtree(staging_parent, ignore_errors=True)
     return InstallResult(
         target="codex",
         destination=str(destination),

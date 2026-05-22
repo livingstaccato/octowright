@@ -113,11 +113,44 @@ SessionSummary = {
 SessionDetail = SessionSummary + {
     "video_path": str | None,
     "trace_path": str | None,
+    "markdown_path": str | None,
+    "websocket_path": str | None,
+    "event_count": int,
     "action_count": int,
     "console_count": int,
     "download_count": int,
     "page_count": int,
-    "title": str | None,
+    "cache": CacheReport,
+    # Live sessions also include an "aria" ARIA-tree snapshot (str) and may
+    # include "macro_intent" (str). Closed sessions may include "url" (str).
+}
+
+CacheReport = {
+    "total_bytes": int,
+    "total_human": str,
+    "components": {
+        "jsonl": CacheComponent,
+        "markdown": CacheComponent,
+        "trace": CacheComponent,
+        "video": CacheComponent,
+        "websocket": CacheComponent,
+        "screenshots": CacheComponentList,
+    },
+    "recommendations": [str, ...],
+}
+
+CacheComponent = {
+    "size_bytes": int,
+    "size_human": str,
+    "path": str | None,
+    "exists": bool,
+}
+
+CacheComponentList = {
+    "size_bytes": int,
+    "size_human": str,
+    "count": int,
+    "paths": [str, ...],
 }
 
 LiveScenario = {

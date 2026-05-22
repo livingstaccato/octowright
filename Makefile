@@ -17,7 +17,7 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	uv run --active ruff format --check .
 	uv run --active mypy src/octowright
 	uv run --active ty check src/octowright
-	uv run --active bandit -q -r src/octowright -s B101,B110,B112,B404,B405,B603,B607
+	uv run --active bandit -q -r src/octowright -s B101,B110,B112,B404,B405
 	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
 	uv run --active python scripts/check_spdx_headers.py
 	uv run --active python scripts/check_max_loc.py
