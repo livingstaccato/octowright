@@ -304,6 +304,22 @@ def test_fetch_metadata_cross_site_unsafe_api_request_is_rejected() -> None:
     assert response.json()["error"] == "cross-origin dashboard request is blocked"
 
 
+@pytest.mark.parametrize("path", ["/api/sessions/s1/screenshot/now", "/api/sessions/s1/markdown"])
+def test_cross_origin_live_capture_get_request_is_rejected(path: str) -> None:
+    with TestClient(_http.build_app()) as client:
+        response = client.get(path, headers={"origin": "https://evil.example"})
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "cross-origin dashboard request is blocked"
+
+
+def test_cross_origin_regular_read_get_request_is_allowed() -> None:
+    with TestClient(_http.build_app()) as client:
+        response = client.get("/api/sessions", headers={"origin": "https://evil.example"})
+
+    assert response.status_code != 403
+
+
 def test_public_static_assets_are_unguarded_on_remote_bind(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

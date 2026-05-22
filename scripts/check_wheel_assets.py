@@ -6,7 +6,22 @@
 from __future__ import annotations
 
 import glob
+import tarfile
 import zipfile
+
+REQUIRED_PACKAGE_FILES = {
+    "octowright/skills/using-octowright/SKILL.md",
+    "octowright/skills/using-octowright/skill.json",
+    "octowright/skills/manifests/claude-plugin.json",
+    "octowright/skills/manifests/codex-plugin.json",
+    # Built SPA — the wheel and sdist must include the dashboard the HTTP app
+    # serves at "/", or packaged installs ship a server with no UI.
+    "octowright/server/frontend/index.html",
+    "octowright/server/frontend/index.js",
+    "octowright/server/frontend/session.html",
+    "octowright/server/frontend/session.js",
+    "octowright/server/frontend/format.css",
+}
 
 
 def main() -> None:
@@ -14,24 +29,37 @@ def main() -> None:
     if not wheels:
         raise SystemExit("missing wheel artifact")
 
-    required = {
-        "octowright/skills/using-octowright/SKILL.md",
-        "octowright/skills/using-octowright/skill.json",
-        "octowright/skills/manifests/claude-plugin.json",
-        "octowright/skills/manifests/codex-plugin.json",
-        # Built SPA — the wheel must include the dashboard the HTTP app
-        # serves at "/", or packaged installs ship a server with no UI.
-        "octowright/server/frontend/index.html",
-        "octowright/server/frontend/index.js",
-        "octowright/server/frontend/session.html",
-        "octowright/server/frontend/session.js",
-        "octowright/server/frontend/format.css",
-    }
     with zipfile.ZipFile(wheels[0]) as zf:
         names = set(zf.namelist())
-    missing = sorted(required - names)
+    missing = sorted(REQUIRED_PACKAGE_FILES - names)
     if missing:
         raise SystemExit(f"wheel missing required files: {missing}")
+
+    sdists = glob.glob("dist/*.tar.gz")
+    if not sdists:
+        raise SystemExit("missing sdist artifact")
+    with tarfile.open(sdists[0], "r:gz") as tf:
+        sdist_names = {
+            normalised for member in tf.getmembers() if (normalised := _normalise_sdist_member(member.name)) is not None
+        }
+    sdist_missing = sorted(REQUIRED_PACKAGE_FILES - sdist_names)
+    if sdist_missing:
+        raise SystemExit(f"sdist missing required files: {sdist_missing}")
+
+
+def _normalise_sdist_member(name: str) -> str | None:
+    """Strip the ``octowright-<version>/`` root and optional ``src/`` prefix so
+    members compare against ``REQUIRED_PACKAGE_FILES``. Returns ``None`` for
+    archive entries that don't fit that layout (e.g., the root directory
+    itself, PAX headers, stray symlinks) so they don't silently map to ``""``
+    and mask a real missing file."""
+    parts = name.split("/")
+    if len(parts) < 2 or not parts[1]:
+        return None
+    without_root = "/".join(parts[1:])
+    if without_root.startswith("src/"):
+        return without_root.removeprefix("src/")
+    return without_root
 
 
 if __name__ == "__main__":
