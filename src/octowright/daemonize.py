@@ -69,7 +69,8 @@ def spawn_daemon(
     if idle_grace is not None:
         args.extend(["--idle-grace", str(idle_grace)])
 
-    proc = subprocess.Popen(
+    # Fixed argv (sys.argv[0] + flags); no shell. Daemon spawn for octowright serve.
+    proc = subprocess.Popen(  # nosec B603
         args,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

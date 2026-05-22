@@ -487,13 +487,17 @@ class TestRunSuite:
                 max_parallel=1,
             )
 
-        assert result["passed"] == 0
-        assert result["failed"] == 1
-        assert result["results"][0]["ok"] is False
-        assert result["results"][0]["error"] == "RuntimeError('close failed')"
+        # Teardown failure on an otherwise-passing test must NOT fail the
+        # test — instead the close error is attached as a teardown_warning
+        # and the test stays ok=True.
+        assert result["passed"] == 1
+        assert result["failed"] == 0
+        assert result["results"][0]["ok"] is True
+        assert result["results"][0]["error"] is None
+        assert result["results"][0]["teardown_warning"] == "RuntimeError('close failed')"
         assert report_path.exists()
         tree = ET.parse(report_path)
-        assert tree.getroot().attrib["failures"] == "1"
+        assert tree.getroot().attrib["failures"] == "0"
         fake_pool.close.assert_called_once_with("abc123")
 
     @pytest.mark.asyncio
