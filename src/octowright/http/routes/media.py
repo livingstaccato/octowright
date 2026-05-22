@@ -296,9 +296,17 @@ def routes() -> list[Route]:
         Route("/api/sessions/{id}/frame", guard_sensitive_http(session_frame), methods=["GET"]),
         Route("/api/sessions/{id}/video", guard_sensitive_http(session_video), methods=["GET"]),
         Route("/api/sessions/{id}/trace", guard_sensitive_http(session_trace), methods=["GET"]),
-        Route("/api/sessions/{id}/markdown", guard_sensitive_http(session_markdown), methods=["GET"]),
+        Route(
+            "/api/sessions/{id}/markdown",
+            guard_sensitive_http(session_markdown, side_effect_get=True),
+            methods=["GET"],
+        ),
         Route("/api/sessions/{id}/trace/open", guard_sensitive_http(trace_open), methods=["POST"]),
-        Route("/api/sessions/{id}/screenshot/now", guard_sensitive_http(session_screenshot_now), methods=["GET"]),
+        Route(
+            "/api/sessions/{id}/screenshot/now",
+            guard_sensitive_http(session_screenshot_now, side_effect_get=True),
+            methods=["GET"],
+        ),
         Route("/api/sessions/{id}/screenshots", guard_sensitive_http(session_screenshots), methods=["GET"]),
         Route(
             "/api/sessions/{id}/screenshots/{filename}",

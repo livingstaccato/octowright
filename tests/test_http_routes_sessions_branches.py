@@ -31,8 +31,10 @@ import pytest
 from starlette.testclient import TestClient
 
 from octowright import http as _http
+from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.http import state as _http_state
 from octowright.http.routes import sessions as session_routes
+from octowright.recorder import Recorder
 from octowright.server import _state
 
 # ─── fixtures ────────────────────────────────────────────────────────────────
@@ -498,6 +500,51 @@ class TestSessionRelaunchEdges:
         assert r.status_code == 201
         assert pool.launch_calls[0]["record_video"] is False
 
+    def test_relaunch_preserves_session_scoping_flags(
+        self,
+        client: TestClient,
+        fakes: dict[str, Any],
+        isolated_recordings: Path,
+    ) -> None:
+        self._write_with_launch(isolated_recordings, "rlchsession1", {"session": True, "ephemeral": False})
+        pool: _FakePool = fakes["pool"]
+        r = client.post("/api/sessions/rlchsession1/relaunch")
+        assert r.status_code == 201
+        assert pool.launch_calls[0]["session"] is True
+        assert pool.launch_calls[0]["ephemeral"] is False
+
+    def test_relaunch_uses_fresh_har_path_when_prior_har_exists(
+        self,
+        client: TestClient,
+        fakes: dict[str, Any],
+        isolated_recordings: Path,
+    ) -> None:
+        har_path = isolated_recordings / "capture.har"
+        har_path.write_text("prior HAR", encoding="utf-8")
+        self._write_with_launch(isolated_recordings, "rlchhar00001", {"har": True, "har_path": str(har_path)})
+        pool: _FakePool = fakes["pool"]
+        r = client.post("/api/sessions/rlchhar00001/relaunch")
+        assert r.status_code == 201
+        assert pool.launch_calls[0]["har"] is True
+        assert pool.launch_calls[0]["har_path"] == str(isolated_recordings / "capture.1.har")
+
+    def test_relaunch_reuses_prior_har_path_when_file_is_gone(
+        self,
+        client: TestClient,
+        fakes: dict[str, Any],
+        isolated_recordings: Path,
+    ) -> None:
+        """If the prior HAR has been deleted, relaunch reuses the original path
+        rather than producing a needlessly suffixed sibling."""
+        har_path = isolated_recordings / "deleted.har"
+        # Note: do NOT write the file — simulate post-cleanup state.
+        self._write_with_launch(isolated_recordings, "rlchhardel01", {"har": True, "har_path": str(har_path)})
+        pool: _FakePool = fakes["pool"]
+        r = client.post("/api/sessions/rlchhardel01/relaunch")
+        assert r.status_code == 201
+        assert pool.launch_calls[0]["har"] is True
+        assert pool.launch_calls[0]["har_path"] == str(har_path)
+
     def test_500_when_pool_launch_raises(
         self,
         client: TestClient,
@@ -511,6 +558,43 @@ class TestSessionRelaunchEdges:
         r = client.post("/api/sessions/rlchboom0001/relaunch")
         assert r.status_code == 500
         assert "relaunch failed" in r.json()["error"]
+
+
+def test_launch_recording_persists_relaunch_relevant_options(tmp_path: Path) -> None:
+    log_path = tmp_path / "launch.jsonl"
+    recorder = Recorder(log_path)
+    _record_launch_event(
+        recorder,
+        instance_id="abc123",
+        kind="chromium",
+        label="temporary",
+        profile=None,
+        user_data_dir=str(tmp_path / "profile"),
+        target_url="https://example.com",
+        headless=False,
+        log_viewport={"mode": "fluid"},
+        stabilize=True,
+        record_video=False,
+        video_dir=None,
+        trace=False,
+        har_path=None,
+        har_mode="minimal",
+        har_url_filter=None,
+        har_content=None,
+        badge=False,
+        badge_position="top-left",
+        tile=True,
+        ephemeral=False,
+        session=True,
+    )
+    recorder.close()
+
+    row = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["badge"] is False
+    assert row["badge_position"] == "top-left"
+    assert row["tile"] is True
+    assert row["ephemeral"] is False
+    assert row["session"] is True
 
 
 # ─── session_detail live-path: aria swallow + macro_intent attach swallow ──
