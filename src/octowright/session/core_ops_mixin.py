@@ -236,18 +236,21 @@ class SessionOpsMixin(SessionLike):
         if target not in ("tab", "window"):
             raise ValueError(f"target must be 'tab' or 'window', got {target!r}")
 
+        nav_error: str | None = None
         if target == "tab":
             new_page = await self.context.new_page()
             try:
                 await new_page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
             except Exception as exc:
-                # Surface what we have even if the navigation timed out.
-                log.debug(
-                    "octowright.open_url.nav_timeout",
+                # Surface the failure to the caller — open_url is a user-action
+                # path, so a swallowed nav must not be reported as ok=True.
+                log.warning(
+                    "octowright.open_url.nav_failed",
                     target="tab",
                     url=url,
                     error=repr(exc),
                 )
+                nav_error = str(exc)
         else:
             async with self.page.expect_popup(timeout=DEFAULT_NAV_TIMEOUT_MS) as popup_info:
                 await self.page.evaluate(
@@ -258,25 +261,35 @@ class SessionOpsMixin(SessionLike):
             try:
                 await new_page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_NAV_TIMEOUT_MS)
             except Exception as exc:
-                log.debug(
-                    "octowright.open_url.nav_timeout",
+                log.warning(
+                    "octowright.open_url.nav_failed",
                     target="window",
                     url=url,
                     error=repr(exc),
                 )
+                nav_error = str(exc)
 
         # _register_popup adds the page to self.pages on the context "page"
         # event; if a race left it absent, append it ourselves.
         if new_page not in self.pages:
             self.pages.append(new_page)
         page_index = self.pages.index(new_page)
-        self.recorder.record("open_url", url=url, target=target, page_index=page_index)
-        return {
-            "ok": True,
+        self.recorder.record(
+            "open_url",
+            url=url,
+            target=target,
+            page_index=page_index,
+            error=nav_error,
+        )
+        result: dict[str, Any] = {
+            "ok": nav_error is None,
             "target": target,
             "page_index": page_index,
             "url": new_page.url,
         }
+        if nav_error is not None:
+            result["error"] = nav_error
+        return result
 
     async def _drain_background_tasks(self) -> None:
         import asyncio

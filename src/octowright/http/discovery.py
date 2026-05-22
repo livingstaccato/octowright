@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import time
+from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from octowright.defaults import DISCOVERY_CACHE_MAX_ENTRIES
 from octowright.http import state
 from octowright.http.artifacts import instance_id_from_recording_name as _instance_id_from_recording_name
 from octowright.http.session_artifacts import session_artifact_cache
@@ -103,7 +105,8 @@ def _live_summary(session: Any) -> dict[str, Any]:
 # (which is stable for the file's lifetime), so a (mtime_ns, size) signature
 # is sufficient to detect anything that would change the summary. Eliminates
 # the ~N file-opens-per-/api/sessions-request that scaled with closed history.
-_summary_per_file: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+# Bounded LRU so the cache can't grow without limit across long-running daemons.
+_summary_per_file: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
 
 
 def _summarise_recording_cached(jsonl_path: Path) -> dict[str, Any] | None:
@@ -115,10 +118,14 @@ def _summarise_recording_cached(jsonl_path: Path) -> dict[str, Any] | None:
     key = str(jsonl_path)
     cached = _summary_per_file.get(key)
     if cached and cached[0] == sig:
+        _summary_per_file.move_to_end(key)
         return cached[1]
     summary = _summarise_recording(jsonl_path)
     if summary is not None:
         _summary_per_file[key] = (sig, summary)
+        _summary_per_file.move_to_end(key)
+        while len(_summary_per_file) > DISCOVERY_CACHE_MAX_ENTRIES:
+            _summary_per_file.popitem(last=False)
     return summary
 
 
@@ -154,8 +161,12 @@ def _closed_sessions(recordings_dir: Path, live_log_paths: set[str]) -> list[dic
 # removed). Negative lookups (unknown id) used to trigger an unconditional
 # rebuild — a real DoS vector under repeated bad-id traffic — so we now
 # stamp the dir mtime alongside the index and skip the rebuild when it
-# hasn't changed since the last build.
-_recording_index: dict[Path, tuple[int, dict[str, Path]]] = {}
+# hasn't changed since the last build. The inner ``OrderedDict`` is LRU-
+# bounded so a recordings dir with more files than
+# ``DISCOVERY_CACHE_MAX_ENTRIES`` evicts least-recently-looked-up entries
+# rather than holding everything in memory; the outer dict has at most one
+# entry per active recordings dir so it doesn't need a bound.
+_recording_index: dict[Path, tuple[int, OrderedDict[str, Path]]] = {}
 
 
 def _dir_mtime_ns(recordings_dir: Path) -> int | None:
@@ -165,14 +176,16 @@ def _dir_mtime_ns(recordings_dir: Path) -> int | None:
         return None
 
 
-def _build_recording_index(recordings_dir: Path) -> dict[str, Path]:
-    index: dict[str, Path] = {}
+def _build_recording_index(recordings_dir: Path) -> OrderedDict[str, Path]:
+    index: OrderedDict[str, Path] = OrderedDict()
     if not recordings_dir.exists():
         return index
     for jsonl in _iter_recordings(recordings_dir):
         sid = _instance_id_from_recording_name(jsonl.stem)
         if sid:
             index[sid] = jsonl
+            while len(index) > DISCOVERY_CACHE_MAX_ENTRIES:
+                index.popitem(last=False)
     return index
 
 
@@ -194,6 +207,7 @@ def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
         cached_mtime, index = cached
         hit = index.get(session_id)
         if hit is not None and hit.exists():
+            index.move_to_end(session_id)
             return hit
         if hit is not None:
             # Cached path was deleted out-of-band; fall through to rebuild.
@@ -205,7 +219,10 @@ def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
             return None
     rebuilt = _build_recording_index(recordings_dir)
     _recording_index[recordings_dir] = (current_mtime if current_mtime is not None else 0, rebuilt)
-    return rebuilt.get(session_id)
+    hit = rebuilt.get(session_id)
+    if hit is not None:
+        rebuilt.move_to_end(session_id)
+    return hit
 
 
 def _live_session_or_none(session_id: str) -> Any | None:

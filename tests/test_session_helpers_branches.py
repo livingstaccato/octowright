@@ -206,12 +206,23 @@ class TestSaveDownload:
 
 class TestWaitForDownload:
     @pytest.mark.anyio
-    async def test_returns_immediately_when_already_recorded(self, tmp_path: Any) -> None:
-        """If session.downloads already has entries, returns the last one."""
+    async def test_waits_for_next_download_even_with_prior_entries(self, tmp_path: Any) -> None:
+        """Contract: blocks until the NEXT download fires, ignoring prior entries.
+        Returning the last existing download immediately would race with the
+        action that's supposed to trigger this wait."""
         sess = _fake_session(tmp_path)
         sess.downloads = [{"a": 1}, {"a": 2}]
-        result = await wait_for_download_impl(sess, timeout_ms=100)
-        assert result == {"a": 2}
+
+        async def trigger() -> None:
+            await asyncio.sleep(0.01)
+            sess.downloads.append({"a": 3})
+            for ev in sess._pending_download_events:
+                ev.set()
+
+        trigger_task = asyncio.create_task(trigger())
+        result = await wait_for_download_impl(sess, timeout_ms=1000)
+        await trigger_task
+        assert result == {"a": 3}
 
     @pytest.mark.anyio
     async def test_waits_then_returns_after_event_set(self, tmp_path: Any) -> None:

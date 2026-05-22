@@ -65,10 +65,14 @@ class TestPatternConstants:
         assert DISABLED_SUFFIX == "_disabled_by_octowright"
 
     def test_name_patterns_present(self) -> None:
-        """The three name patterns must be in the list. Mutating any drops a heuristic."""
-        assert "playwright" in COMPETING_NAME_PATTERNS
-        assert "chromium" in COMPETING_NAME_PATTERNS
-        assert "browser-use" in COMPETING_NAME_PATTERNS
+        """The three name patterns must be in the list. Mutating any drops a heuristic.
+
+        Patterns are word-boundaried to avoid false positives on unrelated
+        names that happen to contain these as substrings.
+        """
+        assert r"\bplaywright\b" in COMPETING_NAME_PATTERNS
+        assert r"\bchromium\b(?!-extension)" in COMPETING_NAME_PATTERNS
+        assert r"\bbrowser-use\b" in COMPETING_NAME_PATTERNS
 
     def test_command_patterns_present(self) -> None:
         """The four command patterns matter for plugin-namespaced installs."""
@@ -293,19 +297,28 @@ class TestCommandString:
 class TestMatchReason:
     def test_name_match_returns_format_string(self) -> None:
         """Name match returns 'name matches /<pattern>/'."""
-        assert _match_reason("playwright-server", "irrelevant") == "name matches /playwright/"
+        assert _match_reason("playwright-server", "irrelevant") == r"name matches /\bplaywright\b/"
 
     def test_name_match_case_insensitive(self) -> None:
         """Case folded — 'PLAYWRIGHT' still matches."""
-        assert _match_reason("PLAYWRIGHT", "") == "name matches /playwright/"
+        assert _match_reason("PLAYWRIGHT", "") == r"name matches /\bplaywright\b/"
 
     def test_chromium_name_match(self) -> None:
         """The 'chromium' name pattern."""
-        assert _match_reason("Chromium-MCP", "") == "name matches /chromium/"
+        assert _match_reason("Chromium-MCP", "") == r"name matches /\bchromium\b(?!-extension)/"
+
+    def test_chromium_extension_helper_excluded(self) -> None:
+        """`chromium-extension*` names are Chrome extension helpers, not browser drivers — must not match."""
+        assert _match_reason("chromium-extension-helper", "") is None
+        assert _match_reason("chromium-extensions", "") is None
+
+    def test_chromium_driver_still_matches(self) -> None:
+        """Real browser-driver suffixes still match — only `-extension` is carved out."""
+        assert _match_reason("chromium-driver", "") == r"name matches /\bchromium\b(?!-extension)/"
 
     def test_browser_use_name_match(self) -> None:
         """The 'browser-use' name pattern."""
-        assert _match_reason("browser-use-thing", "") == "name matches /browser-use/"
+        assert _match_reason("browser-use-thing", "") == r"name matches /\bbrowser-use\b/"
 
     def test_command_match_when_name_doesnt(self) -> None:
         """Bland name + competing command → command-match reason."""

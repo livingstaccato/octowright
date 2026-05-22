@@ -105,8 +105,15 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         try:
             session.recorder.record("close", reason="external")
             session.recorder.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Swallow per the silent-swallow policy: the recorder may already
+            # be closed by an in-flight session.close(). Log so post-mortem
+            # diagnosis is possible.
+            log.debug(
+                "octowright.evict.recorder_close_failed",
+                instance_id=instance_id,
+                error=repr(exc),
+            )
 
     def _on_page_close(*_: Any) -> None:
         # Cascade to full eviction only when no page on the session is still

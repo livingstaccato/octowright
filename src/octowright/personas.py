@@ -209,7 +209,8 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
             hint="treat persona YAML as trusted; bash -c is arbitrary code execution",
         )
     try:
-        result = subprocess.run(  # nosec B603 B607 — list-arg form, PATH-resolved
+        # List-arg form (no shell). argv is validated above; persona YAML is trusted.
+        result = subprocess.run(  # nosec B603
             argv, capture_output=True, text=True, check=False, timeout=30
         )
     except FileNotFoundError as e:

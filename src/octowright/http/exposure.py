@@ -50,9 +50,13 @@ def remote_dashboard_allowed() -> bool:
     return os.environ.get(DASHBOARD_REMOTE_ALLOWED_ENV) == "1"
 
 
+def _sensitive_allowed_for_host(host: str | None) -> bool:
+    return is_loopback_host(host) or remote_dashboard_allowed()
+
+
 def _sensitive_allowed_for_app(app: object) -> bool:
     host = getattr(getattr(app, "state", object()), "octowright_http_host", _DEFAULT_HTTP_HOST)
-    return is_loopback_host(host) or remote_dashboard_allowed()
+    return _sensitive_allowed_for_host(host)
 
 
 def sensitive_allowed_for_request(request: Request) -> bool:
@@ -91,14 +95,21 @@ def guard_sensitive_http(
 
 
 class SensitiveASGIGuard:
-    """ASGI wrapper for sensitive mounted apps such as FastMCP transport."""
+    """ASGI wrapper for sensitive mounted apps such as FastMCP transport.
 
-    def __init__(self, app: ASGIApp) -> None:
+    The bind host is captured at wrap time because ``scope["app"]`` inside a
+    Starlette ``Mount`` resolves to the inner mounted app, not the outer
+    Starlette app where ``octowright_http_host`` is set. Reading from a
+    closure keeps the guard correct regardless of mount nesting.
+    """
+
+    def __init__(self, app: ASGIApp, host: str | None = None) -> None:
         self.app = app
+        self._host = host
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         scope_type = scope["type"]
-        if scope_type in {"http", "websocket"} and not _sensitive_allowed_for_app(scope["app"]):
+        if scope_type in {"http", "websocket"} and not _sensitive_allowed_for_host(self._host):
             if scope_type == "websocket":
                 await send({"type": "websocket.close", "code": 1008, "reason": _REMOTE_DISABLED_BODY["error"]})
                 return
@@ -118,5 +129,5 @@ class SensitiveASGIGuard:
         await self.app(scope, receive, send)
 
 
-def guard_sensitive_asgi_app(app: ASGIApp) -> ASGIApp:
-    return SensitiveASGIGuard(app)
+def guard_sensitive_asgi_app(app: ASGIApp, *, host: str | None = None) -> ASGIApp:
+    return SensitiveASGIGuard(app, host=host)

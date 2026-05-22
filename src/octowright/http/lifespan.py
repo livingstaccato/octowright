@@ -85,8 +85,7 @@ async def serve_app(
 
     import uvicorn
 
-    app = build_app(mcp_leader=mcp_leader)
-    app.state.octowright_http_host = host
+    app = build_app(mcp_leader=mcp_leader, host=host)
 
     config = uvicorn.Config(
         app=app,

@@ -58,6 +58,7 @@ SENSITIVE_HTTP_ROUTES = [
     ("PUT", "/api/macros/login%2Ftest"),
     ("POST", "/api/macros/login%2Ftest/validate"),
     ("POST", "/api/sessions/s1/selector/validate"),
+    ("GET", "/api/metrics"),
 ]
 
 SENSITIVE_ROUTE_PATTERNS = {
@@ -94,6 +95,7 @@ SENSITIVE_ROUTE_PATTERNS = {
     ("POST", "/api/macros/{name:path}/validate"),
     ("GET", "/api/macros/{name:path}/repair_preview"),
     ("POST", "/api/sessions/{id}/selector/validate"),
+    ("GET", "/api/metrics"),
 }
 
 SENSITIVE_WEBSOCKET_ROUTE_PATTERNS = {
@@ -102,7 +104,6 @@ SENSITIVE_WEBSOCKET_ROUTE_PATTERNS = {
 
 PUBLIC_API_ROUTE_PATTERNS = {
     ("GET", "/api/health"),
-    ("GET", "/api/metrics"),
 }
 
 REMOTE_DISABLED_BODY = {
@@ -327,8 +328,7 @@ def test_public_static_assets_are_unguarded_on_remote_bind(
 def test_mcp_mount_denied_on_remote_bind_without_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
     _install_fake_mcp(monkeypatch)
-    app = _http.build_app(mcp_leader=True)
-    app.state.octowright_http_host = "0.0.0.0"
+    app = _http.build_app(mcp_leader=True, host="0.0.0.0")
 
     with TestClient(app) as client:
         response = client.get("/mcp/")
@@ -340,8 +340,7 @@ def test_mcp_mount_denied_on_remote_bind_without_opt_in(monkeypatch: pytest.Monk
 def test_mcp_mount_allowed_on_remote_bind_with_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", "1")
     _install_fake_mcp(monkeypatch)
-    app = _http.build_app(mcp_leader=True)
-    app.state.octowright_http_host = "0.0.0.0"
+    app = _http.build_app(mcp_leader=True, host="0.0.0.0")
 
     with TestClient(app) as client:
         response = client.get("/mcp/")

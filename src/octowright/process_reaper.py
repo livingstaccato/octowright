@@ -79,7 +79,8 @@ def _list_processes() -> list[tuple[int, int, str]]:
 
 
 def _list_processes_posix() -> list[tuple[int, int, str]]:
-    out = subprocess.run(
+    # Fixed `ps` argv, PATH-resolved system binary, no shell.
+    out = subprocess.run(  # nosec B603 B607
         ["ps", "-A", "-o", "pid=,ppid=,command="],
         check=False,
         capture_output=True,
@@ -109,7 +110,8 @@ def _list_processes_windows() -> list[tuple[int, int, str]]:
         "Select-Object ProcessId,ParentProcessId,CommandLine | "
         "ConvertTo-Csv -NoTypeInformation"
     )
-    out = subprocess.run(
+    # Fixed PowerShell argv, literal script body, no shell metachars.
+    out = subprocess.run(  # nosec B603 B607
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
         check=False,
         capture_output=True,
@@ -189,7 +191,8 @@ def _kill_pid(pid: int, *, signum: int) -> tuple[bool, str | None]:
 def _kill_pid_windows(pid: int) -> tuple[bool, str | None]:
     # taskkill exit codes: 0 success; 128 = process not found (treat as
     # ProcessLookupError-equivalent). Anything else is a real failure.
-    out = subprocess.run(
+    # Fixed `taskkill` argv, integer pid arg, no shell.
+    out = subprocess.run(  # nosec B603 B607
         ["taskkill", "/F", "/PID", str(pid)],
         check=False,
         capture_output=True,

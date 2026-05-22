@@ -34,7 +34,7 @@ def _sum_press_key(a: dict, p: str) -> str:
 
 
 def _sum_wait_for(a: dict, p: str) -> str:
-    desc = f"Wait for '{a['selector']}'"
+    desc = f"Wait for '{a.get('selector', '')}'"
     if a.get("text"):
         desc += f" containing text '{a['text']}'"
     return f"{p}{desc} to appear"
@@ -155,7 +155,7 @@ def get_semantic_intent(actions: list[dict[str, Any]]) -> str:
 
 
 @mcp.tool(
-    structured_output=True,
+    structured_output=False,
     description="Explain what a macro does in plain English and provide its semantic intent.",
 )
 async def macro_explain(actions: list[dict[str, Any]]) -> dict[str, str]:

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright.browser_pool.launch_helpers import _next_har_path
 from octowright.session_manifest import remove_session as remove_manifest_session
 
 if TYPE_CHECKING:
@@ -70,6 +71,9 @@ async def handoff_browser(
     if close_original:
         close_result = await pool.close(old_instance_id)
 
+    # Don't overwrite the prior HAR — handoff gets a fresh sibling path.
+    source_har_path = getattr(source, "har_path", None)
+    next_har = _next_har_path(source_har_path) if source_har_path else None
     launch = await pool.launch(
         kind=source.kind,
         url=target_url,
@@ -78,8 +82,8 @@ async def handoff_browser(
         profile=source_profile,
         stabilize=getattr(source, "stabilize", False),
         trace=getattr(source, "trace", False),
-        har=bool(getattr(source, "har_path", None)),
-        har_path=str(source.har_path) if getattr(source, "har_path", None) else None,
+        har=bool(source_har_path),
+        har_path=str(next_har) if next_har else None,
         session=session_scoped,
     )
 

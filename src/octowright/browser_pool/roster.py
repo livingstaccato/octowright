@@ -8,16 +8,25 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from provide.telemetry import get_logger
+
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
 
+log = get_logger(__name__)
+
 
 async def close_all(pool: BrowserPool) -> dict[str, Any]:
+    # Close every session concurrently. A single hung browser would otherwise
+    # block daemon shutdown if we awaited them serially; gather + return_exceptions
+    # lets the rest tear down even if one raises or stalls.
     ids = [session.instance_id for session in pool.iter_sessions()]
-    for iid in ids:
-        await pool.close(iid)
+    results = await asyncio.gather(*(pool.close(iid) for iid in ids), return_exceptions=True)
+    for iid, result in zip(ids, results, strict=True):
+        if isinstance(result, BaseException):
+            log.warning("octowright.browser.close_all_failed", instance_id=iid, error=repr(result))
     return {"closed": ids}
 
 

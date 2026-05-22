@@ -336,8 +336,8 @@ class TestOpenUrl:
         assert out["page_index"] == inst.pages.index(new_page)
 
     @pytest.mark.anyio
-    async def test_tab_goto_failure_swallowed(self, tmp_path: Path) -> None:
-        """Navigation timeout/error doesn't fail open_url — page still tracked."""
+    async def test_tab_goto_failure_reports_not_ok(self, tmp_path: Path) -> None:
+        """Navigation timeout/error → ok=False with error message; page still tracked."""
         new_page = MagicMock()
         new_page.url = "about:blank"
         new_page.goto = AsyncMock(side_effect=RuntimeError("nav timeout"))
@@ -345,7 +345,8 @@ class TestOpenUrl:
         context.new_page = AsyncMock(return_value=new_page)
         inst = _build(tmp_path, context=context)
         out = await inst.open_url("https://x")
-        assert out["ok"] is True
+        assert out["ok"] is False
+        assert "nav timeout" in out["error"]
         assert new_page in inst.pages
 
     @pytest.mark.anyio
@@ -365,8 +366,8 @@ class TestOpenUrl:
         assert eval_args[1] == {"u": "https://popup", "w": 800, "h": 600}
 
     @pytest.mark.anyio
-    async def test_window_load_state_failure_swallowed(self, tmp_path: Path) -> None:
-        """wait_for_load_state raising → still returns ok with the new page."""
+    async def test_window_load_state_failure_reports_not_ok(self, tmp_path: Path) -> None:
+        """wait_for_load_state raising → ok=False with error message; page still tracked."""
         new_page = MagicMock()
         new_page.url = "https://popup"
         new_page.wait_for_load_state = AsyncMock(side_effect=RuntimeError("load timeout"))
@@ -375,7 +376,8 @@ class TestOpenUrl:
         page.evaluate = AsyncMock()
         inst = _build(tmp_path, page=page)
         out = await inst.open_url("https://popup", target="window")
-        assert out["ok"] is True
+        assert out["ok"] is False
+        assert "load timeout" in out["error"]
 
     @pytest.mark.anyio
     async def test_open_url_skips_pages_append_when_already_present(self, tmp_path: Path) -> None:

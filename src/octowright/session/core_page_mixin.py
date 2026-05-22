@@ -81,8 +81,16 @@ class SessionPageMixin(SessionLike):
     async def navigate(self, url: str) -> dict[str, Any]:
         # Tag the upcoming framenavigated event so pool's user_navigation
         # listener skips it (we already record "navigate" below).
+        prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)
         self._last_mcp_navigation = url
-        await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+        try:
+            await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+        except BaseException:
+            # Reset the dedupe tag on failure: if the user then navigates to
+            # the same URL manually, that's a genuine user_navigation event
+            # and should not be suppressed.
+            self._last_mcp_navigation = prior_mcp_navigation
+            raise
         title = await self.page.title()
         self.url = url
         self._schedule_markdown_capture()

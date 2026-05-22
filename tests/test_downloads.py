@@ -162,7 +162,7 @@ async def test_list_downloads_returns_copy(tmp_path: Path, monkeypatch: pytest.M
 
 
 @pytest.mark.anyio
-async def test_wait_for_download_returns_immediately_if_already_present(
+async def test_wait_for_download_ignores_prior_and_waits_for_next(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import octowright.defaults as defs
@@ -170,12 +170,18 @@ async def test_wait_for_download_returns_immediately_if_already_present(
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
 
     s = _make_session(tmp_path)
+    # Prior download must NOT satisfy the wait — the contract is "next".
     s._handle_download(FakeDownload(filename="pre.csv"))
     await asyncio.sleep(0)
 
-    # A download already exists; wait_for_download should return right away
-    rec = await s.wait_for_download(timeout_ms=100)
-    assert rec["suggested_filename"] == "pre.csv"
+    async def _trigger_after_delay() -> None:
+        await asyncio.sleep(0.05)
+        s._handle_download(FakeDownload(filename="next.csv"))
+
+    task = asyncio.create_task(_trigger_after_delay())
+    rec = await s.wait_for_download(timeout_ms=2000)
+    await task
+    assert rec["suggested_filename"] == "next.csv"
 
 
 @pytest.mark.anyio

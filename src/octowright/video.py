@@ -72,7 +72,8 @@ def extract_frames(
 
 
 def _run_ffmpeg(cmd: list[str]) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Fixed list-form ffmpeg argv assembled by callers; no shell.
+    result = subprocess.run(cmd, capture_output=True, text=True)  # nosec B603
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg exited {result.returncode}:\n{result.stderr}")
 
@@ -371,7 +372,8 @@ def probe_video(path: Path) -> dict[str, float | int]:
         "json",
         str(path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Fixed list-form ffprobe argv; no shell.
+    result = subprocess.run(cmd, capture_output=True, text=True)  # nosec B603
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe exited {result.returncode}:\n{result.stderr}")
     payload = json.loads(result.stdout or "{}")

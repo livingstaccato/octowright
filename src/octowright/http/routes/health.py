@@ -11,6 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
+from octowright.http.exposure import guard_sensitive_http
 from octowright.http.metrics import HTTP_METRICS, metrics_enabled
 
 
@@ -33,6 +34,7 @@ def routes() -> list[Route]:
     return out
 
 
+@guard_sensitive_http
 async def metrics_endpoint(_request: Request) -> PlainTextResponse:
     return PlainTextResponse(
         HTTP_METRICS.render_prometheus(),

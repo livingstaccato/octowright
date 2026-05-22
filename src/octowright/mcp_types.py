@@ -100,11 +100,15 @@ class MacroRepairPreviewResult(TypedDict):
     suggestions: list[MacroRepairSuggestion]
 
 
-class TestSuiteCaseResult(TypedDict):
+class TestSuiteCaseResult(TypedDict, total=False):
     name: str
     ok: bool
     error: str | None
     duration: float
+    # Present only when the test passed but teardown (browser close) failed.
+    # The test is still reported as ok=True; this carries the close-error repr
+    # so callers can surface it as a soft warning.
+    teardown_warning: str
 
 
 class TestSuiteResult(TypedDict):
