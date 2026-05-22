@@ -64,6 +64,21 @@ def _build_video_kwargs(
     return out, video_dir
 
 
+def _next_har_path(p: Path) -> Path:
+    """Mint a fresh HAR sibling so a relaunch/handoff doesn't clobber the
+    previous recording. Suffixes the stem with ``.{n}`` and bumps ``n`` until
+    we find a non-existent path (e.g. ``foo.har`` -> ``foo.1.har``)."""
+    parent = p.parent
+    stem = p.stem
+    suffix = p.suffix
+    n = 1
+    while True:
+        candidate = parent / f"{stem}.{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def _build_har_kwargs(
     *,
     har: bool,

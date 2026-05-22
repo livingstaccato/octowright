@@ -67,6 +67,7 @@ async def run_suite(
         iid: str | None = None
         ok = True
         err: str | None = None
+        teardown_warning: str | None = None
         try:
             # Tests start on about:blank so they don't accidentally depend on the global
             # DEFAULT_URL (which points at the production site and is CSP-locked).
@@ -91,16 +92,31 @@ async def run_suite(
                 try:
                     await pool.close(iid)
                 except Exception as e:
-                    ok = False
                     close_err = repr(e)
-                    err = f"{err}; close failed: {close_err}" if err else close_err
+                    if ok:
+                        # The test itself passed; record the teardown failure
+                        # as a warning but don't flip ok to False.
+                        teardown_warning = close_err
+                        log.warning(
+                            "octowright.runner.teardown_failed",
+                            test=t["name"],
+                            instance_id=iid,
+                            error=close_err,
+                        )
+                    else:
+                        # Test already failed — append close failure to the
+                        # primary error so the JUnit report carries both.
+                        err = f"{err}; close failed: {close_err}" if err else close_err
         duration = (datetime.now(UTC) - start).total_seconds()
-        return {
+        result: TestSuiteCaseResult = {
             "name": t["name"],
             "ok": ok,
             "error": err,
             "duration": duration,
         }
+        if teardown_warning is not None:
+            result["teardown_warning"] = teardown_warning
+        return result
 
     semaphore = asyncio.Semaphore(max_parallel)
 

@@ -184,7 +184,29 @@ async def browser_quick_launch(
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
 
-    launch_options = {k: v for k, v in locals().items() if k not in ("url", "profile", "kind", "options")}
+    # Explicit dict beats `locals()` spray: a future signature change here that
+    # adds a kwarg pool.launch doesn't know about would raise TypeError at call
+    # time instead of being statically auditable. Keep this list in sync with
+    # browser_launch above.
+    launch_options: dict[str, Any] = {
+        "headed": headed,
+        "label": label,
+        "viewport_w": viewport_w,
+        "viewport_h": viewport_h,
+        "stabilize": stabilize,
+        "record_video": record_video,
+        "trace": trace,
+        "har": har,
+        "har_path": har_path,
+        "har_mode": har_mode,
+        "har_url_filter": har_url_filter,
+        "har_content": har_content,
+        "badge": badge,
+        "badge_position": badge_position,
+        "tile": tile,
+        "ephemeral": ephemeral,
+        "session": session,
+    }
 
     if profile:
         res = await _pool_launch_with_deadline(url=url, profile=profile, kind=kind, **launch_options)
