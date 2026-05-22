@@ -94,6 +94,8 @@ jobs:
         run: npm install
       - name: Typecheck
         run: npm run typecheck
+      - name: Lint
+        run: npm run lint
       - name: Tests (vitest with coverage)
         run: npm test
 

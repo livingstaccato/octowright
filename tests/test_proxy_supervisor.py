@@ -29,6 +29,11 @@ def _response(request_id: str = "r1") -> SessionMessage:
     return SessionMessage(JSONRPCMessage(root=JSONRPCResponse(jsonrpc="2.0", id=request_id, result={"ok": True})))
 
 
+class FailingRemoteWrite:
+    async def send(self, _message: SessionMessage) -> None:
+        raise anyio.ClosedResourceError
+
+
 def test_request_id_and_method_for_request() -> None:
     msg = _request("tools/call", "abc")
     assert supervisor.message_request_id(msg) == "abc"
@@ -178,6 +183,65 @@ async def test_remote_failure_fails_in_flight() -> None:
         assert root.id == "lost-id"
         assert "remote leader stream closed" in root.error.message
         tg.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+async def test_forward_one_local_message_drops_stale_remote_writer_and_fails_request() -> None:
+    _local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    local_out_send, local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    supervisor_obj = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=local_out_send,
+        request_timeout_seconds=1.0,
+    )
+    remote_write_box: dict[str, Any] = {"remote_write": FailingRemoteWrite()}
+
+    await supervisor_obj.forward_one_local_message(_request("tools/call", "stale-id"), remote_write_box)
+
+    assert "remote_write" not in remote_write_box
+    error = await local_out_recv.receive()
+    root = error.message.root
+    assert isinstance(root, JSONRPCError)
+    assert root.id == "stale-id"
+    assert "leader session unavailable" in root.error.message
+
+
+@pytest.mark.anyio
+async def test_health_monitor_cancels_remote_scope_after_consecutive_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    class FakeResponse:
+        status_code = 503
+
+    class FakeClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, _url: str) -> FakeResponse:
+            nonlocal calls
+            calls += 1
+            return FakeResponse()
+
+    monkeypatch.setattr(supervisor.httpx, "AsyncClient", FakeClient)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(
+            supervisor.monitor_leader_health,
+            tg.cancel_scope,
+            "http://leader/api/health",
+            0.01,
+            2,
+        )
+        with anyio.move_on_after(1.0):
+            await anyio.sleep_forever()
+
+    assert calls >= 2
 
 
 def test_backoff_sequence_caps_at_max() -> None:

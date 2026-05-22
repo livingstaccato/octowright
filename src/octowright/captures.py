@@ -25,6 +25,9 @@ from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CA
 
 DEFAULT_PREVIEW_CHARS = 2000
 DEFAULT_SLICE_CHARS = 4000
+MAX_SLICE_CHARS = 12_000
+MAX_SEARCH_CONTEXT_CHARS = 1_000
+MAX_SEARCH_MATCHES = 50
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,13 @@ def save_capture(
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     stat = path.stat()
+    cleanup_captures(
+        root=root,
+        ttl_seconds=ttl_seconds,
+        max_total_bytes=max_total_bytes,
+        apply=True,
+        protected_path=path,
+    )
     return {
         "capture_id": capture_id,
         "kind": kind,
@@ -170,7 +180,7 @@ def get_capture_slice(
     payload = _read_payload(path)
     content = str(payload.get("content", ""))
     start = max(0, offset)
-    cap = max(0, limit)
+    cap = max(0, min(limit, MAX_SLICE_CHARS))
     end = min(len(content), start + cap)
     return {
         "capture_id": capture_id,
@@ -197,13 +207,15 @@ def search_capture(
     payload = _read_payload(path)
     content = str(payload.get("content", ""))
     matches: list[dict[str, Any]] = []
+    capped_context = max(0, min(context_chars, MAX_SEARCH_CONTEXT_CHARS))
+    capped_limit = max(0, min(limit, MAX_SEARCH_MATCHES))
     if regex:
         iterator = re.finditer(query, content, flags=re.IGNORECASE | re.MULTILINE)
     else:
         iterator = re.finditer(re.escape(query), content, flags=re.IGNORECASE)
     for match in iterator:
-        start = max(0, match.start() - context_chars)
-        end = min(len(content), match.end() + context_chars)
+        start = max(0, match.start() - capped_context)
+        end = min(len(content), match.end() + capped_context)
         matches.append(
             {
                 "start": match.start(),
@@ -213,13 +225,15 @@ def search_capture(
                 "context": content[start:end],
             }
         )
-        if len(matches) >= limit:
+        if len(matches) >= capped_limit:
             break
     return {
         "capture_id": capture_id,
         "query": query,
         "regex": regex,
         "count": len(matches),
+        "limit": capped_limit,
+        "context_chars": capped_context,
         "matches": matches,
         "path": str(path),
     }
@@ -295,17 +309,51 @@ def _size_pruned_capture_sizes(
     total_bytes: int,
     max_total_bytes: int,
     preselected: dict[Path, int],
+    protected_path: Path | None = None,
 ) -> dict[Path, int]:
     selected = dict(preselected)
     projected = total_bytes - sum(selected.values())
+    protected_resolved = protected_path.resolve() if protected_path is not None else None
+    projected = _add_size_prune_candidates(
+        files,
+        selected=selected,
+        projected=projected,
+        max_total_bytes=max_total_bytes,
+        protected_resolved=protected_resolved,
+        include_protected=False,
+    )
+    if projected > max_total_bytes:
+        _add_size_prune_candidates(
+            files,
+            selected=selected,
+            projected=projected,
+            max_total_bytes=max_total_bytes,
+            protected_resolved=protected_resolved,
+            include_protected=True,
+        )
+    return selected
+
+
+def _add_size_prune_candidates(
+    files: list[tuple[Path, float, int]],
+    *,
+    selected: dict[Path, int],
+    projected: int,
+    max_total_bytes: int,
+    protected_resolved: Path | None,
+    include_protected: bool,
+) -> int:
     for path, _mtime, size in sorted(files, key=lambda item: item[1]):
         if projected <= max_total_bytes:
             break
         if path in selected:
             continue
+        is_protected = protected_resolved is not None and path.resolve() == protected_resolved
+        if is_protected != include_protected:
+            continue
         selected[path] = size
         projected -= size
-    return selected
+    return projected
 
 
 def _delete_capture_files(to_remove: dict[Path, int], *, root: Path) -> tuple[int, int, list[dict[str, str]]]:
@@ -331,6 +379,7 @@ def cleanup_captures(
     max_total_bytes: int = CAPTURE_MAX_TOTAL_BYTES,
     apply: bool = False,
     now: float | None = None,
+    protected_path: Path | None = None,
 ) -> dict[str, Any]:
     reference = time.time() if now is None else now
     files = _capture_file_stats(root)
@@ -340,6 +389,7 @@ def cleanup_captures(
         total_bytes=total_bytes,
         max_total_bytes=max_total_bytes,
         preselected=_expired_capture_sizes(files, ttl_seconds=ttl_seconds, reference=reference),
+        protected_path=protected_path,
     )
     errors: list[dict[str, str]] = []
     removed_count = 0
