@@ -41,7 +41,7 @@ dependencies = [
     "mcp>=1.2.0",
     "playwright>=1.47.0",
     "anyio>=4.4.0",
-    "provide-telemetry>=0.3",
+    "provide-telemetry[otel]>=0.4.4",
     "click>=8.1",
     # cryptography stopped shipping win_arm64 wheels after 46.0.3. Pinning
     # to the 46.0.3.x range keeps Windows ARM64 installable (the alternative
@@ -97,11 +97,18 @@ artifacts = [
 # `include = ["src/octowright/skills/**"]`, which truncated sdists to just the
 # skills tree and produced a 22 KB wheel with no source code — kept explicit
 # here so any future narrowing is visible in review.
+#
+# tools/octowright_demos and demo/bundles are required by the test suite
+# (tests import octowright_demos and reference demo/bundles/*) but live
+# outside src/ so they never reach the wheel. Shipping them in the sdist keeps
+# `pip install <sdist>` + `pytest` working for downstream packagers.
 include = [
     "src/**",
     "tests/**",
     "docs/**",
     "examples/**",
+    "tools/octowright_demos/**",
+    "demo/bundles/**",
     "README.md",
     "LICENSES/**",
     "REUSE.toml",
@@ -141,7 +148,7 @@ dev = [
     "pytest-rerunfailures>=14.0",
     "pytest-xdist>=3.8.0",
     "reuse>=6.2.0",
-    "ruff>=0.14.5",
+    "ruff>=0.15.0",
     "twine>=5.1.1",
     "ty>=0.0.18",
     "vulture>=2.14",

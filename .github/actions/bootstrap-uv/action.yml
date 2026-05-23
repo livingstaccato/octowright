@@ -12,21 +12,12 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # Under nektos/act, symlink the bundled node into /usr/local/bin so it
+    # stays on PATH for downstream actions. No-op on real GitHub runners.
     - name: Ensure node on PATH for post-actions (act only)
       if: ${{ env.ACT == 'true' }}
       shell: bash
-      run: |
-        set -x
-        which node || true
-        ls -la /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null || true
-        n=$(ls -t /opt/acttoolcache/node/*/x64/bin/node 2>/dev/null | head -1 || true)
-        echo "Found node: $n"
-        if [ -n "$n" ] && [ ! -x /usr/local/bin/node ]; then
-          ln -sf "$n" /usr/local/bin/node
-          echo "Symlinked $n -> /usr/local/bin/node"
-        fi
-        which node
-        ls -la /usr/local/bin/node || true
+      run: bash "${GITHUB_WORKSPACE}/ci/bootstrap_node_act.sh"
     - name: Install uv (act fallback)
       if: ${{ env.ACT == 'true' }}
       shell: bash

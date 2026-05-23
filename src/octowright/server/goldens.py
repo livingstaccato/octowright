@@ -32,13 +32,27 @@ async def golden_save(
     return {"saved": True, "name": name, "path": str(path)}
 
 
+class GoldenMismatchError(AssertionError):
+    """Raised by `golden_assert` when the live tree differs from the golden.
+
+    Carries the diff list as `.diffs` (first 20 entries) so MCP clients can
+    surface the cause; the JSON-RPC error payload includes `str(exc)`.
+    """
+
+    def __init__(self, name: str, diffs: list[Any]):
+        self.golden = name
+        self.diffs = diffs[:20]
+        self.diff_count = len(diffs)
+        super().__init__(f"golden {name!r} mismatch: {self.diff_count} diff(s); first: {self.diffs[:1]}")
+
+
 @mcp.tool(
     structured_output=False,
     description=(
         "Compare the current page's accessibility tree against a saved golden. "
-        "Returns {ok: false, golden, diffs, diff_count} on mismatch and "
-        "{ok: true, diffs: 0} on match. Callers that want a hard failure on "
-        "drift should check `ok` themselves."
+        "RAISES GoldenMismatchError on any drift (the JSON-RPC error carries "
+        "the first diff). Returns {ok: true, diffs: 0} only on exact match. "
+        "Use golden_verify_loop instead when you want to poll without raising."
     ),
 )
 async def golden_assert(instance_id: str, name: str) -> dict[str, Any]:
@@ -47,12 +61,7 @@ async def golden_assert(instance_id: str, name: str) -> dict[str, Any]:
     expected = goldens_mod.load_golden(name)["tree"]
     diffs = goldens_mod.diff_trees(expected, actual)
     if diffs:
-        return {
-            "ok": False,
-            "golden": name,
-            "diffs": diffs[:20],
-            "diff_count": len(diffs),
-        }
+        raise GoldenMismatchError(name, diffs)
     return {"ok": True, "diffs": 0}
 
 

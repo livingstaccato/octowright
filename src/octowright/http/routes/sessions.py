@@ -33,6 +33,7 @@ from octowright.http.discovery import (
     _summarise_recording,
 )
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.recording_sidecars import is_recording_sidecar
 from octowright.http.routes._common import _read_json_body
 from octowright.http.session_artifacts import session_artifact_cache
 
@@ -319,6 +320,9 @@ async def session_navigate(request: Request) -> JSONResponse:
     session = pool.get(sid)
     try:
         await session.navigate(url)
+    except ValueError as e:
+        # Bad input (e.g. disallowed url scheme) — 400, not 500.
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         state.log.exception("octowright.http.session_navigate_failed", instance_id=sid, url=url)
         return JSONResponse({"error": f"navigate failed: {e}"}, status_code=500)
@@ -376,7 +380,7 @@ async def recording_delete(request: Request) -> JSONResponse:
     deleted: list[str] = []
     stem = jsonl.stem
     for f in jsonl.parent.iterdir():
-        if f.name.startswith(stem):
+        if is_recording_sidecar(f.name, stem):
             try:
                 f.unlink()
                 deleted.append(f.name)

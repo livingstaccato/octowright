@@ -248,12 +248,15 @@ async def test_browser_capture_and_close_with_snapshot(_patch_pool: MagicMock) -
 
 @pytest.mark.anyio
 async def test_browser_read_markdown_failure(_patch_pool: MagicMock) -> None:
+    """When capture_markdown returns None, the tool raises so MCP returns
+    a JSON-RPC error rather than a success-shape dict with an ``error``
+    field. LLM clients expect raised errors for failures."""
     s = _session()
     _patch_pool.get.return_value = s
     s.markdown_path = None
     s.capture_markdown = AsyncMock(return_value=None)
-    out = await _inspect.browser_read_markdown("i")
-    assert "error" in out
+    with pytest.raises(RuntimeError, match="markdown generation"):
+        await _inspect.browser_read_markdown("i")
 
 
 @pytest.mark.anyio

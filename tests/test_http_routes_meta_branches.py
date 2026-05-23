@@ -435,3 +435,74 @@ class TestPersonaUpdate:
         (p / "profile.yaml").write_text("name: cosmo\n")
         r = client.put("/api/personas/cosmo", content="{ broken", headers={"content-type": "application/json"})
         assert r.status_code == 400
+
+    def test_valid_schema_yaml_succeeds(self, client: TestClient, isolated_profiles: Path) -> None:
+        """Full-shape valid YAML round-trips through the validator + write."""
+        p = isolated_profiles / "cosmo"
+        p.mkdir()
+        yaml_path = p / "profile.yaml"
+        yaml_path.write_text("name: cosmo\n")
+        new_yaml = (
+            "name: cosmo\n"
+            "display_name: Cosmo\n"
+            "default_url: https://example.com\n"
+            "default_macros:\n  - login\n"
+            "credentials:\n  email_env: COSMO_EMAIL\n  token_cmd: op read op://x\n"
+            "app:\n  role: player\n"
+            'emoji: "🚀"\n'
+        )
+        r = client.put("/api/personas/cosmo", json={"yaml": new_yaml})
+        assert r.status_code == 200, r.json()
+        # Explicit utf-8: on Windows Path.read_text() defaults to cp1252,
+        # which decodes the on-disk emoji bytes as mojibake and trips this
+        # comparison even though the file contents are correct.
+        assert yaml_path.read_text(encoding="utf-8") == new_yaml
+
+    def test_unknown_top_level_key_400(self, client: TestClient, isolated_profiles: Path) -> None:
+        """Unknown top-level key → 400 with explanatory error."""
+        p = isolated_profiles / "cosmo"
+        p.mkdir()
+        yaml_path = p / "profile.yaml"
+        original = "name: cosmo\n"
+        yaml_path.write_text(original)
+        r = client.put("/api/personas/cosmo", json={"yaml": "name: cosmo\nsomething_evil: rm -rf /\n"})
+        assert r.status_code == 400
+        assert "unknown top-level key" in r.json()["error"]
+        # file untouched
+        assert yaml_path.read_text() == original
+
+    def test_credentials_not_dict_400(self, client: TestClient, isolated_profiles: Path) -> None:
+        """credentials must be a mapping → 400 when given a list."""
+        p = isolated_profiles / "cosmo"
+        p.mkdir()
+        (p / "profile.yaml").write_text("name: cosmo\n")
+        r = client.put(
+            "/api/personas/cosmo",
+            json={"yaml": "name: cosmo\ncredentials:\n  - email_env\n  - PWNED\n"},
+        )
+        assert r.status_code == 400
+        assert "credentials" in r.json()["error"]
+
+    def test_credentials_value_not_string_400(self, client: TestClient, isolated_profiles: Path) -> None:
+        """credential value must be a string (env var name or cmd) → 400."""
+        p = isolated_profiles / "cosmo"
+        p.mkdir()
+        (p / "profile.yaml").write_text("name: cosmo\n")
+        r = client.put(
+            "/api/personas/cosmo",
+            json={"yaml": "name: cosmo\ncredentials:\n  email_env:\n    - PWNED\n"},
+        )
+        assert r.status_code == 400
+        assert "credentials.email_env" in r.json()["error"]
+
+    def test_credentials_key_bad_suffix_400(self, client: TestClient, isolated_profiles: Path) -> None:
+        """Credential keys without _env/_cmd suffix → 400 (catches typos)."""
+        p = isolated_profiles / "cosmo"
+        p.mkdir()
+        (p / "profile.yaml").write_text("name: cosmo\n")
+        r = client.put(
+            "/api/personas/cosmo",
+            json={"yaml": "name: cosmo\ncredentials:\n  email: literal-secret\n"},
+        )
+        assert r.status_code == 400
+        assert "_env" in r.json()["error"]

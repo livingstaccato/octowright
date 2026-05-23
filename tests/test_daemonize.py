@@ -22,9 +22,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
+
+from octowright import daemonize as _daemon
 
 
 def _resolve_octowright_entry() -> str:
@@ -72,8 +75,10 @@ def _read_lock(path: Path) -> dict | None:
 )
 def test_daemon_survives_parent_sigkill(tmp_path: Path) -> None:
     """Spawn parent → wait for daemon → SIGKILL parent → daemon still serves HTTP."""
+    from tests.conftest import _free_port
+
     lock_path = tmp_path / "octowright.lock"
-    test_port = 18950  # well above the user's range
+    test_port = _free_port()  # OS-assigned free port, avoids collision with running daemons
 
     env = os.environ.copy()
     env["OCTOWRIGHT_LOCK_PATH"] = str(lock_path)
@@ -141,3 +146,53 @@ def test_daemon_survives_parent_sigkill(tmp_path: Path) -> None:
         if daemon_pid is not None:
             _kill_pid(daemon_pid)
             # Reap the orphan with waitpid? It's not our child; OS handles it.
+
+
+# ─── _resolve_daemon_entrypoint ──────────────────────────────────────────────
+
+
+class TestResolveDaemonEntrypoint:
+    """Pin the entrypoint resolver. ``sys.argv[0]`` is unreliable for the
+    ``python -m octowright`` launch path; the resolver must prefer the
+    installed console script, then fall back to ``python -m octowright``.
+    """
+
+    def test_prefers_shutil_which_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If `octowright` is on PATH, that absolute path is the entrypoint."""
+        monkeypatch.setattr(_daemon.shutil, "which", lambda _name: "/opt/venv/bin/octowright")
+        assert _daemon._resolve_daemon_entrypoint() == ["/opt/venv/bin/octowright"]
+
+    def test_falls_back_to_python_m_octowright(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When `octowright` is NOT on PATH, fall back to `python -m octowright`."""
+        monkeypatch.setattr(_daemon.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(_daemon.sys, "executable", "/usr/bin/python3.13")
+        assert _daemon._resolve_daemon_entrypoint() == ["/usr/bin/python3.13", "-m", "octowright"]
+
+    def test_last_resort_uses_sys_argv0(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If both PATH lookup and sys.executable are unavailable, fall back to argv[0]."""
+        monkeypatch.setattr(_daemon.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(_daemon.sys, "executable", "")
+        monkeypatch.setattr(_daemon.sys, "argv", ["/some/weird/path"])
+        assert _daemon._resolve_daemon_entrypoint() == ["/some/weird/path"]
+
+    def test_spawn_daemon_uses_resolver_for_argv_prefix(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """spawn_daemon should prepend the resolver's argv prefix, not raw sys.argv[0]."""
+        monkeypatch.setattr(_daemon, "_DAEMON_LOG", tmp_path / "d.log")
+        monkeypatch.setattr(_daemon, "_resolve_daemon_entrypoint", lambda: ["/usr/bin/python3", "-m", "octowright"])
+
+        captured: dict[str, Any] = {}
+
+        def fake_popen(args: list[str], **kwargs: Any) -> Any:
+            captured["args"] = args
+            stderr = kwargs.get("stderr")
+            if hasattr(stderr, "close"):
+                stderr.close()
+
+            class _Fake:
+                pid = 4321
+
+            return _Fake()
+
+        monkeypatch.setattr(_daemon.subprocess, "Popen", fake_popen)
+        _daemon.spawn_daemon(http_host=None, http_port=None, idle_grace=None)
+        assert captured["args"][:5] == ["/usr/bin/python3", "-m", "octowright", "serve", "--daemon-mode"]

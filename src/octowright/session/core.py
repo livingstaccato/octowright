@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
+from provide.telemetry import bind_context, unbind_context
 
 from octowright.browser_pool.viewport import ViewportMode
 from octowright.defaults import NETWORK_EVENT_LIMIT
@@ -71,6 +72,10 @@ class BrowserSession(
     _last_markdown_capture_key: str | None = None
     _pending_markdown_capture: Any | None = None
     websocket_path: Path | None = None
+    # Lazy-opened append handle for high-frequency WS feeds; typed as Any
+    # because Path.open("a", encoding="utf-8") returns TextIOWrapper while
+    # the protocol surface only needs write/flush/close.
+    _websocket_fh: Any = field(default=None, repr=False)
     _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
     _network_requests_dropped: int = 0
     _last_mcp_navigation: str | None = None
@@ -91,6 +96,32 @@ class BrowserSession(
             from datetime import UTC, datetime
 
             self.started_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+        # Bind session context so every log line emitted while this session
+        # is alive auto-carries the per-browser identifiers. unbind happens
+        # in close(). Context is thread-local — fine for asyncio's single-
+        # loop model; callers in worker threads (asyncio.to_thread workers)
+        # see the parent loop's binding via structlog's contextvars copy.
+        try:
+            bind_context(
+                octowright_instance_id=self.instance_id,
+                octowright_kind=self.kind,
+                octowright_profile=self.profile,
+                octowright_label=self.label,
+            )
+        except Exception:
+            # Telemetry must never break session creation.
+            pass
+
+    def unbind_telemetry_context(self) -> None:
+        try:
+            unbind_context(
+                "octowright_instance_id",
+                "octowright_kind",
+                "octowright_profile",
+                "octowright_label",
+            )
+        except Exception:
+            pass
 
     def _target(self) -> Any:
         return self.active_frame if self.active_frame is not None else self.page

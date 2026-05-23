@@ -218,21 +218,23 @@ def test_list_personas_sorts_most_recent_mtime_first(tmp_path, fresh_personas):
     assert names == ["newest", "newer", "old"]
 
 
-def test_list_personas_pins_dante_and_tim_first(tmp_path, fresh_personas):
-    """Dante and Tim are first-party examples and should stay easy to find."""
+def test_list_personas_sorted_by_recent_mtime(tmp_path, fresh_personas):
+    """Personas are sorted by mtime descending (most recently used first).
+    Previously this also pinned specific dev names; that hardcoded
+    preference has been removed."""
     import os
     import time
 
     _write_persona(tmp_path, "newest", {"name": "newest"})
-    _write_persona(tmp_path, "tim", {"name": "tim", "display_name": "Tanooki Tim"})
-    _write_persona(tmp_path, "dante", {"name": "dante", "display_name": "Dinosaur Dante"})
+    _write_persona(tmp_path, "middle", {"name": "middle"})
+    _write_persona(tmp_path, "oldest", {"name": "oldest"})
     now = time.time()
-    os.utime(tmp_path / "dante", (now - 300, now - 300))
-    os.utime(tmp_path / "tim", (now - 200, now - 200))
+    os.utime(tmp_path / "oldest", (now - 300, now - 300))
+    os.utime(tmp_path / "middle", (now - 200, now - 200))
     os.utime(tmp_path / "newest", (now, now))
 
     names = [p["name"] for p in fresh_personas.list_personas()]
-    assert names == ["dante", "tim", "newest"]
+    assert names == ["newest", "middle", "oldest"]
 
 
 def test_list_personas_last_used_iso_format_matches_mtime(tmp_path, fresh_personas):
