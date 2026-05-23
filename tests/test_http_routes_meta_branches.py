@@ -453,7 +453,10 @@ class TestPersonaUpdate:
         )
         r = client.put("/api/personas/cosmo", json={"yaml": new_yaml})
         assert r.status_code == 200, r.json()
-        assert yaml_path.read_text() == new_yaml
+        # Explicit utf-8: on Windows Path.read_text() defaults to cp1252,
+        # which decodes the on-disk emoji bytes as mojibake and trips this
+        # comparison even though the file contents are correct.
+        assert yaml_path.read_text(encoding="utf-8") == new_yaml
 
     def test_unknown_top_level_key_400(self, client: TestClient, isolated_profiles: Path) -> None:
         """Unknown top-level key → 400 with explanatory error."""
