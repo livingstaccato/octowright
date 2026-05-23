@@ -54,7 +54,9 @@ def test_packaging_asset_check_accepts_frontend_in_wheel_and_sdist(
     dist.mkdir()
     required = check_wheel_assets.REQUIRED_PACKAGE_FILES
     _write_zip(dist / "octowright.whl", required)
-    _write_tar(dist / "octowright.tar.gz", {f"octowright-0.3.0/{name}" for name in required})
+    # The version in the synthetic root dir is a placeholder — the normaliser
+    # strips the first segment unconditionally, so any version reads the same.
+    _write_tar(dist / "octowright.tar.gz", {f"octowright-X.Y.Z/{name}" for name in required})
     monkeypatch.chdir(tmp_path)
 
     check_wheel_assets.main()
