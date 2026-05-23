@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
@@ -14,6 +15,8 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
+from octowright._tracing import set_attrs
+from octowright.browser_pool._metrics import LAUNCH_DURATION, LAUNCHED, launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure, cleanup_unregistered_launch
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
 from octowright.browser_pool.launch_helpers import (
@@ -73,10 +76,11 @@ class BrowserPool:
                 self._pw = await async_playwright().start()
         return self._pw
 
-    async def launch(
-        self,
-        **options: Any,
-    ) -> dict[str, Any]:
+    async def launch(self, **options: Any) -> dict[str, Any]:
+        async with launch_span(options.get("kind") or "chromium") as sp:
+            return await self._launch_impl(options, sp)
+
+    async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:
         launch_options = LaunchOptions.from_mapping(options)
         kind = launch_options.kind
         url = launch_options.url
@@ -105,6 +109,7 @@ class BrowserPool:
         registered = False
 
         instance_id = uuid.uuid4().hex[:12]
+        t0 = time.perf_counter()
 
         # Promote: a named launch (label given, no explicit profile, not ephemeral
         # and not session-scoped) gets a persistent profile by default. The whole
@@ -113,7 +118,7 @@ class BrowserPool:
         profile = launch_options.promoted_profile()
 
         session_user_data_dir = self._resolve_session_dir(session, launch_options, instance_id, kind)
-
+        set_attrs(_sp, instance_id=instance_id, profile=profile, label=label, session=session)
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
@@ -238,6 +243,9 @@ class BrowserPool:
             if trace:
                 await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
+            from octowright.session.core_page_mixin import _reject_unsafe_url
+
+            _reject_unsafe_url(target_url)
             await page.goto(target_url)
 
             new_session._schedule_markdown_capture()
@@ -253,6 +261,8 @@ class BrowserPool:
                 log_path=log_path,
             )
             registered = True
+            LAUNCHED.add(1, attributes={"kind": kind})
+            LAUNCH_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind})
             log.info(
                 "octowright.browser.launched",
                 instance_id=instance_id,
@@ -334,6 +344,9 @@ class BrowserPool:
         return len(self._sessions)
 
     def list_sessions(self) -> list[dict[str, Any]]:
+        # Snapshot values() into a tuple before iterating: Playwright sync
+        # close callbacks fire _evict_session_nowait between awaits and could
+        # otherwise mutate the dict mid-iteration.
         return [
             {
                 "instance_id": s.instance_id,
@@ -344,7 +357,7 @@ class BrowserPool:
                 "log_path": str(s.log_path),
                 "har_path": str(s.har_path) if s.har_path else None,
             }
-            for s in self._sessions.values()
+            for s in tuple(self._sessions.values())
         ]
 
     async def _expose_viewport_binding(self, context: Any, session: BrowserSession) -> None:
@@ -395,9 +408,14 @@ class BrowserPool:
         }
 
     def profile_in_use(self, kind: str, profile: str) -> bool:
-        return any(s.kind == kind and s.profile == profile for s in self._sessions.values())
+        return any(s.kind == kind and s.profile == profile for s in tuple(self._sessions.values()))
 
     def _evict_session_nowait(self, instance_id: str) -> BrowserSession | None:
+        # Called from synchronous Playwright event callbacks (page.close,
+        # context.close, browser.disconnected). Can't `await` a lock from a
+        # sync callback, but CPython dict.pop is GIL-atomic and asyncio is
+        # single-threaded — so this and the locked pop in close_browser
+        # cannot interleave in flight. Idempotent: returns None on miss.
         return self._sessions.pop(instance_id, None)
 
     async def close(self, instance_id: str) -> dict[str, Any]:
@@ -471,6 +489,11 @@ class BrowserPool:
         session_key = (session_name, kind)
         existing = self._session_profile_dirs.get(session_key)
         if existing is None or not existing.exists():
+            # Synchronous from get() through assignment: launch() doesn't
+            # await between calling this and the next yield point, so two
+            # concurrent launches cannot interleave here. If a future refactor
+            # introduces awaits inside this function, switch to setdefault
+            # + cleanup-on-loss to avoid leaking the losing tmpdir.
             tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_name}-{kind}-"))
             self._session_profile_dirs[session_key] = tmp
             existing = tmp

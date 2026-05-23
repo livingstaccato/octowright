@@ -209,7 +209,7 @@ def test_check_credentials_empty_persona_has_no_credentials(monkeypatch: pytest.
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_tool_loads_persona_and_runs_check(
+async def test_mcp_tool_loads_persona_and_runs_check(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
 ) -> None:
     """The tool takes a persona NAME, loads it from disk, and returns the report."""
@@ -229,7 +229,7 @@ def test_mcp_tool_loads_persona_and_runs_check(
     monkeypatch.setattr(_personas, "PROFILES_DIR", pdir)
     monkeypatch.setenv("X_EMAIL", "resolved")
 
-    report = _server.persona_credentials_check(name="dante")
+    report = await _server.persona_credentials_check(name="dante")
 
     assert report["persona"] == "dante"
     assert report["ok"] is True

@@ -13,6 +13,7 @@ first ``launch`` event for metadata, and aggregate sibling video/trace files.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections import OrderedDict
 from datetime import UTC, datetime
@@ -108,6 +109,16 @@ def _live_summary(session: Any) -> dict[str, Any]:
 # Bounded LRU so the cache can't grow without limit across long-running daemons.
 _summary_per_file: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
 
+# Guards both ``_summary_per_file`` and ``_recording_index`` against concurrent
+# mutation. Discovery helpers are called from the main asyncio event loop AND
+# from ``asyncio.to_thread`` workers spawned by session-close warmup
+# (``session_artifact_cache.warm_close`` / ``scan_artifacts``) and from any
+# code path that touches these caches off the loop. Without this lock the
+# ``OrderedDict.move_to_end`` / ``__setitem__`` / ``popitem`` calls below can
+# race with concurrent ``.get`` iterations and raise
+# ``RuntimeError: dictionary changed size during iteration``.
+_cache_lock = threading.Lock()
+
 
 def _summarise_recording_cached(jsonl_path: Path) -> dict[str, Any] | None:
     try:
@@ -116,16 +127,22 @@ def _summarise_recording_cached(jsonl_path: Path) -> dict[str, Any] | None:
         return None
     sig = (stat.st_mtime_ns, stat.st_size)
     key = str(jsonl_path)
-    cached = _summary_per_file.get(key)
-    if cached and cached[0] == sig:
-        _summary_per_file.move_to_end(key)
-        return cached[1]
+    with _cache_lock:
+        cached = _summary_per_file.get(key)
+        if cached and cached[0] == sig:
+            _summary_per_file.move_to_end(key)
+            return cached[1]
+    # Parse outside the lock — _summarise_recording does file I/O which we
+    # don't want to serialize across threads. The (signature, summary) write
+    # below is idempotent: if two threads parse the same path concurrently
+    # the second write simply replaces the first with identical content.
     summary = _summarise_recording(jsonl_path)
     if summary is not None:
-        _summary_per_file[key] = (sig, summary)
-        _summary_per_file.move_to_end(key)
-        while len(_summary_per_file) > DISCOVERY_CACHE_MAX_ENTRIES:
-            _summary_per_file.popitem(last=False)
+        with _cache_lock:
+            _summary_per_file[key] = (sig, summary)
+            _summary_per_file.move_to_end(key)
+            while len(_summary_per_file) > DISCOVERY_CACHE_MAX_ENTRIES:
+                _summary_per_file.popitem(last=False)
     return summary
 
 
@@ -135,7 +152,8 @@ def invalidate_recording_summary(jsonl_path: Path) -> None:
     Called from recording_cleanup when a recording is deleted so the cache
     doesn't carry phantom entries for files that no longer exist.
     """
-    _summary_per_file.pop(str(jsonl_path), None)
+    with _cache_lock:
+        _summary_per_file.pop(str(jsonl_path), None)
 
 
 def _closed_sessions(recordings_dir: Path, live_log_paths: set[str]) -> list[dict[str, Any]]:
@@ -194,34 +212,38 @@ def invalidate_recording_index(recordings_dir: Path | None = None) -> None:
 
     Pass a specific dir or ``None`` to clear all dirs (e.g. tests).
     """
-    if recordings_dir is None:
-        _recording_index.clear()
-    else:
-        _recording_index.pop(recordings_dir, None)
+    with _cache_lock:
+        if recordings_dir is None:
+            _recording_index.clear()
+        else:
+            _recording_index.pop(recordings_dir, None)
 
 
 def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
-    cached = _recording_index.get(recordings_dir)
     current_mtime = _dir_mtime_ns(recordings_dir)
-    if cached is not None:
-        cached_mtime, index = cached
-        hit = index.get(session_id)
-        if hit is not None and hit.exists():
-            index.move_to_end(session_id)
-            return hit
-        if hit is not None:
-            # Cached path was deleted out-of-band; fall through to rebuild.
-            del index[session_id]
-        # Skip rebuild for unknown ids when the dir hasn't changed since
-        # we last walked it — protects against repeated bad-id lookups
-        # (negative-cache via dir mtime).
-        if current_mtime is not None and current_mtime == cached_mtime:
-            return None
+    with _cache_lock:
+        cached = _recording_index.get(recordings_dir)
+        if cached is not None:
+            cached_mtime, index = cached
+            hit = index.get(session_id)
+            if hit is not None and hit.exists():
+                index.move_to_end(session_id)
+                return hit
+            if hit is not None:
+                # Cached path was deleted out-of-band; fall through to rebuild.
+                del index[session_id]
+            # Skip rebuild for unknown ids when the dir hasn't changed since
+            # we last walked it — protects against repeated bad-id lookups
+            # (negative-cache via dir mtime).
+            if current_mtime is not None and current_mtime == cached_mtime:
+                return None
+    # Rebuild outside the lock (filesystem walk) and then publish atomically.
     rebuilt = _build_recording_index(recordings_dir)
-    _recording_index[recordings_dir] = (current_mtime if current_mtime is not None else 0, rebuilt)
-    hit = rebuilt.get(session_id)
-    if hit is not None:
-        rebuilt.move_to_end(session_id)
+    with _cache_lock:
+        _recording_index[recordings_dir] = (current_mtime if current_mtime is not None else 0, rebuilt)
+        hit = rebuilt.get(session_id)
+        if hit is not None:
+            rebuilt.move_to_end(session_id)
     return hit
 
 

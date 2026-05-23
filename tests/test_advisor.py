@@ -27,9 +27,6 @@ _HYPOTHESIS_SETTINGS_SMALL = settings(max_examples=50, suppress_health_check=[He
 
 
 def test_default_state_has_per_type_preferences(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
-
     state = advisor.load_state()
 
     assert state["preferences"] == {
@@ -42,7 +39,6 @@ def test_default_state_has_per_type_preferences(tmp_path: Path, monkeypatch) -> 
 
 def test_state_round_trips_preferences_and_usage(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
 
     advisor.set_preference("profile_change", "automatic")
     advisor.record_tool_call("browser_launch")
@@ -55,9 +51,6 @@ def test_state_round_trips_preferences_and_usage(tmp_path: Path, monkeypatch) ->
 
 
 def test_always_on_tools_are_not_counted_as_usage(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
-
     advisor.record_tool_call("octowright_status")
     advisor.record_tool_call("octowright_advisor_status")
 
@@ -66,7 +59,6 @@ def test_always_on_tools_are_not_counted_as_usage(tmp_path: Path, monkeypatch) -
 
 def test_load_state_skips_invalid_nested_entries(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     path.write_text(
         json.dumps(
             {
@@ -120,8 +112,6 @@ def test_load_state_skips_invalid_nested_entries(tmp_path: Path, monkeypatch) ->
 
 
 def test_reset_state_persists_default_state(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     advisor.set_preference("macro_candidate", "no")
     advisor.record_tool_call("browser_launch")
 
@@ -133,8 +123,6 @@ def test_reset_state_persists_default_state(tmp_path: Path, monkeypatch) -> None
 
 
 def test_core_only_usage_suggests_reducing_full_surface(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     monkeypatch.setenv("OCTOWRIGHT_PROFILE", "")
     for tool_name in ("browser_launch", "browser_click", "browser_fill", "browser_close"):
         advisor.record_tool_call(tool_name)
@@ -155,8 +143,6 @@ def test_core_only_usage_suggests_reducing_full_surface(tmp_path: Path, monkeypa
 
 
 def test_macro_usage_suggests_expanding_core_profile(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core")
     advisor.record_tool_call("browser_launch")
     advisor.record_tool_call("macro_run")
@@ -169,8 +155,6 @@ def test_macro_usage_suggests_expanding_core_profile(tmp_path: Path, monkeypatch
 
 
 def test_full_surface_non_core_usage_does_not_suggest_profile_reduction(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     monkeypatch.setenv("OCTOWRIGHT_PROFILE", "")
     advisor.record_tool_call("macro_run")
 
@@ -178,8 +162,6 @@ def test_full_surface_non_core_usage_does_not_suggest_profile_reduction(tmp_path
 
 
 def test_profile_automatic_mode_marks_profile_suggestion_auto_apply(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     monkeypatch.setenv("OCTOWRIGHT_PROFILE", "")
     advisor.set_preference("profile_change", "automatic")
     advisor.record_tool_call("browser_launch")
@@ -191,8 +173,6 @@ def test_profile_automatic_mode_marks_profile_suggestion_auto_apply(tmp_path: Pa
 
 
 def test_macro_automatic_mode_never_auto_saves(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     advisor.set_preference("macro_candidate", "automatic")
     advisor.record_macro_observation(
         source="llm",
@@ -221,8 +201,6 @@ def test_macro_automatic_mode_never_auto_saves(tmp_path: Path, monkeypatch) -> N
 
 
 def test_no_preference_suppresses_suggestion_type(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     monkeypatch.setenv("OCTOWRIGHT_PROFILE", "")
     advisor.set_preference("profile_change", "no")
     advisor.record_tool_call("browser_launch")
@@ -232,16 +210,11 @@ def test_no_preference_suppresses_suggestion_type(tmp_path: Path, monkeypatch) -
 
 
 def test_invalid_preference_value_raises(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
-
     with pytest.raises(ValueError):
         advisor.set_preference("profile_change", "sometimes")
 
 
 def test_matching_active_profile_does_not_suggest_profile_change(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core")
     advisor.record_tool_call("browser_launch")
     advisor.record_tool_call("browser_click")
@@ -250,8 +223,6 @@ def test_matching_active_profile_does_not_suggest_profile_change(tmp_path: Path,
 
 
 def test_macro_preference_no_suppresses_macro_suggestion(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     advisor.set_preference("macro_candidate", "no")
     advisor.record_macro_observation(source="llm", signature="login-flow", summary="Repeated login flow")
     advisor.record_macro_observation(source="server", signature="login-flow", summary="Repeated login flow")
@@ -260,8 +231,6 @@ def test_macro_preference_no_suppresses_macro_suggestion(tmp_path: Path, monkeyp
 
 
 def test_status_reports_usage_summary(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     advisor.record_tool_call("browser_launch")
     advisor.record_tool_call("unknown_tool")
     advisor.record_macro_observation(source="llm", signature="login-flow", summary="Repeated login flow")
@@ -280,7 +249,6 @@ def test_status_reports_usage_summary(tmp_path: Path, monkeypatch) -> None:
 @given(raw=_JSON_VALUES)
 def test_load_state_normalises_arbitrary_persisted_json(tmp_path: Path, monkeypatch, raw) -> None:
     path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     path.write_text(json.dumps(raw), encoding="utf-8")
 
     state = advisor.load_state()
@@ -304,7 +272,6 @@ def test_load_state_normalises_arbitrary_persisted_json(tmp_path: Path, monkeypa
 @given(tool_name=st.text())
 def test_record_tool_call_maps_arbitrary_tool_names(tmp_path: Path, monkeypatch, tool_name: str) -> None:
     path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     path.unlink(missing_ok=True)
 
     advisor.record_tool_call(tool_name)
@@ -334,7 +301,6 @@ def test_set_preference_rejects_invalid_values(
     tmp_path: Path, monkeypatch, suggestion_type: str, preference: str
 ) -> None:
     path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     path.unlink(missing_ok=True)
 
     if suggestion_type in _VALID_SUGGESTION_TYPES and preference in _VALID_PREFERENCES:
@@ -361,7 +327,6 @@ def test_macro_observation_redacts_secretish_values(
     secret_value: str,
 ) -> None:
     path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     path.unlink(missing_ok=True)
 
     advisor.record_macro_observation(
@@ -378,7 +343,6 @@ def test_macro_observation_redacts_secretish_values(
 @given(signature=st.text(min_size=1))
 def test_macro_candidate_ids_are_stable_safe_slugs(tmp_path: Path, monkeypatch, signature: str) -> None:
     path = tmp_path / "advisor.json"
-    monkeypatch.setattr(advisor, "ADVISOR_STATE_PATH", path)
     path.unlink(missing_ok=True)
 
     advisor.record_macro_observation(source="llm", signature=signature, summary="Repeated flow")

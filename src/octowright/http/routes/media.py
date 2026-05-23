@@ -174,12 +174,7 @@ async def session_screenshot_now(request: Request) -> Response:
     if fmt == "jpeg":
         kwargs["quality"] = quality
     try:
-        result = page.screenshot(**kwargs)
-        # Playwright returns bytes; if a stub returned a coroutine, await it.
-        if asyncio.iscoroutine(result):
-            data = await result
-        else:
-            data = result
+        data = await page.screenshot(**kwargs)
     except Exception as e:
         state.log.warning(
             "octowright.http.live_screenshot_failed",

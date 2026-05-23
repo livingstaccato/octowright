@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright._tracing import set_attrs, span
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
 if TYPE_CHECKING:
@@ -55,12 +56,14 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
             session=spec.get("session", False),
         )
 
-    results = await asyncio.gather(*[_launch_one(s) for s in specs], return_exceptions=True)
-    launched: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    for spec, result in zip(specs, results, strict=True):
-        if isinstance(result, BaseException):
-            errors.append({"spec": spec, "error": str(result)})
-        else:
-            launched.append(result)
-    return {"launched": launched, "errors": errors}
+    with span("octowright.browser.spawn_roster", roster_size=len(specs)) as sp:
+        results = await asyncio.gather(*[_launch_one(s) for s in specs], return_exceptions=True)
+        launched: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for spec, result in zip(specs, results, strict=True):
+            if isinstance(result, BaseException):
+                errors.append({"spec": spec, "error": str(result)})
+            else:
+                launched.append(result)
+        set_attrs(sp, launched=len(launched), failed=len(errors))
+        return {"launched": launched, "errors": errors}

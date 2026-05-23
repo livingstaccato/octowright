@@ -25,6 +25,7 @@ from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _read_json_body
 from octowright.macros.lint import lint_macro
 from octowright.personas import _slug as _persona_slug
+from octowright.personas import _validate_persona_yaml_doc
 
 
 def _resolve_persona_dir(name: str) -> Path | JSONResponse:
@@ -238,9 +239,20 @@ async def persona_update_endpoint(request: Request) -> JSONResponse:
         return JSONResponse({"error": "'yaml' must be a string"}, status_code=400)
 
     try:
-        _yaml.safe_load(yaml_text)
+        parsed = _yaml.safe_load(yaml_text)
     except _yaml.YAMLError as e:
         return JSONResponse({"error": f"invalid YAML: {e}"}, status_code=400)
+
+    # Validate the document against the Persona schema BEFORE writing. When
+    # OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1, any HTTP client can hit this
+    # endpoint, and persona YAML drives credential-resolver argv. Catching
+    # unknown keys / wrong types here keeps the on-disk persona files
+    # well-formed and refuses junk that resolve_credential would later
+    # mis-handle.
+    try:
+        _validate_persona_yaml_doc(parsed)
+    except ValueError as e:
+        return JSONResponse({"error": f"invalid persona YAML: {e}"}, status_code=400)
 
     yaml_path.write_text(yaml_text, encoding="utf-8")
     await publish_dashboard_invalidation("personas")

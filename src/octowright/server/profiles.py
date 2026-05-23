@@ -113,6 +113,15 @@ PROFILES: dict[str, list[str]] = {
         "scenario_tail",
         "scenario_wait_for_sync",
     ],
+    # Accessibility-tree snapshot save/diff/verify. Pair with `advanced` for
+    # full test-automation workflows.
+    "goldens": [
+        "golden_assert",
+        "golden_delete",
+        "golden_list",
+        "golden_save",
+        "golden_verify_loop",
+    ],
     # Persona + on-disk profile management.
     "personas": [
         "persona_create",

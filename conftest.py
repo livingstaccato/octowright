@@ -74,3 +74,17 @@ def _isolate_session_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     manifest_path = tmp_path / "session-manifest.json"
     monkeypatch.setattr(_defaults, "SESSION_MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(_manifest, "SESSION_MANIFEST_PATH", manifest_path)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_advisor_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep tests from reading/writing the user's Advisor state JSON.
+
+    Mirrors ``_isolate_session_manifest``: every test gets a per-tmp_path
+    advisor.json so preferences, tool usage, and macro observations stay
+    isolated. Individual tests can still monkeypatch the symbol again.
+    """
+    from octowright import advisor as _advisor
+
+    advisor_state = tmp_path / "advisor.json"
+    monkeypatch.setattr(_advisor, "ADVISOR_STATE_PATH", advisor_state)

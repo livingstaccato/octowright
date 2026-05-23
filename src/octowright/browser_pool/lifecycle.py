@@ -26,11 +26,17 @@ async def close_browser(pool: BrowserPool, instance_id: str) -> dict[str, Any]:
         session = pool._sessions.pop(instance_id, None)
     if session is None:
         raise KeyError(pool._missing_session_message(instance_id))
-    await session.close()
+    # Always run manifest cleanup even if session.close() raises (e.g. a
+    # hung browser process) — the session is already evicted from the pool,
+    # so the manifest entry would otherwise be orphaned. The session's own
+    # finally block ensures the recorder closes regardless.
     try:
-        remove_manifest_session(instance_id)
-    except Exception as exc:
-        log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
+        await session.close()
+    finally:
+        try:
+            remove_manifest_session(instance_id)
+        except Exception as exc:
+            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
     log.info(
         "octowright.browser.closed",
         instance_id=instance_id,

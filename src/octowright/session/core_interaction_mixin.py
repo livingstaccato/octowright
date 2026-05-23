@@ -141,7 +141,18 @@ class SessionInteractionMixin(SessionLike):
     # ------------------------------------------------------------------
 
     async def set_input_files(self, selector: str, paths: list[str]) -> dict[str, Any]:
-        """Upload one or more files into an <input type=file> element."""
-        await self.page.set_input_files(selector, paths)
-        self.recorder.record("set_input_files", selector=selector, paths=paths)
-        return {"ok": True, "selector": selector, "paths": paths}
+        """Upload one or more files into an <input type=file> element.
+
+        Each ``paths`` entry is funneled through
+        :func:`octowright.session.upload_paths.validate_upload_path` so that
+        macro replay (which calls this method directly, bypassing the MCP
+        tool wrapper) is held to the same allowlist as live LLM calls.
+        """
+        from octowright.session.upload_paths import validate_upload_path
+
+        if not isinstance(paths, list):
+            raise ValueError("paths must be a list of file paths")
+        validated = [str(validate_upload_path(p)) for p in paths]
+        await self.page.set_input_files(selector, validated)
+        self.recorder.record("set_input_files", selector=selector, paths=validated)
+        return {"ok": True, "selector": selector, "paths": validated}

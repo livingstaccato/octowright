@@ -38,6 +38,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright import defaults
 from octowright.recorder import Recorder
 from octowright.session.core import BrowserSession
 
@@ -526,41 +527,62 @@ class TestUnmockRoute:
 # ─── set_input_files ────────────────────────────────────────────────────────
 
 
+@pytest.fixture
+def _allow_tmp_uploads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the upload allowlist at ``tmp_path`` so the session validator
+    accepts files created there. Tests still need to create the files."""
+    monkeypatch.setattr(defaults, "UPLOAD_STAGING_DIR", tmp_path)
+    monkeypatch.setattr(defaults, "UPLOAD_EXTRA_ROOTS_RAW", "")
+    return tmp_path
+
+
 class TestSetInputFiles:
     @pytest.mark.anyio
-    async def test_calls_page_set_input_files_with_args(self, tmp_path: Path) -> None:
-        """Selector + paths flow through to page.set_input_files."""
+    async def test_calls_page_set_input_files_with_args(self, tmp_path: Path, _allow_tmp_uploads: Path) -> None:
+        """Selector + paths flow through to page.set_input_files (post-validation)."""
         page = MagicMock()
         page.url = "about:blank"
         page.set_input_files = AsyncMock()
         session = _make_session(tmp_path, page=page)
-        await session.set_input_files("input[type=file]", ["/tmp/a.txt", "/tmp/b.txt"])
-        page.set_input_files.assert_awaited_once_with("input[type=file]", ["/tmp/a.txt", "/tmp/b.txt"])
+        f_a = tmp_path / "a.txt"
+        f_b = tmp_path / "b.txt"
+        f_a.write_text("x")
+        f_b.write_text("y")
+        await session.set_input_files("input[type=file]", [str(f_a), str(f_b)])
+        # Validator resolves; the resolved paths == the originals here because
+        # they're already absolute under an allowed root.
+        page.set_input_files.assert_awaited_once_with("input[type=file]", [str(f_a), str(f_b)])
 
     @pytest.mark.anyio
-    async def test_records_with_selector_and_paths(self, tmp_path: Path) -> None:
-        """The record carries selector + the full paths list."""
+    async def test_records_with_selector_and_paths(self, tmp_path: Path, _allow_tmp_uploads: Path) -> None:
+        """The record carries selector + the validated paths list."""
         page = MagicMock()
         page.url = "about:blank"
         page.set_input_files = AsyncMock()
         session = _make_session(tmp_path, page=page)
         captured = _record_calls(session)
-        await session.set_input_files("#upload", ["/x"])
-        assert ("set_input_files", {"selector": "#upload", "paths": ["/x"]}) in captured
+        f = tmp_path / "x"
+        f.write_text("")
+        await session.set_input_files("#upload", [str(f)])
+        assert ("set_input_files", {"selector": "#upload", "paths": [str(f)]}) in captured
 
     @pytest.mark.anyio
-    async def test_returns_ok_selector_paths_shape(self, tmp_path: Path) -> None:
+    async def test_returns_ok_selector_paths_shape(self, tmp_path: Path, _allow_tmp_uploads: Path) -> None:
         """Return-dict shape is pinned."""
         page = MagicMock()
         page.url = "about:blank"
         page.set_input_files = AsyncMock()
         session = _make_session(tmp_path, page=page)
-        result = await session.set_input_files("#upload", ["/x", "/y"])
-        assert result == {"ok": True, "selector": "#upload", "paths": ["/x", "/y"]}
+        f_x = tmp_path / "x"
+        f_y = tmp_path / "y"
+        f_x.write_text("")
+        f_y.write_text("")
+        result = await session.set_input_files("#upload", [str(f_x), str(f_y)])
+        assert result == {"ok": True, "selector": "#upload", "paths": [str(f_x), str(f_y)]}
 
     @pytest.mark.anyio
-    async def test_empty_paths_list_passes_through(self, tmp_path: Path) -> None:
-        """Empty paths list flows through verbatim."""
+    async def test_empty_paths_list_passes_through(self, tmp_path: Path, _allow_tmp_uploads: Path) -> None:
+        """Empty paths list flows through verbatim (no paths to validate)."""
         page = MagicMock()
         page.url = "about:blank"
         page.set_input_files = AsyncMock()
@@ -568,3 +590,32 @@ class TestSetInputFiles:
         result = await session.set_input_files("#upload", [])
         assert result["paths"] == []
         page.set_input_files.assert_awaited_once_with("#upload", [])
+
+    @pytest.mark.anyio
+    async def test_rejects_path_outside_allowed_roots(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Regression: the session method itself (not just the MCP tool
+        wrapper) must reject paths outside the allowlist, so macro replay
+        can't bypass validation by calling session.set_input_files directly.
+        """
+        # Constrain the allowlist to a sibling dir of tmp_path so any file
+        # under tmp_path is guaranteed *outside* it.
+        sandbox = tmp_path / "sandbox"
+        sandbox.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "secret.txt"
+        outside_file.write_text("nope")
+
+        monkeypatch.setattr(defaults, "UPLOAD_STAGING_DIR", sandbox)
+        monkeypatch.setattr(defaults, "UPLOAD_EXTRA_ROOTS_RAW", "")
+        # Also ensure cwd isn't tmp_path's parent (which would whitelist it).
+        monkeypatch.chdir(sandbox)
+
+        page = MagicMock()
+        page.url = "about:blank"
+        page.set_input_files = AsyncMock()
+        session = _make_session(tmp_path, page=page)
+
+        with pytest.raises(ValueError, match="outside the allowed roots"):
+            await session.set_input_files("#upload", [str(outside_file)])
+        page.set_input_files.assert_not_called()

@@ -328,7 +328,6 @@ class BrowserReadMarkdownResult(TypedDict, total=False):
     markdown: str
     truncated: bool
     markdown_size: int
-    error: str
 
 
 class BrowserBriefResult(TypedDict):

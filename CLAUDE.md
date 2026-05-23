@@ -170,3 +170,92 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_PROFILE` — comma-separated capability-profile names to slim the LLM tool surface; unset or `all` registers everything (see "Capability Profiles" above)
 - `OCTOWRIGHT_TAIL_POLL_SECONDS` / `OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS` — WS `/tail` poll interval and quiet-stream keepalive cadence (defaults 1.0 / 15.0)
 - `OCTOWRIGHT_DASHBOARD_DISCONNECT_POLL_SECONDS` / `OCTOWRIGHT_DASHBOARD_HEARTBEAT_SECONDS` — SSE `/api/dashboard/events` disconnect-detection cadence and keepalive interval (defaults 0.05 / 15.0)
+
+## Telemetry (OpenTelemetry)
+
+Tracing and metrics are emitted via `provide.telemetry`. Logs are always structured; spans and metrics are emitted ONLY when explicitly enabled — the noop tracer/meter is the default so there's no cost when not in use. Exports use OTLP, so any OTel-compatible backend works: an OTel Collector that fans out to LGTM/Tempo, OpenObserve, Honeycomb, Datadog (OTLP), Jaeger, Grafana Cloud, SigNoz, etc. The codebase does not name a specific backend.
+
+### Spans
+
+Emitted at: `octowright.browser.launch`, `octowright.browser.spawn_roster`, `octowright.session.navigate`, `octowright.session.close`, `octowright.macro.run`, `octowright.macro.action`, `octowright.bridge.forward_rpc`. Each span carries `instance_id`, `kind`, `profile`, `label` (where applicable). Macros nest under their `run_macro` parent so `macro.run_sequence` renders as a clean tree.
+
+### Metrics
+
+- Counters: `octowright_browser_launched_total{kind}`, `octowright_browser_closed_total{kind}`, `octowright_browser_launch_failed_total{kind,error}`, `octowright_browser_evicted_total{kind}`, `octowright_macro_run_total{macro,status}`, `octowright_bridge_reconnect_total{reason}`, `octowright_bridge_rpc_total{method}`.
+- Histograms: `octowright_browser_launch_duration_seconds{kind}`, `octowright_macro_run_duration_seconds{macro}`, `octowright_session_navigate_duration_seconds{kind}`.
+
+### Session log context
+
+`BrowserSession.__post_init__` calls `provide.telemetry.bind_context(octowright_instance_id=..., octowright_kind=..., octowright_profile=..., octowright_label=...)` so every log line emitted for the duration of that session auto-carries those fields. `session.close()` unbinds them. The MCP-tool wrappers that don't run inside a session just don't see these fields, which is the right behavior.
+
+### Enabling export
+
+Two env vars turn things on; the OTLP endpoint vars are the standard OpenTelemetry ones (`OTEL_EXPORTER_OTLP_*`), so any backend that speaks OTLP is wired the same way:
+
+```bash
+# Required: turn on tracing + metrics. Both default off.
+export PROVIDE_TRACE_ENABLED=true
+export PROVIDE_METRICS_ENABLED=true
+
+# Optional — service name defaults to "octowright".
+# export PROVIDE_TELEMETRY_SERVICE_NAME=octowright-dev
+
+# Point at your backend. Either set the per-signal vars explicitly:
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://<host>/v1/traces
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://<host>/v1/metrics
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://<host>/v1/logs
+# …or set one root and let the SDK append /v1/<signal>:
+# export OTEL_EXPORTER_OTLP_ENDPOINT=https://<host>
+
+# Auth (if your backend requires it):
+# export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64-user:pass>"
+# or, vendor-specific:
+# export OTEL_EXPORTER_OTLP_HEADERS="api-key=<token>"
+
+uv run octowright serve
+```
+
+The OTel SDK is pulled in as an extra (`provide-telemetry[otel]`); without it (or without `PROVIDE_TRACE_ENABLED=true`), the tracer/meter are noops and the cost is one cached attribute lookup per span entry — safe to leave the instrumentation in place.
+
+#### Backend-specific notes
+
+**Local OTel Collector (gRPC 4317 / HTTP 4318)** — most LGTM stacks (Loki + Grafana + Tempo + Mimir/Prometheus + Pyroscope) and any "agent-in-the-middle" deployment land here. The collector fans out to whatever backends it's configured with; from octowright's perspective it's the only URL you care about:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+```
+
+**OpenObserve (direct ingestion)** — exposes per-stream paths under `/api/<org>/v1/<signal>`:
+
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:5080/api/default/v1/traces
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://localhost:5080/api/default/v1/metrics
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:5080/api/default/v1/logs
+```
+
+**Honeycomb / Grafana Cloud / SigNoz / similar SaaS** — same `OTEL_EXPORTER_OTLP_*` vars; auth goes in `OTEL_EXPORTER_OTLP_HEADERS`.
+
+#### Smoke-test recipe
+
+End-to-end verification (replace the URL with your backend):
+
+```bash
+PROVIDE_TRACE_ENABLED=true PROVIDE_METRICS_ENABLED=true \
+PROVIDE_TELEMETRY_SERVICE_NAME=octowright-smoketest \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+uv run --active python -c "
+from provide.telemetry import setup_telemetry, shutdown_telemetry
+from octowright._tracing import span, counter
+setup_telemetry()
+with span('octowright.browser.launch', kind='chromium'):
+    with span('octowright.macro.run', macro='login'):
+        pass
+counter('octowright_smoketest_total').add(1, attributes={'kind': 'chromium'})
+shutdown_telemetry()
+print('emitted')
+"
+```
+
+Then query your backend for `service.name=octowright-smoketest`. The expected span tree is `browser.launch → macro.run`. The counter shows up as `octowright_smoketest_total{service_name="octowright-smoketest", kind="chromium"} = 1`.

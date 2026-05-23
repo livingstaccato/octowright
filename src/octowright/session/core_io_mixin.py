@@ -85,11 +85,19 @@ class SessionIOMixin(SessionLike):
             )
             if payload_b64 is not None:
                 entry["payload_b64"] = payload_b64
-        self.websocket_path = self._websocket_cache_path()
-        cache_path = self.websocket_path
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with cache_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        # Keep a single append-mode file handle for the session: high-frequency
+        # WS feeds (game servers, market data) can fire thousands of frames
+        # per second, and re-opening + flushing for every frame burns syscalls
+        # and inode locks. The handle is closed in BrowserSession.close().
+        if self.websocket_path is None:
+            self.websocket_path = self._websocket_cache_path()
+            self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = getattr(self, "_websocket_fh", None)
+        if fh is None:
+            fh = self.websocket_path.open("a", encoding="utf-8")
+            self._websocket_fh = fh
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        fh.flush()
 
     async def _extract_markdown(self, html: str) -> str:
         """Convert HTML to markdown using MarkItDown if available."""

@@ -15,7 +15,6 @@ Pins:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -122,11 +121,14 @@ class TestSpawnDaemonArgv:
     def test_argv_starts_with_octowright_serve_daemon_mode(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """First three argv entries: argv[0], 'serve', '--daemon-mode'."""
+        """Last two argv entries are 'serve', '--daemon-mode' regardless of entrypoint."""
         monkeypatch.setattr(_daemon, "_DAEMON_LOG", tmp_path / "d.log")
+        # Force the entrypoint resolver to a stable, predictable value so the
+        # test doesn't depend on whether `octowright` is on PATH in CI.
+        monkeypatch.setattr(_daemon, "_resolve_daemon_entrypoint", lambda: ["/fake/octowright"])
         _, captured = _capture_popen(monkeypatch)
         _daemon.spawn_daemon(http_host=None, http_port=None, idle_grace=None)
-        assert captured["args"][:3] == [sys.argv[0], "serve", "--daemon-mode"]
+        assert captured["args"][:3] == ["/fake/octowright", "serve", "--daemon-mode"]
 
     def test_omits_optional_flags_when_unset(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """All three optional kwargs unset → no --http-host / --http-port / --idle-grace."""

@@ -11,8 +11,40 @@ import time
 from pathlib import Path
 from typing import Any
 
+from octowright._tracing import histogram, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+
+_NAVIGATE_DURATION = histogram(
+    "octowright_session_navigate_duration_seconds",
+    description="Duration of session.navigate() including page.goto",
+    unit="s",
+)
+
+# Schemes the MCP/HTTP navigate paths refuse to send to Playwright.
+# - file://     reads local files; combined with snapshot/read_markdown
+#               tools this is a clean local-file exfiltration vector.
+# - javascript: executes arbitrary script in the current page context,
+#               bypassing the explicit browser_evaluate audit trail.
+# - chrome:/chrome-extension:/view-source: similarly privileged browser-
+#               internal schemes.
+# data:, http, https, ws/wss, about: are not blocked. data: in particular
+# is used by tests for in-memory launches and is reasonable for the
+# operator-controlled launch URL; it cannot read local files.
+_NAV_DENIED_SCHEMES = frozenset({"file", "javascript", "chrome", "chrome-extension", "view-source"})
+
+
+def _reject_unsafe_url(url: str) -> None:
+    """Raise ValueError if ``url`` is on the deny-list of unsafe schemes."""
+    if not isinstance(url, str) or not url:
+        raise ValueError("navigate url must be a non-empty string")
+    stripped = url.strip()
+    scheme, sep, _rest = stripped.partition(":")
+    if not sep:
+        raise ValueError(f"navigate url missing scheme: {url!r}")
+    if scheme.lower() in _NAV_DENIED_SCHEMES:
+        raise ValueError(f"navigate url scheme {scheme!r} is not allowed (blocked: {sorted(_NAV_DENIED_SCHEMES)})")
+
 
 _WAIT_FOR_POLL_SECONDS = 0.05
 
@@ -79,23 +111,29 @@ class SessionPageMixin(SessionLike):
         }
 
     async def navigate(self, url: str) -> dict[str, Any]:
-        # Tag the upcoming framenavigated event so pool's user_navigation
-        # listener skips it (we already record "navigate" below).
-        prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)
-        self._last_mcp_navigation = url
-        try:
-            await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
-        except BaseException:
-            # Reset the dedupe tag on failure: if the user then navigates to
-            # the same URL manually, that's a genuine user_navigation event
-            # and should not be suppressed.
-            self._last_mcp_navigation = prior_mcp_navigation
-            raise
-        title = await self.page.title()
-        self.url = url
-        self._schedule_markdown_capture()
-        self.recorder.record("navigate", url=url)
-        return {"url": url, "title": title}
+        _reject_unsafe_url(url)
+        instance_id = getattr(self, "instance_id", None)
+        kind = getattr(self, "kind", None)
+        t0 = time.perf_counter()
+        with span("octowright.session.navigate", instance_id=instance_id, kind=kind, url=url):
+            # Tag the upcoming framenavigated event so pool's user_navigation
+            # listener skips it (we already record "navigate" below).
+            prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)
+            self._last_mcp_navigation = url
+            try:
+                await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+            except BaseException:
+                # Reset the dedupe tag on failure: if the user then navigates to
+                # the same URL manually, that's a genuine user_navigation event
+                # and should not be suppressed.
+                self._last_mcp_navigation = prior_mcp_navigation
+                raise
+            title = await self.page.title()
+            self.url = url
+            self._schedule_markdown_capture()
+            self.recorder.record("navigate", url=url)
+            _NAVIGATE_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind or "unknown"})
+            return {"url": url, "title": title}
 
     async def _resolve_semantic_metadata(self, selector: str) -> dict[str, str]:
         """Attempt to resolve the role and role_name of the element at selector."""

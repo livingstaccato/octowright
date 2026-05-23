@@ -110,6 +110,11 @@ class SessionArtifactCache:
             cache.pop(key, None)
 
     def scan_artifacts(self, jsonl_path: Path) -> dict[str, Any]:
+        # Threading note: may be called from ``asyncio.to_thread`` workers
+        # (via the close-warmup path) as well as the main event loop. The
+        # per-instance OrderedDict caches read/written here are isolated
+        # from the module-level discovery caches in ``http/discovery.py``
+        # (which are guarded by their own ``threading.Lock``).
         signature = self._signature(jsonl_path)
         if signature is None:
             return scan_recording_artifacts(jsonl_path)
@@ -278,6 +283,13 @@ class SessionArtifactCache:
 
         Returns the cache report payload (same shape as ``cache_report``)
         so the close handler can attach it to the response body.
+
+        Threading note: called from ``asyncio.to_thread`` by
+        ``http/routes/sessions.py::session_close``. The LRU ``OrderedDict``
+        caches written here (``_artifact_cache`` / ``_report_cache`` /
+        ``_console_index_cache`` / ``_downloads_index_cache``) are local
+        to this instance — they do NOT touch the module-level caches in
+        ``http/discovery.py``, which carry their own ``threading.Lock``.
         """
         counts, state = empty_artifact_state()
         console_rows: list[dict[str, Any]] = []

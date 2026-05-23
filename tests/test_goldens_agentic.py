@@ -102,18 +102,18 @@ async def test_golden_assert_and_list_delete(mock_pool, temp_goldens):
 
 
 @pytest.mark.anyio
-async def test_golden_assert_returns_diff_payload_on_mismatch(mock_pool, temp_goldens):
-    """On mismatch, golden_assert returns a structured dict instead of
-    raising RuntimeError(dict) — FastMCP serialises raised exceptions via
-    str(exc), which would turn the dict into an unparsable repr blob."""
-    from octowright.server.goldens import golden_assert, golden_save
+async def test_golden_assert_raises_on_mismatch(mock_pool, temp_goldens):
+    """On mismatch, golden_assert raises GoldenMismatchError so MCP clients
+    get a JSON-RPC error (matching the "assert" semantics in the tool name).
+    Callers wanting a non-raising poll should use golden_verify_loop instead."""
+    from octowright.server.goldens import GoldenMismatchError, golden_assert, golden_save
 
     await golden_save("inst-1", name="mismatch")
     mock_session = mock_pool.get.return_value
     mock_session.snapshot.return_value = {"role": "Root", "children": [{"role": "button"}]}
-    result = await golden_assert("inst-1", "mismatch")
-    assert result["ok"] is False
-    assert result["golden"] == "mismatch"
-    assert result["diff_count"] >= 1
-    assert isinstance(result["diffs"], list)
-    assert len(result["diffs"]) <= 20
+    with pytest.raises(GoldenMismatchError) as exc:
+        await golden_assert("inst-1", "mismatch")
+    assert exc.value.golden == "mismatch"
+    assert exc.value.diff_count >= 1
+    assert isinstance(exc.value.diffs, list)
+    assert len(exc.value.diffs) <= 20
