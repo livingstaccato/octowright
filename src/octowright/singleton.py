@@ -13,17 +13,22 @@ and serves both stdio MCP and HTTP MCP. Subsequent instances become
 **followers**: they read the lockfile and bridge stdin/stdout to the leader's
 HTTP MCP endpoint instead of spawning their own pool.
 
-The lockfile is purely advisory — there is no flock(). We rely on PID liveness
-and a short HTTP probe to detect a stale lock. Concurrent acquisition by two
-processes at the exact same moment is possible but rare and self-corrects on
-the next boot (the probe will reveal one of them as stale).
+The leader-election decision (read-probe-then-maybe-spawn) is serialised
+across processes by ``election_lock``, an advisory ``fcntl.flock`` on a
+sibling lockfile. Without it, two simultaneous starters could both observe
+"no live leader" and both spawn a daemon; the second daemon would silently
+bind a different port and leave followers bridging to the abandoned one.
+On Windows (no fcntl) the lock is a no-op and the original race remains —
+self-corrects on the next boot via the PID + HTTP probe.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -134,6 +139,47 @@ async def probe_http_alive(info: LeaderInfo, timeout: float = 2.0) -> bool:
             return response.status_code == 200
     except (httpx.HTTPError, OSError):
         return False
+
+
+@contextlib.contextmanager
+def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[None]:
+    """Serialise the leader-election decision across processes.
+
+    Holds an exclusive ``fcntl.flock`` on ``<path>.election`` for the
+    duration of the ``with`` block. Blocks (with backoff) until ``timeout``
+    seconds, then raises ``TimeoutError``. On Windows (no ``fcntl``) the
+    lock is a no-op — concurrent election is theoretically possible there
+    but rare and self-corrects via the PID + HTTP probe.
+    """
+    if os.name == "nt":
+        yield
+        return
+    import fcntl
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    election_path = path.with_suffix(path.suffix + ".election")
+    deadline = time.monotonic() + timeout
+    fh = election_path.open("a+", encoding="utf-8")
+    try:
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"timed out waiting {timeout:.1f}s for election lock at {election_path}"
+                    ) from None
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        fh.close()
 
 
 def make_leader_info(http_host: str, http_port: int) -> LeaderInfo:

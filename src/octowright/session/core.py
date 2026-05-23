@@ -71,6 +71,10 @@ class BrowserSession(
     _last_markdown_capture_key: str | None = None
     _pending_markdown_capture: Any | None = None
     websocket_path: Path | None = None
+    # Lazy-opened append handle for high-frequency WS feeds; typed as Any
+    # because Path.open("a", encoding="utf-8") returns TextIOWrapper while
+    # the protocol surface only needs write/flush/close.
+    _websocket_fh: Any = field(default=None, repr=False)
     _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
     _network_requests_dropped: int = 0
     _last_mcp_navigation: str | None = None

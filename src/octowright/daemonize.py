@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -39,6 +40,24 @@ from octowright.config_paths import user_state_dir
 # avoid unbounded growth on dev machines.
 _DAEMON_LOG = user_state_dir() / "logs" / "octowright-daemon.log"
 _DAEMON_LOG_MAX_BYTES = 1_000_000
+
+
+def _resolve_daemon_entrypoint() -> list[str]:
+    """Resolve the argv prefix that re-launches ``octowright serve``.
+
+    ``sys.argv[0]`` is unreliable for re-launching the daemon: when the parent
+    was started via ``python -m octowright``, ``sys.argv[0]`` is a module path
+    that isn't directly executable, and various wrappers (pipx, uv tool) can
+    also leave it in shapes that won't round-trip through ``Popen``. We prefer
+    the installed console script, then fall back to ``python -m octowright``,
+    and only as a last resort use the (possibly broken) ``sys.argv[0]``.
+    """
+    on_path = shutil.which("octowright")
+    if on_path:
+        return [on_path]
+    if sys.executable:
+        return [sys.executable, "-m", "octowright"]
+    return [sys.argv[0]]
 
 
 def _open_daemon_log() -> IO[bytes]:
@@ -61,7 +80,7 @@ def spawn_daemon(
     controlling terminal and with stdin/stdout pointed at /dev/null, so
     nothing about the parent's lifecycle can reach it.
     """
-    args: list[str] = [sys.argv[0], "serve", "--daemon-mode"]
+    args: list[str] = [*_resolve_daemon_entrypoint(), "serve", "--daemon-mode"]
     if http_host:
         args.extend(["--http-host", http_host])
     if http_port is not None:

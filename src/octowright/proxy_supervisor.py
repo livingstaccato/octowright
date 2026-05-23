@@ -99,11 +99,6 @@ class BridgeSupervisor:
     def in_flight_count(self) -> int:
         return len(self._in_flight)
 
-    async def forward_local_to_remote(self, remote_write: Any) -> None:
-        async for message in self.local_read:
-            self.track_local_message(message)
-            await remote_write.send(message)
-
     async def forward_one_local_message(self, message: SessionMessage, remote_write_box: dict[str, Any]) -> None:
         remote_write = remote_write_box.get("remote_write")
         request_id = message_request_id(message)

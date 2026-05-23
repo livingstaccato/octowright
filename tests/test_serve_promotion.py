@@ -20,15 +20,17 @@ import pytest
 
 from octowright import singleton
 from octowright.cli import serve as _serve
+from tests.conftest import _free_port
 
+_DAEMON_PORT = _free_port()
 _DAEMON_INFO = singleton.LeaderInfo(
     # Use the test process PID so the real ``is_stale()`` (which does a kill -0
     # liveness check) reports the fake daemon as alive. Otherwise the recheck
     # path would see "stale daemon, spawn replacement" and pollute the log.
     pid=os.getpid(),
     http_host="127.0.0.1",
-    http_port=18999,
-    mcp_url="http://127.0.0.1:18999/mcp/",
+    http_port=_DAEMON_PORT,
+    mcp_url=f"http://127.0.0.1:{_DAEMON_PORT}/mcp/",
     started_at=0.0,
 )
 
@@ -119,11 +121,12 @@ async def test_stale_pid_spawns_replacement_daemon(monkeypatch: pytest.MonkeyPat
     First read returns the stale lock; later reads (from the recheck path)
     return the freshly-spawned daemon's info via the fixture's flip.
     """
+    stale_port = _free_port()
     stale = singleton.LeaderInfo(
         pid=2_000_000_000,
         http_host="127.0.0.1",
-        http_port=18900,
-        mcp_url="http://127.0.0.1:18900/mcp/",
+        http_port=stale_port,
+        mcp_url=f"http://127.0.0.1:{stale_port}/mcp/",
         started_at=0.0,
     )
     reads = [stale]
@@ -145,11 +148,12 @@ async def test_live_pid_but_dead_http_spawns_replacement_daemon(
     monkeypatch: pytest.MonkeyPatch, call_log: list[str]
 ) -> None:
     """PID alive but HTTP probe fails — wedged leader, spawn replacement daemon."""
+    wedged_port = _free_port()
     wedged = singleton.LeaderInfo(
         pid=os.getpid(),
         http_host="127.0.0.1",
-        http_port=18901,
-        mcp_url="http://127.0.0.1:18901/mcp/",
+        http_port=wedged_port,
+        mcp_url=f"http://127.0.0.1:{wedged_port}/mcp/",
         started_at=0.0,
     )
     reads = [wedged]
@@ -175,11 +179,12 @@ async def test_live_pid_but_dead_http_spawns_replacement_daemon(
 @pytest.mark.asyncio
 async def test_healthy_leader_means_follower(monkeypatch: pytest.MonkeyPatch, call_log: list[str]) -> None:
     """Live PID + responsive HTTP = follower mode, no daemon spawn."""
+    port = _free_port()
     info = singleton.LeaderInfo(
         pid=os.getpid(),
         http_host="127.0.0.1",
-        http_port=18902,
-        mcp_url="http://127.0.0.1:18902/mcp/",
+        http_port=port,
+        mcp_url=f"http://127.0.0.1:{port}/mcp/",
         started_at=0.0,
     )
     monkeypatch.setattr(singleton, "read_lock", lambda: info)
@@ -197,11 +202,12 @@ async def test_follower_spawns_replacement_when_leader_dies_during_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Initial probe says leader alive; bridge raises; recheck shows it gone → spawn fresh daemon."""
+    port = _free_port()
     info = singleton.LeaderInfo(
         pid=os.getpid(),
         http_host="127.0.0.1",
-        http_port=18903,
-        mcp_url="http://127.0.0.1:18903/mcp/",
+        http_port=port,
+        mcp_url=f"http://127.0.0.1:{port}/mcp/",
         started_at=0.0,
     )
 
@@ -244,11 +250,12 @@ async def test_follower_does_not_spawn_daemon_if_leader_still_healthy_on_recheck
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bridge ended cleanly but the leader is still up — exit, do not spawn replacement."""
+    port = _free_port()
     info = singleton.LeaderInfo(
         pid=os.getpid(),
         http_host="127.0.0.1",
-        http_port=18904,
-        mcp_url="http://127.0.0.1:18904/mcp/",
+        http_port=port,
+        mcp_url=f"http://127.0.0.1:{port}/mcp/",
         started_at=0.0,
     )
     monkeypatch.setattr(singleton, "read_lock", lambda: info)

@@ -1532,7 +1532,7 @@ dev = [
     { name = "pytest-rerunfailures", specifier = ">=14.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "reuse", specifier = ">=6.2.0" },
-    { name = "ruff", specifier = ">=0.14.5" },
+    { name = "ruff", specifier = ">=0.15.0" },
     { name = "twine", specifier = ">=5.1.1" },
     { name = "ty", specifier = ">=0.0.18" },
     { name = "vulture", specifier = ">=2.14" },

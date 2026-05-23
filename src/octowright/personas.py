@@ -23,7 +23,6 @@ from octowright.types import CredentialCheckEntry, CredentialCheckReport, Person
 log = get_logger(__name__)
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
-_PINNED_PERSONA_ORDER = {"dante": 0, "tim": 1}
 
 # Tokens that shlex.split surfaces as standalone — i.e. the cmd is asking
 # for shell semantics (pipes, redirection, subshells, command separators,
@@ -80,6 +79,93 @@ class Persona:
     # title prefix and corner badge. When None, the launcher hash-picks from
     # a curated pool keyed off the persona name (deterministic).
     emoji: str | None = None
+
+
+# Allowed top-level keys in a persona YAML document. Mirrors the Persona
+# dataclass fields. Update both together.
+_PERSONA_ALLOWED_KEYS: frozenset[str] = frozenset(
+    {
+        "name",
+        "display_name",
+        "default_url",
+        "default_macros",
+        "credentials",
+        "app",
+        "emoji",
+    }
+)
+
+# Suffixes valid on credential keys. resolve_credential() only consults
+# ``<name>_env`` / ``<name>_cmd`` pairs, so any other suffix is a typo or
+# spec drift that should fail loudly rather than silently no-op.
+_CREDENTIAL_KEY_SUFFIXES: tuple[str, ...] = ("_env", "_cmd")
+
+
+def _validate_scalar_str_fields(doc: dict[str, Any]) -> None:
+    if "name" in doc and not isinstance(doc["name"], str):
+        raise ValueError(f"persona YAML field 'name' must be a string, got {type(doc['name']).__name__}")
+    for str_field in ("display_name", "default_url", "emoji"):
+        v = doc.get(str_field)
+        if str_field in doc and v is not None and not isinstance(v, str):
+            raise ValueError(f"persona YAML field {str_field!r} must be a string or null, got {type(v).__name__}")
+
+
+def _validate_default_macros(doc: dict[str, Any]) -> None:
+    macros = doc.get("default_macros")
+    if "default_macros" not in doc or macros is None:
+        return
+    if not isinstance(macros, list):
+        raise ValueError(f"persona YAML field 'default_macros' must be a list of strings, got {type(macros).__name__}")
+    for i, item in enumerate(macros):
+        if not isinstance(item, str):
+            raise ValueError(f"persona YAML field 'default_macros[{i}]' must be a string, got {type(item).__name__}")
+
+
+def _validate_credentials(doc: dict[str, Any]) -> None:
+    creds = doc.get("credentials")
+    if "credentials" not in doc or creds is None:
+        return
+    if not isinstance(creds, dict):
+        raise ValueError(f"persona YAML field 'credentials' must be a mapping, got {type(creds).__name__}")
+    for key, value in creds.items():
+        if not isinstance(key, str):
+            raise ValueError(f"persona YAML 'credentials' keys must be strings, got {type(key).__name__}")
+        if not key.endswith(_CREDENTIAL_KEY_SUFFIXES):
+            raise ValueError(
+                f"persona YAML 'credentials' key {key!r} must end with one of "
+                f"{list(_CREDENTIAL_KEY_SUFFIXES)!r} (e.g. 'email_env' or 'token_cmd')"
+            )
+        if not isinstance(value, str):
+            raise ValueError(
+                f"persona YAML 'credentials.{key}' must be a string (env var name or cmd), got {type(value).__name__}"
+            )
+
+
+def _validate_persona_yaml_doc(doc: Any) -> None:
+    """Validate a parsed persona YAML document against the Persona schema.
+
+    Raises ``ValueError`` for: non-dict top-level, unknown top-level keys,
+    type mismatches against the dataclass fields, and malformed
+    ``credentials`` shapes (must be a flat ``{name_env|name_cmd: str}`` map).
+
+    The validator only inspects shape — it does NOT check that env vars or
+    cmds resolve, or that referenced macros exist. Those checks belong to
+    runtime (``resolve_credential``, macro execution) which already raises
+    informative errors.
+    """
+    if not isinstance(doc, dict):
+        raise ValueError(f"persona YAML must be a mapping at the top level, got {type(doc).__name__}")
+    unknown = sorted(set(doc) - _PERSONA_ALLOWED_KEYS)
+    if unknown:
+        raise ValueError(
+            f"persona YAML has unknown top-level key(s): {unknown!r}; "
+            f"allowed keys are {sorted(_PERSONA_ALLOWED_KEYS)!r}"
+        )
+    _validate_scalar_str_fields(doc)
+    _validate_default_macros(doc)
+    _validate_credentials(doc)
+    if "app" in doc and doc["app"] is not None and not isinstance(doc["app"], dict):
+        raise ValueError(f"persona YAML field 'app' must be a mapping, got {type(doc['app']).__name__}")
 
 
 def persona_dir(name: str) -> Path:
@@ -149,12 +235,7 @@ def list_personas() -> list[PersonaListEntry]:
                 "last_used": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat().replace("+00:00", "Z"),
             }
         )
-    out.sort(
-        key=lambda p: (
-            _PINNED_PERSONA_ORDER.get(str(p["name"]), len(_PINNED_PERSONA_ORDER)),
-            -float(p["mtime"]),
-        )
-    )
+    out.sort(key=lambda p: -float(p["mtime"]))
     return out
 
 
@@ -178,6 +259,9 @@ def create_persona(
         doc["display_name"] = display_name
     if default_url:
         doc["default_url"] = default_url
+    # Validate so future changes to the scaffold can't drift away from the
+    # schema unnoticed. Today this is a no-op for the constructed doc.
+    _validate_persona_yaml_doc(doc)
     yaml_path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
     return pdir
 

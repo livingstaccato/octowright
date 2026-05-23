@@ -238,6 +238,9 @@ class BrowserPool:
             if trace:
                 await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
+            from octowright.session.core_page_mixin import _reject_unsafe_url
+
+            _reject_unsafe_url(target_url)
             await page.goto(target_url)
 
             new_session._schedule_markdown_capture()
@@ -334,6 +337,9 @@ class BrowserPool:
         return len(self._sessions)
 
     def list_sessions(self) -> list[dict[str, Any]]:
+        # Snapshot values() into a tuple before iterating: Playwright sync
+        # close callbacks fire _evict_session_nowait between awaits and could
+        # otherwise mutate the dict mid-iteration.
         return [
             {
                 "instance_id": s.instance_id,
@@ -344,7 +350,7 @@ class BrowserPool:
                 "log_path": str(s.log_path),
                 "har_path": str(s.har_path) if s.har_path else None,
             }
-            for s in self._sessions.values()
+            for s in tuple(self._sessions.values())
         ]
 
     async def _expose_viewport_binding(self, context: Any, session: BrowserSession) -> None:
@@ -395,9 +401,14 @@ class BrowserPool:
         }
 
     def profile_in_use(self, kind: str, profile: str) -> bool:
-        return any(s.kind == kind and s.profile == profile for s in self._sessions.values())
+        return any(s.kind == kind and s.profile == profile for s in tuple(self._sessions.values()))
 
     def _evict_session_nowait(self, instance_id: str) -> BrowserSession | None:
+        # Called from synchronous Playwright event callbacks (page.close,
+        # context.close, browser.disconnected). Can't `await` a lock from a
+        # sync callback, but CPython dict.pop is GIL-atomic and asyncio is
+        # single-threaded — so this and the locked pop in close_browser
+        # cannot interleave in flight. Idempotent: returns None on miss.
         return self._sessions.pop(instance_id, None)
 
     async def close(self, instance_id: str) -> dict[str, Any]:
@@ -471,6 +482,11 @@ class BrowserPool:
         session_key = (session_name, kind)
         existing = self._session_profile_dirs.get(session_key)
         if existing is None or not existing.exists():
+            # Synchronous from get() through assignment: launch() doesn't
+            # await between calling this and the next yield point, so two
+            # concurrent launches cannot interleave here. If a future refactor
+            # introduces awaits inside this function, switch to setdefault
+            # + cleanup-on-loss to avoid leaking the losing tmpdir.
             tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_name}-{kind}-"))
             self._session_profile_dirs[session_key] = tmp
             existing = tmp

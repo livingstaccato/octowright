@@ -42,6 +42,7 @@ class SessionLike(Protocol):
     video_path: Path | None
     markdown_path: Path | None
     websocket_path: Path | None
+    _websocket_fh: Any
     context: BrowserContext
     browser: Browser | None
     _video: Video | None

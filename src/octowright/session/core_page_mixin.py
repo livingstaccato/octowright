@@ -14,6 +14,31 @@ from typing import Any
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
 
+# Schemes the MCP/HTTP navigate paths refuse to send to Playwright.
+# - file://     reads local files; combined with snapshot/read_markdown
+#               tools this is a clean local-file exfiltration vector.
+# - javascript: executes arbitrary script in the current page context,
+#               bypassing the explicit browser_evaluate audit trail.
+# - chrome:/chrome-extension:/view-source: similarly privileged browser-
+#               internal schemes.
+# data:, http, https, ws/wss, about: are not blocked. data: in particular
+# is used by tests for in-memory launches and is reasonable for the
+# operator-controlled launch URL; it cannot read local files.
+_NAV_DENIED_SCHEMES = frozenset({"file", "javascript", "chrome", "chrome-extension", "view-source"})
+
+
+def _reject_unsafe_url(url: str) -> None:
+    """Raise ValueError if ``url`` is on the deny-list of unsafe schemes."""
+    if not isinstance(url, str) or not url:
+        raise ValueError("navigate url must be a non-empty string")
+    stripped = url.strip()
+    scheme, sep, _rest = stripped.partition(":")
+    if not sep:
+        raise ValueError(f"navigate url missing scheme: {url!r}")
+    if scheme.lower() in _NAV_DENIED_SCHEMES:
+        raise ValueError(f"navigate url scheme {scheme!r} is not allowed (blocked: {sorted(_NAV_DENIED_SCHEMES)})")
+
+
 _WAIT_FOR_POLL_SECONDS = 0.05
 
 
@@ -79,6 +104,7 @@ class SessionPageMixin(SessionLike):
         }
 
     async def navigate(self, url: str) -> dict[str, Any]:
+        _reject_unsafe_url(url)
         # Tag the upcoming framenavigated event so pool's user_navigation
         # listener skips it (we already record "navigate" below).
         prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)

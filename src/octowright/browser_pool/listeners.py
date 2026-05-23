@@ -121,7 +121,15 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         # the user) is not a session death.
         try:
             still_open = [p for p in session.pages if not p.is_closed()]
-        except Exception:
+        except Exception as exc:
+            # Per silent-swallow policy: user-action-adjacent path with a
+            # consequential side effect (eviction). Log so a future bug in
+            # session.pages enumeration is visible in post-mortem.
+            log.debug(
+                "octowright.evict.page_enumeration_failed",
+                instance_id=instance_id,
+                error=repr(exc),
+            )
             still_open = []
         if not still_open:
             _evict()

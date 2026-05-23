@@ -128,6 +128,13 @@ def persona_delete(name: str) -> dict[str, Any]:
         "startup_macros need credentials (e.g. a discord-login macro)."
     ),
 )
-def persona_credentials_check(name: str) -> CredentialCheckReport:
+async def persona_credentials_check(name: str) -> CredentialCheckReport:
+    # check_credentials shells out to each persona's credential helper
+    # (e.g. `op read ...`). FastMCP runs sync tools directly on the event
+    # loop, so a 30s `op` call would stall every live browser, every WS
+    # heartbeat, and every JSONL write. Push the synchronous helper to a
+    # worker thread to keep the loop responsive.
+    import asyncio
+
     persona = persona_mod.load_persona(name)
-    return persona_mod.check_credentials(persona)
+    return await asyncio.to_thread(persona_mod.check_credentials, persona)
