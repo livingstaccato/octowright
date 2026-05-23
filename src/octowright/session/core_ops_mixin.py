@@ -11,8 +11,14 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright._tracing import counter, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+
+_SESSION_CLOSED = counter(
+    "octowright_browser_closed_total",
+    description="Browser sessions closed cleanly via session.close()",
+)
 
 log = get_logger(__name__)
 
@@ -235,6 +241,9 @@ class SessionOpsMixin(SessionLike):
         """
         if target not in ("tab", "window"):
             raise ValueError(f"target must be 'tab' or 'window', got {target!r}")
+        from octowright.session.core_page_mixin import _reject_unsafe_url
+
+        _reject_unsafe_url(url)
 
         nav_error: str | None = None
         if target == "tab":
@@ -316,6 +325,20 @@ class SessionOpsMixin(SessionLike):
             self._bg_tasks.discard(task)
 
     async def close(self) -> None:
+        instance_id = getattr(self, "instance_id", None)
+        kind = getattr(self, "kind", None)
+        with span("octowright.session.close", instance_id=instance_id, kind=kind):
+            try:
+                await self._close_impl()
+            finally:
+                _SESSION_CLOSED.add(1, attributes={"kind": kind or "unknown"})
+                # Unbind the session-scoped log context so subsequent
+                # unrelated logs don't carry this session's identifiers.
+                unbind = getattr(self, "unbind_telemetry_context", None)
+                if unbind is not None:
+                    unbind()
+
+    async def _close_impl(self) -> None:
         try:
             await self._drain_background_tasks()
             if self.trace:
@@ -331,8 +354,15 @@ class SessionOpsMixin(SessionLike):
                 try:
                     resolved = await self._video.path()
                     self.video_path = Path(resolved)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Per silent-swallow policy: video_path stays None and the
+                    # dashboard can't surface the video. Log so the failure is
+                    # diagnosable rather than just missing from the UI.
+                    log.debug(
+                        "octowright.session.video_path_resolve_failed",
+                        instance_id=getattr(self, "instance_id", None),
+                        error=repr(exc),
+                    )
         finally:
             close_handle = getattr(self, "_browser_for_close", None) or self.browser
             if close_handle is not None:
@@ -348,6 +378,17 @@ class SessionOpsMixin(SessionLike):
                         instance_id=getattr(self, "instance_id", None),
                         error=repr(exc),
                     )
+            ws_fh = getattr(self, "_websocket_fh", None)
+            if ws_fh is not None:
+                try:
+                    ws_fh.close()
+                except Exception as exc:
+                    log.debug(
+                        "octowright.session.websocket_fh_close_failed",
+                        instance_id=getattr(self, "instance_id", None),
+                        error=repr(exc),
+                    )
+                self._websocket_fh = None
             self.recorder.record(
                 "close",
                 video_path=str(self.video_path) if self.video_path else None,

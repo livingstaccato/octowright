@@ -47,7 +47,7 @@ from tests.test_http_server import (  # noqa: F401  (re-exported for pytest coll
 def _live_session(log_path: Path, **overrides: Any) -> SimpleNamespace:
     """Build a fake live BrowserSession that the http routes treat as live."""
     page = MagicMock()
-    page.screenshot = MagicMock(return_value=b"\x89PNG-mock")
+    page.screenshot = AsyncMock(return_value=b"\x89PNG-mock")
     base = SimpleNamespace(
         instance_id=overrides.get("instance_id", log_path.stem.split("-")[-1]),
         kind="chromium",
@@ -176,7 +176,7 @@ class TestScreenshotNow:
         log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
         captured: dict[str, Any] = {}
 
-        def screenshot_capture(**kwargs: Any) -> bytes:
+        async def screenshot_capture(**kwargs: Any) -> bytes:
             captured.update(kwargs)
             return b"\xff\xd8\xff-jpeg"
 
@@ -199,7 +199,7 @@ class TestScreenshotNow:
         log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
         captured: dict[str, Any] = {}
 
-        def screenshot_capture(**kwargs: Any) -> bytes:
+        async def screenshot_capture(**kwargs: Any) -> bytes:
             captured.update(kwargs)
             return b"png"
 
@@ -220,7 +220,7 @@ class TestScreenshotNow:
         log_path = isolated_recordings / "20260101T000000Z-chromium-livefail001.jsonl"
         log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
         session = _live_session(log_path)
-        session.page.screenshot = MagicMock(side_effect=RuntimeError("page navigated"))
+        session.page.screenshot = AsyncMock(side_effect=RuntimeError("page navigated"))
         empty_pool["pool"]._sessions["livefail001"] = session
         r = client.get("/api/sessions/livefail001/screenshot/now")
         assert r.status_code == 503

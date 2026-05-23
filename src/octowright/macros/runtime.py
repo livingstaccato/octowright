@@ -11,6 +11,8 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright._tracing import span
+
 log = get_logger(__name__)
 
 # Passive observer events (page emits these on its own — not user actions).
@@ -167,6 +169,30 @@ async def dispatch_simple(
     action_kwargs: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> tuple[int, int]:
     kind = action.get("action", "")
+    with span(
+        "octowright.macro.action",
+        action=kind,
+        instance_id=getattr(session, "instance_id", None),
+    ):
+        return await _dispatch_simple_inner(
+            session,
+            action,
+            kind=kind,
+            semantic_keys=semantic_keys,
+            strip_non_aria_noise=strip_non_aria_noise,
+            action_kwargs=action_kwargs,
+        )
+
+
+async def _dispatch_simple_inner(
+    session: Any,
+    action: dict[str, Any],
+    *,
+    kind: str,
+    semantic_keys: tuple[str, ...],
+    strip_non_aria_noise: Callable[[str, dict[str, Any]], dict[str, Any]],
+    action_kwargs: Callable[[dict[str, Any]], dict[str, Any]],
+) -> tuple[int, int]:
     if kind in _REPLAY_SKIP:
         return 0, 1
     if kind in _REPLAY_PASSIVE:

@@ -1507,7 +1507,7 @@ class _FakePage:
         self.raises = raises
         self.calls: list[dict[str, Any]] = []
 
-    def screenshot(self, **kwargs: Any) -> bytes:
+    async def screenshot(self, **kwargs: Any) -> bytes:
         self.calls.append(kwargs)
         if self.raises is not None:
             raise self.raises

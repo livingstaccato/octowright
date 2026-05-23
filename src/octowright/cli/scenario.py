@@ -24,15 +24,16 @@ def scenario() -> None:
 
 @scenario.command("list")
 def scenario_list_cmd() -> None:
-    """List scenario specs on disk."""
+    """List scenario specs on disk.
+
+    Pure read-only — does NOT init telemetry so the output of `scenario list`
+    is parsable by shell scripts. (OTel SDK emits provider-init warnings to
+    stderr that the CliRunner picks up.)
+    """
     from octowright import scenarios as _s
 
-    setup_telemetry()
-    try:
-        for row in _s.list_scenarios():
-            click.echo(f"{row['name']:30s}  {row['form']:6s}  {row['path']}")
-    finally:
-        shutdown_telemetry()
+    for row in _s.list_scenarios():
+        click.echo(f"{row['name']:30s}  {row['form']:6s}  {row['path']}")
 
 
 @scenario.command("start")

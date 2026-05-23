@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from octowright import defaults
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
 
@@ -59,9 +60,17 @@ def _make_session(tmp_path: Path) -> BrowserSession:
 
 
 @pytest.mark.anyio
-async def test_set_input_files_calls_page(tmp_path: Path) -> None:
+async def test_set_input_files_calls_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Point the upload allowlist at tmp_path so the session validator accepts
+    # paths created here without us tripping the real staging-dir allowlist.
+    monkeypatch.setattr(defaults, "UPLOAD_STAGING_DIR", tmp_path)
+    monkeypatch.setattr(defaults, "UPLOAD_EXTRA_ROOTS_RAW", "")
     s = _make_session(tmp_path)
-    paths = ["/tmp/file1.txt", "/tmp/file2.png"]
+    f1 = tmp_path / "file1.txt"
+    f2 = tmp_path / "file2.png"
+    f1.write_text("a")
+    f2.write_bytes(b"\x89PNG")
+    paths = [str(f1), str(f2)]
     result = await s.set_input_files("#file-input", paths)
 
     assert result == {"ok": True, "selector": "#file-input", "paths": paths}
@@ -69,9 +78,13 @@ async def test_set_input_files_calls_page(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_set_input_files_records_action(tmp_path: Path) -> None:
+async def test_set_input_files_records_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(defaults, "UPLOAD_STAGING_DIR", tmp_path)
+    monkeypatch.setattr(defaults, "UPLOAD_EXTRA_ROOTS_RAW", "")
     s = _make_session(tmp_path)
-    await s.set_input_files("input[type=file]", ["/tmp/upload.csv"])
+    upload = tmp_path / "upload.csv"
+    upload.write_text("col1,col2\n")
+    await s.set_input_files("input[type=file]", [str(upload)])
     log = (tmp_path / "test.jsonl").read_text()
     assert "set_input_files" in log
     assert "upload.csv" in log

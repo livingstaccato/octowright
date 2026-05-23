@@ -354,7 +354,10 @@ async def browser_read_markdown(
     path = await session.capture_markdown(force=True)
 
     if not path or not path.exists():
-        return {"error": "Markdown generation failed or is unavailable"}
+        raise RuntimeError(
+            "markdown generation failed or is unavailable; "
+            "ensure markitdown is installed and the page rendered HTML content"
+        )
 
     text = path.read_text(encoding="utf-8")
     original_size = len(text)
