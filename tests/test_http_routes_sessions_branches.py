@@ -223,6 +223,52 @@ class TestRecordingDelete:
         client.delete("/api/sessions/invalsesn001/recording")
         publish.assert_awaited_once_with("sessions")
 
+    def test_stem_prefix_overlap_does_not_drag_neighbour(
+        self,
+        client: TestClient,
+        isolated_recordings: Path,
+    ) -> None:
+        """Two recordings whose stems share a leading prefix (``abc`` vs
+        ``abcde``) must not delete each other's sidecars. The legacy
+        ``startswith(stem)`` check would falsely match ``...-abcde.jsonl``
+        when deleting ``...-abc``."""
+        short = _write_recording(isolated_recordings, "abc000000001")
+        longer = _write_recording(isolated_recordings, "abc000000001x")
+        # Plausible-shape sidecars next to both stems.
+        short_video = isolated_recordings / f"{short.stem}.webm"
+        short_video.write_bytes(b"shortvid")
+        longer_video = isolated_recordings / f"{longer.stem}.webm"
+        longer_video.write_bytes(b"longervid")
+        longer_md = isolated_recordings / f"{longer.stem}.markdown.md"
+        longer_md.write_bytes(b"longermd")
+
+        r = client.delete("/api/sessions/abc000000001/recording")
+        assert r.status_code == 200
+
+        # Short stem's files gone.
+        assert not short.exists()
+        assert not short_video.exists()
+        # Longer stem's files survive — the bug would unlink these.
+        assert longer.exists(), "neighbour JSONL was incorrectly deleted"
+        assert longer_video.exists(), "neighbour video was incorrectly deleted"
+        assert longer_md.exists(), "neighbour markdown was incorrectly deleted"
+
+    def test_unrelated_extension_in_dir_is_skipped(
+        self,
+        client: TestClient,
+        isolated_recordings: Path,
+    ) -> None:
+        """Files with the right stem prefix but a suffix outside the
+        sidecar allowlist (e.g. a stray ``.bak`` an operator dropped in
+        the recordings dir) are left alone."""
+        jsonl = _write_recording(isolated_recordings, "extguard00001")
+        stray = isolated_recordings / f"{jsonl.stem}.bak"
+        stray.write_bytes(b"backup")
+        r = client.delete("/api/sessions/extguard00001/recording")
+        assert r.status_code == 200
+        assert not jsonl.exists()
+        assert stray.exists(), "non-allowlisted suffix should not be unlinked"
+
 
 # ─── session_selector_validate (POST /api/sessions/{id}/selector/validate) ──
 

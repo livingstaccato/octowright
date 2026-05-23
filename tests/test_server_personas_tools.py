@@ -82,12 +82,12 @@ def test_persona_delete_success(_patch_deps: dict[str, MagicMock]) -> None:
     assert out["deleted"] is True
 
 
-def test_persona_list_and_credentials_check(_patch_deps: dict[str, MagicMock]) -> None:
+async def test_persona_list_and_credentials_check(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["persona"].list_personas.return_value = [{"name": "cosmo"}]
     out = _personas.persona_list()
     assert out == [{"name": "cosmo"}]
     p = MagicMock()
     _patch_deps["persona"].load_persona.return_value = p
     _patch_deps["persona"].check_credentials.return_value = {"ok": True}
-    checked = _personas.persona_credentials_check("cosmo")
+    checked = await _personas.persona_credentials_check("cosmo")
     assert checked["ok"] is True

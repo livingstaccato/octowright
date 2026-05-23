@@ -58,7 +58,7 @@ jobs:
       - name: ty check
         run: uv run --active ty check src/octowright
       - name: Bandit
-        run: uv run --active bandit -q -r src/octowright -s B101,B110,B112,B404,B405,B603,B607
+        run: uv run --active bandit -q -r src/octowright -s B101,B110,B112,B404,B405
       - name: codespell
         run: uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
       - name: SPDX headers
@@ -133,22 +133,12 @@ jobs:
       - name: Install Playwright browsers (github)
         if: ${{ env.ACT != 'true' && runner.os != 'Linux' }}
         run: uv run --active playwright install webkit firefox chromium
+      # Under act, skip tests that need real-display/popup/live-engine support.
       - name: Run unit tests (headless, act-safe subset)
         if: ${{ env.ACT == 'true' }}
         env:
           OCTOWRIGHT_HEADLESS: "1"
-        run: |
-          uv run --active pytest -q tests/ \
-            --no-cov \
-            --ignore=tests/test_engine_matrix_live.py \
-            --ignore=tests/test_badge.py \
-            --ignore=tests/test_pill.py \
-            --ignore=tests/test_popup_listeners.py \
-            --ignore=tests/test_scenario_sync.py \
-            --ignore=tests/test_scenarios_live.py \
-            --ignore=tests/test_session_mode.py \
-            --ignore=tests/test_title_prefix.py \
-            --ignore=tests/test_label_promotion.py
+        run: bash ci/run_unit_tests.sh
       - name: Run unit tests (headless, Windows verbose)
         if: ${{ env.ACT != 'true' && runner.os == 'Windows' }}
         env:
@@ -174,22 +164,9 @@ jobs:
         run: uv run --active python -m build --wheel --sdist
       - name: Verify packaged assets in wheel
         run: uv run --active python scripts/check_wheel_assets.py
+      # Exercise the `octowright skill` CLI surface end-to-end against a
+      # sandboxed CODEX_HOME inside the workspace.
       - name: Skill CLI smoke
         env:
           CODEX_HOME: ${{ github.workspace }}/.ci/codex-home
-        run: |
-          uv run --active octowright skill install using-octowright --target all --dry-run
-          uv run --active octowright skill install using-octowright --target all
-          uv run --active octowright skill status using-octowright --target all --json
-          uv run --active octowright skill doctor --json
-
-  selftest:
-    name: 🔧 Selftest — quick smoke
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/bootstrap-uv
-        with:
-          sync-args: "--python python"
-      - name: Selftest
-        run: uv run --active octowright selftest
+        run: bash ci/smoke_skill.sh

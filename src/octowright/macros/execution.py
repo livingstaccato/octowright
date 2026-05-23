@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 import octowright.conditional as conditional
+from octowright._tracing import counter, histogram, span
 from octowright.browser_pool.visuals import _describe_action
 from octowright.defaults import MACRO_SLOWMO_MS
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
@@ -31,6 +32,16 @@ if TYPE_CHECKING:
     from octowright.session import BrowserSession
 
 log = get_logger(__name__)
+
+_MACRO_RUN = counter(
+    "octowright_macro_run_total",
+    description="Macro runs, labelled by macro name and ok/failed status",
+)
+_MACRO_RUN_DURATION = histogram(
+    "octowright_macro_run_duration_seconds",
+    description="run_macro elapsed time including all nested calls",
+    unit="s",
+)
 
 
 _STATUS_PUSH_JS = "(p) => { if (window.__octowright_macro_status) window.__octowright_macro_status(p); }"
@@ -160,6 +171,22 @@ async def run_macro(
     *,
     slowmo_ms: int | None = None,
 ) -> MacroRunResult:
+    with span(
+        "octowright.macro.run",
+        macro=name,
+        instance_id=getattr(session, "instance_id", None),
+        kind=getattr(session, "kind", None),
+    ):
+        return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms)
+
+
+async def _run_macro_impl(
+    session: BrowserSession,
+    name: str,
+    args: dict[str, Any] | None,
+    *,
+    slowmo_ms: int | None,
+) -> MacroRunResult:
     macro = load_macro(name)
     effective_args = args or {}
     actions = substitute(macro.get("actions", []), effective_args)
@@ -208,6 +235,8 @@ async def run_macro(
         await _push_status(session, text=f"{name} | {outcome_label}", done=True)
 
     elapsed_s = time.monotonic() - macro_started
+    _MACRO_RUN.add(1, attributes={"macro": name, "status": "ok" if completed_ok else "failed"})
+    _MACRO_RUN_DURATION.record(elapsed_s, attributes={"macro": name})
     log.info(
         "octowright.macro.run",
         name=name,

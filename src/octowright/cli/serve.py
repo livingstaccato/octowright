@@ -223,12 +223,17 @@ async def _ensure_leader_or_inline(
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
-    existing = _sn.read_lock()
-    leader_alive = existing is not None and not _sn.is_stale(existing) and await _sn.probe_http_alive(existing)
-    if leader_alive:
-        return existing
-    click.echo("octowright: no live leader; spawning daemon", err=True)
-    _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+    # Serialise the election decision so two simultaneous starters cannot
+    # both observe "no live leader" and both spawn a daemon. The lock is
+    # held only across the probe+spawn window; wait_for_daemon polls without
+    # holding it so a successful spawn can be observed by other waiters.
+    with _sn.election_lock():
+        existing = _sn.read_lock()
+        leader_alive = existing is not None and not _sn.is_stale(existing) and await _sn.probe_http_alive(existing)
+        if leader_alive:
+            return existing
+        click.echo("octowright: no live leader; spawning daemon", err=True)
+        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
     spawned = await _daemon.wait_for_daemon()
     if spawned is None:
         # Daemon didn't come up in time — fall back to running leader inline
@@ -257,13 +262,14 @@ async def _respawn_if_leader_gone(*, http_host: str | None, http_port: int | Non
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
-    recheck = _sn.read_lock()
-    still_alive = recheck is not None and not _sn.is_stale(recheck) and await _sn.probe_http_alive(recheck)
-    if still_alive:
-        click.echo("octowright: leader still healthy, exiting", err=True)
-        return
-    click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
-    _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+    with _sn.election_lock():
+        recheck = _sn.read_lock()
+        still_alive = recheck is not None and not _sn.is_stale(recheck) and await _sn.probe_http_alive(recheck)
+        if still_alive:
+            click.echo("octowright: leader still healthy, exiting", err=True)
+            return
+        click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
+        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
 
 
 async def _serve_singleton(

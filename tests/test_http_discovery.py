@@ -9,6 +9,7 @@ index's negative-cache via dir mtime."""
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,57 @@ def test_find_recording_for_skips_rebuild_on_unchanged_dir(tmp_path: Path, monke
     for _ in range(5):
         assert discovery._find_recording_for("nope" + ("x" * 8), rec) is None
     assert build_count == 1, f"expected 1 build, got {build_count} (negative-cache regression)"
+
+
+def test_summary_cache_is_thread_safe_under_concurrent_load(tmp_path: Path) -> None:
+    """Many threads hammering _summarise_recording_cached on distinct paths
+    must not raise ``RuntimeError: dictionary changed size during iteration``
+    (and every call must return a usable summary)."""
+    rec = tmp_path / "recordings"
+    # Use more paths than DISCOVERY_CACHE_MAX_ENTRIES so the LRU also exercises
+    # popitem under contention; default is 256 so 320 distinct ids guarantees
+    # eviction churn while the workers race.
+    paths = [_write_recording(rec, f"thr{i:09x}") for i in range(320)]
+
+    errors: list[BaseException] = []
+
+    def worker(path: Path) -> None:
+        try:
+            for _ in range(10):
+                summary = discovery._summarise_recording_cached(path)
+                assert summary is not None
+        except BaseException as exc:
+            errors.append(exc)
+
+    with ThreadPoolExecutor(max_workers=50) as pool:
+        # Submit every path; ThreadPoolExecutor schedules them across the
+        # 50 workers so we get genuine cross-thread contention on the LRU.
+        list(pool.map(worker, paths * 2))
+
+    assert not errors, f"concurrent cache access raised: {errors[:3]}"
+
+
+def test_recording_index_is_thread_safe_under_concurrent_load(tmp_path: Path) -> None:
+    """Concurrent _find_recording_for callers must not race on the inner LRU."""
+    rec = tmp_path / "recordings"
+    ids = [f"idx{i:09x}" for i in range(80)]
+    for sid in ids:
+        _write_recording(rec, sid)
+
+    errors: list[BaseException] = []
+
+    def worker(sid: str) -> None:
+        try:
+            # Mix hits and misses to exercise both branches under contention.
+            assert discovery._find_recording_for(sid, rec) is not None
+            assert discovery._find_recording_for("missing__" + sid[:3], rec) is None
+        except BaseException as exc:
+            errors.append(exc)
+
+    with ThreadPoolExecutor(max_workers=50) as pool:
+        list(pool.map(worker, ids * 4))
+
+    assert not errors, f"concurrent index access raised: {errors[:3]}"
 
 
 def test_find_recording_for_rebuilds_when_dir_mtime_changes(tmp_path: Path) -> None:

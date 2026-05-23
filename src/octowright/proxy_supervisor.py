@@ -17,11 +17,21 @@ from mcp.shared.message import SessionMessage
 from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 
 from octowright import bridge_state, singleton
+from octowright._tracing import counter, span
 from octowright.defaults import (
     BRIDGE_CONNECT_TIMEOUT_SECONDS,
     BRIDGE_RECONNECT_MAX_SECONDS,
     BRIDGE_REQUEST_TIMEOUT_SECONDS,
     BRIDGE_STATE_PATH,
+)
+
+_BRIDGE_RECONNECT = counter(
+    "octowright_bridge_reconnect_total",
+    description="Times the follower bridge reconnected to the leader",
+)
+_BRIDGE_RPC = counter(
+    "octowright_bridge_rpc_total",
+    description="JSON-RPC messages forwarded local→remote, labelled by method",
 )
 
 BRIDGE_ERROR_CODE = -32000
@@ -99,24 +109,25 @@ class BridgeSupervisor:
     def in_flight_count(self) -> int:
         return len(self._in_flight)
 
-    async def forward_local_to_remote(self, remote_write: Any) -> None:
-        async for message in self.local_read:
-            self.track_local_message(message)
-            await remote_write.send(message)
-
     async def forward_one_local_message(self, message: SessionMessage, remote_write_box: dict[str, Any]) -> None:
         remote_write = remote_write_box.get("remote_write")
         request_id = message_request_id(message)
+        method = message_method(message) or "notification"
         if remote_write is None:
             if is_request(message) and request_id is not None:
                 await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
             return
-        self.track_local_message(message)
-        try:
-            await remote_write.send(message)
-        except Exception:
-            remote_write_box.pop("remote_write", None)
-            await self.fail_all_in_flight("leader session unavailable; retry")
+        # One span per forwarded message. method="tools/call" carries the
+        # tool name in params; we keep the span coarse here and let the
+        # leader-side @mcp.tool wrapper produce the per-tool child span.
+        with span("octowright.bridge.forward_rpc", method=method, request_id=request_id):
+            self.track_local_message(message)
+            _BRIDGE_RPC.add(1, attributes={"method": method})
+            try:
+                await remote_write.send(message)
+            except Exception:
+                remote_write_box.pop("remote_write", None)
+                await self.fail_all_in_flight("leader session unavailable; retry")
 
     def track_local_message(self, message: SessionMessage) -> None:
         request_id = message_request_id(message)
@@ -263,6 +274,7 @@ async def run_supervised_proxy(
                                         )
                     except Exception as exc:
                         remote_write_box.pop("remote_write", None)
+                        _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
                         await supervisor_obj.fail_all_in_flight(f"remote leader session reset: {exc!r}")
                         supervisor_obj.last_error = repr(exc)
                         bridge_state.record_snapshot(
