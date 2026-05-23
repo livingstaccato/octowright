@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
@@ -14,6 +15,8 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
+from octowright._tracing import set_attrs
+from octowright.browser_pool._metrics import LAUNCH_DURATION, LAUNCHED, launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure, cleanup_unregistered_launch
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
 from octowright.browser_pool.launch_helpers import (
@@ -73,10 +76,11 @@ class BrowserPool:
                 self._pw = await async_playwright().start()
         return self._pw
 
-    async def launch(
-        self,
-        **options: Any,
-    ) -> dict[str, Any]:
+    async def launch(self, **options: Any) -> dict[str, Any]:
+        async with launch_span(options.get("kind") or "chromium") as sp:
+            return await self._launch_impl(options, sp)
+
+    async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:
         launch_options = LaunchOptions.from_mapping(options)
         kind = launch_options.kind
         url = launch_options.url
@@ -105,6 +109,7 @@ class BrowserPool:
         registered = False
 
         instance_id = uuid.uuid4().hex[:12]
+        t0 = time.perf_counter()
 
         # Promote: a named launch (label given, no explicit profile, not ephemeral
         # and not session-scoped) gets a persistent profile by default. The whole
@@ -113,7 +118,7 @@ class BrowserPool:
         profile = launch_options.promoted_profile()
 
         session_user_data_dir = self._resolve_session_dir(session, launch_options, instance_id, kind)
-
+        set_attrs(_sp, instance_id=instance_id, profile=profile, label=label, session=session)
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
@@ -256,6 +261,8 @@ class BrowserPool:
                 log_path=log_path,
             )
             registered = True
+            LAUNCHED.add(1, attributes={"kind": kind})
+            LAUNCH_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind})
             log.info(
                 "octowright.browser.launched",
                 instance_id=instance_id,

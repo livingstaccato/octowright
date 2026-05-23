@@ -170,3 +170,44 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_PROFILE` — comma-separated capability-profile names to slim the LLM tool surface; unset or `all` registers everything (see "Capability Profiles" above)
 - `OCTOWRIGHT_TAIL_POLL_SECONDS` / `OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS` — WS `/tail` poll interval and quiet-stream keepalive cadence (defaults 1.0 / 15.0)
 - `OCTOWRIGHT_DASHBOARD_DISCONNECT_POLL_SECONDS` / `OCTOWRIGHT_DASHBOARD_HEARTBEAT_SECONDS` — SSE `/api/dashboard/events` disconnect-detection cadence and keepalive interval (defaults 0.05 / 15.0)
+
+## Telemetry (OpenTelemetry / OpenObserve)
+
+Tracing and metrics are emitted via `provide.telemetry`. Logs are always structured; spans and metrics are emitted ONLY when explicitly enabled — the noop tracer/meter is the default so there's no cost when not in use.
+
+### Spans
+
+Emitted at: `octowright.browser.launch`, `octowright.browser.spawn_roster`, `octowright.session.navigate`, `octowright.session.close`, `octowright.macro.run`, `octowright.macro.action`, `octowright.bridge.forward_rpc`. Each span carries `instance_id`, `kind`, `profile`, `label` (where applicable). Macros nest under their `run_macro` parent so `macro.run_sequence` renders as a clean tree.
+
+### Metrics
+
+- Counters: `octowright_browser_launched_total{kind}`, `octowright_browser_closed_total{kind}`, `octowright_browser_launch_failed_total{kind,error}`, `octowright_browser_evicted_total{kind}`, `octowright_macro_run_total{macro,status}`, `octowright_bridge_reconnect_total{reason}`, `octowright_bridge_rpc_total{method}`.
+- Histograms: `octowright_browser_launch_duration_seconds{kind}`, `octowright_macro_run_duration_seconds{macro}`, `octowright_session_navigate_duration_seconds{kind}`.
+
+### Session log context
+
+`BrowserSession.__post_init__` calls `provide.telemetry.bind_context(octowright_instance_id=..., octowright_kind=..., octowright_profile=..., octowright_label=...)` so every log line emitted for the duration of that session auto-carries those fields. `session.close()` unbinds them. The MCP-tool wrappers that don't run inside a session just don't see these fields, which is the right behavior.
+
+### Enabling export (OpenObserve recipe)
+
+```bash
+# Required: turn on tracing + metrics.
+export PROVIDE_TRACE_ENABLED=true
+export PROVIDE_METRICS_ENABLED=true
+
+# Service name defaults to "octowright" — set this only to override.
+# export PROVIDE_TELEMETRY_SERVICE_NAME=octowright-dev
+
+# OTLP endpoint. OpenObserve expects per-signal paths under its stream
+# (default stream is "default"; replace if you've named yours).
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:5080/api/default/v1/traces
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://localhost:5080/api/default/v1/metrics
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:5080/api/default/v1/logs
+
+# If OpenObserve is auth-gated (cloud or behind a proxy):
+# export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64-user:pass>"
+
+uv run octowright serve
+```
+
+The OTel SDK is pulled in as an extra (`provide-telemetry[otel]`); without it (or without `PROVIDE_TRACE_ENABLED=true`), the tracer/meter are noops and the cost is one cached attribute lookup per span entry — safe to leave the instrumentation in place. The MCP service name appears in OpenObserve as `octowright`.

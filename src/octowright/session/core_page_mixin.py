@@ -11,8 +11,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+from octowright._tracing import histogram, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+
+_NAVIGATE_DURATION = histogram(
+    "octowright_session_navigate_duration_seconds",
+    description="Duration of session.navigate() including page.goto",
+    unit="s",
+)
 
 # Schemes the MCP/HTTP navigate paths refuse to send to Playwright.
 # - file://     reads local files; combined with snapshot/read_markdown
@@ -105,23 +112,28 @@ class SessionPageMixin(SessionLike):
 
     async def navigate(self, url: str) -> dict[str, Any]:
         _reject_unsafe_url(url)
-        # Tag the upcoming framenavigated event so pool's user_navigation
-        # listener skips it (we already record "navigate" below).
-        prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)
-        self._last_mcp_navigation = url
-        try:
-            await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
-        except BaseException:
-            # Reset the dedupe tag on failure: if the user then navigates to
-            # the same URL manually, that's a genuine user_navigation event
-            # and should not be suppressed.
-            self._last_mcp_navigation = prior_mcp_navigation
-            raise
-        title = await self.page.title()
-        self.url = url
-        self._schedule_markdown_capture()
-        self.recorder.record("navigate", url=url)
-        return {"url": url, "title": title}
+        instance_id = getattr(self, "instance_id", None)
+        kind = getattr(self, "kind", None)
+        t0 = time.perf_counter()
+        with span("octowright.session.navigate", instance_id=instance_id, kind=kind, url=url):
+            # Tag the upcoming framenavigated event so pool's user_navigation
+            # listener skips it (we already record "navigate" below).
+            prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)
+            self._last_mcp_navigation = url
+            try:
+                await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+            except BaseException:
+                # Reset the dedupe tag on failure: if the user then navigates to
+                # the same URL manually, that's a genuine user_navigation event
+                # and should not be suppressed.
+                self._last_mcp_navigation = prior_mcp_navigation
+                raise
+            title = await self.page.title()
+            self.url = url
+            self._schedule_markdown_capture()
+            self.recorder.record("navigate", url=url)
+            _NAVIGATE_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind or "unknown"})
+            return {"url": url, "title": title}
 
     async def _resolve_semantic_metadata(self, selector: str) -> dict[str, str]:
         """Attempt to resolve the role and role_name of the element at selector."""

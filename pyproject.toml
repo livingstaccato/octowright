@@ -41,7 +41,7 @@ dependencies = [
     "mcp>=1.2.0",
     "playwright>=1.47.0",
     "anyio>=4.4.0",
-    "provide-telemetry>=0.3",
+    "provide-telemetry[otel]>=0.4.4",
     "click>=8.1",
     # cryptography stopped shipping win_arm64 wheels after 46.0.3. Pinning
     # to the 46.0.3.x range keeps Windows ARM64 installable (the alternative

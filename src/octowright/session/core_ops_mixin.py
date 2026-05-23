@@ -11,8 +11,14 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright._tracing import counter, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+
+_SESSION_CLOSED = counter(
+    "octowright_browser_closed_total",
+    description="Browser sessions closed cleanly via session.close()",
+)
 
 log = get_logger(__name__)
 
@@ -319,6 +325,20 @@ class SessionOpsMixin(SessionLike):
             self._bg_tasks.discard(task)
 
     async def close(self) -> None:
+        instance_id = getattr(self, "instance_id", None)
+        kind = getattr(self, "kind", None)
+        with span("octowright.session.close", instance_id=instance_id, kind=kind):
+            try:
+                await self._close_impl()
+            finally:
+                _SESSION_CLOSED.add(1, attributes={"kind": kind or "unknown"})
+                # Unbind the session-scoped log context so subsequent
+                # unrelated logs don't carry this session's identifiers.
+                unbind = getattr(self, "unbind_telemetry_context", None)
+                if unbind is not None:
+                    unbind()
+
+    async def _close_impl(self) -> None:
         try:
             await self._drain_background_tasks()
             if self.trace:
