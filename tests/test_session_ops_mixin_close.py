@@ -457,3 +457,49 @@ class TestDrainBackgroundTasks:
         assert second not in inst._bg_tasks
         assert second.done()
         assert second_cancelled, "the second (mid-drain) task was never cancelled"
+
+    @pytest.mark.anyio
+    async def test_drain_bounded_by_max_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A pathological producer that schedules a fresh bg task on every
+        drained task's done-callback can't pin the drain indefinitely —
+        the loop is bounded by ``_BG_TASK_DRAIN_MAX_PASSES``. Without the
+        bound the loop is infinite; with the bound the drain returns even
+        though _bg_tasks still has stragglers.
+        """
+        monkeypatch.setattr(SessionOpsMixin, "_BG_TASK_DRAIN_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(SessionOpsMixin, "_BG_TASK_DRAIN_MAX_PASSES", 2)
+        inst = _build(tmp_path)
+
+        def _spawn_more(_done: Any) -> None:
+            async def _hang() -> None:
+                await asyncio.sleep(10)
+
+            task = asyncio.create_task(_hang())
+            task.add_done_callback(_spawn_more)
+            inst._bg_tasks.add(task)
+
+        async def _quick() -> None:
+            return None
+
+        head = asyncio.create_task(_quick())
+        head.add_done_callback(_spawn_more)
+        await asyncio.sleep(0)
+        inst._bg_tasks.add(head)
+
+        # If the bound is broken, this never returns; the per-pass timeout
+        # is small enough that 2 passes complete in well under 1s.
+        await asyncio.wait_for(inst._drain_background_tasks(), timeout=2.0)
+        try:
+            # After the bounded exit, _bg_tasks still has the most-recently-
+            # spawned straggler that we never got to drain.
+            assert len(inst._bg_tasks) >= 1
+        finally:
+            # Clean up the stragglers so pytest doesn't print "Task was
+            # destroyed but it is pending" — the chain self-perpetuates
+            # otherwise (each cancel triggers another _spawn_more).
+            stragglers = list(inst._bg_tasks)
+            for t in stragglers:
+                t.remove_done_callback(_spawn_more)
+                t.cancel()
+            await asyncio.gather(*stragglers, return_exceptions=True)
+            inst._bg_tasks.clear()

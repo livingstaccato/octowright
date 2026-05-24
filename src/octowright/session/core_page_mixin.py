@@ -130,11 +130,10 @@ class SessionPageMixin(SessionLike):
         was_active = target is self.page
         # Reassign self.page BEFORE the pop so neither pop nor the
         # synchronous _on_page_close ever sees self.page dangling at a
-        # popped index.
+        # popped index. The len(self.pages) > 1 guard above means a
+        # non-target sibling is always present when ``was_active``.
         if was_active:
-            sibling = next((p for p in self.pages if p is not target), None)
-            if sibling is not None:
-                self.page = sibling
+            self.page = next(p for p in self.pages if p is not target)
         self.pages.pop(index)
         await target.close()
         self.recorder.record("close_page", index=index, was_active=was_active)
