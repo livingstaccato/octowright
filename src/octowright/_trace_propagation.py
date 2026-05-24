@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-Comment: Part of octowright.
+#
+
+"""W3C trace-context propagation across the follower→leader HTTP-MCP bridge.
+
+The follower's ``BridgeSupervisor`` calls ``streamablehttp_client(...)`` which
+opens an httpx ``AsyncClient`` under the hood. Without help, OTel spans on the
+follower side and on the leader side appear as two disconnected trees — same
+``service.name`` only correlates by timestamp.
+
+This module adds two seams so the two sides chain via the W3C ``traceparent``
+header:
+
+* :func:`tracing_httpx_client_factory` — returns an ``McpHttpClientFactory``
+  that installs a request event hook on the httpx client. Every outbound
+  request gets its current OTel context injected (``opentelemetry.propagate``).
+* :class:`TraceContextExtractionMiddleware` — ASGI middleware to wrap the
+  leader's ``/mcp`` mount. Extracts the W3C context from incoming headers and
+  attaches it for the duration of the request, so any span the leader opens
+  (per-RPC spans on the FastMCP side, per-tool spans inside ``@mcp.tool``
+  handlers) becomes a child of the follower's span.
+
+Both are safe when OTel is not installed — ``propagate`` is a stdlib import in
+``opentelemetry.api`` which ships with the OTel SDK extra; without the extra
+the module gracefully no-ops.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable, MutableMapping
+from typing import Any
+
+import httpx
+
+try:
+    from opentelemetry import context as _otel_context
+    from opentelemetry import propagate as _otel_propagate
+
+    _OTEL_AVAILABLE = True
+except ImportError:  # pragma: no cover - OTel SDK is a soft dep
+    _OTEL_AVAILABLE = False
+
+
+async def _inject_traceparent_hook(request: httpx.Request) -> None:
+    """httpx event hook: inject the current OTel context into request headers."""
+    if not _OTEL_AVAILABLE:
+        return
+    # propagate.inject mutates the carrier in place; httpx Headers is dict-like
+    # enough for the default W3CTraceContextPropagator (which only does setdefault).
+    try:
+        _otel_propagate.inject(request.headers)
+    except Exception:
+        # Telemetry must never break a transport. Drop the propagation rather
+        # than fail the outbound request.
+        pass
+
+
+def tracing_httpx_client_factory() -> Callable[..., httpx.AsyncClient]:
+    """Return an MCP httpx-client factory whose clients inject W3C traceparent.
+
+    Drop-in replacement for ``mcp.shared._httpx_utils.create_mcp_http_client``
+    matching its signature so callers can pass it as ``httpx_client_factory=``
+    to ``streamablehttp_client``.
+    """
+
+    def _factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        # Mirror create_mcp_http_client's defaults: follow_redirects=True, 30s timeout.
+        kwargs: dict[str, Any] = {
+            "follow_redirects": True,
+            "timeout": timeout if timeout is not None else httpx.Timeout(30.0),
+            "event_hooks": {"request": [_inject_traceparent_hook]},
+        }
+        if headers is not None:
+            kwargs["headers"] = headers
+        if auth is not None:
+            kwargs["auth"] = auth
+        return httpx.AsyncClient(**kwargs)
+
+    return _factory
+
+
+# ASGI middleware (Starlette-compatible) for the leader side.
+
+
+class TraceContextExtractionMiddleware:
+    """ASGI middleware that extracts W3C trace context from incoming requests.
+
+    Attaches the extracted context for the duration of ``__call__`` so any
+    span the wrapped app opens chains under the upstream span. No-ops when
+    OTel is unavailable.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(
+        self,
+        scope: MutableMapping[str, Any],
+        receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+    ) -> None:
+        if not _OTEL_AVAILABLE or scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        carrier = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        try:
+            ctx = _otel_propagate.extract(carrier)
+        except Exception:
+            ctx = None
+        if ctx is None:
+            await self.app(scope, receive, send)
+            return
+        token = _otel_context.attach(ctx)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _otel_context.detach(token)
