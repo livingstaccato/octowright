@@ -172,6 +172,18 @@ DOWNLOAD_PATH_EXISTS_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_DOWNLOAD_PAT
 TAIL_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_TAIL_POLL_SECONDS", "1.0"))
 TAIL_HEARTBEAT_SECONDS = float(os.environ.get("OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS", "15.0"))
 
+# WebSocket-frame cache flush cadence. Per-frame ``fh.flush()`` would
+# add a syscall per inbound/outbound WS frame — for game servers or
+# market-data feeds (thousands of frames per second) that becomes the
+# dominant cost. Python's text-mode block buffer (~8KB) on its own
+# would hold low-volume feeds out of the dashboard tail until the
+# buffer fills. Compromise: flush when EITHER the frame count or the
+# elapsed-time threshold is hit, whichever comes first. Tail polls at
+# 1Hz by default so 250ms flush feels live; 32 frames keeps batches
+# small enough that bursty feeds don't accumulate noticeable lag.
+WEBSOCKET_CACHE_FLUSH_FRAMES = int(os.environ.get("OCTOWRIGHT_WEBSOCKET_CACHE_FLUSH_FRAMES", "32"))
+WEBSOCKET_CACHE_FLUSH_SECONDS = float(os.environ.get("OCTOWRIGHT_WEBSOCKET_CACHE_FLUSH_SECONDS", "0.25"))
+
 # SSE /api/dashboard/events cadence.
 #
 # - DASHBOARD_DISCONNECT_POLL_SECONDS: how often the streaming endpoint checks
