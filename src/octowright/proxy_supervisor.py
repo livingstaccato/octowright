@@ -18,7 +18,7 @@ from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCNotificati
 
 from octowright import bridge_state, singleton
 from octowright._trace_propagation import tracing_httpx_client_factory
-from octowright._tracing import counter, span
+from octowright._tracing import counter, histogram, span
 from octowright.defaults import (
     BRIDGE_CONNECT_TIMEOUT_SECONDS,
     BRIDGE_RECONNECT_MAX_SECONDS,
@@ -33,6 +33,11 @@ _BRIDGE_RECONNECT = counter(
 _BRIDGE_RPC = counter(
     "octowright_bridge_rpc_total",
     description="JSON-RPC messages forwarded local→remote, labelled by method",
+)
+_BRIDGE_RPC_DURATION = histogram(
+    "octowright_bridge_rpc_duration_seconds",
+    description="End-to-end follower→leader→follower RPC latency, labelled by method and outcome",
+    unit="s",
 )
 
 BRIDGE_ERROR_CODE = -32000
@@ -118,9 +123,17 @@ class BridgeSupervisor:
             if is_request(message) and request_id is not None:
                 await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
             return
-        # One span per forwarded message. method="tools/call" carries the
-        # tool name in params; we keep the span coarse here and let the
-        # leader-side @mcp.tool wrapper produce the per-tool child span.
+        # One span per forwarded message — covers only the outbound send to
+        # the leader. End-to-end follower→leader→follower latency is captured
+        # separately in ``forward_remote_message`` via the
+        # ``octowright_bridge_rpc_duration_seconds`` histogram, keyed off
+        # ``InFlightRequest.started_at``. We deliberately don't span the
+        # full RPC: spans would have to bridge two coroutines (local
+        # forwarder vs. remote reader) with shared mutable state, which is
+        # the kind of context-attach interleaving that's easy to get wrong
+        # and hard to test deterministically. Method="tools/call" carries
+        # the tool name in params; we keep the span coarse here and let
+        # the leader-side @mcp.tool wrapper produce the per-tool child span.
         with span("octowright.bridge.forward_rpc", method=method, request_id=request_id):
             self.track_local_message(message)
             _BRIDGE_RPC.add(1, attributes={"method": method})
@@ -150,7 +163,18 @@ class BridgeSupervisor:
     async def forward_remote_message(self, message: SessionMessage) -> None:
         request_id = message_request_id(message)
         if request_id is not None:
-            self._in_flight.pop(request_id, None)
+            in_flight = self._in_flight.pop(request_id, None)
+            if in_flight is not None:
+                # End-to-end RPC latency: from when the follower forwarded
+                # the request to when the matching response arrived from
+                # the leader. Outcome label distinguishes success
+                # (JSONRPCResponse) from leader-side error (JSONRPCError).
+                elapsed = time.monotonic() - in_flight.started_at
+                outcome = "error" if isinstance(message_root(message), JSONRPCError) else "ok"
+                _BRIDGE_RPC_DURATION.record(
+                    elapsed,
+                    attributes={"method": in_flight.method or "unknown", "outcome": outcome},
+                )
         await self.local_write.send(message)
 
     async def watch_deadlines(self, interval: float = 0.01) -> None:
@@ -162,13 +186,24 @@ class BridgeSupervisor:
                 self._in_flight.pop(item.request_id, None)
                 self.request_timeouts += 1
                 self.last_error = f"request {item.request_id!r} timed out while waiting for leader response"
+                # Record the full timeout duration so dashboards see the
+                # tail latency, not just the success path.
+                _BRIDGE_RPC_DURATION.record(
+                    now - item.started_at,
+                    attributes={"method": item.method or "unknown", "outcome": "timeout"},
+                )
                 await self.local_write.send(bridge_error(item.request_id, self.last_error))
 
     async def fail_all_in_flight(self, reason: str) -> None:
         pending = list(self._in_flight.values())
         self._in_flight.clear()
         self.last_error = reason
+        now = time.monotonic()
         for item in pending:
+            _BRIDGE_RPC_DURATION.record(
+                now - item.started_at,
+                attributes={"method": item.method or "unknown", "outcome": "failure"},
+            )
             await self.local_write.send(bridge_error(item.request_id, reason))
 
 

@@ -24,7 +24,6 @@ gate lives at module-load time, not in the hot path.
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -36,9 +35,15 @@ from provide.telemetry import get_tracer
 # ---------------------------------------------------------------------------
 
 
-@functools.lru_cache(maxsize=32)
 def _tracer(name: str) -> Any:
-    """Cached tracer per module name. Noop when tracing is disabled."""
+    """Resolve a tracer by name.
+
+    Not cached locally — ``provide.telemetry.get_tracer`` (and the underlying
+    ``opentelemetry.trace.get_tracer``) already deduplicates by name and binds
+    to whichever provider is current at call time. Local caching would freeze
+    the binding to whatever provider existed at first import, which silently
+    no-ops every span if ``setup_telemetry()`` runs later.
+    """
     return get_tracer(name)
 
 
@@ -121,42 +126,112 @@ def record_exception(sp: Any, exc: BaseException) -> None:
 
 
 class _NoopInstrument:
-    def add(self, _amount: float, _attributes: dict[str, Any] | None = None) -> None: ...
-    def record(self, _value: float, _attributes: dict[str, Any] | None = None) -> None: ...
+    def add(self, _amount: float, _attributes: dict[str, Any] | None = None, **_kwargs: Any) -> None: ...
+    def record(self, _value: float, _attributes: dict[str, Any] | None = None, **_kwargs: Any) -> None: ...
 
 
 _NOOP = _NoopInstrument()
 
 
-@functools.lru_cache(maxsize=1)
+try:  # pragma: no cover - import guard
+    from opentelemetry import metrics as _otel_metrics  # noqa: F401
+
+    _OTEL_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised by monkeypatch test
+    _OTEL_AVAILABLE = False
+
+
 def _meter() -> Any | None:
-    try:
-        from opentelemetry import metrics
-    except ImportError:
+    """Resolve the current OTel meter.
+
+    Not cached: OTel's ``metrics.get_meter`` is itself idempotent and binds
+    to whichever ``MeterProvider`` is currently registered. Caching the
+    return value here would freeze the binding to the provider that existed
+    when this module (or its callers) was first imported, which silently
+    no-ops every instrument if ``setup_telemetry()`` runs later.
+    """
+    if not _OTEL_AVAILABLE:
         return None
     try:
+        from opentelemetry import metrics
+
         return metrics.get_meter("octowright")
     except Exception:
         return None
 
 
+class _LazyInstrument:
+    """Defer instrument creation until first ``add``/``record``.
+
+    Module-level call sites build instruments at import time. If that import
+    happens before ``setup_telemetry()`` swaps in the real ``MeterProvider``,
+    the instrument would bind to whatever provider was current at import
+    (typically the OTel default no-op), and every subsequent ``add``/``record``
+    would silently drop. Deferring resolution to the first datapoint call
+    means we always pick up the live provider.
+    """
+
+    __slots__ = ("_factory", "_instrument", "_kwargs", "_name")
+
+    def __init__(self, factory_name: str, name: str, **kwargs: Any) -> None:
+        # factory_name is the meter method to invoke: "create_counter" /
+        # "create_histogram". Stored as a string so we don't capture the
+        # bound method off a meter we haven't resolved yet.
+        self._factory = factory_name
+        self._name = name
+        self._kwargs = kwargs
+        self._instrument: Any | None = None
+
+    def _resolve(self) -> Any:
+        if self._instrument is not None:
+            return self._instrument
+        m = _meter()
+        if m is None:
+            self._instrument = _NOOP
+            return self._instrument
+        try:
+            factory = getattr(m, self._factory)
+            self._instrument = factory(self._name, **self._kwargs)
+        except Exception:
+            self._instrument = _NOOP
+        return self._instrument
+
+
+class _LazyCounter(_LazyInstrument):
+    def add(self, amount: float, attributes: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        try:
+            self._resolve().add(amount, attributes=attributes, **kwargs)
+        except Exception:
+            pass
+
+
+class _LazyHistogram(_LazyInstrument):
+    def record(self, value: float, attributes: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        try:
+            self._resolve().record(value, attributes=attributes, **kwargs)
+        except Exception:
+            pass
+
+
 def counter(name: str, *, description: str = "", unit: str = "1") -> Any:
-    """Get-or-create a counter instrument. Returns a noop when metrics off."""
-    m = _meter()
-    if m is None:
+    """Return a lazy counter proxy.
+
+    The real OTel counter is created on first ``.add()``, so module-level
+    ``counter(...)`` calls (which run at import time) safely defer binding
+    until after ``setup_telemetry()`` has registered the live provider.
+    Returns a noop-equivalent when OTel isn't importable.
+    """
+    if not _OTEL_AVAILABLE:
         return _NOOP
-    try:
-        return m.create_counter(name, description=description, unit=unit)
-    except Exception:
-        return _NOOP
+    return _LazyCounter("create_counter", name, description=description, unit=unit)
 
 
 def histogram(name: str, *, description: str = "", unit: str = "s") -> Any:
-    """Get-or-create a histogram. Returns a noop when metrics off."""
-    m = _meter()
-    if m is None:
+    """Return a lazy histogram proxy.
+
+    Same lazy-resolution semantics as :func:`counter`. Returns a noop-equivalent
+    when OTel isn't importable.
+    """
+    if not _OTEL_AVAILABLE:
         return _NOOP
-    try:
-        return m.create_histogram(name, description=description, unit=unit)
-    except Exception:
-        return _NOOP
+    return _LazyHistogram("create_histogram", name, description=description, unit=unit)

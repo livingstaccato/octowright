@@ -34,7 +34,7 @@ from typing import Any
 
 import httpx
 
-from octowright._tracing import span as _tracing_span
+from octowright._tracing import _tracer as _tracing_get_tracer
 
 try:
     from opentelemetry import context as _otel_context
@@ -131,16 +131,49 @@ class TraceContextExtractionMiddleware:
             await self.app(scope, receive, send)
             return
         token = _otel_context.attach(ctx)
+        # Emit a per-request leader-side span so even when no @mcp.tool
+        # runs (initialize, ping, malformed body) the trace still shows
+        # a leader leg — proves the chain at the HTTP layer and gives
+        # operators a visible "request landed here" anchor.
+        #
+        # The span MUST end as soon as response headers are sent
+        # (``http.response.start``) — never on body completion. For
+        # streamable-HTTP MCP the response is an SSE stream that stays
+        # open for the duration of the follower's connection (potentially
+        # minutes). Keeping the span open that long fills the OTel
+        # batch-exporter buffer (default 2048 spans) with one entry per
+        # concurrent follower and silently drops spans when it overflows.
+        tracer = _tracing_get_tracer("octowright")
+        span_cm = tracer.start_as_current_span("octowright.mcp.request")
+        sp = span_cm.__enter__()
         try:
-            # Emit a per-request leader-side span so even when no @mcp.tool
-            # runs (initialize, ping, malformed body) the trace still shows
-            # a leader leg — proves the chain at the HTTP layer and gives
-            # operators a visible "request landed here" anchor.
-            with _tracing_span(
-                "octowright.mcp.request",
-                method=scope.get("method"),
-                path=scope.get("path"),
-            ):
-                await self.app(scope, receive, send)
+            sp.set_attribute("method", scope.get("method") or "")
+            sp.set_attribute("path", scope.get("path") or "")
+        except Exception:
+            pass
+        span_ended = False
+
+        def _end_span_once() -> None:
+            nonlocal span_ended
+            if span_ended:
+                return
+            span_ended = True
+            try:
+                span_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+
+        async def _send_wrapper(message: MutableMapping[str, Any]) -> None:
+            if not span_ended and message.get("type") == "http.response.start":
+                _end_span_once()
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send_wrapper)
         finally:
+            # End the span if no http.response.start was ever sent (e.g.
+            # the app raised before producing a response). The OTel context
+            # token outlives the span on purpose so any background work
+            # the app dispatched still chains correctly.
+            _end_span_once()
             _otel_context.detach(token)
