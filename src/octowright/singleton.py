@@ -74,10 +74,28 @@ def read_lock(path: Path = LOCK_PATH) -> LeaderInfo | None:
 
 
 def write_lock(info: LeaderInfo, path: Path = LOCK_PATH) -> None:
-    """Atomically replace the lockfile with ``info``."""
+    """Atomically replace the lockfile with ``info``.
+
+    The lockfile records the leader's PID and HTTP-MCP endpoint URL —
+    sensitive enough that other local users (shared host, multi-tenant
+    workstation) shouldn't be able to read or tamper with it. Force
+    ``0o600`` on the file and ``0o700`` on the parent dir so the default
+    umask can't widen the bits.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # chmod is a no-op on Windows for mode bits beyond read-only; the
+    # invocation is still safe and keeps the POSIX path single-branched.
+    if os.name != "nt":
+        try:
+            path.parent.chmod(0o700)
+        except OSError:
+            # Best-effort: a pre-existing parent dir we don't own can't be
+            # tightened, but the file-level chmod below still applies.
+            pass
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(info.to_json(), encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(tmp, 0o600)
     tmp.replace(path)
 
 

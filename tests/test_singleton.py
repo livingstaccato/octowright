@@ -43,6 +43,21 @@ def test_read_lock_corrupt_returns_none(tmp_path: Path) -> None:
     assert singleton.read_lock(path=lock) is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits don't apply to Windows lockfile")
+def test_write_lock_chmod_0600_and_parent_0700(tmp_path: Path) -> None:
+    """The lockfile contains pid/host/port/mcp_url — sensitive enough that
+    other local users shouldn't read or tamper with it. Pin the mode bits."""
+    parent = tmp_path / "state"
+    lock = parent / "octowright.lock"
+    info = singleton.make_leader_info("127.0.0.1", 8765)
+    singleton.write_lock(info, path=lock)
+
+    file_mode = lock.stat().st_mode & 0o777
+    parent_mode = parent.stat().st_mode & 0o777
+    assert file_mode == 0o600, f"lockfile mode {oct(file_mode)} expected 0o600"
+    assert parent_mode == 0o700, f"parent dir mode {oct(parent_mode)} expected 0o700"
+
+
 def test_remove_lock_idempotent(tmp_path: Path) -> None:
     lock = tmp_path / "octowright.lock"
     singleton.remove_lock(path=lock)  # missing — must not raise

@@ -19,14 +19,22 @@ Holds:
       Read by ``runtime_url()`` and the ``octowright_dashboard_url`` MCP tool.
     * Module-import handles for the helpers tests like to swap (``_video``,
       ``_personas``, ``_macros``, ``shutil``, ``subprocess``).
+    * ``pool`` / ``scenario_pool`` — the shared singletons that the MCP server
+      mutates. Exposed here so HTTP-layer code only ever reads pool state
+      through ``state.<name>`` (the single seam). Resolved lazily via module
+      ``__getattr__`` so they always reflect the current value in
+      ``octowright.server._state`` unless a test explicitly shadows them with
+      ``monkeypatch.setattr(http.state, "pool", ...)``.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+import sys as _sys
 from pathlib import Path
-from typing import Any
+from types import ModuleType as _ModuleType
+from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
@@ -85,6 +93,54 @@ def runtime_status() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Shared-singleton seam: ``pool`` and ``scenario_pool`` live on
+# ``octowright.server._state`` (the MCP server owns the lifecycle). HTTP-layer
+# code reads them via ``state.pool`` / ``state.scenario_pool`` so the seam is
+# in one place. Both reads AND writes forward to ``_server_state`` via a
+# module-class descriptor: ``getattr(state, "pool")`` returns
+# ``server._state.pool`` and ``setattr(state, "pool", X)`` mutates
+# ``server._state.pool``. This keeps ``monkeypatch.setattr(state, "pool", X)``
+# from caching a stale real attribute on this module (which would otherwise
+# shadow the forwarder for the rest of the test session after teardown).
+# ---------------------------------------------------------------------------
+
+
+def _server_state() -> Any:
+    from octowright.server import _state
+
+    return _state
+
+
+class _StateModule(_ModuleType):
+    @property
+    def pool(self) -> Any:
+        return _server_state().pool
+
+    @pool.setter
+    def pool(self, value: Any) -> None:
+        _server_state().pool = value
+
+    @property
+    def scenario_pool(self) -> Any:
+        return _server_state().scenario_pool
+
+    @scenario_pool.setter
+    def scenario_pool(self, value: Any) -> None:
+        _server_state().scenario_pool = value
+
+
+_sys.modules[__name__].__class__ = _StateModule
+
+# Type-checker visibility: the descriptors above are installed at runtime via
+# the ``__class__`` swap, which mypy/ty can't follow. Declaring the names
+# under TYPE_CHECKING makes ``state.pool`` and ``state.scenario_pool`` valid
+# at static-analysis time without affecting runtime behavior.
+if TYPE_CHECKING:
+    pool: Any
+    scenario_pool: Any
+
+
 __all__ = [
     "FRONTEND_DIR",
     "RECORDINGS_DIR",
@@ -97,9 +153,11 @@ __all__ = [
     "_personas",
     "_video",
     "log",
+    "pool",
     "runtime_session_url",
     "runtime_status",
     "runtime_url",
+    "scenario_pool",
     "shutil",
     "subprocess",
 ]

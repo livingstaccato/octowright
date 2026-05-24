@@ -67,12 +67,26 @@ async def handoff_browser(
     # had was two unrelated `browser.close` / `browser.launch` events with
     # no semantic link back to the originating handoff request.
     source = pool.get(old_instance_id)
+    # Snapshot every field we need BEFORE awaiting close. A Playwright
+    # external-close eviction (context.close / browser.disconnected /
+    # page.close) can fire between this point and `pool.close()`, popping
+    # the session out of the pool. If we re-read ``source`` attributes
+    # later they'd still be valid (SimpleNamespace-style ref), but the
+    # important invariant is that we don't depend on the session staying
+    # registered: the launch of the replacement must succeed whether or
+    # not close raced an eviction.
+    source_kind = source.kind
+    source_label = source.label
     source_profile = source.profile
     source_user_data_dir = getattr(source, "user_data_dir", None)
+    source_stabilize = getattr(source, "stabilize", False)
+    source_trace = getattr(source, "trace", False)
+    source_har_path = getattr(source, "har_path", None)
+    target_url = getattr(source.page, "url", None) or source.url
     with span(
         "octowright.browser.handoff",
         old_instance_id=old_instance_id,
-        kind=source.kind,
+        kind=source_kind,
         headed=headed,
         close_original=close_original,
         accept_stateless=accept_stateless,
@@ -86,23 +100,33 @@ async def handoff_browser(
                 "persistent handoff requires close_original=True so the state directory can be safely reused"
             )
 
-        target_url = getattr(source.page, "url", None) or source.url
         session_scoped = source_profile is None and source_user_data_dir is not None
         close_result: dict[str, Any] | None = None
         if close_original:
-            close_result = await pool.close(old_instance_id)
+            try:
+                close_result = await pool.close(old_instance_id)
+            except KeyError:
+                # The session was evicted (external-close listener fired)
+                # between pool.get() above and this close(). Treat as
+                # "already closed" and proceed to launch the replacement
+                # so the user isn't left with no browser.
+                log.warning(
+                    "octowright.browser.handoff.close_raced_eviction",
+                    old_instance_id=old_instance_id,
+                    kind=source_kind,
+                )
+                close_result = None
 
         # Don't overwrite the prior HAR — handoff gets a fresh sibling path.
-        source_har_path = getattr(source, "har_path", None)
         next_har = rotate_har_path(source_har_path)
         launch = await pool.launch(
-            kind=source.kind,
+            kind=source_kind,
             url=target_url,
             headed=headed,
-            label=source.label,
+            label=source_label,
             profile=source_profile,
-            stabilize=getattr(source, "stabilize", False),
-            trace=getattr(source, "trace", False),
+            stabilize=source_stabilize,
+            trace=source_trace,
             har=bool(source_har_path),
             har_path=str(next_har) if next_har else None,
             session=session_scoped,
@@ -114,7 +138,7 @@ async def handoff_browser(
             "new_instance_id": launch["instance_id"],
             "old_closed": bool(close_result and close_result.get("closed")),
             "profile": source_profile,
-            "kind": source.kind,
+            "kind": source_kind,
             "url": target_url,
             "har_path": launch.get("har_path"),
         }

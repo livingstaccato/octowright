@@ -143,6 +143,10 @@ class _FakeSession:
         self.page = MagicMock()
         self.page.evaluate = AsyncMock()
         self.diagnostic_bundle = AsyncMock(return_value={"hint": "yo"})
+        # SessionLike attrs for run_macro span tagging; previously masked by
+        # getattr(..., None) defaults.
+        self.instance_id = "fake-instance"
+        self.kind = "chromium"
 
 
 @pytest.fixture

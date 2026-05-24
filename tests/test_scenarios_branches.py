@@ -310,6 +310,12 @@ class TestValidateScenarioMessages:
 
 
 class TestLoadPythonScenarioMessages:
+    @pytest.fixture(autouse=True)
+    def _allow_py_scenarios(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # These tests cover error-message wording for the post-gate code
+        # path; opt in so they don't trip the default-deny env-var gate.
+        monkeypatch.setenv("OCTOWRIGHT_ALLOW_PY_SCENARIOS", "1")
+
     def test_missing_build_message_includes_path_and_arrow(self, tmp_path: Path) -> None:
         path = tmp_path / "no_build.py"
         path.write_text("# nothing here\n")

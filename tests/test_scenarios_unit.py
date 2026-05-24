@@ -207,6 +207,12 @@ class TestLoadYamlScenario:
 
 
 class TestLoadPythonScenario:
+    @pytest.fixture(autouse=True)
+    def _allow_py_scenarios(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # These tests exercise the post-gate Python loader path; opt in so
+        # they don't trip the default-deny env-var gate.
+        monkeypatch.setenv("OCTOWRIGHT_ALLOW_PY_SCENARIOS", "1")
+
     def test_python_module_with_build_function(self, tmp_path: Path) -> None:
         path = tmp_path / "dyn.py"
         path.write_text(
@@ -253,8 +259,14 @@ class TestLoadPythonScenario:
 
 
 class TestLoadScenarioDispatch:
-    def test_python_wins_over_yaml(self, scenarios_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_python_wins_over_yaml(
+        self,
+        scenarios_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """When both .py and .yaml exist for the same name, the .py form is used."""
+        monkeypatch.setenv("OCTOWRIGHT_ALLOW_PY_SCENARIOS", "1")
         (scenarios_dir / "both.yaml").write_text(yaml.safe_dump({"name": "from-yaml", "participants": []}))
         (scenarios_dir / "both.py").write_text(
             "from octowright.scenarios import Scenario\n"

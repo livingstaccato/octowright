@@ -229,9 +229,12 @@ async def session_screenshot_file(request: Request) -> Response:
         resolved.relative_to(sdir_resolved)
     except (OSError, ValueError):
         return JSONResponse({"error": "invalid filename"}, status_code=400)
-    if not target.exists() or not target.is_file():
+    if not resolved.exists() or not resolved.is_file():
         return JSONResponse({"error": f"no screenshot {filename!r}"}, status_code=404)
-    return FileResponse(path=str(target), media_type="image/png", filename=filename)
+    # Pass the already-resolved path to FileResponse so a symlink swap
+    # between our containment check and FileResponse's open() can't
+    # redirect to a file outside the recordings root.
+    return FileResponse(path=str(resolved), media_type="image/png", filename=filename)
 
 
 async def session_markdown(request: Request) -> Response:

@@ -45,12 +45,12 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 if TYPE_CHECKING:
-    from octowright.session import BrowserSession
+    from octowright.session._protocols import SessionLike
 
 log = get_logger(__name__)
 
 # Type alias for the recursive dispatch callable: `(session, action) -> (executed, skipped)`.
-DispatchFn = Callable[["BrowserSession", dict[str, Any]], Awaitable[tuple[int, int]]]
+DispatchFn = Callable[["SessionLike", dict[str, Any]], Awaitable[tuple[int, int]]]
 
 # Default predicate timeout — short, since we're polling, not blocking on a real wait.
 _DEFAULT_PREDICATE_TIMEOUT_MS = 1000
@@ -71,7 +71,7 @@ async def selector_present(page: Any, selector: str, timeout_ms: int) -> bool:
 
 
 async def do_if_selector(
-    session: BrowserSession,
+    session: SessionLike,
     action: dict[str, Any],
     dispatch: DispatchFn,
 ) -> tuple[int, int]:
@@ -103,7 +103,7 @@ async def do_if_selector(
 
 
 async def do_try(
-    session: BrowserSession,
+    session: SessionLike,
     action: dict[str, Any],
     dispatch: DispatchFn,
 ) -> tuple[int, int]:
@@ -132,7 +132,7 @@ async def do_try(
 
 
 async def do_try_each(
-    session: BrowserSession,
+    session: SessionLike,
     action: dict[str, Any],
     dispatch: DispatchFn,
 ) -> tuple[int, int]:
@@ -172,7 +172,7 @@ CONDITIONAL_ACTIONS = frozenset({"if_selector", "try", "try_each"})
 
 
 async def dispatch_conditional(
-    session: BrowserSession,
+    session: SessionLike,
     action: dict[str, Any],
     dispatch: DispatchFn,
 ) -> tuple[int, int]:

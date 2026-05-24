@@ -16,26 +16,24 @@ from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
 from octowright._tracing import set_attrs, span
-from octowright.browser_pool._metrics import LAUNCH_DURATION, LAUNCHED, launch_span
-from octowright.browser_pool.cleanup import cleanup_on_launch_failure, cleanup_unregistered_launch
+from octowright.browser_pool._metrics import launch_span
+from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
 from octowright.browser_pool.launch_helpers import (
     _build_har_kwargs,
     _build_video_kwargs,
     _build_viewport_kwargs,
     _open_browser_context,
-    _record_launch_event,
-    _safe_manifest_record,
     rotate_har_path,
 )
+from octowright.browser_pool.launch_pipeline import cleanup_failed_launch, post_context_setup
 from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
-from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
 from octowright.browser_pool.options import LaunchOptions
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
-from octowright.browser_pool.visuals import _tile_args_for_chromium, wire_init_scripts
+from octowright.browser_pool.visuals import _tile_args_for_chromium
 from octowright.defaults import DEFAULT_URL, HEADLESS_DEFAULT, RECORDINGS_DIR
-from octowright.recorder import Recorder, new_log_path
+from octowright.recorder import new_log_path
 from octowright.session import BrowserSession
 
 log = get_logger(__name__)
@@ -80,30 +78,9 @@ class BrowserPool:
     async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:
         launch_options = LaunchOptions.from_mapping(options)
         kind = launch_options.kind
-        url = launch_options.url
         headed = launch_options.headed
         label = launch_options.label
-        viewport_w = launch_options.viewport_w
-        viewport_h = launch_options.viewport_h
-        profile = launch_options.profile
-        stabilize = launch_options.stabilize
-        record_video = launch_options.record_video
-        trace = launch_options.trace
-        har = launch_options.har
-        har_path_opt = launch_options.har_path
-        har_mode = launch_options.har_mode
-        har_url_filter = launch_options.har_url_filter
-        har_content = launch_options.har_content
-        badge = launch_options.badge
-        badge_position = launch_options.badge_position
-        tile = launch_options.tile
         session = launch_options.session
-
-        browser: Any | None = None
-        context: Any | None = None
-        page: Any | None = None
-        recorder: Recorder | None = None
-        registered = False
 
         instance_id = uuid.uuid4().hex[:12]
         t0 = time.perf_counter()
@@ -119,22 +96,28 @@ class BrowserPool:
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
-        target_url = url or DEFAULT_URL
+        target_url = launch_options.url or DEFAULT_URL
         log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
 
         viewport_kwargs, log_viewport, explicit_size, viewport_info = _build_viewport_kwargs(
-            headless, viewport_w, viewport_h
+            headless, launch_options.viewport_w, launch_options.viewport_h
         )
-        ctx_video_kwargs, video_dir = _build_video_kwargs(record_video, headless, explicit_size, viewport_w, viewport_h)
+        ctx_video_kwargs, video_dir = _build_video_kwargs(
+            launch_options.record_video, headless, explicit_size, launch_options.viewport_w, launch_options.viewport_h
+        )
         har_path, ctx_har_kwargs = _build_har_kwargs(
-            har=har,
-            har_path_opt=har_path_opt,
-            har_mode=har_mode,
-            har_url_filter=har_url_filter,
-            har_content=har_content,
+            har=launch_options.har,
+            har_path_opt=launch_options.har_path,
+            har_mode=launch_options.har_mode,
+            har_url_filter=launch_options.har_url_filter,
+            har_content=launch_options.har_content,
             log_path=log_path,
         )
-        launch_kwargs = await self._build_launch_kwargs(tile=tile, kind=kind, headless=headless)
+        launch_kwargs = await self._build_launch_kwargs(tile=launch_options.tile, kind=kind, headless=headless)
+
+        browser: Any | None = None
+        context: Any | None = None
+        page: Any | None = None
         user_data_dir: str | None = None
 
         try:
@@ -150,169 +133,50 @@ class BrowserPool:
                 launch_kwargs=launch_kwargs,
             )
         except asyncio.CancelledError:
-            await cleanup_on_launch_failure(context=context, browser=browser, video_dir=video_dir)
-            raise
-        except Exception as exc:
-            await cleanup_on_launch_failure(context=context, browser=browser, video_dir=video_dir)
-            wrapped = maybe_wrap_playwright_error(exc, kind=kind)
-            if wrapped is exc:
-                raise
-            raise wrapped from exc
-
-        try:
-            recorder = Recorder(log_path)
-            _record_launch_event(
-                recorder,
-                instance_id=instance_id,
-                kind=kind,
-                label=label,
-                profile=profile,
-                user_data_dir=user_data_dir,
-                target_url=target_url,
-                headless=headless,
-                log_viewport=log_viewport,
-                stabilize=stabilize,
-                record_video=record_video,
-                video_dir=video_dir,
-                trace=trace,
-                har_path=har_path,
-                har_mode=har_mode,
-                har_url_filter=har_url_filter,
-                har_content=har_content,
-                badge=badge,
-                badge_position=badge_position,
-                tile=tile,
-                ephemeral=launch_options.ephemeral,
-                session=session,
-            )
-
-            # NOTE: this local was named ``session`` for years, but ``session`` is
-            # now the public name of the launch flag (session=True for tmpdir
-            # profiles). Renamed to ``new_session`` to avoid shadowing the bool.
-            new_session = BrowserSession(
-                instance_id=instance_id,
-                kind=kind,
-                label=label,
-                url=target_url,
-                browser=browser,
+            await cleanup_failed_launch(
+                registered=False,
                 context=context,
-                page=page,
-                recorder=recorder,
-                log_path=log_path,
-                user_data_dir=Path(user_data_dir) if user_data_dir is not None else None,
-                profile=profile,
-                stabilize=stabilize,
-                trace=trace,
-                har_path=har_path,
-                viewport_mode=viewport_info.mode.value,
-                viewport_width=viewport_info.width,
-                viewport_height=viewport_info.height,
-                _browser_for_close=(browser if browser is not None else getattr(context, "browser", None)),
+                browser=browser,
+                video_dir=video_dir,
+                recorder=None,
+                pre_register=True,
             )
-            # Wire up video tracking — page.video is only non-None when record_video_dir was set.
-            if record_video and page.video is not None:
-                new_session._video = page.video
-            new_session.attach_console()
-            await self._expose_viewport_binding(context, new_session)
-            # Order matters: the close-evictor and user-nav logger publish handler
-            # factories on the session so that subsequent _wire_listeners calls
-            # (for popup pages) pick them up automatically. Install them BEFORE
-            # the initial _wire_listeners call so the initial page also gets them.
-            _wire_close_evictor(self, new_session)
-            _wire_user_navigation_logger(new_session)
-            _wire_listeners(new_session, page)
-            context.on("page", new_session._register_popup)
-
-            await wire_init_scripts(
-                context,
-                profile=profile,
-                label=label,
-                instance_id=instance_id,
-                kind=kind,
-                badge=badge,
-                badge_position=badge_position,
-                stabilize=stabilize,
-                viewport_mode=new_session.viewport_mode,
-                viewport_width=new_session.viewport_width,
-                viewport_height=new_session.viewport_height,
-            )
-
-            if trace:
-                await context.tracing.start(screenshots=True, snapshots=True, sources=True)
-
-            from octowright.session.core_page_mixin import _reject_unsafe_url
-
-            _reject_unsafe_url(target_url)
-            await page.goto(target_url)
-
-            new_session._schedule_markdown_capture()
-
-            async with self._sessions_lock:
-                self._sessions[instance_id] = new_session
-            _safe_manifest_record(
-                instance_id=instance_id,
-                kind=kind,
-                label=label,
-                profile=profile,
-                user_data_dir=user_data_dir,
-                log_path=log_path,
-            )
-            registered = True
-            LAUNCHED.add(1, attributes={"kind": kind})
-            LAUNCH_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind})
-            log.info(
-                "octowright.browser.launched",
-                instance_id=instance_id,
-                kind=kind,
-                label=label,
-                profile=profile,
-                url=target_url,
-                headed=not headless,
-                log_path=str(log_path),
-            )
-            result: dict[str, Any] = {
-                "instance_id": instance_id,
-                "kind": kind,
-                "label": label,
-                "profile": profile,
-                "url": target_url,
-                "log_path": str(log_path),
-                "record_video": record_video,
-                "trace": trace,
-                "har": bool(har_path),
-                "viewport": log_viewport,
-            }
-            if video_dir is not None:
-                result["video_dir"] = str(video_dir)
-            if har_path is not None:
-                result["har_path"] = str(har_path)
-                result["har_mode"] = har_mode
-                if har_url_filter:
-                    result["har_url_filter"] = har_url_filter
-                if har_content:
-                    result["har_content"] = har_content
-            return result
-        except asyncio.CancelledError:
-            if not registered:
-                await cleanup_unregistered_launch(
-                    context=context,
-                    browser=browser,
-                    video_dir=video_dir,
-                    recorder=recorder,
-                )
             raise
         except Exception as exc:
-            if not registered:
-                await cleanup_unregistered_launch(
-                    context=context,
-                    browser=browser,
-                    video_dir=video_dir,
-                    recorder=recorder,
-                )
+            await cleanup_failed_launch(
+                registered=False,
+                context=context,
+                browser=browser,
+                video_dir=video_dir,
+                recorder=None,
+                pre_register=True,
+            )
             wrapped = maybe_wrap_playwright_error(exc, kind=kind)
             if wrapped is exc:
                 raise
             raise wrapped from exc
+
+        return await post_context_setup(
+            self,
+            launch_options=launch_options,
+            instance_id=instance_id,
+            t0=t0,
+            profile=profile,
+            kind=kind,
+            label=label,
+            target_url=target_url,
+            headless=headless,
+            log_path=log_path,
+            viewport_info=viewport_info,
+            log_viewport=log_viewport,
+            video_dir=video_dir,
+            har_path=har_path,
+            browser=browser,
+            context=context,
+            page=page,
+            user_data_dir=user_data_dir,
+            session=session,
+        )
 
     def get(self, instance_id: str) -> BrowserSession:
         if instance_id not in self._sessions:
@@ -374,24 +238,44 @@ class BrowserPool:
 
     async def relaunch_fluid(self, instance_id: str) -> dict[str, Any]:
         source = self.get(instance_id)
+        # Snapshot every field we need BEFORE awaiting close. A Playwright
+        # external-close eviction can fire between pool.get() and pool.close(),
+        # popping the session and turning close() into a KeyError. We treat
+        # that race as "already closed" and still launch the replacement so
+        # the user isn't left with no browser.
+        source_kind = source.kind
+        source_label = source.label
+        source_profile = source.profile
+        source_user_data_dir = source.user_data_dir
+        source_stabilize = source.stabilize
+        source_trace = source.trace
+        source_har_path = source.har_path
+        target_url = getattr(source.page, "url", None) or source.url
         # Wrap close+launch under a parent span so the child browser.close /
         # browser.launch spans nest underneath as one fluid-mode round-trip.
-        with span("octowright.browser.relaunch_fluid", instance_id=instance_id, kind=source.kind):
-            target_url = getattr(source.page, "url", None) or source.url
-            session_scoped = source.profile is None and source.user_data_dir is not None
-            stateless = source.profile is None and source.user_data_dir is None
+        with span("octowright.browser.relaunch_fluid", instance_id=instance_id, kind=source_kind):
+            session_scoped = source_profile is None and source_user_data_dir is not None
+            stateless = source_profile is None and source_user_data_dir is None
             # Don't overwrite the prior HAR — relaunch gets a sibling path.
-            next_har = rotate_har_path(source.har_path)
-            close_result = await self.close(instance_id)
+            next_har = rotate_har_path(source_har_path)
+            try:
+                close_result: dict[str, Any] | None = await self.close(instance_id)
+            except KeyError:
+                log.warning(
+                    "octowright.browser.relaunch_fluid.close_raced_eviction",
+                    instance_id=instance_id,
+                    kind=source_kind,
+                )
+                close_result = None
             result = await self.launch(
-                kind=source.kind,
+                kind=source_kind,
                 url=target_url,
                 headed=True,
-                label=source.label,
-                profile=source.profile,
-                stabilize=source.stabilize,
-                trace=source.trace,
-                har=bool(source.har_path),
+                label=source_label,
+                profile=source_profile,
+                stabilize=source_stabilize,
+                trace=source_trace,
+                har=bool(source_har_path),
                 har_path=str(next_har) if next_har else None,
                 badge=True,
                 ephemeral=stateless,
@@ -401,7 +285,7 @@ class BrowserPool:
                 "ok": True,
                 "old_instance_id": instance_id,
                 "new_instance_id": result["instance_id"],
-                "old_closed": bool(close_result.get("closed")),
+                "old_closed": bool(close_result and close_result.get("closed")),
                 "mode": "fluid",
                 "launch": result,
             }
