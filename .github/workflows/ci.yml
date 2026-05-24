@@ -149,6 +149,32 @@ jobs:
         env:
           OCTOWRIGHT_HEADLESS: "1"
         run: uv run --active pytest -q tests/
+      # Coverage gate (Linux only): re-runs `coverage report` so the
+      # --cov-fail-under threshold in pyproject.toml becomes a dedicated
+      # failing step instead of a buried tail of pytest output.
+      - name: Coverage gate (--cov-fail-under)
+        if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
+        run: uv run --active coverage report
+      # Generate machine-readable + browsable coverage artifacts for review.
+      - name: Coverage XML + HTML reports
+        if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
+        run: |
+          uv run --active coverage xml -o coverage.xml
+          uv run --active coverage html -d htmlcov
+      # Publish a coverage totals + per-file table to the workflow summary.
+      - name: Coverage summary (GitHub step summary)
+        if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
+        run: bash ci/coverage_summary.sh
+      # Attach the XML + HTML report so PR reviewers can download it.
+      - name: Upload coverage report artifact
+        if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-report
+          path: |
+            coverage.xml
+            htmlcov/
+          if-no-files-found: warn
       - name: Selftest — verify tool registration
         run: uv run --active octowright selftest
       # The built SPA at src/octowright/server/frontend/ is gitignored —
