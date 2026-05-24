@@ -177,9 +177,21 @@ def _macro_pill_chip_for(
 # import from the pool layer (wrong direction). The pool layer still
 # needs the helper for pill / badge rendering, so we re-export under the
 # original underscore name to keep existing call sites unchanged.
-from octowright.macros.descriptions import describe_action as _describe_action  # noqa: E402
+#
+# The re-export goes through a thin wrapper rather than a top-level
+# ``from … import describe_action`` to avoid triggering the
+# ``octowright.macros`` package ``__init__`` (which pulls in
+# ``execution`` → ``repair`` → ``server.macro_semantic`` → ``server._state``)
+# during module import — visuals is loaded by ``browser_pool.options``,
+# which itself imports during ``server._state`` initialisation, creating
+# a cycle.
 
-__all__ = ["_describe_action"]
+
+def _describe_action(action: dict[str, Any]) -> str:
+    """Re-export of :func:`octowright.macros.descriptions.describe_action`."""
+    from octowright.macros.descriptions import describe_action
+
+    return describe_action(action)
 
 
 def _tile_position(index: int, *, cols: int = 4, win_w: int = 720, win_h: int = 540) -> tuple[int, int, int, int]:

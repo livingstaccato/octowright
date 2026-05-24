@@ -14,12 +14,6 @@ from octowright import personas as _personas
 from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
 
 
-def profile_dir(kind: str, name: str) -> Path:
-    """Engine-profile directory for (kind, persona). Public name preserved;
-    internally routes through personas.engine_profile_dir."""
-    return _personas.engine_profile_dir(persona=name, kind=kind)
-
-
 def list_profiles(kind: str | None = None) -> list[dict[str, Any]]:
     """List all engine profiles. Each entry: {kind, name, path, size_bytes, mtime, last_used}.
     `name` is the persona name."""
@@ -52,7 +46,7 @@ def list_profiles(kind: str | None = None) -> list[dict[str, Any]]:
 
 def delete_profile(kind: str, name: str) -> Path:
     """Delete a single engine-profile directory. Raises FileNotFoundError."""
-    target = profile_dir(kind, name)
+    target = _personas.engine_profile_dir(persona=name, kind=kind)
     if not target.exists():
         raise FileNotFoundError(f"no engine profile at {target}; list saved profiles with `profile_list`")
     shutil.rmtree(target)

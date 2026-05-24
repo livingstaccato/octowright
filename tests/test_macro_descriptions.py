@@ -45,10 +45,15 @@ def test_describe_action_clips_long_values_with_ellipsis() -> None:
     assert len(out.split("=", 1)[1]) == 40  # 39 chars + ellipsis
 
 
-def test_visuals_re_export_is_same_callable() -> None:
+def test_visuals_re_export_behaves_identically() -> None:
     """The pool layer still imports ``_describe_action`` from visuals — make
-    sure the re-export points at the same function so behaviour stays
-    identical across both call sites."""
+    sure the wrapper produces the same output as the canonical function.
+
+    The re-export goes through a thin wrapper (rather than `from … import`)
+    to avoid a circular import via the ``octowright.macros`` package init,
+    so identity-check is intentionally not asserted.
+    """
     from octowright.browser_pool.visuals import _describe_action
 
-    assert _describe_action is describe_action
+    sample = {"action": "click", "name": "Sign in"}
+    assert _describe_action(sample) == describe_action(sample)

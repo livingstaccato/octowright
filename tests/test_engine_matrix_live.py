@@ -23,6 +23,7 @@ def _configure_runtime_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.setenv("OCTOWRIGHT_RECORDINGS", str(rec))
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(prof))
 
+    import octowright.browser_pool.launch_helpers as _launch_helpers
     import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
     from octowright import personas as _personas
@@ -30,6 +31,9 @@ def _configure_runtime_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 
     monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
     monkeypatch.setattr(_pool, "RECORDINGS_DIR", rec)
+    # launch_helpers grabs RECORDINGS_DIR at import time and is what
+    # ``_build_har_kwargs`` consults for the path-containment guard.
+    monkeypatch.setattr(_launch_helpers, "RECORDINGS_DIR", rec)
     monkeypatch.setattr(_defaults, "PROFILES_DIR", prof)
     monkeypatch.setattr(_personas, "PROFILES_DIR", prof)
     monkeypatch.setattr(_profiles, "PROFILES_DIR", prof)
