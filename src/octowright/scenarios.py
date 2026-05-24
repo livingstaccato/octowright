@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 from provide.telemetry import get_logger
 
+from octowright._paths import reject_unsafe_path
 from octowright.defaults import SCENARIO_TEMPLATES_DIR, SCENARIOS_DIR, SUPPORTED_KINDS
 from octowright.scenarios_pool import LiveScenario, ScenarioPool
 
@@ -128,8 +129,11 @@ def load_python_scenario(path: Path) -> Scenario:
 
 
 def load_scenario(name: str) -> Scenario:
-    yaml_path = SCENARIOS_DIR / f"{name}.yaml"
-    py_path = SCENARIOS_DIR / f"{name}.py"
+    # Containment check on both candidate paths: ``name`` comes from an MCP
+    # client (untrusted) and the slug-style join is not enough — anything
+    # with ``..`` or an absolute path would otherwise escape SCENARIOS_DIR.
+    yaml_path = reject_unsafe_path(SCENARIOS_DIR / f"{name}.yaml", SCENARIOS_DIR, label=f"scenario name {name!r}")
+    py_path = reject_unsafe_path(SCENARIOS_DIR / f"{name}.py", SCENARIOS_DIR, label=f"scenario name {name!r}")
     if py_path.exists():
         if yaml_path.exists():
             log.warning("scenarios.both_forms_present_py_wins", name=name)
@@ -143,10 +147,26 @@ def load_scenario(name: str) -> Scenario:
 
 
 def load_scenario_template(name: str, args: dict[str, Any]) -> Scenario:
-    path = SCENARIO_TEMPLATES_DIR / f"{name}.yaml"
+    # Same containment guard as load_scenario — the name is MCP-supplied.
+    path = reject_unsafe_path(
+        SCENARIO_TEMPLATES_DIR / f"{name}.yaml",
+        SCENARIO_TEMPLATES_DIR,
+        label=f"scenario template name {name!r}",
+    )
     if not path.exists():
         raise FileNotFoundError(f"no scenario template named {name!r} in {SCENARIO_TEMPLATES_DIR}")
     content = path.read_text(encoding="utf-8")
+    # Reject arg values that contain CR/LF before raw substitution into YAML:
+    # a newline in a value lets the caller inject arbitrary YAML structure
+    # (extra keys, list items) once the {{placeholder}} is replaced and the
+    # result is fed to yaml.safe_load.
+    for k, v in args.items():
+        sv = str(v)
+        if "\n" in sv or "\r" in sv:
+            raise ValueError(
+                f"scenario template arg {k!r} contains a newline; "
+                "templates substitute raw into YAML and newlines would inject structure"
+            )
     # Simple jinja-style substitution if args are provided.
     for k, v in args.items():
         content = content.replace(f"{{{{{k}}}}}", str(v))

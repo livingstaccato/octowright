@@ -420,6 +420,68 @@ class TestSessionCloseEdges:
         assert body["closed"] is True
         assert "cache" not in body  # warm_close swallow path doesn't attach cache
 
+    def test_warm_close_failure_logs_error_detail(
+        self,
+        client: TestClient,
+        fakes: dict[str, Any],
+        isolated_recordings: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Silent-swallow policy: the warm_close error must reach the log so
+        the failure mode is diagnosable from operator output. Capture the
+        ``state.log.warning`` call and confirm ``error=repr(exc)`` is set."""
+        pool: _FakePool = fakes["pool"]
+        jsonl = _write_recording(isolated_recordings, "warmlog00001")
+        pool._sessions["warmlog00001"] = SimpleNamespace(instance_id="warmlog00001")
+        pool.close_result = {
+            "closed": True,
+            "log_path": str(jsonl),
+            "video_path": None,
+            "trace_path": None,
+        }
+
+        from octowright.http import session_artifacts as _sa
+
+        boom = RuntimeError("disk full")
+        monkeypatch.setattr(
+            _sa.session_artifact_cache,
+            "warm_close",
+            MagicMock(side_effect=boom),
+        )
+
+        warning_calls: list[tuple[str, dict[str, Any]]] = []
+        real_log = _http_state.log
+
+        def _capture_warning(event: str, **kwargs: Any) -> None:
+            warning_calls.append((event, kwargs))
+
+        monkeypatch.setattr(
+            _http_state,
+            "log",
+            SimpleNamespace(
+                warning=_capture_warning,
+                info=real_log.info,
+                exception=real_log.exception,
+                debug=real_log.debug,
+                error=real_log.error,
+            ),
+        )
+
+        r = client.delete("/api/sessions/warmlog00001")
+        assert r.status_code == 200
+
+        cache_failed = [
+            (event, kwargs)
+            for event, kwargs in warning_calls
+            if event == "octowright.http.session_close_cache_report_failed"
+        ]
+        assert len(cache_failed) == 1
+        _, kwargs = cache_failed[0]
+        # The repr of the exception is the load-bearing field — without it,
+        # operators see "cache report failed" with no cause to chase.
+        assert kwargs["error"] == repr(boom)
+        assert kwargs["instance_id"] == "warmlog00001"
+
     def test_log_path_empty_skips_warm_close(
         self,
         client: TestClient,

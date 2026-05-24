@@ -31,7 +31,11 @@ from octowright.http.discovery import (
     _resolve_log_path,
     _tail_jsonl,
 )
-from octowright.http.exposure import guard_sensitive_http, sensitive_allowed_for_connection
+from octowright.http.exposure import (
+    guard_sensitive_http,
+    sensitive_allowed_for_connection,
+    websocket_origin_allowed,
+)
 from octowright.http.routes._common import _paginate, _parse_since
 from octowright.http.session_artifacts import session_artifact_cache
 
@@ -292,6 +296,12 @@ class TailEndpoint(WebSocketEndpoint):
     async def on_connect(self, websocket: WebSocket) -> None:
         if not sensitive_allowed_for_connection(websocket):
             await websocket.close(code=1008, reason="remote dashboard access is disabled")
+            return
+        if not websocket_origin_allowed(websocket):
+            # Cross-origin handshake: a browser page loaded from another
+            # origin tried to open the live JSONL stream. Refuse before
+            # accept() so the attacker page never receives any data.
+            await websocket.close(code=1008, reason="cross-origin websocket handshake is blocked")
             return
         await websocket.accept()
         sid = websocket.path_params["id"]

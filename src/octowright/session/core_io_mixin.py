@@ -18,18 +18,13 @@ from typing import TYPE_CHECKING, Any, cast
 from playwright.async_api import ConsoleMessage, Page
 from provide.telemetry import get_logger
 
+from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.session._protocols import SessionLike
 
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
 
 log = get_logger(__name__)
-
-
-def _looks_like_binary_text(payload: Any) -> bool:
-    return isinstance(payload, str) and (
-        (payload.startswith('b"') and payload.endswith('"')) or (payload.startswith("b'") and payload.endswith("'"))
-    )
 
 
 class SessionIOMixin(SessionLike):

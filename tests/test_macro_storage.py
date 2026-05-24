@@ -157,6 +157,33 @@ def test_macro_path_propagates_slug_error(monkeypatch: pytest.MonkeyPatch, tmp_p
         s.macro_path("")
 
 
+def test_macro_path_enforces_containment_even_when_slug_returns_traversal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """macro_path() is the security boundary, not slug().
+
+    The current slug regex collapses ``/`` into ``-`` so the obvious LLM
+    payload (``"../../../etc/passwd"``) is already neutralised at the slug
+    stage. Defense-in-depth: macro_path() must still reject anything that
+    resolves outside MACROS_DIR, even if a future slug change leaks a
+    traversal string through. Verify that with a stubbed slug.
+    """
+    s = _import_storage(monkeypatch, tmp_path)
+    monkeypatch.setattr(s, "slug", lambda name: "../etc/passwd")
+    with pytest.raises(ValueError, match="resolves outside"):
+        s.macro_path("anything")
+
+
+def test_macro_path_enforces_containment_against_absolute_slug(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An absolute-path slug must also be rejected — Path('/abs') / '...' yields '/abs'."""
+    s = _import_storage(monkeypatch, tmp_path)
+    other = tmp_path / "other-dir"
+    other.mkdir()
+    monkeypatch.setattr(s, "slug", lambda name: str(other / "evil"))
+    with pytest.raises(ValueError, match="resolves outside"):
+        s.macro_path("anything")
+
+
 # ---------------------------------------------------------------------------
 # now_iso
 # ---------------------------------------------------------------------------

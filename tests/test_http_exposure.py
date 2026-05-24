@@ -232,6 +232,168 @@ def test_tail_websocket_denied_on_remote_bind_without_opt_in(monkeypatch: pytest
     assert exc.value.reason == "remote dashboard access is disabled"
 
 
+def test_tail_websocket_rejects_cross_origin_browser_handshake() -> None:
+    """A page loaded from another origin must not be able to open /tail.
+
+    Loopback bind allows the connection at TCP level (the kernel sees both
+    peers on 127.0.0.1), so the host check passes; the Origin header is the
+    only signal that the handshake came from a foreign browser context.
+    Refuse with 1008 before ``websocket.accept()`` so the attacker page
+    never receives any JSONL data.
+    """
+    with (
+        TestClient(_http.build_app()) as client,
+        pytest.raises(WebSocketDisconnect) as exc,
+        client.websocket_connect("/api/sessions/s1/tail", headers={"origin": "http://evil.example"}),
+    ):
+        pass
+
+    assert exc.value.code == 1008
+    assert exc.value.reason == "cross-origin websocket handshake is blocked"
+
+
+def _drain_until_disconnect(ws: Any) -> WebSocketDisconnect:
+    """Consume frames from ``ws`` until the server closes; return the close.
+
+    The ``no session with id`` rejection path runs ``accept()`` first and
+    closes inside the handler, so the disconnect surfaces on the first
+    ``receive_*`` call rather than on ``__enter__``.
+    """
+    try:
+        while True:
+            ws.receive_json()
+    except WebSocketDisconnect as exc:
+        return exc
+
+
+def test_tail_websocket_allows_same_origin_browser_handshake(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The dashboard SPA opens /tail with Origin matching Host — must pass."""
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    from octowright.http.discovery import invalidate_recording_index
+
+    invalidate_recording_index()
+    # No live session and no recording → handler accepts, then closes with
+    # 1008 ("no session with id"). Distinguish from the cross-origin
+    # pre-accept close by inspecting the reason.
+    with (
+        TestClient(_http.build_app()) as client,
+        client.websocket_connect(
+            "/api/sessions/sameorigin1/tail",
+            headers={"origin": "http://testserver"},
+        ) as ws,
+    ):
+        exc = _drain_until_disconnect(ws)
+
+    assert exc.code == 1008
+    assert "cross-origin" not in exc.reason
+
+
+def test_tail_websocket_allows_no_origin_header(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """curl / python-websockets clients send no Origin — treat as non-browser."""
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    from octowright.http.discovery import invalidate_recording_index
+
+    invalidate_recording_index()
+    with (
+        TestClient(_http.build_app()) as client,
+        client.websocket_connect("/api/sessions/noorigin001/tail") as ws,
+    ):
+        exc = _drain_until_disconnect(ws)
+    assert exc.code == 1008
+    assert "cross-origin" not in exc.reason
+
+
+def test_tail_websocket_allows_loopback_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A loopback Origin (e.g. another local dashboard tab on a different
+    port) is allowed even if it doesn't match the request Host."""
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    from octowright.http.discovery import invalidate_recording_index
+
+    invalidate_recording_index()
+    with (
+        TestClient(_http.build_app()) as client,
+        client.websocket_connect(
+            "/api/sessions/loopback001/tail",
+            headers={"origin": "http://127.0.0.1:9999"},
+        ) as ws,
+    ):
+        exc = _drain_until_disconnect(ws)
+    assert exc.code == 1008
+    assert "cross-origin" not in exc.reason
+
+
+def test_tail_websocket_rejects_malformed_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An Origin value with no scheme separator is treated as suspicious."""
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    from octowright.http.discovery import invalidate_recording_index
+
+    invalidate_recording_index()
+    with (
+        TestClient(_http.build_app()) as client,
+        pytest.raises(WebSocketDisconnect) as exc,
+        client.websocket_connect(
+            "/api/sessions/malformed01/tail",
+            headers={"origin": "no-scheme-here"},
+        ),
+    ):
+        pass
+    assert exc.value.code == 1008
+    assert exc.value.reason == "cross-origin websocket handshake is blocked"
+
+
+def test_tail_websocket_allows_loopback_ipv6_origin_with_bracket_and_port(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Origin like http://[::1]:9000 must be parsed as IPv6 loopback."""
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    from octowright.http.discovery import invalidate_recording_index
+
+    invalidate_recording_index()
+    with (
+        TestClient(_http.build_app()) as client,
+        client.websocket_connect(
+            "/api/sessions/ipv6brkt001/tail",
+            headers={"origin": "http://[::1]:9000"},
+        ) as ws,
+    ):
+        exc = _drain_until_disconnect(ws)
+    assert exc.code == 1008
+    assert "cross-origin" not in exc.reason
+
+
+def test_websocket_origin_allowed_handles_bare_ipv6_without_brackets() -> None:
+    """Direct unit test for the helper: bare IPv6 (no brackets, no port) loopback path."""
+    from octowright.http.exposure import websocket_origin_allowed
+
+    fake_ws = types.SimpleNamespace(headers={"origin": "http://::1", "host": "127.0.0.1:8765"})
+    # Bare "::1" with three colons doesn't match the port-stripping heuristic
+    # so it falls through to is_loopback_host("::1") → True.
+    assert websocket_origin_allowed(fake_ws) is True  # type: ignore[arg-type]
+
+
 def test_health_route_is_unguarded_on_remote_bind(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
 

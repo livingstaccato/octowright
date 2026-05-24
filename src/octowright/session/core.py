@@ -17,6 +17,7 @@ from provide.telemetry import bind_context, unbind_context
 from octowright.browser_pool.viewport import ViewportMode
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
+from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session.core_interaction_mixin import SessionInteractionMixin
 from octowright.session.core_io_mixin import SessionIOMixin
 from octowright.session.core_locator_mixin import SessionLocatorMixin
@@ -24,8 +25,11 @@ from octowright.session.core_network_mixin import SessionNetworkMixin
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
 
-# Public constant re-exported via session.__init__ and used by server/browser tools.
-DEFAULT_PREVIEW_CHARS = 4000
+# ``DEFAULT_PREVIEW_CHARS`` is the public preview cap, re-exported via
+# ``session.__init__`` and used by server/browser tools. Defined in
+# ``session._constants`` so mixin modules can import the same singleton
+# without forming an import cycle with this module.
+__all__ = ["DEFAULT_PREVIEW_CHARS", "BrowserSession"]
 
 
 @dataclass

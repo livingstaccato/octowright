@@ -343,13 +343,15 @@ class TestBuildLaunchKwargs:
 
 
 class TestResolveSessionDir:
-    def test_session_false_returns_none(self) -> None:
+    @pytest.mark.anyio
+    async def test_session_false_returns_none(self) -> None:
         """session=False short-circuits to None."""
         pool = BrowserPool()
         opts = LaunchOptions(session=False)
-        assert pool._resolve_session_dir(False, opts, "instX", "chromium") is None
+        assert await pool._resolve_session_dir(False, opts, "instX", "chromium") is None
 
-    def test_creates_tmpdir_first_call(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.anyio
+    async def test_creates_tmpdir_first_call(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """First session=True call mints a tmpdir under the prefix and stores it."""
         pool = BrowserPool()
         opts = LaunchOptions(session=True, label="demo")
@@ -364,12 +366,13 @@ class TestResolveSessionDir:
             return real_mkdtemp(prefix=prefix, dir=str(tmp_path))
 
         monkeypatch.setattr(tempfile, "mkdtemp", fake_mkdtemp)
-        out = pool._resolve_session_dir(True, opts, "instX", "chromium")
+        out = await pool._resolve_session_dir(True, opts, "instX", "chromium")
         assert out is not None
         assert "octowright-session-demo-chromium-" in captured[0]
         assert pool._session_profile_dirs[("demo", "chromium")] == Path(out)
 
-    def test_reuses_existing_dir_for_same_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.anyio
+    async def test_reuses_existing_dir_for_same_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Second call with same (label, kind) reuses the cached tmpdir."""
         pool = BrowserPool()
         opts = LaunchOptions(session=True, label="demo")
@@ -378,12 +381,13 @@ class TestResolveSessionDir:
         monkeypatch.setattr(tempfile, "mkdtemp", lambda *, prefix: str(tmp_path / "first"))
         # First call creates /first.
         Path(tmp_path / "first").mkdir()
-        first = pool._resolve_session_dir(True, opts, "instX", "chromium")
+        first = await pool._resolve_session_dir(True, opts, "instX", "chromium")
         # Second call: tmpdir still exists → reuse.
-        second = pool._resolve_session_dir(True, opts, "instY", "chromium")
+        second = await pool._resolve_session_dir(True, opts, "instY", "chromium")
         assert first == second
 
-    def test_recreates_when_existing_dir_vanishes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.anyio
+    async def test_recreates_when_existing_dir_vanishes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """If the cached tmpdir was rm'd externally, _resolve_session_dir mints a fresh one."""
         pool = BrowserPool()
         opts = LaunchOptions(session=True, label="demo")
@@ -396,16 +400,17 @@ class TestResolveSessionDir:
         d2.mkdir()
         seq = iter([str(d1), str(d2)])
         monkeypatch.setattr(tempfile, "mkdtemp", lambda *, prefix: next(seq))
-        first = pool._resolve_session_dir(True, opts, "instX", "chromium")
+        first = await pool._resolve_session_dir(True, opts, "instX", "chromium")
         assert first == str(d1)
         # Simulate tmpdir vanishing.
         import shutil
 
         shutil.rmtree(d1)
-        second = pool._resolve_session_dir(True, opts, "instY", "chromium")
+        second = await pool._resolve_session_dir(True, opts, "instY", "chromium")
         assert second == str(d2)
 
-    def test_different_kinds_get_distinct_dirs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.anyio
+    async def test_different_kinds_get_distinct_dirs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Same label + different engine kinds → distinct keys → distinct tmpdirs."""
         pool = BrowserPool()
         opts = LaunchOptions(session=True, label="demo")
@@ -415,11 +420,12 @@ class TestResolveSessionDir:
         for d in (tmp_path / "chrom", tmp_path / "fire"):
             d.mkdir()
         monkeypatch.setattr(tempfile, "mkdtemp", lambda *, prefix: next(seq))
-        chrom = pool._resolve_session_dir(True, opts, "instX", "chromium")
-        fire = pool._resolve_session_dir(True, opts, "instX", "firefox")
+        chrom = await pool._resolve_session_dir(True, opts, "instX", "chromium")
+        fire = await pool._resolve_session_dir(True, opts, "instX", "firefox")
         assert chrom != fire
 
-    def test_anonymous_session_keys_by_instance_id(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.anyio
+    async def test_anonymous_session_keys_by_instance_id(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """No label → session key uses instance_id, so two anonymous launches don't share state."""
         pool = BrowserPool()
         opts = LaunchOptions(session=True, label=None)
@@ -429,9 +435,78 @@ class TestResolveSessionDir:
         for d in (tmp_path / "a", tmp_path / "b"):
             d.mkdir()
         monkeypatch.setattr(tempfile, "mkdtemp", lambda *, prefix: next(seq))
-        a = pool._resolve_session_dir(True, opts, "inst-A", "chromium")
-        b = pool._resolve_session_dir(True, opts, "inst-B", "chromium")
+        a = await pool._resolve_session_dir(True, opts, "inst-A", "chromium")
+        b = await pool._resolve_session_dir(True, opts, "inst-B", "chromium")
         assert a != b
+
+    @pytest.mark.anyio
+    async def test_concurrent_resolve_same_key_keeps_single_tmpdir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Concurrent _resolve_session_dir calls with the same key must collapse
+        to a single tmpdir on disk.
+
+        Regression for the C8 race: ``spawn_roster`` gathers many ``_launch_one``
+        coroutines; with the same session label they each enter
+        ``_resolve_session_dir``. Without serialisation the read-then-create
+        critical section can interleave such that every coroutine mints its
+        own tmpdir, leaks all but one, and the registry only remembers the
+        last winner.
+
+        The deterministic trigger here parks every coroutine on a shared
+        Event before they call ``_resolve_session_dir``, then patches
+        ``tempfile.mkdtemp`` so that the FIRST mkdtemp invocation yields
+        control to the event loop via ``await asyncio.sleep(0)``. Without
+        the ``_sessions_lock`` serialisation in ``_resolve_session_dir``,
+        that yield would let a second coroutine observe ``existing is None``
+        and queue a duplicate mkdtemp. With the lock, the second coroutine
+        blocks at the lock acquisition and never reaches the duplicate
+        check.
+        """
+        import tempfile
+
+        pool = BrowserPool()
+        opts = LaunchOptions(session=True, label="roster-demo")
+        created: list[str] = []
+        real_mkdtemp = tempfile.mkdtemp
+        first_call_done = asyncio.Event()
+
+        def fake_mkdtemp(*, prefix: str) -> str:
+            path = real_mkdtemp(prefix=prefix, dir=str(tmp_path))
+            created.append(path)
+            if len(created) == 1:
+                # Schedule the gate flip without awaiting (mkdtemp is sync,
+                # asyncio can only reach the gate when the next await
+                # happens — which is the lock release in our fix).
+                first_call_done.set()
+            return path
+
+        monkeypatch.setattr(tempfile, "mkdtemp", fake_mkdtemp)
+
+        gate = asyncio.Event()
+
+        async def _call() -> str | None:
+            await gate.wait()
+            return await pool._resolve_session_dir(True, opts, "inst-X", "chromium")
+
+        coros = [_call() for _ in range(5)]
+        task_group = asyncio.gather(*coros)
+        await asyncio.sleep(0)
+        gate.set()
+        results = await task_group
+        # Sanity: at least one mkdtemp ran.
+        assert first_call_done.is_set()
+
+        # Every caller got the SAME string back.
+        assert len(set(results)) == 1
+        winning = results[0]
+        assert winning is not None
+
+        # Exactly one tmpdir was minted: the lock kept later coros from
+        # entering the create branch at all.
+        assert created == [winning], f"expected exactly one mkdtemp call, got {created}"
+        assert Path(winning).exists()
+        assert pool._session_profile_dirs[("roster-demo", "chromium")] == Path(winning)
 
 
 # ─── close_browser ───────────────────────────────────────────────────────────

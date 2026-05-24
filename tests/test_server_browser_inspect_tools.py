@@ -14,15 +14,29 @@ from octowright.server.browser import inspect as _inspect
 
 
 @pytest.fixture(autouse=True)
-def _patch_pool(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+def _patch_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> MagicMock:
     fake_pool = MagicMock()
     monkeypatch.setattr(_inspect, "pool", fake_pool)
+    # Default RECORDINGS_DIR points at the user's real recordings root; pin
+    # it under tmp_path so screenshot/capture paths the tools synthesise
+    # (log_path.with_suffix(".png")) pass the containment check.
+    monkeypatch.setattr(_inspect, "RECORDINGS_DIR", tmp_path)
     return fake_pool
 
 
-def _session() -> MagicMock:
+@pytest.fixture
+def recordings_dir(tmp_path: Path) -> Path:
+    """The patched RECORDINGS_DIR — handy for tests that synthesise log paths."""
+    return tmp_path
+
+
+def _session(log_root: Path | None = None) -> MagicMock:
     s = MagicMock()
-    s.log_path = Path("/tmp/rec.jsonl")
+    # Default log path lives under the patched RECORDINGS_DIR so the
+    # containment-checked screenshot/capture default paths pass. Callers can
+    # pass an explicit log_root when they need to assert on disk.
+    root = log_root if log_root is not None else Path("/tmp")
+    s.log_path = root / "rec.jsonl"
     s.page.url = "https://example.com"
     s.page.title = AsyncMock(return_value="Example")
     s.page.locator.return_value.aria_snapshot = AsyncMock(return_value="aria-content")
@@ -77,9 +91,9 @@ def test_console_messages_filter_and_cursor(_patch_pool: MagicMock) -> None:
 
 
 @pytest.mark.anyio
-async def test_screenshot_default_and_evaluate_truncated(_patch_pool: MagicMock) -> None:
-    s = _session()
-    s.screenshot = AsyncMock(return_value=Path("/tmp/rec.png"))
+async def test_screenshot_default_and_evaluate_truncated(_patch_pool: MagicMock, recordings_dir: Path) -> None:
+    s = _session(recordings_dir)
+    s.screenshot = AsyncMock(return_value=recordings_dir / "rec.png")
     s.evaluate = AsyncMock(return_value="abcdefghij")
     _patch_pool.get.return_value = s
     shot = await _inspect.browser_screenshot("i")
@@ -91,9 +105,9 @@ async def test_screenshot_default_and_evaluate_truncated(_patch_pool: MagicMock)
 
 @pytest.mark.anyio
 async def test_wait_recording_capture_export_and_expects(
-    monkeypatch: pytest.MonkeyPatch, _patch_pool: MagicMock
+    monkeypatch: pytest.MonkeyPatch, _patch_pool: MagicMock, recordings_dir: Path
 ) -> None:
-    s = _session()
+    s = _session(recordings_dir)
     _patch_pool.get.return_value = s
     _patch_pool.close = AsyncMock(return_value={"closed": True})
     monkeypatch.setattr(_inspect, "_export_script", MagicMock(return_value=Path("/tmp/out.py")))
@@ -237,13 +251,44 @@ def test_top_level_server_exports_browser_read_markdown() -> None:
 
 
 @pytest.mark.anyio
-async def test_browser_capture_and_close_with_snapshot(_patch_pool: MagicMock) -> None:
-    s = _session()
+async def test_browser_capture_and_close_with_snapshot(_patch_pool: MagicMock, recordings_dir: Path) -> None:
+    s = _session(recordings_dir)
     _patch_pool.get.return_value = s
     _patch_pool.close = AsyncMock()
     out = await _inspect.browser_capture_and_close("i", snapshot=True)
     assert out["closed"] is True
     assert out["aria"] == "aria-content"
+
+
+# ─── path-traversal regression for screenshot/capture ────────────────────────
+
+
+@pytest.mark.anyio
+async def test_browser_screenshot_rejects_path_outside_recordings(
+    _patch_pool: MagicMock, recordings_dir: Path, tmp_path: Path
+) -> None:
+    """An explicit MCP-supplied path that escapes RECORDINGS_DIR must raise
+    before any disk write happens."""
+    s = _session(recordings_dir)
+    _patch_pool.get.return_value = s
+    outside = tmp_path.parent / "escape" / "evil.png"
+    with pytest.raises(ValueError, match="resolves outside"):
+        await _inspect.browser_screenshot("i", path=str(outside))
+    s.screenshot.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_browser_capture_and_close_rejects_path_outside_recordings(
+    _patch_pool: MagicMock, recordings_dir: Path, tmp_path: Path
+) -> None:
+    """browser_capture_and_close also confines screenshot_path."""
+    s = _session(recordings_dir)
+    _patch_pool.get.return_value = s
+    _patch_pool.close = AsyncMock()
+    outside = tmp_path.parent / "escape" / "evil.png"
+    with pytest.raises(ValueError, match="resolves outside"):
+        await _inspect.browser_capture_and_close("i", screenshot_path=str(outside))
+    s.screenshot.assert_not_called()
 
 
 @pytest.mark.anyio

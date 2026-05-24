@@ -67,7 +67,7 @@ class TestResolveSlowmoMs:
 class TestFormatStatus:
     def test_with_invocation_stack_uses_chain_separator(self) -> None:
         """' > '.join — mutating the separator would change the format."""
-        # _describe_action lives in browser_pool.visuals; just assert format shape.
+        # describe_action lives in octowright.macros.descriptions; just assert format shape.
         result = _format_status(["outer", "inner"], {"action": "navigate", "url": "https://example.com"})
         assert result.startswith("outer > inner | ")
 
@@ -405,6 +405,104 @@ class TestRunMacroFailurePath:
         with pytest.raises(RuntimeError) as exc_info:
             await run_macro(fake_session, "m")
         assert exc_info.value.args[0]["failed_at_step"] == 1
+
+
+# ─── credential redaction ───────────────────────────────────────────────────
+
+
+class TestCredentialRedaction:
+    """The action dict embedded in the RuntimeError payload reaches the MCP
+    client AND any log sink. ``substitute()`` has already resolved
+    ``{{password}}``-style placeholders into the action before dispatch, so
+    the raw ``value`` field can be a literal credential — redact it for the
+    fill/type/fill_by kinds."""
+
+    @pytest.mark.anyio
+    async def test_fill_value_redacted_in_failure_payload(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        patched_runners["register"](
+            "m",
+            [{"action": "fill", "selector": "#pw", "value": "hunter2"}],
+        )
+        patched_runners["raise_on"]["fill"] = ValueError("boom")
+        with pytest.raises(RuntimeError) as exc_info:
+            await run_macro(fake_session, "m")
+        action = exc_info.value.args[0]["failed_action"]
+        assert action["value"] == "<redacted>"
+        # Selector + action kind are preserved — only the secret is stripped.
+        assert action["selector"] == "#pw"
+        assert action["action"] == "fill"
+
+    @pytest.mark.anyio
+    async def test_type_value_redacted_in_failure_payload(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        patched_runners["register"](
+            "m",
+            [{"action": "type", "selector": "#pw", "value": "hunter2"}],
+        )
+        patched_runners["raise_on"]["type"] = ValueError("boom")
+        with pytest.raises(RuntimeError) as exc_info:
+            await run_macro(fake_session, "m")
+        assert exc_info.value.args[0]["failed_action"]["value"] == "<redacted>"
+
+    @pytest.mark.anyio
+    async def test_fill_by_value_redacted_in_failure_payload(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        patched_runners["register"](
+            "m",
+            [{"action": "fill_by", "name": "Password", "value": "hunter2"}],
+        )
+        patched_runners["raise_on"]["fill_by"] = ValueError("boom")
+        with pytest.raises(RuntimeError) as exc_info:
+            await run_macro(fake_session, "m")
+        assert exc_info.value.args[0]["failed_action"]["value"] == "<redacted>"
+
+    @pytest.mark.anyio
+    async def test_click_action_value_passes_through(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """Non-credential actions are unchanged — only fill/type/fill_by carry secrets."""
+        patched_runners["register"](
+            "m",
+            [{"action": "click", "selector": "#x", "value": "metadata"}],
+        )
+        patched_runners["raise_on"]["click"] = ValueError("boom")
+        with pytest.raises(RuntimeError) as exc_info:
+            await run_macro(fake_session, "m")
+        assert exc_info.value.args[0]["failed_action"]["value"] == "metadata"
+
+    @pytest.mark.anyio
+    async def test_original_action_not_mutated_by_redaction(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """The redaction works on a copy; the macro author's action dict stays intact."""
+        action_in = {"action": "fill", "selector": "#pw", "value": "hunter2"}
+        patched_runners["register"]("m", [action_in])
+        patched_runners["raise_on"]["fill"] = ValueError("boom")
+        with pytest.raises(RuntimeError):
+            await run_macro(fake_session, "m")
+        # The dispatcher saw the original (the macro list isn't mutated by
+        # the redaction-on-failure code).
+        assert patched_runners["dispatched"][0]["value"] == "hunter2"
+
+    @pytest.mark.anyio
+    async def test_pill_status_shows_redacted_value(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """The status pill receives the redacted action so screenshots/traces
+        of the page don't expose the credential."""
+        patched_runners["register"](
+            "m",
+            [{"action": "fill", "selector": "#pw", "value": "hunter2"}],
+        )
+        await run_macro(fake_session, "m")
+        # Inspect every status push for the secret.
+        for call in fake_session.page.evaluate.call_args_list:
+            text = call[0][1].get("text", "")
+            assert "hunter2" not in text
 
 
 # ─── run_macro: pill push sequencing ────────────────────────────────────────

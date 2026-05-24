@@ -197,6 +197,7 @@ def octowright_status() -> dict[str, Any]:
     from octowright import personas as _personas
     from octowright import session_manifest as _session_manifest
     from octowright import singleton as _singleton
+    from octowright.macros import execution as _macro_execution
     from octowright.server.profiles import PROFILES, active_filter
 
     lock = _singleton.read_lock()
@@ -267,6 +268,16 @@ def octowright_status() -> dict[str, Any]:
         "bridge": {
             "state_path": str(defaults.BRIDGE_STATE_PATH),
             **bridge_state.read_state(defaults.BRIDGE_STATE_PATH),
+        },
+        "metrics": {
+            # ``macro_labels_seen`` / ``macro_label_overflow_count`` let an
+            # operator notice when dynamic macro names have filled the
+            # per-macro metric cardinality cap. Recovery (short of a daemon
+            # restart) is ``macros.execution.reset_macro_label_seen()`` —
+            # in-process only, not exposed as an MCP tool by design.
+            "macro_labels_seen": len(_macro_execution._MACRO_LABEL_SEEN),
+            "macro_label_overflow_count": _macro_execution._MACRO_LABEL_OVERFLOW_COUNT,
+            "macro_label_cap": _macro_execution.METRICS_MACRO_LABEL_CAP,
         },
         "dashboard_url": _http.runtime_url() if http_status["running"] else None,
     }

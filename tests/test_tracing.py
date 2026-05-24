@@ -271,15 +271,70 @@ def test_record_exception_with_bare_object() -> None:
     record_exception(object(), ValueError("boom"))
 
 
-def test_lazy_resolve_caches_noop_when_meter_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_LazyInstrument._resolve must cache _NOOP when _meter() returns None."""
+def test_lazy_resolve_does_not_cache_noop_when_meter_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_LazyInstrument._resolve must NOT cache _NOOP when _meter() returns None.
+
+    Regression: caching the pre-setup _NOOP would freeze the binding and defeat
+    the whole point of lazy resolution if ``setup_telemetry()`` runs later.
+    The proxy must leave ``_instrument`` as None so the next call re-checks.
+    """
     import octowright._tracing as tracing
 
     monkeypatch.setattr(tracing, "_meter", lambda: None)
 
     proxy = tracing._LazyCounter("create_counter", "octowright_test_no_meter")
     proxy.add(1)
-    assert proxy._instrument is tracing._NOOP
+    assert proxy._instrument is None
+    # Second call must still re-resolve, not return a cached _NOOP.
+    proxy.add(2)
+    assert proxy._instrument is None
+
+
+def test_lazy_resolve_picks_up_meter_after_late_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-setup .add() must not poison the proxy: late setup_telemetry must take effect.
+
+    Real-world scenario: module-level ``counter(...)`` calls run at import time;
+    something touches the instrument once before ``setup_telemetry()`` installs the
+    real ``MeterProvider`` (e.g. an early import-time metric on a noop meter). The
+    proxy must NOT cache the noop fallback — otherwise every subsequent ``.add()``
+    silently drops the datapoint for the rest of the process's lifetime.
+    """
+    pytest.importorskip("opentelemetry.sdk")
+    import octowright._tracing as tracing
+
+    # Phase 1: meter is None (pre-setup). .add() must be a true no-op (no cache).
+    monkeypatch.setattr(tracing, "_meter", lambda: None)
+    proxy = tracing._LazyCounter("create_counter", "octowright_test_late_setup")
+    proxy.add(7, attributes={"phase": "pre"})
+    assert proxy._instrument is None
+
+    # Phase 2: setup_telemetry equivalent — swap in a real in-memory provider.
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    meter = provider.get_meter("octowright")
+    # Ensure the test cleans up the in-memory provider (no leak across tests).
+    monkeypatch.setattr(tracing, "_meter", lambda: meter)
+
+    proxy.add(3, attributes={"phase": "post"})
+    proxy.add(4, attributes={"phase": "post"})
+
+    data = reader.get_metrics_data()
+    found = False
+    total = 0
+    for resource_metric in data.resource_metrics:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                if metric.name == "octowright_test_late_setup":
+                    found = True
+                    for point in metric.data.data_points:
+                        total += point.value
+    assert found, "post-setup add() did not land in the meter reader"
+    # Only the post-setup adds (3+4) should be recorded — the pre-setup add(7)
+    # legitimately dropped because no real meter existed at the time.
+    assert total == 7
 
 
 def test_lazy_counter_swallows_add_failure(monkeypatch: pytest.MonkeyPatch) -> None:

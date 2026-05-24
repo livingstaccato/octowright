@@ -15,6 +15,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright import defaults
+from octowright._paths import reject_unsafe_path
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
 from octowright.mcp_types import MacroListEntry
@@ -37,7 +38,13 @@ def slug(name: str) -> str:
 
 
 def macro_path(name: str) -> Path:
-    return MACROS_DIR / f"{slug(name)}.json"
+    # slug() preserves "." and "-", so a literal "../etc/passwd" slugs to
+    # itself and would escape MACROS_DIR. The containment check below is
+    # the security boundary — keep it even if slug() is hardened later.
+    candidate = MACROS_DIR / f"{slug(name)}.json"
+    # MACROS_DIR may not yet exist; resolve relative to its absolute form
+    # so the comparison still works on a fresh install.
+    return reject_unsafe_path(candidate, MACROS_DIR, label=f"macro name {name!r}")
 
 
 def now_iso() -> str:

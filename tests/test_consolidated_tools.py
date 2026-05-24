@@ -140,9 +140,15 @@ async def test_browser_launch_returns_before_mcp_timeout(
 
 
 @pytest.mark.anyio
-async def test_browser_capture_and_close(_patch_state: dict[str, MagicMock]) -> None:
+async def test_browser_capture_and_close(
+    _patch_state: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     pool = _patch_state["pool"]
-    session = _stub_session("screenshot", Path("/tmp/test.png"))
+    # Pin RECORDINGS_DIR so the default screenshot path (derived from
+    # session.log_path) passes the path-containment guard.
+    monkeypatch.setattr(_inspect, "RECORDINGS_DIR", tmp_path)
+    session = _stub_session("screenshot", tmp_path / "test.png")
+    session.log_path = tmp_path / "test.jsonl"
     pool.get = MagicMock(return_value=session)
     pool.close = AsyncMock(return_value={"closed": True})
 

@@ -88,7 +88,7 @@ async def capture_create(
     instance_id: str,
     source: str = "snapshot",
     expression: str | None = None,
-    preview_chars: int = _captures.DEFAULT_PREVIEW_CHARS,
+    preview_chars: int = _captures.CAPTURE_PREVIEW_CHARS,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     content, meta = await _capture_content(instance_id, source, expression)

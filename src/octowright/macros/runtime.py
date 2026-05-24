@@ -204,22 +204,22 @@ async def _dispatch_simple_inner(
         # macro_call needs an invocation_stack — it only dispatches through
         # the full _dispatch_one path in macros/execution.py. Reaching the
         # simple dispatcher means a caller routed the wrong way (e.g. via
-        # dispatch_plain_action from inside a conditional). Surface that
-        # because silently skipping it produces wrong macro behaviour.
+        # dispatch_plain_action from inside a conditional). Previously this
+        # logged a warning and returned (0, 1) — visually identical to a
+        # legitimate skip, so the caller had no way to notice the routing
+        # bug. Raise instead so the misroute is loud.
         if kind == "macro_call":
-            log.warning(
-                "octowright.macros.macro_call_in_simple_dispatch",
-                hint="macro_call requires the full _dispatch_one with invocation_stack; this caller skipped it",
+            raise RuntimeError(
+                "macro_call requires _dispatch_one with invocation_stack; reached simple dispatch incorrectly"
             )
-        else:
-            # Any other unknown kind used to silently return (0, 1) — looked
-            # identical to an intentional skip. Surface it so missing
-            # _ACTION_MAP entries can be diagnosed instead of guessed at.
-            log.warning(
-                "octowright.macros.unknown_action_kind",
-                kind=kind,
-                hint="kind is not in _ACTION_MAP, _REPLAY_SKIP, or _REPLAY_PASSIVE",
-            )
+        # Any other unknown kind used to silently return (0, 1) — looked
+        # identical to an intentional skip. Surface it so missing
+        # _ACTION_MAP entries can be diagnosed instead of guessed at.
+        log.warning(
+            "octowright.macros.unknown_action_kind",
+            kind=kind,
+            hint="kind is not in _ACTION_MAP, _REPLAY_SKIP, or _REPLAY_PASSIVE",
+        )
         return 0, 1
 
     kwargs = strip_non_aria_noise(kind, action_kwargs(action))

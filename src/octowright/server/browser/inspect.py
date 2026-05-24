@@ -12,6 +12,8 @@ import json as _json
 from pathlib import Path
 from typing import Any, cast
 
+from octowright._paths import reject_unsafe_path
+from octowright.defaults import RECORDINGS_DIR
 from octowright.export import export_script as _export_script
 from octowright.mcp_types import (
     BrowserBriefResult,
@@ -42,6 +44,8 @@ from octowright.session import DEFAULT_PREVIEW_CHARS
 async def browser_screenshot(instance_id: str, path: str | None = None) -> BrowserScreenshotResult:
     session = pool.get(instance_id)
     target = Path(path) if path else session.log_path.with_suffix(".png")
+    # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
+    target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"screenshot path {str(target)!r}")
     out = await session.screenshot(target)
     return {"path": str(out)}
 
@@ -187,8 +191,9 @@ async def browser_capture_and_close(
     title = await session.page.title()
     url = session.page.url
 
-    # Screenshot
+    # Screenshot — MCP-supplied path is confined to RECORDINGS_DIR.
     target = Path(screenshot_path) if screenshot_path else session.log_path.with_suffix(".png")
+    target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"screenshot_path {str(target)!r}")
     await session.screenshot(target)
 
     # Optional Snapshot

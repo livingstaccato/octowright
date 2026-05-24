@@ -13,9 +13,9 @@ from provide.telemetry import get_logger
 
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
-from octowright.browser_pool.visuals import _describe_action
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
+from octowright.macros.descriptions import describe_action
 from octowright.macros.repair import repair_preview as repair_preview_impl
 from octowright.macros.repair import suggest_fix as _suggest_fix
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
@@ -33,6 +33,24 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+# Action kinds whose ``value`` field carries user-supplied data that often
+# resolves to a credential (``{{password}}``-style placeholders are resolved
+# in-place by ``substitute()`` before dispatch). Redacted before the action
+# dict is embedded in the RuntimeError payload, sent to the macro-pill, or
+# emitted in any log line.
+_REDACT_VALUE_ACTIONS: frozenset[str] = frozenset({"fill", "type", "fill_by"})
+
+
+def _redact_action(action: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``action`` with credential-bearing fields
+    replaced by ``<redacted>``. Non-redacted actions return a copy unchanged
+    so callers can mutate freely without aliasing back into the macro list."""
+    redacted = dict(action)
+    if redacted.get("action") in _REDACT_VALUE_ACTIONS and "value" in redacted:
+        redacted["value"] = "<redacted>"
+    return redacted
+
+
 _MACRO_RUN = counter(
     "octowright_macro_run_total",
     description="Macro runs, labelled by macro name and ok/failed status",
@@ -49,6 +67,12 @@ _MACRO_RUN_DURATION = histogram(
 # count for these metrics stays bounded in long-lived deployments.
 _MACRO_LABEL_SEEN: set[str] = set()
 _MACRO_LABEL_OVERFLOW = "(overflow)"
+# Running count of macro-name lookups that collapsed to the overflow bucket
+# because the cap was already saturated. Surfaces in ``octowright_status``
+# so an operator can see when dynamic macro names are filling the cap with
+# junk and call :func:`reset_macro_label_seen` (or restart the daemon) to
+# recover real per-macro labels.
+_MACRO_LABEL_OVERFLOW_COUNT = 0
 
 
 def _macro_label(name: str) -> str:
@@ -59,14 +83,49 @@ def _macro_label(name: str) -> str:
     name would let its label start aliasing other names, which is worse than
     a stable-but-fixed roster). New names are admitted up to
     :data:`METRICS_MACRO_LABEL_CAP`; beyond that, all new names collapse to
-    a single ``"(overflow)"`` bucket.
+    a single ``"(overflow)"`` bucket and increment
+    ``_MACRO_LABEL_OVERFLOW_COUNT`` for operator visibility via
+    ``octowright_status``.
+
+    If dynamic macro names have saturated the cap and operator-process
+    access is available, call :func:`reset_macro_label_seen` to clear the
+    set (intentionally not surfaced as a remote MCP tool — keeps the API
+    surface lean and reset is rare enough to warrant in-process action).
     """
+    global _MACRO_LABEL_OVERFLOW_COUNT
     if name in _MACRO_LABEL_SEEN:
         return name
     if len(_MACRO_LABEL_SEEN) < METRICS_MACRO_LABEL_CAP:
         _MACRO_LABEL_SEEN.add(name)
         return name
+    _MACRO_LABEL_OVERFLOW_COUNT += 1
     return _MACRO_LABEL_OVERFLOW
+
+
+def reset_macro_label_seen() -> int:
+    """Clear the per-macro label seen-set and return its prior size.
+
+    Operator escape hatch for the situation where dynamic macro names (e.g.
+    ``migrate-table-{uuid}``) have permanently filled the
+    :data:`METRICS_MACRO_LABEL_CAP`-slot cap, forcing every real macro
+    metric into the ``(overflow)`` bucket. The only alternative used to be
+    a daemon restart.
+
+    Intentionally NOT exposed as a remote MCP tool — keeps the agent-facing
+    API surface lean. This helper is here for tests and for an operator
+    with process access (e.g. an interactive debugger or a small
+    in-process patch). The current state is visible via the
+    ``metrics`` block of ``octowright_status``.
+
+    Returns the number of label-set entries that were cleared (0 when
+    already empty). Also resets the overflow-count surface so it tracks
+    overflow events since the last reset rather than cumulative-forever.
+    """
+    global _MACRO_LABEL_OVERFLOW_COUNT
+    prior = len(_MACRO_LABEL_SEEN)
+    _MACRO_LABEL_SEEN.clear()
+    _MACRO_LABEL_OVERFLOW_COUNT = 0
+    return prior
 
 
 _STATUS_PUSH_JS = "(p) => { if (window.__octowright_macro_status) window.__octowright_macro_status(p); }"
@@ -113,7 +172,9 @@ def _resolve_slowmo_ms(slowmo_ms: int | None) -> int:
 
 def _format_status(invocation_stack: list[str] | None, action: dict[str, Any]) -> str:
     chain = " > ".join(invocation_stack) if invocation_stack else ""
-    desc = _describe_action(action)
+    # The pill text is visible to the user and may end up in screenshots /
+    # traces; redact credential fields before handing them to the describer.
+    desc = describe_action(_redact_action(action))
     return f"{chain} | {desc}" if chain else desc
 
 
@@ -239,10 +300,16 @@ async def _run_macro_impl(
             except Exception as exc:
                 bundle = await session.diagnostic_bundle()
                 fix_suggestion = await _suggest_fix(session, action)
+                # The action dict reaches the MCP client AND the structured
+                # log line below. ``substitute()`` has already resolved
+                # ``{{password}}``-style placeholders into the action, so
+                # the raw value field can be a literal credential — strip
+                # it before exposing the payload to either sink.
+                redacted_action = _redact_action(action)
                 payload: dict[str, Any] = {
                     "macro": name,
                     "failed_at_step": index,
-                    "failed_action": action,
+                    "failed_action": redacted_action,
                     "original": repr(exc),
                     "bundle": bundle,
                 }

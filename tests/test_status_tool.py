@@ -219,3 +219,48 @@ def test_status_caps_returned_stale_manifest_list(monkeypatch, tmp_path: Path) -
     assert snap["pool"]["stale_manifest_count"] == 40
     assert len(snap["pool"]["stale_manifest_sessions"]) == 20
     assert snap["pool"]["stale_manifest_list_truncated"] is True
+
+
+def test_status_reports_macro_label_metrics(monkeypatch) -> None:
+    """Status must surface ``metrics.macro_labels_seen`` + ``macro_label_overflow_count``.
+
+    Operators with a stuck ``_MACRO_LABEL_SEEN`` (e.g. dynamic macro names
+    filling the 256-slot cap) need a way to see the current state without
+    a daemon restart. The reset escape hatch lives in
+    ``macros.execution.reset_macro_label_seen()`` — used by tests or by an
+    operator with process access, intentionally NOT exposed as a remote MCP
+    tool to keep the surface lean.
+    """
+    from octowright.macros import execution as _execution
+
+    seen: set[str] = set()
+    monkeypatch.setattr(_execution, "_MACRO_LABEL_SEEN", seen)
+    monkeypatch.setattr(_execution, "_MACRO_LABEL_OVERFLOW_COUNT", 0)
+    monkeypatch.setattr(_execution, "METRICS_MACRO_LABEL_CAP", 2)
+    _execution._macro_label("admitted-1")
+    _execution._macro_label("admitted-2")
+    # These overflow.
+    _execution._macro_label("overflow-1")
+    _execution._macro_label("overflow-2")
+    _execution._macro_label("overflow-3")
+
+    snap = octowright_status()
+
+    assert "metrics" in snap, f"status missing metrics block: {snap}"
+    assert snap["metrics"]["macro_labels_seen"] == 2
+    # The overflow counter reports admitted-cap overflow attempts (3 here).
+    assert snap["metrics"]["macro_label_overflow_count"] == 3
+    assert snap["metrics"]["macro_label_cap"] == 2
+
+
+def test_status_metrics_block_present_when_no_overflow(monkeypatch) -> None:
+    """The metrics block must always be present, even when no overflow has happened."""
+    from octowright.macros import execution as _execution
+
+    monkeypatch.setattr(_execution, "_MACRO_LABEL_SEEN", set())
+    monkeypatch.setattr(_execution, "_MACRO_LABEL_OVERFLOW_COUNT", 0)
+
+    snap = octowright_status()
+    assert "metrics" in snap
+    assert snap["metrics"]["macro_labels_seen"] == 0
+    assert snap["metrics"]["macro_label_overflow_count"] == 0

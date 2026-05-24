@@ -63,3 +63,49 @@ def test_load_missing_template_raises(fresh_scenarios):
     scenarios, _ = fresh_scenarios
     with pytest.raises(FileNotFoundError, match="no scenario template named 'ghost'"):
         scenarios.load_scenario_template("ghost", {})
+
+
+def test_load_scenario_template_rejects_parent_traversal(fresh_scenarios):
+    """Template name must not escape SCENARIO_TEMPLATES_DIR."""
+    scenarios, _ = fresh_scenarios
+    with pytest.raises(ValueError, match="resolves outside"):
+        scenarios.load_scenario_template("../../etc/passwd", {})
+
+
+def test_load_scenario_template_rejects_arg_with_newline(fresh_scenarios):
+    """Newlines in template-arg values would inject YAML structure post-substitution."""
+    scenarios, template_dir = fresh_scenarios
+    template_path = template_dir / "inject.yaml"
+    template_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "Inject",
+                "participants": [{"persona": "{{p}}", "kind": "chromium", "role": "editor"}],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="newline"):
+        scenarios.load_scenario_template("inject", {"p": "cosmo\n  - evil_extra"})
+
+
+def test_load_scenario_template_rejects_arg_with_carriage_return(fresh_scenarios):
+    """CR alone is also rejected — Windows-style line endings carry the same risk."""
+    scenarios, template_dir = fresh_scenarios
+    template_path = template_dir / "inject_cr.yaml"
+    template_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "Inject",
+                "participants": [{"persona": "{{p}}", "kind": "chromium", "role": "editor"}],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="newline"):
+        scenarios.load_scenario_template("inject_cr", {"p": "cosmo\r evil"})
+
+
+def test_load_scenario_rejects_parent_traversal(fresh_scenarios):
+    """``load_scenario`` is also reachable from MCP via scenario_start; same guard applies."""
+    scenarios, _ = fresh_scenarios
+    with pytest.raises(ValueError, match="resolves outside"):
+        scenarios.load_scenario("../../etc/passwd")

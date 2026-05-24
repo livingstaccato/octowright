@@ -114,7 +114,7 @@ class BrowserPool:
         # and session are the explicit exceptions.
         profile = launch_options.promoted_profile()
 
-        session_user_data_dir = self._resolve_session_dir(session, launch_options, instance_id, kind)
+        session_user_data_dir = await self._resolve_session_dir(session, launch_options, instance_id, kind)
         set_attrs(_sp, instance_id=instance_id, profile=profile, label=label, session=session)
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
@@ -468,32 +468,33 @@ class BrowserPool:
             out["args"] = _tile_args_for_chromium(tile_index)
         return out
 
-    def _resolve_session_dir(
+    async def _resolve_session_dir(
         self,
         session: bool,
         launch_options: LaunchOptions,
         instance_id: str,
         kind: str,
     ) -> str | None:
-        """Session=True: a tmpdir profile that lives for the daemon's lifetime.
-        Reused across launches sharing the same (session_key, kind), so close
-        + reopen keeps state but daemon shutdown wipes everything. Named
-        sessions are reusable by label; anonymous sessions get an instance-
-        scoped key so unrelated callers never share state."""
+        """Session=True: a tmpdir profile that lives for the daemon's
+        lifetime, reused across launches sharing the same (session_key, kind).
+        Named sessions reuse by label; anonymous sessions key by instance_id
+        so unrelated callers never share state.
+
+        Concurrency: ``spawn_roster`` gathers _launch_one coroutines that all
+        funnel here; without serialisation two same-(label, kind) coros could
+        each call ``mkdtemp`` and leak the loser. ``_sessions_lock`` collapses
+        the read-or-create critical section so exactly one tmpdir per key is
+        ever minted."""
         if not session:
             return None
         import tempfile
 
         session_name = launch_options.session_name(instance_id)
         session_key = (session_name, kind)
-        existing = self._session_profile_dirs.get(session_key)
-        if existing is None or not existing.exists():
-            # Synchronous from get() through assignment: launch() doesn't
-            # await between calling this and the next yield point, so two
-            # concurrent launches cannot interleave here. If a future refactor
-            # introduces awaits inside this function, switch to setdefault
-            # + cleanup-on-loss to avoid leaking the losing tmpdir.
-            tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_name}-{kind}-"))
-            self._session_profile_dirs[session_key] = tmp
-            existing = tmp
+        async with self._sessions_lock:
+            existing = self._session_profile_dirs.get(session_key)
+            if existing is None or not existing.exists():
+                tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_name}-{kind}-"))
+                self._session_profile_dirs[session_key] = tmp
+                existing = tmp
         return str(existing)
