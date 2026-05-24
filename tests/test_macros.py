@@ -299,6 +299,11 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
     class FakeSession:
+        # SessionLike attrs for run_macro span tagging.
+        instance_id = "fake-instance"
+        kind = "chromium"
+        page = None  # `_push_status` reads `.page`; None short-circuits.
+
         async def diagnostic_bundle(self) -> dict[str, Any]:
             return {}
 
@@ -464,6 +469,11 @@ class _FakeSessionForSequence:
     def __init__(self, *, raises_on: str | None = None) -> None:
         self._raises_on = raises_on
         self.calls: list[str] = []
+        # SessionLike attrs for run_macro span tagging.
+        self.instance_id = "fake-instance"
+        self.kind = "chromium"
+        # `_push_status` reads `.page`; None short-circuits the JS push.
+        self.page = None
 
     async def navigate(self, url: str) -> dict[str, Any]:
         self.calls.append("navigate")
@@ -516,6 +526,13 @@ def _save_macro_file(m: Any, tmp_path: Path, name: str, actions: list[dict[str, 
 class _CallAwareFakeSession:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any] | None]] = []
+        # SessionLike attrs accessed by run_macro / dispatch_simple for span +
+        # log tagging; previously masked by getattr(..., None) defaults.
+        self.instance_id = "fake-instance"
+        self.kind = "chromium"
+        # `_push_status` reads `.page`; None short-circuits the JS push, which
+        # is what the test wants (no Playwright in-process).
+        self.page = None
 
     async def navigate(self, url: str) -> dict[str, Any]:
         self.calls.append(("navigate", (url,), None))
@@ -673,6 +690,9 @@ async def test_run_macro_dispatches_expect_text(monkeypatch: pytest.MonkeyPatch,
 
     class FakeSessionWithPage:
         page = FakePage()
+        # SessionLike attrs for span / log tagging in run_macro.
+        instance_id = "fake-instance"
+        kind = "chromium"
 
         async def diagnostic_bundle(self) -> dict[str, Any]:
             return {}
@@ -694,6 +714,11 @@ async def test_run_macro_dispatches_expect_text(monkeypatch: pytest.MonkeyPatch,
 
 class _FakeSessionWithDiagnostic:
     """Fake session whose click always raises, and provides diagnostic_bundle."""
+
+    # SessionLike attrs for run_macro span tagging.
+    instance_id = "fake-instance"
+    kind = "chromium"
+    page = None  # `_push_status` reads `.page`; None short-circuits.
 
     async def navigate(self, url: str) -> dict[str, Any]:
         return {"url": url, "title": ""}

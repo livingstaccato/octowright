@@ -29,7 +29,7 @@ from octowright.macros.substitution import (
 from octowright.mcp_types import MacroRepairPreviewResult, MacroRunResult, MacroSequenceResult, MacroSequenceStep
 
 if TYPE_CHECKING:
-    from octowright.session import BrowserSession
+    from octowright.session._protocols import SessionLike
 
 log = get_logger(__name__)
 
@@ -132,7 +132,7 @@ _STATUS_PUSH_JS = "(p) => { if (window.__octowright_macro_status) window.__octow
 
 
 async def _push_status(
-    session: BrowserSession,
+    session: SessionLike,
     *,
     text: str | None = None,
     visible: bool = True,
@@ -148,7 +148,7 @@ async def _push_status(
     `done=True` freezes the elapsed counter and disables the pill's
     auto-hide so the final state stays on screen.
     """
-    page = getattr(session, "page", None)
+    page = session.page
     if page is None:
         return
     payload: dict[str, Any] = {"visible": visible}
@@ -179,7 +179,7 @@ def _format_status(invocation_stack: list[str] | None, action: dict[str, Any]) -
 
 
 async def _dispatch_one(
-    session: BrowserSession,
+    session: SessionLike,
     action: dict[str, Any],
     *,
     invocation_stack: list[str] | None = None,
@@ -216,7 +216,7 @@ async def _dispatch_one(
 
     if action.get("action") in conditional.CONDITIONAL_ACTIONS:
 
-        async def _recurse(recurse_session: Any, recurse_action: dict[str, Any]) -> tuple[int, int]:
+        async def _recurse(recurse_session: SessionLike, recurse_action: dict[str, Any]) -> tuple[int, int]:
             return await _dispatch_one(
                 recurse_session,
                 recurse_action,
@@ -236,7 +236,7 @@ async def _dispatch_one(
     )
 
 
-async def _dispatch_simple(session: BrowserSession, action: dict[str, Any]) -> tuple[int, int]:
+async def _dispatch_simple(session: SessionLike, action: dict[str, Any]) -> tuple[int, int]:
     return await runtime_dispatch_simple(
         session,
         action,
@@ -251,7 +251,7 @@ def repair_preview(name: str) -> MacroRepairPreviewResult:
 
 
 async def run_macro(
-    session: BrowserSession,
+    session: SessionLike,
     name: str,
     args: dict[str, Any] | None = None,
     *,
@@ -260,14 +260,14 @@ async def run_macro(
     with span(
         "octowright.macro.run",
         macro=name,
-        instance_id=getattr(session, "instance_id", None),
-        kind=getattr(session, "kind", None),
+        instance_id=session.instance_id,
+        kind=session.kind,
     ):
         return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms)
 
 
 async def _run_macro_impl(
-    session: BrowserSession,
+    session: SessionLike,
     name: str,
     args: dict[str, Any] | None,
     *,
@@ -340,7 +340,7 @@ async def _run_macro_impl(
         log.info(
             "octowright.macro.run",
             name=name,
-            instance_id=getattr(session, "instance_id", None),
+            instance_id=session.instance_id,
             executed=executed,
             skipped=skipped,
             slowmo_ms=resolved_slowmo,
@@ -360,7 +360,7 @@ async def _run_macro_impl(
 
 async def run_sequence(
     *,
-    session: Any,
+    session: SessionLike,
     names: list[str],
     args_list: list[dict[str, Any]] | None = None,
     stop_on_failure: bool = True,

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
 
 if TYPE_CHECKING:
-    from octowright.session import BrowserSession
+    from octowright.session._protocols import SessionLike
 
 MAX_MACRO_CALL_DEPTH = 32
 _RECURSION_PREFIX = "macro_call"
@@ -33,7 +33,7 @@ def validate_macro_call_shape(action: dict[str, Any]) -> tuple[str, dict[str, An
 
 
 async def dispatch_macro_call(
-    session: BrowserSession,
+    session: SessionLike,
     action: dict[str, Any],
     *,
     invocation_stack: list[str],
@@ -68,7 +68,7 @@ async def dispatch_macro_call(
 
 
 async def dispatch_plain_action(
-    session: BrowserSession,
+    session: SessionLike,
     action: dict[str, Any],
     *,
     semantic_keys: tuple[str, ...],

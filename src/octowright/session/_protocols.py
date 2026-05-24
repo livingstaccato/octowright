@@ -16,6 +16,7 @@ from octowright.recorder import Recorder
 
 class SessionLike(Protocol):
     instance_id: str
+    kind: str
     url: str
     page: Page
     pages: list[Page]
@@ -60,3 +61,21 @@ class SessionLike(Protocol):
     def _markdown_cache_path(self) -> Path: ...
 
     def _websocket_cache_path(self) -> Path: ...
+
+    # Action methods accessed directly (not via getattr) by the macro
+    # dispatcher. The remaining action methods (navigate, type_text,
+    # press_key, etc.) are looked up dynamically through ``_ACTION_MAP``
+    # so they don't need a declared signature here.
+    async def click(self, selector: str) -> None: ...
+
+    async def fill(self, selector: str, value: str) -> None: ...
+
+    async def diagnostic_bundle(
+        self,
+        *,
+        screenshot_dir: Path | None = None,
+        console_tail: int = 25,
+        html_full: bool = False,
+    ) -> dict[str, Any]: ...
+
+    async def snapshot(self) -> dict[str, Any]: ...

@@ -7,11 +7,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
+
+if TYPE_CHECKING:
+    from octowright.session._protocols import SessionLike
 
 log = get_logger(__name__)
 
@@ -106,7 +109,9 @@ def _normalize_replay_kwargs(kind: str, kwargs: dict[str, Any]) -> dict[str, Any
     return kwargs
 
 
-async def _dispatch_standard(session: Any, kind: str, kwargs: dict[str, Any], method_name: str) -> tuple[int, int]:
+async def _dispatch_standard(
+    session: SessionLike, kind: str, kwargs: dict[str, Any], method_name: str
+) -> tuple[int, int]:
     if kind == "screenshot":
         path_value = kwargs.get("path")
         if not path_value:
@@ -119,7 +124,7 @@ async def _dispatch_standard(session: Any, kind: str, kwargs: dict[str, Any], me
 
 
 async def _dispatch_click_or_fill(
-    session: Any, kind: str, kwargs: dict[str, Any], semantic_keys: tuple[str, ...]
+    session: SessionLike, kind: str, kwargs: dict[str, Any], semantic_keys: tuple[str, ...]
 ) -> tuple[int, int]:
     is_fill = kind in {"fill", "fill_by"}
     fallback_method: Callable[..., Awaitable[Any]]
@@ -150,7 +155,7 @@ async def _dispatch_click_or_fill(
             log.debug(
                 "octowright.macros.semantic_fallback",
                 kind=kind,
-                instance_id=getattr(session, "instance_id", None),
+                instance_id=session.instance_id,
                 error=str(exc),
                 hint="semantic locator path failed, falling back to CSS selector",
             )
@@ -162,7 +167,7 @@ async def _dispatch_click_or_fill(
 
 
 async def dispatch_simple(
-    session: Any,
+    session: SessionLike,
     action: dict[str, Any],
     *,
     semantic_keys: tuple[str, ...],
@@ -173,7 +178,7 @@ async def dispatch_simple(
     with span(
         "octowright.macro.action",
         action=kind,
-        instance_id=getattr(session, "instance_id", None),
+        instance_id=session.instance_id,
     ):
         return await _dispatch_simple_inner(
             session,
@@ -186,7 +191,7 @@ async def dispatch_simple(
 
 
 async def _dispatch_simple_inner(
-    session: Any,
+    session: SessionLike,
     action: dict[str, Any],
     *,
     kind: str,
@@ -219,7 +224,7 @@ async def _dispatch_simple_inner(
         log.warning(
             "octowright.macros.unknown_action_kind",
             kind=kind,
-            instance_id=getattr(session, "instance_id", None),
+            instance_id=session.instance_id,
             hint="kind is not in _ACTION_MAP, _REPLAY_SKIP, or _REPLAY_PASSIVE",
         )
         return 0, 1
@@ -235,7 +240,7 @@ async def _dispatch_simple_inner(
 
 
 async def dispatch_one(
-    session: Any,
+    session: SessionLike,
     action: dict[str, Any],
     *,
     semantic_keys: tuple[str, ...],
@@ -246,7 +251,7 @@ async def dispatch_one(
 
     if action.get("action") in _cond.CONDITIONAL_ACTIONS:
 
-        async def _recurse(s: Any, a: dict[str, Any]) -> tuple[int, int]:
+        async def _recurse(s: SessionLike, a: dict[str, Any]) -> tuple[int, int]:
             return await dispatch_one(
                 s,
                 a,
