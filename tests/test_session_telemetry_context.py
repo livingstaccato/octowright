@@ -27,10 +27,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Import browser_pool first so the pool→listeners→session chain initializes
-# before we touch session.core directly. Importing session.core ahead of
-# browser_pool triggers a pre-existing circular import at collection time.
-import octowright.browser_pool  # noqa: F401
 from octowright.session.core import BrowserSession
 
 
