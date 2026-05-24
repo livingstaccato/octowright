@@ -503,3 +503,98 @@ class TestDrainBackgroundTasks:
                 t.cancel()
             await asyncio.gather(*stragglers, return_exceptions=True)
             inst._bg_tasks.clear()
+
+    @pytest.mark.anyio
+    async def test_drain_limit_reached_logs_warning(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When the bounded drain exits with bg tasks still attached, emit a
+        warning so the misbehaving task producer is visible in post-mortem.
+
+        Mirrors the previous test's pathological-producer setup but pins the
+        log surface — silently leaving live tasks on a closed session is a
+        real operability gap that the bounded-exit alone won't catch.
+        """
+        from types import SimpleNamespace
+
+        from octowright.session import core_ops_mixin as _ops
+
+        monkeypatch.setattr(SessionOpsMixin, "_BG_TASK_DRAIN_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(SessionOpsMixin, "_BG_TASK_DRAIN_MAX_PASSES", 2)
+
+        events: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            _ops,
+            "log",
+            SimpleNamespace(
+                info=lambda *_a, **_kw: None,
+                debug=lambda *_a, **_kw: None,
+                warning=lambda event, **kw: events.append((event, kw)),
+                error=lambda *_a, **_kw: None,
+            ),
+        )
+
+        inst = _build(tmp_path)
+
+        def _spawn_more(_done: Any) -> None:
+            async def _hang() -> None:
+                await asyncio.sleep(10)
+
+            task = asyncio.create_task(_hang())
+            task.add_done_callback(_spawn_more)
+            inst._bg_tasks.add(task)
+
+        async def _quick() -> None:
+            return None
+
+        head = asyncio.create_task(_quick())
+        head.add_done_callback(_spawn_more)
+        await asyncio.sleep(0)
+        inst._bg_tasks.add(head)
+
+        await asyncio.wait_for(inst._drain_background_tasks(), timeout=2.0)
+        try:
+            warnings = [(name, kw) for name, kw in events if name.endswith("bg_task_drain_limit_reached")]
+            assert warnings, f"expected drain-limit warning, got {events!r}"
+            _name, kw = warnings[0]
+            assert kw["max_passes"] == 2
+            assert kw["undrained_count"] >= 1
+        finally:
+            stragglers = list(inst._bg_tasks)
+            for t in stragglers:
+                t.remove_done_callback(_spawn_more)
+                t.cancel()
+            await asyncio.gather(*stragglers, return_exceptions=True)
+            inst._bg_tasks.clear()
+
+    @pytest.mark.anyio
+    async def test_drain_clean_exit_does_not_log_warning(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A drain that completes within the iteration budget MUST NOT
+        emit the limit-reached warning — pins the inverse of the previous
+        test so a future refactor that always-warns would be caught.
+        """
+        from types import SimpleNamespace
+
+        from octowright.session import core_ops_mixin as _ops
+
+        events: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            _ops,
+            "log",
+            SimpleNamespace(
+                info=lambda *_a, **_kw: None,
+                debug=lambda *_a, **_kw: None,
+                warning=lambda event, **kw: events.append((event, kw)),
+                error=lambda *_a, **_kw: None,
+            ),
+        )
+
+        inst = _build(tmp_path)
+
+        async def _quick() -> None:
+            return None
+
+        task = asyncio.create_task(_quick())
+        await asyncio.sleep(0)
+        inst._bg_tasks.add(task)
+
+        await inst._drain_background_tasks()
+        assert not [e for e in events if e[0].endswith("bg_task_drain_limit_reached")]
