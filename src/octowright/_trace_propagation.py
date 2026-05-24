@@ -34,6 +34,8 @@ from typing import Any
 
 import httpx
 
+from octowright._tracing import span as _tracing_span
+
 try:
     from opentelemetry import context as _otel_context
     from opentelemetry import propagate as _otel_propagate
@@ -118,6 +120,15 @@ class TraceContextExtractionMiddleware:
             return
         token = _otel_context.attach(ctx)
         try:
-            await self.app(scope, receive, send)
+            # Emit a per-request leader-side span so even when no @mcp.tool
+            # runs (initialize, ping, malformed body) the trace still shows
+            # a leader leg — proves the chain at the HTTP layer and gives
+            # operators a visible "request landed here" anchor.
+            with _tracing_span(
+                "octowright.mcp.request",
+                method=scope.get("method"),
+                path=scope.get("path"),
+            ):
+                await self.app(scope, receive, send)
         finally:
             _otel_context.detach(token)
