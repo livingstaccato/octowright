@@ -16,6 +16,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright._paths import reject_unsafe_path
 from octowright.browser_pool.viewport import ViewportInfo, ViewportMode
 from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, RECORDINGS_DIR
 from octowright.profiles import profile_dir
@@ -101,6 +102,10 @@ def _build_har_kwargs(
     har_path = Path(har_path_opt) if har_path_opt else log_path.with_suffix(".har")
     if not har_path.is_absolute():
         har_path = (RECORDINGS_DIR / har_path).resolve()
+    # Both branches (relative-sandboxed and absolute-supplied) must end up
+    # under RECORDINGS_DIR. Previously only the relative path was sandboxed;
+    # an absolute LLM-supplied path passed straight through.
+    har_path = reject_unsafe_path(har_path, RECORDINGS_DIR, label=f"har_path {str(har_path)!r}")
     har_path.parent.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {
         "record_har_path": str(har_path),
