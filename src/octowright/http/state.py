@@ -34,7 +34,7 @@ import subprocess
 import sys as _sys
 from pathlib import Path
 from types import ModuleType as _ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
@@ -132,6 +132,14 @@ class _StateModule(_ModuleType):
 
 _sys.modules[__name__].__class__ = _StateModule
 
+# Type-checker visibility: the descriptors above are installed at runtime via
+# the ``__class__`` swap, which mypy/ty can't follow. Declaring the names
+# under TYPE_CHECKING makes ``state.pool`` and ``state.scenario_pool`` valid
+# at static-analysis time without affecting runtime behavior.
+if TYPE_CHECKING:
+    pool: Any
+    scenario_pool: Any
+
 
 __all__ = [
     "FRONTEND_DIR",
@@ -145,11 +153,11 @@ __all__ = [
     "_personas",
     "_video",
     "log",
-    "pool",  # noqa: F822  resolved lazily via module __getattr__
+    "pool",
     "runtime_session_url",
     "runtime_status",
     "runtime_url",
-    "scenario_pool",  # noqa: F822  resolved lazily via module __getattr__
+    "scenario_pool",
     "shutil",
     "subprocess",
 ]
