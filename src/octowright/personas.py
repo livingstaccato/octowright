@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 from provide.telemetry import get_logger
 
+from octowright import defaults
 from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
 from octowright.types import CredentialCheckEntry, CredentialCheckReport, PersonaListEntry
 
@@ -33,6 +34,11 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _SHELL_OPERATOR_TOKENS = frozenset(
     {"|", "||", "&", "&&", ";", ";;", "<", ">", ">>", "<<", "<<<", "<>", "(", ")", "$(", "`"}
 )
+
+# Interpreter basenames that fall under the ``-c`` shell-pipeline default
+# deny. argv[0]'s basename is checked so absolute paths
+# (``/bin/bash``, ``/usr/local/bin/zsh``) trip the same gate.
+_SHELL_INTERPRETER_BASENAMES = frozenset({"bash", "sh", "zsh", "fish", "dash", "ksh"})
 
 
 def _credential_cmd_argv(cmd: str, persona_name: str, cred_name: str) -> list[str]:
@@ -278,13 +284,24 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     argument carries the shell logic the cmd author has signed off on.
     """
     argv = _credential_cmd_argv(cmd_str, persona_name, cred_name)
-    # `bash -c "..."` is the documented escape hatch for pipelines, but it
-    # also lets the YAML author run arbitrary shell. Surface that at runtime
-    # so an operator running personas authored elsewhere notices.
-    # Match by basename so absolute paths (`/bin/bash -c ...`,
-    # `/usr/local/bin/zsh -c ...`) trip the warning too.
+    # `bash -c "..."` (and equivalents) is arbitrary-code-exec from persona
+    # YAML — a YAML that came from shared storage, a CI checkout, or another
+    # user's profile gets unrestricted shell on the daemon's host. Default-
+    # deny; operators who deliberately ship shell-style cred helpers opt in
+    # via OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS. Match by basename so absolute
+    # paths (``/bin/bash -c ...``, ``/usr/local/bin/zsh -c ...``) trip the
+    # same gate.
     interpreter_name = Path(argv[0]).name if argv else ""
-    if interpreter_name in {"bash", "sh", "zsh", "fish"} and len(argv) >= 3 and argv[1] == "-c":
+    if interpreter_name in _SHELL_INTERPRETER_BASENAMES and len(argv) >= 2 and argv[1] == "-c":
+        if not defaults.allow_shell_cred_cmds():
+            raise MissingCredential(
+                f"persona {persona_name!r} field {cred_name!r}: cmd invokes "
+                f"{argv[0]!r} with -c which is arbitrary shell execution. "
+                f"Rewrite as an argv-form helper (e.g. `op read op://…`) or "
+                f"set {defaults.ALLOW_SHELL_CRED_CMDS_ENV}=1 to opt in."
+            )
+        # Opt-in path: keep the runtime warning so the trust boundary stays
+        # explicit and audit-able.
         log.warning(
             "personas.credential_cmd_executes_shell_pipeline",
             persona=persona_name,
