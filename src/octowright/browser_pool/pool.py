@@ -230,24 +230,44 @@ class BrowserPool:
 
     async def relaunch_fluid(self, instance_id: str) -> dict[str, Any]:
         source = self.get(instance_id)
+        # Snapshot every field we need BEFORE awaiting close. A Playwright
+        # external-close eviction can fire between pool.get() and pool.close(),
+        # popping the session and turning close() into a KeyError. We treat
+        # that race as "already closed" and still launch the replacement so
+        # the user isn't left with no browser.
+        source_kind = source.kind
+        source_label = source.label
+        source_profile = source.profile
+        source_user_data_dir = source.user_data_dir
+        source_stabilize = source.stabilize
+        source_trace = source.trace
+        source_har_path = source.har_path
+        target_url = getattr(source.page, "url", None) or source.url
         # Wrap close+launch under a parent span so the child browser.close /
         # browser.launch spans nest underneath as one fluid-mode round-trip.
-        with span("octowright.browser.relaunch_fluid", instance_id=instance_id, kind=source.kind):
-            target_url = getattr(source.page, "url", None) or source.url
-            session_scoped = source.profile is None and source.user_data_dir is not None
-            stateless = source.profile is None and source.user_data_dir is None
+        with span("octowright.browser.relaunch_fluid", instance_id=instance_id, kind=source_kind):
+            session_scoped = source_profile is None and source_user_data_dir is not None
+            stateless = source_profile is None and source_user_data_dir is None
             # Don't overwrite the prior HAR — relaunch gets a sibling path.
-            next_har = rotate_har_path(source.har_path)
-            close_result = await self.close(instance_id)
+            next_har = rotate_har_path(source_har_path)
+            try:
+                close_result: dict[str, Any] | None = await self.close(instance_id)
+            except KeyError:
+                log.warning(
+                    "octowright.browser.relaunch_fluid.close_raced_eviction",
+                    instance_id=instance_id,
+                    kind=source_kind,
+                )
+                close_result = None
             result = await self.launch(
-                kind=source.kind,
+                kind=source_kind,
                 url=target_url,
                 headed=True,
-                label=source.label,
-                profile=source.profile,
-                stabilize=source.stabilize,
-                trace=source.trace,
-                har=bool(source.har_path),
+                label=source_label,
+                profile=source_profile,
+                stabilize=source_stabilize,
+                trace=source_trace,
+                har=bool(source_har_path),
                 har_path=str(next_har) if next_har else None,
                 badge=True,
                 ephemeral=stateless,
@@ -257,7 +277,7 @@ class BrowserPool:
                 "ok": True,
                 "old_instance_id": instance_id,
                 "new_instance_id": result["instance_id"],
-                "old_closed": bool(close_result.get("closed")),
+                "old_closed": bool(close_result and close_result.get("closed")),
                 "mode": "fluid",
                 "launch": result,
             }
