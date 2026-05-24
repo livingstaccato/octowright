@@ -328,13 +328,14 @@ def test_persona_dir_uses_slug_under_profiles_dir(tmp_path, fresh_personas):
 
 
 def test_credential_cmd_bare_bash_dash_c_warns(monkeypatch, caplog):
-    """Bare interpreter name (`bash -c '...'`) trips the warning. Pin the
-    existing behaviour."""
+    """Bare interpreter name (`bash -c '...'`) trips the warning when the
+    opt-in env var is set. Pin the existing behaviour."""
     from octowright import personas as _p
 
     def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", "1")
     monkeypatch.setattr(subprocess, "run", _fake)
     with caplog.at_level(logging.WARNING):
         _p._exec_credential_cmd("bash -c 'echo hi | tr h H'", "dante", "token")
@@ -342,20 +343,68 @@ def test_credential_cmd_bare_bash_dash_c_warns(monkeypatch, caplog):
 
 
 def test_credential_cmd_absolute_path_bash_dash_c_warns(monkeypatch, caplog):
-    """Absolute-path interpreter (`/bin/bash -c '...'`) ALSO trips the warning.
-    The PR #18 implementation matched the bare token only, so a YAML author
-    using an absolute path quietly evaded the trust-boundary signal —
-    `shell=False` still kept execution safe, but the operator no longer saw
-    the heads-up. Pin the basename-match fix."""
+    """Absolute-path interpreter (`/bin/bash -c '...'`) ALSO trips the warning
+    when the opt-in env var is set. The PR #18 implementation matched the bare
+    token only, so a YAML author using an absolute path quietly evaded the
+    trust-boundary signal — `shell=False` still kept execution safe, but the
+    operator no longer saw the heads-up. Pin the basename-match fix."""
     from octowright import personas as _p
 
     def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", "1")
     monkeypatch.setattr(subprocess, "run", _fake)
     with caplog.at_level(logging.WARNING):
         _p._exec_credential_cmd("/bin/bash -c 'echo hi | tr h H'", "dante", "token")
     assert any("personas.credential_cmd_executes_shell_pipeline" in rec.message for rec in caplog.records)
+
+
+def test_credential_cmd_bash_dash_c_rejected_by_default(monkeypatch):
+    """Default (env var unset) refuses ``bash -c`` style cmds with an error
+    pointing at the gating env var."""
+    from octowright import personas as _p
+
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", raising=False)
+    with pytest.raises(_p.MissingCredential, match="OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS"):
+        _p._exec_credential_cmd('bash -c "echo x"', "dante", "token")
+
+
+def test_credential_cmd_argv_form_allowed_by_default(monkeypatch):
+    """Argv-form helpers (``op read op://…``) must run regardless of the
+    shell-cred-cmds gate."""
+    from octowright import personas as _p
+
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", raising=False)
+
+    def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="secret\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake)
+    assert _p._exec_credential_cmd("op read op://vault/item/token", "dante", "token") == "secret"
+
+
+def test_credential_cmd_each_shell_interpreter_rejected_by_default(monkeypatch):
+    """Every interpreter basename in the default-deny set trips the gate."""
+    from octowright import personas as _p
+
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", raising=False)
+    for interp in ("bash", "sh", "zsh", "fish", "dash", "ksh"):
+        with pytest.raises(_p.MissingCredential, match="OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS"):
+            _p._exec_credential_cmd(f"{interp} -c 'echo x'", "dante", "token")
+
+
+def test_credential_cmd_bash_dash_c_allowed_when_env_set(monkeypatch):
+    """Opt-in env var permits ``bash -c`` to reach subprocess."""
+    from octowright import personas as _p
+
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", "1")
+
+    def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="from-pipeline\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake)
+    assert _p._exec_credential_cmd('bash -c "echo from-pipeline"', "dante", "token") == "from-pipeline"
 
 
 def test_credential_cmd_non_shell_does_not_warn(monkeypatch, caplog):
