@@ -223,11 +223,9 @@ There is intentionally no counter for the ws-cache batched flush — the flush i
 
 ### Session log context
 
-On session creation, `BrowserSession.__post_init__` calls `provide.telemetry.bind_context(octowright_instance_id=..., octowright_kind=..., octowright_profile=..., octowright_label=...)`. Because `bind_context` writes to a contextvar, only the asyncio task that called `__post_init__` (typically the `browser_launch` tool handler) sees the binding — log lines emitted during that launch call carry the IDs automatically.
+Spans are the canonical way to attach session identity to telemetry: span attributes (`instance_id`, `kind`, etc.) are recorded on the span object itself and travel with it regardless of which asyncio task started the span. Anything that needs to chain across tool calls — traces, metrics with `kind=` labels, propagated context across the bridge — relies on the span path, not on log context.
 
-Subsequent MCP tool calls (`browser_navigate`, `browser_click`, `macro_run`, etc.) run on different asyncio tasks and **do not** inherit this context. Those code paths must include `instance_id` explicitly on their structured-log calls; the existing call sites already do (`log.info("session.navigate", instance_id=..., url=...)` style). `session.close()` calls `unbind_telemetry_context()` for symmetry, but in practice the binding rarely outlives the launch task that set it.
-
-Spans, by contrast, always carry their attributes regardless of which task started them — that is the recommended way to attach session identity to telemetry that needs to survive across tool calls.
+For structured logs, every tool-handler log call passes `instance_id=` explicitly as a keyword (`log.info("session.navigate", instance_id=..., url=...)` style). There is no global contextvar binding that fills it in for you; if a new log site wants the per-session identifiers, it must pass them as kwargs.
 
 ### Enabling export
 
