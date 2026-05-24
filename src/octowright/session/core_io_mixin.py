@@ -19,6 +19,7 @@ from playwright.async_api import ConsoleMessage, Page
 from provide.telemetry import get_logger
 
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
+from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session._protocols import SessionLike
 
 if TYPE_CHECKING:
@@ -91,17 +92,21 @@ class SessionIOMixin(SessionLike):
         # Batched flush: a per-frame ``fh.flush()`` would still cost one
         # syscall per frame. Trade liveness against throughput by flushing
         # when EITHER the frame count or the elapsed-time threshold is hit.
-        # See defaults.WEBSOCKET_CACHE_FLUSH_FRAMES / SECONDS.
-        from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
-
+        # See defaults.WEBSOCKET_CACHE_FLUSH_FRAMES / SECONDS — imported at
+        # module scope above so the hot path doesn't pay a sys.modules
+        # lookup per frame.
         if self.websocket_path is None:
             self.websocket_path = self._websocket_cache_path()
             self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
         fh = getattr(self, "_websocket_fh", None)
+        # One time.monotonic() per call, reused for both the elapsed-time
+        # check and (on first write) the init timestamp / (on flush) the
+        # new last_flush stamp.
+        now = time.monotonic()
         if fh is None:
             fh = self.websocket_path.open("a", encoding="utf-8")
             self._websocket_fh = fh
-            self._websocket_last_flush_ts = time.monotonic()
+            self._websocket_last_flush_ts = now
             self._websocket_frames_since_flush = 0
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         # Both fields are dataclass attributes initialized to 0 / 0.0 and
@@ -111,7 +116,6 @@ class SessionIOMixin(SessionLike):
         # any future regression that broke the init invariant.
         frames = self._websocket_frames_since_flush + 1
         last_flush = self._websocket_last_flush_ts
-        now = time.monotonic()
         if frames >= WEBSOCKET_CACHE_FLUSH_FRAMES or (now - last_flush) >= WEBSOCKET_CACHE_FLUSH_SECONDS:
             fh.flush()
             self._websocket_frames_since_flush = 0
