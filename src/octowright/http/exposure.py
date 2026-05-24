@@ -17,6 +17,7 @@ from typing import TypeVar
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.websockets import WebSocket
 
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
 
@@ -65,6 +66,56 @@ def sensitive_allowed_for_request(request: Request) -> bool:
 
 def sensitive_allowed_for_connection(connection: HTTPConnection) -> bool:
     return _sensitive_allowed_for_app(connection.app)
+
+
+def _origin_host_from_origin(origin: str) -> str | None:
+    """Extract the ``host:port`` (or just ``host``) portion from an Origin
+    header value. Returns ``None`` if the value is malformed (no ``://``)."""
+    sep = origin.find("://")
+    if sep == -1:
+        return None
+    return origin[sep + 3 :]
+
+
+def websocket_origin_allowed(websocket: WebSocket) -> bool:
+    """Mirror the HTTP cross-origin guard for WebSocket handshakes.
+
+    HTTP routes get cross-origin protection via ``guard_sensitive_http``;
+    without an equivalent here a cross-origin page in the victim's browser
+    could open ``ws://127.0.0.1:8765/api/sessions/{id}/tail`` (the loopback
+    check passes because the kernel sees the connection coming from the
+    same host) and read the live JSONL — including form input, navigated
+    URLs, and console output.
+
+    Policy:
+      * No ``Origin`` header → non-browser client (curl/python-websockets),
+        allow. Browsers always send Origin on WS handshakes.
+      * Origin host matches the request ``Host`` header → same origin, allow.
+      * Origin host is a loopback name/address → allow (developer tooling
+        on the same machine, e.g. another local dashboard tab).
+      * Otherwise → block.
+    """
+    origin = websocket.headers.get("origin")
+    if origin is None:
+        return True
+    origin_host = _origin_host_from_origin(origin)
+    if origin_host is None:
+        # Malformed Origin header — refuse rather than fail open.
+        return False
+    if origin_host == websocket.headers.get("host", ""):
+        return True
+    # Strip any path/query that snuck through (Origin is host-only per spec).
+    bare_host = origin_host.split("/", 1)[0]
+    # Strip optional :port (IPv6 literals are wrapped in [..] so the rsplit
+    # on the last ':' only trims the port).
+    if bare_host.startswith("["):
+        bracket_close = bare_host.rfind("]")
+        host_only = bare_host[: bracket_close + 1] if bracket_close != -1 else bare_host
+    elif bare_host.count(":") == 1:
+        host_only = bare_host.rsplit(":", 1)[0]
+    else:
+        host_only = bare_host
+    return is_loopback_host(host_only)
 
 
 def _cross_origin_blocked(request: Request, *, side_effect_get: bool) -> bool:
