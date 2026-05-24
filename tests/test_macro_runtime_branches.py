@@ -163,7 +163,10 @@ class TestDispatchSimpleSkipPaths:
     @pytest.mark.anyio
     async def test_session_missing_method_returns_skip(self) -> None:
         """If kind maps to a method the session lacks, dispatch_simple returns (0, 1)."""
-        s = MagicMock(spec=[])  # no methods at all
+        # spec=["instance_id"] satisfies the SessionLike attr access used to
+        # tag the macro.action span; the dispatcher still finds no `navigate`
+        # method via hasattr and short-circuits to the skip tuple.
+        s = MagicMock(spec=["instance_id"])
         result = await _dispatch_via_simple(s, {"action": "navigate", "url": "x"})
         assert result == (0, 1)
 
