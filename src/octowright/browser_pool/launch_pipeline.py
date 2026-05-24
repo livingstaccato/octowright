@@ -314,7 +314,7 @@ async def post_context_setup(
             log_viewport=log_viewport,
             video_dir=video_dir,
         )
-    except BaseException as exc:
+    except asyncio.CancelledError:
         await cleanup_failed_launch(
             registered=registered,
             context=context,
@@ -323,8 +323,16 @@ async def post_context_setup(
             recorder=recorder,
             pre_register=False,
         )
-        if isinstance(exc, asyncio.CancelledError):
-            raise
+        raise
+    except Exception as exc:
+        await cleanup_failed_launch(
+            registered=registered,
+            context=context,
+            browser=browser,
+            video_dir=video_dir,
+            recorder=recorder,
+            pre_register=False,
+        )
         wrapped = maybe_wrap_playwright_error(exc, kind=kind)
         if wrapped is exc:
             raise
