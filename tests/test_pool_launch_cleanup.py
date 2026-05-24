@@ -102,7 +102,9 @@ async def test_launch_failure_closes_context_browser_and_recorder(
         return recorder
 
     monkeypatch.setattr("octowright.browser_pool.pool.RECORDINGS_DIR", tmp_path)
-    monkeypatch.setattr("octowright.browser_pool.pool.Recorder", fake_recorder)
+    # Recorder construction lives in launch_pipeline.post_context_setup after
+    # the _launch_impl → launch_pipeline split.
+    monkeypatch.setattr("octowright.browser_pool.launch_pipeline.Recorder", fake_recorder)
 
     with pytest.raises(RuntimeError):
         await pool.launch(kind="chromium", url="https://example.com", headed=False)
