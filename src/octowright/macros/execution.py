@@ -340,6 +340,7 @@ async def _run_macro_impl(
         log.info(
             "octowright.macro.run",
             name=name,
+            instance_id=getattr(session, "instance_id", None),
             executed=executed,
             skipped=skipped,
             slowmo_ms=resolved_slowmo,

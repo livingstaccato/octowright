@@ -86,6 +86,18 @@ def next_har_path(p: Path) -> Path:
     raise RuntimeError(f"exhausted {_MAX_HAR_ROTATIONS} HAR rotations for {p}")
 
 
+def rotate_har_path(current: Path | None) -> Path | None:
+    """``next_har_path`` with a ``None`` short-circuit.
+
+    The relaunch / handoff / JSONL-replay paths all want "rotate the prior
+    HAR if there was one, else leave it alone" — collapsing the ``None``
+    check into a one-liner avoids three near-identical pieces of code at
+    those call sites."""
+    if current is None:
+        return None
+    return next_har_path(current)
+
+
 def _build_har_kwargs(
     *,
     har: bool,

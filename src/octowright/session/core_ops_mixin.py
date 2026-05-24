@@ -359,11 +359,6 @@ class SessionOpsMixin(SessionLike):
                 await self._close_impl()
             finally:
                 _SESSION_CLOSED.add(1, attributes={"kind": kind or "unknown"})
-                # Unbind the session-scoped log context so subsequent
-                # unrelated logs don't carry this session's identifiers.
-                unbind = getattr(self, "unbind_telemetry_context", None)
-                if unbind is not None:
-                    unbind()
 
     async def _close_impl(self) -> None:
         try:

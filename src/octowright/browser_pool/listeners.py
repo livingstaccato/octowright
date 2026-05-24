@@ -121,23 +121,6 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
                 instance_id=instance_id,
                 error=repr(exc),
             )
-        # Mirror the explicit-close path: tear down the structlog
-        # context-var binding installed in BrowserSession.__post_init__.
-        # Without this, the per-session identifiers (instance_id, kind,
-        # profile, label) would leak into log lines emitted by unrelated
-        # tasks running on the same loop after eviction. Wrapped in
-        # try/except so partially-initialized test subjects (which may
-        # not expose the helper) don't break eviction.
-        try:
-            unbind = getattr(session, "unbind_telemetry_context", None)
-            if unbind is not None:
-                unbind()
-        except Exception as exc:
-            log.debug(
-                "octowright.evict.unbind_telemetry_failed",
-                instance_id=instance_id,
-                error=repr(exc),
-            )
 
     def _on_page_close(*_: Any) -> None:
         # Cascade to full eviction only when no page on the session is still
