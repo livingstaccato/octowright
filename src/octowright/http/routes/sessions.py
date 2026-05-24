@@ -286,11 +286,14 @@ async def session_close(request: Request) -> JSONResponse:
             # cache report, instead of two parallel threads each scanning the
             # full file.
             body["cache"] = await asyncio.to_thread(session_artifact_cache.warm_close, jsonl_path)
-        except Exception:
+        except Exception as e:
+            # User-action swallow path: log the cause so the failure mode
+            # is diagnosable (AGENTS.md silent-swallow policy).
             state.log.warning(
                 "octowright.http.session_close_cache_report_failed",
                 instance_id=sid,
                 log_path=log_path,
+                error=repr(e),
             )
 
     state.log.info("octowright.http.session_closed", instance_id=sid)
