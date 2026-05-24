@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 from playwright.async_api import ConsoleMessage, Page
 from provide.telemetry import get_logger
 
+from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session._protocols import SessionLike
 
 if TYPE_CHECKING:
@@ -96,21 +97,19 @@ class SessionIOMixin(SessionLike):
         # syscall per frame. Trade liveness against throughput by flushing
         # when EITHER the frame count or the elapsed-time threshold is hit.
         # See defaults.WEBSOCKET_CACHE_FLUSH_FRAMES / SECONDS.
-        from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
-
         if self.websocket_path is None:
             self.websocket_path = self._websocket_cache_path()
             self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
         fh = getattr(self, "_websocket_fh", None)
+        now = time.monotonic()
         if fh is None:
             fh = self.websocket_path.open("a", encoding="utf-8")
             self._websocket_fh = fh
-            self._websocket_last_flush_ts = time.monotonic()
+            self._websocket_last_flush_ts = now
             self._websocket_frames_since_flush = 0
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         frames = getattr(self, "_websocket_frames_since_flush", 0) + 1
-        last_flush = getattr(self, "_websocket_last_flush_ts", 0.0) or time.monotonic()
-        now = time.monotonic()
+        last_flush = getattr(self, "_websocket_last_flush_ts", 0.0) or now
         if frames >= WEBSOCKET_CACHE_FLUSH_FRAMES or (now - last_flush) >= WEBSOCKET_CACHE_FLUSH_SECONDS:
             fh.flush()
             self._websocket_frames_since_flush = 0
