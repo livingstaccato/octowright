@@ -183,17 +183,24 @@ class _LazyInstrument:
         self._instrument: Any | None = None
 
     def _resolve(self) -> Any:
-        if self._instrument is not None:
+        # Only cache REAL instruments. ``_NOOP`` is the pre-setup fallback —
+        # caching it here would freeze the binding and defeat lazy resolution
+        # if ``setup_telemetry()`` runs later (or the OTel SDK gets installed
+        # mid-process via a plugin). The trade-off is a per-call ``_meter()``
+        # resolve when the proxy hasn't been bound yet; once a real instrument
+        # is cached the hot path is a single ``is not None`` check.
+        if self._instrument is not None and self._instrument is not _NOOP:
             return self._instrument
         m = _meter()
         if m is None:
-            self._instrument = _NOOP
-            return self._instrument
+            return _NOOP
         try:
             factory = getattr(m, self._factory)
             self._instrument = factory(self._name, **self._kwargs)
         except Exception:
-            self._instrument = _NOOP
+            # Don't cache the noop fallback either — a later, fixed provider
+            # should still get a chance to bind on the next call.
+            return _NOOP
         return self._instrument
 
 
