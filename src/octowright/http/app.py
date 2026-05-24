@@ -85,7 +85,7 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
 
-    routes.extend(_frontend_routes())
+    routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.octowright_http_host = host
     if metrics_enabled():
