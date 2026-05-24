@@ -198,6 +198,11 @@ class _LazyInstrument:
 
 
 class _LazyCounter(_LazyInstrument):
+    # Mirror the parent's __slots__ contract — without an empty __slots__
+    # here Python falls back to a per-instance __dict__ on the subclass and
+    # cancels the parent's memory saving.
+    __slots__ = ()
+
     def add(self, amount: float, attributes: dict[str, Any] | None = None, **kwargs: Any) -> None:
         try:
             self._resolve().add(amount, attributes=attributes, **kwargs)
@@ -206,6 +211,8 @@ class _LazyCounter(_LazyInstrument):
 
 
 class _LazyHistogram(_LazyInstrument):
+    __slots__ = ()
+
     def record(self, value: float, attributes: dict[str, Any] | None = None, **kwargs: Any) -> None:
         try:
             self._resolve().record(value, attributes=attributes, **kwargs)
