@@ -76,6 +76,12 @@ class BrowserSession(
     # because Path.open("a", encoding="utf-8") returns TextIOWrapper while
     # the protocol surface only needs write/flush/close.
     _websocket_fh: Any = field(default=None, repr=False)
+    # Batched-flush bookkeeping for the WS cache: count frames since the
+    # last flush and remember when we last flushed so we can flush when
+    # either threshold (count OR elapsed) is hit. See defaults.WEBSOCKET_
+    # CACHE_FLUSH_FRAMES / SECONDS for the policy.
+    _websocket_frames_since_flush: int = field(default=0, repr=False)
+    _websocket_last_flush_ts: float = field(default=0.0, repr=False)
     _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
     _network_requests_dropped: int = 0
     _last_mcp_navigation: str | None = None

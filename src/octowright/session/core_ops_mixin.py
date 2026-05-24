@@ -381,6 +381,16 @@ class SessionOpsMixin(SessionLike):
             ws_fh = getattr(self, "_websocket_fh", None)
             if ws_fh is not None:
                 try:
+                    # Flush any buffered frames before the close so a final
+                    # batch isn't lost behind the block-buffering window.
+                    ws_fh.flush()
+                except Exception as exc:
+                    log.debug(
+                        "octowright.session.websocket_fh_flush_failed",
+                        instance_id=getattr(self, "instance_id", None),
+                        error=repr(exc),
+                    )
+                try:
                     ws_fh.close()
                 except Exception as exc:
                     log.debug(
