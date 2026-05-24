@@ -90,6 +90,33 @@ def tracing_httpx_client_factory() -> Callable[..., httpx.AsyncClient]:
 # ASGI middleware (Starlette-compatible) for the leader side.
 
 
+def _build_propagation_carrier(headers: Any) -> dict[str, str]:
+    """Decode ASGI header bytes into a W3C-propagator-friendly dict.
+
+    W3C trace context allows ``tracestate`` to appear as multiple headers
+    — per spec they must be combined into a single comma-separated string.
+    A plain dict comprehension would drop all but the last. Comma-join
+    collisions instead so the propagator sees the full carrier.
+    """
+    carrier: dict[str, str] = {}
+    for raw_k, raw_v in headers:
+        name = raw_k.decode("latin-1")
+        value = raw_v.decode("latin-1")
+        if name in carrier:
+            carrier[name] = f"{carrier[name]}, {value}"
+        else:
+            carrier[name] = value
+    return carrier
+
+
+def _extract_context(carrier: dict[str, str]) -> Any:
+    """Run the OTel propagator extract, swallowing broken-propagator errors."""
+    try:
+        return _otel_propagate.extract(carrier)
+    except Exception:
+        return None
+
+
 class TraceContextExtractionMiddleware:
     """ASGI middleware that extracts W3C trace context from incoming requests.
 
@@ -110,52 +137,31 @@ class TraceContextExtractionMiddleware:
         if not _OTEL_AVAILABLE or scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        # W3C trace context allows ``tracestate`` to appear as multiple
-        # headers — per spec they must be combined into a single
-        # comma-separated string. A plain dict comprehension would drop
-        # all but the last. Comma-join collisions instead so the
-        # propagator sees the full carrier.
-        carrier: dict[str, str] = {}
-        for raw_k, raw_v in scope.get("headers", []):
-            name = raw_k.decode("latin-1")
-            value = raw_v.decode("latin-1")
-            if name in carrier:
-                carrier[name] = f"{carrier[name]}, {value}"
-            else:
-                carrier[name] = value
-        try:
-            ctx = _otel_propagate.extract(carrier)
-        except Exception:
-            ctx = None
+        ctx = _extract_context(_build_propagation_carrier(scope.get("headers", [])))
         if ctx is None:
             await self.app(scope, receive, send)
             return
-        token = _otel_context.attach(ctx)
-        # Emit a per-request leader-side span so even when no @mcp.tool
-        # runs (initialize, ping, malformed body) the trace still shows
-        # a leader leg — proves the chain at the HTTP layer and gives
-        # operators a visible "request landed here" anchor.
-        #
-        # The span MUST end as soon as response headers are sent
-        # (``http.response.start``) — never on body completion. For
-        # streamable-HTTP MCP the response is an SSE stream that stays
-        # open for the duration of the follower's connection (potentially
-        # minutes). Keeping the span open that long fills the OTel
-        # batch-exporter buffer (default 2048 spans) with one entry per
-        # concurrent follower and silently drops spans when it overflows.
-        tracer = _tracing_get_tracer("octowright")
-        span_cm = tracer.start_as_current_span("octowright.mcp.request")
-        sp = span_cm.__enter__()
-        try:
-            sp.set_attribute("method", scope.get("method") or "")
-            sp.set_attribute("path", scope.get("path") or "")
-        except Exception:
-            pass
+        await self._dispatch_with_context(ctx, scope, receive, send)
+
+    async def _dispatch_with_context(
+        self,
+        ctx: Any,
+        scope: MutableMapping[str, Any],
+        receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+    ) -> None:
+        # Initialize token + span_cm BEFORE the attach so the finally below
+        # can safely check them. Previously attach + span open ran outside
+        # any try/finally — if attach raised partway through, or if
+        # ``span_cm.__enter__`` raised after attach succeeded, the token
+        # leaked onto the asyncio task (no detach ever ran).
+        token: object | None = None
+        span_cm: Any = None
         span_ended = False
 
         def _end_span_once() -> None:
             nonlocal span_ended
-            if span_ended:
+            if span_ended or span_cm is None:
                 return
             span_ended = True
             try:
@@ -163,17 +169,46 @@ class TraceContextExtractionMiddleware:
             except Exception:
                 pass
 
-        async def _send_wrapper(message: MutableMapping[str, Any]) -> None:
-            if not span_ended and message.get("type") == "http.response.start":
-                _end_span_once()
-            await send(message)
-
         try:
+            token = _otel_context.attach(ctx)
+            # Emit a per-request leader-side span so even when no @mcp.tool
+            # runs (initialize, ping, malformed body) the trace still shows
+            # a leader leg — proves the chain at the HTTP layer and gives
+            # operators a visible "request landed here" anchor.
+            #
+            # The span MUST end as soon as response headers are sent
+            # (``http.response.start``) — never on body completion. For
+            # streamable-HTTP MCP the response is an SSE stream that stays
+            # open for the duration of the follower's connection (potentially
+            # minutes). Keeping the span open that long fills the OTel
+            # batch-exporter buffer (default 2048 spans) with one entry per
+            # concurrent follower and silently drops spans when it overflows.
+            tracer = _tracing_get_tracer("octowright")
+            span_cm = tracer.start_as_current_span("octowright.mcp.request")
+            _set_request_span_attrs(span_cm.__enter__(), scope)
+
+            async def _send_wrapper(message: MutableMapping[str, Any]) -> None:
+                if not span_ended and message.get("type") == "http.response.start":
+                    _end_span_once()
+                await send(message)
+
             await self.app(scope, receive, _send_wrapper)
         finally:
             # End the span if no http.response.start was ever sent (e.g.
             # the app raised before producing a response). The OTel context
             # token outlives the span on purpose so any background work
-            # the app dispatched still chains correctly.
+            # the app dispatched still chains correctly. Both legs of the
+            # cleanup are gated on actually having something to clean up —
+            # attach() may have raised before producing a token.
             _end_span_once()
-            _otel_context.detach(token)
+            if token is not None:
+                _otel_context.detach(token)
+
+
+def _set_request_span_attrs(sp: Any, scope: MutableMapping[str, Any]) -> None:
+    """Set method/path on the leader-side request span, swallowing SDK errors."""
+    try:
+        sp.set_attribute("method", scope.get("method") or "")
+        sp.set_attribute("path", scope.get("path") or "")
+    except Exception:
+        pass
