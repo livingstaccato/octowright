@@ -110,7 +110,19 @@ class TraceContextExtractionMiddleware:
         if not _OTEL_AVAILABLE or scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        carrier = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        # W3C trace context allows ``tracestate`` to appear as multiple
+        # headers — per spec they must be combined into a single
+        # comma-separated string. A plain dict comprehension would drop
+        # all but the last. Comma-join collisions instead so the
+        # propagator sees the full carrier.
+        carrier: dict[str, str] = {}
+        for raw_k, raw_v in scope.get("headers", []):
+            name = raw_k.decode("latin-1")
+            value = raw_v.decode("latin-1")
+            if name in carrier:
+                carrier[name] = f"{carrier[name]}, {value}"
+            else:
+                carrier[name] = value
         try:
             ctx = _otel_propagate.extract(carrier)
         except Exception:
