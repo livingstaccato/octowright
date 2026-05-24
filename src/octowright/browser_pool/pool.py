@@ -26,7 +26,7 @@ from octowright.browser_pool.launch_helpers import (
     _open_browser_context,
     _record_launch_event,
     _safe_manifest_record,
-    next_har_path,
+    rotate_har_path,
 )
 from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
 from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
@@ -381,7 +381,7 @@ class BrowserPool:
             session_scoped = source.profile is None and source.user_data_dir is not None
             stateless = source.profile is None and source.user_data_dir is None
             # Don't overwrite the prior HAR — relaunch gets a sibling path.
-            next_har = next_har_path(source.har_path) if source.har_path else None
+            next_har = rotate_har_path(source.har_path)
             close_result = await self.close(instance_id)
             result = await self.launch(
                 kind=source.kind,
