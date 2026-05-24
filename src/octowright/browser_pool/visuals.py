@@ -172,23 +172,26 @@ def _macro_pill_chip_for(
     return chip_text, _badge_color_for(seed)
 
 
-def _describe_action(action: dict[str, object]) -> str:
-    """One-line human hint for a macro action — '<verb> <key>=<value>'.
+# `_describe_action` used to live here; it was moved to
+# `octowright.macros.descriptions` so the macro layer doesn't have to
+# import from the pool layer (wrong direction). The pool layer still
+# needs the helper for pill / badge rendering, so we re-export under the
+# original underscore name to keep existing call sites unchanged.
+#
+# The re-export goes through a thin wrapper rather than a top-level
+# ``from … import describe_action`` to avoid triggering the
+# ``octowright.macros`` package ``__init__`` (which pulls in
+# ``execution`` → ``repair`` → ``server.macro_semantic`` → ``server._state``)
+# during module import — visuals is loaded by ``browser_pool.options``,
+# which itself imports during ``server._state`` initialisation, creating
+# a cycle.
 
-    Picks the first informative locator/value field (name → text → role → selector
-    → url → key → value) so the pill stays single-line. Long values are clipped
-    with an ellipsis to fit the pill's max-width.
-    """
-    name = str(action.get("action") or "?")
-    for key in ("name", "text", "role", "selector", "url", "key", "value"):
-        val = action.get(key)
-        if val in (None, "", [], {}):
-            continue
-        s = str(val)
-        if len(s) > 40:
-            s = s[:39] + "…"
-        return f"{name} {key}={s}"
-    return name
+
+def _describe_action(action: dict[str, Any]) -> str:
+    """Re-export of :func:`octowright.macros.descriptions.describe_action`."""
+    from octowright.macros.descriptions import describe_action
+
+    return describe_action(action)
 
 
 def _tile_position(index: int, *, cols: int = 4, win_w: int = 720, win_h: int = 540) -> tuple[int, int, int, int]:

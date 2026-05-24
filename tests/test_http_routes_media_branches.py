@@ -516,3 +516,54 @@ class TestScreenshotsListing:
         """No log path resolvable → 404 (not 400)."""
         r = client.get("/api/sessions/missingsess1/screenshots/x.png")
         assert r.status_code == 404
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "../../etc/passwd",  # decoded ../../etc/passwd
+            "../evil.png",  # decoded ../evil.png
+            "/etc/shadow",  # absolute path escape
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_screenshot_file_path_traversal_rejected(
+        self,
+        isolated_recordings: Path,
+        empty_pool: dict[str, Any],
+        filename: str,
+    ) -> None:
+        """Defence-in-depth: filename that escapes the session screenshot
+        directory must return 400, NOT serve the off-tree file.
+
+        Note on testing: Starlette's ``{filename}`` path converter does not
+        match ``/`` so HTTP requests like ``GET .../screenshots/..%2Fevil``
+        return Starlette's own 404 (the segment can't be routed). The path
+        traversal guard exists for defence-in-depth — to catch the case
+        where some future caller constructs the request with a router/path
+        converter that allows ``/`` in the filename, or invokes the handler
+        directly. We therefore exercise the handler with a hand-built
+        request whose ``path_params`` carries the malicious filename.
+        """
+        from starlette.requests import Request
+
+        from octowright.http.routes import media as media_routes
+
+        _write_recording(isolated_recordings, "trav00000001")
+
+        scope: dict[str, Any] = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/sessions/trav00000001/screenshots/x",
+            "headers": [],
+            "path_params": {"id": "trav00000001", "filename": filename},
+            "query_string": b"",
+        }
+
+        async def _receive() -> dict[str, Any]:
+            return {"type": "http.disconnect"}
+
+        request = Request(scope, _receive)
+        response = await media_routes.session_screenshot_file(request)
+        assert response.status_code == 400
+        body = json.loads(response.body)
+        assert body["error"] == "invalid filename"

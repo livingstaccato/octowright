@@ -146,11 +146,5 @@ def test_delete_persona_raises_with_listing_hint(tmp_profiles_dir: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# profile_dir delegation
+# profile_dir delegation removed — see personas.engine_profile_dir directly.
 # ---------------------------------------------------------------------------
-
-
-def test_profile_dir_routes_through_persona_layout(tmp_profiles_dir: Path) -> None:
-    p = _profiles.profile_dir("webkit", "dante")
-    # Persona-first layout: <PROFILES>/<persona>/<kind>/
-    assert p == tmp_profiles_dir / "dante" / "webkit"

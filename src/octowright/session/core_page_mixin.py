@@ -109,6 +109,18 @@ class SessionPageMixin(SessionLike):
 
         If the closed page was active, switches to the first remaining page.
         Raises RuntimeError if this would close the last page.
+
+        Removal-before-await is intentional: Playwright's ``page.close``
+        fires its ``_on_page_close`` listener synchronously, and that
+        listener evaluates ``[p for p in session.pages if not p.is_closed()]``
+        to decide whether to cascade a full session eviction. If the closing
+        page is still in ``self.pages`` when the listener runs AND a sibling
+        page closes in the same tick (popup auto-close, concurrent close
+        race), the comprehension comes up empty and fires a spurious
+        eviction — then the post-await ``self.pages.index(self.page)`` here
+        raises ValueError on the cleared session. Pop first so the
+        listener's view always reflects the truth: this page is being
+        closed deliberately by us.
         """
         if len(self.pages) <= 1:
             raise RuntimeError("cannot close the last remaining page; use browser_close to shut the whole instance")
@@ -116,10 +128,14 @@ class SessionPageMixin(SessionLike):
             raise IndexError(f"page index {index} out of range (0..{len(self.pages) - 1})")
         target = self.pages[index]
         was_active = target is self.page
-        await target.close()
-        self.pages.pop(index)
+        # Reassign self.page BEFORE the pop so neither pop nor the
+        # synchronous _on_page_close ever sees self.page dangling at a
+        # popped index. The len(self.pages) > 1 guard above means a
+        # non-target sibling is always present when ``was_active``.
         if was_active:
-            self.page = self.pages[0]
+            self.page = next(p for p in self.pages if p is not target)
+        self.pages.pop(index)
+        await target.close()
         self.recorder.record("close_page", index=index, was_active=was_active)
         return {
             "closed_index": index,
