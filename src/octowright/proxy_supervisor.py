@@ -17,6 +17,7 @@ from mcp.shared.message import SessionMessage
 from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 
 from octowright import bridge_state, singleton
+from octowright._trace_propagation import tracing_httpx_client_factory
 from octowright._tracing import counter, span
 from octowright.defaults import (
     BRIDGE_CONNECT_TIMEOUT_SECONDS,
@@ -236,7 +237,13 @@ async def run_supervised_proxy(
                     remote_url = resolve_leader_url(leader_mcp_url)
                     try:
                         with anyio.fail_after(BRIDGE_CONNECT_TIMEOUT_SECONDS):
-                            async with streamablehttp_client(remote_url) as (remote_read, remote_write, get_sid):
+                            # Custom factory installs a request hook that
+                            # injects W3C traceparent so the leader's spans
+                            # chain under the follower's bridge span.
+                            async with streamablehttp_client(
+                                remote_url,
+                                httpx_client_factory=tracing_httpx_client_factory(),
+                            ) as (remote_read, remote_write, get_sid):
                                 remote_write_box["remote_write"] = remote_write
                                 try:
                                     supervisor_obj.remote_session_id = get_sid()

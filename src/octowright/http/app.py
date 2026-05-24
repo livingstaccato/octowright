@@ -76,7 +76,12 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette
 
         _session_tracker = McpSessionTracker()
         tracked_app = McpSessionTrackingMiddleware(mcp_app, _session_tracker)
-        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(tracked_app, host=host)))
+        # Extract incoming W3C traceparent so spans the leader opens chain
+        # under the follower's bridge span. No-ops when OTel is off.
+        from octowright._trace_propagation import TraceContextExtractionMiddleware
+
+        traced_app = TraceContextExtractionMiddleware(tracked_app)
+        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(traced_app, host=host)))
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
 
