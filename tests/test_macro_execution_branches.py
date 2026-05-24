@@ -179,6 +179,10 @@ class _FakeSession:
         self.page = MagicMock()
         self.page.evaluate = AsyncMock()
         self.diagnostic_bundle = AsyncMock(return_value={"url": "https://x", "title": "t"})
+        # SessionLike attrs accessed by run_macro / dispatch_simple for span
+        # + log tagging; previously masked by getattr(..., None) defaults.
+        self.instance_id = "fake-instance"
+        self.kind = "chromium"
 
 
 @pytest.fixture

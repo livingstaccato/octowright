@@ -256,6 +256,69 @@ class TestInstallSignalHandlers:
         assert installed_signals == []
         assert installed_handlers == []
 
+    def test_add_signal_handler_failure_is_logged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """add_signal_handler raising NotImplementedError → log.warning emitted.
+
+        Silent swallow would hide SIGTERM/SIGINT setup failures from
+        operators on platforms where the loop refuses to register, so the
+        daemon wouldn't shut down cleanly with no visible signal.
+        """
+        loop = MagicMock()
+        loop.add_signal_handler.side_effect = NotImplementedError("loop refuses")
+        mcp_task = MagicMock()
+        # Make the signal.signal fallback succeed so we isolate the loop-path log.
+        monkeypatch.setattr(signal, "getsignal", lambda _sig: None)
+        monkeypatch.setattr(signal, "signal", lambda _sig, _h: None)
+
+        warnings_captured: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            _serve,
+            "_log",
+            MagicMock(warning=lambda event, **kw: warnings_captured.append((event, kw))),
+        )
+
+        _serve._install_leader_signal_handlers(loop, mcp_task, discoverable=True)
+
+        loop_failed = [
+            (event, kw) for event, kw in warnings_captured if event == "octowright.serve.signal_handler_register_failed"
+        ]
+        assert loop_failed, f"expected loop-register warning, got: {warnings_captured!r}"
+        # At least one warning should mention the NotImplementedError repr.
+        assert any("NotImplementedError" in (kw.get("error") or "") for _e, kw in loop_failed)
+
+    def test_signal_signal_fallback_failure_is_logged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """signal.signal fallback raising OSError → second log.warning emitted.
+
+        Without this log line the fallback path also swallowed silently,
+        leaving an operator with no signal install AND no error trail.
+        """
+        loop = MagicMock()
+        loop.add_signal_handler.side_effect = NotImplementedError
+        mcp_task = MagicMock()
+        monkeypatch.setattr(signal, "getsignal", lambda _sig: None)
+
+        def explode(_sig: Any, _h: Any) -> Any:
+            raise OSError("nope")
+
+        monkeypatch.setattr(signal, "signal", explode)
+
+        warnings_captured: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            _serve,
+            "_log",
+            MagicMock(warning=lambda event, **kw: warnings_captured.append((event, kw))),
+        )
+
+        _serve._install_leader_signal_handlers(loop, mcp_task, discoverable=True)
+
+        # Two warnings expected per signal we tried: the loop add failure and
+        # the fallback signal.signal failure. At minimum we want the fallback
+        # event name to appear so the swallow is no longer silent.
+        events = [event for event, _kw in warnings_captured]
+        assert "octowright.serve.signal_handler_fallback_failed" in events, (
+            f"expected fallback-failed warning, got: {warnings_captured!r}"
+        )
+
 
 # ─── _uninstall_leader_signal_handlers ───────────────────────────────────────
 

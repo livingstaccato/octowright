@@ -15,7 +15,6 @@ from octowright.http import state
 from octowright.http.dashboard_events import publish_dashboard_invalidation
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _read_json_body
-from octowright.server import _state
 
 
 async def list_scenarios(_request: Request) -> JSONResponse:
@@ -27,7 +26,7 @@ async def list_scenarios(_request: Request) -> JSONResponse:
     """
     from octowright.scenarios import list_scenarios as _list_disk
 
-    spool = _state.scenario_pool
+    spool = state.scenario_pool
     return JSONResponse({"live": spool.list_live(), "saved": _list_disk()})
 
 
@@ -40,8 +39,8 @@ async def scenario_start_endpoint(request: Request) -> JSONResponse:
     participant browser fails to launch (with the spawn_roster error list).
     """
     name = request.path_params["name"]
-    spool = _state.scenario_pool
-    pool = _state.pool
+    spool = state.scenario_pool
+    pool = state.pool
     try:
         live = await spool.start(name=name, browser_pool=pool)
     except FileNotFoundError as e:
@@ -75,8 +74,8 @@ async def scenario_start_endpoint(request: Request) -> JSONResponse:
 async def scenario_stop_endpoint(request: Request) -> JSONResponse:
     """DELETE /api/scenarios/{id} — stop a live scenario."""
     sid = request.path_params["id"]
-    spool = _state.scenario_pool
-    pool = _state.pool
+    spool = state.scenario_pool
+    pool = state.pool
     if not spool.has_live(sid):
         return JSONResponse(
             {"error": f"no live scenario with id {sid!r}"},
@@ -111,8 +110,8 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
     if not isinstance(args, dict):
         return JSONResponse({"error": "args must be a JSON object"}, status_code=400)
 
-    spool = _state.scenario_pool
-    pool = _state.pool
+    spool = state.scenario_pool
+    pool = state.pool
     if not spool.has_live(sid):
         return JSONResponse(
             {"error": f"no live scenario with id {sid!r}"},

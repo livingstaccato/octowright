@@ -567,3 +567,61 @@ class TestScreenshotsListing:
         assert response.status_code == 400
         body = json.loads(response.body)
         assert body["error"] == "invalid filename"
+
+    @pytest.mark.asyncio
+    async def test_screenshot_file_passes_resolved_path_to_file_response(
+        self,
+        isolated_recordings: Path,
+        empty_pool: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TOCTOU regression: FileResponse must receive the already-validated
+        ``resolved`` path, not the pre-resolve ``target``. Without this, a
+        symlink swap between the containment check and FileResponse's
+        ``open()`` could redirect to a file outside the recordings root."""
+        from starlette.requests import Request
+
+        from octowright.http.routes import media as media_routes
+
+        _write_recording(isolated_recordings, "regr00000001")
+        shot_path = isolated_recordings / "regr00000001-shot.png"
+        shot_path.write_bytes(_TINY_PNG)
+
+        captured: dict[str, Any] = {}
+
+        class _FakeFileResponse:
+            def __init__(self, path: str, **kwargs: Any) -> None:
+                captured["path"] = path
+                captured["kwargs"] = kwargs
+                self.status_code = 200
+                self.body = b""
+
+        monkeypatch.setattr(media_routes, "FileResponse", _FakeFileResponse)
+
+        scope: dict[str, Any] = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/sessions/regr00000001/screenshots/regr00000001-shot.png",
+            "headers": [],
+            "path_params": {
+                "id": "regr00000001",
+                "filename": "regr00000001-shot.png",
+            },
+            "query_string": b"",
+        }
+
+        async def _receive() -> dict[str, Any]:
+            return {"type": "http.disconnect"}
+
+        request = Request(scope, _receive)
+        await media_routes.session_screenshot_file(request)
+
+        # The path passed must equal Path.resolve() of the target. Pin against
+        # the resolved form so a future regression to ``str(target)`` (the
+        # unresolved path) is caught.
+        assert "path" in captured, "FileResponse was not invoked"
+        passed_path = Path(captured["path"])
+        assert passed_path == shot_path.resolve(), (
+            f"FileResponse got {passed_path} but expected the resolved path {shot_path.resolve()}; "
+            "passing the unresolved path leaves a TOCTOU window for a symlink swap."
+        )
