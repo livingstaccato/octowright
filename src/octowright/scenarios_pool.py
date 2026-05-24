@@ -163,7 +163,7 @@ class ScenarioPool:
         with span(
             "octowright.scenario.start",
             scenario_id=scenario_id,
-            name=effective_name,
+            scenario_name=effective_name,
             participants=len(spec.participants),
         ):
             result = await browser_pool.spawn_roster([resolve_launch_kwargs(p) for p in spec.participants])
