@@ -15,7 +15,7 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
-from octowright._tracing import set_attrs
+from octowright._tracing import set_attrs, span
 from octowright.browser_pool._metrics import LAUNCH_DURATION, LAUNCHED, launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure, cleanup_unregistered_launch
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
@@ -33,10 +33,7 @@ from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listene
 from octowright.browser_pool.options import LaunchOptions
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
-from octowright.browser_pool.visuals import (
-    _tile_args_for_chromium,
-    wire_init_scripts,
-)
+from octowright.browser_pool.visuals import _tile_args_for_chromium, wire_init_scripts
 from octowright.defaults import DEFAULT_URL, HEADLESS_DEFAULT, RECORDINGS_DIR
 from octowright.recorder import Recorder, new_log_path
 from octowright.session import BrowserSession
@@ -377,35 +374,37 @@ class BrowserPool:
 
     async def relaunch_fluid(self, instance_id: str) -> dict[str, Any]:
         source = self.get(instance_id)
-        target_url = getattr(source.page, "url", None) or source.url
-        session_scoped = source.profile is None and source.user_data_dir is not None
-        stateless = source.profile is None and source.user_data_dir is None
-        # Don't overwrite the prior HAR — relaunch gets a sibling path.
-        next_har = next_har_path(source.har_path) if source.har_path else None
-        launch_kwargs = {
-            "kind": source.kind,
-            "url": target_url,
-            "headed": True,
-            "label": source.label,
-            "profile": source.profile,
-            "stabilize": source.stabilize,
-            "trace": source.trace,
-            "har": bool(source.har_path),
-            "har_path": str(next_har) if next_har else None,
-            "badge": True,
-            "ephemeral": stateless,
-            "session": session_scoped,
-        }
-        close_result = await self.close(instance_id)
-        result = await self.launch(**launch_kwargs)
-        return {
-            "ok": True,
-            "old_instance_id": instance_id,
-            "new_instance_id": result["instance_id"],
-            "old_closed": bool(close_result.get("closed")),
-            "mode": "fluid",
-            "launch": result,
-        }
+        # Wrap close+launch under a parent span so the child browser.close /
+        # browser.launch spans nest underneath as one fluid-mode round-trip.
+        with span("octowright.browser.relaunch_fluid", instance_id=instance_id, kind=source.kind):
+            target_url = getattr(source.page, "url", None) or source.url
+            session_scoped = source.profile is None and source.user_data_dir is not None
+            stateless = source.profile is None and source.user_data_dir is None
+            # Don't overwrite the prior HAR — relaunch gets a sibling path.
+            next_har = next_har_path(source.har_path) if source.har_path else None
+            close_result = await self.close(instance_id)
+            result = await self.launch(
+                kind=source.kind,
+                url=target_url,
+                headed=True,
+                label=source.label,
+                profile=source.profile,
+                stabilize=source.stabilize,
+                trace=source.trace,
+                har=bool(source.har_path),
+                har_path=str(next_har) if next_har else None,
+                badge=True,
+                ephemeral=stateless,
+                session=session_scoped,
+            )
+            return {
+                "ok": True,
+                "old_instance_id": instance_id,
+                "new_instance_id": result["instance_id"],
+                "old_closed": bool(close_result.get("closed")),
+                "mode": "fluid",
+                "launch": result,
+            }
 
     def profile_in_use(self, kind: str, profile: str) -> bool:
         return any(s.kind == kind and s.profile == profile for s in tuple(self._sessions.values()))

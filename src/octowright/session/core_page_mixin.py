@@ -10,6 +10,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from octowright._tracing import histogram, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
@@ -32,6 +33,23 @@ _NAVIGATE_DURATION = histogram(
 # is used by tests for in-memory launches and is reasonable for the
 # operator-controlled launch URL; it cannot read local files.
 _NAV_DENIED_SCHEMES = frozenset({"file", "javascript", "chrome", "chrome-extension", "view-source"})
+
+
+def _sanitize_url_for_span(url: str) -> str:
+    """Strip the query string from ``url`` before stamping it as a span attribute.
+
+    Query strings on navigation targets routinely carry session tokens, signed
+    URLs, account IDs, and other PII that we do not want to land in traces /
+    exporter backends. The full URL still goes to ``self.url`` and the
+    recorder's ``navigate`` event — only the span attribute is sanitized.
+
+    Falls back to the original value if parsing fails for any reason; the
+    sanitization is best-effort and must never block a navigation.
+    """
+    try:
+        return urlsplit(url)._replace(query="").geturl()
+    except Exception:
+        return url
 
 
 def _reject_unsafe_url(url: str) -> None:
@@ -115,7 +133,12 @@ class SessionPageMixin(SessionLike):
         instance_id = getattr(self, "instance_id", None)
         kind = getattr(self, "kind", None)
         t0 = time.perf_counter()
-        with span("octowright.session.navigate", instance_id=instance_id, kind=kind, url=url):
+        with span(
+            "octowright.session.navigate",
+            instance_id=instance_id,
+            kind=kind,
+            url=_sanitize_url_for_span(url),
+        ):
             # Tag the upcoming framenavigated event so pool's user_navigation
             # listener skips it (we already record "navigate" below).
             prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)

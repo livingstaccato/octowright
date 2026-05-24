@@ -663,3 +663,177 @@ class TestRespawnIfLeaderGone:
         monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: captured.append(text))
         await _serve._respawn_if_leader_gone(http_host=None, http_port=None, idle_grace=None)
         spawn_daemon.assert_called_once()
+
+
+# ─── Probe-then-recheck race-window correctness ─────────────────────────────
+#
+# The lock is released across probe_http_alive() so concurrent followers don't
+# serialise on a 2-second HTTP call. The double-check under the lock prevents
+# the race where two followers both observe "no live leader" outside the lock
+# and both spawn daemons. We assert by tracking lock state during the probe.
+
+
+class TestEnsureLeaderProbeOutsideLock:
+    @pytest.mark.anyio
+    async def test_live_leader_does_not_acquire_lock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Happy path: live leader → return immediately, election lock never entered."""
+        import contextlib as _ctxlib
+
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        lock_entered: list[bool] = []
+
+        @_ctxlib.asynccontextmanager
+        async def tracking_lock(*_a: Any, **_kw: Any) -> Any:
+            lock_entered.append(True)
+            yield
+
+        import octowright.singleton as _sn_mod
+
+        monkeypatch.setattr(_sn_mod, "async_election_lock", tracking_lock)
+        _patch_sn_daemon(
+            monkeypatch,
+            read_lock=lambda: info,
+            is_stale=lambda _i: False,
+            probe_http_alive=AsyncMock(return_value=True),
+            spawn_daemon=MagicMock(side_effect=AssertionError("must not spawn")),
+            wait_for_daemon=AsyncMock(),
+        )
+        result = await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
+        assert result is info
+        # The lock was NEVER acquired — probe happened outside.
+        assert lock_entered == []
+
+    @pytest.mark.anyio
+    async def test_probe_happens_before_lock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Order: probe → (no leader) → lock → recheck → spawn."""
+        import contextlib as _ctxlib
+
+        order: list[str] = []
+
+        @_ctxlib.asynccontextmanager
+        async def tracking_lock(*_a: Any, **_kw: Any) -> Any:
+            order.append("lock-enter")
+            yield
+            order.append("lock-exit")
+
+        import octowright.singleton as _sn_mod
+
+        monkeypatch.setattr(_sn_mod, "async_election_lock", tracking_lock)
+
+        def fake_read_lock() -> Any:
+            order.append("read")
+            return None
+
+        async def fake_probe(_info: Any, timeout: float = 2.0) -> bool:
+            order.append("probe")
+            return False
+
+        spawn = MagicMock(side_effect=lambda **_kw: order.append("spawn"))
+        _patch_sn_daemon(
+            monkeypatch,
+            read_lock=fake_read_lock,
+            is_stale=lambda _i: False,
+            probe_http_alive=fake_probe,
+            spawn_daemon=spawn,
+            wait_for_daemon=AsyncMock(return_value=SimpleNamespace(mcp_url="x")),
+        )
+        await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
+        # First read happens BEFORE the lock is taken — confirming probe-outside-lock.
+        assert order[0] == "read"
+        assert order.index("lock-enter") > 0
+        # Spawn happens inside the lock, before exit.
+        assert order.index("spawn") < order.index("lock-exit")
+
+    @pytest.mark.anyio
+    async def test_race_window_recheck_finds_now_live_leader(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Outside probe: no leader. Inside lock: another process spawned one.
+
+        This is exactly the race the recheck-under-lock pattern exists to fix.
+        Without the recheck, both followers would spawn duplicate daemons.
+        """
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        # First read (outside lock): no leader. Second read (under lock): a leader exists.
+        reads = [None, info]
+
+        def fake_read_lock() -> Any:
+            return reads.pop(0)
+
+        # Probe: first call (outside lock) only fires when read returned non-None,
+        # so it's the *recheck* call that gets True. We track all calls.
+        probe_calls: list[Any] = []
+
+        async def fake_probe(probed_info: Any, timeout: float = 2.0) -> bool:
+            probe_calls.append(probed_info)
+            return probed_info is info  # only the recheck (info) returns alive
+
+        spawn = MagicMock(side_effect=AssertionError("must not spawn — recheck saw live leader"))
+        _patch_sn_daemon(
+            monkeypatch,
+            read_lock=fake_read_lock,
+            is_stale=lambda _i: False,
+            probe_http_alive=fake_probe,
+            spawn_daemon=spawn,
+            wait_for_daemon=AsyncMock(),
+        )
+        result = await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
+        assert result is info
+        spawn.assert_not_called()
+
+
+class TestRespawnProbeOutsideLock:
+    @pytest.mark.anyio
+    async def test_live_leader_does_not_acquire_lock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Outside probe alive → return immediately, never acquire the lock."""
+        import contextlib as _ctxlib
+
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        lock_entered: list[bool] = []
+
+        @_ctxlib.asynccontextmanager
+        async def tracking_lock(*_a: Any, **_kw: Any) -> Any:
+            lock_entered.append(True)
+            yield
+
+        import octowright.singleton as _sn_mod
+
+        monkeypatch.setattr(_sn_mod, "async_election_lock", tracking_lock)
+        _patch_sn_daemon(
+            monkeypatch,
+            read_lock=lambda: info,
+            is_stale=lambda _i: False,
+            probe_http_alive=AsyncMock(return_value=True),
+            spawn_daemon=MagicMock(side_effect=AssertionError("must not spawn")),
+            wait_for_daemon=AsyncMock(),
+        )
+        captured: list[str] = []
+        monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: captured.append(text))
+        await _serve._respawn_if_leader_gone(http_host=None, http_port=None, idle_grace=None)
+        assert lock_entered == []
+        assert any("still healthy" in line for line in captured)
+
+    @pytest.mark.anyio
+    async def test_race_window_recheck_finds_now_live_leader(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Outside: no leader. Under lock: someone else already respawned one."""
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        reads = [None, info]
+
+        def fake_read_lock() -> Any:
+            return reads.pop(0)
+
+        async def fake_probe(probed_info: Any, timeout: float = 2.0) -> bool:
+            return probed_info is info
+
+        spawn = MagicMock(side_effect=AssertionError("must not spawn — recheck saw live leader"))
+        _patch_sn_daemon(
+            monkeypatch,
+            read_lock=fake_read_lock,
+            is_stale=lambda _i: False,
+            probe_http_alive=fake_probe,
+            spawn_daemon=spawn,
+            wait_for_daemon=AsyncMock(),
+        )
+        captured: list[str] = []
+        monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: captured.append(text))
+        await _serve._respawn_if_leader_gone(http_host=None, http_port=None, idle_grace=None)
+        spawn.assert_not_called()
+        assert any("still healthy" in line for line in captured)

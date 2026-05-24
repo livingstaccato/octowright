@@ -217,28 +217,23 @@ async def _ensure_leader_or_inline(
     http_port: int | None,
     idle_grace: float | None,
 ) -> Any:
-    """Find or spawn a daemon leader. Returns the leader info, OR None if
-    we ended up running the leader inline as a fallback (caller should
-    return immediately in that case)."""
+    """Find or spawn a daemon leader. Returns leader info, OR None when
+    we fell back to running the leader inline (caller returns immediately)."""
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
-    # Serialise the election decision so two simultaneous starters cannot
-    # both observe "no live leader" and both spawn a daemon. The lock is
-    # held only across the probe+spawn window; wait_for_daemon polls without
-    # holding it so a successful spawn can be observed by other waiters.
+    # Probe outside the lock; recheck under it to avoid duplicate spawn.
+    if (found := await _probe_alive_leader(_sn)) is not None:
+        return found
     async with _sn.async_election_lock():
-        existing = _sn.read_lock()
-        leader_alive = existing is not None and not _sn.is_stale(existing) and await _sn.probe_http_alive(existing)
-        if leader_alive:
-            return existing
+        if (found := await _probe_alive_leader(_sn)) is not None:
+            return found
         click.echo("octowright: no live leader; spawning daemon", err=True)
         _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
     spawned = await _daemon.wait_for_daemon()
     if spawned is None:
-        # Daemon didn't come up in time — fall back to running leader inline
-        # so the user at least gets a working server (browsers will die on
-        # this process's exit, but that's better than no service at all).
+        # Daemon didn't come up — run leader inline so the user at least gets
+        # a working server (browsers die on this process's exit).
         click.echo("octowright: daemon spawn timed out; running leader inline", err=True)
         await _run_leader(**leader_kwargs, no_singleton=False)
         return None
@@ -255,17 +250,23 @@ async def _bridge_to_leader(leader_info: Any) -> None:
         click.echo("octowright: leader bridge closed; checking daemon", err=True)
 
 
+async def _probe_alive_leader(sn: Any) -> Any | None:
+    """Return LeaderInfo iff lockfile + HTTP probe both confirm live."""
+    info = sn.read_lock()
+    return info if info and not sn.is_stale(info) and await sn.probe_http_alive(info) else None
+
+
 async def _respawn_if_leader_gone(*, http_host: str | None, http_port: int | None, idle_grace: float | None) -> None:
     """After the bridge ends: if the leader is genuinely gone, spawn a
-    replacement daemon and exit. We don't run leader inline here — we'd
-    just die with the parent's next signal. One spawn attempt is enough."""
+    replacement daemon and exit. One spawn attempt is enough."""
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
+    if await _probe_alive_leader(_sn) is not None:
+        click.echo("octowright: leader still healthy, exiting", err=True)
+        return
     async with _sn.async_election_lock():
-        recheck = _sn.read_lock()
-        still_alive = recheck is not None and not _sn.is_stale(recheck) and await _sn.probe_http_alive(recheck)
-        if still_alive:
+        if await _probe_alive_leader(_sn) is not None:
             click.echo("octowright: leader still healthy, exiting", err=True)
             return
         click.echo("octowright: leader is gone; spawning replacement daemon", err=True)

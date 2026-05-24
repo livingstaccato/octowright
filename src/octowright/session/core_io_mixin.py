@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import importlib
 import json
 import re
@@ -62,7 +63,7 @@ class SessionIOMixin(SessionLike):
 
             if isinstance(payload, bytes | bytearray | memoryview):
                 payload_bytes = bytes(payload)
-                payload_b64 = __import__("base64").b64encode(payload_bytes).decode("ascii")
+                payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
                 if normalized_size is None:
                     normalized_size = len(payload_bytes)
             elif isinstance(payload, str) and _looks_like_binary_text(payload):
@@ -72,7 +73,7 @@ class SessionIOMixin(SessionLike):
                     decoded = None
                 if isinstance(decoded, bytes | bytearray | memoryview):
                     decoded_bytes = bytes(decoded)
-                    payload_b64 = __import__("base64").b64encode(decoded_bytes).decode("ascii")
+                    payload_b64 = base64.b64encode(decoded_bytes).decode("ascii")
                     if normalized_size is None:
                         normalized_size = len(decoded_bytes)
                 else:
@@ -108,8 +109,13 @@ class SessionIOMixin(SessionLike):
             self._websocket_last_flush_ts = time.monotonic()
             self._websocket_frames_since_flush = 0
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        frames = getattr(self, "_websocket_frames_since_flush", 0) + 1
-        last_flush = getattr(self, "_websocket_last_flush_ts", 0.0) or time.monotonic()
+        # Both fields are dataclass attributes initialized to 0 / 0.0 and
+        # are set to live values in the `fh is None` branch above before we
+        # ever reach this point, so direct attribute access is safe. The
+        # previous getattr / `or time.monotonic()` defensive style masked
+        # any future regression that broke the init invariant.
+        frames = self._websocket_frames_since_flush + 1
+        last_flush = self._websocket_last_flush_ts
         now = time.monotonic()
         if frames >= WEBSOCKET_CACHE_FLUSH_FRAMES or (now - last_flush) >= WEBSOCKET_CACHE_FLUSH_SECONDS:
             fh.flush()
@@ -298,14 +304,14 @@ class SessionIOMixin(SessionLike):
 
         def _serialise_binary_payload(payload: Any) -> str | None:
             if isinstance(payload, bytes | bytearray | memoryview):
-                return __import__("base64").b64encode(bytes(payload)).decode("ascii")
+                return base64.b64encode(bytes(payload)).decode("ascii")
             if isinstance(payload, str) and _looks_like_binary_text(payload):
                 try:
                     decoded = ast.literal_eval(payload)
                 except Exception:
                     return None
                 if isinstance(decoded, bytes | bytearray | memoryview):
-                    return __import__("base64").b64encode(bytes(decoded)).decode("ascii")
+                    return base64.b64encode(bytes(decoded)).decode("ascii")
             return None
 
         if not hasattr(websocket, "on"):

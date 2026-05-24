@@ -156,9 +156,13 @@ async def test_live_pid_but_dead_http_spawns_replacement_daemon(
         mcp_url=f"http://127.0.0.1:{wedged_port}/mcp/",
         started_at=0.0,
     )
-    reads = [wedged]
+    # Two wedged reads (outside-lock probe + under-lock recheck both see the
+    # wedged leader still in the lockfile), then the daemon info once it's
+    # spawned. Two False probe results (wedged stays unresponsive across the
+    # recheck), then True (daemon is healthy).
+    reads = [wedged, wedged]
     daemon = _DAEMON_INFO
-    probe_results = [False]  # first probe: wedged-False; later: True (daemon healthy)
+    probe_results = [False, False]
 
     def reads_then_daemon() -> singleton.LeaderInfo | None:
         if reads:
@@ -211,8 +215,10 @@ async def test_follower_spawns_replacement_when_leader_dies_during_session(
         started_at=0.0,
     )
 
-    # State machine: first read returns the live leader; second (recheck) returns None.
-    reads: list[singleton.LeaderInfo | None] = [info, None]
+    # State machine: first read returns the live leader (for _ensure_leader_or_inline);
+    # subsequent reads return None (for _respawn_if_leader_gone, which now reads
+    # twice — once outside the lock and once under it for double-checked locking).
+    reads: list[singleton.LeaderInfo | None] = [info, None, None]
     monkeypatch.setattr(singleton, "read_lock", lambda: reads.pop(0))
 
     async def fake_probe(_info: Any, timeout: float = 2.0) -> bool:

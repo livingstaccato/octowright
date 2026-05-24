@@ -143,6 +143,38 @@ async def probe_http_alive(info: LeaderInfo, timeout: float = 2.0) -> bool:
         return False
 
 
+def _election_paths(path: Path) -> Path:
+    """Return the sibling ``.election`` lock path, creating its parent dir."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.with_suffix(path.suffix + ".election")
+
+
+def _try_flock(fh: Any) -> bool:
+    """Attempt a non-blocking exclusive flock. Return True on success.
+
+    Imported here to keep the import surface narrow and isolate the
+    fcntl-on-Windows guard at the call sites (we don't reach this when
+    ``os.name == 'nt'``).
+    """
+    import fcntl
+
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _release_flock(fh: Any) -> None:
+    """Best-effort flock release; swallow OSError during teardown."""
+    import fcntl
+
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
 @contextlib.contextmanager
 def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[None]:
     """Synchronous leader-election lock.
@@ -150,34 +182,28 @@ def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[
     Kept for non-async callers; the async path should use
     :func:`async_election_lock` instead so the event loop isn't blocked
     by the ``time.sleep`` back-off on contention.
+
+    Implementation shares the open/flock loop with :func:`async_election_lock`
+    so a timeout-logic change applied to one automatically applies to both.
+    Only the sleep primitive differs: sync uses ``time.sleep``; async uses
+    ``anyio.sleep``.
     """
     if os.name == "nt":
         yield
         return
-    import fcntl
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    election_path = path.with_suffix(path.suffix + ".election")
+    election_path = _election_paths(path)
     deadline = time.monotonic() + timeout
     fh = election_path.open("a+", encoding="utf-8")
     try:
-        while True:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(
-                        f"timed out waiting {timeout:.1f}s for election lock at {election_path}"
-                    ) from None
-                time.sleep(0.05)
+        while not _try_flock(fh):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"timed out waiting {timeout:.1f}s for election lock at {election_path}") from None
+            time.sleep(0.05)
         try:
             yield
         finally:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
+            _release_flock(fh)
     finally:
         fh.close()
 
@@ -190,34 +216,26 @@ async def async_election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) 
     event loop. On Windows (no ``fcntl``) the lock is a no-op; concurrent
     election is theoretically possible there but rare and self-corrects
     via the PID + HTTP probe.
+
+    Shares ``_try_flock`` / ``_release_flock`` with :func:`election_lock`
+    so the acquire/release semantics stay in lock-step across the two.
     """
     if os.name == "nt":
         yield
         return
-    import fcntl
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    election_path = path.with_suffix(path.suffix + ".election")
+    election_path = _election_paths(path)
     deadline = time.monotonic() + timeout
     fh = election_path.open("a+", encoding="utf-8")
     try:
-        while True:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(
-                        f"timed out waiting {timeout:.1f}s for election lock at {election_path}"
-                    ) from None
-                await anyio.sleep(0.05)
+        while not _try_flock(fh):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"timed out waiting {timeout:.1f}s for election lock at {election_path}") from None
+            await anyio.sleep(0.05)
         try:
             yield
         finally:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
+            _release_flock(fh)
     finally:
         fh.close()
 

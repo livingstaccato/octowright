@@ -177,16 +177,57 @@ Tracing and metrics are emitted via `provide.telemetry`. Logs are always structu
 
 ### Spans
 
-Emitted at: `octowright.browser.launch`, `octowright.browser.spawn_roster`, `octowright.session.navigate`, `octowright.session.close`, `octowright.macro.run`, `octowright.macro.action`, `octowright.bridge.forward_rpc`. Each span carries `instance_id`, `kind`, `profile`, `label` (where applicable). Macros nest under their `run_macro` parent so `macro.run_sequence` renders as a clean tree.
+Span names follow the `octowright.<area>.<verb>` convention. The list below is alphabetized for stability — order has no semantic meaning. Per-span attributes vary; only the attributes actually set at the span call site are listed (callers may add more via `set_attrs` mid-span).
+
+| Span | Attributes | Emitted by |
+|------|------------|------------|
+| `octowright.bridge.forward_rpc` | `method`, `request_id` | `proxy_supervisor.forward_rpc` (follower leg) |
+| `octowright.browser.handoff` | `instance_id`, `kind`, `close_original` | `browser_pool/lifecycle.handoff_browser` |
+| `octowright.browser.launch` | `kind` | `browser_pool/_metrics.launch_span` (wraps `pool.launch`) |
+| `octowright.browser.relaunch_fluid` | `instance_id`, `kind` | `browser_pool/pool.relaunch_fluid` |
+| `octowright.browser.spawn_roster` | `roster_size` | `browser_pool/roster.browser_spawn_roster` |
+| `octowright.macro.action` | `action`, `instance_id` | `macros/runtime.dispatch_simple` |
+| `octowright.macro.run` | `macro`, `instance_id`, `kind` | `macros/execution.run_macro` |
+| `octowright.macro.run_sequence` | `names_count`, `stop_on_failure` | `macros/execution.run_sequence` |
+| `octowright.mcp.request` | `method`, `path` | `_trace_propagation.TraceContextExtractionMiddleware` (leader leg, ends on `http.response.start`) |
+| `octowright.scenario.run_macro` | `scenario`, `macro` | `server/scenarios.scenario_run_macro` |
+| `octowright.scenario.start` | `scenario` | `server/scenarios.scenario_start` |
+| `octowright.session.close` | `instance_id`, `kind` | `session/core_ops_mixin.SessionOpsMixin.close` |
+| `octowright.session.navigate` | `instance_id`, `kind`, `url` | `session/core_page_mixin.SessionPageMixin.navigate` |
+
+`macro.action` spans nest under their `macro.run` parent, which (when invoked from `macro_run_sequence`) nests under `macro.run_sequence`, so a multi-step macro run renders as a clean tree.
+
+### Trace context propagation across the bridge
+
+The follower→leader chain is glued together by the W3C `traceparent` header. On the follower side, `proxy_supervisor.forward_rpc` opens its `octowright.bridge.forward_rpc` span and hands the underlying MCP `streamablehttp_client` an httpx factory from `_trace_propagation.tracing_httpx_client_factory`; that factory registers a per-request hook (`_inject_traceparent_hook`) that calls the OTel propagator to inject `traceparent` (and `tracestate`) into every outgoing HTTP request. On the leader side, `_trace_propagation.TraceContextExtractionMiddleware` runs as ASGI middleware in front of the HTTP-MCP app: it extracts the propagated context from request headers, attaches it via `opentelemetry.context.attach`, then opens the per-request `octowright.mcp.request` span. Any spans started while the leader handles the request — including spans inside `@mcp.tool` handlers like `browser.launch` or `macro.run` — chain under the follower's `bridge.forward_rpc` span. The `mcp.request` span ends as soon as `http.response.start` is sent (not on body completion) to avoid filling the OTel batch-exporter buffer with long-lived SSE streams.
 
 ### Metrics
 
-- Counters: `octowright_browser_launched_total{kind}`, `octowright_browser_closed_total{kind}`, `octowright_browser_launch_failed_total{kind,error}`, `octowright_browser_evicted_total{kind}`, `octowright_macro_run_total{macro,status}`, `octowright_bridge_reconnect_total{reason}`, `octowright_bridge_rpc_total{method}`.
-- Histograms: `octowright_browser_launch_duration_seconds{kind}`, `octowright_macro_run_duration_seconds{macro}`, `octowright_session_navigate_duration_seconds{kind}`.
+| Instrument | Type | Labels | Description |
+|------------|------|--------|-------------|
+| `octowright_browser_launched_total` | counter | `kind` | Browsers launched (recorded after registration). |
+| `octowright_browser_closed_total` | counter | `kind` | Browser sessions closed cleanly via `session.close()`. |
+| `octowright_browser_launch_failed_total` | counter | `kind`, `error` | Failed launches. `error` is the exception class name. |
+| `octowright_browser_evicted_total` | counter | `kind` | Browsers removed from the pool by an external close signal (not `pool.close`). |
+| `octowright_macro_run_total` | counter | `macro`, `status` | Macro runs (`status` is `ok`/`failed`). |
+| `octowright_bridge_reconnect_total` | counter | `reason` | Times the follower bridge reconnected to the leader. |
+| `octowright_bridge_rpc_total` | counter | `method` | JSON-RPC messages forwarded local→remote. |
+| `octowright_browser_launch_duration_seconds` | histogram (s) | `kind` | Time from `pool.launch()` entry to registered session. |
+| `octowright_macro_run_duration_seconds` | histogram (s) | `macro` | `run_macro` elapsed time including nested actions. |
+| `octowright_session_navigate_duration_seconds` | histogram (s) | `kind` | Duration of `session.navigate()` including `page.goto`. |
+| `octowright_bridge_rpc_duration_seconds` | histogram (s) | `method`, `outcome` | End-to-end follower→leader→follower RPC latency. |
+
+The `macro` label is capped at `OCTOWRIGHT_METRICS_MACRO_LABEL_CAP` distinct values (default 256); beyond the cap, names land in an `(overflow)` bucket so long-lived deployments don't unbound their time-series count. The `error` and `method` labels are intrinsically bounded by code paths; `kind` is bounded to the three browser engines plus `unknown`.
+
+There is intentionally no counter for the ws-cache batched flush — the flush is purely a transport optimization and its frequency is not a useful operational signal.
 
 ### Session log context
 
-`BrowserSession.__post_init__` calls `provide.telemetry.bind_context(octowright_instance_id=..., octowright_kind=..., octowright_profile=..., octowright_label=...)` so every log line emitted for the duration of that session auto-carries those fields. `session.close()` unbinds them. The MCP-tool wrappers that don't run inside a session just don't see these fields, which is the right behavior.
+On session creation, `BrowserSession.__post_init__` calls `provide.telemetry.bind_context(octowright_instance_id=..., octowright_kind=..., octowright_profile=..., octowright_label=...)`. Because `bind_context` writes to a contextvar, only the asyncio task that called `__post_init__` (typically the `browser_launch` tool handler) sees the binding — log lines emitted during that launch call carry the IDs automatically.
+
+Subsequent MCP tool calls (`browser_navigate`, `browser_click`, `macro_run`, etc.) run on different asyncio tasks and **do not** inherit this context. Those code paths must include `instance_id` explicitly on their structured-log calls; the existing call sites already do (`log.info("session.navigate", instance_id=..., url=...)` style). `session.close()` calls `unbind_telemetry_context()` for symmetry, but in practice the binding rarely outlives the launch task that set it.
+
+Spans, by contrast, always carry their attributes regardless of which task started them — that is the recommended way to attach session identity to telemetry that needs to survive across tool calls.
 
 ### Enabling export
 

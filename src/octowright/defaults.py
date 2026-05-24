@@ -11,6 +11,13 @@ from pathlib import Path
 
 from octowright.config_paths import user_cache_dir, user_config_dir, user_state_dir
 
+# Default OTel service name. Set as an env-var default (not a constant) so
+# provide.telemetry.setup_telemetry() picks it up via its env-driven
+# config, while still letting any user-supplied PROVIDE_TELEMETRY_SERVICE_NAME
+# win. defaults.py is imported by every CLI entrypoint via the modules
+# they load, so this lands before setup_telemetry() runs.
+os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
+
 DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://example.com")
 
 DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
@@ -119,6 +126,13 @@ BRIDGE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_BRIDGE_STATE", str(_STATE_DI
 # to see it. 0 disables. Override per-call via the `slowmo_ms` arg on
 # run_macro / macro_run / macro_run_sequence.
 MACRO_SLOWMO_MS = int(os.environ.get("OCTOWRIGHT_MACRO_SLOWMO_MS", "0"))
+
+# Cap on distinct macro-name label values applied to macro_run_total /
+# macro_run_duration_seconds metrics. Long-lived deployments with programmatic
+# macro generation could grow the per-label timeseries count without bound,
+# blowing up Prometheus storage. Once the cap is exceeded, additional names
+# collapse to a single ``"(overflow)"`` label so cardinality stays bounded.
+METRICS_MACRO_LABEL_CAP = int(os.environ.get("OCTOWRIGHT_METRICS_MACRO_LABEL_CAP", "256"))
 
 # HTTP debugger / dashboard sidecar — runs alongside the MCP stdio server when
 # `octowright serve` is invoked. Bind defaults to localhost only because the

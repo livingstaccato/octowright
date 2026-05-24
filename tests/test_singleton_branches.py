@@ -30,6 +30,8 @@ import pytest
 
 from octowright.singleton import (
     LeaderInfo,
+    async_election_lock,
+    election_lock,
     is_stale,
     make_leader_info,
     pid_is_alive,
@@ -362,3 +364,191 @@ class TestLockPathDefault:
         else:
             assert _sg.LOCK_PATH.parent == user_state_dir()
             assert _sg.LOCK_PATH.name == "octowright.lock"
+
+
+# ─── election_lock / async_election_lock ─────────────────────────────────────
+#
+# The shared core (_try_flock / _release_flock helpers) means a regression in
+# either ctx mgr's timeout/release logic gets caught by the symmetric tests
+# below. Skipped on Windows because the implementation no-ops there.
+
+
+_WINDOWS = os.name == "nt"
+
+
+@pytest.mark.skipif(_WINDOWS, reason="election_lock is a no-op on Windows (no fcntl)")
+class TestElectionLockSync:
+    def test_acquire_release_basic(self, tmp_path: Path) -> None:
+        """Plain acquire + release with no contention."""
+        lock_path = tmp_path / "lock"
+        with election_lock(lock_path, timeout=1.0):
+            # We're inside the lock — sibling .election file exists.
+            assert (tmp_path / "lock.election").exists()
+
+    def test_creates_parent_dir(self, tmp_path: Path) -> None:
+        """Missing parent dir is created."""
+        lock_path = tmp_path / "newdir" / "lock"
+        with election_lock(lock_path, timeout=1.0):
+            assert (tmp_path / "newdir" / "lock.election").exists()
+
+    def test_timeout_raises_when_held(self, tmp_path: Path) -> None:
+        """Lock held by another fh → TimeoutError after `timeout` elapses."""
+        import fcntl
+
+        lock_path = tmp_path / "lock"
+        election_path = tmp_path / "lock.election"
+        # Pre-acquire the flock in a separate fh to simulate contention.
+        holder = election_path.open("a+", encoding="utf-8")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(TimeoutError), election_lock(lock_path, timeout=0.1):
+                pass  # pragma: no cover
+        finally:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+            holder.close()
+
+
+@pytest.mark.skipif(_WINDOWS, reason="async_election_lock is a no-op on Windows (no fcntl)")
+class TestAsyncElectionLock:
+    @pytest.mark.anyio
+    async def test_acquire_release_basic(self, tmp_path: Path) -> None:
+        """Plain async acquire + release with no contention."""
+        lock_path = tmp_path / "lock"
+        async with async_election_lock(lock_path, timeout=1.0):
+            assert (tmp_path / "lock.election").exists()
+
+    @pytest.mark.anyio
+    async def test_contention_serialises_two_tasks(self, tmp_path: Path) -> None:
+        """Two concurrent tasks must run their critical sections sequentially."""
+        import anyio
+
+        lock_path = tmp_path / "lock"
+        order: list[str] = []
+
+        async def worker(name: str, hold_for: float) -> None:
+            async with async_election_lock(lock_path, timeout=5.0):
+                order.append(f"{name}-enter")
+                await anyio.sleep(hold_for)
+                order.append(f"{name}-exit")
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(worker, "a", 0.05)
+            # Tiny delay so 'a' enters first.
+            await anyio.sleep(0.01)
+            tg.start_soon(worker, "b", 0.0)
+
+        # 'b' must wait until 'a' fully releases — never interleaves.
+        assert order == ["a-enter", "a-exit", "b-enter", "b-exit"]
+
+    @pytest.mark.anyio
+    async def test_timeout_raises_when_held(self, tmp_path: Path) -> None:
+        """With another flock held, async caller raises TimeoutError."""
+        import fcntl
+
+        lock_path = tmp_path / "lock"
+        election_path = tmp_path / "lock.election"
+        holder = election_path.open("a+", encoding="utf-8")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(TimeoutError):
+                async with async_election_lock(lock_path, timeout=0.1):
+                    pass  # pragma: no cover
+        finally:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+            holder.close()
+
+    @pytest.mark.anyio
+    async def test_second_caller_waits_then_acquires(self, tmp_path: Path) -> None:
+        """When the first holder releases, the second caller acquires (no timeout)."""
+        import anyio
+
+        lock_path = tmp_path / "lock"
+        events: list[str] = []
+        first_entered = anyio.Event()
+        release_first = anyio.Event()
+
+        async def first() -> None:
+            async with async_election_lock(lock_path, timeout=5.0):
+                events.append("first-in")
+                first_entered.set()
+                await release_first.wait()
+                events.append("first-out")
+
+        async def second() -> None:
+            await first_entered.wait()
+            # First is holding — second should block until release.
+            async with async_election_lock(lock_path, timeout=5.0):
+                events.append("second-in")
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(first)
+            tg.start_soon(second)
+            await first_entered.wait()
+            # Give 'second' a chance to be blocked on the lock.
+            await anyio.sleep(0.1)
+            assert events == ["first-in"]  # second still waiting
+            release_first.set()
+
+        assert events == ["first-in", "first-out", "second-in"]
+
+
+@pytest.mark.skipif(_WINDOWS, reason="flock is unix-only")
+class TestReleaseFlockSwallowsOsError:
+    """The shared _release_flock helper must swallow OSError at teardown.
+
+    This protects the both-flavours-shared cleanup path so a closed fd or
+    similar race doesn't bubble out of the ctx mgr exit.
+    """
+
+    def test_oserror_swallowed_during_sync_release(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """fcntl.flock raising OSError on unlock is silently swallowed."""
+        import fcntl
+
+        from octowright import singleton as _sg
+
+        original_flock = fcntl.flock
+
+        def selective_flock(fd: int, op: int) -> int:
+            if op == fcntl.LOCK_UN:
+                raise OSError("simulated release failure")
+            return original_flock(fd, op)
+
+        monkeypatch.setattr(fcntl, "flock", selective_flock)
+        # Must not raise even though the unlock blows up.
+        with _sg.election_lock(tmp_path / "lock", timeout=1.0):
+            pass
+
+
+@pytest.mark.skipif(_WINDOWS, reason="election_lock is a no-op on Windows (no fcntl)")
+class TestSharedImplementationParity:
+    """Both lock ctx mgrs share the same acquire/release helpers, so they
+    must accept the same args and raise the same exception class."""
+
+    def test_both_accept_path_and_timeout_kwargs(self, tmp_path: Path) -> None:
+        """Same call shape: positional path, keyword timeout."""
+        lock_a = tmp_path / "a"
+        lock_b = tmp_path / "b"
+        with election_lock(lock_a, timeout=1.0):
+            pass
+        # No assertion — just confirm the sync call signature works.
+        # The async parity is the import-time assertion + the timeout test below.
+        assert not lock_b.exists()  # we only touched lock_a's .election sibling
+
+    @pytest.mark.anyio
+    async def test_both_raise_timeouterror_on_contention(self, tmp_path: Path) -> None:
+        """Identical exception class for both flavours under contention."""
+        import fcntl
+
+        lock_path = tmp_path / "lock"
+        election_path = tmp_path / "lock.election"
+        holder = election_path.open("a+", encoding="utf-8")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(TimeoutError), election_lock(lock_path, timeout=0.05):
+                pass  # pragma: no cover
+            with pytest.raises(TimeoutError):
+                async with async_election_lock(lock_path, timeout=0.05):
+                    pass  # pragma: no cover
+        finally:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+            holder.close()
