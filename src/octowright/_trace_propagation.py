@@ -155,7 +155,7 @@ class TraceContextExtractionMiddleware:
         # any try/finally — if attach raised partway through, or if
         # ``span_cm.__enter__`` raised after attach succeeded, the token
         # leaked onto the asyncio task (no detach ever ran).
-        token: object | None = None
+        token: Any = None
         span_cm: Any = None
         span_ended = False
 

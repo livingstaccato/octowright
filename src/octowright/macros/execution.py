@@ -49,6 +49,12 @@ _MACRO_RUN_DURATION = histogram(
 # count for these metrics stays bounded in long-lived deployments.
 _MACRO_LABEL_SEEN: set[str] = set()
 _MACRO_LABEL_OVERFLOW = "(overflow)"
+# Running count of macro-name lookups that collapsed to the overflow bucket
+# because the cap was already saturated. Surfaces in ``octowright_status``
+# so an operator can see when dynamic macro names are filling the cap with
+# junk and call :func:`reset_macro_label_seen` (or restart the daemon) to
+# recover real per-macro labels.
+_MACRO_LABEL_OVERFLOW_COUNT = 0
 
 
 def _macro_label(name: str) -> str:
@@ -59,14 +65,49 @@ def _macro_label(name: str) -> str:
     name would let its label start aliasing other names, which is worse than
     a stable-but-fixed roster). New names are admitted up to
     :data:`METRICS_MACRO_LABEL_CAP`; beyond that, all new names collapse to
-    a single ``"(overflow)"`` bucket.
+    a single ``"(overflow)"`` bucket and increment
+    ``_MACRO_LABEL_OVERFLOW_COUNT`` for operator visibility via
+    ``octowright_status``.
+
+    If dynamic macro names have saturated the cap and operator-process
+    access is available, call :func:`reset_macro_label_seen` to clear the
+    set (intentionally not surfaced as a remote MCP tool — keeps the API
+    surface lean and reset is rare enough to warrant in-process action).
     """
+    global _MACRO_LABEL_OVERFLOW_COUNT
     if name in _MACRO_LABEL_SEEN:
         return name
     if len(_MACRO_LABEL_SEEN) < METRICS_MACRO_LABEL_CAP:
         _MACRO_LABEL_SEEN.add(name)
         return name
+    _MACRO_LABEL_OVERFLOW_COUNT += 1
     return _MACRO_LABEL_OVERFLOW
+
+
+def reset_macro_label_seen() -> int:
+    """Clear the per-macro label seen-set and return its prior size.
+
+    Operator escape hatch for the situation where dynamic macro names (e.g.
+    ``migrate-table-{uuid}``) have permanently filled the
+    :data:`METRICS_MACRO_LABEL_CAP`-slot cap, forcing every real macro
+    metric into the ``(overflow)`` bucket. The only alternative used to be
+    a daemon restart.
+
+    Intentionally NOT exposed as a remote MCP tool — keeps the agent-facing
+    API surface lean. This helper is here for tests and for an operator
+    with process access (e.g. an interactive debugger or a small
+    in-process patch). The current state is visible via the
+    ``metrics`` block of ``octowright_status``.
+
+    Returns the number of label-set entries that were cleared (0 when
+    already empty). Also resets the overflow-count surface so it tracks
+    overflow events since the last reset rather than cumulative-forever.
+    """
+    global _MACRO_LABEL_OVERFLOW_COUNT
+    prior = len(_MACRO_LABEL_SEEN)
+    _MACRO_LABEL_SEEN.clear()
+    _MACRO_LABEL_OVERFLOW_COUNT = 0
+    return prior
 
 
 _STATUS_PUSH_JS = "(p) => { if (window.__octowright_macro_status) window.__octowright_macro_status(p); }"
