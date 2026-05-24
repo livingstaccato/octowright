@@ -397,16 +397,14 @@ async def _run_leader(
 
 
 def _install_leader_signal_handlers(
-    loop: Any,
-    mcp_task: Any,
-    discoverable: bool,
+    loop: Any, mcp_task: Any, discoverable: bool
 ) -> tuple[list[Any], list[tuple[Any, _SignalHandler]]]:
     """Convert SIGTERM/SIGHUP (sent by parent MCP clients on close) into a
     graceful "stdio done" signal — cancel mcp_task and let the leader's
     keep-alive path take over. SIGINT keeps default behavior so Ctrl+C still
     exits the process for interactive users. Only install on a discoverable
     leader; in --no-http / --no-singleton modes the default "exit on signal"
-    semantics are correct."""
+    semantics are correct. Register/fallback failures are logged."""
     import signal as _signal
 
     installed_signals: list[Any] = []
@@ -417,16 +415,18 @@ def _install_leader_signal_handlers(
     if hasattr(_signal, "SIGHUP"):
         signals.append(_signal.SIGHUP)
     for sig in signals:
+        name = sig.name if hasattr(sig, "name") else int(sig)
         try:
             loop.add_signal_handler(sig, mcp_task.cancel)
             installed_signals.append(sig)
-        except (NotImplementedError, ValueError):
+        except (NotImplementedError, ValueError) as loop_exc:
+            _log.warning("octowright.serve.signal_handler_register_failed", signal=name, error=repr(loop_exc))
             try:
                 previous = _signal.getsignal(sig)
                 _signal.signal(sig, lambda *_args: loop.call_soon_threadsafe(mcp_task.cancel))
                 installed_signal_handlers.append((sig, previous))
-            except (OSError, RuntimeError, ValueError):
-                pass
+            except (OSError, RuntimeError, ValueError) as exc:
+                _log.warning("octowright.serve.signal_handler_fallback_failed", signal=name, error=repr(exc))
     return installed_signals, installed_signal_handlers
 
 

@@ -482,10 +482,13 @@ def test_cross_origin_regular_read_get_request_is_allowed() -> None:
     assert response.status_code != 403
 
 
-def test_public_static_assets_are_unguarded_on_remote_bind(
+def test_spa_denied_on_remote_bind_without_opt_in(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Bundled SPA is sensitive: serving it on a non-loopback bind without
+    OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD confirms the daemon to anyone who can
+    reach the port and exposes the dashboard surface."""
     monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
     bundle = tmp_path / "frontend"
     bundle.mkdir()
@@ -493,7 +496,38 @@ def test_public_static_assets_are_unguarded_on_remote_bind(
     (bundle / "app.js").write_text("console.log('public asset')", encoding="utf-8")
     monkeypatch.setattr(_http_state, "FRONTEND_DIR", bundle)
 
-    with TestClient(_remote_app()) as client:
+    # SPA guard reads the bind host from a wrap-time closure (StaticFiles
+    # is an ASGI app, not a Request handler), so we must build the app at
+    # the remote host directly rather than post-build override app.state.
+    app = _http.build_app(host="0.0.0.0")
+    with TestClient(app) as client:
+        index_response = client.get("/")
+        asset_response = client.get("/app.js")
+        deep_link_response = client.get("/sessions/abc123")
+
+    assert index_response.status_code == 403
+    assert index_response.json() == REMOTE_DISABLED_BODY
+    assert asset_response.status_code == 403
+    assert asset_response.json() == REMOTE_DISABLED_BODY
+    assert deep_link_response.status_code == 403
+    assert deep_link_response.json() == REMOTE_DISABLED_BODY
+
+
+def test_spa_allowed_on_loopback_without_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Loopback bind keeps the SPA serving — the only-localhost-can-reach-it
+    threat model is unchanged."""
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
+    bundle = tmp_path / "frontend"
+    bundle.mkdir()
+    (bundle / "index.html").write_text("<!doctype html><title>dashboard</title>", encoding="utf-8")
+    (bundle / "app.js").write_text("console.log('public asset')", encoding="utf-8")
+    monkeypatch.setattr(_http_state, "FRONTEND_DIR", bundle)
+
+    app = _http.build_app(host="127.0.0.1")
+    with TestClient(app) as client:
         index_response = client.get("/")
         asset_response = client.get("/app.js")
 
@@ -501,6 +535,26 @@ def test_public_static_assets_are_unguarded_on_remote_bind(
     assert "dashboard" in index_response.text
     assert asset_response.status_code == 200
     assert "public asset" in asset_response.text
+
+
+def test_spa_allowed_on_remote_bind_with_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Remote bind plus OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1 lets the SPA
+    through, matching the documented opt-in behaviour for the API surface."""
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", "1")
+    bundle = tmp_path / "frontend"
+    bundle.mkdir()
+    (bundle / "index.html").write_text("<!doctype html><title>dashboard</title>", encoding="utf-8")
+    monkeypatch.setattr(_http_state, "FRONTEND_DIR", bundle)
+
+    app = _http.build_app(host="0.0.0.0")
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert "dashboard" in response.text
 
 
 def test_mcp_mount_denied_on_remote_bind_without_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:

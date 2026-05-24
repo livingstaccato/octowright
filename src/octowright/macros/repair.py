@@ -15,10 +15,10 @@ from octowright.mcp_types import MacroRepairPreviewResult, MacroRepairSuggestion
 from octowright.server.macro_semantic import summarize_action
 
 if TYPE_CHECKING:
-    from octowright.session import BrowserSession
+    from octowright.session._protocols import SessionLike
 
 
-async def suggest_fix(session: BrowserSession, action: dict[str, Any]) -> str | None:
+async def suggest_fix(session: SessionLike, action: dict[str, Any]) -> str | None:
     """Build an A11y-context prompt for fixing a failed selector action."""
     selector = action.get("selector")
     if not selector:
