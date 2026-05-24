@@ -161,9 +161,11 @@ def test_resolve_cmd_refuses_shell_metachars(tmp_path, fresh_personas):
     sys.platform == "win32",
     reason="bash isn't on PATH on Windows runners; the escape hatch on Windows is `pwsh -c ...` or `cmd /c ...`, exercised by other argv-form tests",
 )
-def test_resolve_cmd_supports_explicit_bash_pipeline(tmp_path, fresh_personas):
-    """`bash -c "..."` is the documented escape hatch — bash is a normal
-    argv token, the pipeline is its own argument."""
+def test_resolve_cmd_supports_explicit_bash_pipeline(tmp_path, fresh_personas, monkeypatch):
+    """`bash -c "..."` is the opt-in escape hatch (gated behind
+    OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS) — bash is a normal argv token, the
+    pipeline is its own argument."""
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", "1")
     _write_persona(
         tmp_path,
         "u",
