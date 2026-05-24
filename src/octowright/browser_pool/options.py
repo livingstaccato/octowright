@@ -77,7 +77,7 @@ class LaunchOptions:
         viewport = record.get("viewport") if isinstance(record.get("viewport"), dict) else None
         return cls.from_mapping(
             {
-                "kind": record["kind"],
+                "kind": record.get("kind", "chromium"),
                 "url": record.get("url") or DEFAULT_URL,
                 "label": record.get("label"),
                 "profile": record.get("profile"),
