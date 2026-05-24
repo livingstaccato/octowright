@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from provide.telemetry import get_logger
 
+from octowright._tracing import span
 from octowright.mcp_types import (
     ScenarioParticipantOutcome,
     ScenarioRemapEntry,
@@ -154,50 +155,62 @@ class ScenarioPool:
         if not spec.participants:
             raise RuntimeError(f"scenario {effective_name!r} has no participants")
         scenario_id = _uuid.uuid4().hex[:12]
-        result = await browser_pool.spawn_roster([resolve_launch_kwargs(p) for p in spec.participants])
-        if result["errors"]:
-            for launched in result["launched"]:
-                try:
-                    await browser_pool.close(launched["instance_id"])
-                except Exception as exc:
-                    # Cleanup-after-error path: surface failures so a stuck
-                    # browser leaking after a partial-roster crash is auditable.
-                    log.warning(
-                        "scenario.rollback.close_failed",
-                        instance_id=launched["instance_id"],
-                        error=repr(exc),
-                    )
-            raise RuntimeError(
-                f"scenario {effective_name!r}: {len(result['errors'])} participant(s) failed to launch: {result['errors']}"
-            )
-        participants: list[dict[str, Any]] = []
-        for participant_spec, launched in zip(spec.participants, result["launched"], strict=True):
-            entry = dict(launched)
-            entry["persona"] = participant_spec.persona
-            entry["role"] = participant_spec.role
-            participants.append(entry)
-        live = LiveScenario(scenario_id=scenario_id, name=effective_name, spec=spec, participants=participants)
-        async with self._live_lock:
-            self._live[scenario_id] = live
-        try:
-            await _apply_fixtures(browser_pool, live, spec.fixtures)
-            await _run_startup_macros(browser_pool, live)
-        except Exception:
+        # Wrap the whole multi-browser roster spawn + fixture + startup-macro
+        # sequence under a single span so the per-participant launches and
+        # macro runs nest cleanly underneath, and operators can attribute
+        # latency to scenario startup vs. ad-hoc browser activity. Count is
+        # used (not the full participant list) to keep cardinality bounded.
+        with span(
+            "octowright.scenario.start",
+            scenario_id=scenario_id,
+            name=effective_name,
+            participants=len(spec.participants),
+        ):
+            result = await browser_pool.spawn_roster([resolve_launch_kwargs(p) for p in spec.participants])
+            if result["errors"]:
+                for launched in result["launched"]:
+                    try:
+                        await browser_pool.close(launched["instance_id"])
+                    except Exception as exc:
+                        # Cleanup-after-error path: surface failures so a stuck
+                        # browser leaking after a partial-roster crash is auditable.
+                        log.warning(
+                            "scenario.rollback.close_failed",
+                            instance_id=launched["instance_id"],
+                            error=repr(exc),
+                        )
+                raise RuntimeError(
+                    f"scenario {effective_name!r}: {len(result['errors'])} participant(s) failed to launch: "
+                    f"{result['errors']}"
+                )
+            participants: list[dict[str, Any]] = []
+            for participant_spec, launched in zip(spec.participants, result["launched"], strict=True):
+                entry = dict(launched)
+                entry["persona"] = participant_spec.persona
+                entry["role"] = participant_spec.role
+                participants.append(entry)
+            live = LiveScenario(scenario_id=scenario_id, name=effective_name, spec=spec, participants=participants)
             async with self._live_lock:
-                self._live.pop(scenario_id, None)
-            for launched in result["launched"]:
-                try:
-                    await browser_pool.close(launched["instance_id"])
-                except Exception as exc:
-                    # Cleanup-after-error path: surface failures so a stuck
-                    # browser leaking after a partial-roster crash is auditable.
-                    log.warning(
-                        "scenario.rollback.close_failed",
-                        instance_id=launched["instance_id"],
-                        error=repr(exc),
-                    )
-            raise
-        return live
+                self._live[scenario_id] = live
+            try:
+                await _apply_fixtures(browser_pool, live, spec.fixtures)
+                await _run_startup_macros(browser_pool, live)
+            except Exception:
+                async with self._live_lock:
+                    self._live.pop(scenario_id, None)
+                for launched in result["launched"]:
+                    try:
+                        await browser_pool.close(launched["instance_id"])
+                    except Exception as exc:
+                        # Cleanup-after-error path: surface failures so a stuck
+                        # browser leaking after a partial-roster crash is auditable.
+                        log.warning(
+                            "scenario.rollback.close_failed",
+                            instance_id=launched["instance_id"],
+                            error=repr(exc),
+                        )
+                raise
+            return live
 
     async def stop(self, *, scenario_id: str, browser_pool: Any) -> ScenarioStopResult:
         async with self._live_lock:
@@ -259,23 +272,35 @@ class ScenarioPool:
 
         live = self.get(scenario_id)
         targets = [p for p in live.participants if role is None or p["role"] == role]
+        # Wrap the fan-out so the per-participant macro.run spans nest under a
+        # single scenario-scoped parent. ``targeted`` records whether the role
+        # filter narrowed the fan-out at all (None role = fan to every
+        # participant); ``role`` is the literal filter value the operator
+        # supplied, propagated for filtering in the trace UI.
+        with span(
+            "octowright.scenario.run_macro",
+            scenario_id=scenario_id,
+            macro=macro,
+            role=role,
+            targeted=role is not None,
+        ):
 
-        async def _run(p: dict[str, Any]) -> ScenarioParticipantOutcome:
-            session = browser_pool.get(p["instance_id"])
-            try:
-                await _macros.run_macro(session=session, name=macro, args=args or {})
-                return {"instance_id": p["instance_id"], "ok": True}
-            except Exception as e:
-                return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
+            async def _run(p: dict[str, Any]) -> ScenarioParticipantOutcome:
+                session = browser_pool.get(p["instance_id"])
+                try:
+                    await _macros.run_macro(session=session, name=macro, args=args or {})
+                    return {"instance_id": p["instance_id"], "ok": True}
+                except Exception as e:
+                    return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
 
-        results = await _asyncio.gather(*(_run(p) for p in targets))
-        return {
-            "scenario_id": scenario_id,
-            "macro": macro,
-            "role": role,
-            "targeted": len(targets),
-            "results": list(results),
-        }
+            results = await _asyncio.gather(*(_run(p) for p in targets))
+            return {
+                "scenario_id": scenario_id,
+                "macro": macro,
+                "role": role,
+                "targeted": len(targets),
+                "results": list(results),
+            }
 
     async def wait_for_sync(
         self,

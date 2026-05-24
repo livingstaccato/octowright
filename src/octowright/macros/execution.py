@@ -14,7 +14,7 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.browser_pool.visuals import _describe_action
-from octowright.defaults import MACRO_SLOWMO_MS
+from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
 from octowright.macros.repair import repair_preview as repair_preview_impl
 from octowright.macros.repair import suggest_fix as _suggest_fix
@@ -42,6 +42,31 @@ _MACRO_RUN_DURATION = histogram(
     description="run_macro elapsed time including all nested calls",
     unit="s",
 )
+
+# Bounded set of distinct macro names that have been admitted as label values
+# on the per-macro metrics above. Once the size hits METRICS_MACRO_LABEL_CAP,
+# any further unseen name collapses to ``"(overflow)"`` so the time-series
+# count for these metrics stays bounded in long-lived deployments.
+_MACRO_LABEL_SEEN: set[str] = set()
+_MACRO_LABEL_OVERFLOW = "(overflow)"
+
+
+def _macro_label(name: str) -> str:
+    """Return a bounded-cardinality label value for ``name``.
+
+    Names already in the seen-set pass through verbatim (no eviction — order
+    of arrival is the only signal we have, but evicting an already-admitted
+    name would let its label start aliasing other names, which is worse than
+    a stable-but-fixed roster). New names are admitted up to
+    :data:`METRICS_MACRO_LABEL_CAP`; beyond that, all new names collapse to
+    a single ``"(overflow)"`` bucket.
+    """
+    if name in _MACRO_LABEL_SEEN:
+        return name
+    if len(_MACRO_LABEL_SEEN) < METRICS_MACRO_LABEL_CAP:
+        _MACRO_LABEL_SEEN.add(name)
+        return name
+    return _MACRO_LABEL_OVERFLOW
 
 
 _STATUS_PUSH_JS = "(p) => { if (window.__octowright_macro_status) window.__octowright_macro_status(p); }"
@@ -228,23 +253,33 @@ async def _run_macro_impl(
             skipped += skipped_count
         completed_ok = True
     finally:
+        elapsed_s = time.monotonic() - macro_started
         # Pill stays open showing the final state — `done` freezes the elapsed
         # counter and suspends auto-hide so the user can read it. The next
         # macro's `start` push (or an explicit visible:false) clears it.
         outcome_label = "done" if completed_ok else "failed"
         await _push_status(session, text=f"{name} | {outcome_label}", done=True)
+        # Metrics + structured log must fire on BOTH the ok and failed paths.
+        # Previously these sat outside the try/finally, so a raised
+        # RuntimeError skipped them entirely — the "failed" datapoint never
+        # landed, the histogram only ever measured successful runs, and the
+        # operator-visible log line vanished on the unhappy path.
+        macro_label = _macro_label(name)
+        _MACRO_RUN.add(
+            1,
+            attributes={"macro": macro_label, "status": "ok" if completed_ok else "failed"},
+        )
+        _MACRO_RUN_DURATION.record(elapsed_s, attributes={"macro": macro_label})
+        log.info(
+            "octowright.macro.run",
+            name=name,
+            executed=executed,
+            skipped=skipped,
+            slowmo_ms=resolved_slowmo,
+            status="ok" if completed_ok else "failed",
+            elapsed_s=round(elapsed_s, 3),
+        )
 
-    elapsed_s = time.monotonic() - macro_started
-    _MACRO_RUN.add(1, attributes={"macro": name, "status": "ok" if completed_ok else "failed"})
-    _MACRO_RUN_DURATION.record(elapsed_s, attributes={"macro": name})
-    log.info(
-        "octowright.macro.run",
-        name=name,
-        executed=executed,
-        skipped=skipped,
-        slowmo_ms=resolved_slowmo,
-        elapsed_s=round(elapsed_s, 3),
-    )
     return {
         "macro": name,
         "executed": executed,
@@ -263,23 +298,33 @@ async def run_sequence(
     stop_on_failure: bool = True,
     slowmo_ms: int | None = None,
 ) -> MacroSequenceResult:
-    resolved_args: list[dict[str, Any]] = []
-    for index in range(len(names)):
-        if args_list is not None and index < len(args_list):
-            resolved_args.append(args_list[index] or {})
-        else:
-            resolved_args.append({})
+    # Wrap the whole sequence in a single parent span so the per-macro
+    # ``octowright.macro.run`` spans nest underneath it in the trace tree
+    # (OTel context propagation handles the nesting automatically). Without
+    # this, N successive run_macro calls produced N sibling top-level spans
+    # with no aggregate to anchor sequence-level latency / status views.
+    with span(
+        "octowright.macro.run_sequence",
+        count=len(names),
+        stop_on_failure=stop_on_failure,
+    ):
+        resolved_args: list[dict[str, Any]] = []
+        for index in range(len(names)):
+            if args_list is not None and index < len(args_list):
+                resolved_args.append(args_list[index] or {})
+            else:
+                resolved_args.append({})
 
-    steps: list[MacroSequenceStep] = []
-    all_ok = True
-    for name, step_args in zip(names, resolved_args, strict=True):
-        try:
-            outcome = await run_macro(session=session, name=name, args=step_args, slowmo_ms=slowmo_ms)
-            steps.append({**outcome, "ok": True})
-        except Exception as exc:
-            all_ok = False
-            steps.append({"macro": name, "ok": False, "error": str(exc), "args_used": step_args})
-            if stop_on_failure:
-                raise
+        steps: list[MacroSequenceStep] = []
+        all_ok = True
+        for name, step_args in zip(names, resolved_args, strict=True):
+            try:
+                outcome = await run_macro(session=session, name=name, args=step_args, slowmo_ms=slowmo_ms)
+                steps.append({**outcome, "ok": True})
+            except Exception as exc:
+                all_ok = False
+                steps.append({"macro": name, "ok": False, "error": str(exc), "args_used": step_args})
+                if stop_on_failure:
+                    raise
 
-    return {"sequence": names, "steps": steps, "ok": all_ok}
+        return {"sequence": names, "steps": steps, "ok": all_ok}
