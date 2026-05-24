@@ -150,6 +150,7 @@ async def _dispatch_click_or_fill(
             log.debug(
                 "octowright.macros.semantic_fallback",
                 kind=kind,
+                instance_id=getattr(session, "instance_id", None),
                 error=str(exc),
                 hint="semantic locator path failed, falling back to CSS selector",
             )
@@ -218,6 +219,7 @@ async def _dispatch_simple_inner(
         log.warning(
             "octowright.macros.unknown_action_kind",
             kind=kind,
+            instance_id=getattr(session, "instance_id", None),
             hint="kind is not in _ACTION_MAP, _REPLAY_SKIP, or _REPLAY_PASSIVE",
         )
         return 0, 1
