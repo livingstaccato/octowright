@@ -336,7 +336,7 @@ class TestRunSequenceSpan:
         all_attrs = _span_attrs(exporter, "octowright.macro.run_sequence")
         assert all_attrs, "octowright.macro.run_sequence span never fired"
         attrs = all_attrs[-1]
-        assert attrs.get("count") == 2
+        assert attrs.get("names_count") == 2
         assert attrs.get("stop_on_failure") is True
 
     @pytest.mark.anyio
@@ -656,7 +656,7 @@ class TestScenarioSpans:
         attrs_list = _span_attrs(exporter, "octowright.scenario.start")
         assert attrs_list
         attrs = attrs_list[-1]
-        assert attrs.get("name") == "demo"
+        assert attrs.get("scenario_name") == "demo"
         assert attrs.get("participants") == 1
         assert isinstance(attrs.get("scenario_id"), str)
 

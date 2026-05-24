@@ -305,7 +305,7 @@ async def run_sequence(
     # with no aggregate to anchor sequence-level latency / status views.
     with span(
         "octowright.macro.run_sequence",
-        count=len(names),
+        names_count=len(names),
         stop_on_failure=stop_on_failure,
     ):
         resolved_args: list[dict[str, Any]] = []
