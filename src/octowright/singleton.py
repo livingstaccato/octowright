@@ -28,10 +28,12 @@ import contextlib
 import json
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
+
+import anyio
 
 from octowright import defaults
 
@@ -143,13 +145,11 @@ async def probe_http_alive(info: LeaderInfo, timeout: float = 2.0) -> bool:
 
 @contextlib.contextmanager
 def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[None]:
-    """Serialise the leader-election decision across processes.
+    """Synchronous leader-election lock.
 
-    Holds an exclusive ``fcntl.flock`` on ``<path>.election`` for the
-    duration of the ``with`` block. Blocks (with backoff) until ``timeout``
-    seconds, then raises ``TimeoutError``. On Windows (no ``fcntl``) the
-    lock is a no-op — concurrent election is theoretically possible there
-    but rare and self-corrects via the PID + HTTP probe.
+    Kept for non-async callers; the async path should use
+    :func:`async_election_lock` instead so the event loop isn't blocked
+    by the ``time.sleep`` back-off on contention.
     """
     if os.name == "nt":
         yield
@@ -171,6 +171,46 @@ def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[
                         f"timed out waiting {timeout:.1f}s for election lock at {election_path}"
                     ) from None
                 time.sleep(0.05)
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        fh.close()
+
+
+@contextlib.asynccontextmanager
+async def async_election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> AsyncIterator[None]:
+    """Async-friendly version of :func:`election_lock`.
+
+    Uses ``anyio.sleep`` for back-off so contention doesn't stall the
+    event loop. On Windows (no ``fcntl``) the lock is a no-op; concurrent
+    election is theoretically possible there but rare and self-corrects
+    via the PID + HTTP probe.
+    """
+    if os.name == "nt":
+        yield
+        return
+    import fcntl
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    election_path = path.with_suffix(path.suffix + ".election")
+    deadline = time.monotonic() + timeout
+    fh = election_path.open("a+", encoding="utf-8")
+    try:
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"timed out waiting {timeout:.1f}s for election lock at {election_path}"
+                    ) from None
+                await anyio.sleep(0.05)
         try:
             yield
         finally:
