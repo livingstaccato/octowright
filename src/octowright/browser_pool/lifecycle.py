@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
-from octowright.browser_pool.launch_helpers import next_har_path
+from octowright.browser_pool.launch_helpers import rotate_har_path
 from octowright.session_manifest import remove_session as remove_manifest_session
 
 if TYPE_CHECKING:
@@ -94,7 +94,7 @@ async def handoff_browser(
 
         # Don't overwrite the prior HAR — handoff gets a fresh sibling path.
         source_har_path = getattr(source, "har_path", None)
-        next_har = next_har_path(source_har_path) if source_har_path else None
+        next_har = rotate_har_path(source_har_path)
         launch = await pool.launch(
             kind=source.kind,
             url=target_url,

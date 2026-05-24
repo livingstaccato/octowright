@@ -12,6 +12,7 @@ from typing import Any
 
 from octowright import _format as fmt
 from octowright import resolve as resolve_mod
+from octowright.browser_pool.options import LaunchOptions
 from octowright.defaults import BROWSER_LAUNCH_TIMEOUT_SECONDS
 from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import mcp, pool
@@ -93,10 +94,9 @@ async def browser_launch(
     ephemeral: bool = False,
     session: bool = False,
 ) -> dict[str, Any]:
-    # Explicit dict beats `locals()` spray: a future signature change here that
-    # adds a kwarg pool.launch doesn't know about would raise TypeError at call
-    # time instead of being statically auditable.
-    result = await _pool_launch_with_deadline(
+    # Single source of truth: LaunchOptions.to_pool_kwargs() — adding a launch
+    # field is a one-line edit in options.py, not four parallel sites.
+    options = LaunchOptions(
         kind=kind,
         url=url,
         headed=headed,
@@ -118,6 +118,7 @@ async def browser_launch(
         ephemeral=ephemeral,
         session=session,
     )
+    result = await _pool_launch_with_deadline(**options.to_pool_kwargs())
     publish_dashboard_invalidation_nowait("sessions")
     return result
 
@@ -184,32 +185,36 @@ async def browser_quick_launch(
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
 
-    # Explicit dict beats `locals()` spray: a future signature change here that
-    # adds a kwarg pool.launch doesn't know about would raise TypeError at call
-    # time instead of being statically auditable. Keep this list in sync with
-    # browser_launch above.
-    launch_options: dict[str, Any] = {
-        "headed": headed,
-        "label": label,
-        "viewport_w": viewport_w,
-        "viewport_h": viewport_h,
-        "stabilize": stabilize,
-        "record_video": record_video,
-        "trace": trace,
-        "har": har,
-        "har_path": har_path,
-        "har_mode": har_mode,
-        "har_url_filter": har_url_filter,
-        "har_content": har_content,
-        "badge": badge,
-        "badge_position": badge_position,
-        "tile": tile,
-        "ephemeral": ephemeral,
-        "session": session,
-    }
+    def _build_options(*, profile_for_launch: str | None, kind_for_launch: str) -> LaunchOptions:
+        # Reuses the LaunchOptions schema so this site never drifts from
+        # browser_launch above. The two variant fields (profile/kind) come
+        # from either the explicit argument or the resolver's suggestion.
+        return LaunchOptions(
+            kind=kind_for_launch,
+            url=url,
+            headed=headed,
+            label=label,
+            profile=profile_for_launch,
+            viewport_w=viewport_w,
+            viewport_h=viewport_h,
+            stabilize=stabilize,
+            record_video=record_video,
+            trace=trace,
+            har=har,
+            har_path=har_path,
+            har_mode=har_mode,
+            har_url_filter=har_url_filter,
+            har_content=har_content,
+            badge=badge,
+            badge_position=badge_position,
+            tile=tile,
+            ephemeral=ephemeral,
+            session=session,
+        )
 
     if profile:
-        res = await _pool_launch_with_deadline(url=url, profile=profile, kind=kind, **launch_options)
+        opts = _build_options(profile_for_launch=profile, kind_for_launch=kind)
+        res = await _pool_launch_with_deadline(**opts.to_pool_kwargs())
         publish_dashboard_invalidation_nowait("sessions")
         return {**res, "profile_used": profile}
 
@@ -230,12 +235,8 @@ async def browser_quick_launch(
             profile_to_use = top["persona"]
             kind = top["kind"]
 
-    res = await _pool_launch_with_deadline(
-        url=url,
-        profile=profile_to_use,
-        kind=kind,
-        **launch_options,
-    )
+    opts = _build_options(profile_for_launch=profile_to_use, kind_for_launch=kind)
+    res = await _pool_launch_with_deadline(**opts.to_pool_kwargs())
     publish_dashboard_invalidation_nowait("sessions")
     return {**res, "profile_used": profile_to_use}
 

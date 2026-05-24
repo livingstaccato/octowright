@@ -18,7 +18,7 @@ from starlette.routing import Route
 
 import octowright.http.state as state
 import octowright.server._state as _state
-from octowright.browser_pool.launch_helpers import next_har_path
+from octowright.browser_pool.options import LaunchOptions
 from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
 from octowright.http.artifacts import _build_cache_components
 from octowright.http.dashboard_events import publish_dashboard_invalidation
@@ -207,28 +207,12 @@ async def session_launch(request: Request) -> JSONResponse:
             status_code=400,
         )
 
-    launch_kwargs: dict[str, Any] = {
-        "kind": kind,
-        "url": payload.get("url") or DEFAULT_URL,
-        "label": payload.get("label"),
-        "profile": payload.get("profile"),
-        "viewport_w": payload.get("viewport_w"),
-        "viewport_h": payload.get("viewport_h"),
-        "headed": payload.get("headed") if "headed" in payload else None,
-        "stabilize": payload.get("stabilize", False),
-        "record_video": payload.get("record_video", False),
-        "trace": payload.get("trace", False),
-        "har": payload.get("har", False),
-        "har_path": payload.get("har_path"),
-        "har_mode": payload.get("har_mode", "minimal"),
-        "har_url_filter": payload.get("har_url_filter"),
-        "har_content": payload.get("har_content"),
-        "badge": payload.get("badge", True),
-        "badge_position": payload.get("badge_position", "bottom-right"),
-        "tile": payload.get("tile", False),
-        "ephemeral": payload.get("ephemeral", False),
-        "session": payload.get("session", False),
-    }
+    # Funnel through LaunchOptions.from_mapping so the HTTP body shape stays
+    # in lock-step with the MCP browser_launch surface — a new launch field
+    # is one edit in options.py, not three call sites.
+    launch_kwargs = LaunchOptions.from_mapping(
+        {**payload, "kind": kind, "url": payload.get("url") or DEFAULT_URL}
+    ).to_pool_kwargs()
 
     pool = _state.pool
     try:
@@ -398,39 +382,12 @@ async def recording_delete(request: Request) -> JSONResponse:
 def _relaunch_kwargs_from_record(launch: dict[str, Any]) -> dict[str, Any]:
     """Translate a JSONL ``launch`` record into ``pool.launch`` kwargs.
 
-    Rotates the HAR target so the relaunch doesn't clobber the prior recording
-    (or reuses the same path if it has since been deleted). Only string
-    ``har_path`` values are honoured; ill-typed values fall through to
-    autogeneration. ``ephemeral`` / ``session`` / ``tile`` may be missing from
-    pre-this-schema recordings — defaults match the original launch defaults.
+    The JSONL-shape → LaunchOptions translation (nested viewport dict,
+    ``video_dir`` → ``record_video`` bool, default ``headed=True``) lives on
+    ``LaunchOptions.from_launch_record``; ``with_har_rotated`` then bumps
+    the HAR sibling so the relaunch doesn't clobber the prior recording.
     """
-    viewport = launch.get("viewport") if isinstance(launch.get("viewport"), dict) else None
-    prior_har_path = launch.get("har_path")
-    rotated_har_path: str | None = None
-    if isinstance(prior_har_path, str) and prior_har_path:
-        rotated_har_path = str(next_har_path(Path(prior_har_path)))
-    return {
-        "kind": launch["kind"],
-        "url": launch.get("url") or DEFAULT_URL,
-        "label": launch.get("label"),
-        "profile": launch.get("profile"),
-        "viewport_w": viewport.get("w") if viewport else None,
-        "viewport_h": viewport.get("h") if viewport else None,
-        "headed": launch.get("headed", True),
-        "stabilize": launch.get("stabilize", False),
-        "record_video": bool(launch.get("video_dir")),
-        "trace": launch.get("trace", False),
-        "har": bool(rotated_har_path) or bool(launch.get("har")),
-        "har_path": rotated_har_path,
-        "har_mode": launch.get("har_mode", "minimal"),
-        "har_url_filter": launch.get("har_url_filter"),
-        "har_content": launch.get("har_content"),
-        "badge": launch.get("badge", True),
-        "badge_position": launch.get("badge_position", "bottom-right"),
-        "tile": launch.get("tile", False),
-        "ephemeral": launch.get("ephemeral", False),
-        "session": launch.get("session", False),
-    }
+    return LaunchOptions.from_launch_record(launch).with_har_rotated().to_pool_kwargs()
 
 
 async def session_relaunch(request: Request) -> JSONResponse:
