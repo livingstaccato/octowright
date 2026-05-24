@@ -44,10 +44,10 @@ def _ws_flush_every_frame(monkeypatch: pytest.MonkeyPatch) -> None:
     file back after a single write and would race the buffer. Drop
     both thresholds to 1 so every test write is immediately on disk.
     """
-    from octowright import defaults
+    from octowright.session import core_io_mixin as _io
 
-    monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_FRAMES", 1)
-    monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_SECONDS", 0.0)
+    monkeypatch.setattr(_io, "WEBSOCKET_CACHE_FLUSH_FRAMES", 1)
+    monkeypatch.setattr(_io, "WEBSOCKET_CACHE_FLUSH_SECONDS", 0.0)
 
 
 def _make_subject(tmp_path: Path) -> SessionIOMixin:
@@ -163,11 +163,11 @@ class TestAppendWebsocketCacheBatchedFlush:
 
     def test_count_threshold_triggers_flush(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Hit WEBSOCKET_CACHE_FLUSH_FRAMES → buffer is flushed to disk."""
-        from octowright import defaults
+        from octowright.session import core_io_mixin as _io
 
-        monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_FRAMES", 3)
+        monkeypatch.setattr(_io, "WEBSOCKET_CACHE_FLUSH_FRAMES", 3)
         # Disable time-based flush so only count matters.
-        monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_SECONDS", 10_000.0)
+        monkeypatch.setattr(_io, "WEBSOCKET_CACHE_FLUSH_SECONDS", 10_000.0)
         subj = _make_subject(tmp_path)
         for i in range(2):
             subj._append_websocket_cache(direction="framesent", id_=i, url="ws://x")
@@ -181,10 +181,10 @@ class TestAppendWebsocketCacheBatchedFlush:
 
     def test_time_threshold_triggers_flush(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Elapsed time since last flush > threshold → next write flushes."""
-        from octowright import defaults
+        from octowright.session import core_io_mixin as _io
 
-        monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_FRAMES", 10_000)
-        monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_SECONDS", 0.0)
+        monkeypatch.setattr(_io, "WEBSOCKET_CACHE_FLUSH_FRAMES", 10_000)
+        monkeypatch.setattr(_io, "WEBSOCKET_CACHE_FLUSH_SECONDS", 0.0)
         subj = _make_subject(tmp_path)
         subj._append_websocket_cache(direction="framesent", id_=1, url="ws://x")
         # FLUSH_SECONDS=0 means every elapsed delta beats the threshold,

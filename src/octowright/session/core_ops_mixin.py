@@ -332,6 +332,27 @@ class SessionOpsMixin(SessionLike):
             for task in tasks:
                 self._bg_tasks.discard(task)
                 drained.add(task)
+        self._warn_if_drain_limit_left_tasks(current, drained)
+
+    def _warn_if_drain_limit_left_tasks(self, current: Any, drained: set[Any]) -> None:
+        """Surface a bounded-exit that left bg tasks behind.
+
+        The iteration budget on the drain loop prevents an infinite spin
+        from a pathological producer, but on bound-exit any still-spawning
+        tasks stay attached to a closed session — invisible to operators
+        unless we say so. Pulled out of the loop body to keep its xenon
+        rank flat.
+        """
+        leftover = {task for task in list(self._bg_tasks) if task is not current and task not in drained}
+        if not leftover:
+            return
+        log.warning(
+            "octowright.session.bg_task_drain_limit_reached",
+            instance_id=getattr(self, "instance_id", None),
+            kind=getattr(self, "kind", None),
+            max_passes=self._BG_TASK_DRAIN_MAX_PASSES,
+            undrained_count=len(leftover),
+        )
 
     async def _drain_one_pass(self, tasks: set[Any]) -> None:
         """Await one batch of bg tasks: collect results from finished ones,
