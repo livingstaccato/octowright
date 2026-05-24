@@ -43,6 +43,8 @@ class SessionLike(Protocol):
     markdown_path: Path | None
     websocket_path: Path | None
     _websocket_fh: Any
+    _websocket_frames_since_flush: int
+    _websocket_last_flush_ts: float
     context: BrowserContext
     browser: Browser | None
     _video: Video | None
