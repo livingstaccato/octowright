@@ -132,7 +132,7 @@ class BrowserPool:
                 ctx_har_kwargs=ctx_har_kwargs,
                 launch_kwargs=launch_kwargs,
             )
-        except BaseException as exc:
+        except asyncio.CancelledError:
             await cleanup_failed_launch(
                 registered=False,
                 context=context,
@@ -141,8 +141,16 @@ class BrowserPool:
                 recorder=None,
                 pre_register=True,
             )
-            if isinstance(exc, asyncio.CancelledError):
-                raise
+            raise
+        except Exception as exc:
+            await cleanup_failed_launch(
+                registered=False,
+                context=context,
+                browser=browser,
+                video_dir=video_dir,
+                recorder=None,
+                pre_register=True,
+            )
             wrapped = maybe_wrap_playwright_error(exc, kind=kind)
             if wrapped is exc:
                 raise
