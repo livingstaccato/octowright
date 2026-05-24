@@ -19,6 +19,12 @@ Holds:
       Read by ``runtime_url()`` and the ``octowright_dashboard_url`` MCP tool.
     * Module-import handles for the helpers tests like to swap (``_video``,
       ``_personas``, ``_macros``, ``shutil``, ``subprocess``).
+    * ``pool`` / ``scenario_pool`` — the shared singletons that the MCP server
+      mutates. Exposed here so HTTP-layer code only ever reads pool state
+      through ``state.<name>`` (the single seam). Resolved lazily via module
+      ``__getattr__`` so they always reflect the current value in
+      ``octowright.server._state`` unless a test explicitly shadows them with
+      ``monkeypatch.setattr(http.state, "pool", ...)``.
 """
 
 from __future__ import annotations
@@ -85,6 +91,30 @@ def runtime_status() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Shared-singleton seam: ``pool`` and ``scenario_pool`` live on
+# ``octowright.server._state`` (the MCP server owns the lifecycle). HTTP-layer
+# code reads them via ``state.pool`` / ``state.scenario_pool`` so the seam is
+# in one place. Module ``__getattr__`` forwards to ``_server_state`` on every
+# access, so the values are always live. ``monkeypatch.setattr(state, "pool",
+# X)`` plants a real attribute on this module which takes precedence over
+# ``__getattr__`` for the duration of the patch (and is removed on teardown,
+# restoring the forwarding behaviour). Tests that still patch
+# ``server._state.pool`` continue to work because the forwarding path reads
+# the current value at access time.
+# ---------------------------------------------------------------------------
+
+_FORWARDED_NAMES = frozenset({"pool", "scenario_pool"})
+
+
+def __getattr__(name: str) -> Any:
+    if name in _FORWARDED_NAMES:
+        from octowright.server import _state as _server_state
+
+        return getattr(_server_state, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "FRONTEND_DIR",
     "RECORDINGS_DIR",
@@ -97,9 +127,11 @@ __all__ = [
     "_personas",
     "_video",
     "log",
+    "pool",  # noqa: F822  resolved lazily via module __getattr__
     "runtime_session_url",
     "runtime_status",
     "runtime_url",
+    "scenario_pool",  # noqa: F822  resolved lazily via module __getattr__
     "shutil",
     "subprocess",
 ]

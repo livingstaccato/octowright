@@ -40,10 +40,10 @@ Endpoints (mirror the API contract in MCP-SHARED-CONTRACT.md):
     GET  /api/macros                               → macro summaries
     GET  /api/health                               → liveness probe
 
-State is read straight off the shared singletons in
-``octowright.server._state`` (the same ``pool`` and ``scenario_pool`` the MCP
-tools mutate); closed sessions are reconstructed from
-``RECORDINGS_DIR/*.jsonl``.
+State is read through the HTTP-layer seam ``octowright.http.state`` —
+``state.pool`` and ``state.scenario_pool`` forward to the same shared
+singletons that the MCP tools mutate (defined in ``octowright.server._state``).
+Closed sessions are reconstructed from ``RECORDINGS_DIR/*.jsonl``.
 
 Module-level mutables (``RECORDINGS_DIR``, ``FRONTEND_DIR``, runtime port,
 etc.) live in ``state``. Tests should monkeypatch via ``_http.state.X``.
