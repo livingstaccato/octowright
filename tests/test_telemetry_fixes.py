@@ -316,6 +316,55 @@ class TestMacroLabelCardinalityCap:
         assert "brand-new-name" not in seen
 
 
+class TestResetMacroLabelSeen:
+    """Operator-visible reset helper for ``_MACRO_LABEL_SEEN``.
+
+    Dynamic macro names (e.g. ``migrate-table-{uuid}``) can permanently fill
+    the 256-slot cap with junk and force real macros into ``(overflow)``.
+    ``reset_macro_label_seen()`` is the only escape hatch short of a daemon
+    restart — exposed for tests and for an operator who has process access
+    via the existing ``octowright_status`` MCP tool's reporting fields.
+    """
+
+    def test_reset_clears_seen_set_and_returns_prior_size(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from octowright.macros import execution as _execution
+
+        seen: set[str] = set()
+        monkeypatch.setattr(_execution, "_MACRO_LABEL_SEEN", seen)
+        _execution._macro_label("alpha")
+        _execution._macro_label("beta")
+        _execution._macro_label("gamma")
+        assert len(seen) == 3
+
+        prior = _execution.reset_macro_label_seen()
+        assert prior == 3
+        assert len(seen) == 0
+
+    def test_reset_on_empty_set_returns_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from octowright.macros import execution as _execution
+
+        monkeypatch.setattr(_execution, "_MACRO_LABEL_SEEN", set())
+        assert _execution.reset_macro_label_seen() == 0
+
+    def test_reset_lets_overflowed_name_re_enter_after_clear(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """After reset, previously-overflowed names get fresh slots."""
+        from octowright.macros import execution as _execution
+
+        monkeypatch.setattr(_execution, "METRICS_MACRO_LABEL_CAP", 2)
+        seen: set[str] = set()
+        monkeypatch.setattr(_execution, "_MACRO_LABEL_SEEN", seen)
+
+        _execution._macro_label("a")
+        _execution._macro_label("b")
+        # cap reached; "c" collapses.
+        assert _execution._macro_label("c") == _execution._MACRO_LABEL_OVERFLOW
+
+        prior = _execution.reset_macro_label_seen()
+        assert prior == 2
+        # After reset, "c" gets admitted (no longer overflows).
+        assert _execution._macro_label("c") == "c"
+
+
 # ---------------------------------------------------------------------------
 # Fix 3: run_sequence span
 # ---------------------------------------------------------------------------

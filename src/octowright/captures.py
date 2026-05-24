@@ -23,7 +23,13 @@ from urllib.parse import urlparse
 
 from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CAPTURES_DIR
 
-DEFAULT_PREVIEW_CHARS = 2000
+# Capture-specific preview cap. Intentionally smaller than the session-level
+# ``DEFAULT_PREVIEW_CHARS`` (4000) in ``octowright.session._constants``: a
+# capture record always has a full-fidelity copy on disk so the inline preview
+# only needs to give callers enough context to decide whether to slice the
+# full payload. Renamed from ``DEFAULT_PREVIEW_CHARS`` so a future grep for
+# the session-level constant won't pull in this unrelated capture surface.
+CAPTURE_PREVIEW_CHARS = 2000
 DEFAULT_SLICE_CHARS = 4000
 MAX_SLICE_CHARS = 12_000
 MAX_SEARCH_CONTEXT_CHARS = 1_000
@@ -117,7 +123,7 @@ def save_capture(
     root: Path = CAPTURES_DIR,
     max_total_bytes: int = CAPTURE_MAX_TOTAL_BYTES,
     ttl_seconds: float = CAPTURE_TTL_SECONDS,
-    preview_chars: int = DEFAULT_PREVIEW_CHARS,
+    preview_chars: int = CAPTURE_PREVIEW_CHARS,
 ) -> dict[str, Any]:
     """Persist a capture and return a compact wire-facing summary."""
     host = host_for_url(url)
