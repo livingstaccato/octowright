@@ -182,7 +182,7 @@ Span names follow the `octowright.<area>.<verb>` convention. The list below is a
 | Span | Attributes | Emitted by |
 |------|------------|------------|
 | `octowright.bridge.forward_rpc` | `method`, `request_id` | `proxy_supervisor.forward_rpc` (follower leg) |
-| `octowright.browser.handoff` | `instance_id`, `kind`, `close_original` | `browser_pool/lifecycle.handoff_browser` |
+| `octowright.browser.handoff` | `old_instance_id`, `kind`, `headed`, `close_original`, `accept_stateless` | `browser_pool/lifecycle.handoff_browser` |
 | `octowright.browser.launch` | `kind` | `browser_pool/_metrics.launch_span` (wraps `pool.launch`) |
 | `octowright.browser.relaunch_fluid` | `instance_id`, `kind` | `browser_pool/pool.relaunch_fluid` |
 | `octowright.browser.spawn_roster` | `roster_size` | `browser_pool/roster.browser_spawn_roster` |
@@ -190,8 +190,8 @@ Span names follow the `octowright.<area>.<verb>` convention. The list below is a
 | `octowright.macro.run` | `macro`, `instance_id`, `kind` | `macros/execution.run_macro` |
 | `octowright.macro.run_sequence` | `names_count`, `stop_on_failure` | `macros/execution.run_sequence` |
 | `octowright.mcp.request` | `method`, `path` | `_trace_propagation.TraceContextExtractionMiddleware` (leader leg, ends on `http.response.start`) |
-| `octowright.scenario.run_macro` | `scenario`, `macro` | `server/scenarios.scenario_run_macro` |
-| `octowright.scenario.start` | `scenario` | `server/scenarios.scenario_start` |
+| `octowright.scenario.run_macro` | `scenario_id`, `macro`, `role`, `targeted` | `scenarios_pool.ScenarioPool.run_macro` |
+| `octowright.scenario.start` | `scenario_id`, `scenario_name`, `participants` | `scenarios_pool.ScenarioPool.start` |
 | `octowright.session.close` | `instance_id`, `kind` | `session/core_ops_mixin.SessionOpsMixin.close` |
 | `octowright.session.navigate` | `instance_id`, `kind`, `url` | `session/core_page_mixin.SessionPageMixin.navigate` |
 
