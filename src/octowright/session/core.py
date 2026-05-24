@@ -9,11 +9,10 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
-from octowright.browser_pool.viewport import ViewportMode
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
@@ -29,6 +28,24 @@ from octowright.session.core_page_mixin import SessionPageMixin
 # ``session._constants`` so mixin modules can import the same singleton
 # without forming an import cycle with this module.
 __all__ = ["DEFAULT_PREVIEW_CHARS", "BrowserSession"]
+
+# Default for ``BrowserSession.viewport_mode`` — kept as a string literal
+# (rather than ``ViewportMode.UNKNOWN.value``) to avoid importing
+# ``octowright.browser_pool.viewport`` here. That import would trigger
+# ``browser_pool/__init__`` → ``pool`` → ``launch_pipeline`` → ``listeners``,
+# all of which import ``BrowserSession`` back from this module, closing a
+# circular-import cycle when ``octowright.session`` is loaded first (the
+# failure mode when a single ``test_session_*`` file is run in isolation).
+# The string must stay in sync with ``ViewportMode.UNKNOWN`` in
+# ``octowright.browser_pool.viewport``; a ``TYPE_CHECKING`` guarded import
+# below pins the relationship for type checkers and human readers.
+_VIEWPORT_MODE_UNKNOWN = "unknown"
+
+if TYPE_CHECKING:  # pragma: no cover - import-time-only assertion
+    from octowright.browser_pool.viewport import ViewportMode as _ViewportMode
+
+    # Compile-time assertion that the literal default still matches the enum.
+    _: str = _ViewportMode.UNKNOWN.value
 
 
 @dataclass
@@ -54,7 +71,7 @@ class BrowserSession(
     stabilize: bool = False
     trace: bool = False
     har_path: Path | None = None
-    viewport_mode: str = ViewportMode.UNKNOWN.value
+    viewport_mode: str = _VIEWPORT_MODE_UNKNOWN
     viewport_width: int | None = None
     viewport_height: int | None = None
     console: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=1000))
