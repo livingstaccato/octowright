@@ -102,6 +102,7 @@ class FakeBrowserType:
 
 @pytest.fixture
 def isolated_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[BrowserPool, Path]:
+    import octowright.browser_pool.launch_pipeline as _pipeline
     import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
     from octowright import session_manifest as _manifest
@@ -115,7 +116,9 @@ def isolated_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Brow
     monkeypatch.setattr(_defaults, "SESSION_MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(_pool, "RECORDINGS_DIR", recordings)
     monkeypatch.setattr(_manifest, "SESSION_MANIFEST_PATH", manifest_path)
-    monkeypatch.setattr(_pool, "Recorder", FakeRecorder)
+    # Recorder construction lives in launch_pipeline.post_context_setup after
+    # the _launch_impl → launch_pipeline split.
+    monkeypatch.setattr(_pipeline, "Recorder", FakeRecorder)
     monkeypatch.setattr(BrowserSession, "_schedule_markdown_capture", lambda self: None)
 
     context = FakeContext()
