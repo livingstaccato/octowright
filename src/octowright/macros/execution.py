@@ -13,9 +13,9 @@ from provide.telemetry import get_logger
 
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
-from octowright.browser_pool.visuals import _describe_action
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
+from octowright.macros.descriptions import describe_action
 from octowright.macros.repair import repair_preview as repair_preview_impl
 from octowright.macros.repair import suggest_fix as _suggest_fix
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
@@ -32,6 +32,24 @@ if TYPE_CHECKING:
     from octowright.session import BrowserSession
 
 log = get_logger(__name__)
+
+# Action kinds whose ``value`` field carries user-supplied data that often
+# resolves to a credential (``{{password}}``-style placeholders are resolved
+# in-place by ``substitute()`` before dispatch). Redacted before the action
+# dict is embedded in the RuntimeError payload, sent to the macro-pill, or
+# emitted in any log line.
+_REDACT_VALUE_ACTIONS: frozenset[str] = frozenset({"fill", "type", "fill_by"})
+
+
+def _redact_action(action: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``action`` with credential-bearing fields
+    replaced by ``<redacted>``. Non-redacted actions return a copy unchanged
+    so callers can mutate freely without aliasing back into the macro list."""
+    redacted = dict(action)
+    if redacted.get("action") in _REDACT_VALUE_ACTIONS and "value" in redacted:
+        redacted["value"] = "<redacted>"
+    return redacted
+
 
 _MACRO_RUN = counter(
     "octowright_macro_run_total",
@@ -113,7 +131,9 @@ def _resolve_slowmo_ms(slowmo_ms: int | None) -> int:
 
 def _format_status(invocation_stack: list[str] | None, action: dict[str, Any]) -> str:
     chain = " > ".join(invocation_stack) if invocation_stack else ""
-    desc = _describe_action(action)
+    # The pill text is visible to the user and may end up in screenshots /
+    # traces; redact credential fields before handing them to the describer.
+    desc = describe_action(_redact_action(action))
     return f"{chain} | {desc}" if chain else desc
 
 
@@ -239,10 +259,16 @@ async def _run_macro_impl(
             except Exception as exc:
                 bundle = await session.diagnostic_bundle()
                 fix_suggestion = await _suggest_fix(session, action)
+                # The action dict reaches the MCP client AND the structured
+                # log line below. ``substitute()`` has already resolved
+                # ``{{password}}``-style placeholders into the action, so
+                # the raw value field can be a literal credential — strip
+                # it before exposing the payload to either sink.
+                redacted_action = _redact_action(action)
                 payload: dict[str, Any] = {
                     "macro": name,
                     "failed_at_step": index,
-                    "failed_action": action,
+                    "failed_action": redacted_action,
                     "original": repr(exc),
                     "bundle": bundle,
                 }
