@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 from provide.telemetry import get_logger
 
+from octowright import defaults
 from octowright._paths import reject_unsafe_path
 from octowright.defaults import SCENARIO_TEMPLATES_DIR, SCENARIOS_DIR, SUPPORTED_KINDS
 from octowright.scenarios_pool import LiveScenario, ScenarioPool
@@ -100,11 +101,19 @@ def load_python_scenario(path: Path) -> Scenario:
     import sys
 
     # `*.py` scenarios execute arbitrary Python at module import — anything
-    # at top level runs with the daemon's privileges. Treat the scenarios
-    # dir like trusted local config (your own files, not random downloads
-    # or shared-repo contributions). The warning makes the trust boundary
-    # explicit at runtime so an operator who didn't realize the scenarios
-    # dir was on shared storage notices.
+    # at top level runs with the daemon's privileges. Default-deny so a
+    # scenarios dir on shared storage / CI checkout can't be a code-exec
+    # vector. Operators who deliberately ship Python scenarios opt in via
+    # OCTOWRIGHT_ALLOW_PY_SCENARIOS.
+    if not defaults.allow_py_scenarios():
+        raise RuntimeError(
+            f"Python scenario {path} is gated behind "
+            f"{defaults.ALLOW_PY_SCENARIOS_ENV}=1; .py scenarios execute "
+            f"arbitrary code at import. Either convert to .yaml or set "
+            f"{defaults.ALLOW_PY_SCENARIOS_ENV}=1 to opt in."
+        )
+    # Opt-in path: keep the existing runtime warning so the trust boundary
+    # is explicit and audit-able.
     log.warning(
         "scenarios.python_load_executes_arbitrary_code",
         path=str(path),

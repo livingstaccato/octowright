@@ -245,3 +245,33 @@ HTTP_METRICS_ENABLED = _parse_bool_env("OCTOWRIGHT_HTTP_METRICS", True)
 #                     user-supplied value may be confidential.
 INPUT_REDACTION_MODE = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower() or "passwords"
 REDACTED_INPUT_PLACEHOLDER = "<redacted:password>"
+
+# Env var name controlling whether ``.py`` scenario files are loadable.
+# ``.py`` scenarios run arbitrary Python at module import; default OFF so a
+# scenarios dir on shared storage or a CI checkout can't be a code-execution
+# vector. Operators who deliberately ship Python scenarios opt in by setting
+# this to ``1``/``true``/``yes``/``on``.
+ALLOW_PY_SCENARIOS_ENV = "OCTOWRIGHT_ALLOW_PY_SCENARIOS"
+
+
+def allow_py_scenarios() -> bool:
+    """Return True iff ``OCTOWRIGHT_ALLOW_PY_SCENARIOS`` opts into ``.py``
+    scenario loading. Read at call time so tests can monkeypatch the env
+    var without reloading the module."""
+    return _parse_bool_env(ALLOW_PY_SCENARIOS_ENV, False)
+
+
+# Env var name controlling whether persona credential ``*_cmd`` values may
+# invoke a POSIX shell with ``-c`` (``bash -c "..."``, ``sh -c "..."``, etc.).
+# Default OFF so persona YAML — which may come from shared storage or a
+# CI-checked-in directory — can't smuggle arbitrary shell execution into the
+# daemon. Operators who deliberately ship shell-style credential helpers opt
+# in by setting this to ``1``/``true``/``yes``/``on``.
+ALLOW_SHELL_CRED_CMDS_ENV = "OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS"
+
+
+def allow_shell_cred_cmds() -> bool:
+    """Return True iff ``OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS`` opts into
+    ``bash -c`` (and equivalents) for persona credential cmds. Read at call
+    time so tests can monkeypatch the env var without reloading the module."""
+    return _parse_bool_env(ALLOW_SHELL_CRED_CMDS_ENV, False)
