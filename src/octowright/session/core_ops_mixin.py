@@ -43,6 +43,13 @@ class SessionOpsMixin(SessionLike):
     viewport_width: int | None
     viewport_height: int | None
     _BG_TASK_DRAIN_TIMEOUT_SECONDS = 1.0
+    # Max iterations of the iterative drain loop. Bg-task callbacks may
+    # schedule more bg work (markdown capture rescheduled by a
+    # framenavigated event firing mid-close, for example); without this
+    # bound a misbehaving producer could pin _drain_background_tasks
+    # indefinitely. Three passes is enough for the realistic chains we
+    # ship (the producer dies after the closed page rejects its work).
+    _BG_TASK_DRAIN_MAX_PASSES = 3
 
     async def diagnostic_bundle(
         self,
@@ -307,13 +314,31 @@ class SessionOpsMixin(SessionLike):
         return result
 
     async def _drain_background_tasks(self) -> None:
+        # Iterative drain: a bg task whose done-callback schedules a fresh
+        # bg task (e.g. _schedule_markdown_capture firing from a
+        # framenavigated event mid-close) would not appear in a single
+        # snapshot of self._bg_tasks. Loop until the set has nothing new,
+        # bounded by _BG_TASK_DRAIN_MAX_PASSES so a pathological producer
+        # can't pin the close path indefinitely.
         import asyncio
-        import contextlib
 
         current = asyncio.current_task()
-        tasks = {task for task in list(self._bg_tasks) if task is not current}
-        if not tasks:
-            return
+        drained: set[Any] = set()
+        for _ in range(self._BG_TASK_DRAIN_MAX_PASSES):
+            tasks = {task for task in list(self._bg_tasks) if task is not current and task not in drained}
+            if not tasks:
+                return
+            await self._drain_one_pass(tasks)
+            for task in tasks:
+                self._bg_tasks.discard(task)
+                drained.add(task)
+
+    async def _drain_one_pass(self, tasks: set[Any]) -> None:
+        """Await one batch of bg tasks: collect results from finished ones,
+        cancel + await the stragglers. Called repeatedly by
+        ``_drain_background_tasks`` until ``_bg_tasks`` is quiescent."""
+        import asyncio
+        import contextlib
 
         done, pending = await asyncio.wait(tasks, timeout=self._BG_TASK_DRAIN_TIMEOUT_SECONDS)
         for task in done:
@@ -321,14 +346,10 @@ class SessionOpsMixin(SessionLike):
                 continue
             with contextlib.suppress(Exception):
                 task.result()
-
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
-
-        for task in tasks:
-            self._bg_tasks.discard(task)
 
     async def close(self) -> None:
         instance_id = getattr(self, "instance_id", None)

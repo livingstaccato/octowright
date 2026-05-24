@@ -401,3 +401,59 @@ class TestDrainBackgroundTasks:
         assert drained is True
         # _bg_tasks emptied.
         assert task not in inst._bg_tasks
+
+    @pytest.mark.anyio
+    async def test_tasks_added_during_drain_are_also_drained(self, tmp_path: Path) -> None:
+        """A bg task whose done-callback schedules another bg task must be drained too.
+
+        Real-world example: ``capture_markdown`` is scheduled as a bg task by
+        ``_schedule_markdown_capture``. A ``framenavigated`` callback firing
+        during ``asyncio.wait`` adds a fresh markdown-capture task to
+        ``_bg_tasks`` AFTER we snapshotted the set — without the iterative
+        drain that second task leaks a reference to the closed session's
+        recorder and is never cancelled.
+        """
+        inst = _build(tmp_path)
+        second_cancelled = False
+
+        async def _second_hang() -> None:
+            nonlocal second_cancelled
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                second_cancelled = True
+                raise
+
+        async def _first_quick() -> None:
+            return None
+
+        first = asyncio.create_task(_first_quick())
+        # When `first` finishes, schedule a NEW bg task and register it in
+        # _bg_tasks — mirroring how _schedule_markdown_capture wires its own
+        # cleanup callback. The drain must catch this task even though it
+        # didn't exist in the initial snapshot.
+        second_box: dict[str, Any] = {}
+
+        def _spawn_second(_done: Any) -> None:
+            second = asyncio.create_task(_second_hang())
+            inst._bg_tasks.add(second)
+            second_box["task"] = second
+
+        first.add_done_callback(_spawn_second)
+        await asyncio.sleep(0)  # let `first` complete and the callback run
+        inst._bg_tasks.add(first)
+
+        # Tight timeout so the test isn't slow if the iterative drain regresses.
+        SessionOpsMixin._BG_TASK_DRAIN_TIMEOUT_SECONDS = 0.05  # type: ignore[misc]
+        try:
+            await inst._drain_background_tasks()
+        finally:
+            SessionOpsMixin._BG_TASK_DRAIN_TIMEOUT_SECONDS = 1.0  # type: ignore[misc]
+
+        # Both tasks should be drained: the original short one AND the one
+        # spawned mid-drain by its done-callback.
+        assert first not in inst._bg_tasks
+        second = second_box["task"]
+        assert second not in inst._bg_tasks
+        assert second.done()
+        assert second_cancelled, "the second (mid-drain) task was never cancelled"
