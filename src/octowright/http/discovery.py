@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from octowright._wire_utils import looks_like_binary_text
 from octowright.defaults import DISCOVERY_CACHE_MAX_ENTRIES
 from octowright.http import state
 from octowright.http.artifacts import instance_id_from_recording_name as _instance_id_from_recording_name
@@ -290,18 +291,13 @@ def _tail_jsonl(log_path: Path, since: int) -> dict[str, Any]:
     if not log_path.exists():
         return {"events": [], "cursor": since, "total_bytes": 0, "complete": True}
 
-    def _looks_like_binary_preview(value: object) -> bool:
-        return isinstance(value, str) and (
-            (value.startswith('b"') and value.endswith('"')) or (value.startswith("b'") and value.endswith("'"))
-        )
-
     def _sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
         action = event.get("action", "")
         if not (isinstance(action, str) and action.startswith("websocket_")):
             return event
         preview = event.get("payload_preview")
-        is_binary = event.get("is_binary") is True or _looks_like_binary_preview(preview)
-        if not (isinstance(preview, str) and (is_binary or _looks_like_binary_preview(preview))):
+        is_binary = event.get("is_binary") is True or looks_like_binary_text(preview)
+        if not (isinstance(preview, str) and (is_binary or looks_like_binary_text(preview))):
             return event
         size = event.get("payload_size")
         event["payload_preview"] = (
