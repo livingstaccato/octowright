@@ -35,6 +35,21 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def _ws_flush_every_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force flush-per-frame for WS cache tests.
+
+    Production batches the flush (count OR time threshold) so file
+    contents aren't visible until either fires. These tests read the
+    file back after a single write and would race the buffer. Drop
+    both thresholds to 1 so every test write is immediately on disk.
+    """
+    from octowright import defaults
+
+    monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_FRAMES", 1)
+    monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_SECONDS", 0.0)
+
+
 def _make_subject(tmp_path: Path) -> SessionIOMixin:
     """Build an instance carrying just the attributes the mixin touches."""
     log_path = tmp_path / "rec.jsonl"
@@ -139,6 +154,43 @@ class TestAppendWebsocketCacheNoPayload:
         subj._websocket_cache_path = lambda: log_path.with_suffix(".websocket.cache.jsonl")  # type: ignore[attr-defined]
         subj._append_websocket_cache(direction="framesent", id_=1, url="ws://x")
         assert subj.websocket_path.exists()
+
+
+class TestAppendWebsocketCacheBatchedFlush:
+    """Pin the count/time-based flush batching so a regression to either
+    flush-per-frame (perf bottleneck on high-freq feeds) OR no-flush
+    (frames invisible to dashboard tail) trips a test."""
+
+    def test_count_threshold_triggers_flush(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Hit WEBSOCKET_CACHE_FLUSH_FRAMES → buffer is flushed to disk."""
+        from octowright import defaults
+
+        monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_FRAMES", 3)
+        # Disable time-based flush so only count matters.
+        monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_SECONDS", 10_000.0)
+        subj = _make_subject(tmp_path)
+        for i in range(2):
+            subj._append_websocket_cache(direction="framesent", id_=i, url="ws://x")
+        # Two writes < threshold → frames sit in the buffer, may not be on disk.
+        # (Some platforms partial-flush, so we don't assert empty — only that
+        # the count tracker reports the unflushed-frame state.)
+        assert subj._websocket_frames_since_flush == 2
+        subj._append_websocket_cache(direction="framesent", id_=2, url="ws://x")
+        assert subj._websocket_frames_since_flush == 0  # counter reset → flushed
+        assert len(subj.websocket_path.read_text().splitlines()) == 3
+
+    def test_time_threshold_triggers_flush(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Elapsed time since last flush > threshold → next write flushes."""
+        from octowright import defaults
+
+        monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_FRAMES", 10_000)
+        monkeypatch.setattr(defaults, "WEBSOCKET_CACHE_FLUSH_SECONDS", 0.0)
+        subj = _make_subject(tmp_path)
+        subj._append_websocket_cache(direction="framesent", id_=1, url="ws://x")
+        # FLUSH_SECONDS=0 means every elapsed delta beats the threshold,
+        # so each write flushes regardless of count.
+        assert subj._websocket_frames_since_flush == 0
+        assert len(subj.websocket_path.read_text().splitlines()) == 1
 
 
 class TestAppendWebsocketCacheTextPayload:

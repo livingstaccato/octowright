@@ -9,6 +9,7 @@ import ast
 import importlib
 import json
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -87,8 +88,16 @@ class SessionIOMixin(SessionLike):
                 entry["payload_b64"] = payload_b64
         # Keep a single append-mode file handle for the session: high-frequency
         # WS feeds (game servers, market data) can fire thousands of frames
-        # per second, and re-opening + flushing for every frame burns syscalls
-        # and inode locks. The handle is closed in BrowserSession.close().
+        # per second, and re-opening for every frame burns syscalls and inode
+        # locks. The handle is closed (with a final flush) in
+        # ``BrowserSession.close()``.
+        #
+        # Batched flush: a per-frame ``fh.flush()`` would still cost one
+        # syscall per frame. Trade liveness against throughput by flushing
+        # when EITHER the frame count or the elapsed-time threshold is hit.
+        # See defaults.WEBSOCKET_CACHE_FLUSH_FRAMES / SECONDS.
+        from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
+
         if self.websocket_path is None:
             self.websocket_path = self._websocket_cache_path()
             self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,8 +105,18 @@ class SessionIOMixin(SessionLike):
         if fh is None:
             fh = self.websocket_path.open("a", encoding="utf-8")
             self._websocket_fh = fh
+            self._websocket_last_flush_ts = time.monotonic()
+            self._websocket_frames_since_flush = 0
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        fh.flush()
+        frames = getattr(self, "_websocket_frames_since_flush", 0) + 1
+        last_flush = getattr(self, "_websocket_last_flush_ts", 0.0) or time.monotonic()
+        now = time.monotonic()
+        if frames >= WEBSOCKET_CACHE_FLUSH_FRAMES or (now - last_flush) >= WEBSOCKET_CACHE_FLUSH_SECONDS:
+            fh.flush()
+            self._websocket_frames_since_flush = 0
+            self._websocket_last_flush_ts = now
+        else:
+            self._websocket_frames_since_flush = frames
 
     async def _extract_markdown(self, html: str) -> str:
         """Convert HTML to markdown using MarkItDown if available."""
