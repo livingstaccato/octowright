@@ -233,6 +233,10 @@ async def run_supervised_proxy(
 
             async def _remote_supervisor() -> None:
                 attempt = 0
+                # Build the tracing httpx factory once; it's a closure with no
+                # per-connection state, so reusing it across reconnects avoids
+                # an allocation per attempt.
+                httpx_factory = tracing_httpx_client_factory()
                 while True:
                     remote_url = resolve_leader_url(leader_mcp_url)
                     try:
@@ -242,7 +246,7 @@ async def run_supervised_proxy(
                             # chain under the follower's bridge span.
                             async with streamablehttp_client(
                                 remote_url,
-                                httpx_client_factory=tracing_httpx_client_factory(),
+                                httpx_client_factory=httpx_factory,
                             ) as (remote_read, remote_write, get_sid):
                                 remote_write_box["remote_write"] = remote_write
                                 try:

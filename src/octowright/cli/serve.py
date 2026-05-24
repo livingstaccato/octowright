@@ -227,7 +227,7 @@ async def _ensure_leader_or_inline(
     # both observe "no live leader" and both spawn a daemon. The lock is
     # held only across the probe+spawn window; wait_for_daemon polls without
     # holding it so a successful spawn can be observed by other waiters.
-    with _sn.election_lock():
+    async with _sn.async_election_lock():
         existing = _sn.read_lock()
         leader_alive = existing is not None and not _sn.is_stale(existing) and await _sn.probe_http_alive(existing)
         if leader_alive:
@@ -262,7 +262,7 @@ async def _respawn_if_leader_gone(*, http_host: str | None, http_port: int | Non
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
-    with _sn.election_lock():
+    async with _sn.async_election_lock():
         recheck = _sn.read_lock()
         still_alive = recheck is not None and not _sn.is_stale(recheck) and await _sn.probe_http_alive(recheck)
         if still_alive:
