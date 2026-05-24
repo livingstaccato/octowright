@@ -3,16 +3,10 @@
 # SPDX-Comment: Part of octowright.
 #
 
-import os as _os
-
 from octowright.version import VERSION, __version__
 
-# Default OTel service name so OpenObserve / any OTLP backend labels our
-# spans and metrics as "octowright" without the operator setting it. A
-# user-supplied value wins.
-_os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
-
-# Revert the earlier change in cli/serve.py — handled centrally now so
-# all entrypoints (selftest, persona, scenario, etc.) get the default.
+# Default-env application happens in octowright.defaults, which is imported
+# by every CLI entrypoint via the modules they load. Keep __init__.py
+# logic-free per project convention.
 
 __all__ = ["VERSION", "__version__"]

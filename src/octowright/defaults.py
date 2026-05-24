@@ -11,6 +11,13 @@ from pathlib import Path
 
 from octowright.config_paths import user_cache_dir, user_config_dir, user_state_dir
 
+# Default OTel service name. Set as an env-var default (not a constant) so
+# provide.telemetry.setup_telemetry() picks it up via its env-driven
+# config, while still letting any user-supplied PROVIDE_TELEMETRY_SERVICE_NAME
+# win. defaults.py is imported by every CLI entrypoint via the modules
+# they load, so this lands before setup_telemetry() runs.
+os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
+
 DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://example.com")
 
 DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
