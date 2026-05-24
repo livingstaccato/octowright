@@ -26,7 +26,6 @@ from octowright.http import state
 from octowright.http.artifacts import instance_id_from_recording_name as _instance_id_from_recording_name
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.recorder import tail_log
-from octowright.server import _state
 
 
 def _iso(ts: float) -> str:
@@ -249,7 +248,7 @@ def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
 
 
 def _live_session_or_none(session_id: str) -> Any | None:
-    pool = _state.pool
+    pool = state.pool
     return pool.maybe_get(session_id)
 
 

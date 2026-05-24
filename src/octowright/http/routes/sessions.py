@@ -17,7 +17,6 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import octowright.http.state as state
-import octowright.server._state as _state
 from octowright.browser_pool.options import LaunchOptions
 from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
 from octowright.http.artifacts import _build_cache_components
@@ -39,7 +38,7 @@ from octowright.http.session_artifacts import session_artifact_cache
 
 
 async def list_sessions(_request: Request) -> JSONResponse:
-    pool = _state.pool
+    pool = state.pool
     live = [_live_summary(s) for s in pool.iter_sessions()]
     live_paths = {s["log_path"] for s in live}
     closed = _closed_sessions(state.RECORDINGS_DIR, live_paths)
@@ -214,7 +213,7 @@ async def session_launch(request: Request) -> JSONResponse:
         {**payload, "kind": kind, "url": payload.get("url") or DEFAULT_URL}
     ).to_pool_kwargs()
 
-    pool = _state.pool
+    pool = state.pool
     try:
         result = await pool.launch(**launch_kwargs)
     except ValueError as e:
@@ -249,7 +248,7 @@ async def session_close(request: Request) -> JSONResponse:
     callers can distinguish "I closed something" from "nothing to do".
     """
     sid = request.path_params["id"]
-    pool = _state.pool
+    pool = state.pool
     if not pool.has_session(sid):
         return JSONResponse(
             {"error": f"no live session with id {sid!r}; closed sessions cannot be re-closed"},
@@ -298,7 +297,7 @@ async def session_navigate(request: Request) -> JSONResponse:
     if not isinstance(url, str) or not url.strip():
         return JSONResponse({"error": "url is required and must be a non-empty string"}, status_code=400)
 
-    pool = _state.pool
+    pool = state.pool
     if not pool.has_session(sid):
         return JSONResponse(
             {"error": f"no live session with id {sid!r}"},
@@ -330,7 +329,7 @@ async def session_selector_validate(request: Request) -> JSONResponse:
     if not isinstance(selector, str) or not selector.strip():
         return JSONResponse({"error": "selector is required and must be a non-empty string"}, status_code=400)
 
-    pool = _state.pool
+    pool = state.pool
     if not pool.has_session(sid):
         return JSONResponse({"error": f"no live session with id {sid!r}"}, status_code=404)
     session = pool.get(sid)
@@ -353,7 +352,7 @@ async def session_selector_validate(request: Request) -> JSONResponse:
 async def recording_delete(request: Request) -> JSONResponse:
     """DELETE /api/sessions/{id}/recording — remove a closed session's files from disk."""
     sid = request.path_params["id"]
-    pool = _state.pool
+    pool = state.pool
     if pool.has_session(sid):
         return JSONResponse(
             {"error": f"session {sid!r} is still live; close it first"},
@@ -403,7 +402,7 @@ async def session_relaunch(request: Request) -> JSONResponse:
     JSONL has no parseable launch record.
     """
     sid = request.path_params["id"]
-    pool = _state.pool
+    pool = state.pool
     if pool.has_session(sid):
         return JSONResponse(
             {"error": f"session {sid!r} is still live; relaunch only applies to closed sessions"},
