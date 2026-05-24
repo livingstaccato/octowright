@@ -1,0 +1,58 @@
+name: 🧬 Mutation testing (nightly)
+
+on:
+  schedule:
+    # Daily at 06:00 UTC — runs after typical overnight merges, before EU morning.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_COLOR: "1"
+  UV_PYTHON_DOWNLOADS: never
+  # Keep scenarios/profiles quiet during CI — never touch $HOME defaults.
+  OCTOWRIGHT_RECORDINGS: ${{ github.workspace }}/.ci/recordings
+  OCTOWRIGHT_PROFILES_DIR: ${{ github.workspace }}/.ci/profiles
+  OCTOWRIGHT_SCENARIOS_DIR: ${{ github.workspace }}/.ci/scenarios
+  OCTOWRIGHT_MACROS_DIR: ${{ github.workspace }}/.ci/macros
+  OCTOWRIGHT_GOLDENS_DIR: ${{ github.workspace }}/.ci/goldens
+
+jobs:
+  mutmut:
+    name: 🧬 mutmut
+    runs-on: ubuntu-24.04
+    # Visibility-only — never block main. PR signal is the regular test job.
+    continue-on-error: true
+    # Mutation runs are slow; allow up to 4 hours before GitHub forcibly cancels.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/bootstrap-uv
+      # Install Playwright so any mutated paths that try to launch a browser
+      # at import time don't crash before mutmut can score them.
+      - name: Install Playwright browsers + Linux deps
+        run: uv run --active playwright install --with-deps webkit firefox chromium
+      # Run mutation testing via the existing Makefile target so config stays
+      # in one place (pyproject.toml [tool.mutmut]).
+      - name: Run mutmut
+        run: make mutmut
+      # Render the per-mutant HTML report mutmut 3.x exposes for browsing.
+      - name: Generate mutmut HTML report
+        if: always()
+        run: PYTHONPATH=src uv run --active mutmut html
+      # Surface the surviving-mutants count in the workflow summary.
+      - name: Mutmut summary (GitHub step summary)
+        if: always()
+        run: bash ci/mutmut_summary.sh
+      # Attach the HTML report + raw mutmut cache for offline inspection.
+      - name: Upload mutmut report artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutmut-report
+          path: |
+            html/
+            mutants/
+          if-no-files-found: warn
