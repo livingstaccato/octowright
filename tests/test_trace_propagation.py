@@ -503,6 +503,163 @@ async def test_middleware_swallows_span_exit_failure(
 
 
 @pytest.mark.anyio
+async def test_middleware_does_not_leak_context_when_attach_raises(
+    in_memory_tracer: tuple[InMemorySpanExporter, TracerProvider],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If _otel_context.attach raises, the middleware must NOT call detach(None).
+
+    Regression: ``token = _otel_context.attach(ctx)`` previously ran outside
+    any try/finally. If attach raised, ``token`` was never bound — and the
+    later finally block referenced ``token``. With the fix in place, ``token``
+    is initialized to None up front and the finally guards against
+    ``detach(None)`` (which would be a TypeError on the real OTel runtime).
+
+    We assert that:
+      (a) The middleware does not crash with NameError / TypeError when
+          attach raises (it propagates the original RuntimeError cleanly).
+      (b) detach is NOT called at all when there is no token to detach.
+    """
+    exporter, _provider = in_memory_tracer
+    exporter.clear()
+
+    real_attach = tp._otel_context.attach
+    real_detach = tp._otel_context.detach
+    detach_calls: list[Any] = []
+
+    def boom(_ctx: Any) -> Any:
+        raise RuntimeError("attach failed inside the OTel runtime")
+
+    def recording_detach(token: Any) -> None:
+        detach_calls.append(token)
+        # Mirror the real detach contract: passing None would TypeError.
+        if token is None:
+            raise TypeError("detach() called with None — fix not applied")
+        real_detach(token)
+
+    monkeypatch.setattr(tp._otel_context, "attach", boom)
+    monkeypatch.setattr(tp._otel_context, "detach", recording_detach)
+
+    headers = [(b"traceparent", b"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")]
+    app_called: dict[str, bool] = {}
+
+    async def fake_app(*_: Any) -> None:
+        app_called["yes"] = True
+
+    mw = tp.TraceContextExtractionMiddleware(fake_app)
+    send, _ = _make_send_collector()
+    with pytest.raises(RuntimeError, match="attach failed"):
+        await mw(_make_scope(headers), _noop_receive, send)
+    assert app_called == {}, "app must not run when attach failed"
+    assert detach_calls == [], "detach must not be invoked when no token was acquired"
+
+    # Restore so other tests aren't affected by the patched detach.
+    monkeypatch.setattr(tp._otel_context, "attach", real_attach)
+    monkeypatch.setattr(tp._otel_context, "detach", real_detach)
+
+
+@pytest.mark.anyio
+async def test_middleware_detaches_token_when_span_open_raises(
+    in_memory_tracer: tuple[InMemorySpanExporter, TracerProvider],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: token detach must run even when span opening raises.
+
+    Concrete failure mode: ``attach(ctx)`` succeeds (token acquired), then
+    ``tracer.start_as_current_span(...)`` raises (e.g. a broken provider).
+    Under the original layout, ``detach(token)`` sat inside a try/finally
+    that wrapped ``self.app(...)`` — so if the span open raised before the
+    try began, the token was attached but never detached, leaking the
+    upstream context onto the asyncio task.
+
+    With the fix, ``token`` is initialized to None up front, the attach +
+    span open + app run + detach all sit in a single try/finally, and the
+    finally always calls ``detach(token)`` when token is not None.
+    """
+    exporter, _provider = in_memory_tracer
+    exporter.clear()
+
+    real_detach = tp._otel_context.detach
+    detach_calls: list[Any] = []
+
+    def recording_detach(token: Any) -> None:
+        detach_calls.append(token)
+        real_detach(token)
+
+    monkeypatch.setattr(tp._otel_context, "detach", recording_detach)
+
+    class BrokenTracer:
+        def start_as_current_span(self, _name: str, **_kw: Any) -> Any:
+            raise RuntimeError("span open broken")
+
+    monkeypatch.setattr(tp, "_tracing_get_tracer", lambda _name: BrokenTracer())
+
+    headers = [(b"traceparent", b"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")]
+    app_called: dict[str, bool] = {}
+
+    async def fake_app(*_: Any) -> None:
+        # Should never run — span open raises before the app is invoked.
+        app_called["yes"] = True
+
+    mw = tp.TraceContextExtractionMiddleware(fake_app)
+    send, _ = _make_send_collector()
+    with pytest.raises(RuntimeError, match="span open broken"):
+        await mw(_make_scope(headers), _noop_receive, send)
+
+    assert app_called == {}, "broken span open must short-circuit app dispatch"
+    assert len(detach_calls) == 1, f"token must be detached exactly once; got {detach_calls!r}"
+    assert detach_calls[0] is not None, "detach must be called with a real token, not None"
+
+
+@pytest.mark.anyio
+async def test_middleware_propagator_extract_failure_does_not_attach(
+    in_memory_tracer: tuple[InMemorySpanExporter, TracerProvider],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """propagate.extract raising must not result in any attach/detach calls.
+
+    Extract failure falls through the early-return branch — no context to
+    attach, so no token, so no detach.
+    """
+    exporter, _provider = in_memory_tracer
+    exporter.clear()
+
+    real_attach = tp._otel_context.attach
+    real_detach = tp._otel_context.detach
+    attach_calls: list[Any] = []
+    detach_calls: list[Any] = []
+
+    def recording_attach(ctx: Any) -> Any:
+        attach_calls.append(ctx)
+        return real_attach(ctx)
+
+    def recording_detach(token: Any) -> None:
+        detach_calls.append(token)
+        real_detach(token)
+
+    monkeypatch.setattr(tp._otel_context, "attach", recording_attach)
+    monkeypatch.setattr(tp._otel_context, "detach", recording_detach)
+
+    def boom(_carrier: dict[str, str]) -> Any:
+        raise RuntimeError("broken propagator extract")
+
+    monkeypatch.setattr(tp._otel_propagate, "extract", boom)
+
+    called: dict[str, bool] = {}
+
+    async def fake_app(*_: Any) -> None:
+        called["yes"] = True
+
+    mw = tp.TraceContextExtractionMiddleware(fake_app)
+    send, _ = _make_send_collector()
+    await mw(_make_scope([(b"traceparent", b"badness")]), _noop_receive, send)
+
+    assert called == {"yes": True}
+    assert attach_calls == [], "extract failure must short-circuit before attach"
+    assert detach_calls == [], "no token acquired -> no detach"
+
+
+@pytest.mark.anyio
 async def test_middleware_send_wrapper_only_ends_span_on_first_response_start(
     in_memory_tracer: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
