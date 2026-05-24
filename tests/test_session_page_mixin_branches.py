@@ -286,6 +286,142 @@ class TestActions:
         subj.recorder.record.assert_called_once_with("press_key", key="Tab")
 
 
+# ─── input redaction (passwords) ───────────────────────────────────────────
+
+
+def _make_input_target(input_type: str | None) -> MagicMock:
+    """Build a _target() mock whose locator(...).first.evaluate() returns input_type.
+
+    None simulates locator.evaluate() raising (e.g. element detached); the
+    redaction policy must default to NOT redacting in that case so a flaky
+    DOM lookup never accidentally falsifies non-secret recordings.
+    """
+    target = MagicMock()
+    target.type = AsyncMock()
+    target.fill = AsyncMock()
+    # The locator(selector) call has to satisfy:
+    #   - _resolve_semantic_metadata: ``.aria_snapshot()``
+    #   - _is_password_input:         ``.first.evaluate(js)``
+    locator_mock = MagicMock()
+    locator_mock.aria_snapshot = AsyncMock(return_value="")
+    first_mock = MagicMock()
+    if input_type is None:
+        first_mock.evaluate = AsyncMock(side_effect=RuntimeError("locator gone"))
+    else:
+        first_mock.evaluate = AsyncMock(return_value=input_type)
+    locator_mock.first = first_mock
+    target.locator = MagicMock(return_value=locator_mock)
+    return target
+
+
+def _make_redaction_subject(tmp_path: Path, input_type: str | None) -> SessionPageMixin:
+    """Reusable subject builder for redaction tests."""
+    subj = SessionPageMixin.__new__(SessionPageMixin)
+    subj._last_mcp_navigation = None
+    subj.page = MagicMock()
+    subj.pages = [subj.page]
+    subj.recorder = MagicMock()
+    subj.recorder.record = MagicMock()
+    target = _make_input_target(input_type)
+    subj._target = lambda: target  # type: ignore[attr-defined]
+    return subj
+
+
+class TestInputRedaction:
+    """Passwords typed/filled into <input type=password> must NOT land in the
+    JSONL record. The page must still receive the real value."""
+
+    @pytest.mark.anyio
+    async def test_default_redacts_password_field_for_type(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """type_text into a password field → recorder text is the placeholder, NOT the secret."""
+        monkeypatch.delenv("OCTOWRIGHT_REDACT_INPUTS", raising=False)
+        from octowright.defaults import REDACTED_INPUT_PLACEHOLDER
+
+        subj = _make_redaction_subject(tmp_path, "password")
+        await subj.type_text("#pw", "hunter2-secret!", None)
+        target = subj._target()
+        # Page got the real value:
+        target.type.assert_awaited_once_with("#pw", "hunter2-secret!", delay=0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        # Recorder got the redacted placeholder:
+        call = subj.recorder.record.call_args
+        assert call.args == ("type",)
+        assert call.kwargs["text"] == REDACTED_INPUT_PLACEHOLDER
+        assert call.kwargs["text"] != "hunter2-secret!"
+
+    @pytest.mark.anyio
+    async def test_default_redacts_password_field_for_fill(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """fill into a password field → recorder value is the placeholder."""
+        monkeypatch.delenv("OCTOWRIGHT_REDACT_INPUTS", raising=False)
+        from octowright.defaults import REDACTED_INPUT_PLACEHOLDER
+
+        subj = _make_redaction_subject(tmp_path, "password")
+        await subj.fill("#pw", "hunter2-secret!")
+        target = subj._target()
+        target.fill.assert_awaited_once_with("#pw", "hunter2-secret!", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        call = subj.recorder.record.call_args
+        assert call.args == ("fill",)
+        assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
+
+    @pytest.mark.anyio
+    async def test_default_does_not_redact_text_field(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default mode 'passwords' must NOT redact regular text inputs."""
+        monkeypatch.delenv("OCTOWRIGHT_REDACT_INPUTS", raising=False)
+        subj = _make_redaction_subject(tmp_path, "text")
+        await subj.type_text("#name", "alice", None)
+        call = subj.recorder.record.call_args
+        assert call.kwargs["text"] == "alice"
+
+    @pytest.mark.anyio
+    async def test_all_mode_redacts_text_field(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """OCTOWRIGHT_REDACT_INPUTS=all redacts even type=text fields."""
+        monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "all")
+        from octowright.defaults import REDACTED_INPUT_PLACEHOLDER
+
+        subj = _make_redaction_subject(tmp_path, "text")
+        await subj.fill("#name", "alice")
+        target = subj._target()
+        target.fill.assert_awaited_once_with("#name", "alice", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        call = subj.recorder.record.call_args
+        assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
+
+    @pytest.mark.anyio
+    async def test_off_mode_disables_redaction(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """OCTOWRIGHT_REDACT_INPUTS=off → password fields are NOT redacted (legacy)."""
+        monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "off")
+        subj = _make_redaction_subject(tmp_path, "password")
+        await subj.fill("#pw", "hunter2-secret!")
+        call = subj.recorder.record.call_args
+        assert call.kwargs["value"] == "hunter2-secret!"
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("mode", ["off", "passwords", "all"])
+    async def test_page_receives_unredacted_value_always(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    ) -> None:
+        """No matter the policy, the page MUST receive the real value (typing works)."""
+        monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", mode)
+        subj = _make_redaction_subject(tmp_path, "password")
+        await subj.fill("#pw", "real-secret-value")
+        target = subj._target()
+        target.fill.assert_awaited_once_with("#pw", "real-secret-value", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+
+    @pytest.mark.anyio
+    async def test_locator_evaluate_failure_does_not_break_type(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the DOM type lookup raises, fall back to NOT redacting (don't break typing)."""
+        monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "passwords")
+        subj = _make_redaction_subject(tmp_path, None)  # evaluate raises
+        # Must not raise — the page action still goes through.
+        await subj.type_text("#x", "value", None)
+        target = subj._target()
+        target.type.assert_awaited_once()
+
+
 # ─── screenshot / snapshot / evaluate ───────────────────────────────────────
 
 

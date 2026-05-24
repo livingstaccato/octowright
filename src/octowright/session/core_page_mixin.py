@@ -6,15 +6,50 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from provide.telemetry import get_logger
+
 from octowright._tracing import histogram, span
-from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from octowright.defaults import (
+    DEFAULT_ACTION_TIMEOUT_MS,
+    DEFAULT_NAV_TIMEOUT_MS,
+    REDACTED_INPUT_PLACEHOLDER,
+)
 from octowright.session._protocols import SessionLike
+
+log = get_logger(__name__)
+
+# Recognised values for the OCTOWRIGHT_REDACT_INPUTS env var. Re-read on
+# every type/fill call so monkeypatched env changes (and operator
+# adjustments without a restart) take effect immediately.
+_REDACTION_MODES: frozenset[str] = frozenset({"off", "passwords", "all"})
+
+
+def _current_redaction_mode() -> str:
+    """Return the effective input-redaction mode for the current call.
+
+    Reads ``OCTOWRIGHT_REDACT_INPUTS`` at call time. Unknown values fall
+    back to ``"passwords"`` (safer default than silently disabling
+    redaction) and emit a one-time debug log so a typo is at least
+    observable.
+    """
+    raw = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower() or "passwords"
+    if raw not in _REDACTION_MODES:
+        log.debug(
+            "core_page_mixin.unknown_redaction_mode",
+            value=raw,
+            fallback="passwords",
+            supported=sorted(_REDACTION_MODES),
+        )
+        return "passwords"
+    return raw
+
 
 _NAVIGATE_DURATION = histogram(
     "octowright_session_navigate_duration_seconds",
@@ -197,15 +232,49 @@ class SessionPageMixin(SessionLike):
         await self._target().click(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("click", selector=selector, **meta)
 
+    async def _is_password_input(self, selector: str) -> bool:
+        """Best-effort check: does *selector* resolve to ``<input type=password>``?
+
+        Uses ``locator.first.evaluate(...)`` so multi-match selectors don't
+        raise. Any Playwright/JS error swallows to ``False`` — the redaction
+        policy treats a failed lookup as "not password" so we never falsify
+        a non-secret recording, but the caller can still escalate to
+        unconditional redaction via ``OCTOWRIGHT_REDACT_INPUTS=all``.
+        """
+        try:
+            loc = self._target().locator(selector).first
+            kind = await loc.evaluate("el => (el && el.type) ? String(el.type).toLowerCase() : ''")
+        except Exception as exc:
+            log.debug("core_page_mixin.password_lookup_failed", selector=selector, error=str(exc))
+            return False
+        return kind == "password"
+
+    async def _redacted_or_original(self, selector: str, value: str) -> str:
+        """Return ``REDACTED_INPUT_PLACEHOLDER`` if the current redaction
+        policy says to scrub this value, else *value* unchanged. The page
+        action itself always receives the original value — only the JSONL
+        record sees the result of this call."""
+        mode = _current_redaction_mode()
+        if mode == "off":
+            return value
+        if mode == "all":
+            return REDACTED_INPUT_PLACEHOLDER
+        # mode == "passwords"
+        if await self._is_password_input(selector):
+            return REDACTED_INPUT_PLACEHOLDER
+        return value
+
     async def type_text(self, selector: str, text: str, delay_ms: int | None) -> None:
         meta = await self._resolve_semantic_metadata(selector)
         await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("type", selector=selector, text=text, delay_ms=delay_ms, **meta)
+        recorded_text = await self._redacted_or_original(selector, text)
+        self.recorder.record("type", selector=selector, text=recorded_text, delay_ms=delay_ms, **meta)
 
     async def fill(self, selector: str, value: str) -> None:
         meta = await self._resolve_semantic_metadata(selector)
         await self._target().fill(selector, value, timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("fill", selector=selector, value=value, **meta)
+        recorded_value = await self._redacted_or_original(selector, value)
+        self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     async def press_key(self, key: str) -> None:
         await self.page.keyboard.press(key)
