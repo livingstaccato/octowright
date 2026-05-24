@@ -13,6 +13,7 @@ from provide.telemetry import get_logger
 
 from octowright._tracing import counter, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 
 _SESSION_CLOSED = counter(
@@ -22,7 +23,12 @@ _SESSION_CLOSED = counter(
 
 log = get_logger(__name__)
 
-DEFAULT_PREVIEW_CHARS = 4000
+# Re-exported so existing ``from octowright.session.core_ops_mixin import
+# DEFAULT_PREVIEW_CHARS`` callers keep resolving the same singleton from
+# ``session._constants`` — the prior in-module shadow could drift out of
+# sync with the canonical value in ``session.core`` (both were 4000 but the
+# duplication was an accident waiting to happen).
+__all__ = ["DEFAULT_PREVIEW_CHARS", "SessionOpsMixin"]
 
 
 def _timestamp() -> str:
