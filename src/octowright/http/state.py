@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys as _sys
 from pathlib import Path
+from types import ModuleType as _ModuleType
 from typing import Any
 
 from provide.telemetry import get_logger
@@ -95,24 +97,40 @@ def runtime_status() -> dict[str, Any]:
 # Shared-singleton seam: ``pool`` and ``scenario_pool`` live on
 # ``octowright.server._state`` (the MCP server owns the lifecycle). HTTP-layer
 # code reads them via ``state.pool`` / ``state.scenario_pool`` so the seam is
-# in one place. Module ``__getattr__`` forwards to ``_server_state`` on every
-# access, so the values are always live. ``monkeypatch.setattr(state, "pool",
-# X)`` plants a real attribute on this module which takes precedence over
-# ``__getattr__`` for the duration of the patch (and is removed on teardown,
-# restoring the forwarding behaviour). Tests that still patch
-# ``server._state.pool`` continue to work because the forwarding path reads
-# the current value at access time.
+# in one place. Both reads AND writes forward to ``_server_state`` via a
+# module-class descriptor: ``getattr(state, "pool")`` returns
+# ``server._state.pool`` and ``setattr(state, "pool", X)`` mutates
+# ``server._state.pool``. This keeps ``monkeypatch.setattr(state, "pool", X)``
+# from caching a stale real attribute on this module (which would otherwise
+# shadow the forwarder for the rest of the test session after teardown).
 # ---------------------------------------------------------------------------
 
-_FORWARDED_NAMES = frozenset({"pool", "scenario_pool"})
+
+def _server_state() -> Any:
+    from octowright.server import _state
+
+    return _state
 
 
-def __getattr__(name: str) -> Any:
-    if name in _FORWARDED_NAMES:
-        from octowright.server import _state as _server_state
+class _StateModule(_ModuleType):
+    @property
+    def pool(self) -> Any:
+        return _server_state().pool
 
-        return getattr(_server_state, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    @pool.setter
+    def pool(self, value: Any) -> None:
+        _server_state().pool = value
+
+    @property
+    def scenario_pool(self) -> Any:
+        return _server_state().scenario_pool
+
+    @scenario_pool.setter
+    def scenario_pool(self, value: Any) -> None:
+        _server_state().scenario_pool = value
+
+
+_sys.modules[__name__].__class__ = _StateModule
 
 
 __all__ = [
