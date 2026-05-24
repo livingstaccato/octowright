@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright._tracing import span
 from octowright.browser_pool.launch_helpers import next_har_path
 from octowright.session_manifest import remove_session as remove_manifest_session
 
@@ -61,48 +62,62 @@ async def handoff_browser(
     close_original: bool = True,
     accept_stateless: bool = False,
 ) -> dict[str, Any]:
+    # Wrap the full handoff in a span so close + launch nest cleanly under it
+    # in the trace tree. Without a parent span the only signal an operator
+    # had was two unrelated `browser.close` / `browser.launch` events with
+    # no semantic link back to the originating handoff request.
     source = pool.get(old_instance_id)
     source_profile = source.profile
     source_user_data_dir = getattr(source, "user_data_dir", None)
-    if source_profile is None and source_user_data_dir is None and not accept_stateless:
-        raise ValueError(
-            "handoff would be stateless: source has no profile/user_data_dir; pass accept_stateless=True to proceed"
-        )
-    if not close_original and (source_profile is not None or source_user_data_dir is not None):
-        raise ValueError("persistent handoff requires close_original=True so the state directory can be safely reused")
-
-    target_url = getattr(source.page, "url", None) or source.url
-    session_scoped = source_profile is None and source_user_data_dir is not None
-    close_result: dict[str, Any] | None = None
-    if close_original:
-        close_result = await pool.close(old_instance_id)
-
-    # Don't overwrite the prior HAR — handoff gets a fresh sibling path.
-    source_har_path = getattr(source, "har_path", None)
-    next_har = next_har_path(source_har_path) if source_har_path else None
-    launch = await pool.launch(
+    with span(
+        "octowright.browser.handoff",
+        old_instance_id=old_instance_id,
         kind=source.kind,
-        url=target_url,
         headed=headed,
-        label=source.label,
-        profile=source_profile,
-        stabilize=getattr(source, "stabilize", False),
-        trace=getattr(source, "trace", False),
-        har=bool(source_har_path),
-        har_path=str(next_har) if next_har else None,
-        session=session_scoped,
-    )
+        close_original=close_original,
+        accept_stateless=accept_stateless,
+    ):
+        if source_profile is None and source_user_data_dir is None and not accept_stateless:
+            raise ValueError(
+                "handoff would be stateless: source has no profile/user_data_dir; pass accept_stateless=True to proceed"
+            )
+        if not close_original and (source_profile is not None or source_user_data_dir is not None):
+            raise ValueError(
+                "persistent handoff requires close_original=True so the state directory can be safely reused"
+            )
 
-    return {
-        "ok": True,
-        "old_instance_id": old_instance_id,
-        "new_instance_id": launch["instance_id"],
-        "old_closed": bool(close_result and close_result.get("closed")),
-        "profile": source_profile,
-        "kind": source.kind,
-        "url": target_url,
-        "har_path": launch.get("har_path"),
-    }
+        target_url = getattr(source.page, "url", None) or source.url
+        session_scoped = source_profile is None and source_user_data_dir is not None
+        close_result: dict[str, Any] | None = None
+        if close_original:
+            close_result = await pool.close(old_instance_id)
+
+        # Don't overwrite the prior HAR — handoff gets a fresh sibling path.
+        source_har_path = getattr(source, "har_path", None)
+        next_har = next_har_path(source_har_path) if source_har_path else None
+        launch = await pool.launch(
+            kind=source.kind,
+            url=target_url,
+            headed=headed,
+            label=source.label,
+            profile=source_profile,
+            stabilize=getattr(source, "stabilize", False),
+            trace=getattr(source, "trace", False),
+            har=bool(source_har_path),
+            har_path=str(next_har) if next_har else None,
+            session=session_scoped,
+        )
+
+        return {
+            "ok": True,
+            "old_instance_id": old_instance_id,
+            "new_instance_id": launch["instance_id"],
+            "old_closed": bool(close_result and close_result.get("closed")),
+            "profile": source_profile,
+            "kind": source.kind,
+            "url": target_url,
+            "har_path": launch.get("har_path"),
+        }
 
 
 async def shutdown_pool(pool: BrowserPool) -> None:
