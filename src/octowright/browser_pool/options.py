@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
-from octowright.defaults import SUPPORTED_KINDS
+from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,43 @@ class LaunchOptions:
         launch_options.validate()
         return launch_options
 
+    @classmethod
+    def from_launch_record(cls, record: dict[str, Any]) -> LaunchOptions:
+        """Translate a JSONL ``launch`` event back into ``LaunchOptions``.
+
+        Unlike ``from_mapping`` (flat dict matching the kwarg names), the
+        recording shape uses a nested ``viewport`` dict and stores video
+        capture as a ``video_dir`` path rather than a ``record_video`` bool.
+        Pre-this-schema recordings also lack the explicit ``headed`` field;
+        the historical default for those is ``True``. HAR rotation is the
+        caller's job — chain ``.with_har_rotated()`` if you want it.
+        """
+        viewport = record.get("viewport") if isinstance(record.get("viewport"), dict) else None
+        return cls.from_mapping(
+            {
+                "kind": record["kind"],
+                "url": record.get("url") or DEFAULT_URL,
+                "label": record.get("label"),
+                "profile": record.get("profile"),
+                "viewport_w": viewport.get("w") if viewport else None,
+                "viewport_h": viewport.get("h") if viewport else None,
+                "headed": record.get("headed", True),
+                "stabilize": record.get("stabilize", False),
+                "record_video": bool(record.get("video_dir")),
+                "trace": record.get("trace", False),
+                "har": bool(record.get("har")),
+                "har_path": record.get("har_path"),
+                "har_mode": record.get("har_mode", "minimal"),
+                "har_url_filter": record.get("har_url_filter"),
+                "har_content": record.get("har_content"),
+                "badge": record.get("badge", True),
+                "badge_position": record.get("badge_position", _BADGE_POSITION_DEFAULT),
+                "tile": record.get("tile", False),
+                "ephemeral": record.get("ephemeral", False),
+                "session": record.get("session", False),
+            }
+        )
+
     def validate(self) -> None:
         if self.kind not in SUPPORTED_KINDS:
             raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {self.kind!r}")
@@ -83,3 +121,50 @@ class LaunchOptions:
 
     def session_name(self, instance_id: str) -> str:
         return self.label or instance_id
+
+    def to_pool_kwargs(self) -> dict[str, Any]:
+        """Flatten back to the kwarg dict accepted by ``BrowserPool.launch``.
+
+        This is the canonical shape every call site (``browser_launch``,
+        ``browser_quick_launch``, HTTP ``session_launch``, JSONL relaunch)
+        funnels through, so adding a new field is a one-line edit here +
+        one new dataclass attribute above.
+        """
+        return {
+            "kind": self.kind,
+            "url": self.url,
+            "headed": self.headed,
+            "label": self.label,
+            "viewport_w": self.viewport_w,
+            "viewport_h": self.viewport_h,
+            "profile": self.profile,
+            "stabilize": self.stabilize,
+            "record_video": self.record_video,
+            "trace": self.trace,
+            "har": self.har,
+            "har_path": self.har_path,
+            "har_mode": self.har_mode,
+            "har_url_filter": self.har_url_filter,
+            "har_content": self.har_content,
+            "badge": self.badge,
+            "badge_position": self.badge_position,
+            "tile": self.tile,
+            "ephemeral": self.ephemeral,
+            "session": self.session,
+        }
+
+    def with_har_rotated(self) -> LaunchOptions:
+        """Return a copy whose ``har_path`` won't clobber an existing recording.
+
+        No-op when ``har_path`` is unset. When set, picks the next free
+        sibling path via ``rotate_har_path`` and re-flags ``har=True`` so
+        relaunch/handoff callers that copy a session's HAR config don't
+        have to also remember to set ``har``.
+        """
+        if not self.har_path:
+            return self
+        # Local import to avoid a launch_helpers → options circular import.
+        from octowright.browser_pool.launch_helpers import rotate_har_path
+
+        rotated = rotate_har_path(Path(self.har_path))
+        return replace(self, har=True, har_path=str(rotated) if rotated else None)
