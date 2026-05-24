@@ -170,6 +170,7 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_PROFILE` — comma-separated capability-profile names to slim the LLM tool surface; unset or `all` registers everything (see "Capability Profiles" above)
 - `OCTOWRIGHT_TAIL_POLL_SECONDS` / `OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS` — WS `/tail` poll interval and quiet-stream keepalive cadence (defaults 1.0 / 15.0)
 - `OCTOWRIGHT_DASHBOARD_DISCONNECT_POLL_SECONDS` / `OCTOWRIGHT_DASHBOARD_HEARTBEAT_SECONDS` — SSE `/api/dashboard/events` disconnect-detection cadence and keepalive interval (defaults 0.05 / 15.0)
+- `OCTOWRIGHT_REDACT_INPUTS` — record-time scrubbing of user-typed values (`type_text` / `fill`) in the per-session JSONL stream. `off` records the literal value (legacy, leaks secrets to anyone reading `/api/sessions/{id}/events`), `passwords` (DEFAULT) replaces values typed into `<input type="password">` with `<redacted:password>` while the page still receives the real value, `all` redacts every typed/filled value regardless of element type. This is the record-time companion to the save-time `macros/lint.py` credential check — the linter only fires when an operator saves a recording as a macro, so unless this is set the JSONL on disk still contains the cleartext password.
 
 ## Telemetry (OpenTelemetry)
 
