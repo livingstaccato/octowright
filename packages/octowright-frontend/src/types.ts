@@ -124,8 +124,10 @@ export interface MacroValidationIssue {
 
 export interface MacroValidationResponse {
   ok: boolean;
-  valid: boolean;
+  valid?: boolean;
   issues: MacroValidationIssue[];
+  issue_count?: number;
+  error_count?: number;
   message?: string;
 }
 

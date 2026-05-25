@@ -16,7 +16,7 @@ from octowright import _format as fmt
 from octowright import macros as macro_mod
 from octowright import runner as runner_mod
 from octowright import scenarios as scenario_mod
-from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.mcp_types import (
     ScenarioParticipant,
     ScenarioParticipantsResult,

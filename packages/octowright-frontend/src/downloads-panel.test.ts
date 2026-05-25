@@ -77,4 +77,28 @@ describe("renderDownloadsPanel", () => {
     const sizeCell = container.querySelector(".downloads-panel__size");
     expect(sizeCell?.textContent).toContain("2.0 KB");
   });
+
+  it("falls back from suggested filename to basename and unknown", () => {
+    renderDownloadsPanel(container, [
+      { ...SAMPLE[0]!, suggested_filename: "", path: "C:\\tmp\\fallback.bin" },
+      { ...SAMPLE[1]!, suggested_filename: "", path: "" },
+      { ...SAMPLE[1]!, suggested_filename: "", path: "/" },
+    ]);
+    const filenames = Array.from(container.querySelectorAll(".downloads-panel__filename"), (el) => el.textContent);
+    expect(filenames).toEqual(["fallback.bin", "(unknown)", "/"]);
+  });
+
+  it("formats byte, megabyte, gigabyte, missing, and invalid sizes", () => {
+    renderDownloadsPanel(container, [
+      { ...SAMPLE[0]!, size_bytes: 512 },
+      { ...SAMPLE[0]!, suggested_filename: "mb.bin", size_bytes: 2 * 1024 * 1024 },
+      { ...SAMPLE[0]!, suggested_filename: "gb.bin", size_bytes: 2 * 1024 * 1024 * 1024 },
+      { ...SAMPLE[0]!, suggested_filename: "missing.bin" },
+      { ...SAMPLE[0]!, suggested_filename: "bad.bin", size_bytes: Number.POSITIVE_INFINITY },
+      { ...SAMPLE[0]!, suggested_filename: "negative.bin", size_bytes: -1 },
+    ]);
+
+    const sizes = Array.from(container.querySelectorAll(".downloads-panel__size"), (el) => el.textContent);
+    expect(sizes).toEqual(["512 B", "2.0 MB", "2.00 GB", "", "", ""]);
+  });
 });

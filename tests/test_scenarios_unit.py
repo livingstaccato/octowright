@@ -24,7 +24,6 @@ from octowright import scenarios as _scenarios
 from octowright.scenarios import (
     Participant,
     Scenario,
-    ScenarioPool,
     _validate_scenario,
     list_scenarios,
     load_python_scenario,
@@ -33,6 +32,7 @@ from octowright.scenarios import (
     resolve_launch_kwargs,
     resolve_startup_macros,
 )
+from octowright.scenarios_pool import ScenarioPool
 
 # ---------------------------------------------------------------------------
 # fixtures

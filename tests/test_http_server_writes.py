@@ -43,6 +43,12 @@ def isolated_recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path
     rec = tmp_path / "recordings"
     rec.mkdir()
     monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
+    # LaunchOptions.from_launch_record validates HAR path containment against
+    # defaults.RECORDINGS_DIR — patch both so relaunch-from-JSONL tests can
+    # write har_path values under the tmp dir.
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
     from octowright.http.discovery import invalidate_recording_index
 
     invalidate_recording_index()

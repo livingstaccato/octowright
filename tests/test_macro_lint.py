@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from octowright.macros.lint import Issue, lint_macro
+from octowright.macros.runtime import _ACTION_MAP
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,6 +26,12 @@ def _macro(actions: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _codes(issues: list[Issue]) -> list[str]:
     return [i.code for i in issues]
+
+
+def test_runtime_actions_are_known_to_linter() -> None:
+    issues = lint_macro({"actions": [{"action": name} for name in _ACTION_MAP]})
+
+    assert "unknown_action" not in _codes(issues)
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTelemetry } from "@provide-io/telemetry";
 import {
   apiErrorsCounter,
@@ -27,6 +27,7 @@ describe("telemetry", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     setupTelemetry({
       serviceName: "octowright-frontend-test",
       version: "test",
@@ -51,6 +52,33 @@ describe("telemetry", () => {
     it("returns 'development' for localhost", () => {
       // jsdom default URL is http://localhost/, so this should hit the dev branch.
       expect(detectEnvironment()).toBe("development");
+    });
+    it("returns 'development' for RFC1918 dashboard hosts", () => {
+      vi.stubGlobal("window", { location: { hostname: "192.168.1.20" } });
+      expect(detectEnvironment()).toBe("development");
+    });
+    it("returns 'production' for non-local hosts", () => {
+      vi.stubGlobal("window", { location: { hostname: "octowright.example" } });
+      expect(detectEnvironment()).toBe("production");
+    });
+  });
+
+  describe("global handlers", () => {
+    it("handle window error and unhandled rejection events", () => {
+      initTelemetry({ pageName: "handlers" });
+      const errorEvent = new Event("error") as ErrorEvent;
+      Object.defineProperties(errorEvent, {
+        message: { value: "boom" },
+        filename: { value: "app.js" },
+        lineno: { value: 1 },
+        colno: { value: 2 },
+      });
+      const rejectionEvent = new Event("unhandledrejection") as PromiseRejectionEvent;
+      Object.defineProperty(rejectionEvent, "reason", { value: "nope" });
+      expect(() => {
+        window.dispatchEvent(errorEvent);
+        window.dispatchEvent(rejectionEvent);
+      }).not.toThrow();
     });
   });
 

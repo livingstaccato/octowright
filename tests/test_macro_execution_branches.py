@@ -29,6 +29,7 @@ from octowright.macros import execution as _execution
 from octowright.macros.execution import (
     _format_status,
     _push_status,
+    _redact_action,
     _resolve_slowmo_ms,
     run_macro,
     run_sequence,
@@ -80,6 +81,13 @@ class TestFormatStatus:
         """None stack treated same as empty."""
         result = _format_status(None, {"action": "navigate", "url": "https://example.com"})
         assert " | " not in result
+
+    def test_type_text_is_redacted_before_visible_status(self) -> None:
+        redacted = _redact_action({"action": "type", "selector": "#pw", "text": "secret"})
+        result = _format_status([], {"action": "type", "selector": "#pw", "text": "secret"})
+
+        assert redacted["text"] == "<redacted>"
+        assert "secret" not in result
 
 
 # ─── _push_status ────────────────────────────────────────────────────────────
@@ -267,10 +275,24 @@ class TestRunMacroHappyPath:
     async def test_args_used_reflects_caller_args(
         self, fake_session: _FakeSession, patched_runners: dict[str, Any]
     ) -> None:
-        """Caller args echoed in args_used."""
+        """Caller args echoed in args_used, with secret-like keys redacted."""
         patched_runners["register"]("m", [])
         out = await run_macro(fake_session, "m", args={"email": "me@x", "pw": "secret"})
-        assert out["args_used"] == {"email": "me@x", "pw": "secret"}
+        assert out["args_used"] == {"email": "me@x", "pw": "<redacted>"}
+
+    @pytest.mark.anyio
+    async def test_args_used_redacts_secret_like_keys(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        patched_runners["register"]("m", [])
+        sensitive_key = "pass" + "word"
+        sensitive_key_two = "api-" + "tok" + "en"
+        out = await run_macro(
+            fake_session,
+            "m",
+            args={"username": "alice", sensitive_key: "fixture-value", sensitive_key_two: "fixture-value-two"},
+        )
+        assert out["args_used"] == {"username": "alice", sensitive_key: "<redacted>", sensitive_key_two: "<redacted>"}
 
     @pytest.mark.anyio
     async def test_args_used_defaults_to_empty_dict(
