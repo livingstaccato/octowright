@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -264,10 +265,13 @@ async def session_close(request: Request) -> JSONResponse:
     if isinstance(log_path, str) and log_path:
         try:
             jsonl_path = Path(log_path)
-            # Single-pass close: one JSONL walk produces the sidecars AND the
-            # cache report, instead of a worker thread racing the dashboard's
-            # event-loop cache readers/writers over the same OrderedDicts.
-            body["cache"] = session_artifact_cache.warm_close(jsonl_path)
+            # Run the JSONL walk + sidecar write in a worker thread so a
+            # multi-MB recording doesn't block the event loop (other
+            # dashboard requests and SSE/WS streams would otherwise stall).
+            # The cache's LRU OrderedDicts are guarded by ``self._lock``
+            # inside ``warm_close``, so concurrent event-loop readers
+            # touching the same caches won't race with the warmup.
+            body["cache"] = await asyncio.to_thread(session_artifact_cache.warm_close, jsonl_path)
         except Exception as e:
             # User-action swallow path: log the cause so the failure mode
             # is diagnosable (AGENTS.md silent-swallow policy).
