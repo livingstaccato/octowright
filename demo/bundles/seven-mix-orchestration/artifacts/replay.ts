@@ -23,10 +23,6 @@ const resolveBundleUrl = (raw: string): string => {
   browser = await chromium.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"));
-  browser = await chromium.launch({ headless: false });
-  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  page = await ctx.newPage();
   await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p7&colour=%238e24aa"));
   browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
@@ -35,7 +31,7 @@ const resolveBundleUrl = (raw: string): string => {
   browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"));
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=operator&colour=%23000"));
   browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
@@ -43,7 +39,11 @@ const resolveBundleUrl = (raw: string): string => {
   browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=operator&colour=%23000"));
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"));
+  browser = await chromium.launch({ headless: false });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"));
   browser = await firefox.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
@@ -72,16 +72,6 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
-    await page.click("[data-testid=\"tile-3-5\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-3-5\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
     await page.click("[data-testid=\"tile-2-2\"]");
   }
   try {
@@ -102,7 +92,22 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
-    await page.click("[data-testid=\"tile-5-7\"]");
+    await page.click("[data-testid=\"tile-3-5\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-3-5\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-3-5\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-3-5\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
@@ -112,29 +117,13 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
-    await page.click("[data-testid=\"tile-7-3\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-7-3\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-8-8\"]");
+    await page.click("[data-testid=\"tile-5-7\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
     await page.click("[data-testid=\"tile-2-2\"]");
   }
-  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-8-8\"]");
-  }
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
@@ -144,22 +133,6 @@ const resolveBundleUrl = (raw: string): string => {
     await page.getByRole("player", { name: "" }).click();
   } catch {
     await page.click("[data-testid=\"tile-3-5\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-3-5\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-3-5\"]");
-  }
-  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-5-7\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
@@ -170,16 +143,6 @@ const resolveBundleUrl = (raw: string): string => {
     await page.getByRole("player", { name: "" }).click();
   } catch {
     await page.click("[data-testid=\"tile-5-7\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-3-5\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-7-3\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
@@ -199,6 +162,43 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
+    await page.click("[data-testid=\"tile-3-5\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-7-3\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-8-8\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-8-8\"]");
+  }
+  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-5-7\"]");
+  }
+  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-7-3\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-7-3\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
     await page.click("[data-testid=\"tile-5-7\"]");
   }
   try {
@@ -206,18 +206,6 @@ const resolveBundleUrl = (raw: string): string => {
   } catch {
     await page.click("[data-testid=\"tile-8-8\"]");
   }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-8-8\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-8-8\"]");
-  }
-  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
-  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   try {
     await page.getByRole("player", { name: "" }).click();
@@ -227,11 +215,6 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
-    await page.click("[data-testid=\"tile-7-3\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
     await page.click("[data-testid=\"tile-8-8\"]");
   }
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
@@ -240,6 +223,23 @@ const resolveBundleUrl = (raw: string): string => {
   } catch {
     await page.click("[data-testid=\"tile-8-8\"]");
   }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-7-3\"]");
+  }
+  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-8-8\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-8-8\"]");
+  }
+  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   await page.waitForSelector("#grid");
   await page.evaluate("document.querySelector('#grid').scrollIntoView({block: 'center', behavior: 'smooth'}); window.scrollY");
