@@ -314,7 +314,17 @@ class SessionPageMixin(SessionLike):
 
     async def screenshot(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        await self.page.screenshot(path=str(path))
+
+        # Atomic write via the shared helper — defeats the symlink-swap
+        # window between the caller's containment check and Playwright's
+        # write. See ``octowright._paths.atomic_write_via_writer`` for the
+        # full reasoning.
+        async def _write(tmp: Path) -> None:
+            await self.page.screenshot(path=str(tmp))
+
+        from octowright._paths import atomic_write_via_writer
+
+        await atomic_write_via_writer(path, _write)
         self.recorder.record("screenshot", path=str(path))
         return path
 
