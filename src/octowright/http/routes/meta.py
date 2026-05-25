@@ -97,6 +97,7 @@ def _validation_body(macro: dict[str, Any]) -> dict[str, Any]:
     error_count = sum(1 for issue in issues if issue["severity"] == "error")
     return {
         "ok": error_count == 0,
+        "valid": error_count == 0,
         "issues": issues,
         "issue_count": len(issues),
         "error_count": error_count,

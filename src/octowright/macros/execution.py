@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
@@ -38,6 +39,7 @@ log = get_logger(__name__)
 # in-place by ``substitute()`` before dispatch). Redacted before the action
 # dict is embedded in the RuntimeError payload, sent to the macro-pill, or
 # emitted in any log line.
+_REDACTED_MACRO_VALUE = "<redacted>"
 _REDACT_VALUE_ACTIONS: frozenset[str] = frozenset({"fill", "type", "fill_by"})
 
 
@@ -46,8 +48,35 @@ def _redact_action(action: dict[str, Any]) -> dict[str, Any]:
     replaced by ``<redacted>``. Non-redacted actions return a copy unchanged
     so callers can mutate freely without aliasing back into the macro list."""
     redacted = dict(action)
-    if redacted.get("action") in _REDACT_VALUE_ACTIONS and "value" in redacted:
-        redacted["value"] = "<redacted>"
+    if redacted.get("action") in _REDACT_VALUE_ACTIONS:
+        for key in ("value", "text"):
+            if key in redacted:
+                redacted[key] = _REDACTED_MACRO_VALUE
+    return redacted
+
+
+_SENSITIVE_ARG_KEY_PARTS = (
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_key",
+    "credential",
+)
+_SENSITIVE_ARG_EXACT_KEYS = frozenset({"pw", "pwd", "auth"})
+
+
+def _redact_args_for_response(args: Mapping[str, Any]) -> dict[str, Any]:
+    redacted: dict[str, Any] = {}
+    for key, value in args.items():
+        normalized = str(key).lower().replace("-", "_")
+        if normalized in _SENSITIVE_ARG_EXACT_KEYS or any(part in normalized for part in _SENSITIVE_ARG_KEY_PARTS):
+            redacted[str(key)] = _REDACTED_MACRO_VALUE
+        else:
+            redacted[str(key)] = value
     return redacted
 
 
@@ -352,7 +381,7 @@ async def _run_macro_impl(
         "macro": name,
         "executed": executed,
         "skipped": skipped,
-        "args_used": effective_args,
+        "args_used": _redact_args_for_response(effective_args),
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
     }

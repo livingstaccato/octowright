@@ -143,4 +143,13 @@ describe("mountPanels / updatePanels", () => {
     updatePanels(panels, state, new Set<Scope>()); // empty set: nothing
     expect(calls).toEqual([]);
   });
+
+  it("appends a new body if a panel wrapper has lost its body child", () => {
+    const panels = mountPanels(root, DEFS.slice(0, 1), { alphaCount: 1, betaCount: 2, gammaCount: 3 });
+    panels[0].root.children[1]?.remove();
+
+    updatePanels(panels, { alphaCount: 42, betaCount: 2, gammaCount: 3 }, null);
+
+    expect((panels[0].root.children[1] as HTMLElement).dataset.count).toBe("42");
+  });
 });

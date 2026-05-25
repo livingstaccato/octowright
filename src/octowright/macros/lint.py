@@ -24,6 +24,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .runtime import _ACTION_MAP
+
 # ---------------------------------------------------------------------------
 # Action catalogues — kept in sync with macros/runtime.py and conditional.py manually.
 # ---------------------------------------------------------------------------
@@ -61,7 +63,7 @@ _CONDITIONAL_ACTIONS: frozenset[str] = frozenset({"if_selector", "try", "try_eac
 _MACRO_CALL_ACTION = "macro_call"
 
 _KNOWN_ACTIONS: frozenset[str] = (
-    frozenset(_SIMPLE_REQUIRED) | _REPLAY_SKIP | _CONDITIONAL_ACTIONS | {_MACRO_CALL_ACTION}
+    frozenset(_SIMPLE_REQUIRED) | frozenset(_ACTION_MAP) | _REPLAY_SKIP | _CONDITIONAL_ACTIONS | {_MACRO_CALL_ACTION}
 )
 
 # ---------------------------------------------------------------------------

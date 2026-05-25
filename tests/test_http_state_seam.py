@@ -24,6 +24,16 @@ from starlette.testclient import TestClient
 from octowright import http as _http
 from octowright.http import discovery as _discovery
 from octowright.http import state as _http_state
+from octowright.http.routes.meta import _validation_body
+
+
+def test_macro_validation_body_includes_valid_contract() -> None:
+    payload = _validation_body({"name": "x", "description": None, "parameters": [], "actions": []})
+
+    assert payload["ok"] is True
+    assert payload["valid"] is True
+    assert payload["issue_count"] == 0
+    assert payload["error_count"] == 0
 
 
 class _FakeHttpPool:

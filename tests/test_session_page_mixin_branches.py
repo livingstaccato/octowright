@@ -200,7 +200,7 @@ class TestActions:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         target.click = AsyncMock()
-        target.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value="")))
+        target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.click("#submit")
         target.click.assert_awaited_once_with("#submit", timeout=DEFAULT_ACTION_TIMEOUT_MS)
@@ -211,7 +211,7 @@ class TestActions:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         target.click = AsyncMock()
-        target.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value='- button "Save"')))
+        target.locator = MagicMock(return_value=_make_action_locator('- button "Save"'))
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.click("#submit")
         subj.recorder.record.assert_called_once_with("click", selector="#submit", role="button", role_name="Save")
@@ -222,7 +222,7 @@ class TestActions:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         target.type = AsyncMock()
-        target.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value="")))
+        target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#input", "hello", None)
         target.type.assert_awaited_once_with("#input", "hello", delay=0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
@@ -233,7 +233,7 @@ class TestActions:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         target.type = AsyncMock()
-        target.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value="")))
+        target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#input", "hello", 50)
         target.type.assert_awaited_once_with("#input", "hello", delay=50, timeout=DEFAULT_ACTION_TIMEOUT_MS)
@@ -244,7 +244,7 @@ class TestActions:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         target.type = AsyncMock()
-        target.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value="")))
+        target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#input", "hi", None)
         subj.recorder.record.assert_called_once_with("type", selector="#input", text="hi", delay_ms=None)
@@ -255,7 +255,7 @@ class TestActions:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         target.fill = AsyncMock()
-        target.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value="")))
+        target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.fill("#email", "x@y.z")
         target.fill.assert_awaited_once_with("#email", "x@y.z", timeout=DEFAULT_ACTION_TIMEOUT_MS)
@@ -266,7 +266,7 @@ class TestActions:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         target.fill = AsyncMock()
-        target.locator = MagicMock(return_value=MagicMock(aria_snapshot=AsyncMock(return_value="")))
+        target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.fill("#email", "x@y.z")
         subj.recorder.record.assert_called_once_with("fill", selector="#email", value="x@y.z")
@@ -312,6 +312,14 @@ def _make_input_target(input_type: str | None) -> MagicMock:
     locator_mock.first = first_mock
     target.locator = MagicMock(return_value=locator_mock)
     return target
+
+
+def _make_action_locator(snapshot: str = "", input_type: str = "text") -> MagicMock:
+    locator = MagicMock()
+    locator.aria_snapshot = AsyncMock(return_value=snapshot)
+    locator.first = MagicMock()
+    locator.first.evaluate = AsyncMock(return_value=input_type)
+    return locator
 
 
 def _make_redaction_subject(tmp_path: Path, input_type: str | None) -> SessionPageMixin:
