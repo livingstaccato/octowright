@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Iterator
@@ -84,6 +85,13 @@ class SessionArtifactCache:
         self._console_index_cache: OrderedDict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = OrderedDict()
         self._downloads_index_cache: OrderedDict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = OrderedDict()
         self._path_exists_cache: OrderedDict[str, tuple[float, bool]] = OrderedDict()
+        # Guards every read/write of the OrderedDict caches above. Required
+        # because ``warm_close`` is invoked from a worker thread via
+        # ``asyncio.to_thread`` while the event loop concurrently serves
+        # dashboard reads that touch the same caches. The lock is fine-
+        # grained: only the LRU bookkeeping is held under it; disk I/O
+        # (JSONL walk, sidecar write) runs outside.
+        self._lock = threading.Lock()
 
     def _signature(self, jsonl_path: Path) -> tuple[int, int] | None:
         try:
@@ -93,35 +101,47 @@ class SessionArtifactCache:
         return (stat.st_mtime_ns, stat.st_size)
 
     def _lru_set(self, cache: OrderedDict[str, Any], key: str, value: Any) -> None:
-        cache[key] = value
-        cache.move_to_end(key)
-        while len(cache) > self._max_entries:
-            cache.popitem(last=False)
+        """Mutate the LRU under ``self._lock``. Callers must NOT hold the lock."""
+        with self._lock:
+            cache[key] = value
+            cache.move_to_end(key)
+            while len(cache) > self._max_entries:
+                cache.popitem(last=False)
+
+    def _lru_get(self, cache: OrderedDict[str, Any], key: str) -> Any | None:
+        """Read + LRU-promote under ``self._lock``. Returns None on miss."""
+        with self._lock:
+            cached = cache.get(key)
+            if cached is None:
+                return None
+            cache.move_to_end(key)
+            return cached
 
     def evict(self, jsonl_path: Path) -> None:
         """Drop any cached entries for ``jsonl_path`` (call on session deletion)."""
         key = str(jsonl_path)
-        for cache in (
-            self._artifact_cache,
-            self._report_cache,
-            self._console_index_cache,
-            self._downloads_index_cache,
-        ):
-            cache.pop(key, None)
+        with self._lock:
+            for cache in (
+                self._artifact_cache,
+                self._report_cache,
+                self._console_index_cache,
+                self._downloads_index_cache,
+            ):
+                cache.pop(key, None)
 
     def scan_artifacts(self, jsonl_path: Path) -> dict[str, Any]:
-        # Threading note: may be called from ``asyncio.to_thread`` workers
-        # (via the close-warmup path) as well as the main event loop. The
-        # per-instance OrderedDict caches read/written here are isolated
-        # from the module-level discovery caches in ``http/discovery.py``
-        # (which are guarded by their own ``threading.Lock``).
+        # Threading note: called from both ``asyncio.to_thread`` workers
+        # (via ``warm_close``) and the event loop. The cache reads/writes
+        # are serialised by ``self._lock``; the underlying JSONL walk runs
+        # outside the lock so a multi-MB recording doesn't stall dashboard
+        # readers. The discovery-layer caches in ``http/discovery.py`` are
+        # a separate concern with their own lock.
         signature = self._signature(jsonl_path)
         if signature is None:
             return scan_recording_artifacts(jsonl_path)
         key = str(jsonl_path)
-        cached = self._artifact_cache.get(key)
+        cached = self._lru_get(self._artifact_cache, key)
         if cached and cached[0] == signature:
-            self._artifact_cache.move_to_end(key)
             return cached[1]
         scanned = scan_recording_artifacts(jsonl_path)
         self._lru_set(self._artifact_cache, key, (signature, scanned))
@@ -132,9 +152,8 @@ class SessionArtifactCache:
         if signature is None:
             return cache_report_for_recording(jsonl_path)
         key = str(jsonl_path)
-        cached = self._report_cache.get(key)
+        cached = self._lru_get(self._report_cache, key)
         if cached and cached[0] == signature:
-            self._report_cache.move_to_end(key)
             return cached[1]
         report = cache_report_for_recording(jsonl_path)
         self._lru_set(self._report_cache, key, (signature, report))
@@ -210,9 +229,8 @@ class SessionArtifactCache:
         if signature is None:
             return None
         key = str(jsonl_path)
-        cached = self._console_index_cache.get(key)
+        cached = self._lru_get(self._console_index_cache, key)
         if cached and cached[0] == signature:
-            self._console_index_cache.move_to_end(key)
             return cached[1]
         rows = self._read_index_file(self._console_index_path(jsonl_path), signature)
         if rows is None:
@@ -225,9 +243,8 @@ class SessionArtifactCache:
         if signature is None:
             return None
         key = str(jsonl_path)
-        cached = self._downloads_index_cache.get(key)
+        cached = self._lru_get(self._downloads_index_cache, key)
         if cached and cached[0] == signature:
-            self._downloads_index_cache.move_to_end(key)
             return cached[1]
         rows = self._read_index_file(self._downloads_index_path(jsonl_path), signature)
         if rows is None:
@@ -285,11 +302,11 @@ class SessionArtifactCache:
         so the close handler can attach it to the response body.
 
         Threading note: called from ``asyncio.to_thread`` by
-        ``http/routes/sessions.py::session_close``. The LRU ``OrderedDict``
-        caches written here (``_artifact_cache`` / ``_report_cache`` /
-        ``_console_index_cache`` / ``_downloads_index_cache``) are local
-        to this instance — they do NOT touch the module-level caches in
-        ``http/discovery.py``, which carry their own ``threading.Lock``.
+        ``http/routes/sessions.py::session_close`` so a multi-MB JSONL
+        walk doesn't block the event loop. Concurrent dashboard reads
+        of the same cache OrderedDicts are serialised by ``self._lock``
+        (the JSONL walk + sidecar disk write run outside the lock; only
+        the LRU bookkeeping is held under it).
         """
         counts, state = empty_artifact_state()
         console_rows: list[dict[str, Any]] = []
@@ -355,10 +372,13 @@ class SessionArtifactCache:
 
     def path_exists(self, path: str) -> bool:
         now = time.monotonic()
-        cached = self._path_exists_cache.get(path)
-        if cached is not None and (now - cached[0]) <= self._path_exists_ttl_seconds:
-            self._path_exists_cache.move_to_end(path)
-            return cached[1]
+        with self._lock:
+            cached = self._path_exists_cache.get(path)
+            if cached is not None and (now - cached[0]) <= self._path_exists_ttl_seconds:
+                self._path_exists_cache.move_to_end(path)
+                return cached[1]
+        # Disk stat runs outside the lock; another caller may race in and
+        # populate the same key — last-write-wins, no correctness loss.
         exists = Path(path).exists()
         self._lru_set(self._path_exists_cache, path, (now, exists))
         return exists

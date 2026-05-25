@@ -434,7 +434,7 @@ def test_cleans_up_temp_file_on_write_failure(tmp_path: Path, monkeypatch: pytes
         assert Path(src).exists(), "exporter should stage temp file before os.replace"
         raise OSError("simulated replace failure")
 
-    monkeypatch.setattr("octowright.export.os.replace", _boom)
+    monkeypatch.setattr("octowright._paths.os.replace", _boom)
     with pytest.raises(OSError, match="simulated replace failure"):
         export_script(log, out_path, fmt="python")
 

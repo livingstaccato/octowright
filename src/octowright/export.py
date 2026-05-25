@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
+
+from octowright._paths import atomic_write_text
 
 _SEMANTIC_LOCATOR_KEYS = ("role", "label", "text", "test_id")
 
@@ -391,42 +391,10 @@ def export_script(log_path: Path, out_path: Path, fmt: str = "python") -> Path:
                 lines.append(rendered)
     lines.append(footer)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write via NamedTemporaryFile + os.replace to defeat the residual
-    # symlink-swap TOCTOU window between the caller's path-containment check
-    # and the final write. A same-user attacker who replaces ``out_path`` (or
-    # its parent) with a symlink between resolve() and write_text() can
-    # redirect the write; staging into a sibling temp file inside the same
-    # already-resolved parent and atomically renaming closes that window.
-    #
-    # ``delete=False`` means cleanup is the caller's responsibility — if the
-    # write or replace fails we'd otherwise leak the ``.tmp`` file. The
-    # try/finally below unlinks the staging file on any failure path and
-    # is a no-op on the success path (we clear ``tmp_path`` after replace).
-    body = "\n".join(lines)
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=out_path.parent,
-            prefix=f".{out_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as tmp:
-            tmp.write(body)
-            tmp_path = Path(tmp.name)
-        os.replace(tmp_path, out_path)
-        tmp_path = None  # replace consumed it; nothing for finally to clean.
-    finally:
-        if tmp_path is not None:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                # Best-effort cleanup on the failure path; if unlink itself
-                # fails (parent gone, permission flip) there's nothing useful
-                # we can do, and the original exception is what the caller
-                # cares about.
-                pass
+    # Atomic write via the shared helper — defeats the symlink-swap window
+    # between the caller's containment check and the final write, and
+    # cleans up the staging file on failure. See ``octowright._paths``.
+    atomic_write_text(out_path, "\n".join(lines))
     return out_path
 
 
