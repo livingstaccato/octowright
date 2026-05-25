@@ -191,8 +191,12 @@ def load_persona(name: str) -> Persona:
             f"no persona named {name!r} at {p}; list with `persona_list` or create with `persona_create name={name!r}`"
         )
     raw = yaml.safe_load(p.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
+    if raw is None:
         raw = {}
+    try:
+        _validate_persona_yaml_doc(raw)
+    except ValueError as exc:
+        raise ValueError(f"invalid persona file {p}: {exc}") from exc
     return Persona(
         name=raw.get("name", _slug(name)),
         display_name=raw.get("display_name"),

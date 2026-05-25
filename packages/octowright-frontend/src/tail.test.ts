@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openTail } from "./tail.js";
 
 interface Listener {
@@ -27,7 +27,27 @@ class FakeWebSocket {
   }
 }
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("openTail", () => {
+  it("uses the global WebSocket constructor when one is not injected", () => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    openTail("ws://test/global", { onMessage: () => {} });
+    expect(FakeWebSocket.instances[0]?.url).toBe("ws://test/global");
+  });
+
+  it("handles open events", () => {
+    FakeWebSocket.instances = [];
+    openTail("ws://test/x", {
+      onMessage: () => {},
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    expect(() => FakeWebSocket.instances[0]!.emit("open", new Event("open"))).not.toThrow();
+  });
+
   it("invokes onMessage with parsed payload", () => {
     FakeWebSocket.instances = [];
     const onMessage = vi.fn();
@@ -63,6 +83,18 @@ describe("openTail", () => {
     FakeWebSocket.instances[0]!.emit("message", { data: JSON.stringify({ foo: 1 }) });
     expect(onMessage).not.toHaveBeenCalled();
   });
+  it("accepts complete=true frames", () => {
+    FakeWebSocket.instances = [];
+    const onMessage = vi.fn();
+    openTail("ws://test/x", {
+      onMessage,
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    FakeWebSocket.instances[0]!.emit("message", {
+      data: JSON.stringify({ events: [], cursor: 5, complete: true }),
+    });
+    expect(onMessage.mock.calls[0]?.[0]?.complete).toBe(true);
+  });
   it("close() invokes WebSocket.close", () => {
     FakeWebSocket.instances = [];
     const handle = openTail("ws://test/x", {
@@ -71,6 +103,19 @@ describe("openTail", () => {
     });
     handle.close();
     expect(FakeWebSocket.instances[0]!.closed).toBe(true);
+  });
+  it("close() swallows WebSocket close errors", () => {
+    class ThrowingWebSocket extends FakeWebSocket {
+      override close(): void {
+        throw new Error("close failed");
+      }
+    }
+    FakeWebSocket.instances = [];
+    const handle = openTail("ws://test/x", {
+      onMessage: () => {},
+      webSocketCtor: ThrowingWebSocket as unknown as typeof WebSocket,
+    });
+    expect(() => handle.close()).not.toThrow();
   });
   it("forwards onError and onClose if given", () => {
     FakeWebSocket.instances = [];
@@ -87,5 +132,17 @@ describe("openTail", () => {
     ws.emit("close", { code: 1000, reason: "ok" });
     expect(onError).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+  it("handles error and close events when optional callbacks are absent", () => {
+    FakeWebSocket.instances = [];
+    openTail("ws://test/x", {
+      onMessage: () => {},
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    const ws = FakeWebSocket.instances[0]!;
+    expect(() => {
+      ws.emit("error", new Event("error"));
+      ws.emit("close", { code: 1006, reason: "gone", wasClean: false });
+    }).not.toThrow();
   });
 });

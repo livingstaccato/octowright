@@ -56,29 +56,22 @@ def test_load_persona_missing_file_message_includes_name_and_path(fresh_personas
     assert "profile.yaml" in msg
 
 
-def test_load_persona_non_dict_yaml_falls_back_to_defaults(tmp_path, fresh_personas):
-    """A YAML doc that isn't a mapping (e.g. a list) collapses to an empty dict."""
+def test_load_persona_non_dict_yaml_is_rejected(tmp_path, fresh_personas):
+    """A YAML doc that isn't a mapping (e.g. a list) is rejected."""
     pdir = tmp_path / "weird"
     pdir.mkdir()
     (pdir / "profile.yaml").write_text(yaml.safe_dump(["not", "a", "mapping"]))
-    p = fresh_personas.load_persona("weird")
-    assert p.name == "weird"
-    assert p.display_name is None
-    assert p.default_url is None
-    assert p.default_macros == []
-    assert p.credentials == {}
-    assert p.app == {}
-    assert p.emoji is None
+    with pytest.raises(ValueError, match="invalid persona file"):
+        fresh_personas.load_persona("weird")
 
 
-def test_load_persona_yaml_string_falls_back_to_defaults(tmp_path, fresh_personas):
-    """A scalar YAML is also non-dict — same fallback path as the list case."""
+def test_load_persona_yaml_string_is_rejected(tmp_path, fresh_personas):
+    """A scalar YAML is also non-dict and rejected."""
     pdir = tmp_path / "scalar"
     pdir.mkdir()
     (pdir / "profile.yaml").write_text("just a string\n")
-    p = fresh_personas.load_persona("scalar")
-    assert p.name == "scalar"
-    assert p.credentials == {}
+    with pytest.raises(ValueError, match="invalid persona file"):
+        fresh_personas.load_persona("scalar")
 
 
 def test_load_persona_uses_slug_when_name_field_absent(tmp_path, fresh_personas):

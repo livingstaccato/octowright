@@ -70,9 +70,11 @@ async def test_scenario_wait_for_sync(tmp_octowright, monkeypatch):
             importlib.reload(sys.modules[m])
 
     from octowright import scenarios as _s
+    from octowright import scenarios_pool as _sp
     from octowright.browser_pool import BrowserPool
 
     importlib.reload(_s)
+    importlib.reload(_sp)
 
     _original_spawn = BrowserPool.spawn_roster
 
@@ -83,7 +85,7 @@ async def test_scenario_wait_for_sync(tmp_octowright, monkeypatch):
     monkeypatch.setattr(BrowserPool, "spawn_roster", _headless_spawn)
 
     pool = BrowserPool()
-    spool = _s.ScenarioPool()
+    spool = _sp.ScenarioPool()
     try:
         live = await spool.start(name="sync", browser_pool=pool)
 

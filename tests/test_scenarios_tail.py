@@ -8,7 +8,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from octowright.scenarios import LiveScenario, Scenario, ScenarioPool
+from octowright.scenarios import Scenario
+from octowright.scenarios_pool import LiveScenario, ScenarioPool
 
 
 def _make_live(tmp_path: Path) -> tuple[ScenarioPool, Path, Path]:

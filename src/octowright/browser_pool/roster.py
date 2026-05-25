@@ -60,10 +60,19 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
         results = await asyncio.gather(*[_launch_one(s) for s in specs], return_exceptions=True)
         launched: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        cancelled: list[BaseException] = []
         for spec, result in zip(specs, results, strict=True):
-            if isinstance(result, BaseException):
+            if isinstance(result, asyncio.CancelledError):
+                # Cancellation during a user-initiated launch path is not a
+                # "soft success" — propagate after collecting all results so
+                # the caller (and any structured-concurrency parent) sees it.
+                cancelled.append(result)
+                errors.append({"spec": spec, "error": "cancelled"})
+            elif isinstance(result, BaseException):
                 errors.append({"spec": spec, "error": str(result)})
             else:
                 launched.append(result)
         set_attrs(sp, launched=len(launched), failed=len(errors))
+        if cancelled:
+            raise cancelled[0]
         return {"launched": launched, "errors": errors}

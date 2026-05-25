@@ -8,7 +8,6 @@
 The first instance becomes the **leader**: it serves stdio MCP, the HTTP
 debugger, and an HTTP-MCP transport at ``/mcp`` so subsequent instances can
 proxy through it. It records itself in Octowright's user config directory.
-
 Subsequent instances become **followers**: they detect the live leader and
 bridge stdin/stdout to its HTTP-MCP endpoint instead of spawning a pool. Pass
 ``--no-singleton`` to bypass the lock (useful for tests and debugging).
@@ -455,7 +454,6 @@ async def _cancel_and_collect_tasks(
     watch_task: Any,
     mcp_task: Any,
 ) -> None:
-    """Cancel any still-running task and await each so exceptions surface."""
     import asyncio as _asyncio
 
     for t in (*sidecars, watch_task, mcp_task):
@@ -466,8 +464,10 @@ async def _cancel_and_collect_tasks(
             continue
         try:
             await t
-        except (_asyncio.CancelledError, Exception):
+        except _asyncio.CancelledError:
             pass
+        except Exception as exc:
+            _log.debug("serve.task_cancel.exception", error=repr(exc))
 
 
 async def _run_leader_phases(
