@@ -443,12 +443,52 @@ class TestArtifactCalls:
         assert target_path.parent.exists()
 
     @pytest.mark.anyio
-    async def test_screenshot_passes_str_path_to_playwright(self, tmp_path: Path) -> None:
-        """page.screenshot(path=str(path)) — Playwright wants a string."""
+    async def test_screenshot_writes_via_atomic_temp_then_replace(self, tmp_path: Path) -> None:
+        """screenshot stages to a sibling ``.{name}.<rand>.tmp`` and os.replaces
+        into the final path — defeats the symlink-swap window between the
+        caller's containment check and Playwright's write."""
         subj = _make_subject(tmp_path)
         target_path = tmp_path / "shot.png"
+
+        # Capture the path Playwright was asked to write to so we can verify
+        # the stager handed it a temp sibling, not the final path.
+        captured: dict[str, str] = {}
+
+        async def _capture_screenshot(*, path: str) -> None:
+            captured["path"] = path
+            # Playwright would create the file at the requested path; mimic
+            # that so the os.replace into the final target succeeds.
+            Path(path).write_bytes(b"\x89PNG")
+
+        subj.page.screenshot = AsyncMock(side_effect=_capture_screenshot)
         await subj.screenshot(target_path)
-        subj.page.screenshot.assert_awaited_once_with(path=str(target_path))
+
+        # Final file landed at the intended path; no temp sibling remained.
+        assert target_path.exists()
+        assert target_path.read_bytes() == b"\x89PNG"
+        leaked = list(tmp_path.glob(".shot.png.*.tmp"))
+        assert leaked == [], f"screenshot leaked temp file(s): {leaked}"
+        # Playwright was given the temp path, not the final path.
+        assert captured["path"] != str(target_path)
+        assert captured["path"].startswith(str(tmp_path / ".shot.png."))
+        assert captured["path"].endswith(".tmp")
+
+    @pytest.mark.anyio
+    async def test_screenshot_cleans_up_temp_file_on_playwright_failure(self, tmp_path: Path) -> None:
+        """If Playwright raises mid-write, the staging ``.tmp`` must not leak."""
+        subj = _make_subject(tmp_path)
+        target_path = tmp_path / "shot.png"
+
+        async def _boom(**_kw: object) -> None:
+            raise RuntimeError("playwright exploded")
+
+        subj.page.screenshot = AsyncMock(side_effect=_boom)
+        with pytest.raises(RuntimeError, match="playwright exploded"):
+            await subj.screenshot(target_path)
+
+        assert not target_path.exists()
+        leaked = list(tmp_path.glob(".shot.png.*.tmp"))
+        assert leaked == [], f"screenshot leaked temp file(s) on failure: {leaked}"
 
     @pytest.mark.anyio
     async def test_screenshot_returns_path(self, tmp_path: Path) -> None:
