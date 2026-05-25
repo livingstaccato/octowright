@@ -22,13 +22,13 @@ async def test_capture_markdown_falls_back_to_html_strip(tmp_path: Path) -> None
     log_path = tmp_path / "capture-fallback.jsonl"
     recorder = Recorder(log_path)
     page = MagicMock()
-    page.url = "https://example.com"
+    page.url = "https://octowright.com"
     page.content = AsyncMock(return_value="<script>ignore</script><div>hello</div>")
     session = BrowserSession(
         instance_id="m1",
         kind="chromium",
         label="fallback",
-        url="https://example.com",
+        url="https://octowright.com",
         browser=MagicMock(),
         context=MagicMock(),
         page=page,
@@ -49,13 +49,13 @@ async def test_capture_markdown_dedups_with_same_url(tmp_path: Path) -> None:
     log_path = tmp_path / "capture-dedupe.jsonl"
     recorder = Recorder(log_path)
     page = MagicMock()
-    page.url = "https://example.com"
+    page.url = "https://octowright.com"
     page.content = AsyncMock(return_value="<div>first</div>")
     session = BrowserSession(
         instance_id="m2",
         kind="chromium",
         label="dedupe",
-        url="https://example.com",
+        url="https://octowright.com",
         browser=MagicMock(),
         context=MagicMock(),
         page=page,
@@ -71,7 +71,7 @@ async def test_capture_markdown_dedups_with_same_url(tmp_path: Path) -> None:
     assert second == first
     page.content.assert_not_called()
 
-    page.url = "https://example.com/next"
+    page.url = "https://octowright.com/next"
     await session.capture_markdown()
     assert page.content.call_count == 1
 
@@ -93,13 +93,13 @@ async def test_capture_markdown_uses_markitdown_when_available(tmp_path: Path) -
         log_path = tmp_path / "capture-markitdown.jsonl"
         recorder = Recorder(log_path)
         page = MagicMock()
-        page.url = "https://example.com"
+        page.url = "https://octowright.com"
         page.content = AsyncMock(return_value="<div>raw</div>")
         session = BrowserSession(
             instance_id="m3",
             kind="chromium",
             label="markitdown",
-            url="https://example.com",
+            url="https://octowright.com",
             browser=MagicMock(),
             context=MagicMock(),
             page=page,
@@ -130,13 +130,13 @@ async def test_capture_markdown_falls_back_when_markitdown_fails(tmp_path: Path)
         log_path = tmp_path / "capture-fallback-after-error.jsonl"
         recorder = Recorder(log_path)
         page = MagicMock()
-        page.url = "https://example.com"
+        page.url = "https://octowright.com"
         page.content = AsyncMock(return_value="<script>ignore</script><div>hello</div>")
         session = BrowserSession(
             instance_id="m-error",
             kind="chromium",
             label="fallback-error",
-            url="https://example.com",
+            url="https://octowright.com",
             browser=MagicMock(),
             context=MagicMock(),
             page=page,
@@ -171,13 +171,13 @@ async def test_close_records_markdown_path_in_jsonl(tmp_path: Path) -> None:
     browser.close = AsyncMock(return_value=None)
 
     page = MagicMock()
-    page.url = "https://example.com"
+    page.url = "https://octowright.com"
 
     session = BrowserSession(
         instance_id="m4",
         kind="chromium",
         label="close",
-        url="https://example.com",
+        url="https://octowright.com",
         browser=browser,
         context=context,
         page=page,

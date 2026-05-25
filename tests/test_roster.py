@@ -27,7 +27,7 @@ def _launch_result(label: str | None = None, kind: str = "webkit") -> dict[str, 
         "kind": kind,
         "label": label,
         "profile": None,
-        "url": "https://example.com",
+        "url": "https://octowright.com",
         "log_path": "/tmp/fake.jsonl",
         "record_video": False,
     }
@@ -51,9 +51,9 @@ async def test_spawn_roster_launches_all_specs(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(pool, "launch", _fake_launch)
 
     specs = [
-        {"kind": "webkit", "url": "https://example.com", "headed": False, "label": "a"},
-        {"kind": "chromium", "url": "https://example.com", "headed": False, "label": "b"},
-        {"kind": "firefox", "url": "https://example.com", "headed": False, "label": "c"},
+        {"kind": "webkit", "url": "https://octowright.com", "headed": False, "label": "a"},
+        {"kind": "chromium", "url": "https://octowright.com", "headed": False, "label": "b"},
+        {"kind": "firefox", "url": "https://octowright.com", "headed": False, "label": "c"},
     ]
 
     result = await pool.spawn_roster(specs)
@@ -88,9 +88,9 @@ async def test_spawn_roster_partial_failure(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(pool, "launch", _fake_launch)
 
     specs = [
-        {"kind": "webkit", "url": "https://example.com", "headed": False, "label": "ok1"},
-        {"kind": "webkit", "url": "https://example.com", "headed": False, "label": "bad"},
-        {"kind": "webkit", "url": "https://example.com", "headed": False, "label": "ok2"},
+        {"kind": "webkit", "url": "https://octowright.com", "headed": False, "label": "ok1"},
+        {"kind": "webkit", "url": "https://octowright.com", "headed": False, "label": "bad"},
+        {"kind": "webkit", "url": "https://octowright.com", "headed": False, "label": "ok2"},
     ]
 
     result = await pool.spawn_roster(specs)

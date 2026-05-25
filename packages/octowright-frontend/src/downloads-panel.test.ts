@@ -4,14 +4,14 @@ import type { DownloadEntry } from "./types.js";
 
 const SAMPLE: DownloadEntry[] = [
   {
-    url: "https://example.com/file1.pdf",
+    url: "https://octowright.com/file1.pdf",
     suggested_filename: "file1.pdf",
     path: "/tmp/dl/file1.pdf",
     timestamp: "2026-04-24T12:00:00.000Z",
     path_exists: true,
   },
   {
-    url: "https://example.com/super-long-path/that/is/definitely-going-to-exceed-the-truncation-limit/file2.zip",
+    url: "https://octowright.com/super-long-path/that/is/definitely-going-to-exceed-the-truncation-limit/file2.zip",
     suggested_filename: "file2.zip",
     path: "/tmp/dl/file2.zip",
     timestamp: "2026-04-24T12:01:00.000Z",
@@ -42,7 +42,7 @@ describe("renderDownloadsPanel", () => {
     renderDownloadsPanel(container, SAMPLE);
     const rows = container.querySelectorAll('[data-testid="downloads-row"]');
     expect(rows[0]?.querySelector(".downloads-panel__filename")?.textContent).toBe("file1.pdf");
-    expect(rows[0]?.querySelector(".downloads-panel__url")?.textContent).toContain("example.com");
+    expect(rows[0]?.querySelector(".downloads-panel__url")?.textContent).toContain("octowright.com");
   });
 
   it("truncates long urls but keeps full url in title attr", () => {

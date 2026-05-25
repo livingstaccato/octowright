@@ -292,7 +292,7 @@ def test_session_launch_omits_headed_when_not_provided(monkeypatch: pytest.Monke
             "kind": "chromium",
             "label": None,
             "profile": None,
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "log_path": str(Path("recordings") / "abc123.jsonl"),
         }
 
@@ -315,7 +315,7 @@ def test_session_launch_preserves_explicit_headed_false(monkeypatch: pytest.Monk
             "kind": "chromium",
             "label": None,
             "profile": None,
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "log_path": str(Path("recordings") / "abc123.jsonl"),
         }
 

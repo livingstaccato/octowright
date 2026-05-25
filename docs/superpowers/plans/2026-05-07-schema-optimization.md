@@ -30,7 +30,7 @@ async def test_browser_brief(_patch_pool: MagicMock) -> None:
     _patch_pool.get.return_value = s
     out = await _inspect.browser_brief("i")
     
-    assert out["url"] == "https://example.com"
+    assert out["url"] == "https://octowright.com"
     assert out["title"] == "Example"
     assert "elements" in out
 ```

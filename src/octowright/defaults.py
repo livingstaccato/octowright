@@ -18,7 +18,7 @@ from octowright.config_paths import user_cache_dir, user_config_dir, user_state_
 # they load, so this lands before setup_telemetry() runs.
 os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
 
-DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://example.com")
+DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://octowright.com")
 
 DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
 DEFAULT_VIEWPORT_H = int(os.environ.get("OCTOWRIGHT_VIEWPORT_H", "800"))

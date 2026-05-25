@@ -39,9 +39,9 @@ async def main() -> None:
             await page.click("#next-1")
         await page.wait_for_selector(".step--active #email")
         try:
-            await page.get_by_role("player", name="Email").fill("octavia@example.com")
+            await page.get_by_role("player", name="Email").fill("octavia@octowright.test")
         except Exception:
-            await page.fill("#email", "octavia@example.com")
+            await page.fill("#email", "octavia@octowright.test")
         try:
             await page.get_by_role("player", name="Next").click()
         except Exception:

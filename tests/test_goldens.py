@@ -50,12 +50,12 @@ SAMPLE_TREE: dict[str, Any] = {
 
 def test_save_golden_writes_expected_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     g = _import_goldens(monkeypatch, tmp_path)
-    path = g.save_golden(name="My Page", tree=SAMPLE_TREE, url="https://example.com", description="smoke test")
+    path = g.save_golden(name="My Page", tree=SAMPLE_TREE, url="https://octowright.com", description="smoke test")
     assert path.exists()
     data = json.loads(path.read_text())
     assert data["name"] == "My Page"
     assert data["description"] == "smoke test"
-    assert data["url"] == "https://example.com"
+    assert data["url"] == "https://octowright.com"
     assert data["tree"] == SAMPLE_TREE
     assert "created_at" in data
     assert "updated_at" in data
@@ -77,7 +77,7 @@ def test_save_golden_preserves_created_at_on_overwrite(monkeypatch: pytest.Monke
 
 def test_load_golden_returns_full_dict(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     g = _import_goldens(monkeypatch, tmp_path)
-    g.save_golden(name="load-me", tree=SAMPLE_TREE, url="https://example.com")
+    g.save_golden(name="load-me", tree=SAMPLE_TREE, url="https://octowright.com")
     data = g.load_golden("load-me")
     assert data["name"] == "load-me"
     assert data["tree"] == SAMPLE_TREE

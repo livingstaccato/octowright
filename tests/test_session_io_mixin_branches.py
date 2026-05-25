@@ -403,12 +403,12 @@ class TestCaptureMarkdown:
         """Happy path: HTML fetched, markdown written, recorder.record('markdown_cached') called."""
         monkeypatch.setitem(sys.modules, "markitdown", None)  # force fallback
         subj = _make_subject(tmp_path)
-        subj.page.url = "https://example.com/p"
+        subj.page.url = "https://octowright.com/p"
         subj.page.content = AsyncMock(return_value="<p>hello</p>")
         path = await subj.capture_markdown()
         assert path is not None and path.exists()
         assert subj.markdown_path == path
-        assert subj._last_markdown_capture_url == "https://example.com/p"
+        assert subj._last_markdown_capture_url == "https://octowright.com/p"
         # recorder called with markdown_cached.
         recorded = [c.args for c in subj.recorder.record.call_args_list]
         assert any(call == ("markdown_cached",) for call in recorded)
@@ -418,7 +418,7 @@ class TestCaptureMarkdown:
         """Same URL + key + path-exists + not force → returns the cached path without re-rendering."""
         monkeypatch.setitem(sys.modules, "markitdown", None)
         subj = _make_subject(tmp_path)
-        subj.page.url = "https://example.com/p"
+        subj.page.url = "https://octowright.com/p"
         subj.page.content = AsyncMock(return_value="<p>hello</p>")
         # First call populates the cache.
         await subj.capture_markdown()
@@ -432,7 +432,7 @@ class TestCaptureMarkdown:
         """force=True bypasses the cache-hit fast path."""
         monkeypatch.setitem(sys.modules, "markitdown", None)
         subj = _make_subject(tmp_path)
-        subj.page.url = "https://example.com/p"
+        subj.page.url = "https://octowright.com/p"
         subj.page.content = AsyncMock(return_value="<p>hello</p>")
         await subj.capture_markdown()
         await subj.capture_markdown(force=True)
@@ -443,10 +443,10 @@ class TestCaptureMarkdown:
         """Different URL → re-render, even without force."""
         monkeypatch.setitem(sys.modules, "markitdown", None)
         subj = _make_subject(tmp_path)
-        subj.page.url = "https://example.com/a"
+        subj.page.url = "https://octowright.com/a"
         subj.page.content = AsyncMock(return_value="<p>hello</p>")
         await subj.capture_markdown()
-        subj.page.url = "https://example.com/b"
+        subj.page.url = "https://octowright.com/b"
         await subj.capture_markdown()
         assert subj.page.content.await_count == 2
 
@@ -454,7 +454,7 @@ class TestCaptureMarkdown:
     async def test_content_failure_records_error_and_returns_none(self, tmp_path: Path) -> None:
         """If page.content() raises, we record markdown_cache_error and return None."""
         subj = _make_subject(tmp_path)
-        subj.page.url = "https://example.com/p"
+        subj.page.url = "https://octowright.com/p"
         subj.page.content = AsyncMock(side_effect=RuntimeError("boom"))
         result = await subj.capture_markdown()
         assert result is None
@@ -494,7 +494,7 @@ class TestScheduleMarkdownCapture:
         """A done pending task is treated as no longer pending → new task created."""
         monkeypatch.setitem(sys.modules, "markitdown", None)
         subj = _make_subject(tmp_path)
-        subj.page.url = "https://example.com/p"
+        subj.page.url = "https://octowright.com/p"
         subj.page.content = AsyncMock(return_value="<p>x</p>")
         old = MagicMock()
         old.done = MagicMock(return_value=True)

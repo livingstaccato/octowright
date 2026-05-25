@@ -113,11 +113,11 @@ def _write_recording(
             "ts": "2026-01-01T00:00:00Z",
             "action": "launch",
             "kind": kind,
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "label": None,
             "profile": None,
         },
-        {"ts": "2026-01-01T00:00:01Z", "action": "navigate", "url": "https://example.com/login"},
+        {"ts": "2026-01-01T00:00:01Z", "action": "navigate", "url": "https://octowright.com/login"},
         {"ts": "2026-01-01T00:00:02Z", "action": "close", "video_path": None, "trace_path": None},
     ]
     if extra:
@@ -175,7 +175,7 @@ def test_list_sessions_with_closed_recording(client: TestClient, isolated_record
     assert closed["id"] == "abc123def456"
     assert closed["kind"] == "chromium"
     assert closed["live"] is False
-    assert closed["url"] == "https://example.com"
+    assert closed["url"] == "https://octowright.com"
 
 
 def test_list_sessions_with_live_session(
@@ -224,7 +224,7 @@ def test_list_sessions_live_session_uses_launch_timestamp(
         kind="chromium",
         label=None,
         profile=None,
-        url="https://example.com/live",
+        url="https://octowright.com/live",
         log_path=log_path,
         video_path=None,
         trace_path=None,
