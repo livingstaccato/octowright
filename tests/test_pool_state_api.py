@@ -21,7 +21,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
         kind="webkit",
         label="demo",
         profile="demo",
-        url="https://example.com",
+        url="https://octowright.com",
         log_path="/tmp/demo.jsonl",
         har_path=None,
     )
@@ -37,7 +37,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
             "kind": "webkit",
             "label": "demo",
             "profile": "demo",
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "log_path": "/tmp/demo.jsonl",
             "har_path": None,
         }

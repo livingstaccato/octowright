@@ -37,7 +37,7 @@ function makeDetail(overrides: Partial<SessionDetail> = {}): SessionDetail {
     kind: "chromium",
     label: "demo",
     profile: null,
-    url: "https://example.com",
+    url: "https://octowright.com",
     started_at: "2026-04-24T12:00:00.000Z",
     live: false,
     log_path: "/tmp/x.jsonl",

@@ -45,7 +45,7 @@ def _make_session(tmp_path: Path) -> BrowserSession:
         instance_id="upload-test",
         kind="chromium",
         label=None,
-        url="https://example.com",
+        url="https://octowright.com",
         browser=None,  # type: ignore[arg-type]
         context=MagicMock(),
         page=fake_page,  # type: ignore[arg-type]

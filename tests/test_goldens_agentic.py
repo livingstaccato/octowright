@@ -29,7 +29,7 @@ def mock_pool(monkeypatch):
 
     mock_session = MagicMock()
     mock_session.snapshot = AsyncMock(return_value={"role": "Root"})
-    mock_session.page.url = "https://example.com"
+    mock_session.page.url = "https://octowright.com"
 
     mpool = MagicMock()
     mpool.get.return_value = mock_session
@@ -50,7 +50,7 @@ async def test_golden_save_creates_file(mock_pool, temp_goldens):
     data = json.loads((temp_goldens / "manual-save.json").read_text())
     assert data["name"] == "manual-save"
     assert data["tree"] == {"role": "Root"}
-    assert data["url"] == "https://example.com"
+    assert data["url"] == "https://octowright.com"
     assert data["description"] == "test save"
 
 

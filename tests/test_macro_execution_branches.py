@@ -69,17 +69,17 @@ class TestFormatStatus:
     def test_with_invocation_stack_uses_chain_separator(self) -> None:
         """' > '.join — mutating the separator would change the format."""
         # describe_action lives in octowright.macros.descriptions; just assert format shape.
-        result = _format_status(["outer", "inner"], {"action": "navigate", "url": "https://example.com"})
+        result = _format_status(["outer", "inner"], {"action": "navigate", "url": "https://octowright.com"})
         assert result.startswith("outer > inner | ")
 
     def test_empty_stack_omits_separator(self) -> None:
         """No chain → no `chain | ` prefix."""
-        result = _format_status([], {"action": "navigate", "url": "https://example.com"})
+        result = _format_status([], {"action": "navigate", "url": "https://octowright.com"})
         assert " | " not in result
 
     def test_none_stack_omits_separator(self) -> None:
         """None stack treated same as empty."""
-        result = _format_status(None, {"action": "navigate", "url": "https://example.com"})
+        result = _format_status(None, {"action": "navigate", "url": "https://octowright.com"})
         assert " | " not in result
 
     def test_type_text_is_redacted_before_visible_status(self) -> None:

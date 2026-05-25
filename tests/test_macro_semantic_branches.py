@@ -261,7 +261,7 @@ class TestSummarizeActionDispatch:
 class TestIntentLoginUrl:
     def test_no_login_in_urls_returns_none(self) -> None:
         """No URL contains 'login' → None."""
-        assert _intent_login_url(["https://example.com"], []) is None
+        assert _intent_login_url(["https://octowright.com"], []) is None
 
     def test_case_insensitive_match(self) -> None:
         """url.lower() — uppercase 'LOGIN' still matches."""
@@ -372,10 +372,10 @@ class TestGetSemanticIntent:
     def test_url_fallback_when_no_specific_intent(self) -> None:
         """Random URL with no login/search match → 'Interact with <url>'."""
         actions = [
-            {"action": "navigate", "url": "https://example.com/about"},
+            {"action": "navigate", "url": "https://octowright.com/about"},
             {"action": "click", "selector": "#x"},
         ]
-        assert get_semantic_intent(actions) == "Interact with https://example.com/about"
+        assert get_semantic_intent(actions) == "Interact with https://octowright.com/about"
 
     def test_no_url_no_match_count_fallback(self) -> None:
         """Line 154 — no detector matches → 'Perform N actions'."""

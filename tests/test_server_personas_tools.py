@@ -33,7 +33,7 @@ def test_persona_get_maps_fields(_patch_deps: dict[str, MagicMock]) -> None:
     p = MagicMock()
     p.name = "cosmo"
     p.display_name = "Crumpet Cosmo"
-    p.default_url = "https://example.com"
+    p.default_url = "https://octowright.com"
     p.default_macros = ["login"]
     p.credentials = {"email_env": "COSMO_EMAIL"}
     p.app = {"team": "qa"}

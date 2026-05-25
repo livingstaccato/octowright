@@ -53,7 +53,7 @@ def _live_session(log_path: Path, **overrides: Any) -> SimpleNamespace:
         kind="chromium",
         label=None,
         profile=None,
-        url="https://example.com",
+        url="https://octowright.com",
         log_path=log_path,
         video_path=None,
         trace_path=None,

@@ -38,8 +38,8 @@ def test_write_sample_persona_creates_yaml_with_app_hosts(tmp_path: Path) -> Non
     doc = yaml.safe_load(path.read_text())
     assert doc["name"] == "sample"
     assert doc["display_name"] == "Sample Persona"
-    assert doc["default_url"] == "https://example.com/"
-    assert doc["app"]["hosts"] == ["example.com"]
+    assert doc["default_url"] == "https://octowright.com/"
+    assert doc["app"]["hosts"] == ["octowright.com"]
 
 
 def test_write_sample_persona_skips_when_exists(tmp_path: Path) -> None:

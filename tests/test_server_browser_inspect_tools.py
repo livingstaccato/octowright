@@ -37,13 +37,13 @@ def _session(log_root: Path | None = None) -> MagicMock:
     # pass an explicit log_root when they need to assert on disk.
     root = log_root if log_root is not None else Path("/tmp")
     s.log_path = root / "rec.jsonl"
-    s.page.url = "https://example.com"
+    s.page.url = "https://octowright.com"
     s.page.title = AsyncMock(return_value="Example")
     s.page.locator.return_value.aria_snapshot = AsyncMock(return_value="aria-content")
     s.screenshot = AsyncMock(return_value=Path("/tmp/shot.png"))
     s.evaluate = AsyncMock(return_value={"k": "v"})
     s.wait_for = AsyncMock(return_value=None)
-    s.expect_url = AsyncMock(return_value="https://example.com")
+    s.expect_url = AsyncMock(return_value="https://octowright.com")
     s.expect_text = AsyncMock(return_value="hello")
     s.expect_selector = AsyncMock(return_value=None)
     s.expect_js = AsyncMock(return_value=True)
@@ -310,7 +310,7 @@ async def test_browser_brief(_patch_pool: MagicMock) -> None:
     _patch_pool.get.return_value = s
     out = await _inspect.browser_brief("i")
 
-    assert out["url"] == "https://example.com"
+    assert out["url"] == "https://octowright.com"
     assert out["title"] == "Example"
     assert "elements" in out
 

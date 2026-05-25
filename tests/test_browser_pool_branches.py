@@ -46,7 +46,7 @@ def _fake_session(
     kind: str = "chromium",
     label: str | None = "demo",
     profile: str | None = "demo",
-    url: str = "https://example.com",
+    url: str = "https://octowright.com",
     log_path: str = "/tmp/demo.jsonl",
     har_path: Any = None,
     user_data_dir: Any = None,

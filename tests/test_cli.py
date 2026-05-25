@@ -216,14 +216,14 @@ class TestFormatWatchEvent:
             "ts": "2026-04-24T12:34:56Z",
             "persona": "dante",
             "role": "player",
-            "url": "https://example.com/x",
+            "url": "https://octowright.com/x",
         }
         line = _format_watch_event(ev)
         assert line is not None
         assert "[12:34:56]" in line
         assert "dante/player" in line
         assert "navigate" in line
-        assert "https://example.com/x" in line
+        assert "https://octowright.com/x" in line
 
     def test_uses_selector_when_no_url(self) -> None:
         ev = {

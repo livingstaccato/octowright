@@ -18,7 +18,7 @@ from octowright.session import BrowserSession
 # ---------------------------------------------------------------------------
 
 
-def _make_page(url: str = "https://example.com") -> MagicMock:
+def _make_page(url: str = "https://octowright.com") -> MagicMock:
     """Return a minimal mock that looks like a Playwright Page.
 
     page.close() must be awaitable so close_page() can await it.
@@ -29,7 +29,7 @@ def _make_page(url: str = "https://example.com") -> MagicMock:
     return p
 
 
-def _make_session(tmp_path: Path, url: str = "https://example.com") -> BrowserSession:
+def _make_session(tmp_path: Path, url: str = "https://octowright.com") -> BrowserSession:
     """Build a BrowserSession backed by mock objects (no real browser)."""
     log_path = tmp_path / "test.jsonl"
     recorder = Recorder(log_path)
@@ -61,7 +61,7 @@ def test_register_popup_appends_to_pages(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
     assert len(session.pages) == 1  # initial page at index 0
 
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
     assert len(session.pages) == 2
@@ -70,7 +70,7 @@ def test_register_popup_appends_to_pages(tmp_path: Path) -> None:
 
 def test_register_popup_records_event(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
     log = (tmp_path / "test.jsonl").read_text().splitlines()
@@ -80,12 +80,12 @@ def test_register_popup_records_event(tmp_path: Path) -> None:
     last = json.loads(log[-1])
     assert last["action"] == "popup_opened"
     assert last["page_index"] == 1
-    assert last["url"] == "https://popup.example.com"
+    assert last["url"] == "https://popup.octowright.com"
 
 
 def test_register_popup_attaches_console_listener(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
     # _register_popup now registers console + dialog + download listeners.
@@ -101,19 +101,19 @@ def test_register_popup_attaches_console_listener(tmp_path: Path) -> None:
 
 
 def test_list_pages_initial_shape(tmp_path: Path) -> None:
-    session = _make_session(tmp_path, url="https://initial.example.com")
+    session = _make_session(tmp_path, url="https://initial.octowright.com")
     pages = session.list_pages()
 
     assert len(pages) == 1
     assert pages[0]["index"] == 0
-    assert pages[0]["url"] == "https://initial.example.com"
+    assert pages[0]["url"] == "https://initial.octowright.com"
     assert pages[0]["is_active"] is True
     assert "title" in pages[0]
 
 
 def test_list_pages_is_active_correct_after_popup(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
     pages = session.list_pages()
@@ -131,7 +131,7 @@ def test_list_pages_is_active_correct_after_popup(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_switch_page_changes_active_page(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
     result = await session.switch_page(1)
@@ -152,7 +152,7 @@ async def test_switch_page_raises_on_out_of_range(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_switch_page_is_active_reflects_new_selection(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
     await session.switch_page(1)
@@ -170,7 +170,7 @@ async def test_switch_page_is_active_reflects_new_selection(tmp_path: Path) -> N
 @pytest.mark.anyio
 async def test_close_page_removes_from_list(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
     assert len(session.pages) == 2
 
@@ -184,7 +184,7 @@ async def test_close_page_removes_from_list(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_close_page_reassigns_active_when_active_closed(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
     original_page = session.page
@@ -198,7 +198,7 @@ async def test_close_page_reassigns_active_when_active_closed(tmp_path: Path) ->
 @pytest.mark.anyio
 async def test_close_page_keeps_active_when_inactive_closed(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
     original_page = session.page
@@ -233,7 +233,7 @@ async def test_close_page_pops_before_awaiting_close(tmp_path: Path) -> None:
     the page we're closing on purpose.
     """
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
     assert len(session.pages) == 2
 

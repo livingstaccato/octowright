@@ -54,7 +54,7 @@ def _live(
                 "persona": "dante",
                 "kind": "webkit",
                 "instance_id": "i1",
-                "url": "https://example.com",
+                "url": "https://octowright.com",
             }
         ],
         spec=SimpleNamespace(verify=verify if verify is not None else {}),

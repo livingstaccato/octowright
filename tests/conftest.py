@@ -12,9 +12,11 @@ so demo-generation tooling never ships in the wheel. Tests that import it need
 
 from __future__ import annotations
 
+import os
 import socket
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 
@@ -63,3 +65,50 @@ def _free_port() -> int:
         return s.getsockname()[1]
     finally:
         s.close()
+
+
+def _override_base_url(default_url: str, override: str | None) -> str:
+    """Apply optional host override to the default local integration URL.
+
+    `override` can be a full URL (e.g. ``http://test.octowright.com``) or a
+    bare host. When no port is provided, the default URL port is preserved.
+    """
+    if not override:
+        return default_url
+    candidate = override if "://" in override else f"http://{override}"
+    default_parts = urlsplit(default_url)
+    cand_parts = urlsplit(candidate)
+    scheme = cand_parts.scheme or default_parts.scheme
+    host = cand_parts.hostname or default_parts.hostname
+    port = cand_parts.port or default_parts.port
+    if host is None:
+        return default_url
+    netloc = host if port is None else f"{host}:{port}"
+    return urlunsplit((scheme, netloc, default_parts.path, default_parts.query, default_parts.fragment))
+
+
+@pytest.fixture
+async def playground_server(monkeypatch: pytest.MonkeyPatch):
+    """Run the demo playground on an ephemeral local port for integration tests."""
+    from demo.playground.server import PlaygroundServer
+
+    port = _free_port()
+    server = PlaygroundServer(port=port)
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
+@pytest.fixture
+def integration_local_base_url(playground_server: object, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Base URL used by local-server-backed integration tests.
+
+    Default is the started PlaygroundServer URL. Set OCTOWRIGHT_TEST_BASE_URL
+    for local alias runs (e.g. http://test.octowright.com).
+    """
+    _ = monkeypatch
+    raw = playground_server.url
+    override = os.environ.get("OCTOWRIGHT_TEST_BASE_URL")
+    return _override_base_url(str(raw), override)

@@ -10,7 +10,7 @@
 {"ts": "2026-05-12T01:37:04.691844Z", "action": "fill", "selector": "#name", "value": "Octavia Wright", "role": "player", "role_name": "Full name", "instance_id": "7ae671650976", "persona": "duo-player", "kind": "chromium"}
 {"ts": "2026-05-12T01:37:05.241269Z", "action": "click", "selector": "#next-1", "role": "player", "role_name": "Next", "instance_id": "7ae671650976", "persona": "duo-player", "kind": "chromium"}
 {"ts": "2026-05-12T01:37:05.746400Z", "action": "wait_for", "selector": ".step--active #email", "timeout_ms": 5000, "instance_id": "7ae671650976", "persona": "duo-player", "role": "player", "kind": "chromium"}
-{"ts": "2026-05-12T01:37:06.254516Z", "action": "fill", "selector": "#email", "value": "octavia@example.com", "role": "player", "role_name": "Email", "instance_id": "7ae671650976", "persona": "duo-player", "kind": "chromium"}
+{"ts": "2026-05-12T01:37:06.254516Z", "action": "fill", "selector": "#email", "value": "octavia@octowright.test", "role": "player", "role_name": "Email", "instance_id": "7ae671650976", "persona": "duo-player", "kind": "chromium"}
 {"ts": "2026-05-12T01:37:06.778554Z", "action": "click", "selector": "#next-2", "role": "player", "role_name": "Next", "instance_id": "7ae671650976", "persona": "duo-player", "kind": "chromium"}
 {"ts": "2026-05-12T01:37:07.284220Z", "action": "wait_for", "selector": ".step--active #notes", "timeout_ms": 5000, "instance_id": "7ae671650976", "persona": "duo-player", "role": "player", "kind": "chromium"}
 {"ts": "2026-05-12T01:37:07.792619Z", "action": "fill", "selector": "#notes", "value": "Demo run — replay this to see the dashboard fill again.", "role": "player", "role_name": "Notes", "instance_id": "7ae671650976", "persona": "duo-player", "kind": "chromium"}

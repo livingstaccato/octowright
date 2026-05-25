@@ -21,7 +21,7 @@ from octowright.session import BrowserSession
 
 
 class FakeDownload:
-    def __init__(self, url: str = "https://example.com/file.csv", filename: str = "file.csv") -> None:
+    def __init__(self, url: str = "https://octowright.com/file.csv", filename: str = "file.csv") -> None:
         self.url = url
         self.suggested_filename = filename
         self._saved_to: str | None = None
@@ -40,7 +40,7 @@ class FakeDownload:
 
 class FakePage:
     def __init__(self) -> None:
-        self.url = "https://example.com"
+        self.url = "https://octowright.com"
         self.frames: list[Any] = []
         self._handlers: dict[str, Any] = {}
 
@@ -56,7 +56,7 @@ def _make_session(tmp_path: Path) -> BrowserSession:
         instance_id="dl-test-abc",
         kind="chromium",
         label=None,
-        url="https://example.com",
+        url="https://octowright.com",
         browser=None,  # type: ignore[arg-type]
         context=MagicMock(),
         page=page,  # type: ignore[arg-type]
@@ -79,7 +79,7 @@ async def test_handle_download_appends_record(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
 
     s = _make_session(tmp_path)
-    dl = FakeDownload(url="https://example.com/report.csv", filename="report.csv")
+    dl = FakeDownload(url="https://octowright.com/report.csv", filename="report.csv")
 
     s._handle_download(dl)
     # _handle_download schedules a task; let it run
@@ -87,7 +87,7 @@ async def test_handle_download_appends_record(tmp_path: Path, monkeypatch: pytes
 
     assert len(s.downloads) == 1
     rec = s.downloads[0]
-    assert rec["url"] == "https://example.com/report.csv"
+    assert rec["url"] == "https://octowright.com/report.csv"
     assert rec["suggested_filename"] == "report.csv"
     assert "report.csv" in rec["path"]
     assert "timestamp" in rec

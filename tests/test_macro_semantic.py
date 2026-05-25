@@ -18,8 +18,8 @@ def test_summarize_click():
 
 
 def test_summarize_type():
-    action = {"action": "type", "selector": "input#email", "text": "user@example.com"}
-    assert summarize_action(action) == "Type 'user@example.com' into 'input#email'"
+    action = {"action": "type", "selector": "input#email", "text": "user@octowright.test"}
+    assert summarize_action(action) == "Type 'user@octowright.test' into 'input#email'"
 
 
 def test_summarize_fill():
@@ -73,7 +73,7 @@ def test_summarize_macro_call_without_args():
 
 def test_get_semantic_intent():
     actions = [
-        {"action": "navigate", "url": "https://example.com/login"},
+        {"action": "navigate", "url": "https://octowright.com/login"},
         {"action": "fill", "selector": "#user", "value": "ziggy"},
         {"action": "fill", "selector": "#pass", "value": "secret"},
         {"action": "click", "selector": "button#submit"},
@@ -85,11 +85,11 @@ def test_get_semantic_intent():
 
 async def test_macro_explain():
     actions = [
-        {"action": "navigate", "url": "https://example.com"},
+        {"action": "navigate", "url": "https://octowright.com"},
         {"action": "click", "selector": "button#ok"},
     ]
     result = await macro_explain(actions)
     assert "summary" in result
     assert "intent" in result
-    assert "Navigate to https://example.com" in result["summary"]
+    assert "Navigate to https://octowright.com" in result["summary"]
     assert "Click 'button#ok'" in result["summary"]

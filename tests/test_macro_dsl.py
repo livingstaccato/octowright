@@ -21,7 +21,7 @@ description: basic shorthand
 parameters:
   - user
 actions:
-  - navigate: "https://example.com/login"
+  - navigate: "https://octowright.com/login"
   - click: "#next"
   - fill:
       selector: "#user"
@@ -33,7 +33,7 @@ actions:
     assert compiled["description"] == "basic shorthand"
     assert compiled["parameters"] == ["user"]
     assert compiled["actions"] == [
-        {"action": "navigate", "url": "https://example.com/login"},
+        {"action": "navigate", "url": "https://octowright.com/login"},
         {"action": "click", "selector": "#next"},
         {"action": "fill", "selector": "#user", "value": "{{user}}"},
         {"action": "press_key", "key": "Escape"},

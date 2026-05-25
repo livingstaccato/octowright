@@ -48,7 +48,7 @@ def test_load_persona_round_trip(tmp_path, fresh_personas):
         {
             "name": "dante",
             "display_name": "Dante",
-            "default_url": "https://example.com",
+            "default_url": "https://octowright.com",
             "default_macros": ["login"],
             "credentials": {"email_env": "DANTE_EMAIL"},
             "app": {"discord_user_id": "1234", "role": "player"},
@@ -57,7 +57,7 @@ def test_load_persona_round_trip(tmp_path, fresh_personas):
     p = personas.load_persona("dante")
     assert p.name == "dante"
     assert p.display_name == "Dante"
-    assert p.default_url == "https://example.com"
+    assert p.default_url == "https://octowright.com"
     assert p.default_macros == ["login"]
     assert p.credentials == {"email_env": "DANTE_EMAIL"}
     assert p.app == {"discord_user_id": "1234", "role": "player"}
@@ -88,9 +88,9 @@ def test_resolve_env_credential(tmp_path, fresh_personas, monkeypatch):
             "credentials": {"email_env": "TEST_EMAIL"},
         },
     )
-    monkeypatch.setenv("TEST_EMAIL", "me@example.com")
+    monkeypatch.setenv("TEST_EMAIL", "me@octowright.test")
     p = fresh_personas.load_persona("u")
-    assert fresh_personas.resolve_credential(p, "email") == "me@example.com"
+    assert fresh_personas.resolve_credential(p, "email") == "me@octowright.test"
 
 
 def test_resolve_env_missing_raises(tmp_path, fresh_personas, monkeypatch):

@@ -37,11 +37,11 @@ def _make_subject(maxlen: int = 100) -> SessionNetworkMixin:
 class TestMatchUrl:
     def test_substring_match(self) -> None:
         """`in` substring match — partial URL matches."""
-        assert _matches_url("login")({"url": "https://example.com/login?x=1"}) is True
+        assert _matches_url("login")({"url": "https://octowright.com/login?x=1"}) is True
 
     def test_no_match(self) -> None:
         """No substring → False."""
-        assert _matches_url("missing")({"url": "https://example.com/x"}) is False
+        assert _matches_url("missing")({"url": "https://octowright.com/x"}) is False
 
     def test_missing_url_field_returns_false(self) -> None:
         """`get('url', '')` default — empty string never contains anything (almost)."""

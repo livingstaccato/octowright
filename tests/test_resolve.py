@@ -103,9 +103,9 @@ def test_no_matches_returns_ephemeral_ok() -> None:
     """Site nobody owns — ephemeral launch is fine. Weak matches (engine
     profile exists, but no host signal) may still appear; only strong matches
     block ephemeral_ok."""
-    result = _resolve.suggest_for_url("https://example.com/")
-    assert result["host"] == "example.com"
-    # No persona has example.com as default_url or in app.hosts.
+    result = _resolve.suggest_for_url("https://octowright.com/")
+    assert result["host"] == "octowright.com"
+    # No persona has octowright.com as default_url or in app.hosts.
     strong = [m for m in result["matches"] if m["score"] >= 2]
     assert strong == []
     assert result["ambiguous"] is False

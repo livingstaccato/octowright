@@ -420,7 +420,7 @@ def test_same_origin_unsafe_api_request_is_allowed() -> None:
     with TestClient(_http.build_app()) as client:
         response = client.post(
             "/api/sessions/s1/navigate",
-            json={"url": "https://example.com"},
+            json={"url": "https://octowright.com"},
             headers={"origin": "http://testserver"},
         )
 
@@ -444,7 +444,7 @@ def test_origin_host_and_port_matching_for_unsafe_requests(
     with TestClient(_http.build_app()) as client:
         response = client.post(
             "/api/sessions/s1/navigate",
-            json={"url": "https://example.com"},
+            json={"url": "https://octowright.com"},
             headers={"origin": origin, "host": host},
         )
     if expected_blocked:

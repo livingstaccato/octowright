@@ -42,7 +42,7 @@ def test_runtime_actions_are_known_to_linter() -> None:
 def test_clean_macro_returns_no_issues() -> None:
     macro = _macro(
         [
-            {"action": "navigate", "url": "https://example.com"},
+            {"action": "navigate", "url": "https://octowright.com"},
             {"action": "fill", "selector": "input[name=email]", "value": "{{email}}"},
             {"action": "fill", "selector": "input[name=password]", "value": "{{password}}"},
             {"action": "click", "selector": "button[type=submit]"},
@@ -187,10 +187,10 @@ def test_lifecycle_snapshot_is_warning() -> None:
 
 
 def test_looks_like_credential_email() -> None:
-    issues = lint_macro(_macro([{"action": "fill", "selector": "input[name=email]", "value": "me@example.com"}]))
+    issues = lint_macro(_macro([{"action": "fill", "selector": "input[name=email]", "value": "me@octowright.test"}]))
     assert _codes(issues) == ["looks_like_credential"]
     assert issues[0].severity == "warning"
-    assert "me@example.com" in issues[0].message
+    assert "me@octowright.test" in issues[0].message
 
 
 def test_looks_like_credential_password() -> None:
@@ -343,7 +343,7 @@ def test_macro_with_multiple_issues_reports_all() -> None:
     macro = _macro(
         [
             {"action": "navigate"},  # missing url -> error
-            {"action": "fill", "selector": "input", "value": "me@example.com"},  # credential warning
+            {"action": "fill", "selector": "input", "value": "me@octowright.test"},  # credential warning
             {"action": "do_unknown"},  # unknown_action warning
             {"action": "snapshot"},  # lifecycle warning
             {"action": "if_selector", "selector": "#x"},  # empty branches warning
@@ -433,7 +433,7 @@ def test_macro_lint_tool_wrapper_clean_macro(monkeypatch: pytest.MonkeyPatch, tm
     macro = {
         "name": "clean",
         "actions": [
-            {"action": "navigate", "url": "https://example.com"},
+            {"action": "navigate", "url": "https://octowright.com"},
             {"action": "click", "selector": "#go"},
         ],
     }

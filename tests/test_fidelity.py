@@ -19,7 +19,7 @@ def fake_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> BrowserSess
     monkeypatch.setenv("OCTOWRIGHT_RECORDINGS", str(tmp_path / "rec"))
 
     page = MagicMock()
-    page.url = "https://example.com"
+    page.url = "https://octowright.com"
     page.title = AsyncMock(return_value="Title")
     page.content = AsyncMock(return_value="<html><body>" + "x" * 10000 + "</body></html>")
     page.screenshot = AsyncMock()

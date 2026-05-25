@@ -192,8 +192,8 @@ class TestDispatchStandardKwargs:
     async def test_navigate_passes_url_kwarg(self) -> None:
         """navigate forwards url= as a kwarg."""
         s = _full_session()
-        await _dispatch_via_simple(s, {"action": "navigate", "url": "https://example.com"})
-        s.navigate.assert_awaited_once_with(url="https://example.com")
+        await _dispatch_via_simple(s, {"action": "navigate", "url": "https://octowright.com"})
+        s.navigate.assert_awaited_once_with(url="https://octowright.com")
 
     @pytest.mark.anyio
     async def test_press_key_passes_key_kwarg(self) -> None:
@@ -248,10 +248,10 @@ class TestDispatchStandardKwargs:
                 "kind": "chromium",
                 "profile": "cosmo",
                 "instance_id": "deadbeef",
-                "url": "https://example.com",
+                "url": "https://octowright.com",
             },
         )
-        s.navigate.assert_awaited_once_with(url="https://example.com")
+        s.navigate.assert_awaited_once_with(url="https://octowright.com")
 
 
 # --------------------------------------------------------------------------
@@ -407,10 +407,10 @@ class TestSemanticFillBehavior:
                 "action": "fill",
                 "selector": "#email",
                 "label": "Email",
-                "value": "me@example.com",
+                "value": "me@octowright.test",
             },
         )
-        s.fill_by.assert_awaited_once_with(label="Email", value="me@example.com")
+        s.fill_by.assert_awaited_once_with(label="Email", value="me@octowright.test")
         s.fill.assert_not_called()
 
     @pytest.mark.anyio
@@ -442,9 +442,9 @@ class TestSemanticFillBehavior:
         s = _full_session()
         await _dispatch_via_simple(
             s,
-            {"action": "fill_by", "label": "Email", "value": "me@example.com"},
+            {"action": "fill_by", "label": "Email", "value": "me@octowright.test"},
         )
-        s.fill_by.assert_awaited_once_with(label="Email", value="me@example.com")
+        s.fill_by.assert_awaited_once_with(label="Email", value="me@octowright.test")
 
     @pytest.mark.anyio
     async def test_click_by_uses_click_by_directly(self) -> None:

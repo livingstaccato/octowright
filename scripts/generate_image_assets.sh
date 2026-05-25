@@ -34,7 +34,7 @@ resize_one() {
   exit 1
 }
 
-for size in 128 256 512 1024; do
+for size in 128 256 512; do
   out="${ROOT_DIR}/docs/images/octowright-logo-${size}.png"
   resize_one "${size}" "${out}"
   echo "wrote ${out}"

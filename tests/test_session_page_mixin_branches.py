@@ -44,7 +44,7 @@ def _make_subject(tmp_path: Path) -> SessionPageMixin:
     subj = SessionPageMixin.__new__(SessionPageMixin)
     subj._last_mcp_navigation = None
     page = MagicMock()
-    page.url = "https://example.com"
+    page.url = "https://octowright.com"
     page.goto = AsyncMock()
     page.title = AsyncMock(return_value="Example")
     page.content = AsyncMock(return_value="<html></html>")
@@ -526,7 +526,7 @@ class TestArtifactCalls:
         subj.page.locator = MagicMock(return_value=loc)
         subj.page.title = AsyncMock(return_value="Title")
         result = await subj.snapshot()
-        assert result == {"aria": "- y", "url": "https://example.com", "title": "Title"}
+        assert result == {"aria": "- y", "url": "https://octowright.com", "title": "Title"}
 
     @pytest.mark.anyio
     async def test_snapshot_records_event(self, tmp_path: Path) -> None:
@@ -980,7 +980,7 @@ class TestListPagesEdgeCases:
         type(bad).url = property(lambda _self: (_ for _ in ()).throw(RuntimeError("no url")))
         subj.pages = [subj.page, bad]
         result = subj.list_pages()
-        assert result[0]["url"] == "https://example.com"
+        assert result[0]["url"] == "https://octowright.com"
         assert result[1]["url"] is None
 
     def test_list_pages_marks_active_correctly(self, tmp_path: Path) -> None:

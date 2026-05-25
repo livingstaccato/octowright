@@ -11,7 +11,7 @@ from octowright.types import ClickAction, LaunchOptions, MacroAction, NavigateAc
 def test_launch_options_typed_dict_usage() -> None:
     opts: LaunchOptions = {
         "kind": "chromium",
-        "url": "https://example.com",
+        "url": "https://octowright.com",
         "headed": False,
         "har": True,
     }
@@ -20,7 +20,7 @@ def test_launch_options_typed_dict_usage() -> None:
 
 
 def test_macro_action_union_accepts_known_actions() -> None:
-    nav: NavigateAction = {"action": "navigate", "url": "https://example.com"}
+    nav: NavigateAction = {"action": "navigate", "url": "https://octowright.com"}
     click: ClickAction = {"action": "click", "selector": "#submit"}
     actions: list[MacroAction] = [nav, click]
     assert [a["action"] for a in actions] == ["navigate", "click"]

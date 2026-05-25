@@ -131,9 +131,9 @@ class TestAutocompleteRedaction:
         one-time-code) trigger redaction; ``username`` carries no secret."""
         monkeypatch.delenv(REDACT_INPUTS_ENV, raising=False)
         subj = _make_redaction_subject({"type": "text", "ac": "username"})
-        await subj.fill("#user", "alice@example.com")
+        await subj.fill("#user", "alice@octowright.test")
         call = subj.recorder.record.call_args
-        assert call.kwargs["value"] == "alice@example.com"
+        assert call.kwargs["value"] == "alice@octowright.test"
         assert call.kwargs["value"] != REDACTED_INPUT_PLACEHOLDER
 
     @pytest.mark.anyio
@@ -317,16 +317,16 @@ class TestPerSelectorEvaluation:
         target.locator = MagicMock(side_effect=lambda sel: per_selector[sel])
         subj._target = lambda: target  # type: ignore[attr-defined]
 
-        await subj.fill("#email", "alice@example.com")
+        await subj.fill("#email", "alice@octowright.test")
         await subj.fill("#pw", "hunter2")
 
         calls = subj.recorder.record.call_args_list
         # First call: email — literal value.
         assert calls[0].args == ("fill",)
-        assert calls[0].kwargs["value"] == "alice@example.com"
+        assert calls[0].kwargs["value"] == "alice@octowright.test"
         # Second call: password — placeholder.
         assert calls[1].args == ("fill",)
         assert calls[1].kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
         # And the page itself always saw the real value.
-        assert target.fill.await_args_list[0].args == ("#email", "alice@example.com")
+        assert target.fill.await_args_list[0].args == ("#email", "alice@octowright.test")
         assert target.fill.await_args_list[1].args == ("#pw", "hunter2")

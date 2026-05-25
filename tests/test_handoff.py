@@ -22,11 +22,11 @@ async def test_handoff_reuses_profile_and_closes_original(monkeypatch: pytest.Mo
         kind="webkit",
         profile="dante",
         label="lab",
-        url="https://example.com/app",
+        url="https://octowright.com/app",
         user_data_dir="/tmp/profile-dir",
         har_path=None,
         stabilize=False,
-        page=SimpleNamespace(url="https://example.com/live"),
+        page=SimpleNamespace(url="https://octowright.com/live"),
     )
     pool._sessions["old01"] = source
 
@@ -69,11 +69,11 @@ async def test_handoff_rejects_stateless_without_opt_in() -> None:
         kind="chromium",
         profile=None,
         label=None,
-        url="https://example.com",
+        url="https://octowright.com",
         user_data_dir=None,
         har_path=None,
         stabilize=False,
-        page=SimpleNamespace(url="https://example.com"),
+        page=SimpleNamespace(url="https://octowright.com"),
     )
 
     with pytest.raises(ValueError, match="accept_stateless=True"):
@@ -88,11 +88,11 @@ async def test_handoff_rejects_keep_original_for_persistent() -> None:
         kind="firefox",
         profile="mortimer",
         label="mortimer",
-        url="https://example.com",
+        url="https://octowright.com",
         user_data_dir="/tmp/ops",
         har_path=None,
         stabilize=False,
-        page=SimpleNamespace(url="https://example.com"),
+        page=SimpleNamespace(url="https://octowright.com"),
     )
 
     with pytest.raises(ValueError, match="close_original=True"):
@@ -108,8 +108,8 @@ async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.Monke
         label="scratch",
         profile=None,
         user_data_dir=tmp_path / "session-dir",
-        page=SimpleNamespace(url="https://example.com"),
-        url="https://example.com",
+        page=SimpleNamespace(url="https://octowright.com"),
+        url="https://octowright.com",
         stabilize=False,
         trace=False,
         har_path=None,
@@ -165,12 +165,12 @@ async def test_handoff_survives_eviction_race(monkeypatch: pytest.MonkeyPatch) -
         kind="chromium",
         profile="dante",
         label="dante-lab",
-        url="https://example.com/app",
+        url="https://octowright.com/app",
         user_data_dir="/tmp/profile-dir",
         har_path=None,
         stabilize=False,
         trace=False,
-        page=SimpleNamespace(url="https://example.com/live"),
+        page=SimpleNamespace(url="https://octowright.com/live"),
     )
     pool._sessions["evict01"] = source
 
@@ -227,12 +227,12 @@ async def test_relaunch_fluid_survives_eviction_race(monkeypatch: pytest.MonkeyP
         kind="chromium",
         profile=None,
         label="scratch",
-        url="https://example.com/app",
+        url="https://octowright.com/app",
         user_data_dir=None,
         har_path=None,
         stabilize=False,
         trace=False,
-        page=SimpleNamespace(url="https://example.com/live"),
+        page=SimpleNamespace(url="https://octowright.com/live"),
     )
     pool._sessions["fluid01"] = source
 
