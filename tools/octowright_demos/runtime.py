@@ -8,12 +8,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse, urlunparse
 
 from octowright.browser_pool import BrowserPool
 from octowright.recorder import tail_log
@@ -115,6 +116,7 @@ def _load_bundle_scenario(bundle: DemoBundle) -> Scenario:
 
 _DEMO_VIEWPORT_W = 1920
 _DEMO_VIEWPORT_H = 1080
+_DEFAULT_PLAYGROUND_BASE = "http://127.0.0.1:7900"
 
 
 def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
@@ -131,9 +133,11 @@ def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
         # pointing at the dashboard sidecar (or any live service) keep their
         # target URL instead of being rewritten to a bundle seed.
         if participant.url and (participant.url.startswith("http://") or participant.url.startswith("https://")):
+            rewritten_url = _rewrite_playground_url(participant.url)
             participants.append(
                 replace(
                     participant,
+                    url=rewritten_url,
                     viewport_w=viewport_w,
                     viewport_h=viewport_h,
                     record_video=True,
@@ -160,6 +164,32 @@ def _prepare_scenario(bundle: DemoBundle, scenario: Scenario) -> Scenario:
         fixtures=dict(scenario.fixtures),
         teardown_macro=scenario.teardown_macro,
         verify=dict(scenario.verify),
+    )
+
+
+def _rewrite_playground_url(url: str) -> str:
+    base_override = os.getenv("OCTOWRIGHT_PLAYGROUND_BASE_URL", "").strip()
+    if not base_override:
+        return url
+
+    parsed_url = urlparse(url)
+    parsed_default = urlparse(_DEFAULT_PLAYGROUND_BASE)
+    parsed_override = urlparse(base_override)
+    if (
+        parsed_url.scheme != parsed_default.scheme
+        or parsed_url.hostname != parsed_default.hostname
+        or parsed_url.port != parsed_default.port
+    ):
+        return url
+    return urlunparse(
+        (
+            parsed_override.scheme,
+            parsed_override.netloc,
+            parsed_url.path,
+            parsed_url.params,
+            parsed_url.query,
+            parsed_url.fragment,
+        )
     )
 
 

@@ -13,7 +13,7 @@ from octowright_demos.catalog import load_demo_bundle
 from octowright_demos.models import DemoBundle, DemoMacroRun, DemoPresentationConfig, DemoRecordingConfig
 from octowright_demos.presentation_profiles import select_render_plan
 from octowright_demos.rendering import render_bundle_video
-from octowright_demos.runtime import record_demo_bundle
+from octowright_demos.runtime import _rewrite_playground_url, record_demo_bundle
 
 from octowright.scenarios_pool import LiveScenario
 
@@ -367,3 +367,16 @@ def test_site_facing_render_plans_use_readable_canvases() -> None:
     }
     assert min(slot.width for slot in seven_mix.placements) >= 640
     assert min(slot.height for slot in seven_mix.placements) >= 360
+
+
+def test_rewrite_playground_url_respects_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = "http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935"
+
+    monkeypatch.delenv("OCTOWRIGHT_PLAYGROUND_BASE_URL", raising=False)
+    assert _rewrite_playground_url(source) == source
+
+    monkeypatch.setenv("OCTOWRIGHT_PLAYGROUND_BASE_URL", "http://127.0.0.1:7901")
+    assert _rewrite_playground_url(source) == "http://127.0.0.1:7901/canvas.html?role=p1&colour=%23e53935"
+
+    external = "https://octowright.com/"
+    assert _rewrite_playground_url(external) == external
