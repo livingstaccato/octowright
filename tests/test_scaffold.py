@@ -160,8 +160,8 @@ def test_render_report_writes_to_passed_stream(tmp_path: Path) -> None:
 def test_init_cli_first_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`octowright init` against fresh paths reports + creates everything."""
     from octowright import defaults as _defaults
+    from octowright import engine_profiles as _profiles
     from octowright import personas as _personas
-    from octowright import profiles as _profiles
     from octowright import scenarios as _scenarios
     from octowright.macros import storage as _macro_storage
 
@@ -188,8 +188,8 @@ def test_init_cli_first_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_init_cli_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Re-running init must not crash and must report items as 'exists'."""
     from octowright import defaults as _defaults
+    from octowright import engine_profiles as _profiles
     from octowright import personas as _personas
-    from octowright import profiles as _profiles
     from octowright import scenarios as _scenarios
     from octowright.macros import storage as _macro_storage
 
@@ -212,8 +212,8 @@ def test_init_cli_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_init_cli_force_flag_overwrites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from octowright import defaults as _defaults
+    from octowright import engine_profiles as _profiles
     from octowright import personas as _personas
-    from octowright import profiles as _profiles
     from octowright import scenarios as _scenarios
     from octowright.macros import storage as _macro_storage
 

@@ -28,8 +28,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
+from octowright import engine_profiles as _profiles
 from octowright import personas as _personas
-from octowright import profiles as _profiles
 from octowright.types import PersonaListEntry
 
 
