@@ -2,23 +2,29 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Shared canvas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared Canvas | Octowright Test Range</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<main class="canvas-root">
-  <header>
-    <h1>Shared canvas</h1>
+<main class="page-shell canvas-root">
+  <a class="mini-brand" href="/"><img src="/assets/octowright-logo-512.png" alt="">Octowright Test Range</a>
+  <header class="page-header">
+    <div class="page-title">
+      <h1>Shared Canvas</h1>
+      <p>Multiple browsers claim tiles on one shared grid. Every claim broadcasts over SSE so spectators and monitors update live.</p>
+    </div>
     <p>
       <span id="role-label">spectator</span>
-      &middot;
-      <span id="claim-counter">0</span> tiles claimed
+      <span class="tag"><span id="claim-counter">0</span> claimed</span>
     </p>
   </header>
-  <div id="grid" class="grid" role="grid" aria-label="claim grid"></div>
-  <p class="footnote">
-    Set the role via <code>?role=player-N&amp;colour=hex</code>. Player roles get a Claim button; spectator just watches.
-  </p>
+  <section class="tool-card">
+    <div id="grid" class="grid" role="grid" aria-label="claim grid"></div>
+    <p class="footnote">
+      Set the role via <code>?role=player-N&amp;colour=hex</code>. Player roles can click tiles; spectators watch shared state.
+    </p>
+  </section>
 </main>
 <script src="/canvas.js"></script>
 </body>
