@@ -72,8 +72,8 @@ Visual rules:
 
 Primary brand assets to incorporate:
 
-- `docs/images/octowright-banner.png`
-- `docs/images/octowright-logo-512.png`
+- `docs/images/brand/octowright-banner.png`
+- `docs/images/brand/octowright-logo-512.png`
 
 ## Homepage Strategy
 
