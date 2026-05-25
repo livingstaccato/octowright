@@ -445,7 +445,7 @@ class TestPersonaUpdate:
         new_yaml = (
             "name: cosmo\n"
             "display_name: Cosmo\n"
-            "default_url: https://example.com\n"
+            "default_url: https://octowright.com\n"
             "default_macros:\n  - login\n"
             "credentials:\n  email_env: COSMO_EMAIL\n  token_cmd: op read op://x\n"
             "app:\n  role: player\n"

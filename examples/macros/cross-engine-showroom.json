@@ -7,7 +7,7 @@
   "actions": [
     {"action": "expect_js", "expression": "typeof document.getElementById('depart') === 'object' && document.getElementById('depart') !== null"},
     {"action": "fill", "selector": "#name", "value": "Octavia Wright"},
-    {"action": "fill", "selector": "#email", "value": "octavia@example.com"},
+    {"action": "fill", "selector": "#email", "value": "octavia@octowright.test"},
     {"action": "click", "selector": "#depart"},
     {"action": "press_key", "key": "Escape"},
     {"action": "evaluate", "expression": "(()=>{var s=document.getElementById('pax');s.value='5';s.dispatchEvent(new Event('input',{bubbles:true}));return s.value})()"},

@@ -210,7 +210,7 @@ async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, li
 
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="ext",
         viewport_w=None,
@@ -240,7 +240,7 @@ async def test_browser_disconnected_evicts_session(monkeypatch: pytest.MonkeyPat
 
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="disc",
         viewport_w=None,
@@ -272,7 +272,7 @@ async def test_all_pages_closed_evicts_session(monkeypatch: pytest.MonkeyPatch, 
 
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="pages",
         viewport_w=None,
@@ -300,7 +300,7 @@ async def test_one_page_close_with_survivor_does_not_evict(monkeypatch: pytest.M
 
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="pop",
         viewport_w=None,
@@ -329,7 +329,7 @@ async def test_multiple_signals_only_evict_once(monkeypatch: pytest.MonkeyPatch,
 
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="dup",
         viewport_w=None,
@@ -361,7 +361,7 @@ async def test_explicit_close_does_not_emit_external_log(
 
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="explicit",
         viewport_w=None,
@@ -399,7 +399,7 @@ async def test_external_close_after_explicit_close_is_noop(
 
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="twice",
         viewport_w=None,
@@ -429,7 +429,7 @@ async def test_external_close_one_of_two_keeps_survivor(monkeypatch: pytest.Monk
 
     a = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="a",
         viewport_w=None,
@@ -437,7 +437,7 @@ async def test_external_close_one_of_two_keeps_survivor(monkeypatch: pytest.Monk
     )
     b = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="b",
         viewport_w=None,
@@ -468,7 +468,7 @@ async def test_persistent_context_has_no_browser_disconnect(monkeypatch: pytest.
 
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="persist",
         viewport_w=None,

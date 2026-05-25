@@ -439,7 +439,7 @@ def _make_navigate_subject() -> Any:
     subj = SessionPageMixin.__new__(SessionPageMixin)
     subj._last_mcp_navigation = None
     page = MagicMock()
-    page.url = "https://example.com"
+    page.url = "https://octowright.com"
     page.goto = AsyncMock()
     page.title = AsyncMock(return_value="t")
     subj.page = page
@@ -456,19 +456,19 @@ class TestNavigateUrlSanitization:
     def test_sanitize_strips_query(self) -> None:
         from octowright.session.core_page_mixin import _sanitize_url_for_span
 
-        assert _sanitize_url_for_span("https://example.com/a?token=abc&id=1") == "https://example.com/a"
+        assert _sanitize_url_for_span("https://octowright.com/a?token=abc&id=1") == "https://octowright.com/a"
 
     def test_sanitize_keeps_fragment_and_path(self) -> None:
         from octowright.session.core_page_mixin import _sanitize_url_for_span
 
         # urlsplit preserves fragment; only query is stripped.
-        out = _sanitize_url_for_span("https://example.com/x/y?secret=1#frag")
-        assert out == "https://example.com/x/y#frag"
+        out = _sanitize_url_for_span("https://octowright.com/x/y?secret=1#frag")
+        assert out == "https://octowright.com/x/y#frag"
 
     def test_sanitize_passthrough_when_no_query(self) -> None:
         from octowright.session.core_page_mixin import _sanitize_url_for_span
 
-        assert _sanitize_url_for_span("https://example.com/a") == "https://example.com/a"
+        assert _sanitize_url_for_span("https://octowright.com/a") == "https://octowright.com/a"
 
     def test_sanitize_falls_back_on_parse_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If urlsplit raises, the helper returns the original URL untouched."""
@@ -525,11 +525,11 @@ class TestHandoffSpan:
             kind="webkit",
             profile="dante",
             label="lab",
-            url="https://example.com",
+            url="https://octowright.com",
             user_data_dir="/tmp/profile-dir",
             har_path=None,
             stabilize=False,
-            page=SimpleNamespace(url="https://example.com/live"),
+            page=SimpleNamespace(url="https://octowright.com/live"),
         )
 
         async def _fake_close(instance_id: str) -> dict[str, Any]:
@@ -564,11 +564,11 @@ class TestHandoffSpan:
             kind="chromium",
             profile=None,
             label=None,
-            url="https://example.com",
+            url="https://octowright.com",
             user_data_dir=None,
             har_path=None,
             stabilize=False,
-            page=SimpleNamespace(url="https://example.com"),
+            page=SimpleNamespace(url="https://octowright.com"),
         )
         with pytest.raises(ValueError, match="accept_stateless=True"):
             await pool.handoff("old02", headed=True)
@@ -594,12 +594,12 @@ class TestRelaunchFluidSpan:
             kind="chromium",
             profile=None,
             label="lab",
-            url="https://example.com/initial",
+            url="https://octowright.com/initial",
             user_data_dir=None,
             har_path=None,
             stabilize=False,
             trace=False,
-            page=SimpleNamespace(url="https://example.com/live"),
+            page=SimpleNamespace(url="https://octowright.com/live"),
         )
         pool._sessions["rid"] = source
 
