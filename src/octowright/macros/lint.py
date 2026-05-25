@@ -90,9 +90,12 @@ _TOKEN_PREFIX_RE = re.compile(
     r"|ghu_[A-Za-z0-9]{20,}"  # GitHub user-to-server token
     r"|ghs_[A-Za-z0-9]{20,}"  # GitHub server-to-server token
     r"|ghr_[A-Za-z0-9]{20,}"  # GitHub refresh token
+    r"|github_pat_[A-Za-z0-9_]{20,}"  # GitHub fine-grained PAT
+    r"|glpat-[A-Za-z0-9_-]{20,}"  # GitLab personal access token
     r"|xox[abprs]-[A-Za-z0-9-]{10,}"  # Slack tokens
     r"|ya29\.[A-Za-z0-9_-]{20,}"  # Google OAuth access token
     r"|sk-[A-Za-z0-9]{20,}"  # OpenAI / Anthropic-style secret key
+    r"|(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{20,}"  # Stripe API keys
     r")$"
 )
 

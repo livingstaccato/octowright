@@ -46,6 +46,8 @@ def _frame_cache_path(session_id: str, t: float) -> Path:
 
 async def session_frame(request: Request) -> Response:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     raw_t = request.query_params.get("t", "0")
     try:
         t = float(raw_t)
@@ -92,6 +94,8 @@ async def session_frame(request: Request) -> Response:
 
 async def session_video(request: Request) -> Response:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     video_path = _resolve_artifact_path(sid, "video_path")
     if video_path is None or not video_path.exists():
         return JSONResponse(
@@ -104,6 +108,8 @@ async def session_video(request: Request) -> Response:
 
 async def session_trace(request: Request) -> Response:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     trace_path = _resolve_artifact_path(sid, "trace_path")
     if trace_path is None or not trace_path.exists():
         return JSONResponse(
@@ -166,6 +172,8 @@ async def session_screenshot_now(request: Request) -> Response:
             status_code=400,
         )
 
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     live = _live_session_or_none(sid)
     if live is None:
         # Distinguish "closed session" from "no such session" so the frontend
@@ -268,6 +276,8 @@ async def session_screenshot_file(request: Request) -> Response:
 
 async def session_markdown(request: Request) -> Response:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     live = _live_session_or_none(sid)
 
     if live is not None:
@@ -297,6 +307,8 @@ async def session_markdown(request: Request) -> Response:
 async def trace_open(request: Request) -> JSONResponse:
     """POST /api/sessions/{id}/trace/open — same payload as ``browser_open_trace``."""
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     trace_path = _resolve_artifact_path(sid, "trace_path")
     if trace_path is None or not trace_path.exists():
         return JSONResponse(
