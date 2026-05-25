@@ -350,3 +350,69 @@ async def test_request_timeout_fires_even_under_load() -> None:
     assert timed_out_ids == {f"slow-{i}" for i in range(20)}
     assert supervisor_obj.in_flight_count == 0
     assert supervisor_obj.request_timeouts == 20
+
+
+class _RaceyRemoteWrite:
+    """Send fails AFTER the slot has been swapped to a fresh writer.
+
+    Models the exact race Gemini flagged on PR #50: while the outbound
+    ``send`` is awaiting, ``_remote_supervisor`` reconnects and installs
+    a new writer in the slot. The old writer's failure must not clear
+    the new writer.
+    """
+
+    def __init__(self, slot: supervisor._RemoteWriteSlot, swap_in: Any) -> None:
+        self._slot = slot
+        self._swap_in = swap_in
+
+    async def send(self, _message: SessionMessage) -> None:
+        # Simulate the reconnect happening during the await: another
+        # coroutine has reset the slot to a brand-new writer before our
+        # exception surfaces.
+        self._slot.write = self._swap_in
+        raise ConnectionResetError("old remote stream closed")
+
+
+@pytest.mark.anyio
+async def test_failed_send_does_not_clear_freshly_reconnected_writer() -> None:
+    """Race regression: clearing the slot on send failure must check
+    that the slot still holds the writer we tried to send through."""
+    _local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    outgoing_send, _outgoing_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    supervisor_obj = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=outgoing_send,
+        request_timeout_seconds=1.0,
+    )
+    fresh_writer = _CapturingRemoteWrite()
+    slot = supervisor._RemoteWriteSlot()
+    slot.write = _RaceyRemoteWrite(slot, swap_in=fresh_writer)
+
+    await supervisor_obj.forward_one_local_message(_request("tools/call", "raced"), slot)
+
+    # Failure of the old writer must NOT have nuked the freshly installed one.
+    assert slot.write is fresh_writer
+
+
+@pytest.mark.anyio
+async def test_failed_send_clears_slot_when_no_reconnect_raced() -> None:
+    """Companion to the race-regression test: the normal failure path
+    (no reconnect happened during the await) still clears the slot."""
+    _local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    outgoing_send, _outgoing_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    supervisor_obj = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=outgoing_send,
+        request_timeout_seconds=1.0,
+    )
+
+    class _PlainFailingWrite:
+        async def send(self, _message: SessionMessage) -> None:
+            raise ConnectionResetError("remote stream closed")
+
+    failing = _PlainFailingWrite()
+    slot = supervisor._RemoteWriteSlot(write=failing)
+
+    await supervisor_obj.forward_one_local_message(_request("tools/call", "plain-fail"), slot)
+
+    assert slot.write is None

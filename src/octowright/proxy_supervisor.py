@@ -168,7 +168,13 @@ class BridgeSupervisor:
                         method=method,
                         error=repr(exc),
                     )
-                remote_write_slot.write = None
+                # Only clear the slot if it still holds the writer we just
+                # tried to send through. During the await above the remote
+                # supervisor can reconnect and swap in a fresh writer; an
+                # unconditional clear here would nuke that valid new writer
+                # based on the failure of the old one.
+                if remote_write_slot.write is remote_write:
+                    remote_write_slot.write = None
                 await self.fail_all_in_flight("leader session unavailable; retry")
 
     def track_local_message(self, message: SessionMessage) -> None:

@@ -397,18 +397,36 @@ def export_script(log_path: Path, out_path: Path, fmt: str = "python") -> Path:
     # its parent) with a symlink between resolve() and write_text() can
     # redirect the write; staging into a sibling temp file inside the same
     # already-resolved parent and atomically renaming closes that window.
+    #
+    # ``delete=False`` means cleanup is the caller's responsibility — if the
+    # write or replace fails we'd otherwise leak the ``.tmp`` file. The
+    # try/finally below unlinks the staging file on any failure path and
+    # is a no-op on the success path (we clear ``tmp_path`` after replace).
     body = "\n".join(lines)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=out_path.parent,
-        prefix=f".{out_path.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as tmp:
-        tmp.write(body)
-        tmp_path = Path(tmp.name)
-    os.replace(tmp_path, out_path)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=out_path.parent,
+            prefix=f".{out_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp.write(body)
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, out_path)
+        tmp_path = None  # replace consumed it; nothing for finally to clean.
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                # Best-effort cleanup on the failure path; if unlink itself
+                # fails (parent gone, permission flip) there's nothing useful
+                # we can do, and the original exception is what the caller
+                # cares about.
+                pass
     return out_path
 
 
