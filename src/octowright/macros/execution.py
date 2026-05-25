@@ -189,8 +189,10 @@ async def _push_status(
         payload["done"] = True
     try:
         await page.evaluate(_STATUS_PUSH_JS, payload)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Per silent-swallow policy: this is a user-action path, so log instead
+        # of truly swallowing. A failed pill push must not break macro dispatch.
+        log.debug("octowright.macro.pill_push_failed", error=repr(exc))
 
 
 def _resolve_slowmo_ms(slowmo_ms: int | None) -> int:

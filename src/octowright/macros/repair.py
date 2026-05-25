@@ -11,8 +11,8 @@ import copy
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from octowright.macros.semantic import summarize_action
 from octowright.mcp_types import MacroRepairPreviewResult, MacroRepairSuggestion
-from octowright.server.macro_semantic import summarize_action
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike

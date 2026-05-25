@@ -14,7 +14,7 @@ from typing import Any, cast
 import pytest
 from starlette.responses import StreamingResponse
 
-from octowright.http.dashboard_events import DashboardEventBus
+from octowright.dashboard_events import DashboardEventBus
 from octowright.http.routes.events import dashboard_events_endpoint
 
 

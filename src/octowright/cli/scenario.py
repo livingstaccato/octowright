@@ -46,7 +46,7 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
     import asyncio as _asyncio
     import signal
 
-    from octowright import scenarios as _s
+    from octowright import scenarios_pool as _s
     from octowright.browser_pool import BrowserPool
 
     setup_telemetry()

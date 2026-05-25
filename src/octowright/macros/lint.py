@@ -19,6 +19,7 @@ from `octowright.macros._dispatch_simple`; conditional action shapes mirror
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -76,6 +77,36 @@ _HAS_DIGIT = re.compile(r"\d")
 _HAS_LETTER = re.compile(r"[A-Za-z]")
 _HAS_SPECIAL = re.compile(r"[^A-Za-z0-9]")
 
+# Well-known credential prefixes — small, high-precision set that catches
+# vendor token shapes the digit+letter+special heuristic misses (no special
+# characters, or short overall). Tuned for false-negative reduction, not
+# exhaustive coverage; the runtime ``OCTOWRIGHT_REDACT_INPUTS`` policy is the
+# real defence.
+_TOKEN_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"AKIA[0-9A-Z]{16}"  # AWS access key ID
+    r"|ghp_[A-Za-z0-9]{20,}"  # GitHub personal access token
+    r"|gho_[A-Za-z0-9]{20,}"  # GitHub OAuth token
+    r"|ghu_[A-Za-z0-9]{20,}"  # GitHub user-to-server token
+    r"|ghs_[A-Za-z0-9]{20,}"  # GitHub server-to-server token
+    r"|ghr_[A-Za-z0-9]{20,}"  # GitHub refresh token
+    r"|xox[abprs]-[A-Za-z0-9-]{10,}"  # Slack tokens
+    r"|ya29\.[A-Za-z0-9_-]{20,}"  # Google OAuth access token
+    r"|sk-[A-Za-z0-9]{20,}"  # OpenAI / Anthropic-style secret key
+    r")$"
+)
+
+
+def _shannon_entropy(s: str) -> float:
+    if not s:
+        return 0.0
+    freq: dict[str, int] = {}
+    for ch in s:
+        freq[ch] = freq.get(ch, 0) + 1
+    n = len(s)
+    return -sum((c / n) * math.log2(c / n) for c in freq.values())
+
+
 # Fields that are NEVER credentials even if they happen to look like one
 # (e.g. a CSS selector containing `[id="user@host"]` — unlikely, but cheap
 # to skip). We only inspect string fields whose KEY plausibly carries
@@ -87,10 +118,20 @@ _ARIA_LOCATOR_KEYS: frozenset[str] = frozenset({"role", "role_name", "label", "t
 
 
 def _looks_like_password(s: str) -> bool:
-    """True if *s* is >= 12 chars and contains digits AND letters AND a special char."""
-    if len(s) < 12:
-        return False
-    return bool(_HAS_DIGIT.search(s) and _HAS_LETTER.search(s) and _HAS_SPECIAL.search(s))
+    """True if *s* looks like a literal credential.
+
+    Combines three independent signals:
+      1. Known token prefixes (AWS, GitHub, Slack, Google OAuth, sk-...).
+      2. Classic password shape: >=12 chars with digits + letters + special.
+      3. High Shannon entropy (>4.0 bits/char) for strings >=20 chars — catches
+         bare hex API keys and alphanumeric bearer tokens that have no special
+         characters and so slip past (2).
+    """
+    if _TOKEN_PREFIX_RE.match(s):
+        return True
+    if len(s) >= 12 and _HAS_DIGIT.search(s) and _HAS_LETTER.search(s) and _HAS_SPECIAL.search(s):
+        return True
+    return len(s) >= 20 and _shannon_entropy(s) > 4.0
 
 
 def _looks_like_email(s: str) -> bool:

@@ -85,16 +85,16 @@ def test_get_list_and_remap_errors() -> None:
 
     live = _live()
     sp._live[live.scenario_id] = live
-    sp._browser_pool = SimpleNamespace(
+    bp = SimpleNamespace(
         maybe_get=lambda instance_id: SimpleNamespace(kind="chromium", profile="cosmo") if instance_id == "x" else None
     )
     assert sp.list_live()[0]["scenario_id"] == "sid"
 
-    out = sp.remap_participant(scenario_id="sid", old_instance_id="a", new_instance_id="x")
+    out = sp.remap_participant(scenario_id="sid", old_instance_id="a", new_instance_id="x", browser_pool=bp)
     assert out["new_instance_id"] == "x"
 
     with pytest.raises(ValueError):
-        sp.remap_participant(scenario_id="sid", old_instance_id="nope", new_instance_id="x")
+        sp.remap_participant(scenario_id="sid", old_instance_id="nope", new_instance_id="x", browser_pool=bp)
 
 
 def test_public_live_lookup_helpers() -> None:

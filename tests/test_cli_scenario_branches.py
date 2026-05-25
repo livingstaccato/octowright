@@ -76,7 +76,7 @@ def patched_pools(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     spool_class = MagicMock(return_value=spool_inst)
 
     import octowright.browser_pool as _bp
-    import octowright.scenarios as _s
+    import octowright.scenarios_pool as _s
 
     monkeypatch.setattr(_bp, "BrowserPool", pool_class)
     monkeypatch.setattr(_s, "ScenarioPool", spool_class)

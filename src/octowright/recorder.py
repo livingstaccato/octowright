@@ -6,9 +6,15 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+# Restrict label characters to alphanumeric + dot/underscore/hyphen so a
+# caller-supplied label can never inject path separators, NUL bytes, or
+# other characters that would escape base_dir on disk.
+_LABEL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 # Mirrors octowright.http.artifacts.EVENT_ONLY_ACTIONS — kept here to avoid
 # importing the http layer from the core recorder.
@@ -100,5 +106,6 @@ def tail_log(path: Path, cursor: int) -> tuple[list[dict], int, int]:
 
 def new_log_path(base_dir: Path, instance_id: str, label: str | None, kind: str) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    suffix = f"-{label}" if label else ""
+    safe_label = _LABEL_UNSAFE_RE.sub("-", label).strip("-.") if label else ""
+    suffix = f"-{safe_label}" if safe_label else ""
     return base_dir / f"{stamp}-{kind}-{instance_id}{suffix}.jsonl"

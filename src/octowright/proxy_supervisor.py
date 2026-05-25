@@ -15,6 +15,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
 from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
+from provide.telemetry import get_logger
 
 from octowright import bridge_state, singleton
 from octowright._trace_propagation import tracing_httpx_client_factory
@@ -42,6 +43,8 @@ _BRIDGE_RPC_DURATION = histogram(
 
 BRIDGE_ERROR_CODE = -32000
 BRIDGE_ERROR_PREFIX = "Octowright bridge error:"
+
+log = get_logger(__name__)
 
 
 def message_root(message: SessionMessage) -> Any:
@@ -139,7 +142,17 @@ class BridgeSupervisor:
             _BRIDGE_RPC.add(1, attributes={"method": method})
             try:
                 await remote_write.send(message)
-            except Exception:
+            except Exception as exc:
+                # If the failed send was a notification we have nowhere to
+                # return an error to — log so a missing `notifications/*`
+                # round-trip (e.g. notifications/initialized after reconnect)
+                # is at least visible in post-mortem.
+                if not (is_request(message) and request_id is not None):
+                    log.debug(
+                        "octowright.bridge.notification_drop",
+                        method=method,
+                        error=repr(exc),
+                    )
                 remote_write_box.pop("remote_write", None)
                 await self.fail_all_in_flight("leader session unavailable; retry")
 
@@ -210,8 +223,40 @@ class BridgeSupervisor:
 def resolve_leader_url(fallback_url: str) -> str:
     info = singleton.read_lock()
     if info is not None and not singleton.is_stale(info):
-        return info.mcp_url
+        if _leader_url_is_safe(info.mcp_url):
+            return info.mcp_url
+        log.warning(
+            "octowright.bridge.leader_url_rejected",
+            mcp_url=info.mcp_url,
+            reason="non-loopback host without OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1",
+        )
     return fallback_url
+
+
+def _leader_url_is_safe(mcp_url: str) -> bool:
+    """Refuse to bridge to a leader URL whose host isn't loopback.
+
+    The lockfile is writable by any process running as the same user — a
+    malicious local process (poisoned pip install, sandbox escape, etc.)
+    could overwrite ``mcp_url`` to redirect MCP traffic (including persona
+    credentials substituted into tool args) to an attacker-controlled URL.
+    Validate the host before opening the stream; allow remote URLs only
+    when the operator has explicitly opted in via the env flag the HTTP
+    layer already uses for the same trust boundary.
+    """
+    # Import lazily — http.exposure is a separate layer; we only want the
+    # host classifier, not the full HTTP guard machinery.
+    from urllib.parse import urlparse
+
+    from octowright.http.exposure import is_loopback_host, remote_dashboard_allowed
+
+    try:
+        host = urlparse(mcp_url).hostname
+    except ValueError:
+        return False
+    if host is None:
+        return False
+    return is_loopback_host(host) or remote_dashboard_allowed()
 
 
 def reconnect_delay(attempt: int, *, max_delay: float) -> float:
@@ -286,7 +331,11 @@ async def run_supervised_proxy(
                                 remote_write_box["remote_write"] = remote_write
                                 try:
                                     supervisor_obj.remote_session_id = get_sid()
-                                except Exception:
+                                except Exception as exc:
+                                    # get_sid() may not be implemented on every
+                                    # transport; log so bridge diagnostics aren't
+                                    # silently misleading when the field is null.
+                                    log.debug("octowright.bridge.get_sid_failed", error=repr(exc))
                                     supervisor_obj.remote_session_id = None
                                 supervisor_obj.reconnect_attempts = attempt
                                 bridge_state.record_snapshot(
