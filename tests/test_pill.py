@@ -31,7 +31,7 @@ def test_describe_action_uses_first_informative_field() -> None:
     # bare action when no hint fields are present
     assert _describe_action({"action": "wait_for"}) == "wait_for"
     # long values get clipped with an ellipsis
-    long_url = "https://example.com/" + "a" * 80
+    long_url = "https://octowright.com/" + "a" * 80
     out = _describe_action({"action": "navigate", "url": long_url})
     assert out.startswith("navigate url=")
     assert out.endswith("…")

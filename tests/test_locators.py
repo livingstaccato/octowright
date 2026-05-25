@@ -221,10 +221,10 @@ async def test_click_by_uses_default_timeout(tmp_path: Path) -> None:
 async def test_fill_by_calls_locator_fill(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
-    result = await session.fill_by("me@example.com", label="Email", timeout_ms=2000)
+    result = await session.fill_by("me@octowright.test", label="Email", timeout_ms=2000)
     assert result == {"ok": True}
     assert len(page._locator._fills) == 1
-    assert page._locator._fills[0] == {"value": "me@example.com", "timeout": 2000}
+    assert page._locator._fills[0] == {"value": "me@octowright.test", "timeout": 2000}
     assert session.recorder.recorded[-1][0] == "fill_by"  # type: ignore[union-attr]
 
 

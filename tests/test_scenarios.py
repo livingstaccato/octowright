@@ -44,7 +44,7 @@ def test_load_yaml_scenario(fresh_scenarios):
             "participants": [
                 {"persona": "cosmo", "kind": "webkit", "role": "player"},
                 {"persona": "ziggy", "kind": "firefox", "role": "player", "startup_macros": ["login"]},
-                {"persona": "mortimer", "kind": "chromium", "role": "monitor", "url": "https://ops.example.com"},
+                {"persona": "mortimer", "kind": "chromium", "role": "monitor", "url": "https://ops.octowright.com"},
             ],
             "fixtures": {"mock_routes": [{"pattern": "**/api/time", "status": 200, "body": "{}"}]},
             "teardown": {"macro": "cleanup"},
@@ -56,7 +56,7 @@ def test_load_yaml_scenario(fresh_scenarios):
     assert len(s.participants) == 3
     assert s.participants[1].persona == "ziggy"
     assert s.participants[1].startup_macros == ["login"]
-    assert s.participants[2].url == "https://ops.example.com"
+    assert s.participants[2].url == "https://ops.octowright.com"
     assert s.fixtures["mock_routes"][0]["pattern"] == "**/api/time"
     assert s.teardown_macro == "cleanup"
     assert s.verify == {"player": "assert-in", "monitor": "assert-up"}

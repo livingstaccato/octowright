@@ -47,10 +47,10 @@ def write_sample_persona(profiles_dir: Path, *, force: bool = False) -> tuple[Pa
     doc: dict[str, Any] = {
         "name": SAMPLE_PERSONA_NAME,
         "display_name": "Sample Persona",
-        "default_url": "https://example.com/",
+        "default_url": "https://octowright.com/",
         "default_macros": [],
         "credentials": {},
-        "app": {"hosts": ["example.com"]},
+        "app": {"hosts": ["octowright.com"]},
     }
     target.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
     return target, "overwritten" if force else "created"
@@ -62,7 +62,7 @@ def write_sample_scenario(scenarios_dir: Path, *, force: bool = False) -> tuple[
         return target, "exists"
     doc: dict[str, Any] = {
         "name": SAMPLE_SCENARIO_NAME,
-        "description": "One webkit browser visiting example.com — the smallest possible scenario.",
+        "description": "One webkit browser visiting octowright.com — the smallest possible scenario.",
         "participants": [
             {
                 "persona": SAMPLE_PERSONA_NAME,

@@ -31,19 +31,19 @@ class TestShortUrl:
         assert short_url("") == ""
 
     def test_strips_scheme_returns_host_plus_path(self) -> None:
-        assert short_url("https://example.com/some/path") == "example.com/some/path"
+        assert short_url("https://octowright.com/some/path") == "octowright.com/some/path"
 
     def test_drops_trailing_slash_only_path(self) -> None:
-        assert short_url("https://example.com/") == "example.com"
+        assert short_url("https://octowright.com/") == "octowright.com"
 
     def test_truncates_with_ellipsis_when_over_max(self) -> None:
-        url = "https://example.com/" + "a" * 100
+        url = "https://octowright.com/" + "a" * 100
         rendered = short_url(url, max_chars=20)
         assert len(rendered) == 20
         assert rendered.endswith("…")
 
     def test_keeps_short_url_intact(self) -> None:
-        assert short_url("https://example.com/x", max_chars=48) == "example.com/x"
+        assert short_url("https://octowright.com/x", max_chars=48) == "octowright.com/x"
 
     def test_unparseable_falls_back_to_truncation(self) -> None:
         # Even malformed strings should not raise.
@@ -58,7 +58,7 @@ class TestShortUrl:
             raise ValueError("simulated bad parse")
 
         monkeypatch.setattr(_fmt, "urlparse", _raising_urlparse)
-        out = short_url("https://example.com/long-path", max_chars=10)
+        out = short_url("https://octowright.com/long-path", max_chars=10)
         assert isinstance(out, str)
         assert len(out) <= 10
 

@@ -16,10 +16,10 @@ describe("truncate", () => {
 
 describe("shortUrl", () => {
   it("strips scheme and trailing slash", () => {
-    expect(shortUrl("https://example.com/")).toBe("example.com");
+    expect(shortUrl("https://octowright.com/")).toBe("octowright.com");
   });
   it("keeps path and query", () => {
-    expect(shortUrl("https://example.com/foo?bar=1")).toBe("example.com/foo?bar=1");
+    expect(shortUrl("https://octowright.com/foo?bar=1")).toBe("octowright.com/foo?bar=1");
   });
   it("returns empty for null", () => {
     expect(shortUrl(null)).toBe("");
@@ -29,7 +29,7 @@ describe("shortUrl", () => {
     expect(shortUrl("not a url")).toBe("not a url");
   });
   it("truncates long urls", () => {
-    expect(shortUrl(`https://example.com/${"a".repeat(100)}`, 20)).toHaveLength(20);
+    expect(shortUrl(`https://octowright.com/${"a".repeat(100)}`, 20)).toHaveLength(20);
   });
 });
 
@@ -77,7 +77,7 @@ describe("eventHeadline", () => {
     expect(eventHeadline({ ts: "x", action: "click", selector: "#foo", text: "ignored" })).toBe("#foo");
   });
   it("falls back to url", () => {
-    expect(eventHeadline({ ts: "x", action: "navigate", url: "https://example.com" })).toBe("https://example.com");
+    expect(eventHeadline({ ts: "x", action: "navigate", url: "https://octowright.com" })).toBe("https://octowright.com");
   });
   it("returns empty when nothing matches", () => {
     expect(eventHeadline({ ts: "x", action: "noop" })).toBe("");

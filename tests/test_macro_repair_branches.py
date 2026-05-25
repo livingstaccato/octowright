@@ -235,8 +235,8 @@ class TestReplacementPreviewFallthrough:
     def test_other_kinds_use_summarize_action(self) -> None:
         """Kinds other than click_by/fill_by route to summarize_action."""
         assert (
-            replacement_preview({"action": "navigate", "url": "https://example.com"})
-            == "Navigate to https://example.com"
+            replacement_preview({"action": "navigate", "url": "https://octowright.com"})
+            == "Navigate to https://octowright.com"
         )
 
     def test_unknown_kind_via_summarize_fallback(self) -> None:
@@ -315,7 +315,7 @@ class TestRepairPreviewEmptyAndFiltering:
         """The `'selector' not in action` continue branch."""
         macro = _macro(
             actions=[
-                {"action": "navigate", "url": "https://example.com"},
+                {"action": "navigate", "url": "https://octowright.com"},
                 {"action": "press_key", "key": "Enter"},
             ]
         )

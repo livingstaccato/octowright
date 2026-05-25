@@ -30,6 +30,8 @@ import pytest
 # demo-bundle tests, so this import resolves the same way.
 from demo.playground.server import PlaygroundServer, _State
 
+pytestmark = pytest.mark.integration_local
+
 
 @pytest.fixture
 def anyio_backend() -> str:
@@ -169,7 +171,7 @@ async def test_form_step_appended() -> None:
             )
             await client.post(
                 s.url + "/api/form-step",
-                json={"step": 2, "label": "email", "value": "tim@example.com"},
+                json={"step": 2, "label": "email", "value": "tim@octowright.test"},
             )
             state = (await client.get(s.url + "/api/state")).json()
         assert len(state["form_steps"]) == 2
