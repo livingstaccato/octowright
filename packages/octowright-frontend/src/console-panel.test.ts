@@ -25,16 +25,28 @@ describe("badgeClassForLevel", () => {
   it("falls back for unknown", () => {
     expect(badgeClassForLevel("trace")).toBe("console-badge--log");
   });
+  it("maps aliases and missing levels", () => {
+    expect(badgeClassForLevel("warning")).toBe("console-badge--warn");
+    expect(badgeClassForLevel("debug")).toBe("console-badge--debug");
+    expect(badgeClassForLevel(null as unknown as ConsoleMessage["level"])).toBe("console-badge--log");
+  });
 });
 
 describe("filterMessages", () => {
   it("returns all when level is 'all'", () => {
     expect(filterMessages(SAMPLE, "all")).toHaveLength(4);
   });
+  it("returns all when level is empty", () => {
+    expect(filterMessages(SAMPLE, "")).toHaveLength(4);
+  });
   it("filters by level", () => {
     const errs = filterMessages(SAMPLE, "error");
     expect(errs).toHaveLength(1);
     expect(errs[0]?.text).toBe("boom");
+  });
+  it("treats missing message levels as log", () => {
+    const messages = [{ text: "defaulted", page_index: undefined } as unknown as ConsoleMessage];
+    expect(filterMessages(messages, "log")).toHaveLength(1);
   });
 });
 
@@ -57,6 +69,21 @@ describe("renderConsolePanel", () => {
     // row 1 has page_index 1
     expect(rows[1]?.querySelector(".console-panel__tab")?.textContent).toBe("[tab 1]");
     expect(rows[3]?.querySelector(".console-panel__tab")?.textContent).toBe("[tab 2]");
+  });
+  it("does not render a tab prefix when page_index is undefined", () => {
+    renderConsolePanel(container, [
+      { level: "log", text: "no tab", page_index: undefined } as unknown as ConsoleMessage,
+    ]);
+    expect(container.querySelector(".console-panel__tab")).toBeNull();
+  });
+
+  it("defaults row level text and data attributes when level is missing", () => {
+    renderConsolePanel(container, [
+      { level: undefined, text: "default level", page_index: null } as unknown as ConsoleMessage,
+    ]);
+    const row = container.querySelector("li.console-panel__row");
+    expect(row?.getAttribute("data-level")).toBe("log");
+    expect(row?.querySelector(".console-badge")?.textContent).toBe("log");
   });
 
   it("shows empty placeholder when no messages", () => {

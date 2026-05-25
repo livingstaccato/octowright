@@ -23,7 +23,7 @@ from provide.telemetry import get_logger
 
 if TYPE_CHECKING:
     from octowright.browser_pool import BrowserPool
-    from octowright.scenarios import ScenarioPool
+    from octowright.scenarios_pool import ScenarioPool
 
 log = get_logger(__name__)
 

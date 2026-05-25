@@ -15,7 +15,11 @@ from provide.telemetry import get_logger
 from octowright import defaults
 from octowright._paths import reject_unsafe_path
 from octowright.defaults import SCENARIO_TEMPLATES_DIR, SCENARIOS_DIR, SUPPORTED_KINDS
-from octowright.scenarios_pool import LiveScenario, ScenarioPool
+
+# ``LiveScenario`` and ``ScenarioPool`` are the runtime/registry classes —
+# their canonical home is ``octowright.scenarios_pool``. They are NOT re-
+# exported here so there's exactly one stable import path; this module is
+# the static data model (Scenario / Participant / loaders / resolvers).
 
 log = get_logger(__name__)
 
@@ -245,7 +249,3 @@ def resolve_startup_macros(p: Participant) -> list[str]:
     except FileNotFoundError:
         return []
     return list(persona.default_macros or [])
-
-
-# Keep runtime/pool classes in this module's API surface.
-_SCENARIO_RUNTIME_EXPORTS = (LiveScenario, ScenarioPool)

@@ -3,7 +3,8 @@
 # SPDX-Comment: Part of octowright.
 #
 
-from octowright.server.macro_semantic import get_semantic_intent, macro_explain, summarize_action
+from octowright.macros.semantic import get_semantic_intent, summarize_action
+from octowright.server.macros import macro_explain
 
 
 def test_summarize_navigate():

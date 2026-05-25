@@ -259,7 +259,16 @@ async def async_election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) 
 
 
 def make_leader_info(http_host: str, http_port: int) -> LeaderInfo:
-    """Build the lockfile record for ``this`` process becoming leader."""
+    """Build the lockfile record for ``this`` process becoming leader.
+
+    Also stashes a monotonic-clock timestamp in process-local state so that
+    callers in this same process can compute uptime without wall-clock skew
+    contaminating the result. The stash is private to this Python process;
+    foreign callers (a separate process reading the lockfile) get the
+    wall-clock ``started_at`` and pay the clock-skew cost.
+    """
+    global _LOCAL_LEADER_STARTED_MONOTONIC
+    _LOCAL_LEADER_STARTED_MONOTONIC = time.monotonic()
     return LeaderInfo(
         pid=os.getpid(),
         http_host=http_host,
@@ -270,3 +279,17 @@ def make_leader_info(http_host: str, http_port: int) -> LeaderInfo:
         mcp_url=f"http://{http_host}:{http_port}/mcp/",
         started_at=time.time(),
     )
+
+
+_LOCAL_LEADER_STARTED_MONOTONIC: float | None = None
+
+
+def local_leader_started_monotonic() -> float | None:
+    """Return the monotonic timestamp at which this process became leader.
+
+    Returns ``None`` if this process never called :func:`make_leader_info`
+    (e.g. a follower, or a fresh interpreter). Callers should only use this
+    when ``read_lock().pid == os.getpid()`` — across processes the monotonic
+    clocks are not comparable.
+    """
+    return _LOCAL_LEADER_STARTED_MONOTONIC

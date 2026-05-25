@@ -68,6 +68,9 @@ describe("sessionIdFromPath", () => {
   it("decodes URL components", () => {
     expect(sessionIdFromPath("/sessions/foo%2Fbar")).toBe("foo/bar");
   });
+  it("returns the raw id when URL decoding fails", () => {
+    expect(sessionIdFromPath("/sessions/%E0%A4%A")).toBe("%E0%A4%A");
+  });
   it("returns null for non-matching paths", () => {
     expect(sessionIdFromPath("/dashboard")).toBeNull();
     expect(sessionIdFromPath("/sessions/")).toBeNull();
@@ -208,6 +211,12 @@ describe("renderCachePanel", () => {
     const refs = buildLayout(root);
     renderCachePanel(refs.cachePanel, makeDetail());
     expect(refs.cachePanel.textContent).toContain("Enable compression on recordings.");
+  });
+
+  it("omits recommendations block when none are provided", () => {
+    const refs = buildLayout(root);
+    renderCachePanel(refs.cachePanel, makeDetail({ cache: { ...SAMPLE_CACHE, recommendations: [] } }));
+    expect(refs.cachePanel.textContent).not.toContain("Recommendations:");
   });
 });
 

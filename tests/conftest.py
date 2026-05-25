@@ -16,9 +16,33 @@ import socket
 import sys
 from pathlib import Path
 
+import pytest
+
 _TOOLS = Path(__file__).resolve().parent.parent / "tools"
 if str(_TOOLS) not in sys.path:
     sys.path.insert(0, str(_TOOLS))
+
+_AMBIENT_OTLP_ENV_VARS = (
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_ambient_otlp_export_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tests deterministic when a developer shell has OTLP export configured."""
+    for name in _AMBIENT_OTLP_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 def _free_port() -> int:

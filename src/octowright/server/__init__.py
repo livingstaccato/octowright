@@ -21,7 +21,6 @@ from __future__ import annotations
 from octowright.server import browser as _browser  # noqa: F401
 from octowright.server import captures as _captures  # noqa: F401
 from octowright.server import goldens as _goldens  # noqa: F401
-from octowright.server import macro_semantic as _macro_semantic  # noqa: F401
 from octowright.server import macros as _macros  # noqa: F401
 from octowright.server import meta as _meta  # noqa: F401
 from octowright.server import personas as _personas  # noqa: F401
@@ -105,10 +104,10 @@ from octowright.server.goldens import (
     golden_save,
     golden_verify_loop,
 )
-from octowright.server.macro_semantic import macro_explain
 from octowright.server.macros import (
     macro_compile,
     macro_delete,
+    macro_explain,
     macro_lint,
     macro_list,
     macro_repair_preview,

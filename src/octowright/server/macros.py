@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import octowright.macros as macro_mod
-from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.mcp_types import (
     CleanupResult,
     MacroCompileResult,
@@ -285,3 +285,18 @@ def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
             for s in stale
         ],
     }
+
+
+@mcp.tool(
+    structured_output=False,
+    description="Explain what a macro does in plain English and provide its semantic intent.",
+)
+async def macro_explain(actions: list[dict[str, Any]]) -> dict[str, str]:
+    """Summarize a list of macro actions and return a one-line intent.
+
+    Args:
+        actions: List of macro actions (JSONL format).
+    """
+    from octowright.macros.semantic import explain_macro
+
+    return explain_macro(actions)

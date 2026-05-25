@@ -8,6 +8,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("mountLivePreview — closed session", () => {
@@ -23,6 +24,8 @@ describe("mountLivePreview — closed session", () => {
 
     // start() must be a no-op — calling it should not create timers.
     handle.start();
+    handle.stop();
+    handle.setInterval(1000);
     vi.advanceTimersByTime(60_000);
     expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
     handle.destroy();
@@ -58,6 +61,21 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
   });
 
+  it("uses Date.now/performance fallback path when load completes without performance.now", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("performance", undefined);
+    const handle = mountLivePreview(container, { sessionId: "live-no-perf", isLive: true });
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const timestamp = container.querySelector('[data-testid="live-preview-timestamp"]');
+    if (!img || !timestamp) throw new Error("missing preview elements");
+
+    handle.start();
+    img.dispatchEvent(new Event("load"));
+
+    expect(timestamp.textContent).not.toBe("—");
+    handle.destroy();
+  });
+
   it("stop() halts polling and start() resumes", () => {
     vi.useFakeTimers();
     const handle = mountLivePreview(container, { sessionId: "live3", isLive: true, intervalMs: 1000 });
@@ -77,6 +95,19 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
   });
 
+  it("start and stop are idempotent while already in the target state", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live3b", isLive: true, intervalMs: 1000 });
+    handle.start();
+    const timerCount = vi.getTimerCount();
+    handle.start();
+    expect(vi.getTimerCount()).toBe(timerCount);
+    handle.stop();
+    handle.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    handle.destroy();
+  });
+
   it("setInterval(ms) changes tick rate", () => {
     vi.useFakeTimers();
     const handle = mountLivePreview(container, { sessionId: "live4", isLive: true, intervalMs: 5000 });
@@ -92,6 +123,16 @@ describe("mountLivePreview — live session", () => {
     // Rate select reflects the new value.
     const rate = container.querySelector<HTMLSelectElement>('[data-testid="live-preview-rate"]');
     expect(rate?.value).toBe("1000");
+    handle.destroy();
+  });
+
+  it("setInterval before start updates the selector without creating a timer", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live4b", isLive: true, intervalMs: 3000 });
+    handle.setInterval(10000);
+    const rate = container.querySelector<HTMLSelectElement>('[data-testid="live-preview-rate"]');
+    expect(rate?.value).toBe("10000");
+    expect(vi.getTimerCount()).toBe(0);
     handle.destroy();
   });
 
@@ -141,6 +182,22 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
   });
 
+  it("ignores invalid rate selector values", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live7b", isLive: true, intervalMs: 3000 });
+    handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const rate = container.querySelector<HTMLSelectElement>('[data-testid="live-preview-rate"]');
+    if (!img || !rate) throw new Error("missing preview controls");
+    img.dispatchEvent(new Event("load"));
+    rate.value = "";
+    rate.dispatchEvent(new Event("change"));
+    const before = img.src;
+    vi.advanceTimersByTime(1000);
+    expect(img.src).toBe(before);
+    handle.destroy();
+  });
+
   it("play button toggles polling state", () => {
     vi.useFakeTimers();
     const handle = mountLivePreview(container, { sessionId: "live8", isLive: true });
@@ -174,6 +231,21 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
   });
 
+  it("markClosed clears a visible error indicator", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live9b", isLive: true, intervalMs: 1000 });
+    handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!img || !error) throw new Error("missing preview elements");
+
+    img.dispatchEvent(new Event("error"));
+    expect(error.style.display).toBe("");
+    handle.markClosed();
+    expect(error.style.display).toBe("none");
+    handle.destroy();
+  });
+
   it("markClosed is idempotent and a no-op for already-closed sessions", () => {
     const closedHandle = mountLivePreview(container, { sessionId: "closed1", isLive: false });
     // Should not throw — closed-mode handle exposes a no-op markClosed.
@@ -197,6 +269,22 @@ describe("mountLivePreview — live session", () => {
     expect(img.src).toBe(before);
     vi.advanceTimersByTime(1_100);
     expect(img.src).not.toBe(before);
+    handle.destroy();
+  });
+
+  it("handles an image error after polling has already been stopped", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live10b", isLive: true, intervalMs: 1000 });
+    handle.start();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!img || !error) throw new Error("missing preview elements");
+
+    handle.stop();
+    img.dispatchEvent(new Event("error"));
+
+    expect(error.textContent).toContain("transient error");
+    expect(vi.getTimerCount()).toBe(0);
     handle.destroy();
   });
 
@@ -259,5 +347,28 @@ describe("mountLivePreview — live session", () => {
     vi.advanceTimersByTime(150);
     expect(img.src).not.toBe(initialSrc);
     handle.destroy();
+  });
+
+  it("live handle methods are no-ops after destroy", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live14", isLive: true, intervalMs: 1000 });
+    handle.start();
+    handle.destroy();
+
+    expect(() => {
+      handle.start();
+      handle.stop();
+      handle.setInterval(1000);
+      handle.markClosed();
+    }).not.toThrow();
+    expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
+  });
+
+  it("destroy before start removes DOM without clearing a timer", () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, { sessionId: "live15", isLive: true, intervalMs: 1000 });
+    handle.destroy();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(container.classList.contains("live-preview")).toBe(false);
   });
 });

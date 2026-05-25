@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from mcp.server.fastmcp import FastMCP
 from provide.telemetry import get_logger
 
-from octowright import scenarios as _scenarios
+from octowright import scenarios_pool as _scenario_pool_mod
 from octowright.browser_pool import BrowserPool
 from octowright.server.profiles import active_filter
 
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 log = get_logger("octowright.server")
 
 pool = BrowserPool()
-scenario_pool = _scenarios.ScenarioPool()
+scenario_pool = _scenario_pool_mod.ScenarioPool()
 
 
 def _track_advisor_usage(fn: Callable[..., Any]) -> Callable[..., Any]:

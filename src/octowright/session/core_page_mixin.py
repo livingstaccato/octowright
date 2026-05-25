@@ -166,9 +166,14 @@ class SessionPageMixin(SessionLike):
         # Reassign self.page BEFORE the pop so neither pop nor the
         # synchronous _on_page_close ever sees self.page dangling at a
         # popped index. The len(self.pages) > 1 guard above means a
-        # non-target sibling is always present when ``was_active``.
+        # non-target sibling is always present when ``was_active``; we
+        # still snapshot here to defend against a concurrent popup-close
+        # listener mutating self.pages between the guard and this lookup.
         if was_active:
-            self.page = next(p for p in self.pages if p is not target)
+            sibling = next((p for p in self.pages if p is not target), None)
+            if sibling is None:
+                raise RuntimeError("no sibling page available; another close raced ahead")
+            self.page = sibling
         self.pages.pop(index)
         await target.close()
         self.recorder.record("close_page", index=index, was_active=was_active)
@@ -233,21 +238,40 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("click", selector=selector, **meta)
 
     async def _is_password_input(self, selector: str) -> bool:
-        """Best-effort check: does *selector* resolve to ``<input type=password>``?
+        """Best-effort check: does *selector* resolve to a credential input?
+
+        Treats both ``type=password`` AND ``autocomplete in {current-password,
+        new-password, one-time-code}`` as credential-bearing so SPAs that
+        implement custom password fields as ``<input type=text>`` with the
+        appropriate autocomplete hint still get scrubbed.
 
         Uses ``locator.first.evaluate(...)`` so multi-match selectors don't
-        raise. Any Playwright/JS error swallows to ``False`` — the redaction
-        policy treats a failed lookup as "not password" so we never falsify
-        a non-secret recording, but the caller can still escalate to
-        unconditional redaction via ``OCTOWRIGHT_REDACT_INPUTS=all``.
+        raise. Any Playwright/JS error fails closed to ``True`` so a selector
+        that disappears around a typing/fill action cannot write cleartext
+        credentials into the JSONL recording.
         """
         try:
             loc = self._target().locator(selector).first
-            kind = await loc.evaluate("el => (el && el.type) ? String(el.type).toLowerCase() : ''")
+            info = await loc.evaluate(
+                "el => el ? {"
+                "  type: el.type ? String(el.type).toLowerCase() : '',"
+                "  ac: el.autocomplete ? String(el.autocomplete).toLowerCase() : ''"
+                "} : {type: '', ac: ''}"
+            )
         except Exception as exc:
             log.debug("core_page_mixin.password_lookup_failed", selector=selector, error=str(exc))
-            return False
-        return kind == "password"
+            return True
+        # New shape: {type, ac}. Legacy callers / tests may stub `evaluate`
+        # to return a bare string (the old behaviour); accept that shape too
+        # so the redaction policy stays the same for callers that haven't
+        # upgraded their mocks.
+        if isinstance(info, str):
+            return info == "password"
+        if not isinstance(info, dict):
+            return True
+        if info.get("type") == "password":
+            return True
+        return info.get("ac") in ("current-password", "new-password", "one-time-code")
 
     async def _redacted_or_original(self, selector: str, value: str) -> str:
         """Return ``REDACTED_INPUT_PLACEHOLDER`` if the current redaction
@@ -266,14 +290,14 @@ class SessionPageMixin(SessionLike):
 
     async def type_text(self, selector: str, text: str, delay_ms: int | None) -> None:
         meta = await self._resolve_semantic_metadata(selector)
-        await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         recorded_text = await self._redacted_or_original(selector, text)
+        await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("type", selector=selector, text=recorded_text, delay_ms=delay_ms, **meta)
 
     async def fill(self, selector: str, value: str) -> None:
         meta = await self._resolve_semantic_metadata(selector)
-        await self._target().fill(selector, value, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         recorded_value = await self._redacted_or_original(selector, value)
+        await self._target().fill(selector, value, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     async def press_key(self, key: str) -> None:

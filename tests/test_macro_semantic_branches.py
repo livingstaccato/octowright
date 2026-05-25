@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Branch-targeted tests for octowright.server.macro_semantic.
+"""Branch-targeted tests for octowright.macros.semantic.
 
 Covers per-kind formatter edge cases (missing optional fields, empty values,
 indent multipliers), the unknown-kind fallback in `summarize_action`, every
@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from octowright.server.macro_semantic import (
+from octowright.macros.semantic import (
     _intent_login_fields,
     _intent_login_url,
     _intent_search,
@@ -34,9 +34,9 @@ from octowright.server.macro_semantic import (
     _sum_type,
     _sum_wait_for,
     get_semantic_intent,
-    macro_explain,
     summarize_action,
 )
+from octowright.server.macros import macro_explain
 
 
 @pytest.fixture

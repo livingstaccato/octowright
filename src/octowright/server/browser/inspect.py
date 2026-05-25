@@ -228,6 +228,8 @@ def browser_export_script(
     session = pool.get(instance_id)
     suffix = ".py" if format == "python" else ".ts"
     target = Path(out_path) if out_path else session.log_path.with_suffix(suffix)
+    # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
+    target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"export_script out_path {str(target)!r}")
     result = _export_script(session.log_path, target, fmt=format)
     return {"path": str(result)}
 

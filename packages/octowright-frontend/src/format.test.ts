@@ -57,11 +57,15 @@ describe("colorForAction", () => {
     ["dblclick", "click"],
     ["fill", "fill"],
     ["press_key", "fill"],
+    ["type", "fill"],
     ["navigate", "navigate"],
     ["goto", "navigate"],
+    ["navigation", "navigate"],
     ["expect_url", "expect"],
     ["expect_text", "expect"],
     ["error", "error"],
+    ["exception", "error"],
+    ["failure", "error"],
     ["something_else", "default"],
   ] as const)("maps %s to %s", (input, want) => {
     expect(colorForAction(input)).toBe(want);
@@ -89,6 +93,11 @@ describe("eventHeadline", () => {
   it("normalizes old raw binary payload preview format", () => {
     expect(
       eventHeadline({ ts: "x", action: "websocket_framereceived", is_binary: true, payload_preview: "b'hello'" }),
+    ).toBe("[binary payload hidden]");
+  });
+  it("normalizes old double-quoted raw binary payload preview format", () => {
+    expect(
+      eventHeadline({ ts: "x", action: "websocket_framereceived", is_binary: true, payload_preview: 'b"hello"' }),
     ).toBe("[binary payload hidden]");
   });
 });

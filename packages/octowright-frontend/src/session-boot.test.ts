@@ -122,6 +122,15 @@ async function getMockedGetSession() {
   return api.getSession as ReturnType<typeof vi.fn>;
 }
 
+async function getMockedPanelLoaders() {
+  const api = await import("./api.js");
+  return {
+    getConsole: api.getConsole as ReturnType<typeof vi.fn>,
+    getDownloads: api.getDownloads as ReturnType<typeof vi.fn>,
+    getScreenshots: api.getScreenshots as ReturnType<typeof vi.fn>,
+  };
+}
+
 let root: HTMLDivElement;
 beforeEach(() => {
   root = document.createElement("div");
@@ -322,6 +331,53 @@ describe("bootSession — closed session", () => {
     }
     // No assertion needed beyond "no throw" — coverage is the goal here.
   });
+
+  it("falls back to empty panel data when side-panel loaders fail", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail());
+    const loaders = await getMockedPanelLoaders();
+    loaders.getConsole.mockRejectedValueOnce(new Error("console failed"));
+    loaders.getDownloads.mockRejectedValueOnce(new Error("downloads failed"));
+    loaders.getScreenshots.mockRejectedValueOnce(new Error("screenshots failed"));
+
+    await bootSession(root, "sess-1");
+
+    expect(root.querySelector("[data-testid='tab-console']")?.textContent).toContain("(0)");
+    expect(root.querySelector("[data-testid='tab-downloads']")?.textContent).toContain("(0)");
+    expect(root.querySelector("[data-testid='tab-screenshots']")?.textContent).toContain("(0)");
+  });
+
+  it("uses zero counts when optional detail counts are missing", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(
+      makeDetail({
+        console_count: undefined as never,
+        download_count: undefined as never,
+        aria: undefined,
+        markdown_path: null,
+      }),
+    );
+
+    await bootSession(root, "sess-missing-counts");
+
+    expect(root.querySelector("[data-testid='tab-console']")?.textContent).toContain("(0)");
+    expect(root.querySelector("[data-testid='tab-downloads']")?.textContent).toContain("(0)");
+    expect(root.querySelector("[data-testid='tab-aria']")?.textContent).toContain("(0)");
+    expect(root.querySelector("[data-testid='tab-markdown']")?.textContent).toContain("(0)");
+  });
+
+  it("destroys the live preview on beforeunload", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail());
+    const { mountLivePreview } = await import("./live-preview.js");
+    const livePreviewHandle = { start: vi.fn(), stop: vi.fn(), destroy: vi.fn(), markClosed: vi.fn(), setInterval: vi.fn() };
+    (mountLivePreview as ReturnType<typeof vi.fn>).mockReturnValueOnce(livePreviewHandle);
+
+    await bootSession(root, "sess-unload");
+    window.dispatchEvent(new Event("beforeunload"));
+
+    expect(livePreviewHandle.destroy).toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -402,6 +458,76 @@ describe("bootSession — live session", () => {
     capturedOnMessage!({ events: [event], cursor: 1 });
 
     expect(appendTimelineEvents).toHaveBeenCalled();
+  });
+
+  it("onMessage keeps the initial base timestamp when history already exists", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ live: true }));
+    const api = await import("./api.js");
+    (api.getEvents as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      events: [{ ts: "2026-04-24T12:00:00Z", action: "navigate" }],
+      cursor: 10,
+      total_bytes: 1,
+      complete: false,
+    });
+
+    const { openTail } = await import("./tail.js");
+    const { appendTimelineEvents } = await import("./timeline.js");
+    let capturedOnMessage: ((msg: { events: RecordingEvent[]; cursor: number; complete?: boolean }) => void) | null =
+      null;
+    (openTail as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_url: string, opts: { onMessage: typeof capturedOnMessage }) => {
+        capturedOnMessage = opts.onMessage;
+        return { close: vi.fn() };
+      },
+    );
+
+    await bootSession(root, "sess-live-history", {});
+
+    capturedOnMessage!({ events: [{ ts: "2026-04-24T12:00:05Z", action: "click" }], cursor: 11 });
+
+    expect(appendTimelineEvents).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.any(Array),
+      "2026-04-24T12:00:00Z",
+      expect.any(Object),
+    );
+  });
+
+  it("logs and swallows cheap panel refresh errors from tail messages", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ live: true }));
+    const { openTail } = await import("./tail.js");
+    const panels = await import("./console-panel.js");
+    let capturedOnMessage: ((msg: { events: RecordingEvent[]; cursor: number; complete?: boolean }) => void) | null =
+      null;
+    (openTail as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_url: string, opts: { onMessage: typeof capturedOnMessage }) => {
+        capturedOnMessage = opts.onMessage;
+        return { close: vi.fn() };
+      },
+    );
+    await bootSession(root, "sess-live-refresh-error", {});
+    (panels.renderConsolePanel as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      throw new Error("render failed");
+    });
+
+    expect(() => {
+      capturedOnMessage!({ events: [{ ts: "2026-04-24T13:00:00Z", action: "click" }], cursor: 1 });
+    }).not.toThrow();
+    await Promise.resolve();
+  });
+
+  it("closes the tail on beforeunload", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ live: true }));
+    const { openTail } = await import("./tail.js");
+
+    await bootSession(root, "sess-live4", {});
+    const tailHandle = (openTail as ReturnType<typeof vi.fn>).mock.results.at(-1)?.value as { close: ReturnType<typeof vi.fn> };
+    window.dispatchEvent(new Event("beforeunload"));
+
+    expect(tailHandle.close).toHaveBeenCalled();
   });
 });
 

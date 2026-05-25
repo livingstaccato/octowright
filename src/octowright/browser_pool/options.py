@@ -73,8 +73,28 @@ class LaunchOptions:
         Pre-this-schema recordings also lack the explicit ``headed`` field;
         the historical default for those is ``True``. HAR rotation is the
         caller's job — chain ``.with_har_rotated()`` if you want it.
+
+        Treats every JSONL field as untrusted: a malicious actor able to
+        drop a crafted ``*.jsonl`` into ``RECORDINGS_DIR`` (other local user,
+        poisoned CI step, etc.) could otherwise pick the engine, profile, or
+        HAR write-target on relaunch. ``validate()`` rejects unknown
+        ``kind``/``badge_position``/``har_mode``/``har_content`` values, and
+        the ``har_path`` containment check below blocks write-anywhere.
         """
         viewport = record.get("viewport") if isinstance(record.get("viewport"), dict) else None
+        har_path = record.get("har_path")
+        if har_path is not None:
+            # HAR writes go under RECORDINGS_DIR by construction in the live
+            # launch path. Enforce that on the JSONL replay path too, so a
+            # poisoned record can't redirect HAR writes anywhere on disk.
+            # Read defaults.RECORDINGS_DIR dynamically so tests that
+            # monkeypatch it (or reload defaults after setenv) see the
+            # current value, not the import-time snapshot.
+            from octowright import defaults as _defaults
+            from octowright._paths import safe_under
+
+            if not safe_under(Path(har_path), _defaults.RECORDINGS_DIR):
+                har_path = None
         return cls.from_mapping(
             {
                 "kind": record.get("kind", "chromium"),
@@ -87,8 +107,8 @@ class LaunchOptions:
                 "stabilize": record.get("stabilize", False),
                 "record_video": bool(record.get("video_dir")),
                 "trace": record.get("trace", False),
-                "har": bool(record.get("har")),
-                "har_path": record.get("har_path"),
+                "har": bool(record.get("har")) and har_path is not None,
+                "har_path": har_path,
                 "har_mode": record.get("har_mode", "minimal"),
                 "har_url_filter": record.get("har_url_filter"),
                 "har_content": record.get("har_content"),

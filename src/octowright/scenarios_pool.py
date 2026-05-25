@@ -40,7 +40,6 @@ class ScenarioPool:
     def __init__(self) -> None:
         self._live: dict[str, LiveScenario] = {}
         self._live_lock = asyncio.Lock()
-        self._browser_pool: Any | None = None
 
     def get(self, scenario_id: str) -> LiveScenario:
         if scenario_id not in self._live:
@@ -91,10 +90,9 @@ class ScenarioPool:
                 f"scenario {scenario_id!r} has multiple participants for instance_id={old_instance_id!r}; pass role=... to disambiguate"
             )
         target = matches[0]
-        effective_browser_pool = browser_pool or self._browser_pool
-        if effective_browser_pool is None:
+        if browser_pool is None:
             raise ValueError("browser_pool is required for remap validation")
-        replacement = effective_browser_pool.maybe_get(new_instance_id)
+        replacement = browser_pool.maybe_get(new_instance_id)
         if replacement is None:
             raise ValueError(f"replacement instance_id={new_instance_id!r} is not live")
         expected_kind = target.get("kind")
@@ -146,7 +144,6 @@ class ScenarioPool:
     async def start(self, *, name: str | None = None, browser_pool: Any, spec: Any | None = None) -> LiveScenario:
         from octowright.scenarios import load_scenario, resolve_launch_kwargs
 
-        self._browser_pool = browser_pool
         if spec is None:
             if name is None:
                 raise ValueError("either 'name' or 'spec' must be provided to start a scenario")

@@ -19,8 +19,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import octowright.http.state as state
+from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
-from octowright.http.dashboard_events import publish_dashboard_invalidation
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _read_json_body
 from octowright.macros.lint import lint_macro
@@ -97,6 +97,7 @@ def _validation_body(macro: dict[str, Any]) -> dict[str, Any]:
     error_count = sum(1 for issue in issues if issue["severity"] == "error")
     return {
         "ok": error_count == 0,
+        "valid": error_count == 0,
         "issues": issues,
         "issue_count": len(issues),
         "error_count": error_count,

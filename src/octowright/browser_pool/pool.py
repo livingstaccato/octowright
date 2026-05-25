@@ -179,6 +179,19 @@ class BrowserPool:
         )
 
     def get(self, instance_id: str) -> BrowserSession:
+        """Return the live session for ``instance_id`` or raise KeyError.
+
+        Reads ``_sessions`` without ``_sessions_lock`` — concurrent eviction
+        (``_evict_session_nowait`` in ``listeners.py``) writes without the
+        lock too, relying on CPython's GIL-atomic ``dict.pop``. The returned
+        session may therefore be evicted by a Playwright-side close signal
+        between this call and the caller's first ``await`` on it; tool
+        handlers in that window will surface as Playwright-disconnected
+        errors rather than a clean KeyError. (The eviction itself has
+        already incremented ``octowright_browser_evicted_total`` via the
+        listener path.) The caller is expected to treat both as terminal
+        for the session and either close or retry.
+        """
         if instance_id not in self._sessions:
             raise KeyError(self._missing_session_message(instance_id))
         return self._sessions[instance_id]

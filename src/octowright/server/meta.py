@@ -205,7 +205,16 @@ def octowright_status() -> dict[str, Any]:
     daemon_uptime: float | None = None
     if lock is not None:
         daemon_pid = lock.pid
-        daemon_uptime = max(0.0, time.time() - lock.started_at)
+        # When the lockfile belongs to THIS process, derive uptime from a
+        # monotonic clock so it's immune to wall-clock skew (NTP, DST, manual
+        # set). When the lockfile is foreign (a leader running in a different
+        # process), monotonic isn't comparable across processes so we fall
+        # back to the wall-clock difference, clamped to >= 0.
+        local_start = _singleton.local_leader_started_monotonic()
+        if lock.pid == os.getpid() and local_start is not None:
+            daemon_uptime = max(0.0, time.monotonic() - local_start)
+        else:
+            daemon_uptime = max(0.0, time.time() - lock.started_at)
 
     persona_list = _personas.list_personas()
     persona_names = [p["name"] for p in persona_list]

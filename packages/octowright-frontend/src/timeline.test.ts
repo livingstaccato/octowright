@@ -20,6 +20,12 @@ describe("renderTimeline", () => {
     renderTimeline(container, []);
     expect(container.querySelector(".timeline__empty")?.textContent).toBe("No actions recorded yet.");
   });
+  it("returns without rendering rows when the first array slot is empty", () => {
+    const sparse = [] as RecordingEvent[];
+    sparse.length = 1;
+    renderTimeline(container, sparse);
+    expect(container.querySelector("ol.timeline__list")).toBeNull();
+  });
   it("renders one row per event", () => {
     renderTimeline(container, SAMPLE_EVENTS);
     const rows = container.querySelectorAll("li.timeline__row");

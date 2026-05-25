@@ -118,7 +118,7 @@ export function openMacroEditor(
         saveBtn.textContent = "Validating…";
         validateMacro(name, macroJson)
           .then((validation) => {
-            if (!validation.ok || !validation.valid) {
+            if (!validation.ok || validation.valid === false) {
               const reasons = validation.issues.map((issue) => `${issue.code}: ${issue.message}`).join("\n");
               throw new Error(reasons || "Macro validation failed.");
             }

@@ -19,12 +19,12 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from octowright.dashboard_events import dashboard_events
 from octowright.defaults import (
     DASHBOARD_DISCONNECT_POLL_SECONDS,
     DASHBOARD_HEARTBEAT_SECONDS,
 )
 from octowright.http import state
-from octowright.http.dashboard_events import dashboard_events
 from octowright.http.discovery import (
     _find_recording_for,
     _live_session_or_none,

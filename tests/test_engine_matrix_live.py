@@ -11,7 +11,8 @@ import pytest
 import yaml
 
 from octowright.browser_pool import BrowserPool
-from octowright.scenarios import LiveScenario, Participant, Scenario, ScenarioPool
+from octowright.scenarios import Participant, Scenario
+from octowright.scenarios_pool import LiveScenario, ScenarioPool
 
 
 def _configure_runtime_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
