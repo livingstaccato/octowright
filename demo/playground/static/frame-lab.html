@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frame Lab | Octowright Test Range</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="page-shell">
+  <a class="mini-brand" href="/"><img src="/assets/octowright-logo-512.png" alt="">Octowright Test Range</a>
+  <header class="page-header">
+    <div class="page-title">
+      <h1>Frame Lab</h1>
+      <p>Same-origin iframe target for frame selection, nested form interaction, and postMessage visibility.</p>
+    </div>
+    <span class="tag">ID: FRAME</span>
+  </header>
+  <section class="frame-layout">
+    <iframe id="demo-frame" class="frame-demo" title="Nested Octowright frame" src="/frame-child.html"></iframe>
+    <aside class="lab-panel">
+      <h2>Parent Frame</h2>
+      <p>Messages from the child frame appear here after nested interactions.</p>
+      <pre id="frame-result" class="result-box" aria-live="polite">Waiting for child frame...</pre>
+    </aside>
+  </section>
+</main>
+<script src="/frame-lab.js"></script>
+</body>
+</html>

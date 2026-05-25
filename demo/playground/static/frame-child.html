@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nested Frame Target</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="page-shell">
+  <section class="lab-panel">
+    <h1>Nested Frame Target</h1>
+    <p>Interact inside this frame, then verify the parent page receives the message.</p>
+    <label for="frame-input">Frame value</label>
+    <input id="frame-input" data-testid="frame-input" type="text" value="nested-value" autocomplete="off">
+    <div class="button-row">
+      <button id="frame-send" data-testid="frame-send" type="button">Send to parent</button>
+    </div>
+    <p id="frame-status" class="status" role="status">Ready.</p>
+  </section>
+</main>
+<script>
+document.getElementById("frame-send").addEventListener("click", () => {
+  const value = document.getElementById("frame-input").value;
+  parent.postMessage({ source: "octowright-frame-child", value }, location.origin);
+  document.getElementById("frame-status").textContent = `Sent: ${value}`;
+  document.getElementById("frame-status").classList.add("status--success");
+});
+</script>
+</body>
+</html>

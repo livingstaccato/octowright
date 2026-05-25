@@ -57,7 +57,56 @@ async def test_index_serves_static_html() -> None:
         async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
             r = await client.get(s.url + "/")
         assert r.status_code == 200
-        assert "Octowright playground" in r.text
+        assert "Octowright Test Range" in r.text
+        assert "/assets/octowright-logo-512.png" in r.text
+    finally:
+        await s.stop()
+
+
+@pytest.mark.anyio
+async def test_logo_asset_served_from_docs_image() -> None:
+    s = await _start_server()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+            r = await client.get(s.url + "/assets/octowright-logo-512.png")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/png"
+        assert r.content.startswith(b"\x89PNG")
+    finally:
+        await s.stop()
+
+
+@pytest.mark.anyio
+async def test_favicon_alias_serves_logo_without_404() -> None:
+    s = await _start_server()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+            r = await client.get(s.url + "/favicon.ico")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/png"
+    finally:
+        await s.stop()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/dialog-lab.html", "Dialog & Popup Lab"),
+        ("/frame-lab.html", "Frame Lab"),
+        ("/network-lab.html", "Network Lab"),
+        ("/download-bay.html", "Download Bay"),
+        ("/storage-console.html", "Storage Console"),
+        ("/external.html", "External Launchpad"),
+    ],
+)
+async def test_showcase_pages_are_served(path: str, expected: str) -> None:
+    s = await _start_server()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+            r = await client.get(s.url + path)
+        assert r.status_code == 200
+        assert expected in r.text
     finally:
         await s.stop()
 
@@ -71,6 +120,7 @@ async def test_state_starts_empty() -> None:
         state = r.json()
         assert state["canvas"][0][0] is None
         assert state["form_steps"] == []
+        assert state["events"] == []
         assert len(state["canvas"]) == _State.GRID_SIZE
     finally:
         await s.stop()
@@ -130,6 +180,53 @@ async def test_form_step_appended() -> None:
 
 
 @pytest.mark.anyio
+async def test_event_appended_to_shared_log() -> None:
+    s = await _start_server()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+            r = await client.post(
+                s.url + "/api/event",
+                json={"source": "network-lab", "kind": "ping", "message": "GET /api/ping 200"},
+            )
+            assert r.status_code == 200
+            assert r.json()["event"] == "log_event"
+            state = (await client.get(s.url + "/api/state")).json()
+        assert state["events"] == [{"source": "network-lab", "kind": "ping", "message": "GET /api/ping 200"}]
+    finally:
+        await s.stop()
+
+
+@pytest.mark.anyio
+async def test_ping_echo_and_error_endpoints_are_deterministic() -> None:
+    s = await _start_server()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+            ping = await client.get(s.url + "/api/ping")
+            echo = await client.post(s.url + "/api/echo", json={"value": "octowright"})
+            err = await client.get(s.url + "/api/error")
+        assert ping.json() == {"ok": True, "service": "octowright-playground"}
+        assert echo.json() == {"ok": True, "echo": {"value": "octowright"}}
+        assert err.status_code == 418
+        assert err.json()["error"] == "intentional playground error"
+    finally:
+        await s.stop()
+
+
+@pytest.mark.anyio
+async def test_download_report_endpoint_returns_csv_attachment() -> None:
+    s = await _start_server()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+            r = await client.get(s.url + "/api/download/report.csv")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/csv")
+        assert "attachment" in r.headers["content-disposition"]
+        assert "browser,action,status" in r.text
+    finally:
+        await s.stop()
+
+
+@pytest.mark.anyio
 async def test_reset_clears_state() -> None:
     s = await _start_server()
     try:
@@ -142,10 +239,15 @@ async def test_reset_clears_state() -> None:
                 s.url + "/api/form-step",
                 json={"step": 1, "label": "x", "value": "y"},
             )
+            await client.post(
+                s.url + "/api/event",
+                json={"source": "dialog-lab", "kind": "dialog", "message": "alert opened"},
+            )
             await client.post(s.url + "/api/reset")
             state = (await client.get(s.url + "/api/state")).json()
         assert state["canvas"][0][0] is None
         assert state["form_steps"] == []
+        assert state["events"] == []
     finally:
         await s.stop()
 

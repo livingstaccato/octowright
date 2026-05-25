@@ -2,21 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Monitor dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitor Dashboard | Octowright Test Range</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<main class="dashboard-root">
-  <header>
-    <h1>Monitor dashboard</h1>
-    <p>Read-only view of form-step events from <code>/api/form-step</code>. New rows appear as the player posts.</p>
+<main class="page-shell dashboard-root">
+  <a class="mini-brand" href="/"><img src="/assets/octowright-logo-512.png" alt="">Octowright Test Range</a>
+  <header class="page-header">
+    <div class="page-title">
+      <h1>Monitor Dashboard</h1>
+      <p>Read-only SSE monitor for form-step events. Use it beside the form flow to show live cross-browser state.</p>
+    </div>
+    <span class="tag">ID: MONITOR</span>
   </header>
   <table class="event-table">
     <thead>
       <tr><th>#</th><th>Step</th><th>Label</th><th>Value</th></tr>
     </thead>
     <tbody id="rows">
-      <tr class="empty"><td colspan="4">Waiting for events&hellip;</td></tr>
+      <tr class="empty"><td colspan="4">Waiting for events...</td></tr>
     </tbody>
   </table>
 </main>
