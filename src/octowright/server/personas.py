@@ -11,7 +11,7 @@ from typing import Any
 
 from octowright import personas as persona_mod
 from octowright import profiles as profile_mod
-from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import log, mcp, pool
 from octowright.types import CredentialCheckReport, PersonaListEntry
 

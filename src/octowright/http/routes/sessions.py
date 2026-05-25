@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -18,9 +17,9 @@ from starlette.routing import Route
 
 import octowright.http.state as state
 from octowright.browser_pool.options import LaunchOptions
+from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
 from octowright.http.artifacts import _build_cache_components
-from octowright.http.dashboard_events import publish_dashboard_invalidation
 from octowright.http.discovery import (
     _closed_sessions,
     _find_recording_for,
@@ -81,7 +80,7 @@ def _build_live_session_detail(live: Any, markdown_path: str | None) -> dict[str
 
 def _attach_macro_intent(detail: dict[str, Any], log_path: Path) -> None:
     from octowright.macros import load_macro_from_recording
-    from octowright.server.macro_semantic import get_semantic_intent
+    from octowright.macros.semantic import get_semantic_intent
 
     try:
         actions = load_macro_from_recording(log_path)
@@ -266,9 +265,9 @@ async def session_close(request: Request) -> JSONResponse:
         try:
             jsonl_path = Path(log_path)
             # Single-pass close: one JSONL walk produces the sidecars AND the
-            # cache report, instead of two parallel threads each scanning the
-            # full file.
-            body["cache"] = await asyncio.to_thread(session_artifact_cache.warm_close, jsonl_path)
+            # cache report, instead of a worker thread racing the dashboard's
+            # event-loop cache readers/writers over the same OrderedDicts.
+            body["cache"] = session_artifact_cache.warm_close(jsonl_path)
         except Exception as e:
             # User-action swallow path: log the cause so the failure mode
             # is diagnosable (AGENTS.md silent-swallow policy).

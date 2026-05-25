@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,17 @@ from octowright.http.discovery import (
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _parse_bool
 
+# Production session ids are ``uuid.uuid4().hex[:12]`` (12 lower-case hex
+# chars), but tests and a few other call sites use longer alphanumeric ids.
+# Restrict to a generous-but-safe character set so a glob metachar (``*``,
+# ``?``, ``[``) or path separator can't widen the result set when ``sid``
+# flows into ``glob()`` patterns or filesystem joins.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _valid_session_id(sid: str) -> bool:
+    return bool(_SESSION_ID_RE.match(sid))
+
 
 def _frame_cache_path(session_id: str, t: float) -> Path:
     cache_dir = state.RECORDINGS_DIR / ".frame-cache" / session_id
@@ -34,6 +46,8 @@ def _frame_cache_path(session_id: str, t: float) -> Path:
 
 async def session_frame(request: Request) -> Response:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     raw_t = request.query_params.get("t", "0")
     try:
         t = float(raw_t)
@@ -80,6 +94,8 @@ async def session_frame(request: Request) -> Response:
 
 async def session_video(request: Request) -> Response:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     video_path = _resolve_artifact_path(sid, "video_path")
     if video_path is None or not video_path.exists():
         return JSONResponse(
@@ -92,6 +108,8 @@ async def session_video(request: Request) -> Response:
 
 async def session_trace(request: Request) -> Response:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     trace_path = _resolve_artifact_path(sid, "trace_path")
     if trace_path is None or not trace_path.exists():
         return JSONResponse(
@@ -154,6 +172,8 @@ async def session_screenshot_now(request: Request) -> Response:
             status_code=400,
         )
 
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     live = _live_session_or_none(sid)
     if live is None:
         # Distinguish "closed session" from "no such session" so the frontend
@@ -196,13 +216,23 @@ async def session_screenshot_now(request: Request) -> Response:
 
 async def session_screenshots(request: Request) -> JSONResponse:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     sdir = _screenshot_dir_for(sid)
     if sdir is None:
         return JSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
-    if not sdir.exists():
+    # Defence-in-depth: sdir must resolve inside RECORDINGS_DIR. _screenshot_dir_for
+    # returns the unresolved parent; if the recording dir is itself a symlink to
+    # somewhere unexpected we don't want to enumerate it.
+    try:
+        sdir_resolved = sdir.resolve()
+        sdir_resolved.relative_to(state.RECORDINGS_DIR.resolve())
+    except (OSError, ValueError):
+        return JSONResponse({"error": "invalid session dir"}, status_code=400)
+    if not sdir_resolved.exists():
         return JSONResponse({"screenshots": []})
     out: list[dict[str, Any]] = []
-    for png in sorted(sdir.glob(f"*{sid}*.png")):
+    for png in sorted(sdir_resolved.glob(f"*{sid}*.png")):
         st = png.stat()
         out.append(
             {
@@ -218,14 +248,21 @@ async def session_screenshots(request: Request) -> JSONResponse:
 async def session_screenshot_file(request: Request) -> Response:
     sid = request.path_params["id"]
     filename = request.path_params["filename"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     sdir = _screenshot_dir_for(sid)
     if sdir is None:
         return JSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
     target = sdir / filename
-    # Defence-in-depth: filename must resolve inside `sdir` (no `../` escapes).
+    # Defence-in-depth: the resolved file AND its parent dir must both live
+    # under RECORDINGS_DIR. Symlink-resolving only the file isn't enough — a
+    # session dir that's itself a symlink could redirect the whole containment
+    # anchor outside the recordings root.
     try:
         resolved = target.resolve()
         sdir_resolved = sdir.resolve()
+        recordings_resolved = state.RECORDINGS_DIR.resolve()
+        sdir_resolved.relative_to(recordings_resolved)
         resolved.relative_to(sdir_resolved)
     except (OSError, ValueError):
         return JSONResponse({"error": "invalid filename"}, status_code=400)
@@ -239,6 +276,8 @@ async def session_screenshot_file(request: Request) -> Response:
 
 async def session_markdown(request: Request) -> Response:
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     live = _live_session_or_none(sid)
 
     if live is not None:
@@ -268,6 +307,8 @@ async def session_markdown(request: Request) -> Response:
 async def trace_open(request: Request) -> JSONResponse:
     """POST /api/sessions/{id}/trace/open — same payload as ``browser_open_trace``."""
     sid = request.path_params["id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     trace_path = _resolve_artifact_path(sid, "trace_path")
     if trace_path is None or not trace_path.exists():
         return JSONResponse(

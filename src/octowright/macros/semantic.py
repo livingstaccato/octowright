@@ -3,12 +3,18 @@
 # SPDX-Comment: Part of octowright.
 #
 
+"""Pure macro-semantic helpers: summarize an action list, infer intent.
+
+Lives in the ``macros/`` package (not ``server/``) because it has no
+dependency on the MCP tool registry — it's plain string-building over
+action dicts. The ``@mcp.tool macro_explain`` that re-exports these into
+the MCP surface is registered in ``server/macros.py``.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
-
-from octowright.server._state import mcp
 
 # --- summarize_action: per-kind formatters + dispatch ---------------------
 
@@ -154,17 +160,8 @@ def get_semantic_intent(actions: list[dict[str, Any]]) -> str:
     return f"Perform {len(actions)} actions"
 
 
-@mcp.tool(
-    structured_output=False,
-    description="Explain what a macro does in plain English and provide its semantic intent.",
-)
-async def macro_explain(actions: list[dict[str, Any]]) -> dict[str, str]:
-    """
-    Explain what a macro does in plain English and provide its semantic intent.
-
-    Args:
-        actions: List of macro actions (JSONL format).
-    """
+def explain_macro(actions: list[dict[str, Any]]) -> dict[str, str]:
+    """Return ``{summary, intent}`` for an action list. Pure — no MCP dep."""
     summary_lines = [summarize_action(action) for action in actions]
     return {
         "summary": "\n".join(summary_lines),

@@ -181,7 +181,7 @@ def _macro_pill_chip_for(
 # The re-export goes through a thin wrapper rather than a top-level
 # ``from … import describe_action`` to avoid triggering the
 # ``octowright.macros`` package ``__init__`` (which pulls in
-# ``execution`` → ``repair`` → ``server.macro_semantic`` → ``server._state``)
+# ``execution`` → ``repair`` → ``macros.semantic``)
 # during module import — visuals is loaded by ``browser_pool.options``,
 # which itself imports during ``server._state`` initialisation, creating
 # a cycle.

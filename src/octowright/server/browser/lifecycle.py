@@ -13,8 +13,8 @@ from typing import Any
 from octowright import _format as fmt
 from octowright import resolve as resolve_mod
 from octowright.browser_pool.options import LaunchOptions
+from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import BROWSER_LAUNCH_TIMEOUT_SECONDS
-from octowright.http.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import mcp, pool
 from octowright.server.browser.inspect import browser_brief
 

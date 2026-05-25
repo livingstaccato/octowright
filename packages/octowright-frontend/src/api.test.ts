@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  deleteRecording,
   fetchJson,
   frameUrl,
+  getPersonaDetail,
+  getPersonaSizes,
   getConsole,
   getDownloads,
   getEvents,
@@ -19,11 +22,16 @@ import {
   getSession,
   getSessions,
   dashboardEventsUrl,
+  liveScreenshotUrl,
   openTrace,
   markdownUrl,
+  pathTemplate,
+  relaunchSession,
   screenshotUrl,
+  startScenario,
   tailWebSocketUrl,
   traceDownloadUrl,
+  updatePersonaYaml,
   videoUrl,
 } from "./api.js";
 
@@ -72,6 +80,41 @@ describe("fetchJson", () => {
   it("includes server error details on non-2xx JSON responses", async () => {
     installFetch({ error: "invalid YAML: broken" }, 400);
     await expect(fetchJson("/api/x")).rejects.toThrow("invalid YAML: broken");
+  });
+  it("uses server message details when error is absent", async () => {
+    installFetch({ message: "try again later" }, 503);
+    await expect(fetchJson("/api/x")).rejects.toThrow("try again later");
+  });
+  it("skips blank server error fields before using message details", async () => {
+    installFetch({ error: "  ", message: "fallback message" }, 400);
+    await expect(fetchJson("/api/x")).rejects.toThrow("fallback message");
+  });
+  it("falls back to status text when error body is not JSON", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 502,
+      statusText: "Bad Gateway",
+      json: async () => {
+        throw new Error("not json");
+      },
+    })) as unknown as typeof fetch;
+
+    await expect(fetchJson("/api/x")).rejects.toThrow("request failed: 502 Bad Gateway");
+  });
+  it("records and rethrows fetch exceptions", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError("network down");
+    }) as unknown as typeof fetch;
+
+    await expect(fetchJson("/api/x")).rejects.toThrow("network down");
+  });
+  it("falls back to Date.now when performance.now is unavailable", async () => {
+    vi.stubGlobal("performance", undefined);
+    const calls = installFetch({ ok: true });
+
+    await fetchJson("/api/no-performance");
+
+    expect(calls[0]?.url).toBe("/api/no-performance");
   });
   it("forwards AbortSignal", async () => {
     const calls = installFetch({});
@@ -127,7 +170,7 @@ describe("typed wrappers", () => {
     expect(calls[0]?.url).toBe("/api/macros/login%2Ftest");
   });
   it("validateMacro posts JSON body", async () => {
-    const calls = installFetch({ ok: true, valid: true, issues: [] });
+    const calls = installFetch({ ok: true, valid: true, issues: [], issue_count: 0, error_count: 0 });
     const macro = { name: "login", actions: [] };
     await validateMacro("login", macro);
     expect(calls[0]?.url).toBe("/api/macros/login/validate");
@@ -185,9 +228,52 @@ describe("typed wrappers", () => {
     await getHealth();
     expect(calls[0]?.url).toBe("/api/health");
   });
+  it("getPersonaDetail encodes persona names", async () => {
+    const calls = installFetch({ name: "qa/user" });
+    await getPersonaDetail("qa/user");
+    expect(calls[0]?.url).toBe("/api/personas/qa%2Fuser");
+  });
+  it("updatePersonaYaml puts YAML body", async () => {
+    const calls = installFetch({ ok: true, name: "qa" });
+    await updatePersonaYaml("qa", "name: qa\n");
+    expect(calls[0]?.url).toBe("/api/personas/qa");
+    expect(calls[0]?.init?.method).toBe("PUT");
+    expect(calls[0]?.init?.body).toBe(JSON.stringify({ yaml: "name: qa\n" }));
+  });
+  it("deleteRecording deletes the encoded recording endpoint", async () => {
+    const calls = installFetch({ deleted: true, session_id: "s/1", files_removed: 1 });
+    await deleteRecording("s/1");
+    expect(calls[0]?.url).toBe("/api/sessions/s%2F1/recording");
+    expect(calls[0]?.init?.method).toBe("DELETE");
+  });
+  it("relaunchSession posts to the relaunch endpoint", async () => {
+    const calls = installFetch({ id: "new", kind: "chromium" });
+    await relaunchSession("old/1");
+    expect(calls[0]?.url).toBe("/api/sessions/old%2F1/relaunch");
+    expect(calls[0]?.init?.method).toBe("POST");
+  });
+  it("startScenario posts to the encoded scenario endpoint", async () => {
+    const calls = installFetch({ scenario_id: "s1", name: "two/user", participants: [] });
+    await startScenario("two/user");
+    expect(calls[0]?.url).toBe("/api/scenarios/two%2Fuser/start");
+    expect(calls[0]?.init?.method).toBe("POST");
+  });
+  it("getPersonaSizes hits the sizes endpoint", async () => {
+    const calls = installFetch({ qa: 1024 });
+    await getPersonaSizes();
+    expect(calls[0]?.url).toBe("/api/personas/sizes");
+  });
 });
 
 describe("url helpers", () => {
+  it("pathTemplate strips queries and templates dynamic ids", () => {
+    expect(pathTemplate("/api/sessions/abc/events?since=1")).toBe("/api/sessions/{id}/events");
+    expect(pathTemplate("/api/sessions/abc/screenshots/shot 1.png")).toBe(
+      "/api/sessions/{id}/screenshots/{file}",
+    );
+    expect(pathTemplate("/api/sessions/abc/screenshot/now")).toBe("/api/sessions/{id}/screenshot/now");
+    expect(pathTemplate("/api/sessions/abc/frame")).toBe("/api/sessions/{id}/frame");
+  });
   it("videoUrl", () => {
     expect(videoUrl("a")).toBe("/api/sessions/a/video");
   });
@@ -216,7 +302,18 @@ describe("url helpers", () => {
     const url = tailWebSocketUrl("a", 0);
     expect(url.includes("?")).toBe(false);
   });
+  it("tailWebSocketUrl falls back without window", () => {
+    vi.stubGlobal("window", undefined);
+    expect(tailWebSocketUrl("a")).toBe("ws://localhost/api/sessions/a/tail");
+  });
   it("dashboardEventsUrl", () => {
     expect(dashboardEventsUrl()).toBe("/api/dashboard/events");
+  });
+  it("liveScreenshotUrl includes optional jpeg, quality, full-page, and cache-bust params", () => {
+    expect(liveScreenshotUrl("a/b")).toBe("/api/sessions/a%2Fb/screenshot/now?format=png");
+    expect(liveScreenshotUrl("a", { format: "jpeg", quality: 75, fullPage: true, cacheBust: 123 })).toBe(
+      "/api/sessions/a/screenshot/now?format=jpeg&quality=75&full_page=true&_=123",
+    );
+    expect(liveScreenshotUrl("a", { quality: 75 })).toBe("/api/sessions/a/screenshot/now?format=png");
   });
 });

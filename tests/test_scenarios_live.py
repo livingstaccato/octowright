@@ -67,13 +67,15 @@ async def test_scenario_start_and_stop_live(tmp_octowright, monkeypatch):
             importlib.reload(sys.modules[m])
 
     from octowright import scenarios as _s
+    from octowright import scenarios_pool as _sp
     from octowright.browser_pool import BrowserPool
 
     # Reload scenarios so it picks up the freshly-reloaded defaults.
     importlib.reload(_s)
+    importlib.reload(_sp)
 
     pool = BrowserPool()
-    spool = _s.ScenarioPool()
+    spool = _sp.ScenarioPool()
     try:
         live = await spool.start(name="mini", browser_pool=pool)
         assert len(live.participants) == 2

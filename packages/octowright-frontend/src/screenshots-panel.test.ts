@@ -65,4 +65,14 @@ describe("renderScreenshotsPanel", () => {
     const link = container.querySelector<HTMLAnchorElement>('[data-testid="screenshot-link"]');
     expect(link?.getAttribute("href")).toBe("/api/sessions/a%2Fb/screenshots/shot-001.png");
   });
+
+  it("omits timestamp prefix for zero or invalid timestamps", () => {
+    renderScreenshotsPanel(container, "sess-1", [
+      { ...SAMPLE[0]!, filename: "zero.png", ts: 0 },
+      { ...SAMPLE[1]!, filename: "bad.png", ts: Number.NaN },
+      { ...SAMPLE[1]!, filename: "huge.png", ts: Number.MAX_VALUE },
+    ]);
+    const captions = Array.from(container.querySelectorAll(".screenshots-panel__caption"), (el) => el.textContent);
+    expect(captions).toEqual(["zero.png", "bad.png", "huge.png"]);
+  });
 });
