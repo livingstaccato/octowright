@@ -1,4 +1,4 @@
-![octowright](https://raw.githubusercontent.com/livingstaccato/octowright/main/docs/images/octowright-banner.png)
+![octowright](https://raw.githubusercontent.com/livingstaccato/octowright/main/docs/images/brand/octowright-banner.png)
 
 # Octowright
 
