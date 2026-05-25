@@ -47,6 +47,21 @@ BRIDGE_ERROR_PREFIX = "Octowright bridge error:"
 log = get_logger(__name__)
 
 
+@dataclass
+class _RemoteWriteSlot:
+    """A nullable handle to the leader's incoming-stream send channel.
+
+    The bridge has two coroutines that race for the same slot: the local
+    forwarder reads it on every inbound stdio frame, and the remote
+    supervisor sets/clears it on reconnect. Previously this was a
+    ``dict[str, Any]`` masquerading as a nullable channel — works at runtime
+    but hides the nullability from the type checker. A one-attribute
+    dataclass makes the ``None`` state explicit.
+    """
+
+    write: Any | None = None
+
+
 def message_root(message: SessionMessage) -> Any:
     return message.message.root
 
@@ -118,8 +133,8 @@ class BridgeSupervisor:
     def in_flight_count(self) -> int:
         return len(self._in_flight)
 
-    async def forward_one_local_message(self, message: SessionMessage, remote_write_box: dict[str, Any]) -> None:
-        remote_write = remote_write_box.get("remote_write")
+    async def forward_one_local_message(self, message: SessionMessage, remote_write_slot: _RemoteWriteSlot) -> None:
+        remote_write = remote_write_slot.write
         request_id = message_request_id(message)
         method = message_method(message) or "notification"
         if remote_write is None:
@@ -153,7 +168,7 @@ class BridgeSupervisor:
                         method=method,
                         error=repr(exc),
                     )
-                remote_write_box.pop("remote_write", None)
+                remote_write_slot.write = None
                 await self.fail_all_in_flight("leader session unavailable; retry")
 
     def track_local_message(self, message: SessionMessage) -> None:
@@ -304,11 +319,11 @@ async def run_supervised_proxy(
             request_timeout_seconds=BRIDGE_REQUEST_TIMEOUT_SECONDS,
         )
         async with anyio.create_task_group() as local_tg:
-            remote_write_box: dict[str, Any] = {}
+            remote_write_slot = _RemoteWriteSlot()
 
             async def _local_forwarder() -> None:
                 async for message in local_read:
-                    await supervisor_obj.forward_one_local_message(message, remote_write_box)
+                    await supervisor_obj.forward_one_local_message(message, remote_write_slot)
                 local_tg.cancel_scope.cancel()
 
             async def _remote_supervisor() -> None:
@@ -328,7 +343,7 @@ async def run_supervised_proxy(
                                 remote_url,
                                 httpx_client_factory=httpx_factory,
                             ) as (remote_read, remote_write, get_sid):
-                                remote_write_box["remote_write"] = remote_write
+                                remote_write_slot.write = remote_write
                                 try:
                                     supervisor_obj.remote_session_id = get_sid()
                                 except Exception as exc:
@@ -368,7 +383,7 @@ async def run_supervised_proxy(
                                             heartbeat_max_failures,
                                         )
                     except Exception as exc:
-                        remote_write_box.pop("remote_write", None)
+                        remote_write_slot.write = None
                         _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
                         await supervisor_obj.fail_all_in_flight(f"remote leader session reset: {exc!r}")
                         supervisor_obj.last_error = repr(exc)

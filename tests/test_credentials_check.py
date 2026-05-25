@@ -22,6 +22,16 @@ import pytest
 from octowright import personas as _personas
 from octowright import server as _server
 
+
+@pytest.fixture(autouse=True)
+def _bypass_cred_cmd_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests here use synthetic cmd names like ``ok-cmd`` that aren't on the
+    credential-helper allowlist. Opt in to the arbitrary-cmd bypass so the
+    pre-flight checker exercises its downstream paths; the allowlist itself
+    is covered by tests/test_persona_cred_cmd_allowlist.py."""
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS", "1")
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------

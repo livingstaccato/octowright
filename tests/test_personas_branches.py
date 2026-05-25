@@ -22,19 +22,34 @@ import pytest
 import yaml
 
 
+@pytest.fixture(autouse=True)
+def _bypass_cred_cmd_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Module-wide: these branch tests use synthetic cmd names (e.g.
+    ``no-such-bin``, ``echo``) that aren't on the credential-helper
+    allowlist. Opt in to the arbitrary-cmd bypass so the downstream paths
+    under test (parse, missing binary, timeout, exit code) still run; the
+    allowlist itself is covered by tests/test_persona_cred_cmd_allowlist.py."""
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS", "1")
+
+
 @pytest.fixture
 def fresh_personas(tmp_path, monkeypatch):
     """Same isolated PROFILES_DIR pattern used by tests/test_personas.py."""
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path))
+    # Opt in to the arbitrary-cmd bypass so these branch tests can exercise
+    # downstream paths (parsing, missing binary, timeout) without the new
+    # allowlist gate short-circuiting them. The allowlist itself is tested
+    # by tests/test_persona_cred_cmd_allowlist.py.
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS", "1")
     from octowright import defaults
 
     importlib.reload(defaults)
     from octowright import personas
 
     importlib.reload(personas)
-    from octowright import profiles
+    from octowright import engine_profiles
 
-    importlib.reload(profiles)
+    importlib.reload(engine_profiles)
     return personas
 
 

@@ -40,6 +40,34 @@ _SHELL_OPERATOR_TOKENS = frozenset(
 # (``/bin/bash``, ``/usr/local/bin/zsh``) trip the same gate.
 _SHELL_INTERPRETER_BASENAMES = frozenset({"bash", "sh", "zsh", "fish", "dash", "ksh"})
 
+# Well-known credential-helper executable basenames that may run without an
+# env-var opt-in. argv[0]'s basename is matched, so absolute paths like
+# ``/usr/local/bin/op`` or ``/opt/homebrew/bin/op`` still resolve.
+#
+# Trust model: a same-user attacker who can write to a persona YAML on this
+# host can ALREADY exec arbitrary code via the shell-form escape hatch when
+# OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS=1, and can write to ~/.bashrc, $PATH dirs,
+# etc. The allowlist is NOT a defense against a determined local attacker —
+# it's a guardrail against accidental/sloppy YAML (a copy-pasted example, a
+# CI-checked-in config that drifts) silently invoking an unexpected binary.
+# To run a non-allowlisted cmd, opt in with
+# OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS=1.
+_CREDENTIAL_HELPER_ALLOWLIST = frozenset(
+    {
+        "op",  # 1Password CLI
+        "vault",  # HashiCorp Vault CLI
+        "gpg",  # GnuPG (pass, gpg-agent, etc.)
+        "gpg2",
+        "pass",  # password-store
+        "aws",  # AWS CLI (sts get-session-token, secretsmanager, etc.)
+        "gcloud",  # Google Cloud CLI
+        "security",  # macOS Keychain CLI
+        "secret-tool",  # libsecret (GNOME Keyring / KWallet bridge)
+        "bw",  # Bitwarden CLI
+        "kwallet-query",  # KDE KWallet CLI
+    }
+)
+
 
 def _credential_cmd_argv(cmd: str, persona_name: str, cred_name: str) -> list[str]:
     """Parse `cmd` into argv form; raise MissingCredential if it cannot be
@@ -280,6 +308,60 @@ class MissingCredential(RuntimeError):
     pass
 
 
+def _enforce_credential_cmd_policy(argv: list[str], persona_name: str, cred_name: str) -> None:
+    """Apply the trust-boundary gates that must pass before we exec ``argv``.
+
+    Two gates, mutually exclusive on the argv shape:
+
+    1. **Shell form** (``bash -c "..."`` / ``zsh -c ...``): arbitrary code
+       execution from persona YAML. Default-deny unless
+       ``OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS=1``. Match the interpreter by
+       basename so absolute paths trip the same gate.
+
+    2. **Argv form**: gate any executable that isn't on the well-known
+       credential-helper allowlist. ``OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS=1``
+       is the documented escape hatch.
+
+    Both opt-in paths emit a structured ``log.warning`` at the call site so
+    the trust boundary stays audit-able.
+    """
+    interpreter_name = Path(argv[0]).name if argv else ""
+    is_shell_form = interpreter_name in _SHELL_INTERPRETER_BASENAMES and len(argv) >= 2 and argv[1] == "-c"
+    if is_shell_form:
+        if not defaults.allow_shell_cred_cmds():
+            raise MissingCredential(
+                f"persona {persona_name!r} field {cred_name!r}: cmd invokes "
+                f"{argv[0]!r} with -c which is arbitrary shell execution. "
+                f"Rewrite as an argv-form helper (e.g. `op read op://…`) or "
+                f"set {defaults.ALLOW_SHELL_CRED_CMDS_ENV}=1 to opt in."
+            )
+        log.warning(
+            "personas.credential_cmd_executes_shell_pipeline",
+            persona=persona_name,
+            field=cred_name,
+            interpreter=argv[0],
+            hint="treat persona YAML as trusted; bash -c is arbitrary code execution",
+        )
+        return
+    if interpreter_name in _CREDENTIAL_HELPER_ALLOWLIST:
+        return
+    if not defaults.allow_arbitrary_cred_cmds():
+        raise MissingCredential(
+            f"persona {persona_name!r} field {cred_name!r}: cmd "
+            f"executable {argv[0]!r} is not on the credential-helper "
+            f"allowlist ({sorted(_CREDENTIAL_HELPER_ALLOWLIST)!r}). "
+            f"Use an allowlisted helper, or set "
+            f"{defaults.ALLOW_ARBITRARY_CRED_CMDS_ENV}=1 to opt in."
+        )
+    log.warning(
+        "personas.credential_cmd_executes_arbitrary_binary",
+        persona=persona_name,
+        field=cred_name,
+        executable=argv[0],
+        hint="treat persona YAML as trusted; arbitrary cred cmd opt-in is enabled",
+    )
+
+
 def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str:
     """Execute a credential cmd and return stdout.
 
@@ -288,31 +370,7 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     argument carries the shell logic the cmd author has signed off on.
     """
     argv = _credential_cmd_argv(cmd_str, persona_name, cred_name)
-    # `bash -c "..."` (and equivalents) is arbitrary-code-exec from persona
-    # YAML — a YAML that came from shared storage, a CI checkout, or another
-    # user's profile gets unrestricted shell on the daemon's host. Default-
-    # deny; operators who deliberately ship shell-style cred helpers opt in
-    # via OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS. Match by basename so absolute
-    # paths (``/bin/bash -c ...``, ``/usr/local/bin/zsh -c ...``) trip the
-    # same gate.
-    interpreter_name = Path(argv[0]).name if argv else ""
-    if interpreter_name in _SHELL_INTERPRETER_BASENAMES and len(argv) >= 2 and argv[1] == "-c":
-        if not defaults.allow_shell_cred_cmds():
-            raise MissingCredential(
-                f"persona {persona_name!r} field {cred_name!r}: cmd invokes "
-                f"{argv[0]!r} with -c which is arbitrary shell execution. "
-                f"Rewrite as an argv-form helper (e.g. `op read op://…`) or "
-                f"set {defaults.ALLOW_SHELL_CRED_CMDS_ENV}=1 to opt in."
-            )
-        # Opt-in path: keep the runtime warning so the trust boundary stays
-        # explicit and audit-able.
-        log.warning(
-            "personas.credential_cmd_executes_shell_pipeline",
-            persona=persona_name,
-            field=cred_name,
-            interpreter=argv[0],
-            hint="treat persona YAML as trusted; bash -c is arbitrary code execution",
-        )
+    _enforce_credential_cmd_policy(argv, persona_name, cred_name)
     try:
         # List-arg form (no shell). argv is validated above; persona YAML is trusted.
         result = subprocess.run(  # nosec B603

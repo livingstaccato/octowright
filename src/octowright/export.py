@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -389,7 +391,24 @@ def export_script(log_path: Path, out_path: Path, fmt: str = "python") -> Path:
                 lines.append(rendered)
     lines.append(footer)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines), encoding="utf-8")
+    # Atomic write via NamedTemporaryFile + os.replace to defeat the residual
+    # symlink-swap TOCTOU window between the caller's path-containment check
+    # and the final write. A same-user attacker who replaces ``out_path`` (or
+    # its parent) with a symlink between resolve() and write_text() can
+    # redirect the write; staging into a sibling temp file inside the same
+    # already-resolved parent and atomically renaming closes that window.
+    body = "\n".join(lines)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=out_path.parent,
+        prefix=f".{out_path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as tmp:
+        tmp.write(body)
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, out_path)
     return out_path
 
 

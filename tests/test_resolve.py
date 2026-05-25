@@ -31,8 +31,8 @@ def populated_profiles_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> P
     pdir = tmp_path / "profiles"
     pdir.mkdir()
 
+    from octowright import engine_profiles as _profiles
     from octowright import personas as _personas
-    from octowright import profiles as _profiles
 
     monkeypatch.setattr(_personas, "PROFILES_DIR", pdir)
     monkeypatch.setattr(_profiles, "PROFILES_DIR", pdir)
