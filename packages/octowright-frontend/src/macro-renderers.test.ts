@@ -60,6 +60,7 @@ describe("macro summary renderers", () => {
 
   it("renders conditional, try-each, selector, and unknown action edge cases", () => {
     const summary = renderMacroActionSummaryList([
+      // biome-ignore lint/suspicious/noThenProperty: `then` is the literal macro action field name for if_selector branches, not a thenable.
       { action: "if_selector", selector: undefined, then: undefined, else: undefined },
       { action: "try_each", branches: undefined },
       { action: "try_each", branches: [[{ action: "click", selector: "#go" }], undefined as never] },
