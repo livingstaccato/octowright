@@ -27,8 +27,8 @@ def _configure_runtime_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     import octowright.browser_pool.launch_helpers as _launch_helpers
     import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
+    from octowright import engine_profiles as _profiles
     from octowright import personas as _personas
-    from octowright import profiles as _profiles
 
     monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
     monkeypatch.setattr(_pool, "RECORDINGS_DIR", rec)

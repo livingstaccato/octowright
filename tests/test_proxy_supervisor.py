@@ -189,11 +189,11 @@ async def test_forward_one_local_message_drops_stale_remote_writer_and_fails_req
         local_write=local_out_send,
         request_timeout_seconds=1.0,
     )
-    remote_write_box: dict[str, Any] = {"remote_write": FailingRemoteWrite()}
+    remote_write_slot = supervisor._RemoteWriteSlot(write=FailingRemoteWrite())
 
-    await supervisor_obj.forward_one_local_message(_request("tools/call", "stale-id"), remote_write_box)
+    await supervisor_obj.forward_one_local_message(_request("tools/call", "stale-id"), remote_write_slot)
 
-    assert "remote_write" not in remote_write_box
+    assert remote_write_slot.write is None
     error = await local_out_recv.receive()
     root = error.message.root
     assert isinstance(root, JSONRPCError)
@@ -405,8 +405,8 @@ async def test_forward_one_local_message_opens_outbound_span(monkeypatch: pytest
         async def send(self, message: SessionMessage) -> None:
             captured_messages.append(message)
 
-    remote_write_box: dict[str, Any] = {"remote_write": _CapturingRemoteWrite()}
-    await supervisor_obj.forward_one_local_message(_request("tools/call", "spanned"), remote_write_box)
+    remote_write_slot = supervisor._RemoteWriteSlot(write=_CapturingRemoteWrite())
+    await supervisor_obj.forward_one_local_message(_request("tools/call", "spanned"), remote_write_slot)
 
     assert len(captured_messages) == 1
     assert ("octowright.bridge.forward_rpc", {"method": "tools/call", "request_id": "spanned"}) in seen
@@ -433,7 +433,7 @@ async def test_forward_one_local_message_no_remote_writer_skips_span(monkeypatch
         request_timeout_seconds=1.0,
     )
 
-    await supervisor_obj.forward_one_local_message(_request("tools/call", "no-leader"), {})
+    await supervisor_obj.forward_one_local_message(_request("tools/call", "no-leader"), supervisor._RemoteWriteSlot())
     err = await outgoing_recv.receive()
     assert "leader session unavailable" in err.message.root.error.message
     assert seen == []
@@ -466,7 +466,9 @@ async def test_forward_one_local_message_notification_with_no_remote_drops_silen
         local_write=outgoing_send,
         request_timeout_seconds=1.0,
     )
-    await supervisor_obj.forward_one_local_message(_notification("notifications/initialized"), {})
+    await supervisor_obj.forward_one_local_message(
+        _notification("notifications/initialized"), supervisor._RemoteWriteSlot()
+    )
     # Nothing should land on the local outgoing stream — notifications are fire-and-forget.
     with anyio.move_on_after(0.05):
         msg = await outgoing_recv.receive()
@@ -497,8 +499,8 @@ async def test_forward_one_local_message_notification_unaffected(monkeypatch: py
     class _CapturingRemoteWrite:
         async def send(self, _message: SessionMessage) -> None: ...
 
-    remote_write_box: dict[str, Any] = {"remote_write": _CapturingRemoteWrite()}
-    await supervisor_obj.forward_one_local_message(_notification("notifications/initialized"), remote_write_box)
+    remote_write_slot = supervisor._RemoteWriteSlot(write=_CapturingRemoteWrite())
+    await supervisor_obj.forward_one_local_message(_notification("notifications/initialized"), remote_write_slot)
 
     assert seen == [
         ("octowright.bridge.forward_rpc", {"method": "notifications/initialized", "request_id": None}),

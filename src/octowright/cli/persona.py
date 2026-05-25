@@ -80,7 +80,7 @@ def persona_create_cmd(name: str, display_name: str | None, default_url: str | N
 @click.argument("name")
 def persona_delete_cmd(name: str) -> None:
     """Delete an entire persona (all engines + metadata)."""
-    from octowright.profiles import delete_persona
+    from octowright.engine_profiles import delete_persona
 
     setup_telemetry()
     try:

@@ -30,9 +30,9 @@ def fresh_personas(tmp_path, monkeypatch):
     from octowright import personas
 
     importlib.reload(personas)
-    from octowright import profiles
+    from octowright import engine_profiles
 
-    importlib.reload(profiles)
+    importlib.reload(engine_profiles)
     return personas
 
 

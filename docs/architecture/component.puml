@@ -34,7 +34,7 @@ package "session modules" #fdf4ff {
 
 package "domain modules" #ecfccb {
   [personas.py\nPersona, load, migrate, creds] as PERSONAS
-  [profiles.py\nengine-profile path layer] as PROFILES
+  [engine_profiles.py\nengine-profile path layer] as PROFILES
   [scenarios.py\nScenario, Participant, loaders] as SCENARIOS
   [macros/\nstorage, import, substitute, run] as MACROS
   [runner.py\ntest-macro discovery + JUnit] as RUNNER

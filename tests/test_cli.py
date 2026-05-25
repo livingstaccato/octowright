@@ -38,8 +38,8 @@ def isolated_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str,
     scenarios.mkdir()
 
     from octowright import defaults as _defaults
+    from octowright import engine_profiles as _profiles
     from octowright import personas as _personas
-    from octowright import profiles as _profiles
     from octowright import scenarios as _scenarios
     from octowright.macros import storage as _macro_storage
 

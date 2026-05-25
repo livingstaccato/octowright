@@ -21,7 +21,7 @@ def tmp_octowright(tmp_path, monkeypatch):
     for m in (
         "octowright.defaults",
         "octowright.personas",
-        "octowright.profiles",
+        "octowright.engine_profiles",
         "octowright.scenarios",
         "octowright.macros.storage",
         "octowright.macros",

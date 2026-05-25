@@ -22,8 +22,8 @@ def isolated_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     pytest.importorskip("playwright")
     import octowright.browser_pool.pool as _pool
     from octowright import defaults as _defaults
+    from octowright import engine_profiles as _profiles
     from octowright import personas as _personas
-    from octowright import profiles as _profiles
     from octowright import session_manifest as _manifest
     from octowright.browser_pool import BrowserPool
 

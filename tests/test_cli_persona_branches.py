@@ -162,7 +162,7 @@ class TestPersonaCreate:
 class TestPersonaDelete:
     def test_calls_delete_persona(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
         """delete_persona path printed back to user."""
-        from octowright import profiles as _profiles
+        from octowright import engine_profiles as _profiles
 
         target = tmp_path / "cosmo"
 
@@ -177,7 +177,7 @@ class TestPersonaDelete:
 
     def test_propagates_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If delete_persona raises, the runner surfaces non-zero exit."""
-        from octowright import profiles as _profiles
+        from octowright import engine_profiles as _profiles
 
         def boom(_name: str) -> Any:
             raise FileNotFoundError("nope")

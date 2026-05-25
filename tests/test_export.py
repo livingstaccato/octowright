@@ -406,3 +406,43 @@ def test_ts_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
     assert 'await page.getByLabel("Email").fill("me@example.com");' in src
     assert "page.click(" not in src
     assert "page.fill(" not in src
+
+
+# ---------------------------------------------------------------------------
+# atomic-write cleanup
+# ---------------------------------------------------------------------------
+
+
+def test_cleans_up_temp_file_on_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If ``os.replace`` fails, the staging ``.tmp`` file must not be leaked.
+
+    Regression for the temp-file-leak path flagged on PR #50: the
+    ``NamedTemporaryFile(delete=False)`` makes cleanup the caller's job,
+    and a failure between ``tmp.write`` and ``os.replace`` would otherwise
+    leave an orphan in the recordings dir.
+    """
+    log = _write_recording(tmp_path / "r.jsonl", [{"action": "navigate", "url": "https://x"}])
+    out_path = tmp_path / "out.py"
+
+    import os as _os
+
+    real_replace = _os.replace
+
+    def _boom(src: str, dst: str) -> None:
+        # Verify the stager actually created the temp file before failing,
+        # otherwise this test couldn't observe whether the cleanup ran.
+        assert Path(src).exists(), "exporter should stage temp file before os.replace"
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("octowright.export.os.replace", _boom)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        export_script(log, out_path, fmt="python")
+
+    # The exporter must clean up its staging file even though os.replace failed.
+    leaked = list(tmp_path.glob(".out.py.*.tmp"))
+    assert leaked == [], f"export leaked temp file(s): {leaked}"
+    # And the final out_path must NOT exist (the failure aborted before
+    # the rename could land).
+    assert not out_path.exists()
+    # Sanity: real os.replace is unaffected by the monkeypatch outside this call.
+    _ = real_replace

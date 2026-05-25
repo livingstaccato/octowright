@@ -252,10 +252,18 @@ class SessionPageMixin(SessionLike):
         """
         try:
             loc = self._target().locator(selector).first
+            # Read both el.autocomplete (the IDL property — only present on
+            # form-control elements) and el.getAttribute('autocomplete') (the
+            # raw attribute — present on any element that declares it). Custom
+            # elements / <div contenteditable> declare autocomplete via the
+            # attribute, not the property, so the property-only read would
+            # silently leak.
             info = await loc.evaluate(
                 "el => el ? {"
                 "  type: el.type ? String(el.type).toLowerCase() : '',"
                 "  ac: el.autocomplete ? String(el.autocomplete).toLowerCase() : ''"
+                "    || (el.getAttribute && el.getAttribute('autocomplete')"
+                "         ? String(el.getAttribute('autocomplete')).toLowerCase() : '')"
                 "} : {type: '', ac: ''}"
             )
         except Exception as exc:

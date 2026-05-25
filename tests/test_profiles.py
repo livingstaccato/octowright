@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Exercise tests for octowright.profiles.
+"""Exercise tests for octowright.engine_profiles.
 
 Covers ``list_profiles`` (per-engine inventory), ``delete_profile``
 (single engine dir), and ``delete_persona`` (whole persona).
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from octowright import profiles as _profiles
+from octowright import engine_profiles as _profiles
 
 
 @pytest.fixture

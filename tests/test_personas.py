@@ -16,15 +16,21 @@ import yaml
 @pytest.fixture
 def fresh_personas(tmp_path, monkeypatch):
     monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path))
+    # These tests predate the credential-helper allowlist and exercise the
+    # downstream error paths (missing binary, timeout, shell semantics) that
+    # the allowlist now short-circuits. Opt in to the arbitrary-cmd bypass
+    # so the original behaviour under test still runs; the allowlist itself
+    # has its own dedicated test module with the bypass disabled.
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS", "1")
     from octowright import defaults
 
     importlib.reload(defaults)
     from octowright import personas
 
     importlib.reload(personas)
-    from octowright import profiles
+    from octowright import engine_profiles
 
-    importlib.reload(profiles)
+    importlib.reload(engine_profiles)
     return personas
 
 
