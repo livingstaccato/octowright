@@ -18,6 +18,21 @@ Use these square variants for icons/thumbnails:
 - `octowright-logo-256.png`
 - `octowright-logo-512.png`
 
+## Naming Convention
+
+Avoid numeric-only filenames. Use `name-purpose-size.ext` so files are readable
+at a glance.
+
+Current examples:
+
+- `otto/otto-avatar-64.png`
+- `otto/otto-avatar-128.png`
+- `otto/otto-avatar-256.png`
+- `otto/otto-avatar-512.png`
+- `favicon/favicon-icon-192.png`
+- `favicon/favicon-icon-512.png`
+- `favicon/social-og-image.png`
+
 ## Regeneration workflow
 
 Regenerate all derived sizes from the banner source:
