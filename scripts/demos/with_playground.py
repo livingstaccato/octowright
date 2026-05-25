@@ -18,6 +18,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -46,7 +47,15 @@ async def _record_with_playground(demo_id: str) -> int:
     print(f"starting playground at {server.url}", flush=True)
     await server.start()
     try:
-        recording = await record_demo_bundle(bundle)
+        prior_base = os.environ.get("OCTOWRIGHT_PLAYGROUND_BASE_URL")
+        os.environ["OCTOWRIGHT_PLAYGROUND_BASE_URL"] = server.url
+        try:
+            recording = await record_demo_bundle(bundle)
+        finally:
+            if prior_base is None:
+                os.environ.pop("OCTOWRIGHT_PLAYGROUND_BASE_URL", None)
+            else:
+                os.environ["OCTOWRIGHT_PLAYGROUND_BASE_URL"] = prior_base
     finally:
         await server.stop()
 
