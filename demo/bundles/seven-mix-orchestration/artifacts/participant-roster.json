@@ -2,7 +2,7 @@
   "participants": [
     {
       "har": false,
-      "instance_id": "fa058749a216",
+      "instance_id": "580befec6a2e",
       "kind": "webkit",
       "label": null,
       "persona": "p1",
@@ -10,11 +10,16 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     },
     {
       "har": false,
-      "instance_id": "5e13c24ab0c8",
+      "instance_id": "f44af59faef9",
       "kind": "webkit",
       "label": null,
       "persona": "p2",
@@ -22,11 +27,16 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     },
     {
       "har": false,
-      "instance_id": "17b0dc324d60",
+      "instance_id": "0c8db4dac1a7",
       "kind": "webkit",
       "label": null,
       "persona": "p3",
@@ -34,11 +44,16 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=p3&colour=%23fdd835"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p3&colour=%23fdd835",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     },
     {
       "har": false,
-      "instance_id": "f4d4372f9342",
+      "instance_id": "5708be40cc5e",
       "kind": "firefox",
       "label": null,
       "persona": "p4",
@@ -46,11 +61,16 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=p4&colour=%2343a047"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p4&colour=%2343a047",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     },
     {
       "har": false,
-      "instance_id": "51e7edfc6b76",
+      "instance_id": "c4f13ebaa5a7",
       "kind": "firefox",
       "label": null,
       "persona": "p5",
@@ -58,11 +78,16 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=p5&colour=%2300acc1"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p5&colour=%2300acc1",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     },
     {
       "har": false,
-      "instance_id": "8cf0c3e958a3",
+      "instance_id": "4da19490564a",
       "kind": "chromium",
       "label": null,
       "persona": "p6",
@@ -70,11 +95,16 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=p6&colour=%231e88e5"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p6&colour=%231e88e5",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     },
     {
       "har": false,
-      "instance_id": "1c5ac5097abb",
+      "instance_id": "e7bbbceeca93",
       "kind": "chromium",
       "label": null,
       "persona": "p7",
@@ -82,23 +112,33 @@
       "record_video": true,
       "role": "player",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=p7&colour=%238e24aa"
+      "url": "http://127.0.0.1:7900/canvas.html?role=p7&colour=%238e24aa",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     },
     {
       "har": false,
-      "instance_id": "b3f4084b79b8",
+      "instance_id": "e9de3fe0f8f4",
       "kind": "webkit",
       "label": null,
-      "persona": "mortimer",
-      "profile": "mortimer",
+      "persona": "ops",
+      "profile": "ops",
       "record_video": true,
       "role": "monitor",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=operator&colour=%23000"
+      "url": "http://127.0.0.1:7900/canvas.html?role=operator&colour=%23000",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     },
     {
       "har": false,
-      "instance_id": "86c12d322829",
+      "instance_id": "21b452f17075",
       "kind": "chromium",
       "label": null,
       "persona": "spectator",
@@ -106,8 +146,13 @@
       "record_video": true,
       "role": "main-site",
       "trace": false,
-      "url": "http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"
+      "url": "http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999",
+      "viewport": {
+        "h": 1080,
+        "mode": "fixed",
+        "w": 1920
+      }
     }
   ],
-  "scenario_id": "4e3bb6cfd996"
+  "scenario_id": "80b25db9c5a4"
 }

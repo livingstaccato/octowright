@@ -12,7 +12,7 @@
     tr.className = "empty";
     const td = document.createElement("td");
     td.colSpan = 4;
-    td.textContent = "Waiting for events…";
+    td.textContent = "Waiting for events...";
     tr.append(td);
     rows.append(tr);
   }

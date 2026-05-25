@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download Bay | Octowright Test Range</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="page-shell">
+  <a class="mini-brand" href="/"><img src="/assets/octowright-logo-512.png" alt="">Octowright Test Range</a>
+  <header class="page-header">
+    <div class="page-title">
+      <h1>Download Bay</h1>
+      <p>Trigger a real CSV download and use the upload control to test file-input automation against a stable page.</p>
+    </div>
+    <span class="tag">ID: DOWNLOAD</span>
+  </header>
+  <section class="tool-grid">
+    <article class="lab-panel">
+      <h2>Download</h2>
+      <p>The link resolves to <code>/api/download/report.csv</code> with a content-disposition attachment header.</p>
+      <a id="download-report" class="primary-action" href="/api/download/report.csv" download data-testid="download-report">Download report.csv</a>
+    </article>
+    <article class="lab-panel">
+      <h2>Upload Input</h2>
+      <label for="upload-file">Select a file</label>
+      <input id="upload-file" data-testid="upload-file" type="file">
+      <pre id="upload-result" class="result-box" aria-live="polite">No file selected.</pre>
+    </article>
+  </section>
+</main>
+<script src="/download-bay.js"></script>
+</body>
+</html>
