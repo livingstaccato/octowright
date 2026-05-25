@@ -2,19 +2,131 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Octowright playground</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Octowright Test Range</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<main class="playground-root">
-  <h1>Octowright playground</h1>
-  <p>A small target site used by recorded demo bundles. Pages below host the shared state for multi-browser demos.</p>
-  <ul>
-    <li><a href="/canvas.html">Shared canvas</a> &mdash; tiles claimed by multiple participants, broadcast over SSE.</li>
-    <li><a href="/form-flow.html">Form flow</a> &mdash; three-step form. Each Next button posts an event.</li>
-    <li><a href="/dashboard.html">Monitor dashboard</a> &mdash; read-only stream of form-step events.</li>
-  </ul>
-  <p class="footnote">Not a public site. Boots on <code>http://127.0.0.1:7900</code> while a demo records.</p>
-</main>
+<body class="range-shell">
+<aside class="target-rail" aria-label="Test targets">
+  <a class="brand-lockup" href="/" aria-label="Octowright Test Range home">
+    <img src="/assets/octowright-logo-512.png" alt="" width="54" height="54">
+    <span>OCTOWRIGHT</span>
+  </a>
+  <div class="rail-title">Test Targets</div>
+  <nav class="target-list" aria-label="Target pages">
+    <a class="target-link target-link--active" href="/canvas.html" data-target="canvas">
+      <span><strong>Shared Canvas</strong><small>/canvas.html</small><small>ID: CANVAS</small></span>
+      <em>LIVE</em>
+    </a>
+    <a class="target-link" href="/form-flow.html" data-target="form">
+      <span><strong>Form Flow</strong><small>/form-flow.html</small><small>ID: FORM</small></span>
+      <em class="status-idle">IDLE</em>
+    </a>
+    <a class="target-link" href="/dashboard.html" data-target="monitor">
+      <span><strong>Monitor (SSE)</strong><small>/dashboard.html</small><small>ID: MONITOR</small></span>
+      <em>LIVE</em>
+    </a>
+    <a class="target-link" href="/dialog-lab.html" data-target="dialog">
+      <span><strong>Dialog & Popup Lab</strong><small>/dialog-lab.html</small><small>ID: DIALOG</small></span>
+      <em class="status-idle">IDLE</em>
+    </a>
+    <a class="target-link" href="/frame-lab.html" data-target="frame">
+      <span><strong>Frame Lab</strong><small>/frame-lab.html</small><small>ID: FRAME</small></span>
+      <em class="status-idle">IDLE</em>
+    </a>
+    <a class="target-link" href="/network-lab.html" data-target="network">
+      <span><strong>Network Lab</strong><small>/network-lab.html</small><small>ID: NETWORK</small></span>
+      <em class="status-idle">IDLE</em>
+    </a>
+    <a class="target-link" href="/download-bay.html" data-target="download">
+      <span><strong>Download Bay</strong><small>/download-bay.html</small><small>ID: DOWNLOAD</small></span>
+      <em class="status-idle">IDLE</em>
+    </a>
+    <a class="target-link" href="/storage-console.html" data-target="storage">
+      <span><strong>Storage Console</strong><small>/storage-console.html</small><small>ID: STORAGE</small></span>
+      <em class="status-idle">IDLE</em>
+    </a>
+    <a class="target-link" href="/external.html" data-target="external">
+      <span><strong>External Launchpad</strong><small>/external.html</small><small>ID: EXTERNAL</small></span>
+      <em class="status-idle">IDLE</em>
+    </a>
+  </nav>
+  <div class="rail-footer"><span>9 targets</span><a href="#target-map">View map</a></div>
+</aside>
+
+<div class="range-main">
+  <header class="topbar">
+    <nav aria-label="Range navigation">
+      <a href="/" aria-current="page">Range</a>
+      <a href="#target-map">Targets</a>
+      <a href="#state-panel">State</a>
+      <a href="/external.html">External</a>
+    </nav>
+    <button id="reset-range" class="ghost-button" type="button" data-testid="reset-range">Reset</button>
+  </header>
+
+  <main class="range-grid">
+    <section class="hero-panel" aria-labelledby="range-title">
+      <div>
+        <h1 id="range-title">Octowright Test Range</h1>
+        <p>A deterministic target site for multi-browser demos, macros, and browser tool smoke tests.</p>
+        <div class="hero-actions">
+          <a class="primary-action" href="/canvas.html">Open shared canvas</a>
+          <a class="secondary-action" href="/form-flow.html">Run form flow</a>
+        </div>
+      </div>
+      <img class="hero-logo" src="/assets/octowright-logo-512.png" alt="Octowright mascot logo" width="256" height="256">
+    </section>
+
+    <section id="target-map" class="map-panel" aria-labelledby="map-title">
+      <div class="panel-heading">
+        <h2 id="map-title">Target Map</h2>
+        <span>Stable pages for browser automation</span>
+      </div>
+      <div class="map-board">
+        <a class="map-node map-node--primary" href="/canvas.html">Shared Canvas<small>SSE grid coordination</small></a>
+        <a class="map-node" href="/form-flow.html">Form Flow<small>Inputs and submit state</small></a>
+        <a class="map-node" href="/dashboard.html">Monitor<small>Live table over SSE</small></a>
+        <a class="map-node" href="/dialog-lab.html">Dialog Lab<small>Alert, confirm, prompt, popup</small></a>
+        <a class="map-node" href="/frame-lab.html">Frame Lab<small>Nested browsing contexts</small></a>
+        <a class="map-node" href="/network-lab.html">Network Lab<small>Fetch, delay, error, echo</small></a>
+        <a class="map-node" href="/download-bay.html">Download Bay<small>CSV download and upload input</small></a>
+        <a class="map-node" href="/storage-console.html">Storage Console<small>localStorage, sessionStorage, cookies</small></a>
+        <a class="map-node" href="/external.html">External Launchpad<small>Known outbound sites</small></a>
+      </div>
+    </section>
+
+    <aside class="status-column">
+      <section class="side-panel" aria-labelledby="events-title">
+        <div class="panel-heading">
+          <h2 id="events-title">Status & Events</h2>
+          <span id="event-live">LIVE</span>
+        </div>
+        <ol id="event-log" class="event-log" aria-live="polite">
+          <li class="empty">Waiting for activity...</li>
+        </ol>
+      </section>
+      <section id="state-panel" class="side-panel" aria-labelledby="state-title">
+        <div class="panel-heading">
+          <h2 id="state-title">Shared State</h2>
+          <span>LIVE</span>
+        </div>
+        <dl class="state-list">
+          <div><dt>Tiles claimed</dt><dd id="state-tiles">0</dd></div>
+          <div><dt>Form events</dt><dd id="state-forms">0</dd></div>
+          <div><dt>Log messages</dt><dd id="state-events">0</dd></div>
+          <div><dt>Downloads served</dt><dd id="state-downloads">0</dd></div>
+        </dl>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="range-footer">
+    <span>Server: Starlette</span>
+    <span>Port: 7900</span>
+    <span>Use test IDs and stable URLs for repeatable Octowright macros.</span>
+  </footer>
+</div>
+<script src="/range.js"></script>
 </body>
 </html>
