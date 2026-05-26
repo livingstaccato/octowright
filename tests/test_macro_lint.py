@@ -34,6 +34,27 @@ def test_runtime_actions_are_known_to_linter() -> None:
     assert "unknown_action" not in _codes(issues)
 
 
+@pytest.mark.parametrize(
+    ("action_name", "required_field"),
+    [
+        ("hover", "selector"),
+        ("select_option", "selector"),
+        ("drag", "source"),
+        ("drag", "target"),
+        ("resize", "width"),
+        ("resize", "height"),
+        ("open_url", "url"),
+        ("switch_page", "index"),
+        ("close_page", "index"),
+    ],
+)
+def test_runtime_actions_missing_required_fields_are_linted(action_name: str, required_field: str) -> None:
+    issues = lint_macro(_macro([{"action": action_name}]))
+    missing = [i for i in issues if i.code == "missing_required_field"]
+    assert missing, f"expected missing_required_field for {action_name}"
+    assert any(required_field in i.message for i in missing), [i.message for i in missing]
+
+
 # ---------------------------------------------------------------------------
 # Whole-macro structural rules
 # ---------------------------------------------------------------------------
