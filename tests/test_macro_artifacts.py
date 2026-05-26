@@ -85,6 +85,45 @@ def test_plan_ok_when_all_args_present(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert plan["args_used"] == {"email": "<redacted>", "password": "<redacted>"}
 
 
+def test_plan_ignores_symlinked_manifest_outside_recordings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage, macro_artifacts, recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage)
+    artifact_dir = recordings_dir / "artifacts" / "macros" / "login"
+    artifact_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_manifest = outside / "artifact.json"
+    outside_manifest.write_text(
+        json.dumps(
+            {
+                "artifact_type": "macro",
+                "name": "login",
+                "created_at": "1999-01-01T00:00:00Z",
+                "latest_run": {"run_id": "evil", "path": str(outside)},
+                "metadata": {"evil": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = artifact_dir / "artifact.json"
+    manifest_path.symlink_to(outside_manifest)
+
+    plan = macro_artifacts.plan_macro_artifact(
+        "login",
+        args={"email": "me@example.com", "password": "secret"},  # pragma: allowlist secret
+    )
+
+    assert plan["ok"] is True
+    assert not manifest_path.is_symlink()
+    assert json.loads(outside_manifest.read_text(encoding="utf-8"))["metadata"] == {"evil": True}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["latest_run"] is None
+    assert "evil" not in manifest["metadata"]
+
+
 def test_list_macro_artifacts_reads_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
     _write_macro(storage)

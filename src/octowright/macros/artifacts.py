@@ -41,8 +41,9 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
         runs_dir=runs_dir,
         exports_dir=exports_dir,
     )
-    if manifest_path.exists():
-        manifest = _merge_existing_manifest(manifest_path, manifest)
+    existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
+    if existing_manifest_path is not None:
+        manifest = _merge_existing_manifest(existing_manifest_path, manifest)
     write_artifact_manifest(manifest_path, manifest)
 
     return {
