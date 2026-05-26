@@ -19,6 +19,12 @@ dist/
 # Junit test outputs from local act / CI runs — not for tracking.
 .ci/*.xml
 node_modules/
+
+# .claude-plugin/ + .codex-plugin/ + .antigravity-plugin/ are intentionally
+# tracked so that "claude marketplace add . / agy plugin install . / etc"
+# work directly from a checkout. The check_plugin_versions.py pre-commit
+# hook keeps every tracked plugin.json's "version" field in sync with the
+# repo-level VERSION file.
 *.actcache
 
 # Compiled debugger frontend (built by packages/octowright-frontend)
@@ -29,8 +35,6 @@ packages/octowright-frontend/coverage/
 
 # Local agent/tooling artifacts
 .claude/
-.claude-plugin/
-.codex-plugin/
 .gemini/
 memray.bin
 
