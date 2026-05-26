@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -14,14 +13,9 @@ import pytest
 
 
 def _import_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.setenv("OCTOWRIGHT_MACROS_DIR", str(tmp_path / "macros"))
-    monkeypatch.setenv("OCTOWRIGHT_PROFILES_DIR", str(tmp_path / "profiles"))
-    from octowright import defaults
-
-    importlib.reload(defaults)
     import octowright.macros.storage as storage
 
-    importlib.reload(storage)
+    monkeypatch.setattr(storage, "MACROS_DIR", tmp_path / "macros")
     return storage
 
 
