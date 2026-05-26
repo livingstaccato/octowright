@@ -52,6 +52,13 @@ _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "unmock_route": ("pattern",),
     "set_dialog_policy": ("policy",),
     "set_input_files": ("selector",),
+    "hover": ("selector",),
+    "select_option": ("selector",),
+    "drag": (),
+    "resize": ("width", "height"),
+    "open_url": ("url",),
+    "switch_page": ("index",),
+    "close_page": ("index",),
 }
 
 # Lifecycle / inspection actions that the runtime silently skips during
@@ -188,27 +195,40 @@ def _check_credentials(action: dict[str, Any], outer_index: int, issues: list[Is
 
 def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
     """Validate a known simple action's required fields."""
-    if kind in {"click_by", "fill_by"} and not any(action.get(k) for k in _ARIA_LOCATOR_KEYS):
+
+    def _append_missing(message: str) -> None:
         issues.append(
             Issue(
                 severity="error",
                 code="missing_required_field",
-                message=(f"action {kind!r} is missing required locator field (one of role, label, text, or test_id)"),
+                message=message,
                 action_index=outer_index,
             )
         )
 
-    required = _SIMPLE_REQUIRED[kind]
-    for field in required:
+    _check_simple_locator_fields(action, kind, _append_missing)
+    _check_simple_drag_fields(action, kind, _append_missing)
+    _check_simple_required_fields(action, kind, _append_missing)
+
+
+def _check_simple_locator_fields(action: dict[str, Any], kind: str, append_missing: Callable[[str], None]) -> None:
+    if kind in {"click_by", "fill_by"} and not any(action.get(k) for k in _ARIA_LOCATOR_KEYS):
+        append_missing(f"action {kind!r} is missing required locator field (one of role, label, text, or test_id)")
+
+
+def _check_simple_drag_fields(action: dict[str, Any], kind: str, append_missing: Callable[[str], None]) -> None:
+    if kind != "drag":
+        return
+    if not (action.get("source") or action.get("source_selector")):
+        append_missing("action 'drag' is missing required field 'source' (or 'source_selector')")
+    if not (action.get("target") or action.get("target_selector")):
+        append_missing("action 'drag' is missing required field 'target' (or 'target_selector')")
+
+
+def _check_simple_required_fields(action: dict[str, Any], kind: str, append_missing: Callable[[str], None]) -> None:
+    for field in _SIMPLE_REQUIRED[kind]:
         if field not in action or action.get(field) in (None, ""):
-            issues.append(
-                Issue(
-                    severity="error",
-                    code="missing_required_field",
-                    message=f"action {kind!r} is missing required field {field!r}",
-                    action_index=outer_index,
-                )
-            )
+            append_missing(f"action {kind!r} is missing required field {field!r}")
 
 
 def _check_if_selector(action: dict[str, Any], outer_index: int, issues: list[Issue]) -> None:
