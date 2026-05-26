@@ -689,13 +689,13 @@ class TestRunSequenceShape:
     async def test_failure_step_carries_args_used(
         self, fake_session: _FakeSession, patched_runners: dict[str, Any]
     ) -> None:
-        """Failure step args_used field reflects the per-step args input."""
+        """Failure steps redact secret-like args the same way as run_macro."""
         patched_runners["register"]("a", [{"action": "click", "selector": "#x"}])
         patched_runners["raise_on"]["click"] = ValueError("boom")
         out = await run_sequence(
             session=fake_session,
             names=["a"],
-            args_list=[{"foo": "bar"}],
+            args_list=[{"foo": "bar", "pwd": "not_a_real_pw"}],  # pragma: allowlist secret
             stop_on_failure=False,
         )
-        assert out["steps"][0]["args_used"] == {"foo": "bar"}
+        assert out["steps"][0]["args_used"] == {"foo": "bar", "pwd": "<redacted>"}

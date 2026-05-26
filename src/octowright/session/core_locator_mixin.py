@@ -16,13 +16,52 @@ locator-based actions a single home.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
+from provide.telemetry import get_logger
+
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
 from octowright.session._protocols import SessionLike
+
+log = get_logger(__name__)
 
 
 class SessionLocatorMixin(SessionLike):
+    async def _is_password_locator(self, locator: Any) -> bool:
+        """Best-effort credential check for semantic-locator actions."""
+        try:
+            info = await locator.first.evaluate(
+                "el => el ? {"
+                "  type: el.type ? String(el.type).toLowerCase() : '',"
+                "  ac: el.autocomplete ? String(el.autocomplete).toLowerCase() : ''"
+                "    || (el.getAttribute && el.getAttribute('autocomplete')"
+                "         ? String(el.getAttribute('autocomplete')).toLowerCase() : '')"
+                "} : {type: '', ac: ''}"
+            )
+        except Exception as exc:
+            log.debug("core_locator_mixin.password_lookup_failed", error=str(exc))
+            return True
+        if isinstance(info, str):
+            return info == "password"
+        if not isinstance(info, dict):
+            return True
+        if info.get("type") == "password":
+            return True
+        return info.get("ac") in ("current-password", "new-password", "one-time-code")
+
+    async def _redacted_or_original_for_locator(self, locator: Any, value: str) -> str:
+        mode = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower()
+        if mode not in {"off", "all", "passwords"}:
+            mode = "passwords"
+        if mode == "off":
+            return value
+        if mode == "all":
+            return REDACTED_INPUT_PLACEHOLDER
+        if await self._is_password_locator(locator):
+            return REDACTED_INPUT_PLACEHOLDER
+        return value
+
     def _locator(self, **finders: Any) -> Any:
         """Return a Playwright Locator for the given finder kwargs.
 
@@ -43,8 +82,9 @@ class SessionLocatorMixin(SessionLike):
     async def fill_by(self, value: str, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Fill an input matched by role, label, or data-testid."""
         locator = self._locator(**finders)
+        recorded_value = await self._redacted_or_original_for_locator(locator, value)
         await locator.fill(value, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("fill_by", value=value, **finders)
+        self.recorder.record("fill_by", value=recorded_value, **finders)
         return {"ok": True}
 
     async def get_text_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
