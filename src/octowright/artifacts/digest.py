@@ -29,9 +29,11 @@ def truncate_text(text: str, *, max_chars: int = DEFAULT_DIGEST_CHARS) -> dict[s
 
 
 def digest_macro(macro: dict[str, Any], *, max_chars: int = DEFAULT_DIGEST_CHARS) -> dict[str, Any]:
-    actions = macro.get("actions") if isinstance(macro.get("actions"), list) else []
+    raw_actions = macro.get("actions")
+    actions = raw_actions if isinstance(raw_actions, list) else []
     counts = Counter(_safe_label(action.get("action", "unknown")) for action in actions if isinstance(action, dict))
-    parameters = macro.get("parameters") if isinstance(macro.get("parameters"), list) else []
+    raw_parameters = macro.get("parameters")
+    parameters = raw_parameters if isinstance(raw_parameters, list) else []
     lines = [
         f"Macro {_safe_label(macro.get('name', '(unnamed)'))}",
         f"parameters: {_format_parameters(parameters)}",
