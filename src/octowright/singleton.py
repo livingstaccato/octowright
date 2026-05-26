@@ -131,7 +131,12 @@ def _pid_is_alive_windows(pid: int) -> bool:
     if handle:
         kernel32.CloseHandle(handle)
         return True
-    return kernel32.GetLastError() == 5
+    # Read GetLastError BEFORE any other Win32 call: CloseHandle (and even
+    # success paths inside the runtime) can clobber the thread-local last-error
+    # code, turning ERROR_ACCESS_DENIED (process exists, owned by another user)
+    # into "looks dead".
+    last_error = kernel32.GetLastError()
+    return last_error == 5
 
 
 def is_stale(info: LeaderInfo) -> bool:
