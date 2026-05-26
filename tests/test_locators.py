@@ -27,6 +27,12 @@ class FakeLocator:
     _fills: list[dict[str, Any]] = field(default_factory=list)
     _waits: list[dict[str, Any]] = field(default_factory=list)
     _inner_text_value: str = "Click me"
+    _evaluate_value: Any = field(default_factory=lambda: {"type": "text", "ac": ""})
+    _evaluate_raises: bool = False
+    first: Any = None
+
+    def __post_init__(self) -> None:
+        self.first = self
 
     async def click(self, timeout: int = 5000) -> None:
         self._clicks.append({"timeout": timeout})
@@ -39,6 +45,11 @@ class FakeLocator:
 
     async def inner_text(self) -> str:
         return self._inner_text_value
+
+    async def evaluate(self, _script: str) -> Any:
+        if self._evaluate_raises:
+            raise RuntimeError("evaluate failed")
+        return self._evaluate_value
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +248,34 @@ async def test_fill_by_records_value(tmp_path: Path) -> None:
     assert action == "fill_by"
     assert kwargs["value"] == "hunter2"
     assert kwargs["test_id"] == "password-input"
+
+
+@pytest.mark.anyio
+async def test_fill_by_records_redacted_value_for_password_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "passwords")
+    page = FakePage()
+    page._locator._evaluate_value = {"type": "password", "ac": ""}
+    session = _make_session(page, tmp_path)
+    await session.fill_by("hunter2", label="Password")
+    action, kwargs = session.recorder.recorded[-1]  # type: ignore[union-attr]
+    assert action == "fill_by"
+    assert kwargs["value"] == "<redacted:password>"
+
+
+@pytest.mark.anyio
+async def test_fill_by_records_redacted_value_for_password_autocomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "passwords")
+    page = FakePage()
+    page._locator._evaluate_value = {"type": "text", "ac": "current-password"}
+    session = _make_session(page, tmp_path)
+    await session.fill_by("hunter2", label="Password")
+    action, kwargs = session.recorder.recorded[-1]  # type: ignore[union-attr]
+    assert action == "fill_by"
+    assert kwargs["value"] == "<redacted:password>"
 
 
 # ---------------------------------------------------------------------------
