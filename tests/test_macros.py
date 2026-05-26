@@ -18,6 +18,14 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Sentinel value used wherever a "password" substitution arg is exercised.
+# Renamed away from realistic strings ("s3cr3t" / "pass123") because the
+# detect-secrets pre-commit hook fires on the "password" keyword regardless
+# of value; the obviously-synthetic name plus a single module-level constant
+# keeps the test diff free of allowlist-secret pragmas at every call site.
+PW_FIXTURE = "fixture-not-a-real-secret"  # pragma: allowlist secret
+
+
 SAMPLE_RECORDING = [
     {"ts": "2026-04-24T10:00:00.000Z", "action": "launch", "url": "https://octowright.com"},
     {"ts": "2026-04-24T10:00:01.000Z", "action": "navigate", "url": "https://discord.com/login"},
@@ -256,10 +264,10 @@ def test_substitute_replaces_placeholders(monkeypatch: pytest.MonkeyPatch, tmp_p
         {"action": "fill", "selector": "input[name=pw]", "value": "{{password}}"},
         {"action": "click", "selector": "button"},
     ]
-    result = m.substitute(actions, {"email": "cosmo@octowright.test", "password": "s3cr3t"})
+    result = m.substitute(actions, {"email": "cosmo@octowright.test", "password": PW_FIXTURE})
 
     assert result[0]["value"] == "cosmo@octowright.test"
-    assert result[1]["value"] == "s3cr3t"
+    assert result[1]["value"] == PW_FIXTURE
     assert result[2]["selector"] == "button"
 
 
@@ -343,7 +351,7 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     result = await m.run_macro(
         fake,  # type: ignore[arg-type]
         "replay-test",
-        args={"email": "cosmo@octowright.test", "password": "pass123"},
+        args={"email": "cosmo@octowright.test", "password": PW_FIXTURE},
     )
 
     assert result["macro"] == "replay-test"
@@ -360,7 +368,7 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     fill_calls = [(name, args) for name, args, _ in calls if name == "fill"]
     fill_values = [args[1] for _, args in fill_calls]
     assert "cosmo@octowright.test" in fill_values
-    assert "pass123" in fill_values
+    assert PW_FIXTURE in fill_values
 
     # click was called (button[type=submit])
     click_calls = [name for name, _, _ in calls if name == "click"]
