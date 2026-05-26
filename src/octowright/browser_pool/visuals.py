@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -15,12 +16,40 @@ log = get_logger(__name__)
 
 
 # JS init scripts live as standalone .js files for editor highlighting + lint.
-# Loaded once at import — small (a few KB each) and read-only at runtime.
+# Reads are deferred to first use so a wheel built without the assets still
+# imports cleanly — the failure surfaces at first browser launch with a clear
+# message rather than as an opaque ImportError on `import octowright`.
 _ASSETS = Path(__file__).with_name("_assets")
-_TITLE_TAG_SCRIPT = (_ASSETS / "title_tag.js").read_text(encoding="utf-8")
-_BADGE_SCRIPT = (_ASSETS / "badge.js").read_text(encoding="utf-8")
-_MACRO_STATUS_SCRIPT = (_ASSETS / "macro_pill.js").read_text(encoding="utf-8")
-_VIEWPORT_PILL_SCRIPT = (_ASSETS / "viewport_pill.js").read_text(encoding="utf-8")
+
+
+def _read_asset(filename: str) -> str:
+    path = _ASSETS / filename
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"missing octowright init-script asset {path.name!r} at {path}; broken install?"
+        ) from exc
+
+
+@functools.cache
+def _title_tag_script() -> str:
+    return _read_asset("title_tag.js")
+
+
+@functools.cache
+def _badge_script() -> str:
+    return _read_asset("badge.js")
+
+
+@functools.cache
+def _macro_status_script() -> str:
+    return _read_asset("macro_pill.js")
+
+
+@functools.cache
+def _viewport_pill_script() -> str:
+    return _read_asset("viewport_pill.js")
 
 
 # Curated emoji pool for per-persona/per-label visual identity. 33 picks: mostly
@@ -116,7 +145,7 @@ def _title_tag_for(
 
 
 # Badge corner positions, mapped to (vertical-css-prop, horizontal-css-prop).
-# Used by _BADGE_SCRIPT to decide which two CSS edges to anchor to.
+# Used by the badge init script to decide which two CSS edges to anchor to.
 _BADGE_POSITIONS: dict[str, dict[str, str]] = {
     "top-left": {"vertical": "top", "horizontal": "left"},
     "top-right": {"vertical": "top", "horizontal": "right"},
@@ -263,7 +292,7 @@ async def wire_init_scripts(
 
     title_tag = _title_tag_for(profile, label, persona_emoji=persona_emoji, kind=kind)
     if title_tag:
-        script = _TITLE_TAG_SCRIPT.replace("__SUFFIX__", _json.dumps(title_tag))
+        script = _title_tag_script().replace("__SUFFIX__", _json.dumps(title_tag))
         await context.add_init_script(script=script)
 
     if badge:
@@ -273,7 +302,8 @@ async def wire_init_scripts(
         # differentiation.
         color_seed = profile or label or instance_id[:6]
         badge_script = (
-            _BADGE_SCRIPT.replace("__TAG__", _json.dumps(badge_text))
+            _badge_script()
+            .replace("__TAG__", _json.dumps(badge_text))
             .replace("__COLOR__", _json.dumps(_badge_color_for(color_seed)))
             .replace("__POS__", _json.dumps(_BADGE_POSITIONS[badge_position]))
         )
@@ -282,8 +312,10 @@ async def wire_init_scripts(
     # Macro status pill — overlay stays invisible until a running macro
     # pushes text via window.__octowright_macro_status.
     chip_text, chip_color = _macro_pill_chip_for(profile, label, instance_id)
-    pill_script = _MACRO_STATUS_SCRIPT.replace("__ID_TAG__", _json.dumps(chip_text)).replace(
-        "__ID_COLOR__", _json.dumps(chip_color)
+    pill_script = (
+        _macro_status_script()
+        .replace("__ID_TAG__", _json.dumps(chip_text))
+        .replace("__ID_COLOR__", _json.dumps(chip_color))
     )
     await context.add_init_script(script=pill_script)
 
@@ -292,7 +324,7 @@ async def wire_init_scripts(
         "width": viewport_width,
         "height": viewport_height,
     }
-    viewport_script = _VIEWPORT_PILL_SCRIPT.replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
+    viewport_script = _viewport_pill_script().replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
     await context.add_init_script(script=viewport_script)
 
     if stabilize:

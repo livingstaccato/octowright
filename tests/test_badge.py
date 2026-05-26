@@ -156,6 +156,59 @@ def test_badge_default_position_is_bottom_right() -> None:
     assert _BADGE_POSITION_DEFAULT == "bottom-right"
 
 
+# ---------------------------------------------------------------------------
+# Deferred asset loading — a wheel built without _assets/ must still import
+# ---------------------------------------------------------------------------
+
+
+def test_visuals_module_imports_without_assets(monkeypatch, tmp_path) -> None:
+    """Import-time must not touch the _assets/ dir.
+
+    If the wheel build drops the JS assets, `import octowright.browser_pool`
+    must still succeed — the failure should surface lazily on first use with
+    a clear error, not as an opaque ImportError that kills the whole package.
+    """
+    from octowright.browser_pool import visuals
+
+    monkeypatch.setattr(visuals, "_ASSETS", tmp_path / "does-not-exist")
+    for cached in (
+        visuals._title_tag_script,
+        visuals._badge_script,
+        visuals._macro_status_script,
+        visuals._viewport_pill_script,
+    ):
+        cached.cache_clear()
+
+    with pytest.raises(FileNotFoundError, match="broken install"):
+        visuals._title_tag_script()
+    with pytest.raises(FileNotFoundError, match="broken install"):
+        visuals._badge_script()
+    with pytest.raises(FileNotFoundError, match="broken install"):
+        visuals._macro_status_script()
+    with pytest.raises(FileNotFoundError, match="broken install"):
+        visuals._viewport_pill_script()
+
+    for cached in (
+        visuals._title_tag_script,
+        visuals._badge_script,
+        visuals._macro_status_script,
+        visuals._viewport_pill_script,
+    ):
+        cached.cache_clear()
+
+
+def test_visuals_asset_loaders_are_cached() -> None:
+    """Each loader caches the read so repeated calls don't re-hit disk."""
+    from octowright.browser_pool import visuals
+
+    visuals._title_tag_script.cache_clear()
+    first = visuals._title_tag_script()
+    second = visuals._title_tag_script()
+    assert first is second
+    info = visuals._title_tag_script.cache_info()
+    assert info.hits >= 1
+
+
 def test_badge_positions_cover_all_four_corners() -> None:
     from octowright.browser_pool.visuals import _BADGE_POSITIONS
 

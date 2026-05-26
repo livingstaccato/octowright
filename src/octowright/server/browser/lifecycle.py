@@ -373,9 +373,12 @@ async def browser_open_url(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Launch several browsers in parallel from a list of launch specs. Each spec is "
-        "a dict accepting any subset of: kind, url, headed, label, profile, viewport_w, "
-        "viewport_h, stabilize, record_video. Returns {launched: [...], errors: [...]}."
+        "Launch several browsers in parallel from a list of launch specs. Each spec "
+        "is a dict accepting any subset of the LaunchOptions fields used by "
+        "browser_launch: kind, url, headed, label, profile, viewport_w, viewport_h, "
+        "stabilize, record_video, trace, har, har_path, har_mode, har_url_filter, "
+        "har_content, badge, badge_position, tile, ephemeral, session. Returns "
+        "{launched: [...], errors: [...]}."
     ),
 )
 async def browser_spawn_roster(specs: list[dict[str, Any]]) -> dict[str, Any]:

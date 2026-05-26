@@ -1062,3 +1062,59 @@ class TestClosePageRecord:
         subj = _make_subject(tmp_path)
         with pytest.raises(RuntimeError, match=r"cannot close the last remaining page"):
             await subj.close_page(0)
+
+    @pytest.mark.anyio
+    async def test_popup_close_during_await_does_not_raise_value_error(self, tmp_path: Path) -> None:
+        """Simulates a popup _on_page_close listener firing during the
+        ``await target.close()`` and stripping the currently-active page out
+        of ``self.pages``. The post-await ``self.pages.index(self.page)``
+        previously raised ValueError; the fix must surface a valid
+        active_index instead."""
+        subj = _make_subject(tmp_path)
+        sibling = MagicMock()
+        sibling.url = "https://sibling"
+        target = MagicMock()
+        target.url = "https://target"
+
+        async def _close_and_strip_sibling() -> None:
+            # During the await, a synchronous popup-close listener mutates
+            # self.pages and removes the page we just chose as active.
+            if sibling in subj.pages:
+                subj.pages.remove(sibling)
+
+        target.close = AsyncMock(side_effect=_close_and_strip_sibling)
+        subj.pages = [target, sibling]
+        subj.page = target
+        result = await subj.close_page(0)
+        assert result["closed_index"] == 0
+        assert result["was_active"] is True
+        # active_index falls back cleanly even though self.page is no
+        # longer in self.pages.
+        assert result["active_index"] == 0
+        assert result["page_count"] == 0
+
+    @pytest.mark.anyio
+    async def test_popup_close_leaves_other_pages_intact(self, tmp_path: Path) -> None:
+        """If the popup-close listener trims a *non-active* page, the
+        returned active_index still points at the surviving active page."""
+        subj = _make_subject(tmp_path)
+        survivor = MagicMock()
+        survivor.url = "https://survivor"
+        bystander = MagicMock()
+        bystander.url = "https://bystander"
+        target = MagicMock()
+        target.url = "https://target"
+
+        async def _close_and_strip_bystander() -> None:
+            if bystander in subj.pages:
+                subj.pages.remove(bystander)
+
+        target.close = AsyncMock(side_effect=_close_and_strip_bystander)
+        subj.pages = [target, survivor, bystander]
+        subj.page = target
+        result = await subj.close_page(0)
+        # survivor was promoted to active before the await; it should still
+        # be the active page after.
+        assert subj.page is survivor
+        assert result["active_index"] == subj.pages.index(survivor)
+        assert result["page_count"] == len(subj.pages)
