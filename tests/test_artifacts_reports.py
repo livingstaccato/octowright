@@ -94,6 +94,7 @@ def test_write_run_bundle_redacts_log_excerpt_preview(tmp_path: Path) -> None:
         "password=hunter2 token=abc123 cookie=sessionid=raw "
         '"api_key":"key-123" "authorization": "Bearer raw-token" '  # pragma: allowlist secret
         "authorization: Bearer colon-token Cookie: colon-session token: colon-abc password: colon-password"  # pragma: allowlist secret
+        "\nCookie: sessionid=abc123; csrftoken=raw-token; theme=dark"  # pragma: allowlist secret
     )  # pragma: allowlist secret
     evidence = EvidenceBuilder()
     record = evidence.log_excerpt(
@@ -106,6 +107,8 @@ def test_write_run_bundle_redacts_log_excerpt_preview(tmp_path: Path) -> None:
     assert "colon-session" not in record["preview"]
     assert "colon-abc" not in record["preview"]
     assert "colon-password" not in record["preview"]
+    assert "raw-token" not in record["preview"]
+    assert "theme=dark" not in record["preview"]
     raw_evidence = [
         {
             "id": "ev_001",
@@ -151,6 +154,8 @@ def test_write_run_bundle_redacts_log_excerpt_preview(tmp_path: Path) -> None:
     assert "colon-session" not in evidence_text
     assert "colon-abc" not in evidence_text
     assert "colon-password" not in evidence_text
+    assert "raw-token" not in evidence_text
+    assert "theme=dark" not in evidence_text
 
 
 def test_write_run_bundle_uses_atomic_write_text(tmp_path: Path, monkeypatch: Any) -> None:
