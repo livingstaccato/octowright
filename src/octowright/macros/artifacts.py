@@ -63,8 +63,11 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
 def list_macro_artifacts(name: str | None = None, limit: int = 20) -> dict[str, Any]:
     store = ArtifactStore()
     manifests = [store.root / "macros" / artifact_slug(name) / "artifact.json"] if name else _all_macro_manifests(store)
-    artifacts = [_compact_manifest(store, manifest) for manifest in manifests]
-    artifacts = [artifact for artifact in artifacts if artifact is not None]
+    artifacts: list[dict[str, Any]] = []
+    for manifest in manifests:
+        artifact = _compact_manifest(store, manifest)
+        if artifact is not None:
+            artifacts.append(artifact)
     artifacts.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
     capped = artifacts[: max(0, int(limit))]
     return {"artifacts": capped, "count": len(capped), "limit": max(0, int(limit))}
@@ -282,8 +285,11 @@ def _merge_existing_manifest(path: Path, manifest: dict[str, Any]) -> dict[str, 
     for key in ("created_at", "latest_run", "exports", "critical_points"):
         if key in existing:
             merged[key] = existing[key]
-    existing_metadata = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
-    merged["metadata"] = {**existing_metadata, **manifest.get("metadata", {})}
+    raw_existing_metadata = existing.get("metadata")
+    existing_metadata = raw_existing_metadata if isinstance(raw_existing_metadata, dict) else {}
+    raw_manifest_metadata = manifest.get("metadata")
+    manifest_metadata = raw_manifest_metadata if isinstance(raw_manifest_metadata, dict) else {}
+    merged["metadata"] = {**existing_metadata, **manifest_metadata}
     return merged
 
 
