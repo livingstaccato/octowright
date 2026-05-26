@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml mcp-tool-surface
-title MCP tool inventory by concern (97 tools — slim with --profile=core etc.)
+title MCP tool inventory by capability profile (106 tools total — slim with --profile=core,...)
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -11,73 +11,62 @@ skinparam packageBorderColor #d1d5db
 skinparam packageBackgroundColor #f9fafb
 skinparam noteBackgroundColor #fef3c7
 skinparam noteBorderColor #d1d5db
+skinparam ArrowColor transparent
 
-note as PROFILES_LEGEND #fef3c7
-  **Capability profiles** (set via OCTOWRIGHT_PROFILE / --profile=...)
-  • **core** (13) — minimum to drive a browser
-  • **advanced** (13) — inspection + assertions + ARIA locators
-  • **macros** (9) — record / replay / lint / repair
-  • **scenarios** (12) — multi-browser orchestration
-  • **personas** (8) — identity + on-disk profile management
-  • **always-on** (6) — status, dashboard, takeover, Advisor
-  Each box below is tagged with profile, always-on, or all-only behavior.
-  All-only tools register only when no profile filter is active.
+' PlantUML doesn't have a real grid layout. The trick that works: wrap
+' each row of profile boxes in an outer "row" package. Outer packages
+' stack vertically because nothing links them horizontally; inner
+' boxes pack horizontally within their row.
+
+note as LEGEND #fef3c7
+  **OCTOWRIGHT_PROFILE** (env var or ``serve --profile=...``) slims the
+  LLM-visible tool surface to one or more named profiles. Tools listed
+  under ``all-only`` register **only when no --profile filter is active**.
+  Always-on tools register under every profile (and under no profile).
+
+  Authoritative per-tool list:
+  ``docs/architecture/mcp-tool-inventory.md`` — generated against
+  ``uv run octowright selftest``, which is the source of truth.
 end note
 
-package "browser lifecycle (core)" #eff6ff {
-  rectangle "browser_launch\nbrowser_list / list_sessions\nbrowser_close / close_all\nbrowser_navigate" as LIFE
+package "Row 1 — profiles you usually compose" as ROW1 #ffffff {
+  package "core (15)" as P_CORE #eff6ff {
+    rectangle "minimum to drive a browser:\nbrowser_launch / list / close / navigate\nbrowser_suggest_for_url / quick_launch\nbrowser_click / fill / type / press_key\nbrowser_screenshot / brief / read_markdown\nbrowser_wait_for" as R_CORE
+  }
+  package "advanced (22)" as P_ADV #fef3c7 {
+    rectangle "inspection, ARIA locators, assertions,\nviewport sync, capture cache, export script,\nrelaunch:\nbrowser_click_by / fill_by / get_text_by\nbrowser_expect_url / _text / _selector / _js\nbrowser_evaluate / snapshot / console_messages\nbrowser_recording_path / tail_recording\nbrowser_resize / viewport_status / sync\nbrowser_export_script / relaunch_fluid\ncapture_create / get / list / search / cleanup" as R_ADV
+  }
+  package "macros (9)" as P_MAC #e0f2fe {
+    rectangle "record → save → replay pipeline:\nmacro_save / list / run / delete\nmacro_run_sequence\nmacro_lint / repair_preview\nmacro_compile / explain" as R_MAC
+  }
 }
 
-package "input (core)" #ecfccb {
-  rectangle "browser_click\nbrowser_type\nbrowser_fill\nbrowser_press_key\nbrowser_set_input_files" as INPUT
+package "Row 2 — profile-scoped domain bundles" as ROW2 #ffffff {
+  package "scenarios (12)" as P_SCN #f3e8ff {
+    rectangle "multi-browser orchestration:\nscenario_list / plan / start / status / stop\nscenario_participants / run_macro\nscenario_wait_for_sync / run_as_test\nscenario_remap_participants / tail\nscenario_spawn_template" as R_SCN
+  }
+  package "personas (8)" as P_PERS #fdf2f8 {
+    rectangle "identity + on-disk profile mgmt:\npersona_list / get / create / delete\npersona_credentials_check\nprofile_list / delete / cleanup" as R_PERS
+  }
+  package "goldens (5)" as P_GOLD #ecfdf5 {
+    rectangle "aria-tree snapshot baselines + diff:\ngolden_save / list / delete\ngolden_assert / verify_loop" as R_GOLD
+  }
 }
 
-package "introspection (mixed: core + advanced)" #fef3c7 {
-  rectangle "browser_brief (core)\nbrowser_screenshot (core)\nbrowser_read_markdown (core)\nbrowser_evaluate (advanced)\nbrowser_snapshot (advanced)\nbrowser_console_messages (advanced)\nbrowser_recording_path (advanced)\nbrowser_tail_recording (advanced)" as INTRO
+package "Row 3 — always available regardless of profile" as ROW3 #ffffff {
+  package "always-on meta + Advisor (7)" as P_META #f5f5f4 {
+    rectangle "registers under every profile:\noctowright_status / storage_report\noctowright_dashboard_url / check_takeover\noctowright_advisor_status\noctowright_advisor_set_preference\noctowright_advisor_record_macro_observation" as R_META
+  }
+  package "all-only (28)" as P_ALL #f0fdf4 {
+    rectangle "registers only when no --profile filter is active:\nframes/tabs/popups (browser_switch_frame /\nreset_frame / list_frames /\npage_list / page_switch / page_close),\nnetwork + dialogs (browser_mock_route /\nunmock_route / set_dialog_policy /\nnetwork_requests / wait_for_download /\ndownloads),\ntrace (browser_open_trace),\nroster (browser_spawn_roster /\nbrowser_open_url / navigate_back),\nfan-out (browser_*_each),\ninteraction extras (hover / drag /\nselect_option / set_input_files /\ncapture_and_close),\nrecordings_cleanup, run_test_suite" as R_ALL
+  }
 }
 
-package "wait + assert (mixed: core + advanced)" #fdf4ff {
-  rectangle "browser_wait_for (core)\nbrowser_expect_url (advanced)\nbrowser_expect_text (advanced)\nbrowser_expect_selector (advanced)\nbrowser_expect_js (advanced)" as ASSERT
-}
-
-package "locator-by-aria/text (advanced)" #fef9c3 {
-  rectangle "browser_click_by\nbrowser_fill_by\nbrowser_get_text_by" as LOC
-}
-
-package "frames + tabs + popups (no profile — all only)" #f0fdf4 {
-  rectangle "browser_switch_frame / reset_frame / list_frames\npage_list / page_switch / page_close" as FRMTAB
-}
-
-package "network + dialogs + downloads (no profile — all only)" #fee2e2 {
-  rectangle "browser_mock_route / unmock_route\nbrowser_set_dialog_policy\nbrowser_downloads (after cursor)\nbrowser_wait_for_download" as NET
-}
-
-package "macros + replay (macros)" #e0f2fe {
-  rectangle "macro_save / list / run / delete\nmacro_run_sequence\nmacro_lint / repair_preview\nmacro_compile / explain\nbrowser_export_script (advanced)" as MAC
-}
-
-package "personas + profiles (personas)" #fdf2f8 {
-  rectangle "persona_list / get / create / delete\npersona_credentials_check\nprofile_list / delete / cleanup" as PERS
-}
-
-package "scenarios (scenarios)" #f3e8ff {
-  rectangle "scenario_list / plan / start / status / stop\nscenario_participants / run_macro / wait_for_sync\nscenario_run_as_test / remap_participants\nscenario_tail (cursor stream)\nscenario_spawn_template" as SCN
-}
-
-package "goldens + video + trace (no profile — all only)" #ecfdf5 {
-  rectangle "golden_save / assert / list / delete / verify_loop\nbrowser_open_trace\n(trace via browser_launch trace=True)" as ART
-}
-
-package "test runner (no profile — all only)" #fffbeb {
-  rectangle "run_test_suite (CLI: octowright test)" as RUN
-}
-
-package "always-on meta + Advisor" #f5f5f4 {
-  rectangle "octowright_status\noctowright_dashboard_url\noctowright_check_takeover\noctowright_advisor_status\noctowright_advisor_set_preference\noctowright_advisor_record_macro_observation" as META
-}
-
-package "cleanup (no profile — all only)" #f5f5f4 {
-  rectangle "recordings_cleanup" as CLEAN
-}
+' Force vertical stacking of the row packages. Without these, PlantUML
+' lays the three outer packages out in a single horizontal strip.
+' (The note doesn't participate — hidden-arrow on a note leaks as a
+' visible text label in some renderers.)
+ROW1 -[hidden]down-> ROW2
+ROW2 -[hidden]down-> ROW3
 
 @enduml
