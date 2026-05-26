@@ -44,11 +44,20 @@ def test_redact_mapping_redacts_header_pair_value_for_sensitive_name() -> None:
         "value": REDACTED_VALUE,
         "safe": "visible",
     }
+    assert redact_mapping({"name": "Cookie", "value": "sid=abc"}) == {
+        "name": "Cookie",
+        "value": REDACTED_VALUE,
+    }
 
 
 def test_redact_mapping_redacts_header_pair_value_for_sensitive_key() -> None:
     assert redact_mapping({"key": "api-key", "value": "abc"}) == {
         "key": "api-key",
+        "value": REDACTED_VALUE,
+    }
+    assert redact_mapping({"name": "safe", "key": "Authorization", "value": "Bearer abc"}) == {
+        "name": "safe",
+        "key": "Authorization",
         "value": REDACTED_VALUE,
     }
 
@@ -63,6 +72,8 @@ def test_redact_mapping_preserves_header_pair_value_for_safe_name() -> None:
 def test_redact_value_for_key_matches_partial_and_exact_keys() -> None:
     assert redact_value_for_key("access-token", "abc") == REDACTED_VALUE
     assert redact_value_for_key("Authorization", "Bearer abc") == REDACTED_VALUE
+    assert redact_value_for_key("Cookie", "sid=abc") == REDACTED_VALUE
+    assert redact_value_for_key("set-cookie", "sid=abc") == REDACTED_VALUE
     assert redact_value_for_key("authorization_header", "Bearer abc") == REDACTED_VALUE
     assert redact_value_for_key("authorizationHeader", "Bearer abc") == REDACTED_VALUE
     assert redact_value_for_key("proxyAuthorization", "Bearer abc") == REDACTED_VALUE
