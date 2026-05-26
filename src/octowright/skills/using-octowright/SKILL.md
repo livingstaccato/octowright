@@ -244,7 +244,7 @@ If you catch yourself doing these, you are violating the Octowright workflow:
 | Persist a preference | `octowright_advisor_set_preference(suggestion_type, preference)` |
 | Start session | `browser_launch(kind, profile, ...)` |
 | Robust interaction by aria role/label/test-id | `browser_click_by(role=, label=, test_id=, timeout_ms=)` |
-| Wait for an element/text to appear | `browser_wait_for(instance_id, selector=, text=, timeout_ms=)` |
+| Wait for an element/text/JS expression to appear | `browser_wait_for(instance_id, selector=, text=, expression=, timeout_ms=)` |
 | Fix failing macro | `browser_snapshot` -> `macro_save` |
 | Cleanup (agent-internal browser) | `browser_close` |
 | Cleanup (user-facing browser) | Don't — user closes when they're done |
