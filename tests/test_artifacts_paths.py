@@ -14,7 +14,7 @@ import pytest
 def _reload_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     import octowright.defaults as defaults
 
-    monkeypatch.setenv("OCTOWRIGHT_RECORDINGS_DIR", str(tmp_path / "recordings"))
+    monkeypatch.setenv("OCTOWRIGHT_RECORDINGS", str(tmp_path / "recordings"))
     importlib.reload(defaults)
 
     import octowright.artifacts.paths as paths
