@@ -67,6 +67,11 @@ LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(_STATE_DIR / "octowr
 # expanduser()'d at consumer-call time so ~ in the env value still works.
 CODEX_HOME = os.environ.get("CODEX_HOME", "~/.codex")
 
+# Antigravity CLI (agy) config root for the skill-distribution copy step.
+# agy shares ~/.gemini/config as its plugin store; override ANTIGRAVITY_HOME
+# to redirect installs to a test tree without touching the user's live config.
+ANTIGRAVITY_HOME = os.environ.get("ANTIGRAVITY_HOME", "~/.gemini/config")
+
 
 def active_profile_raw() -> str:
     """Read OCTOWRIGHT_PROFILE's raw env value for diagnostic display.

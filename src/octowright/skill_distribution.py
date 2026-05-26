@@ -66,6 +66,13 @@ def _codex_destination() -> Path:
     return codex_home / "skills" / SKILL_NAME
 
 
+def _antigravity_destination() -> Path:
+    # agy shares ~/.gemini/config as its plugin store; read ANTIGRAVITY_HOME
+    # at call time so monkeypatch overrides work in tests.
+    agy_home = Path(defaults.ANTIGRAVITY_HOME).expanduser()
+    return agy_home / "plugins" / SKILL_NAME.removeprefix("using-")
+
+
 def _claude_plugin_destination(cwd: Path | None = None) -> Path:
     root = cwd or Path.cwd()
     return root / ".claude-plugin" / "plugin.json"
@@ -74,6 +81,11 @@ def _claude_plugin_destination(cwd: Path | None = None) -> Path:
 def _codex_plugin_destination(cwd: Path | None = None) -> Path:
     root = cwd or Path.cwd()
     return root / ".codex-plugin" / "plugin.json"
+
+
+def _antigravity_plugin_destination(cwd: Path | None = None) -> Path:
+    root = cwd or Path.cwd()
+    return root / ".antigravity-plugin" / "plugin.json"
 
 
 def install_skill_to_codex(*, dry_run: bool = False, force: bool = False) -> InstallResult:
@@ -136,6 +148,77 @@ def install_skill_to_codex(*, dry_run: bool = False, force: bool = False) -> Ins
     )
 
 
+def install_skill_to_antigravity(*, dry_run: bool = False, force: bool = False) -> InstallResult:
+    """Install the using-octowright skill and plugin manifest into the agy store.
+
+    agy shares ~/.gemini/config/plugins/ as its plugin installation root.
+    Each plugin dir contains plugin.json + a skills/ subdir with one subdir
+    per skill. The mcp_config.json is not written here — users add the MCP
+    server registration to their agent harness config separately.
+    """
+    source = _packaged_skill_path()
+    destination = _antigravity_destination()
+    source_skill = source / "SKILL.md"
+    source_hash = _sha256(source_skill)
+
+    if destination.exists() and not force:
+        existing_skill = destination / "skills" / SKILL_NAME / "SKILL.md"
+        hash_match = existing_skill.exists() and _sha256(existing_skill) == source_hash
+        return InstallResult(
+            target="antigravity",
+            destination=str(destination),
+            installed=False,
+            updated=False,
+            reason="already_installed",
+            version=_version(),
+            hash_match=hash_match,
+        )
+
+    if dry_run:
+        return InstallResult(
+            target="antigravity",
+            destination=str(destination),
+            installed=not destination.exists(),
+            updated=destination.exists(),
+            reason="dry_run",
+            version=_version(),
+            hash_match=False,
+        )
+
+    skills_dir = destination / "skills" / SKILL_NAME
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    # Stage into a sibling temp dir so a mid-copy failure can't leave a
+    # corrupted skill tree on disk.
+    staging_parent = Path(tempfile.mkdtemp(prefix=f".{SKILL_NAME}.", dir=str(skills_dir.parent)))
+    staging_dir = staging_parent / SKILL_NAME
+    try:
+        shutil.copytree(source, staging_dir)
+    except Exception:
+        shutil.rmtree(staging_parent, ignore_errors=True)
+        raise
+    if skills_dir.exists():
+        shutil.rmtree(skills_dir)
+    try:
+        os.replace(staging_dir, skills_dir)
+    finally:
+        shutil.rmtree(staging_parent, ignore_errors=True)
+
+    # Write plugin.json alongside the skills/ subdir so agy plugin validate passes.
+    manifest_content = _packaged_manifest("antigravity-plugin.json")
+    (destination / "plugin.json").write_text(manifest_content, encoding="utf-8", newline="\n")
+
+    return InstallResult(
+        target="antigravity",
+        destination=str(destination),
+        installed=True,
+        updated=force,
+        reason="installed",
+        version=_version(),
+        hash_match=True,
+    )
+
+
 def install_plugin_manifests(
     *, dry_run: bool = False, force: bool = False, cwd: Path | None = None
 ) -> list[InstallResult]:
@@ -143,6 +226,7 @@ def install_plugin_manifests(
     for target, name, dest_fn in (
         ("claude", "claude-plugin.json", _claude_plugin_destination),
         ("codex_plugin", "codex-plugin.json", _codex_plugin_destination),
+        ("antigravity_plugin", "antigravity-plugin.json", _antigravity_plugin_destination),
     ):
         destination = dest_fn(cwd)
         content = _packaged_manifest(name)
@@ -205,54 +289,59 @@ def install_distributed_assets(
     results: list[InstallResult] = []
     if target in {"codex", "all"}:
         results.append(install_skill_to_codex(dry_run=dry_run, force=force))
+    if target in {"antigravity", "all"}:
+        results.append(install_skill_to_antigravity(dry_run=dry_run, force=force))
     if target in {"claude", "all"}:
         results.extend(install_plugin_manifests(dry_run=dry_run, force=force, cwd=cwd))
     return results
 
 
+def _skill_status(target: str, destination: Path, skill_file: Path, source_hash: str) -> InstallResult:
+    exists = skill_file.exists()
+    return InstallResult(
+        target=target,
+        destination=str(destination),
+        installed=exists,
+        updated=False,
+        reason="present" if exists else "missing",
+        version=_version(),
+        hash_match=exists and _sha256(skill_file) == source_hash,
+    )
+
+
+def _manifest_status(target: str, manifest_name: str, destination: Path) -> InstallResult:
+    expected_hash = hashlib.sha256(_packaged_manifest(manifest_name).encode("utf-8")).hexdigest()
+    exists = destination.exists()
+    return InstallResult(
+        target=target,
+        destination=str(destination),
+        installed=exists,
+        updated=False,
+        reason="present" if exists else "missing",
+        version=_version(),
+        hash_match=exists and _sha256(destination) == expected_hash,
+    )
+
+
 def status_distributed_assets(*, target: str, cwd: Path | None = None) -> list[InstallResult]:
     results: list[InstallResult] = []
-    source = _packaged_skill_path()
-    source_hash = _sha256(source / "SKILL.md")
+    source_hash = _sha256(_packaged_skill_path() / "SKILL.md")
 
     if target in {"codex", "all"}:
-        destination = _codex_destination()
-        skill_file = destination / "SKILL.md"
-        exists = skill_file.exists()
-        hash_match = exists and _sha256(skill_file) == source_hash
-        results.append(
-            InstallResult(
-                target="codex",
-                destination=str(destination),
-                installed=exists,
-                updated=False,
-                reason="present" if exists else "missing",
-                version=_version(),
-                hash_match=hash_match,
-            )
-        )
+        dest = _codex_destination()
+        results.append(_skill_status("codex", dest, dest / "SKILL.md", source_hash))
+
+    if target in {"antigravity", "all"}:
+        dest = _antigravity_destination()
+        results.append(_skill_status("antigravity", dest, dest / "skills" / SKILL_NAME / "SKILL.md", source_hash))
 
     if target in {"claude", "all"}:
         for label, manifest_name, dest_fn in (
             ("claude", "claude-plugin.json", _claude_plugin_destination),
             ("codex_plugin", "codex-plugin.json", _codex_plugin_destination),
+            ("antigravity_plugin", "antigravity-plugin.json", _antigravity_plugin_destination),
         ):
-            destination = dest_fn(cwd)
-            expected = _packaged_manifest(manifest_name).encode("utf-8")
-            expected_hash = hashlib.sha256(expected).hexdigest()
-            exists = destination.exists()
-            hash_match = exists and _sha256(destination) == expected_hash
-            results.append(
-                InstallResult(
-                    target=label,
-                    destination=str(destination),
-                    installed=exists,
-                    updated=False,
-                    reason="present" if exists else "missing",
-                    version=_version(),
-                    hash_match=hash_match,
-                )
-            )
+            results.append(_manifest_status(label, manifest_name, dest_fn(cwd)))
 
     return results
 
@@ -289,6 +378,10 @@ def doctor_distributed_assets(*, cwd: Path | None = None) -> list[InstallResult]
         ("packaged_skill", _packaged_skill_path() / "SKILL.md"),
         ("packaged_manifest_claude", files("octowright.skills").joinpath("manifests", "claude-plugin.json")),
         ("packaged_manifest_codex", files("octowright.skills").joinpath("manifests", "codex-plugin.json")),
+        (
+            "packaged_manifest_antigravity",
+            files("octowright.skills").joinpath("manifests", "antigravity-plugin.json"),
+        ),
     ):
         exists = False
         try:
@@ -312,6 +405,7 @@ def doctor_distributed_assets(*, cwd: Path | None = None) -> list[InstallResult]
     for target, path in (
         ("repo_claude_plugin_dir", root / ".claude-plugin"),
         ("repo_codex_plugin_dir", root / ".codex-plugin"),
+        ("repo_antigravity_plugin_dir", root / ".antigravity-plugin"),
     ):
         parent_exists = path.parent.exists()
         exists = path.exists()
