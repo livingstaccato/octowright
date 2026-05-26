@@ -60,6 +60,21 @@ def _make_temp_sibling(path: Path) -> Path:
         return Path(tmp.name)
 
 
+def _inherit_target_mode(target: Path, tmp_path: Path) -> None:
+    # NamedTemporaryFile creates the temp at 0o600; if ``target`` already
+    # exists with more permissive bits, os.replace would silently demote
+    # them. Copy the existing mode onto the temp before the swap so an
+    # atomic write is a true content replacement, not a permission change.
+    try:
+        st = os.stat(target)
+    except FileNotFoundError:
+        return
+    try:
+        os.chmod(tmp_path, st.st_mode & 0o7777)
+    except OSError:
+        pass
+
+
 async def atomic_write_via_writer(path: Path, writer: Callable[[Path], Awaitable[None]]) -> None:
     """Run ``writer(tmp_path)`` then ``os.replace(tmp_path, path)`` atomically.
 
@@ -78,6 +93,7 @@ async def atomic_write_via_writer(path: Path, writer: Callable[[Path], Awaitable
     cleanup: Path | None = tmp_path
     try:
         await writer(tmp_path)
+        _inherit_target_mode(path, tmp_path)
         os.replace(tmp_path, path)
         cleanup = None
     finally:
@@ -94,6 +110,7 @@ def atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8") -> None
     cleanup: Path | None = tmp_path
     try:
         tmp_path.write_text(body, encoding=encoding)
+        _inherit_target_mode(path, tmp_path)
         os.replace(tmp_path, path)
         cleanup = None
     finally:
