@@ -17,17 +17,19 @@ _SENSITIVE_KEY_PARTS = (
     "passphrase",
     "secret",
     "token",
+    "authorization",
     "api_key",
     "apikey",
     "access_key",
     "credential",
 )
-_SENSITIVE_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "authorization", "email", "username"})
+_SENSITIVE_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "email", "username"})
 _CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
 def is_sensitive_key(key: str) -> bool:
-    normalized = _CAMEL_CASE_BOUNDARY.sub("_", key).lower().replace("-", "_")
+    normalized = _NON_ALNUM.sub("_", _CAMEL_CASE_BOUNDARY.sub("_", key).lower()).strip("_")
     compact = normalized.replace("_", "")
     return (
         normalized in _SENSITIVE_EXACT_KEYS
