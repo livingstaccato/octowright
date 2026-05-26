@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from octowright import _format as fmt
+from octowright import defaults
 from octowright import macros as macro_mod
 from octowright import runner as runner_mod
 from octowright import scenarios as scenario_mod
+from octowright._paths import reject_unsafe_path
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.mcp_types import (
     ScenarioParticipant,
@@ -270,6 +272,7 @@ async def scenario_run_as_test(
     await _asyncio.gather(*(_run(p) for p in live.participants))
     passed = sum(1 for r in results if r["ok"])
     report_path = Path(out_path) if out_path else runner_mod._default_report_path()
+    report_path = reject_unsafe_path(report_path, defaults.RECORDINGS_DIR, label="scenario report path")
     runner_mod._write_junit(results, report_path, kind="scenario")
     return {
         "scenario_id": scenario_id,

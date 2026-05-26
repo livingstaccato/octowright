@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright import defaults
+from octowright._paths import reject_unsafe_path
 from octowright._tracing import span
 
 if TYPE_CHECKING:
@@ -116,7 +118,8 @@ async def _dispatch_standard(
         path_value = kwargs.get("path")
         if not path_value:
             return 0, 1
-        await getattr(session, method_name)(Path(path_value))
+        screenshot_path = reject_unsafe_path(Path(path_value), defaults.RECORDINGS_DIR, label="screenshot path")
+        await getattr(session, method_name)(screenshot_path)
         return 1, 0
     kwargs = _normalize_replay_kwargs(kind, kwargs)
     await getattr(session, method_name)(**kwargs)
