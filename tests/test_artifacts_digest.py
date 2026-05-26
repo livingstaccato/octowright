@@ -142,6 +142,30 @@ def test_digest_recording_text_handles_unclosed_ipv6_urls() -> None:
     assert "frag" not in result["summary"]
 
 
+def test_digest_recording_text_preserves_bracketed_ipv6_urls() -> None:
+    text = json.dumps({"action": "navigate", "url": "https://[::1]/path?token=secret#frag"})
+
+    result = digest_recording_text(text, max_chars=4000)
+
+    assert "first_url: https://[::1]/path" in result["summary"]
+    assert "last_url: https://[::1]/path" in result["summary"]
+    assert "token" not in result["summary"]
+    assert "secret" not in result["summary"]
+    assert "frag" not in result["summary"]
+
+
+def test_digest_recording_text_preserves_bracketed_ipv6_urls_with_port() -> None:
+    text = json.dumps({"action": "navigate", "url": "https://[2001:db8::1]:8443/path?token=secret#frag"})
+
+    result = digest_recording_text(text, max_chars=4000)
+
+    assert "first_url: https://[2001:db8::1]:8443/path" in result["summary"]
+    assert "last_url: https://[2001:db8::1]:8443/path" in result["summary"]
+    assert "token" not in result["summary"]
+    assert "secret" not in result["summary"]
+    assert "frag" not in result["summary"]
+
+
 def test_digest_recording_text_handles_invalid_nfkc_urls() -> None:
     text = json.dumps({"action": "navigate", "url": "https://exa\u2100mple.test/path?token=secret#frag"})
 

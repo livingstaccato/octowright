@@ -109,7 +109,7 @@ def _sanitize_url(url: str) -> str:
         return INVALID_URL
     if not hostname:
         return INVALID_URL if parts.scheme else parts._replace(query="", fragment="").geturl()[:MAX_LABEL_CHARS]
-    netloc = hostname
+    netloc = _sanitize_hostname(hostname)
     try:
         port = parts.port
     except ValueError:
@@ -117,3 +117,7 @@ def _sanitize_url(url: str) -> str:
     if port is not None:
         netloc = f"{netloc}:{port}"
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
+def _sanitize_hostname(hostname: str) -> str:
+    return f"[{hostname}]" if ":" in hostname else hostname
