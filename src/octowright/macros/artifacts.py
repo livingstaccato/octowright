@@ -94,6 +94,7 @@ async def run_macro_artifact(
     args: dict[str, Any] | None = None,
     *,
     capture: bool = True,
+    notes: str | None = None,
     slowmo_ms: int | None = None,
 ) -> dict[str, Any]:
     macro = load_macro(name)
@@ -112,8 +113,9 @@ async def run_macro_artifact(
         runs_dir=runs_dir,
         exports_dir=exports_dir,
     )
-    if manifest_path.exists():
-        manifest = _merge_existing_manifest(manifest_path, manifest)
+    existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
+    if existing_manifest_path is not None:
+        manifest = _merge_existing_manifest(existing_manifest_path, manifest)
     write_artifact_manifest(manifest_path, manifest)
 
     run_dir = store.next_run_dir(artifact_dir)
@@ -152,7 +154,7 @@ async def run_macro_artifact(
         error=error,
         recording_path=recording_path,
     )
-    summary = f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}."
+    summary = notes or f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}."
     paths = write_run_bundle(run_dir=run_dir, result=run_result, evidence=evidence.records, summary=summary)
 
     manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
@@ -193,6 +195,17 @@ async def _capture_screenshot(
         evidence.log_excerpt(path=path, offset=0, preview=f"{exc.__class__.__name__}: {exc}")
         return
     evidence.screenshot(path=path, label=label)
+
+
+def _safe_existing_manifest_path(store: ArtifactStore, manifest_path: Path) -> Path | None:
+    if not manifest_path.exists():
+        return None
+    try:
+        contained_path = store._contained(manifest_path, label="macro artifact manifest")
+        contained_path.relative_to(store.root.resolve())
+    except (OSError, ValueError):
+        return None
+    return contained_path
 
 
 def _manifest_for_plan(
