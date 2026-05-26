@@ -312,7 +312,8 @@ def antigravity_home_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 
 class TestInstallSkillToAntigravity:
     def test_fresh_install_writes_skill_tree(self, antigravity_home_fixture: Path) -> None:
-        """No existing destination → installed=True, skill files copied, plugin.json written."""
+        """No existing destination → installed=True, skill files copied,
+        plugin.json + mcp_config.json written so agy auto-wires the server."""
         result = install_skill_to_antigravity()
         assert result.installed is True
         assert result.updated is False
@@ -322,6 +323,13 @@ class TestInstallSkillToAntigravity:
         dest = antigravity_home_fixture / "plugins" / "octowright"
         assert (dest / "skills" / SKILL_NAME / "SKILL.md").exists()
         assert (dest / "plugin.json").exists()
+        mcp_config = dest / "mcp_config.json"
+        assert mcp_config.exists()
+        import json as _json
+
+        parsed = _json.loads(mcp_config.read_text())
+        assert parsed["mcpServers"]["octowright"]["command"] == "uvx"
+        assert parsed["mcpServers"]["octowright"]["args"] == ["octowright", "serve"]
 
     def test_destination_str_in_result(self, antigravity_home_fixture: Path) -> None:
         """destination field is the str of the resolved plugin directory."""

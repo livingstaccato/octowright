@@ -152,9 +152,10 @@ def install_skill_to_antigravity(*, dry_run: bool = False, force: bool = False) 
     """Install the using-octowright skill and plugin manifest into the agy store.
 
     agy shares ~/.gemini/config/plugins/ as its plugin installation root.
-    Each plugin dir contains plugin.json + a skills/ subdir with one subdir
-    per skill. The mcp_config.json is not written here — users add the MCP
-    server registration to their agent harness config separately.
+    Each plugin dir contains plugin.json + mcp_config.json + a skills/
+    subdir with one subdir per skill. The mcp_config.json registers
+    ``uvx octowright serve`` as the MCP server so agy auto-wires it on
+    plugin install — no manual harness-config step required.
     """
     source = _packaged_skill_path()
     destination = _antigravity_destination()
@@ -207,6 +208,11 @@ def install_skill_to_antigravity(*, dry_run: bool = False, force: bool = False) 
     # Write plugin.json alongside the skills/ subdir so agy plugin validate passes.
     manifest_content = _packaged_manifest("antigravity-plugin.json")
     (destination / "plugin.json").write_text(manifest_content, encoding="utf-8", newline="\n")
+
+    # mcp_config.json wires up the octowright MCP server so agy can spawn
+    # it without the user editing harness config by hand.
+    mcp_config_content = _packaged_manifest("antigravity-mcp-config.json")
+    (destination / "mcp_config.json").write_text(mcp_config_content, encoding="utf-8", newline="\n")
 
     return InstallResult(
         target="antigravity",
