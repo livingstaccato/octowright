@@ -15,6 +15,15 @@ from octowright.server import scenarios as _scenarios
 
 
 @pytest.fixture(autouse=True)
+def _recordings_dir_under_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from octowright import defaults
+
+    rec = tmp_path / "recordings"
+    rec.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(defaults, "RECORDINGS_DIR", rec)
+
+
+@pytest.fixture(autouse=True)
 def _patch_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
     fake_pool = MagicMock()
     fake_spool = MagicMock()
@@ -125,9 +134,28 @@ async def test_scenario_run_as_test_success_and_missing_macro(
 
     monkeypatch.setattr(_scenarios.runner_mod, "_write_junit", _fake_write)
 
-    out = await _scenarios.scenario_run_as_test("sid", out_path=str(tmp_path / "report.xml"))
+    out = await _scenarios.scenario_run_as_test("sid", out_path=str(tmp_path / "recordings" / "report.xml"))
     assert out["total"] == 2
     assert out["passed"] == 1
     assert out["failed"] == 1
     assert out["report_path"].endswith("report.xml")
     assert write_calls and write_calls[0][2] == "scenario"
+
+
+@pytest.mark.anyio
+async def test_scenario_run_as_test_rejects_out_path_outside_recordings(
+    _patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    participants = [{"role": "player", "persona": "cosmo", "instance_id": "i1"}]
+    live = SimpleNamespace(
+        name="demo",
+        spec=SimpleNamespace(verify={"player": "macro_player"}),
+        participants=participants,
+    )
+    _patch_deps["scenario_pool"].get.return_value = live
+    _patch_deps["pool"].get.return_value = object()
+    monkeypatch.setattr(_scenarios.macro_mod, "run_macro", AsyncMock(return_value=None))
+    monkeypatch.setattr(_scenarios.runner_mod, "_write_junit", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="scenario report path"):
+        await _scenarios.scenario_run_as_test("sid", out_path=str(tmp_path / "outside.xml"))

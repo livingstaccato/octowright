@@ -15,6 +15,16 @@ import pytest
 
 from octowright.runner import _default_report_path, _is_test, _write_junit, run_suite
 
+
+@pytest.fixture(autouse=True)
+def _recordings_dir_under_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from octowright import defaults
+
+    rec = tmp_path / "recordings"
+    rec.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(defaults, "RECORDINGS_DIR", rec)
+
+
 # ---------------------------------------------------------------------------
 # _is_test
 # ---------------------------------------------------------------------------
@@ -74,7 +84,7 @@ class TestWriteJunit:
             {"name": "login", "ok": True, "error": None, "duration": 1.2},
             {"name": "checkout", "ok": True, "error": None, "duration": 0.8},
         ]
-        report = tmp_path / "report.xml"
+        report = tmp_path / "recordings" / "report.xml"
         _write_junit(results, report, kind="webkit")
 
         assert report.exists()
@@ -171,7 +181,7 @@ class TestRunSuite:
             result = await run_suite(
                 kind="webkit",
                 tag=None,
-                out_path=str(tmp_path / "out.xml"),
+                out_path=str(tmp_path / "recordings" / "out.xml"),
                 pool=fake_pool,
             )
 
@@ -197,7 +207,7 @@ class TestRunSuite:
             result = await run_suite(
                 kind="webkit",
                 tag=None,
-                out_path=str(tmp_path / "out.xml"),
+                out_path=str(tmp_path / "recordings" / "out.xml"),
                 pool=fake_pool,
             )
 
@@ -225,7 +235,7 @@ class TestRunSuite:
             result = await run_suite(
                 kind="webkit",
                 tag=None,
-                out_path=str(tmp_path / "out.xml"),
+                out_path=str(tmp_path / "recordings" / "out.xml"),
                 pool=fake_pool,
             )
 
@@ -262,7 +272,7 @@ class TestRunSuite:
             result = await run_suite(
                 kind="webkit",
                 tag="smoke",
-                out_path=str(tmp_path / "out.xml"),
+                out_path=str(tmp_path / "recordings" / "out.xml"),
                 pool=fake_pool,
             )
 
@@ -271,7 +281,7 @@ class TestRunSuite:
 
     @pytest.mark.asyncio
     async def test_report_written(self, fake_pool: MagicMock, tmp_path: Path) -> None:
-        report_path = tmp_path / "report.xml"
+        report_path = tmp_path / "recordings" / "report.xml"
         macros_list = [{"name": "t1"}]
         macros_full = {"name": "t1", "description": "[test] simple"}
 
@@ -326,7 +336,7 @@ class TestRunSuite:
             result = await run_suite(
                 kind="webkit",
                 tag=None,
-                out_path=str(tmp_path / "out.xml"),
+                out_path=str(tmp_path / "recordings" / "out.xml"),
                 pool=fake_pool,
                 max_parallel=1,
             )
@@ -368,7 +378,7 @@ class TestRunSuite:
             result = await run_suite(
                 kind="webkit",
                 tag=None,
-                out_path=str(tmp_path / "out.xml"),
+                out_path=str(tmp_path / "recordings" / "out.xml"),
                 pool=fake_pool,
                 max_parallel=2,
             )
@@ -405,7 +415,7 @@ class TestRunSuite:
             result = await run_suite(
                 kind="webkit",
                 tag=None,
-                out_path=str(tmp_path / "out.xml"),
+                out_path=str(tmp_path / "recordings" / "out.xml"),
                 pool=fake_pool,
                 max_parallel=2,
             )
@@ -420,7 +430,7 @@ class TestRunSuite:
         fake_pool: MagicMock,
         tmp_path: Path,
     ) -> None:
-        report_path = tmp_path / "out.xml"
+        report_path = tmp_path / "recordings" / "out.xml"
         macros_list = [{"name": "bad-launch"}, {"name": "ok"}]
 
         async def _launch(**kwargs: Any) -> dict[str, str]:
@@ -465,7 +475,7 @@ class TestRunSuite:
         fake_pool: MagicMock,
         tmp_path: Path,
     ) -> None:
-        report_path = tmp_path / "out.xml"
+        report_path = tmp_path / "recordings" / "out.xml"
         macros_list = [{"name": "close-fails"}]
         macros_full = {"name": "close-fails", "description": "[test] flow"}
         fake_pool.close.side_effect = RuntimeError("close failed")
@@ -506,7 +516,20 @@ class TestRunSuite:
             await run_suite(
                 kind="webkit",
                 tag=None,
-                out_path=str(tmp_path / "out.xml"),
+                out_path=str(tmp_path / "recordings" / "out.xml"),
                 pool=fake_pool,
                 max_parallel=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_out_path_outside_recordings(self, fake_pool: MagicMock, tmp_path: Path) -> None:
+        with (
+            patch("octowright.runner.macro_mod.list_macros", return_value=[]),
+            pytest.raises(ValueError, match="suite report path"),
+        ):
+            await run_suite(
+                kind="webkit",
+                tag=None,
+                out_path=str(tmp_path / "outside.xml"),
+                pool=fake_pool,
             )
