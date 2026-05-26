@@ -1,4 +1,4 @@
-![octowright](https://raw.githubusercontent.com/livingstaccato/octowright/main/docs/images/octowright-banner.png)
+![octowright](https://raw.githubusercontent.com/livingstaccato/octowright/main/docs/images/brand/octowright-banner.png)
 
 # Octowright
 
@@ -60,7 +60,7 @@ into `<absolute-path-to-octowright>`:
 
 Reload your MCP client. The tools appear as `mcp__octowright__browser_launch`, etc.
 
-Verify in 30 seconds: ask your client to launch a webkit browser at `example.com`,
+Verify in 30 seconds: ask your client to launch a webkit browser at `octowright.com`,
 click a link, list browsers, then close. The next section walks through that same
 flow as a tour of what Octowright actually does.
 
@@ -69,8 +69,8 @@ flow as a tour of what Octowright actually does.
 Once installed and registered, ask your MCP client to walk through these in order.
 Each step builds on the previous one and shows you what Octowright actually does.
 
-**1. Open a browser.** Ask: *"launch a webkit browser at example.com"*. The client
-calls `browser_launch kind=webkit url=https://example.com`. A real WebKit window opens
+**1. Open a browser.** Ask: *"launch a webkit browser at octowright.com"*. The client
+calls `browser_launch kind=webkit url=https://octowright.com`. A real WebKit window opens
 on your desktop. The result includes the `instance_id` so the client can target later
 actions.
 
@@ -476,12 +476,12 @@ browser_launch kind=webkit profile=disc-1 url=https://discord.com/login label=ac
 # 2. Snapshot those actions as a macro, telling Octowright which literal values
 #    to treat as parameters:
 macro_save instance_id=<id> name=discord-login \
-           parameters={"email":"me@example.com","password":"hunter2"}
+           parameters={"email":"me@octowright.test","password":"hunter2"}
 
 # 3. Days later, against a fresh instance, replay it with different creds:
 browser_launch kind=webkit profile=disc-2 url=https://discord.com/login label=acct-2
 macro_run instance_id=<new-id> name=discord-login \
-          args={"email":"other@example.com","password":"correcthorsebatterystaple"}
+          args={"email":"other@octowright.test","password":"correcthorsebatterystaple"}
 ```
 
 `macro_list` enumerates saved macros; `macro_delete` removes one. Macros live at
@@ -552,7 +552,7 @@ participants:
   - persona: ops
     kind: firefox
     role: monitor
-    url: https://example.com/monitor
+    url: https://octowright.com/monitor
 fixtures:
   mock_routes:
     - pattern: "**/api/time"
@@ -601,7 +601,7 @@ On Windows, config uses `%APPDATA%\octowright\`, while state and cache use
 
 | Variable | Default | Description |
 |---|---|---|
-| `OCTOWRIGHT_DEFAULT_URL` | `https://example.com` | Fallback `url` when `browser_launch` omits it. |
+| `OCTOWRIGHT_DEFAULT_URL` | `https://octowright.com` | Fallback `url` when `browser_launch` omits it. |
 | `OCTOWRIGHT_RECORDINGS` | POSIX: `${XDG_STATE_HOME:-~/.local/state}/octowright/sessions/`; Windows: `%LOCALAPPDATA%\octowright\State\sessions\` | Where session artifacts land: JSONL action logs, traces, screenshots, videos, downloads, and markdown captures. |
 | `OCTOWRIGHT_CAPTURES_DIR` | POSIX: `${XDG_CACHE_HOME:-~/.cache}/octowright/captures/`; Windows: `%LOCALAPPDATA%\octowright\Cache\captures\` | Where large cached analysis payloads live. |
 | `OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES` | `52428800` | Size cap for cached analysis captures before oldest captures are pruned. |

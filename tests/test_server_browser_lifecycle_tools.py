@@ -23,10 +23,10 @@ async def test_browser_navigate_default_returns_navigate_result(
 ) -> None:
     s = MagicMock()
     _patch_pool_lifecycle.get.return_value = s
-    s.navigate = AsyncMock(return_value={"url": "https://example.com", "title": "Example"})
+    s.navigate = AsyncMock(return_value={"url": "https://octowright.com", "title": "Example"})
 
-    out = await _lifecycle.browser_navigate("i", "https://example.com")
-    assert out == {"url": "https://example.com", "title": "Example"}
+    out = await _lifecycle.browser_navigate("i", "https://octowright.com")
+    assert out == {"url": "https://octowright.com", "title": "Example"}
     assert "brief" not in out
 
 
@@ -37,16 +37,16 @@ async def test_browser_navigate_brief_mode_includes_brief(
 ) -> None:
     s = MagicMock()
     _patch_pool_lifecycle.get.return_value = s
-    s.navigate = AsyncMock(return_value={"url": "https://example.com", "title": "Example"})
+    s.navigate = AsyncMock(return_value={"url": "https://octowright.com", "title": "Example"})
 
     monkeypatch.setattr(
         _lifecycle,
         "browser_brief",
-        AsyncMock(return_value={"url": "https://example.com", "title": "Example", "elements": "..."}),
+        AsyncMock(return_value={"url": "https://octowright.com", "title": "Example", "elements": "..."}),
     )
 
-    out = await _lifecycle.browser_navigate("i", "https://example.com", response_mode="brief")
-    assert out["url"] == "https://example.com"
+    out = await _lifecycle.browser_navigate("i", "https://octowright.com", response_mode="brief")
+    assert out["url"] == "https://octowright.com"
     assert out["title"] == "Example"
     assert out["brief"]["elements"] == "..."
 

@@ -57,11 +57,11 @@ def test_python_export_compiles_with_full_action_set(tmp_path: Path) -> None:
             {
                 "action": "launch",
                 "kind": "webkit",
-                "url": "https://example.com",
+                "url": "https://octowright.com",
                 "headed": True,
                 "viewport": {"w": 1024, "h": 768},
             },
-            {"action": "navigate", "url": "https://example.com/home"},
+            {"action": "navigate", "url": "https://octowright.com/home"},
             {"action": "click", "selector": "#login"},
             {"action": "fill", "selector": "input[name=email]", "value": "a@b.com"},
             {"action": "type", "selector": "input[name=q]", "text": "hi", "delay_ms": 30},
@@ -82,8 +82,8 @@ def test_python_export_compiles_with_full_action_set(tmp_path: Path) -> None:
     assert "async with async_playwright() as p:" in src
     assert "await p.webkit.launch(headless=False)" in src
     assert "viewport={'width': 1024, 'height': 768}" in src
-    assert "await page.goto(_resolve_bundle_url('https://example.com'))" in src  # initial nav from launch
-    assert "await page.goto(_resolve_bundle_url('https://example.com/home'))" in src  # explicit navigate
+    assert "await page.goto(_resolve_bundle_url('https://octowright.com'))" in src  # initial nav from launch
+    assert "await page.goto(_resolve_bundle_url('https://octowright.com/home'))" in src  # explicit navigate
     assert "await page.click('#login')" in src
     assert "await page.fill('input[name=email]', 'a@b.com')" in src
     assert "await page.type('input[name=q]', 'hi', delay=30)" in src
@@ -161,7 +161,7 @@ def test_python_export_uses_default_viewport_when_fluid_recorded(tmp_path: Path)
                 "ts": "2026-01-01T00:00:00Z",
                 "action": "launch",
                 "kind": "chromium",
-                "url": "https://example.com",
+                "url": "https://octowright.com",
                 "viewport": {"mode": "fluid"},
             }
         )
@@ -203,7 +203,7 @@ def test_python_export_prefers_semantic_locator_with_selector_fallback(tmp_path:
         tmp_path / "r.jsonl",
         [
             {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
-            {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+            {"action": "fill", "selector": "#email", "value": "me@octowright.test", "label": "Email"},
         ],
     )
     out = export_script(log, tmp_path / "out.py", fmt="python")
@@ -212,8 +212,8 @@ def test_python_export_prefers_semantic_locator_with_selector_fallback(tmp_path:
     assert _python_compiles(src)
     assert "await page.get_by_role('button', name='Log in').click()" in src
     assert "await page.click('#login')" in src
-    assert "await page.get_by_label('Email').fill('me@example.com')" in src
-    assert "await page.fill('#email', 'me@example.com')" in src
+    assert "await page.get_by_label('Email').fill('me@octowright.test')" in src
+    assert "await page.fill('#email', 'me@octowright.test')" in src
 
 
 def test_python_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
@@ -221,7 +221,7 @@ def test_python_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
         tmp_path / "r.jsonl",
         [
             {"action": "click_by", "role": "button", "role_name": "Log in"},
-            {"action": "fill_by", "value": "me@example.com", "label": "Email"},
+            {"action": "fill_by", "value": "me@octowright.test", "label": "Email"},
         ],
     )
     out = export_script(log, tmp_path / "out.py", fmt="python")
@@ -229,7 +229,7 @@ def test_python_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
 
     assert _python_compiles(src)
     assert "await page.get_by_role('button', name='Log in').click()" in src
-    assert "await page.get_by_label('Email').fill('me@example.com')" in src
+    assert "await page.get_by_label('Email').fill('me@octowright.test')" in src
     assert "page.click(" not in src
     assert "page.fill(" not in src
 
@@ -257,10 +257,10 @@ def test_ts_export_full_action_set(tmp_path: Path) -> None:
             {
                 "action": "launch",
                 "kind": "firefox",
-                "url": "https://example.com",
+                "url": "https://octowright.com",
                 "headed": True,
             },
-            {"action": "navigate", "url": "https://example.com/home"},
+            {"action": "navigate", "url": "https://octowright.com/home"},
             {"action": "click", "selector": "#login"},
             {"action": "fill", "selector": "input[name=email]", "value": "a@b.com"},
             {"action": "type", "selector": "input[name=q]", "text": "hi", "delay_ms": 25},
@@ -279,8 +279,8 @@ def test_ts_export_full_action_set(tmp_path: Path) -> None:
     assert 'import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwright";' in src
     # Engine launch path (lowercase headless boolean — ts is case-sensitive).
     assert "browser = await firefox.launch({ headless: false })" in src
-    assert 'await page.goto(resolveBundleUrl("https://example.com"));' in src  # initial nav
-    assert 'await page.goto(resolveBundleUrl("https://example.com/home"));' in src
+    assert 'await page.goto(resolveBundleUrl("https://octowright.com"));' in src  # initial nav
+    assert 'await page.goto(resolveBundleUrl("https://octowright.com/home"));' in src
     assert 'await page.click("#login");' in src
     assert 'await page.fill("input[name=email]", "a@b.com");' in src
     assert 'await page.type("input[name=q]", "hi", { delay: 25 });' in src
@@ -347,7 +347,7 @@ def test_ts_export_uses_default_viewport_when_fluid_recorded(tmp_path: Path) -> 
                 "ts": "2026-01-01T00:00:00Z",
                 "action": "launch",
                 "kind": "chromium",
-                "url": "https://example.com",
+                "url": "https://octowright.com",
                 "viewport": {"mode": "fluid"},
             }
         )
@@ -379,7 +379,7 @@ def test_ts_export_prefers_semantic_locator_with_selector_fallback(tmp_path: Pat
         tmp_path / "r.jsonl",
         [
             {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
-            {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+            {"action": "fill", "selector": "#email", "value": "me@octowright.test", "label": "Email"},
         ],
     )
     out = export_script(log, tmp_path / "out.ts", fmt="ts")
@@ -387,8 +387,8 @@ def test_ts_export_prefers_semantic_locator_with_selector_fallback(tmp_path: Pat
 
     assert 'await page.getByRole("button", { name: "Log in" }).click();' in src
     assert 'await page.click("#login");' in src
-    assert 'await page.getByLabel("Email").fill("me@example.com");' in src
-    assert 'await page.fill("#email", "me@example.com");' in src
+    assert 'await page.getByLabel("Email").fill("me@octowright.test");' in src
+    assert 'await page.fill("#email", "me@octowright.test");' in src
 
 
 def test_ts_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
@@ -396,14 +396,14 @@ def test_ts_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
         tmp_path / "r.jsonl",
         [
             {"action": "click_by", "role": "button", "role_name": "Log in"},
-            {"action": "fill_by", "value": "me@example.com", "label": "Email"},
+            {"action": "fill_by", "value": "me@octowright.test", "label": "Email"},
         ],
     )
     out = export_script(log, tmp_path / "out.ts", fmt="ts")
     src = out.read_text()
 
     assert 'await page.getByRole("button", { name: "Log in" }).click();' in src
-    assert 'await page.getByLabel("Email").fill("me@example.com");' in src
+    assert 'await page.getByLabel("Email").fill("me@octowright.test");' in src
     assert "page.click(" not in src
     assert "page.fill(" not in src
 

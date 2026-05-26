@@ -70,7 +70,8 @@ POST /api/sessions
     "trace": bool                                // default: false
   }
   → 201 + SessionSummary (identical shape to GET /api/sessions live[] entries)
-  → 400 if `kind` is missing/invalid or body is unparsable JSON
+  → 400 if `kind` is missing/invalid or body is malformed JSON (valid Content-Type, unparsable bytes)
+  → 415 if Content-Type is not `application/json` (per RFC 7231)
   → 500 if `pool.launch()` raises an unexpected error
 
 POST /api/sessions/{id}/navigate
@@ -93,8 +94,14 @@ PUT /api/personas/{name}
   → 404 if no profile.yaml exists for that persona
 ```
 
-All write endpoints accept an empty body as `{}`. Malformed JSON is rejected
-with a 400 + `{"error": "invalid JSON body: ..."}`.
+All write endpoints accept an empty body as `{}`. Request body conventions:
+
+- **Missing/wrong Content-Type for a non-empty body**: 415 Unsupported Media Type +
+  `{"error": "content-type must be application/json for JSON request bodies"}`.
+  A request with a non-empty body must declare `Content-Type: application/json`
+  (per RFC 7231). Empty bodies bypass the Content-Type check and decode to `{}`.
+- **Malformed JSON** (valid Content-Type, unparsable body): 400 Bad Request +
+  `{"error": "invalid JSON body: ..."}`.
 
 ## Type shapes
 

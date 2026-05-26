@@ -28,13 +28,15 @@ async def health_endpoint(_request: Request) -> JSONResponse:
 
 
 def routes() -> list[Route]:
-    out: list[Route] = [Route("/api/health", health_endpoint, methods=["GET"])]
+    out: list[Route] = [
+        # intentionally unguarded — used by liveness probes / load balancers; exposes only {ok, version}
+        Route("/api/health", health_endpoint, methods=["GET"]),
+    ]
     if metrics_enabled():
-        out.append(Route("/api/metrics", metrics_endpoint, methods=["GET"]))
+        out.append(Route("/api/metrics", guard_sensitive_http(metrics_endpoint), methods=["GET"]))
     return out
 
 
-@guard_sensitive_http
 async def metrics_endpoint(_request: Request) -> PlainTextResponse:
     return PlainTextResponse(
         HTTP_METRICS.render_prometheus(),

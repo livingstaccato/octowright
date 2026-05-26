@@ -56,7 +56,7 @@ Octowright's user config directory.
 
 A four-call smoke test that exercises launch, drive, list, and close:
 
-1. Ask your MCP client to call `browser_launch` with `kind=webkit` and `url=https://example.com`.
+1. Ask your MCP client to call `browser_launch` with `kind=webkit` and `url=https://octowright.com`.
 2. Call `browser_click_by` on the link text "More information".
 3. Call `browser_list` and confirm exactly one live instance.
 4. Call `browser_close` with the `instance_id` from step 1.

@@ -38,7 +38,10 @@ class _Stubs:
 def stubs(monkeypatch: pytest.MonkeyPatch) -> _Stubs:
     s = _Stubs()
 
-    async def fake_stdio() -> None:
+    async def fake_stdio(*_args: Any, **_kwargs: Any) -> None:
+        # serve.py now invokes run_stdio_with_notifications(mcp), which
+        # internally would open stdio_server and start the notification
+        # emit loop. Both stub-replacements below cover the call shape.
         await s.stdio_done.wait()
 
     async def fake_http(**kwargs: Any) -> None:
@@ -54,10 +57,22 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> _Stubs:
         s.watchdog_started.set()
         await s.watchdog_done.wait()
 
-    # FastMCP instance — replace its method on the live object.
+    # FastMCP instance — replace its method on the live object so any
+    # caller still going through mcp.run_stdio_async() is also stubbed.
     from octowright.server import _state as _server_state
 
     monkeypatch.setattr(_server_state.mcp, "run_stdio_async", fake_stdio)
+
+    # serve.py now invokes run_stdio_with_notifications(mcp), which opens
+    # a real stdio_server() + emits notifications. Stub at the import
+    # site so the test doesn't actually grab stdin/stdout in its harness.
+    from octowright.cli import serve as _serve_mod
+
+    monkeypatch.setattr(_serve_mod, "_lazy_run_stdio_with_notifications", lambda: fake_stdio, raising=False)
+    # Also patch the module-level reference if serve imported it directly.
+    from octowright.server import mcp_notifications as _mcp_notif_mod
+
+    monkeypatch.setattr(_mcp_notif_mod, "run_stdio_with_notifications", lambda _mcp: fake_stdio())
 
     # Replace the http.serve_app symbol that _run_leader imports.
     from octowright import http as _http_pkg

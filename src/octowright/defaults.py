@@ -18,7 +18,7 @@ from octowright.config_paths import user_cache_dir, user_config_dir, user_state_
 # they load, so this lands before setup_telemetry() runs.
 os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
 
-DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://example.com")
+DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", "https://octowright.com")
 
 DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
 DEFAULT_VIEWPORT_H = int(os.environ.get("OCTOWRIGHT_VIEWPORT_H", "800"))
@@ -66,6 +66,11 @@ LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(_STATE_DIR / "octowr
 # a Codex-defined env var, not OCTOWRIGHT_*; the resolved path is
 # expanduser()'d at consumer-call time so ~ in the env value still works.
 CODEX_HOME = os.environ.get("CODEX_HOME", "~/.codex")
+
+# Antigravity CLI (agy) config root for the skill-distribution copy step.
+# agy shares ~/.gemini/config as its plugin store; override ANTIGRAVITY_HOME
+# to redirect installs to a test tree without touching the user's live config.
+ANTIGRAVITY_HOME = os.environ.get("ANTIGRAVITY_HOME", "~/.gemini/config")
 
 
 def active_profile_raw() -> str:

@@ -266,7 +266,7 @@ def _make_page_with_frames(num_frames: int = 3) -> Any:
     frames = []
     for i in range(num_frames):
         f = MagicMock()
-        f.url = f"https://example.com/frame-{i}"
+        f.url = f"https://octowright.com/frame-{i}"
         f.name = f"frame-{i}"
         frames.append(f)
     page.frames = frames

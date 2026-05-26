@@ -36,7 +36,7 @@ def _stub_session(method_name: str, return_value: object) -> MagicMock:
     session = MagicMock()
     session.log_path = Path("/tmp/test.jsonl")
     session.page = MagicMock()
-    session.page.url = "https://example.com"
+    session.page.url = "https://octowright.com"
     session.page.title = AsyncMock(return_value="Example Title")
 
     # Mock aria_snapshot on page.locator("html")
@@ -172,9 +172,9 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport() -> None
     session.trace = False
     session.har_path = None
     session.user_data_dir = None
-    session.url = "https://example.com/original"
+    session.url = "https://octowright.com/original"
     session.page = MagicMock()
-    session.page.url = "https://example.com/current"
+    session.page.url = "https://octowright.com/current"
     pool._sessions["old-id"] = session
     pool.close = AsyncMock(return_value={"closed": True})
     pool.launch = AsyncMock(return_value={"instance_id": "new-id"})
@@ -184,7 +184,7 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport() -> None
     pool.close.assert_awaited_once_with("old-id")
     pool.launch.assert_awaited_once()
     _, kwargs = pool.launch.call_args
-    assert kwargs["url"] == "https://example.com/current"
+    assert kwargs["url"] == "https://octowright.com/current"
     assert kwargs["kind"] == "chromium"
     assert kwargs["label"] == "player"
     assert kwargs["profile"] == "profile-a"

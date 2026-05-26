@@ -19,6 +19,7 @@ from octowright._tracing import set_attrs, span
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
+from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.launch_helpers import (
     _build_har_kwargs,
     _build_video_kwargs,
@@ -314,11 +315,11 @@ class BrowserPool:
         # cannot interleave in flight. Idempotent: returns None on miss.
         return self._sessions.pop(instance_id, None)
 
-    async def close(self, instance_id: str) -> dict[str, Any]:
-        return await close_browser(self, instance_id)
+    async def close(self, instance_id: str, *, _reason: SessionCloseReason = "agent_close") -> dict[str, Any]:
+        return await close_browser(self, instance_id, _reason=_reason)
 
-    async def close_all(self) -> dict[str, Any]:
-        return await _close_all(self)
+    async def close_all(self, *, _reason: SessionCloseReason = "agent_close") -> dict[str, Any]:
+        return await _close_all(self, _reason=_reason)
 
     async def handoff(
         self,

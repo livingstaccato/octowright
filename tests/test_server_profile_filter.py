@@ -178,3 +178,39 @@ def test_profile_personas_subprocess_isolates_personas() -> None:
     assert set(profiles.PROFILES["personas"]).issubset(names)
     assert "browser_launch" not in names
     assert "macro_save" not in names
+
+
+def test_profiled_fastmcp_honours_explicit_name_override_in_allowlist() -> None:
+    """An MCP tool whose Python `__name__` is NOT in any profile but whose
+    explicit `name=` override IS in the allowlist must still register.
+    Otherwise renaming via `@mcp.tool(name=...)` is a silent profile-filter bypass.
+    """
+    from octowright.server._state import _ProfiledFastMCP
+
+    server = _ProfiledFastMCP("octowright-test", allowed_tools={"public_alias"})
+
+    @server.tool(name="public_alias")
+    async def _internal_handler() -> dict[str, str]:
+        return {"ok": "yes"}
+
+    registered = {tool.name for tool in server._tool_manager.list_tools()}
+    assert "public_alias" in registered
+    assert "_internal_handler" not in registered
+
+
+def test_profiled_fastmcp_filters_out_when_name_override_missing_from_allowlist() -> None:
+    """The inverse: a Python `__name__` that matches the allowlist must NOT
+    rescue a tool whose explicit `name=` override is outside it. The MCP-visible
+    name is the authority.
+    """
+    from octowright.server._state import _ProfiledFastMCP
+
+    server = _ProfiledFastMCP("octowright-test", allowed_tools={"browser_launch"})
+
+    @server.tool(name="hidden_tool")
+    async def browser_launch() -> dict[str, str]:
+        return {"ok": "yes"}
+
+    registered = {tool.name for tool in server._tool_manager.list_tools()}
+    assert "hidden_tool" not in registered
+    assert "browser_launch" not in registered

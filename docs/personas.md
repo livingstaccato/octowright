@@ -116,7 +116,7 @@ was unset on #7" failure mode before any browser launches.
 ```bash
 uv run octowright persona list
 uv run octowright persona show <name>
-uv run octowright persona create <name> --display "Display Name" --url "https://example.com"
+uv run octowright persona create <name> --display "Display Name" --url "https://octowright.com"
 uv run octowright persona delete <name>
 ```
 

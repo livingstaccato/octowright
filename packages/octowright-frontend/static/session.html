@@ -4,11 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>octowright session</title>
+  <link rel="icon" type="image/svg+xml" href="otto.svg">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="page page--session">
   <header class="topbar">
-    <a class="topbar__back" href="/">&larr; dashboard</a>
+    <a class="topbar__brand topbar__brand--link" href="/" title="back to dashboard">
+      <img class="topbar__logo" src="otto.svg" alt="" aria-hidden="true" width="32" height="32">
+      <span>octo<strong>wright</strong></span>
+    </a>
+    <span class="topbar__sep" aria-hidden="true">/</span>
     <h1 class="topbar__title">session debugger</h1>
   </header>
   <main id="app" class="session-shell">

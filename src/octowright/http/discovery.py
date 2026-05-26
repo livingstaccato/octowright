@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from octowright._paths import safe_under
 from octowright._wire_utils import looks_like_binary_text
 from octowright.defaults import DISCOVERY_CACHE_MAX_ENTRIES
 from octowright.http import state
@@ -271,13 +272,17 @@ def _resolve_artifact_path(session_id: str, attr: str) -> Path | None:
     if live is not None:
         live_path = getattr(live, attr, None)
         if live_path is not None:
-            return Path(live_path)
+            candidate = Path(live_path)
+            return candidate if safe_under(candidate, state.RECORDINGS_DIR) else None
     jsonl = _find_recording_for(session_id, state.RECORDINGS_DIR)
     if jsonl is None:
         return None
     artefacts = session_artifact_cache.scan_artifacts(jsonl)
     artefact = artefacts.get(attr)
-    return Path(artefact) if artefact else None
+    if not artefact:
+        return None
+    candidate = Path(artefact)
+    return candidate if safe_under(candidate, state.RECORDINGS_DIR) else None
 
 
 # ---------------------------------------------------------------------------
