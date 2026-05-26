@@ -52,7 +52,7 @@ PLAYGROUND_PORT_ENV = "OCTOWRIGHT_PLAYGROUND_PORT"
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_LOGO_PATH = _REPO_ROOT / "docs" / "images" / "octowright-logo-512.png"
+_LOGO_PATH = _REPO_ROOT / "docs" / "images" / "brand" / "octowright-logo-512.png"
 
 
 def _resolve_port() -> int:
