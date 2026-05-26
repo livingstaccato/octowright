@@ -13,7 +13,9 @@ from octowright.artifacts.models import now_iso
 
 _REDACTED = "<redacted>"
 _SENSITIVE_KEYS = r"(?:password|token|api_key|authorization|cookie|set-cookie)"
+_AUTHORIZATION_KEYS = r"(?:authorization|proxyauthorization|proxy[-_]authorization)"
 _KEY_VALUE_COOKIE_SECRET = re.compile(r"\b(cookie|set-cookie)\s*=\s*([^\r\n]+)", re.IGNORECASE)
+_KEY_VALUE_AUTHORIZATION_SECRET = re.compile(rf"\b({_AUTHORIZATION_KEYS})\s*=\s*([^\r\n]+)", re.IGNORECASE)
 _KEY_VALUE_SECRET = re.compile(rf"\b({_SENSITIVE_KEYS})\s*=\s*([^\s,;]+)", re.IGNORECASE)
 _COOKIE_HEADER_SECRET = re.compile(r"\b(cookie|set-cookie)\s*:\s*([^\r\n]+)", re.IGNORECASE)
 _COLON_SECRET = re.compile(rf"\b({_SENSITIVE_KEYS})\s*:\s*([^\r\n,;]+)", re.IGNORECASE)
@@ -25,6 +27,7 @@ _JSON_SECRET = re.compile(
 
 def redact_preview(preview: str) -> str:
     redacted = _KEY_VALUE_COOKIE_SECRET.sub(rf"\1={_REDACTED}", preview)
+    redacted = _KEY_VALUE_AUTHORIZATION_SECRET.sub(rf"\1={_REDACTED}", redacted)
     redacted = _KEY_VALUE_SECRET.sub(rf"\1={_REDACTED}", redacted)
     redacted = _JSON_SECRET.sub(rf"\1{_REDACTED}\3", redacted)
     redacted = _COOKIE_HEADER_SECRET.sub(rf"\1: {_REDACTED}", redacted)
