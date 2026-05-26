@@ -91,6 +91,31 @@ def test_digest_recording_text_reports_same_first_and_last_url() -> None:
     assert "last_url: https://example.test/path" in result["summary"]
 
 
+def test_digest_recording_text_handles_malformed_url_ports() -> None:
+    text = json.dumps({"action": "navigate", "url": "https://example.test:bad/path?token=secret#frag"})
+
+    result = digest_recording_text(text, max_chars=4000)
+
+    assert "first_url: (invalid-url)" in result["summary"]
+    assert "last_url: (invalid-url)" in result["summary"]
+    assert "token" not in result["summary"]
+    assert "secret" not in result["summary"]
+    assert "frag" not in result["summary"]
+
+
+def test_digest_recording_text_handles_no_host_userinfo_urls() -> None:
+    text = json.dumps({"action": "navigate", "url": "https://user:pass@/path?token=x#frag"})
+
+    result = digest_recording_text(text, max_chars=4000)
+
+    assert "first_url: (invalid-url)" in result["summary"]
+    assert "last_url: (invalid-url)" in result["summary"]
+    assert "user" not in result["summary"]
+    assert "pass" not in result["summary"]
+    assert "token" not in result["summary"]
+    assert "frag" not in result["summary"]
+
+
 def test_digest_macro_uses_fallback_for_non_scalar_action_values() -> None:
     macro = {
         "name": "bad-actions",
