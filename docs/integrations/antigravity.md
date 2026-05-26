@@ -30,10 +30,28 @@ Expected output:
     - hooks       : skipped (not found)
 ```
 
-## Register the MCP server with agy
+## MCP server registration (automatic)
 
-`agy` reads MCP server configuration from `~/.gemini/config/mcp_config.json` (the same
-file Gemini CLI uses). Add the Octowright server entry:
+`octowright skill install --target antigravity` ships an `mcp_config.json` into the
+plugin directory (`~/.gemini/config/plugins/octowright/mcp_config.json`) that registers:
+
+```json
+{
+  "mcpServers": {
+    "octowright": {
+      "command": "uvx",
+      "args": ["octowright", "serve"]
+    }
+  }
+}
+```
+
+This uses `uvx` so no separate `pip install octowright` is needed — `uv` resolves and
+runs the package on demand. If `uvx` isn't on your PATH, install `uv` first
+(`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`).
+
+If you prefer a development-checkout pinned to a specific local path, override
+`mcp_config.json` after install with:
 
 ```json
 {
@@ -46,12 +64,11 @@ file Gemini CLI uses). Add the Octowright server entry:
 }
 ```
 
-Replace `/abs/path/to/octowright` with the actual path to your Octowright checkout.
-
 ## Plugin manifest in the repo
 
-The `.antigravity-plugin/plugin.json` at the repository root lets `agy plugin validate`
-treat the repo itself as a valid plugin source. You can also install directly from the repo:
+The `.antigravity-plugin/` directory at the repo root ships both `plugin.json` and
+`mcp_config.json` so `agy plugin install /path/to/octowright` validates and
+wires up the MCP server in one step:
 
 ```bash
 agy plugin install /path/to/octowright
@@ -76,11 +93,11 @@ mismatch means local drift from the shipped copy).
 
 ## Known limitations vs Claude Code / Codex
 
-- **No MCP server auto-registration.** The install step only copies the skill files and
-  `plugin.json`. You must manually add the `mcpServers` block to
-  `~/.gemini/config/mcp_config.json` (see above).
 - **Shared store with Gemini CLI.** agy uses the same `~/.gemini/config/plugins/` directory
   that Gemini CLI manages. Changes to plugins there may affect both tools.
 - **No hooks support yet.** The agy plugin manifest supports a `hooks.json` but Octowright
   does not currently ship any hooks for agy. Session-start guidance is delivered via the
   `using-octowright` skill instead.
+- **`uvx` required for the default config.** The default `mcp_config.json` uses
+  `uvx octowright serve` for portability. Without `uv` installed, edit `mcp_config.json`
+  to point at your install path directly.
