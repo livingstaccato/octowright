@@ -67,7 +67,7 @@ def extract_frames(
     if fps is not None:
         return _extract_by_fps(ffmpeg, video_path, out_dir, fps)
     else:
-        assert at_times is not None
+        assert at_times is not None  # nosec B101
         return _extract_at_times(ffmpeg, video_path, out_dir, at_times)
 
 
