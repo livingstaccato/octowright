@@ -145,8 +145,10 @@ def test_duplicate_persona_kind_rejected(fresh_scenarios):
         scenarios.load_scenario("dup")
 
 
-def test_unknown_role_rejected(fresh_scenarios):
-    """Typos like ``role: plyer`` would silently fan out to zero targets."""
+def test_unknown_role_warns(fresh_scenarios, caplog):
+    """Typos like ``role: plyer`` would silently fan out to zero targets,
+    so loading logs a warning. Custom roles (recorder, main-site, …) are
+    legitimate and must not raise."""
     scenarios, scen_dir = fresh_scenarios
     (scen_dir / "bad-role.yaml").write_text(
         yaml.safe_dump(
@@ -158,8 +160,9 @@ def test_unknown_role_rejected(fresh_scenarios):
             }
         )
     )
-    with pytest.raises(ValueError, match="unknown role"):
+    with caplog.at_level("WARNING"):
         scenarios.load_scenario("bad-role")
+    assert any("unknown_role" in rec.message or "plyer" in rec.message for rec in caplog.records)
 
 
 def test_resolve_launch_kwargs_defaults(fresh_scenarios, tmp_path):
