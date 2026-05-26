@@ -195,6 +195,79 @@ async def test_run_macro_artifact_writes_bundle(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.asyncio
+async def test_run_macro_artifact_uses_notes_for_summary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage)
+    session = FakeSession(tmp_path)
+
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+        return {"macro": name, "executed": 1, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args={"email": "me@example.com", "password": "secret"},  # pragma: allowlist secret
+        capture=False,
+        notes="Operator verified the login confirmation banner.",
+    )
+
+    assert result["summary"] == "Operator verified the login confirmation banner."
+    summary_text = Path(result["paths"]["summary"]).read_text(encoding="utf-8")
+    assert "Operator verified the login confirmation banner." in summary_text
+    assert "Ran macro login" not in summary_text
+
+
+@pytest.mark.asyncio
+async def test_run_macro_artifact_ignores_symlinked_manifest_outside_recordings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage, macro_artifacts, recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage)
+    session = FakeSession(tmp_path)
+
+    artifact_dir = recordings_dir / "artifacts" / "macros" / "login"
+    artifact_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_manifest = outside / "artifact.json"
+    outside_manifest.write_text(
+        json.dumps(
+            {
+                "artifact_type": "macro",
+                "name": "login",
+                "created_at": "1999-01-01T00:00:00Z",
+                "latest_run": {"run_id": "evil", "path": str(outside)},
+                "metadata": {"evil": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = artifact_dir / "artifact.json"
+    manifest_path.symlink_to(outside_manifest)
+
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+        return {"macro": name, "executed": 1, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args={"email": "me@example.com", "password": "secret"},  # pragma: allowlist secret
+        capture=False,
+    )
+
+    assert not manifest_path.is_symlink()
+    assert json.loads(outside_manifest.read_text(encoding="utf-8"))["metadata"] == {"evil": True}
+    manifest = json.loads(Path(result["paths"]["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["latest_run"] == {"run_id": "run_0001", "path": result["paths"]["run_dir"]}
+    assert "evil" not in manifest["metadata"]
+
+
+@pytest.mark.asyncio
 async def test_run_macro_artifact_records_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
     _write_macro(storage)
