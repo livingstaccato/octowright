@@ -24,12 +24,12 @@ import pytest
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 from starlette.testclient import TestClient
 
 from octowright import proxy_supervisor, singleton
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
-from octowright.http.exposure import guard_sensitive_http, is_loopback_host
+from octowright.http.exposure import guard_sensitive_asgi_app, guard_sensitive_http, is_loopback_host
 from octowright.proxy_supervisor import _leader_url_is_safe, resolve_leader_url
 from octowright.singleton import LeaderInfo
 
@@ -248,3 +248,72 @@ def test_guard_sensitive_http_accepts_when_flag_set_even_for_non_loopback(
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# guard_sensitive_asgi_app (mounted app mirror for /mcp and static mounts)
+# ---------------------------------------------------------------------------
+
+
+def _build_guarded_mount_app(host: str, *, side_effect_get: bool = False) -> Starlette:
+    async def _handler(_request: Request) -> Response:
+        return JSONResponse({"ok": True})
+
+    mounted = Starlette(routes=[Route("/rpc", _handler, methods=["GET", "POST"])])
+    return Starlette(
+        routes=[Mount("/mcp", app=guard_sensitive_asgi_app(mounted, host=host, side_effect_get=side_effect_get))]
+    )
+
+
+def test_guard_sensitive_asgi_app_blocks_cross_origin_post_to_loopback_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(DASHBOARD_REMOTE_ALLOWED_ENV, raising=False)
+    with TestClient(_build_guarded_mount_app("127.0.0.1")) as client:
+        response = client.post(
+            "/mcp/rpc",
+            headers={
+                "origin": "https://attacker.example",
+                "sec-fetch-site": "cross-site",
+                "host": "127.0.0.1:8765",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {"error": "cross-origin dashboard request is blocked"}
+
+
+def test_guard_sensitive_asgi_app_allows_same_origin_post_to_loopback_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(DASHBOARD_REMOTE_ALLOWED_ENV, raising=False)
+    with TestClient(_build_guarded_mount_app("127.0.0.1")) as client:
+        response = client.post(
+            "/mcp/rpc",
+            headers={
+                "origin": "http://testserver",
+                "sec-fetch-site": "same-origin",
+                "host": "testserver",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_guard_sensitive_asgi_app_blocks_cross_origin_get_when_flagged_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(DASHBOARD_REMOTE_ALLOWED_ENV, raising=False)
+    with TestClient(_build_guarded_mount_app("127.0.0.1", side_effect_get=True)) as client:
+        response = client.get(
+            "/mcp/rpc",
+            headers={
+                "origin": "https://attacker.example",
+                "sec-fetch-site": "cross-site",
+                "host": "127.0.0.1:8765",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {"error": "cross-origin dashboard request is blocked"}
