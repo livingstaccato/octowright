@@ -90,6 +90,7 @@ PROFILES: dict[str, list[str]] = {
     "macros": [
         "macro_artifact_list",
         "macro_artifact_plan",
+        "macro_artifact_run",
         "macro_compile",
         "macro_delete",
         "macro_digest",

@@ -153,3 +153,77 @@ def test_macro_digest_from_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
     assert result["truncated"] is False
     assert "Macro login" in result["summary"]
+
+
+class FakeSession:
+    def __init__(self, tmp_path: Path) -> None:
+        self.instance_id = "inst-1"
+        self.log_path = tmp_path / "recording.jsonl"
+        self.log_path.write_text('{"action":"click"}\n', encoding="utf-8")
+        self.page = None
+
+
+@pytest.mark.asyncio
+async def test_run_macro_artifact_writes_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage)
+    session = FakeSession(tmp_path)
+
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+        return {"macro": name, "executed": 4, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args={"email": "me@example.com", "password": "secret"},  # pragma: allowlist secret
+        capture=False,
+    )
+
+    assert result["ok"] is True
+    assert result["run_id"] == "run_0001"
+    assert Path(result["paths"]["result"]).exists()
+    assert Path(result["paths"]["evidence"]).exists()
+    assert Path(result["paths"]["summary"]).exists()
+
+    result_data = json.loads(Path(result["paths"]["result"]).read_text(encoding="utf-8"))
+    assert result_data["args_used"] == {"email": "<redacted>", "password": "<redacted>"}
+
+    manifest = json.loads(Path(result["paths"]["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["latest_run"] == {"run_id": "run_0001", "path": result["paths"]["run_dir"]}
+
+
+@pytest.mark.asyncio
+async def test_run_macro_artifact_records_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage)
+    session = FakeSession(tmp_path)
+
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args={"email": "me@example.com", "password": "secret"},  # pragma: allowlist secret
+        capture=False,
+    )
+
+    assert result["ok"] is False
+    assert Path(result["paths"]["result"]).exists()
+    assert Path(result["paths"]["evidence"]).exists()
+
+    result_data = json.loads(Path(result["paths"]["result"]).read_text(encoding="utf-8"))
+    assert result_data["status"] == "failed"
+    assert result_data["args_used"] == {"email": "<redacted>", "password": "<redacted>"}
+    assert "RuntimeError" in result_data["error"]
+
+    evidence_data = json.loads(Path(result["paths"]["evidence"]).read_text(encoding="utf-8"))
+    assert evidence_data["records"][0]["type"] == "log_excerpt"
+    assert "RuntimeError" in evidence_data["records"][0]["preview"]
+
+    manifest = json.loads(Path(result["paths"]["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["latest_run"] == {"run_id": "run_0001", "path": result["paths"]["run_dir"]}

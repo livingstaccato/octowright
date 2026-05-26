@@ -75,6 +75,26 @@ def macro_artifact_list(name: str | None = None, limit: int = 20) -> dict[str, A
     return macro_artifacts.list_macro_artifacts(name=name, limit=limit)
 
 
+@mcp.tool(structured_output=False, description="Replay a macro and write an artifact bundle with evidence files.")
+async def macro_artifact_run(
+    instance_id: str,
+    name: str,
+    args: dict[str, Any] | None = None,
+    capture: bool = True,
+    slowmo_ms: int | None = None,
+) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    session = pool.get(instance_id)
+    return await macro_artifacts.run_macro_artifact(
+        session=session,
+        name=name,
+        args=args,
+        capture=capture,
+        slowmo_ms=slowmo_ms,
+    )
+
+
 @mcp.tool(structured_output=False, description="Return a redacted digest for a saved macro or recording JSONL path.")
 def macro_digest(name: str | None = None, recording_path: str | None = None, max_chars: int = 4000) -> dict[str, Any]:
     from octowright.macros import artifacts as macro_artifacts
