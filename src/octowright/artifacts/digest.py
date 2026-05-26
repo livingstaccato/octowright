@@ -100,7 +100,10 @@ def _safe_label(value: Any) -> str:
 def _sanitize_url(url: str) -> str:
     if not url:
         return ""
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return INVALID_URL
     hostname = parts.hostname or ""
     if not hostname:
         return INVALID_URL if parts.scheme else parts._replace(query="", fragment="").geturl()[:MAX_LABEL_CHARS]
