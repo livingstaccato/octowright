@@ -13,12 +13,26 @@
     });
   }
 
+  function getCookie(name) {
+    // Filter document.cookie down to just the requested key. localhost shares
+    // cookies across all ports, so dumping the whole jar leaks unrelated test
+    // state and makes integration assertions flaky.
+    const prefix = encodeURIComponent(name) + "=";
+    for (const raw of document.cookie.split(";")) {
+      const c = raw.trim();
+      if (c.startsWith(prefix)) {
+        return decodeURIComponent(c.slice(prefix.length));
+      }
+    }
+    return null;
+  }
+
   function render() {
     const currentKey = key.value;
     result.textContent = JSON.stringify({
       localStorage: localStorage.getItem(currentKey),
       sessionStorage: sessionStorage.getItem(currentKey),
-      cookie: document.cookie || "",
+      cookie: getCookie(currentKey),
     }, null, 2);
   }
 
