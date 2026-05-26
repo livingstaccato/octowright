@@ -158,6 +158,48 @@ def test_write_run_bundle_redacts_log_excerpt_preview(tmp_path: Path) -> None:
     assert "theme=dark" not in evidence_text
 
 
+def test_write_run_bundle_redacts_key_value_cookie_preview_through_line_end(tmp_path: Path) -> None:
+    preview = "cookie=sessionid=abc; csrftoken=raw-token; theme=dark"  # pragma: allowlist secret
+    raw_evidence = [
+        {
+            "id": "ev_001",
+            "type": "log_excerpt",
+            "path": str(tmp_path / "recording.jsonl"),
+            "offset": 12,
+            "length": len(preview),
+            "preview": preview,
+            "ts": "2026-05-26T00:00:00Z",
+        }
+    ]
+    result = new_run_result(
+        run_id="run_0004",
+        status="ok",
+        instance_id="inst-1",
+        macro="login",
+        args_used={},
+        executed=1,
+        skipped=0,
+        error=None,
+        recording_path="/tmp/recording.jsonl",
+    )
+
+    paths = write_run_bundle(
+        run_dir=tmp_path,
+        result=result,
+        evidence=raw_evidence,
+        summary="Captured logs.",
+    )
+
+    evidence_text = paths["evidence"].read_text()
+    evidence_data = json.loads(evidence_text)
+    redacted_preview = evidence_data["records"][0]["preview"]
+
+    assert redacted_preview == "cookie=<redacted>"
+    assert "abc" not in evidence_text
+    assert "raw-token" not in evidence_text
+    assert "theme=dark" not in evidence_text
+
+
 def test_write_run_bundle_uses_atomic_write_text(tmp_path: Path, monkeypatch: Any) -> None:
     calls: list[tuple[Path, str, str]] = []
 
