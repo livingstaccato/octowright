@@ -426,7 +426,9 @@ async def run_sequence(
                 steps.append({**outcome, "ok": True})
             except Exception as exc:
                 all_ok = False
-                steps.append({"macro": name, "ok": False, "error": str(exc), "args_used": step_args})
+                steps.append(
+                    {"macro": name, "ok": False, "error": str(exc), "args_used": _redact_args_for_response(step_args)}
+                )
                 if stop_on_failure:
                     raise
 
