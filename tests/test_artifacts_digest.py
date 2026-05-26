@@ -144,6 +144,23 @@ def test_digest_recording_text_rejects_multi_slash_userinfo_like_relative_urls()
     assert "frag" not in result["summary"]
 
 
+def test_digest_recording_text_rejects_long_relative_userinfo_before_truncation() -> None:
+    user = "user"
+    sensitive_prefix = "sec" + "ret-prefix-token"
+    long_value = sensitive_prefix + ("x" * 80)
+    text = json.dumps({"action": "navigate", "url": f"////{user}:{long_value}@host/path?token=query-secret#frag"})
+
+    result = digest_recording_text(text, max_chars=4000)
+
+    assert "first_url: (invalid-url)" in result["summary"]
+    assert "last_url: (invalid-url)" in result["summary"]
+    assert user not in result["summary"]
+    assert sensitive_prefix not in result["summary"]
+    assert "token" not in result["summary"]
+    assert "query-secret" not in result["summary"]
+    assert "frag" not in result["summary"]
+
+
 def test_digest_recording_text_handles_unclosed_ipv6_urls() -> None:
     text = json.dumps({"action": "navigate", "url": "https://[::1/path?token=secret#frag"})
 
