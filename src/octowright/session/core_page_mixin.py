@@ -323,9 +323,13 @@ class SessionPageMixin(SessionLike):
         # Atomic write via the shared helper — defeats the symlink-swap
         # window between the caller's containment check and Playwright's
         # write. See ``octowright._paths.atomic_write_via_writer`` for the
-        # full reasoning.
+        # full reasoning. The temp sibling has a ``.tmp`` suffix so the
+        # final path suffix is the only signal of image format; pass it
+        # explicitly so Playwright doesn't try to infer from ``.tmp``.
+        img_type = "jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "png"
+
         async def _write(tmp: Path) -> None:
-            await self.page.screenshot(path=str(tmp))
+            await self.page.screenshot(path=str(tmp), type=img_type)
 
         from octowright._paths import atomic_write_via_writer
 
