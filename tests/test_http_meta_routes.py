@@ -65,6 +65,29 @@ def test_persona_update_rejects_bad_yaml(client: TestClient, tmp_path: Path) -> 
     assert "invalid YAML" in r.json()["error"]
 
 
+def test_persona_update_uses_atomic_write_text(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdir = _meta_routes.PROFILES_DIR / "crumpet-cosmo"
+    pdir.mkdir(parents=True)
+    yaml_path = pdir / "profile.yaml"
+    yaml_path.write_text("name: Crumpet Cosmo\n")
+    calls: list[tuple[Path, str]] = []
+
+    def fake_atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8") -> None:
+        calls.append((path, encoding))
+        path.write_text(body, encoding=encoding)
+
+    monkeypatch.setattr(_meta_routes, "atomic_write_text", fake_atomic_write_text)
+
+    r = client.put("/api/personas/crumpet-cosmo", json={"yaml": "name: crumpet-cosmo\n"})
+
+    assert r.status_code == 200
+    assert calls == [(yaml_path, "utf-8")]
+    assert yaml_path.read_text(encoding="utf-8") == "name: crumpet-cosmo\n"
+
+
 def test_persona_detail_rejects_symlink_that_escapes_profiles_dir(
     client: TestClient,
     tmp_path: Path,

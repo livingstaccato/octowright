@@ -19,6 +19,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import octowright.http.state as state
+from octowright._paths import atomic_write_text
 from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
 from octowright.http.exposure import guard_sensitive_http
@@ -260,7 +261,7 @@ async def persona_update_endpoint(request: Request) -> JSONResponse:
     except ValueError as e:
         return JSONResponse({"error": f"invalid persona YAML: {e}"}, status_code=400)
 
-    yaml_path.write_text(yaml_text, encoding="utf-8")
+    atomic_write_text(yaml_path, yaml_text, encoding="utf-8")
     await publish_dashboard_invalidation("personas")
     return JSONResponse({"ok": True, "name": name})
 
