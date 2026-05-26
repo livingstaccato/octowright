@@ -646,7 +646,7 @@ class TestCloseAll:
         pool._sessions["b"] = _fake_session(instance_id="b")
         called: list[str] = []
 
-        async def fake_close(iid: str) -> dict[str, Any]:
+        async def fake_close(iid: str, **_kw: Any) -> dict[str, Any]:
             called.append(iid)
             return {"closed": True}
 
@@ -751,7 +751,7 @@ class TestShutdownPool:
         """close_all called, then pw.stop awaited, then _pw set to None."""
         pool = BrowserPool()
         order: list[str] = []
-        pool.close_all = AsyncMock(side_effect=lambda: order.append("close_all"))  # type: ignore[method-assign]
+        pool.close_all = AsyncMock(side_effect=lambda **_kw: order.append("close_all"))  # type: ignore[method-assign]
         fake_pw = MagicMock()
         fake_pw.stop = AsyncMock(side_effect=lambda: order.append("stop"))
         pool._pw = fake_pw
