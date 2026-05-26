@@ -126,8 +126,8 @@ def _sanitize_hostname(hostname: str) -> str:
 def _sanitize_relative_url(parts: Any) -> str:
     if parts.scheme:
         return INVALID_URL
-    relative_url = parts._replace(query="", fragment="").geturl()[:MAX_LABEL_CHARS]
-    return INVALID_URL if _looks_like_relative_userinfo(relative_url) else relative_url
+    relative_url = parts._replace(query="", fragment="").geturl()
+    return INVALID_URL if _looks_like_relative_userinfo(relative_url) else relative_url[:MAX_LABEL_CHARS]
 
 
 def _looks_like_relative_userinfo(url: str) -> bool:
