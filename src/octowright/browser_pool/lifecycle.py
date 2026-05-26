@@ -149,9 +149,16 @@ async def shutdown_pool(pool: BrowserPool) -> None:
     if pool._pw is not None:
         await pool._pw.stop()
         pool._pw = None
-    for tmpdir in pool._session_profile_dirs.values():
+    # Hold ``_sessions_lock`` across the snapshot-and-clear so a concurrent
+    # ``_resolve_session_dir`` (which mints tmpdirs under the same lock) can't
+    # slip a new entry into the dict between our iteration and ``.clear()``.
+    # Without this, a launch racing shutdown would create a tmpdir that the
+    # cleanup loop has already iterated past, leaking the directory.
+    async with pool._sessions_lock:
+        tmpdirs = list(pool._session_profile_dirs.values())
+        pool._session_profile_dirs.clear()
+    for tmpdir in tmpdirs:
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
         except OSError:
             pass
-    pool._session_profile_dirs.clear()
