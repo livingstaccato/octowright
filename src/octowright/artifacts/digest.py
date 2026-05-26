@@ -105,6 +105,8 @@ def _sanitize_url(url: str) -> str:
     except ValueError:
         return INVALID_URL
     hostname = parts.hostname or ""
+    if parts.netloc and not hostname:
+        return INVALID_URL
     if not hostname:
         return INVALID_URL if parts.scheme else parts._replace(query="", fragment="").geturl()[:MAX_LABEL_CHARS]
     netloc = hostname
