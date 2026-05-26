@@ -27,10 +27,10 @@ def skill() -> None:
 @click.argument("name", default=SKILL_NAME)
 @click.option(
     "--target",
-    type=click.Choice(["codex", "claude", "all"]),
+    type=click.Choice(["codex", "antigravity", "claude", "all"]),
     default="all",
     show_default=True,
-    help="Install destination.",
+    help="Install destination: codex (~/.codex/skills/), antigravity (~/.gemini/config/plugins/), claude (.claude-plugin/), or all.",
 )
 @click.option("--force", is_flag=True, help="Overwrite existing installed assets.")
 @click.option("--dry-run", is_flag=True, help="Print planned operations without writing files.")
@@ -47,7 +47,7 @@ def skill_install(name: str, target: str, force: bool, dry_run: bool, as_json: b
 @click.argument("name", default=SKILL_NAME)
 @click.option(
     "--target",
-    type=click.Choice(["codex", "claude", "all"]),
+    type=click.Choice(["codex", "antigravity", "claude", "all"]),
     default="all",
     show_default=True,
     help="Status destination.",
