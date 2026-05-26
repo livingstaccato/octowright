@@ -20,8 +20,10 @@ def test_install_distributed_assets_dry_run(monkeypatch: pytest.MonkeyPatch, tmp
     from octowright import defaults as _defaults
 
     monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(tmp_path / ".gemini-config"))
     results = install_distributed_assets(target="all", dry_run=True, force=False, cwd=tmp_path)
-    assert len(results) == 3
+    # codex + antigravity + claude + codex_plugin + antigravity_plugin
+    assert len(results) == 5
     assert all(item.reason == "dry_run" for item in results)
 
 
@@ -29,12 +31,14 @@ def test_install_and_status_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path:
     from octowright import defaults as _defaults
 
     monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(tmp_path / ".gemini-config"))
     results = install_distributed_assets(target="all", dry_run=False, force=False, cwd=tmp_path)
-    assert len(results) == 3
+    # codex + antigravity + claude + codex_plugin + antigravity_plugin
+    assert len(results) == 5
     assert all(item.installed for item in results)
 
     status = status_distributed_assets(target="all", cwd=tmp_path)
-    assert len(status) == 3
+    assert len(status) == 5
     assert all(item.installed for item in status)
     assert all(item.hash_match for item in status)
 
@@ -57,6 +61,7 @@ def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_
     from octowright import defaults as _defaults
 
     monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(tmp_path / ".gemini-config"))
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=str(tmp_path)):
         install_result = runner.invoke(
@@ -65,7 +70,8 @@ def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_
         )
         assert install_result.exit_code == 0, install_result.output
         payload = json.loads(install_result.output)
-        assert len(payload) == 3
+        # codex + antigravity + claude + codex_plugin + antigravity_plugin
+        assert len(payload) == 5
         assert all(item["installed"] for item in payload)
         assert all(item["version"] == VERSION for item in payload)
 
@@ -75,7 +81,7 @@ def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_
         )
         assert status_result.exit_code == 0, status_result.output
         status_payload = json.loads(status_result.output)
-        assert len(status_payload) == 3
+        assert len(status_payload) == 5
         assert all(item["installed"] for item in status_payload)
         assert all(item["version"] == VERSION for item in status_payload)
 
@@ -86,5 +92,6 @@ def test_cli_skill_doctor_json(tmp_path: Path) -> None:
         result = runner.invoke(cli, ["skill", "doctor", "--json"])
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
-        assert len(payload) >= 3
+        # 4 packaged-asset checks + 3 repo-dir checks (claude, codex, antigravity) = 7
+        assert len(payload) >= 7
         assert all(item["version"] == VERSION for item in payload)

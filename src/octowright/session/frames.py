@@ -42,7 +42,7 @@ async def switch_frame_impl(
         if frame is None:
             raise RuntimeError(f"no frame with name={name!r}")
     else:
-        assert url_pattern is not None
+        assert url_pattern is not None  # nosec B101
         frame = page.frame(url=re.compile(url_pattern))
         if frame is None:
             raise RuntimeError(f"no frame matching url_pattern={url_pattern!r}")

@@ -46,7 +46,7 @@ def _participant(draw: st.DrawFn) -> dict[str, object]:
     return {
         "persona": draw(_persona_text),
         "kind": draw(st.sampled_from(SUPPORTED_KINDS)),
-        "role": draw(st.sampled_from(["player", "monitor", "spectator", "participant"])),
+        "role": draw(st.sampled_from(["player", "monitor", "spectator"])),
     }
 
 

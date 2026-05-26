@@ -44,7 +44,7 @@ def test_load_yaml_scenario(fresh_scenarios):
             "participants": [
                 {"persona": "cosmo", "kind": "webkit", "role": "player"},
                 {"persona": "ziggy", "kind": "firefox", "role": "player", "startup_macros": ["login"]},
-                {"persona": "mortimer", "kind": "chromium", "role": "monitor", "url": "https://ops.example.com"},
+                {"persona": "mortimer", "kind": "chromium", "role": "monitor", "url": "https://ops.octowright.com"},
             ],
             "fixtures": {"mock_routes": [{"pattern": "**/api/time", "status": 200, "body": "{}"}]},
             "teardown": {"macro": "cleanup"},
@@ -56,7 +56,7 @@ def test_load_yaml_scenario(fresh_scenarios):
     assert len(s.participants) == 3
     assert s.participants[1].persona == "ziggy"
     assert s.participants[1].startup_macros == ["login"]
-    assert s.participants[2].url == "https://ops.example.com"
+    assert s.participants[2].url == "https://ops.octowright.com"
     assert s.fixtures["mock_routes"][0]["pattern"] == "**/api/time"
     assert s.teardown_macro == "cleanup"
     assert s.verify == {"player": "assert-in", "monitor": "assert-up"}
@@ -135,14 +135,34 @@ def test_duplicate_persona_kind_rejected(fresh_scenarios):
             {
                 "name": "dup",
                 "participants": [
-                    {"persona": "a", "kind": "webkit", "role": "x"},
-                    {"persona": "a", "kind": "webkit", "role": "y"},
+                    {"persona": "a", "kind": "webkit", "role": "player"},
+                    {"persona": "a", "kind": "webkit", "role": "monitor"},
                 ],
             }
         )
     )
     with pytest.raises(ValueError, match="duplicate"):
         scenarios.load_scenario("dup")
+
+
+def test_unknown_role_warns(fresh_scenarios, caplog):
+    """Typos like ``role: plyer`` would silently fan out to zero targets,
+    so loading logs a warning. Custom roles (recorder, main-site, …) are
+    legitimate and must not raise."""
+    scenarios, scen_dir = fresh_scenarios
+    (scen_dir / "bad-role.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "bad-role",
+                "participants": [
+                    {"persona": "a", "kind": "webkit", "role": "plyer"},
+                ],
+            }
+        )
+    )
+    with caplog.at_level("WARNING"):
+        scenarios.load_scenario("bad-role")
+    assert any("unknown_role" in rec.message or "plyer" in rec.message for rec in caplog.records)
 
 
 def test_resolve_launch_kwargs_defaults(fresh_scenarios, tmp_path):

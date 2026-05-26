@@ -1,3 +1,5 @@
+> **STATUS: shipped — archived 2026-05-25.** Deliverables landed on `feat/local-playground-integration-final` (PR #52); see commits 6d146a7..a6ff51b for the implementation trail. This file is kept verbatim as the spec snapshot.
+
 # site-octowright-com Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -57,8 +59,8 @@
 - Read: `../site-pyvider-com/static/css/site.css`
 - Read: `demo/tutorial-export/index.json`
 - Read: `demo/tutorial-export/manifest.json`
-- Read: `docs/images/octowright-banner.png`
-- Read: `docs/images/octowright-logo-512.png`
+- Read: `docs/images/brand/octowright-banner.png`
+- Read: `docs/images/brand/octowright-logo-512.png`
 
 ---
 
@@ -570,8 +572,8 @@ git -C ../site-octowright-com commit -m "feat: add curated get started and docs 
 Copy:
 
 ```bash
-cp docs/images/octowright-banner.png ../site-octowright-com/static/img/octowright-banner.png
-cp docs/images/octowright-logo-512.png ../site-octowright-com/static/img/octowright-logo-512.png
+cp docs/images/brand/octowright-banner.png ../site-octowright-com/static/img/octowright-banner.png
+cp docs/images/brand/octowright-logo-512.png ../site-octowright-com/static/img/octowright-logo-512.png
 cp recordings/20260505T181456Z-chromium-0c1d8ccb1f21-octowright-dashboard-selftest-fixed.png ../site-octowright-com/static/img/octowright-dashboard-selftest-fixed.png
 ```
 

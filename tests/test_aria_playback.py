@@ -71,14 +71,14 @@ async def test_aria_first_fill_success(mock_session: MagicMock) -> None:
     action = {
         "action": "fill",
         "selector": "#email",
-        "value": "test@example.com",
+        "value": "test@octowright.test",
         "role": "textbox",
         "role_name": "Email",
     }
 
     await macros._dispatch_simple(mock_session, action)
 
-    mock_session.fill_by.assert_awaited_once_with(role="textbox", role_name="Email", value="test@example.com")
+    mock_session.fill_by.assert_awaited_once_with(role="textbox", role_name="Email", value="test@octowright.test")
     mock_session.fill.assert_not_called()
 
 
@@ -87,7 +87,7 @@ async def test_aria_first_fill_fallback(mock_session: MagicMock) -> None:
     action = {
         "action": "fill",
         "selector": "#legacy-email",
-        "value": "test@example.com",
+        "value": "test@octowright.test",
         "role": "textbox",
         "role_name": "Email",
     }
@@ -97,7 +97,7 @@ async def test_aria_first_fill_fallback(mock_session: MagicMock) -> None:
     await macros._dispatch_simple(mock_session, action)
 
     mock_session.fill_by.assert_awaited_once()
-    mock_session.fill.assert_awaited_once_with(selector="#legacy-email", value="test@example.com")
+    mock_session.fill.assert_awaited_once_with(selector="#legacy-email", value="test@octowright.test")
 
 
 @pytest.mark.anyio

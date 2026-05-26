@@ -76,8 +76,8 @@ class TestValidateScenario:
         s = Scenario(
             name="bad",
             participants=[
-                Participant(persona="dante", kind="webkit", role="a"),
-                Participant(persona="dante", kind="webkit", role="b"),  # same (persona, kind)
+                Participant(persona="dante", kind="webkit", role="player"),
+                Participant(persona="dante", kind="webkit", role="monitor"),  # same (persona, kind)
             ],
         )
         with pytest.raises(ValueError, match="duplicate \\(persona, kind\\)"):
@@ -88,11 +88,23 @@ class TestValidateScenario:
         s = Scenario(
             name="ok",
             participants=[
-                Participant(persona="dante", kind="webkit", role="a"),
-                Participant(persona="dante", kind="firefox", role="b"),
+                Participant(persona="dante", kind="webkit", role="player"),
+                Participant(persona="dante", kind="firefox", role="monitor"),
             ],
         )
         _validate_scenario(s)  # does not raise
+
+    def test_unknown_role_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Typo like ``role: plyer`` would silently match zero players in
+        fan-out, so a warning is logged. Custom roles (recorder, main-site,
+        form, …) are legitimate domain vocabularies — must not raise."""
+        s = Scenario(
+            name="bad",
+            participants=[Participant(persona="dante", kind="webkit", role="plyer")],
+        )
+        with caplog.at_level("WARNING"):
+            _validate_scenario(s)  # does not raise
+        assert any("unknown_role" in rec.message or "plyer" in rec.message for rec in caplog.records)
 
     def test_distinct_personas_in_one_scenario_ok(self) -> None:
         """Multiple distinct persona identities share a single scenario.
@@ -119,8 +131,8 @@ class TestValidateScenario:
         s = Scenario(
             name="two-on-webkit",
             participants=[
-                Participant(persona="dante", kind="webkit", role="a"),
-                Participant(persona="ziggy", kind="webkit", role="b"),
+                Participant(persona="dante", kind="webkit", role="player"),
+                Participant(persona="ziggy", kind="webkit", role="monitor"),
             ],
         )
         _validate_scenario(s)  # does not raise
@@ -220,7 +232,7 @@ class TestLoadPythonScenario:
             "def build():\n"
             "    return Scenario(\n"
             "        name='dyn',\n"
-            "        participants=[Participant(persona='a', kind='webkit', role='r')],\n"
+            "        participants=[Participant(persona='a', kind='webkit', role='player')],\n"
             "    )\n"
         )
         s = load_python_scenario(path)
@@ -246,7 +258,7 @@ class TestLoadPythonScenario:
             "def build():\n"
             "    return Scenario(\n"
             "        name='bad',\n"
-            "        participants=[Participant(persona='a', kind='opera', role='r')],\n"
+            "        participants=[Participant(persona='a', kind='opera', role='player')],\n"
             "    )\n"
         )
         with pytest.raises(ValueError, match="unsupported kind"):
@@ -468,7 +480,7 @@ class TestScenarioPoolGet:
     @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
     async def test_get_unknown_includes_status_hint_when_others_live(self, scenarios_dir: Path) -> None:
-        _write_trivial_scenario(scenarios_dir, "alive", [{"persona": "a", "kind": "webkit", "role": "r"}])
+        _write_trivial_scenario(scenarios_dir, "alive", [{"persona": "a", "kind": "webkit", "role": "player"}])
         spool = ScenarioPool()
         bp = _StubPool()
         await spool.start(name="alive", browser_pool=bp)
@@ -493,8 +505,8 @@ class TestScenarioPoolStart:
             scenarios_dir,
             "rough",
             [
-                {"persona": "a", "kind": "webkit", "role": "r"},
-                {"persona": "b", "kind": "firefox", "role": "r"},
+                {"persona": "a", "kind": "webkit", "role": "player"},
+                {"persona": "b", "kind": "firefox", "role": "player"},
             ],
         )
         bp = _StubPool(
@@ -523,8 +535,8 @@ class TestScenarioPoolStart:
             scenarios_dir,
             "rough2",
             [
-                {"persona": "a", "kind": "webkit", "role": "r"},
-                {"persona": "b", "kind": "firefox", "role": "r"},
+                {"persona": "a", "kind": "webkit", "role": "player"},
+                {"persona": "b", "kind": "firefox", "role": "player"},
             ],
         )
         bp = _StubPool(
@@ -554,8 +566,8 @@ class TestScenarioPoolStop:
             scenarios_dir,
             "stoppy",
             [
-                {"persona": "a", "kind": "webkit", "role": "r"},
-                {"persona": "b", "kind": "firefox", "role": "r"},
+                {"persona": "a", "kind": "webkit", "role": "player"},
+                {"persona": "b", "kind": "firefox", "role": "player"},
             ],
         )
         bp = _StubPool(close_fails={"iid-1"})
@@ -572,7 +584,7 @@ class TestScenarioPoolStop:
         _write_trivial_scenario(
             scenarios_dir,
             "td",
-            [{"persona": "a", "kind": "webkit", "role": "r"}],
+            [{"persona": "a", "kind": "webkit", "role": "player"}],
             teardown={"macro": "doesnt-exist"},
         )
 
@@ -599,7 +611,7 @@ class TestScenarioPoolStop:
         _write_trivial_scenario(
             scenarios_dir,
             "stoppy-once",
-            [{"persona": "a", "kind": "webkit", "role": "r"}],
+            [{"persona": "a", "kind": "webkit", "role": "player"}],
         )
         bp = _StubPool(close_delay=0.01)
         spool = ScenarioPool()
@@ -625,7 +637,7 @@ class TestScenarioPoolRunMacroAndFixtures:
         _write_trivial_scenario(
             scenarios_dir,
             "fxt",
-            [{"persona": "a", "kind": "webkit", "role": "r"}],
+            [{"persona": "a", "kind": "webkit", "role": "player"}],
             fixtures={
                 "dialog_policy": "dismiss",
                 "mock_routes": [{"pattern": "**/api/time", "body": '{"now":"2026"}'}],
@@ -654,7 +666,7 @@ class TestScenarioPoolRunMacroAndFixtures:
         _write_trivial_scenario(
             scenarios_dir,
             "fixture-boom",
-            [{"persona": "a", "kind": "webkit", "role": "r"}],
+            [{"persona": "a", "kind": "webkit", "role": "player"}],
             fixtures={"mock_routes": [{"pattern": "**/boom"}]},
         )
 
@@ -753,7 +765,7 @@ class TestScenarioPoolTail:
     @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
     async def test_tail_handles_missing_log_file(self, scenarios_dir: Path) -> None:
-        _write_trivial_scenario(scenarios_dir, "tnone", [{"persona": "a", "kind": "webkit", "role": "r"}])
+        _write_trivial_scenario(scenarios_dir, "tnone", [{"persona": "a", "kind": "webkit", "role": "player"}])
         bp = _StubPool()  # gives log_path = /tmp/log-0.jsonl, which doesn't exist
         spool = ScenarioPool()
         live = await spool.start(name="tnone", browser_pool=bp)
@@ -767,7 +779,7 @@ class TestScenarioPoolTail:
     async def test_tail_advances_only_past_complete_lines(self, scenarios_dir: Path, tmp_path: Path) -> None:
         log_path = tmp_path / "log.jsonl"
         log_path.write_text('{"action":"x","ts":"1"}\n{"action":"partial",')  # last line has no \n
-        _write_trivial_scenario(scenarios_dir, "tp", [{"persona": "a", "kind": "webkit", "role": "r"}])
+        _write_trivial_scenario(scenarios_dir, "tp", [{"persona": "a", "kind": "webkit", "role": "player"}])
         bp = _StubPool(
             spawn_launched=[
                 {
@@ -797,7 +809,7 @@ class TestScenarioPoolTail:
     async def test_tail_skips_malformed_json_lines(self, scenarios_dir: Path, tmp_path: Path) -> None:
         log_path = tmp_path / "log.jsonl"
         log_path.write_text('{"action":"good"}\nnot-json-at-all\n{"action":"alsogood"}\n')
-        _write_trivial_scenario(scenarios_dir, "tj", [{"persona": "a", "kind": "webkit", "role": "r"}])
+        _write_trivial_scenario(scenarios_dir, "tj", [{"persona": "a", "kind": "webkit", "role": "player"}])
         bp = _StubPool(
             spawn_launched=[
                 {
@@ -836,7 +848,7 @@ async def test_startup_macro_failure_raises_and_cleans_up(
 
     monkeypatch.setattr(_personas, "PROFILES_DIR", pdir)
 
-    _write_trivial_scenario(scenarios_dir, "sm", [{"persona": "a", "kind": "webkit", "role": "r"}])
+    _write_trivial_scenario(scenarios_dir, "sm", [{"persona": "a", "kind": "webkit", "role": "player"}])
 
     from octowright import macros as _macros
 

@@ -80,10 +80,10 @@ class TestParticipantFieldDefaults:
         s = load_yaml_scenario(yaml.safe_dump(doc), "x")
         return s.participants[0]
 
-    def test_role_default_is_participant_string(self) -> None:
-        """Mutation flipping role default ('participant' -> 'x') would survive without this assertion."""
+    def test_role_default_is_player_string(self) -> None:
+        """Mutation flipping role default ('player' -> 'x') would survive without this assertion."""
         p = self._load({"persona": "a", "kind": "webkit"})
-        assert p.role == "participant"
+        assert p.role == "player"
 
     def test_role_explicit_value_preserved(self) -> None:
         p = self._load({"persona": "a", "kind": "webkit", "role": "monitor"})
@@ -273,7 +273,7 @@ class TestValidateScenarioMessages:
         """Error message must include both scenario name and offending kind in repr form."""
         s = Scenario(
             name="my-scenario",
-            participants=[Participant(persona="dante", kind="opera", role="r")],
+            participants=[Participant(persona="dante", kind="opera", role="player")],
         )
         with pytest.raises(ValueError) as exc:
             _validate_scenario(s)
@@ -286,8 +286,8 @@ class TestValidateScenarioMessages:
         s = Scenario(
             name="dup-scn",
             participants=[
-                Participant(persona="dante", kind="webkit", role="a"),
-                Participant(persona="dante", kind="webkit", role="b"),
+                Participant(persona="dante", kind="webkit", role="player"),
+                Participant(persona="dante", kind="webkit", role="monitor"),
             ],
         )
         with pytest.raises(ValueError) as exc:
@@ -383,7 +383,7 @@ class TestLoadScenarioTemplate:
             yaml.safe_dump(
                 {
                     "name": "tpl",
-                    "participants": [{"persona": "{{user}}", "kind": "webkit", "role": "r"}],
+                    "participants": [{"persona": "{{user}}", "kind": "webkit", "role": "player"}],
                 }
             )
         )
@@ -396,7 +396,7 @@ class TestLoadScenarioTemplate:
             yaml.safe_dump(
                 {
                     "name": "tpl2",
-                    "participants": [{"persona": "{{nope}}", "kind": "webkit", "role": "r"}],
+                    "participants": [{"persona": "{{nope}}", "kind": "webkit", "role": "player"}],
                 }
             )
         )
@@ -415,7 +415,7 @@ class TestLoadScenarioTemplate:
             yaml.safe_dump(
                 {
                     "name": "single",
-                    "participants": [{"persona": "{user}", "kind": "webkit", "role": "r"}],
+                    "participants": [{"persona": "{user}", "kind": "webkit", "role": "player"}],
                 }
             )
         )

@@ -167,7 +167,7 @@ async def test_dispatch_macro_call_runs_sub_actions() -> None:
     executed_actions: list[dict[str, Any]] = []
 
     def _load_macro(name: str) -> dict[str, Any]:
-        return {"actions": [{"action": "navigate", "url": "https://example.com"}]}
+        return {"actions": [{"action": "navigate", "url": "https://octowright.com"}]}
 
     def _substitute(actions: list[Any], args: dict[str, Any]) -> list[Any]:
         return actions

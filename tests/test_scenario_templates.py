@@ -40,8 +40,8 @@ def test_load_scenario_template(fresh_scenarios):
             {
                 "name": "Collaboration Template",
                 "participants": [
-                    {"persona": "{{persona_1}}", "kind": "chromium", "role": "editor"},
-                    {"persona": "{{persona_2}}", "kind": "firefox", "role": "viewer"},
+                    {"persona": "{{persona_1}}", "kind": "chromium", "role": "player"},
+                    {"persona": "{{persona_2}}", "kind": "firefox", "role": "spectator"},
                 ],
             }
         )
@@ -53,10 +53,10 @@ def test_load_scenario_template(fresh_scenarios):
     assert len(s.participants) == 2
     assert s.participants[0].persona == "cosmo"
     assert s.participants[0].kind == "chromium"
-    assert s.participants[0].role == "editor"
+    assert s.participants[0].role == "player"
     assert s.participants[1].persona == "ziggy"
     assert s.participants[1].kind == "firefox"
-    assert s.participants[1].role == "viewer"
+    assert s.participants[1].role == "spectator"
 
 
 def test_load_missing_template_raises(fresh_scenarios):
@@ -80,7 +80,7 @@ def test_load_scenario_template_rejects_arg_with_newline(fresh_scenarios):
         yaml.safe_dump(
             {
                 "name": "Inject",
-                "participants": [{"persona": "{{p}}", "kind": "chromium", "role": "editor"}],
+                "participants": [{"persona": "{{p}}", "kind": "chromium", "role": "player"}],
             }
         )
     )
@@ -96,7 +96,7 @@ def test_load_scenario_template_rejects_arg_with_carriage_return(fresh_scenarios
         yaml.safe_dump(
             {
                 "name": "Inject",
-                "participants": [{"persona": "{{p}}", "kind": "chromium", "role": "editor"}],
+                "participants": [{"persona": "{{p}}", "kind": "chromium", "role": "player"}],
             }
         )
     )

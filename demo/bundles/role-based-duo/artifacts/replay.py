@@ -20,14 +20,14 @@ def _resolve_bundle_url(raw: str) -> str:
 
 async def main() -> None:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = await ctx.new_page()
-        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/dashboard.html"))
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/form-flow.html"))
+        browser = await p.chromium.launch(headless=False)
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = await ctx.new_page()
+        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/dashboard.html"))
         await page.wait_for_selector("#name")
         try:
             await page.get_by_role("player", name="Full name").fill("Octavia Wright")
@@ -39,9 +39,9 @@ async def main() -> None:
             await page.click("#next-1")
         await page.wait_for_selector(".step--active #email")
         try:
-            await page.get_by_role("player", name="Email").fill("octavia@example.com")
+            await page.get_by_role("player", name="Email").fill("octavia@octowright.test")
         except Exception:
-            await page.fill("#email", "octavia@example.com")
+            await page.fill("#email", "octavia@octowright.test")
         try:
             await page.get_by_role("player", name="Next").click()
         except Exception:

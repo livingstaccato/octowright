@@ -62,6 +62,13 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: plugin-versions
+        name: plugin manifest versions match VERSION
+        entry: uv run --active python scripts/check_plugin_versions.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: vulture
         name: vulture (dead code, baseline-ratchet)
         entry: uv run --active python scripts/check_vulture.py
