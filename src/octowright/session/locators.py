@@ -34,5 +34,5 @@ def build_locator(
         return target.get_by_label(label)
     if text is not None:
         return target.get_by_text(text)
-    assert test_id is not None
+    assert test_id is not None  # nosec B101
     return target.get_by_test_id(test_id)
