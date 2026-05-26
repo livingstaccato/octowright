@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter
+from octowright.browser_pool.events import SessionClosedEvent
+from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session import BrowserSession
 
 _EVICTED = counter(
@@ -104,6 +106,22 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             kind=session.kind,
             profile=session.profile,
             log_path=str(session.log_path),
+        )
+        # Notify MCP clients that the session is gone. Playwright cannot
+        # reliably distinguish "user closed the window" from "browser process
+        # died", so we use ``user_close`` for both signals that arrive here
+        # (page.close / context.close / browser.disconnected). See the
+        # ``SessionClosedEvent`` docstring for the ``external_disconnect``
+        # reservation.
+        session_event_bus.publish_nowait(
+            SessionClosedEvent(
+                instance_id=instance_id,
+                kind=session.kind,
+                label=session.label,
+                profile=session.profile,
+                reason="user_close",
+                log_path=str(session.log_path),
+            )
         )
         # Best-effort: record an external-close marker in the recording so
         # post-mortem inspection shows the session ended unexpectedly. Both
