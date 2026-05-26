@@ -94,14 +94,17 @@ class TestValidateScenario:
         )
         _validate_scenario(s)  # does not raise
 
-    def test_unknown_role_rejected(self) -> None:
-        """Typo like ``role: plyer`` would silently match zero players in fan-out."""
+    def test_unknown_role_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Typo like ``role: plyer`` would silently match zero players in
+        fan-out, so a warning is logged. Custom roles (recorder, main-site,
+        form, …) are legitimate domain vocabularies — must not raise."""
         s = Scenario(
             name="bad",
             participants=[Participant(persona="dante", kind="webkit", role="plyer")],
         )
-        with pytest.raises(ValueError, match="unknown role 'plyer'"):
-            _validate_scenario(s)
+        with caplog.at_level("WARNING"):
+            _validate_scenario(s)  # does not raise
+        assert any("unknown_role" in rec.message or "plyer" in rec.message for rec in caplog.records)
 
     def test_distinct_personas_in_one_scenario_ok(self) -> None:
         """Multiple distinct persona identities share a single scenario.
