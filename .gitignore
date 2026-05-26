@@ -16,6 +16,8 @@ dist/
 !.ci/
 !.ci/*-baseline.json
 !.ci/pip-audit-allow.txt
+# Junit test outputs from local act / CI runs — not for tracking.
+.ci/*.xml
 node_modules/
 *.actcache
 
