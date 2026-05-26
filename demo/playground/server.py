@@ -51,8 +51,7 @@ DEFAULT_PORT = 7900
 PLAYGROUND_PORT_ENV = "OCTOWRIGHT_PLAYGROUND_PORT"
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_LOGO_PATH = _REPO_ROOT / "docs" / "images" / "brand" / "octowright-logo-512.png"
+_LOGO_PATH = _STATIC_DIR / "otto.svg"
 
 
 def _resolve_port() -> int:
@@ -170,7 +169,7 @@ def _make_app(state: _State) -> Starlette:
     async def get_logo(_request: Request) -> Response:
         if not _LOGO_PATH.exists():
             return Response(status_code=404)
-        return FileResponse(_LOGO_PATH, media_type="image/png")
+        return FileResponse(_LOGO_PATH, media_type="image/svg+xml")
 
     async def post_claim(request: Request) -> JSONResponse:
         body = await request.json()
@@ -245,7 +244,10 @@ def _make_app(state: _State) -> Starlette:
         )
 
     routes = [
-        Route("/assets/octowright-logo-512.png", get_logo, methods=["GET"]),
+        # /otto.svg is also served directly by StaticFiles below; this route
+        # keeps the favicon working when the static mount hasn't matched yet
+        # and provides an explicit content-type for the SVG.
+        Route("/otto.svg", get_logo, methods=["GET"]),
         Route("/favicon.ico", get_logo, methods=["GET"]),
         Route("/api/state", get_state, methods=["GET"]),
         Route("/api/claim", post_claim, methods=["POST"]),
