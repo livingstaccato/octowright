@@ -1,3 +1,5 @@
+> **STATUS: shipped — archived 2026-05-25.** Deliverables landed on `feat/local-playground-integration-final` (PR #52); see commits 6d146a7..a6ff51b for the implementation trail. This file is kept verbatim as the spec snapshot.
+
 # Schema Optimization Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
