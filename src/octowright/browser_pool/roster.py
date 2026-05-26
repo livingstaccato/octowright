@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import set_attrs, span
+from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
 if TYPE_CHECKING:
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-async def close_all(pool: BrowserPool, *, _reason: str = "agent_close") -> dict[str, Any]:
+async def close_all(pool: BrowserPool, *, _reason: SessionCloseReason = "agent_close") -> dict[str, Any]:
     # Close every session concurrently. A single hung browser would otherwise
     # block daemon shutdown if we awaited them serially; gather + return_exceptions
     # lets the rest tear down even if one raises or stalls.
