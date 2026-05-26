@@ -49,5 +49,8 @@ def test_redact_value_for_key_matches_partial_and_exact_keys() -> None:
     assert redact_value_for_key("api.key", "abc") == REDACTED_VALUE
     assert redact_value_for_key("api key", "abc") == REDACTED_VALUE
     assert redact_value_for_key("apiKey", "abc") == REDACTED_VALUE
+    assert redact_value_for_key("private_key", "abc") == REDACTED_VALUE
+    assert redact_value_for_key("privateKey", "abc") == REDACTED_VALUE
+    assert redact_value_for_key("sshPrivateKey", "abc") == REDACTED_VALUE
     assert redact_value_for_key("pwd", "abc") == REDACTED_VALUE
     assert redact_value_for_key("display_name", "Octo") == "Octo"
