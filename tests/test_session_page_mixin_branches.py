@@ -454,8 +454,9 @@ class TestArtifactCalls:
         # the stager handed it a temp sibling, not the final path.
         captured: dict[str, str] = {}
 
-        async def _capture_screenshot(*, path: str) -> None:
+        async def _capture_screenshot(*, path: str, type: str | None = None) -> None:
             captured["path"] = path
+            captured["type"] = type or ""
             # Playwright would create the file at the requested path; mimic
             # that so the os.replace into the final target succeeds.
             Path(path).write_bytes(b"\x89PNG")

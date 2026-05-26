@@ -75,6 +75,7 @@ async def test_concurrent_close_claims_session_once() -> None:
     class FakeSession:
         instance_id = "abc123"
         kind = "webkit"
+        label = None
         profile = None
         log_path = "/tmp/demo.jsonl"
         video_path = None
