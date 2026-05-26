@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 DEFAULT_DIGEST_CHARS = 4000
 MAX_LABEL_CHARS = 80
 MAX_ACTION_COUNTS = 20
+INVALID_URL = "(invalid-url)"
 SAFE_SCALAR_TYPES = (str, int, float, bool)
 
 
@@ -102,8 +103,12 @@ def _sanitize_url(url: str) -> str:
     parts = urlsplit(url)
     hostname = parts.hostname or ""
     if not hostname:
-        return urlsplit(url)._replace(query="", fragment="").geturl()[:MAX_LABEL_CHARS]
+        return INVALID_URL if parts.scheme else parts._replace(query="", fragment="").geturl()[:MAX_LABEL_CHARS]
     netloc = hostname
-    if parts.port is not None:
-        netloc = f"{netloc}:{parts.port}"
+    try:
+        port = parts.port
+    except ValueError:
+        return INVALID_URL
+    if port is not None:
+        netloc = f"{netloc}:{port}"
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
