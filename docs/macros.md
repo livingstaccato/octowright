@@ -10,9 +10,11 @@ dir `${XDG_CONFIG_HOME:-~/.config}/octowright/macros/`, and Windows uses
 
 The macro tools (`macro_save`, `macro_run`, `macro_run_sequence`, `macro_list`,
 `macro_delete`, `macro_lint`, `macro_repair_preview`, `macro_compile`,
-`macro_explain`) belong to the `macros` capability profile. By default every
-tool registers; if your operator runs `octowright serve --profile=core`, add
-`macros` to the spec (`--profile=core,macros`) to keep these visible. See
+`macro_explain`, `macro_artifact_plan`, `macro_artifact_run`,
+`macro_artifact_list`, `macro_digest`, and `macro_export_cli`) belong to the
+`macros` capability profile. By default every tool registers; if your operator
+runs `octowright serve --profile=core`, add `macros` to the spec
+(`--profile=core,macros`) to keep these visible. See
 [getting-started.md](getting-started.md#slimming-the-llm-tool-surface).
 
 ## When to use a macro
@@ -164,6 +166,20 @@ uv run octowright test [path] --kind webkit --tag smoke --out dist/macro-tests.x
 
 Equivalent MCP tool: `run_test_suite`.
 
+## Artifact bundles
+
+Macro artifact tools produce durable, token-light bundles for macro reuse and
+verification. The MCP response returns compact status plus paths; full details
+stay on disk under `RECORDINGS_DIR/artifacts/macros/<macro>/`.
+
+| Tool | Purpose |
+|---|---|
+| `macro_artifact_plan` | Dry-run paths and missing args without replaying. |
+| `macro_artifact_run` | Replay a macro and write `result.json`, `evidence.json`, and `summary.md`. |
+| `macro_artifact_list` | List macro artifact manifests. |
+| `macro_digest` | Return a bounded summary of a macro or recording. |
+| `macro_export_cli` | Export a saved macro as an import-safe Python CLI script. |
+
 ## Watching execution
 
 Every page rendered by a launched browser gets a faint **status pill** injected at
@@ -205,6 +221,11 @@ under `examples/pill-status-demo/` shows this end-to-end.
 | `macro_compile` | Compile YAML macro DSL to canonical JSON; optionally save it. |
 | `macro_delete` | Remove a saved macro file. |
 | `macro_lint` | Static-analysis pass on a saved macro. |
+| `macro_artifact_plan` | Validate a saved macro and write/update its artifact manifest without replaying. |
+| `macro_artifact_run` | Replay a macro and write a run bundle with `result.json`, `evidence.json`, and `summary.md`. |
+| `macro_artifact_list` | List macro artifact manifests, newest first. |
+| `macro_digest` | Return a bounded summary of a saved macro or contained recording path. |
+| `macro_export_cli` | Export a saved macro as an import-safe Python argparse script. |
 | `run_test_suite` | Execute every `[test]`-tagged macro in a directory; emit JUnit XML. |
 
 ## Related
