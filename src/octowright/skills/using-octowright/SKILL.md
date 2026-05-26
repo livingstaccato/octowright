@@ -115,6 +115,41 @@ When an action fails (e.g., selector not found):
 - **NOMINATE**: If a manual workflow repeats, record an Advisor macro observation
   so the user can decide whether it should become a saved macro.
 
+## Session-Close Push Notifications
+
+Octowright sends a JSON-RPC **push notification** to the MCP client whenever a
+browser session leaves the pool — before the agent polls or tries a tool call.
+
+**Method**: `notifications/octowright/session_closed`
+
+**Params**:
+```json
+{
+  "instance_id": "abc123",
+  "kind": "chromium",
+  "label": "user-label-or-null",
+  "profile": "persona-name-or-null",
+  "reason": "agent_close | user_close | external_disconnect | shutdown",
+  "log_path": "/path/to/session.jsonl"
+}
+```
+
+**Reason values**:
+- `agent_close` — you called `browser_close` or `browser_close_all`.
+- `user_close` — the human closed the window (or the browser process exited
+  cleanly). Playwright does not reliably distinguish "user clicked X" from a
+  clean browser process exit, so both arrive as `user_close`.
+- `shutdown` — the daemon is exiting (idle watchdog, SIGTERM, `octowright restart`).
+- `external_disconnect` — reserved for future use; not emitted today.
+
+**What to do when you receive one**:
+1. Remove `instance_id` from any local tracking (open tabs, active macros, etc.).
+2. If the window was **user-facing** (`reason == "user_close"` or `"shutdown"`), surface the closure to the user immediately — they may want to reopen it.
+3. If the window was **agent-internal** and `reason == "user_close"`, reopen it if the task needs it; otherwise abort the task cleanly.
+4. Do **not** call `browser_close` for a session that already closed — it will return a `KeyError`. The notification is the authoritative signal that the session is gone.
+
+**Bridge propagation**: notifications flow through the follower→leader bridge automatically. If your MCP client is a follower, it still receives `notifications/octowright/session_closed` without any extra configuration.
+
 ## When Something's Wrong
 
 Octowright has two distinct "is it working?" surfaces and they fail

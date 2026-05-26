@@ -326,6 +326,7 @@ async def _run_leader(
     from octowright.idle_watchdog import idle_watchdog
     from octowright.server import mcp
     from octowright.server._state import pool, scenario_pool
+    from octowright.server.mcp_notifications import run_stdio_with_notifications
 
     grace = idle_grace if idle_grace is not None else IDLE_GRACE_SECONDS
     bound_host = http_host or HTTP_HOST
@@ -337,7 +338,7 @@ async def _run_leader(
         info = _sn.make_leader_info(host, port)
         _sn.write_lock(info)
 
-    mcp_task = _asyncio.create_task(mcp.run_stdio_async(), name="octowright.mcp")
+    mcp_task = _asyncio.create_task(run_stdio_with_notifications(mcp), name="octowright.mcp")
     sidecars: list[_asyncio.Task[object]] = []
 
     if not no_http:
@@ -375,7 +376,6 @@ async def _run_leader(
     discoverable = not no_http and not no_singleton
 
     # Signal handlers: see _install_leader_signal_handlers for rationale.
-
     loop = _asyncio.get_running_loop()
     installed_signals, installed_signal_handlers = _install_leader_signal_handlers(loop, mcp_task, discoverable)
 

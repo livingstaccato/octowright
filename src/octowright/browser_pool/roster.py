@@ -19,12 +19,12 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-async def close_all(pool: BrowserPool) -> dict[str, Any]:
+async def close_all(pool: BrowserPool, *, _reason: str = "agent_close") -> dict[str, Any]:
     # Close every session concurrently. A single hung browser would otherwise
     # block daemon shutdown if we awaited them serially; gather + return_exceptions
     # lets the rest tear down even if one raises or stalls.
     ids = [session.instance_id for session in pool.iter_sessions()]
-    results = await asyncio.gather(*(pool.close(iid) for iid in ids), return_exceptions=True)
+    results = await asyncio.gather(*(pool.close(iid, _reason=_reason) for iid in ids), return_exceptions=True)
     for iid, result in zip(ids, results, strict=True):
         if isinstance(result, BaseException):
             log.warning("octowright.browser.close_all_failed", instance_id=iid, error=repr(result))
