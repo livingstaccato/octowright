@@ -6,15 +6,18 @@
 from __future__ import annotations
 
 import json
+import traceback
 from pathlib import Path
 from typing import Any
 
+import octowright.macros as macro_mod
 from octowright.artifacts.digest import digest_macro, digest_recording_text
-from octowright.artifacts.models import new_manifest
+from octowright.artifacts.evidence import EvidenceBuilder
+from octowright.artifacts.models import new_manifest, new_run_result
 from octowright.artifacts.paths import ArtifactStore
 from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.redaction import redact_mapping
-from octowright.artifacts.reports import write_artifact_manifest
+from octowright.artifacts.reports import write_artifact_manifest, write_run_bundle
 from octowright.macros.storage import load_macro, macro_path
 
 
@@ -83,6 +86,113 @@ def macro_digest(
     result = digest_recording_text(path.read_text(encoding="utf-8"), max_chars=max_chars)
     result["source"] = {"type": "recording", "path": str(path)}
     return result
+
+
+async def run_macro_artifact(
+    session: Any,
+    name: str,
+    args: dict[str, Any] | None = None,
+    *,
+    capture: bool = True,
+    slowmo_ms: int | None = None,
+) -> dict[str, Any]:
+    macro = load_macro(name)
+    args_used = dict(args or {})
+    store = ArtifactStore()
+    artifact_dir = store.macro_dir(name)
+    runs_dir = artifact_dir / "runs"
+    exports_dir = artifact_dir / "exports"
+    manifest_path = artifact_dir / "artifact.json"
+    manifest = _manifest_for_plan(
+        name=name,
+        macro=macro,
+        args_used=args_used,
+        missing_args=_missing_args(macro, args_used),
+        artifact_dir=artifact_dir,
+        runs_dir=runs_dir,
+        exports_dir=exports_dir,
+    )
+    if manifest_path.exists():
+        manifest = _merge_existing_manifest(manifest_path, manifest)
+    write_artifact_manifest(manifest_path, manifest)
+
+    run_dir = store.next_run_dir(artifact_dir)
+    evidence = EvidenceBuilder()
+    await _capture_screenshot(session=session, run_dir=run_dir, evidence=evidence, label="before", enabled=capture)
+
+    status = "ok"
+    error: str | None = None
+    executed = 0
+    skipped = 0
+    try:
+        replay = await macro_mod.run_macro(session=session, name=name, args=args_used, slowmo_ms=slowmo_ms)
+        if isinstance(replay, dict):
+            executed = int(replay.get("executed", 0))
+            skipped = int(replay.get("skipped", 0))
+    except Exception as exc:  # Return artifact paths to MCP callers even when replay fails.
+        status = "failed"
+        error = f"{exc.__class__.__name__}: {exc}"
+        evidence.log_excerpt(
+            path=Path(getattr(session, "log_path", run_dir / "replay.jsonl")),
+            offset=0,
+            preview=traceback.format_exc(limit=8),
+        )
+
+    await _capture_screenshot(session=session, run_dir=run_dir, evidence=evidence, label="after", enabled=capture)
+
+    recording_path = str(getattr(session, "log_path", "")) or None
+    run_result = new_run_result(
+        run_id=run_dir.name,
+        status=status,
+        instance_id=str(getattr(session, "instance_id", "")),
+        macro=name,
+        args_used=args_used,
+        executed=executed,
+        skipped=skipped,
+        error=error,
+        recording_path=recording_path,
+    )
+    summary = f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}."
+    paths = write_run_bundle(run_dir=run_dir, result=run_result, evidence=evidence.records, summary=summary)
+
+    manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
+    write_artifact_manifest(manifest_path, manifest)
+
+    return {
+        "ok": status == "ok",
+        "macro": name,
+        "run_id": run_dir.name,
+        "summary": summary,
+        "paths": {
+            "run_dir": str(run_dir),
+            "manifest": str(manifest_path),
+            "summary": str(paths["summary"]),
+            "evidence": str(paths["evidence"]),
+            "result": str(paths["result"]),
+        },
+    }
+
+
+async def _capture_screenshot(
+    *,
+    session: Any,
+    run_dir: Path,
+    evidence: EvidenceBuilder,
+    label: str,
+    enabled: bool,
+) -> None:
+    if not enabled or getattr(session, "page", None) is None:
+        return
+    screenshot = getattr(session, "screenshot", None)
+    if screenshot is None:
+        return
+    path = run_dir / "screenshots" / f"{label}.png"
+    try:
+        await screenshot(path)
+    except Exception as exc:  # Best-effort evidence must not hide macro results.
+        evidence.log_excerpt(path=path, offset=0, preview=f"{exc.__class__.__name__}: {exc}")
+        return
+    evidence.screenshot(path=path, label=label)
 
 
 def _manifest_for_plan(
