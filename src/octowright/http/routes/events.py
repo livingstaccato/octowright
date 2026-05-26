@@ -104,7 +104,7 @@ async def session_events(request: Request) -> JSONResponse:
     since, err = _parse_since(request)
     if err is not None:
         return err
-    assert since is not None  # narrow for type-checker
+    assert since is not None  # nosec B101  # narrow for type-checker
     # _tail_jsonl opens + seeks + reads the JSONL synchronously; running it on
     # the event loop blocks every other request and WS push for the duration.
     payload = await asyncio.to_thread(_tail_jsonl, log_path, since)
@@ -152,7 +152,7 @@ async def session_console(request: Request) -> JSONResponse:
     since, err = _parse_since(request)
     if err is not None:
         return err
-    assert since is not None  # narrow for type-checker
+    assert since is not None  # nosec B101  # narrow for type-checker
 
     live = _live_session_or_none(sid)
     if live is not None:
@@ -185,7 +185,7 @@ async def session_downloads(request: Request) -> JSONResponse:
     since, err = _parse_since(request)
     if err is not None:
         return err
-    assert since is not None
+    assert since is not None  # nosec B101
 
     live = _live_session_or_none(sid)
     if live is not None:
