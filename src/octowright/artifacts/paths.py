@@ -28,7 +28,7 @@ class ArtifactStore:
         self.root = self.recordings_dir / "artifacts"
 
     def _contained(self, path: Path, *, label: str) -> Path:
-        return reject_unsafe_path(path, self.root, label=label)
+        return reject_unsafe_path(path, self.recordings_dir, label=label)
 
     def macro_dir(self, name: str) -> Path:
         target = self.root / "macros" / slug(name)
