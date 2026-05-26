@@ -89,6 +89,7 @@ artifacts = [
     "src/octowright/server/frontend/*.css",
     "src/octowright/server/frontend/*.js",
     "src/octowright/server/frontend/*.js.map",
+    "src/octowright/server/frontend/*.svg",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -122,6 +123,7 @@ artifacts = [
     "src/octowright/server/frontend/*.css",
     "src/octowright/server/frontend/*.js",
     "src/octowright/server/frontend/*.js.map",
+    "src/octowright/server/frontend/*.svg",
 ]
 
 [dependency-groups]
@@ -169,6 +171,7 @@ addopts = [
 markers = [
     "live_browser: tests that require real browser engines installed",
     "engine_matrix: tests that exercise chromium/firefox/webkit matrices",
+    "integration_local: tests that run against the local demo playground server",
 ]
 filterwarnings = [
     "ignore:websockets\\.legacy is deprecated;.*:DeprecationWarning:websockets\\.legacy",

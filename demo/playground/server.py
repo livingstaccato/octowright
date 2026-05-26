@@ -3,9 +3,9 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Tiny Starlette app that backs the demo playground.
+"""Starlette app that backs the demo playground/test range.
 
-Two responsibilities:
+Three responsibilities:
 
 1. **Static serve** the playground HTML/CSS/JS so all demo bundles can target
    ``http://127.0.0.1:7900/<page>.html``.
@@ -14,6 +14,9 @@ Two responsibilities:
    This is what makes "9 browsers visibly coordinating" actually visible on
    video — without shared state, each window does its own thing and the
    parallelism doesn't read.
+3. **Deterministic browser-feature targets** for internal smoke tests and
+   demos: dialogs, popups, frames, fetches, downloads, storage, and outbound
+   links.
 
 The server resets state on every startup so recordings are reproducible.
 No persistence; no auth; loopback-only by default. If you need a different
@@ -40,7 +43,7 @@ from typing import Any
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -48,6 +51,7 @@ DEFAULT_PORT = 7900
 PLAYGROUND_PORT_ENV = "OCTOWRIGHT_PLAYGROUND_PORT"
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+_LOGO_PATH = _STATIC_DIR / "otto.svg"
 
 
 def _resolve_port() -> int:
@@ -67,6 +71,7 @@ class _State:
       or a colour string claimed by one of the canvas-demo participants.
     * **form steps** — a list of step events written by the form-flow page and
       streamed to the monitor dashboard.
+    * **event log** — a shared status stream for the showcase/test-range pages.
 
     Every mutation pushes an event to every connected SSE subscriber. The
     payload shape is intentionally simple so the playground HTML can render it
@@ -78,11 +83,18 @@ class _State:
     def __init__(self) -> None:
         self.canvas: list[list[str | None]] = [[None] * self.GRID_SIZE for _ in range(self.GRID_SIZE)]
         self.form_steps: list[dict[str, Any]] = []
+        self.events: list[dict[str, str]] = []
+        self.downloads_served = 0
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._lock = asyncio.Lock()
 
     def snapshot(self) -> dict[str, Any]:
-        return {"canvas": self.canvas, "form_steps": list(self.form_steps)}
+        return {
+            "canvas": self.canvas,
+            "form_steps": list(self.form_steps),
+            "events": list(self.events),
+            "downloads_served": self.downloads_served,
+        }
 
     async def claim_tile(self, row: int, col: int, colour: str, claimed_by: str) -> dict[str, Any]:
         if not 0 <= row < self.GRID_SIZE or not 0 <= col < self.GRID_SIZE:
@@ -107,10 +119,26 @@ class _State:
         await self._broadcast(event)
         return event
 
+    async def append_event(self, source: str, kind: str, message: str) -> dict[str, Any]:
+        entry = {"source": source, "kind": kind, "message": message}
+        async with self._lock:
+            self.events.append(entry)
+            self.events = self.events[-50:]
+        event = {"event": "log_event", **entry}
+        await self._broadcast(event)
+        return event
+
+    async def note_download(self, filename: str) -> None:
+        async with self._lock:
+            self.downloads_served += 1
+        await self.append_event("download-bay", "download", f"File ready: {filename}")
+
     async def reset(self) -> None:
         async with self._lock:
             self.canvas = [[None] * self.GRID_SIZE for _ in range(self.GRID_SIZE)]
             self.form_steps = []
+            self.events = []
+            self.downloads_served = 0
         await self._broadcast({"event": "reset"})
 
     async def subscribe(self) -> AsyncIterator[dict[str, Any]]:
@@ -138,6 +166,11 @@ def _make_app(state: _State) -> Starlette:
     async def get_state(_request: Request) -> JSONResponse:
         return JSONResponse(state.snapshot())
 
+    async def get_logo(_request: Request) -> Response:
+        if not _LOGO_PATH.exists():
+            return Response(status_code=404)
+        return FileResponse(_LOGO_PATH, media_type="image/svg+xml")
+
     async def post_claim(request: Request) -> JSONResponse:
         body = await request.json()
         row = int(body["row"])
@@ -158,6 +191,43 @@ def _make_app(state: _State) -> Starlette:
         event = await state.append_form_step(step, label, value)
         return JSONResponse(event)
 
+    async def post_event(request: Request) -> JSONResponse:
+        body = await request.json()
+        event = await state.append_event(
+            source=str(body.get("source", "playground")),
+            kind=str(body.get("kind", "event")),
+            message=str(body.get("message", "event recorded")),
+        )
+        return JSONResponse(event)
+
+    async def get_ping(_request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True, "service": "octowright-playground"})
+
+    async def post_echo(request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True, "echo": await request.json()})
+
+    async def get_error(_request: Request) -> JSONResponse:
+        return JSONResponse({"ok": False, "error": "intentional playground error"}, status_code=418)
+
+    async def get_delay(request: Request) -> JSONResponse:
+        raw_ms = request.query_params.get("ms", "250")
+        try:
+            delay_ms = max(0, min(int(raw_ms), 2000))
+        except ValueError:
+            delay_ms = 250
+        await asyncio.sleep(delay_ms / 1000)
+        return JSONResponse({"ok": True, "delay_ms": delay_ms})
+
+    async def get_download_report(_request: Request) -> Response:
+        filename = "octowright-report.csv"
+        await state.note_download(filename)
+        csv = "browser,action,status\nchromium,launch,ok\nfirefox,navigate,ok\nwebkit,download,ready\n"
+        return Response(
+            csv,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     async def post_reset(_request: Request) -> Response:
         await state.reset()
         return Response(status_code=204)
@@ -174,9 +244,20 @@ def _make_app(state: _State) -> Starlette:
         )
 
     routes = [
+        # /otto.svg is also served directly by StaticFiles below; this route
+        # keeps the favicon working when the static mount hasn't matched yet
+        # and provides an explicit content-type for the SVG.
+        Route("/otto.svg", get_logo, methods=["GET"]),
+        Route("/favicon.ico", get_logo, methods=["GET"]),
         Route("/api/state", get_state, methods=["GET"]),
         Route("/api/claim", post_claim, methods=["POST"]),
         Route("/api/form-step", post_form_step, methods=["POST"]),
+        Route("/api/event", post_event, methods=["POST"]),
+        Route("/api/ping", get_ping, methods=["GET"]),
+        Route("/api/echo", post_echo, methods=["POST"]),
+        Route("/api/error", get_error, methods=["GET"]),
+        Route("/api/delay", get_delay, methods=["GET"]),
+        Route("/api/download/report.csv", get_download_report, methods=["GET"]),
         Route("/api/reset", post_reset, methods=["POST"]),
         Route("/api/events", sse_events, methods=["GET"]),
         Mount("/", app=StaticFiles(directory=str(_STATIC_DIR), html=True), name="static"),

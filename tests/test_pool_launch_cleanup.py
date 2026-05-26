@@ -107,7 +107,7 @@ async def test_launch_failure_closes_context_browser_and_recorder(
     monkeypatch.setattr("octowright.browser_pool.launch_pipeline.Recorder", fake_recorder)
 
     with pytest.raises(RuntimeError):
-        await pool.launch(kind="chromium", url="https://example.com", headed=False)
+        await pool.launch(kind="chromium", url="https://octowright.com", headed=False)
 
     assert context.closed is True
     assert browser.closed is True

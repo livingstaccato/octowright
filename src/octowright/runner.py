@@ -14,7 +14,9 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright import defaults
 from octowright import macros as macro_mod
+from octowright._paths import reject_unsafe_path
 from octowright.mcp_types import TestSuiteCaseResult, TestSuiteResult
 
 log = get_logger(__name__)
@@ -130,6 +132,7 @@ async def run_suite(
     failed = len(results) - passed
 
     report_path = Path(out_path) if out_path else _default_report_path()
+    report_path = reject_unsafe_path(report_path, defaults.RECORDINGS_DIR, label="suite report path")
     _write_junit(results, report_path, kind=kind)
 
     log.info(

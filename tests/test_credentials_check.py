@@ -209,8 +209,10 @@ def test_check_credentials_empty_persona_has_no_credentials(monkeypatch: pytest.
     persona = _persona({})
     report = _personas.check_credentials(persona)
     assert report["checked"] == []
-    # No creds declared → ok is False (nothing to confirm), but summary says so.
-    assert report["ok"] is False
+    # No creds declared → nothing to verify → not a failure. The summary
+    # already says "declares no credentials" so callers can disambiguate
+    # "ok: nothing to check" from "ok: all checks passed".
+    assert report["ok"] is True
     assert "no credentials" in report["summary"]
 
 

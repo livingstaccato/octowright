@@ -68,7 +68,7 @@ const sessions: SessionListResponse = {
       kind: "chromium",
       label: "live one",
       profile: null,
-      url: "https://example.com",
+      url: "https://octowright.com",
       started_at: "2026-04-24T13:00:00Z",
       live: true,
       log_path: "x",

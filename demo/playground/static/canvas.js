@@ -70,6 +70,15 @@
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ row, col, colour, claimed_by: role }),
     });
+    await fetch("/api/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        source: "shared-canvas",
+        kind: "canvas",
+        message: `${role} claimed tile ${row},${col}`,
+      }),
+    });
   }
 
   function connectSSE() {
@@ -83,6 +92,7 @@
           applyTile(event.row, event.col, event.colour);
         } else if (event.event === "reset") {
           renderGrid();
+          counter.textContent = "0";
         }
       } catch {
         /* ignore malformed frames */

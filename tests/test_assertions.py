@@ -32,13 +32,13 @@ def mock_session(tmp_path: Path) -> BrowserSession:
     # Build a BrowserSession around an AsyncMock page
     page = AsyncMock()
     # default behavior for tests that don't override
-    page.url = "https://example.com/path"
+    page.url = "https://octowright.com/path"
 
     session = BrowserSession(
         instance_id="test",
         kind="chromium",
         label="test-label",
-        url="https://example.com",
+        url="https://octowright.com",
         page=page,
         context=MagicMock(),
         browser=MagicMock(),
@@ -55,42 +55,42 @@ def mock_session(tmp_path: Path) -> BrowserSession:
 
 @pytest.mark.anyio
 async def test_check_url_regex_match(mock_session: BrowserSession) -> None:
-    mock_session.page.url = "https://example.com/dashboard"
-    actual = await mock_session.expect_url(r"example\.com/dash", "regex")
-    assert actual == "https://example.com/dashboard"
+    mock_session.page.url = "https://octowright.com/dashboard"
+    actual = await mock_session.expect_url(r"octowright\.com/dash", "regex")
+    assert actual == "https://octowright.com/dashboard"
 
 
 @pytest.mark.anyio
 async def test_check_url_regex_mismatch(mock_session: BrowserSession) -> None:
-    mock_session.page.url = "https://example.com/other"
+    mock_session.page.url = "https://octowright.com/other"
     with pytest.raises(RuntimeError, match="regex"):
-        await mock_session.expect_url(r"example\.com/dash", "regex")
+        await mock_session.expect_url(r"octowright\.com/dash", "regex")
 
 
 @pytest.mark.anyio
 async def test_check_url_equals_match(mock_session: BrowserSession) -> None:
-    mock_session.page.url = "https://example.com/exact"
-    actual = await mock_session.expect_url("https://example.com/exact", "equals")
-    assert actual == "https://example.com/exact"
+    mock_session.page.url = "https://octowright.com/exact"
+    actual = await mock_session.expect_url("https://octowright.com/exact", "equals")
+    assert actual == "https://octowright.com/exact"
 
 
 @pytest.mark.anyio
 async def test_check_url_equals_mismatch(mock_session: BrowserSession) -> None:
-    mock_session.page.url = "https://example.com/other"
+    mock_session.page.url = "https://octowright.com/other"
     with pytest.raises(RuntimeError, match="equals"):
-        await mock_session.expect_url("https://example.com/exact", "equals")
+        await mock_session.expect_url("https://octowright.com/exact", "equals")
 
 
 @pytest.mark.anyio
 async def test_check_url_contains_match(mock_session: BrowserSession) -> None:
-    mock_session.page.url = "https://example.com/path?q=1"
+    mock_session.page.url = "https://octowright.com/path?q=1"
     actual = await mock_session.expect_url("/path", "contains")
     assert "/path" in actual
 
 
 @pytest.mark.anyio
 async def test_check_url_contains_mismatch(mock_session: BrowserSession) -> None:
-    mock_session.page.url = "https://example.com/other"
+    mock_session.page.url = "https://octowright.com/other"
     with pytest.raises(RuntimeError, match="contains"):
         await mock_session.expect_url("/dashboard", "contains")
 

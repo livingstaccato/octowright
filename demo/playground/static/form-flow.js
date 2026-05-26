@@ -25,8 +25,19 @@
     if (!res.ok) {
       status.textContent = `step ${step} failed: ${res.status}`;
       status.classList.remove("status--success");
+      status.classList.add("status--error");
       return false;
     }
+    await fetch("/api/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        source: "form-flow",
+        kind: "form",
+        message: `step ${step} posted: ${label}`,
+      }),
+    });
+    status.classList.remove("status--error");
     return true;
   }
 

@@ -54,7 +54,7 @@ uv run octowright test           # run the JSONL-driven test suite (CI-friendly)
 1. **Browser** — One Playwright instance (one engine, one window). Has `instance_id`, records to JSONL.
 2. **Profile** — Persistent on-disk state (`~/.config/octowright/profiles/<persona>/<kind>/`). Survives close/relaunch.
 3. **Persona** — Named identity (display name, default URL, credentials). Owns profiles across engines.
-4. **Scenario** — Pre-declared group of personas launched together with roles (`player`/`monitor`/`spectator`), fixtures, and verify macros for testing.
+4. **Scenario** — Pre-declared group of personas launched together with roles, fixtures, and verify macros for testing. Canonical roles are `player`/`monitor`/`spectator`; additional domain-specific roles are also in use (`main-site`, `recorder`, `replayer`, `form`, `counter`, `arithmetic` — see `examples/scenarios/` and `demo/bundles/`). `scenarios._validate_scenario` logs `scenario.unknown_role` on any role outside the canonical set so typos surface in logs without blocking custom role vocabularies.
 5. **Dashboard** — Starlette web UI showing live browsers, recordings, session debugger with embedded video + action timeline.
 
 ### Layer Map

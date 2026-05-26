@@ -46,7 +46,7 @@ def _stub_session(method_name: str, return_value: object) -> MagicMock:
 
 @pytest.mark.anyio
 async def test_browser_navigate_back_forwards_to_session(_patch_pool: MagicMock) -> None:
-    expected = {"ok": True, "url": "https://prev.example.com", "title": "Prev"}
+    expected = {"ok": True, "url": "https://prev.octowright.com", "title": "Prev"}
     session = _stub_session("navigate_back", expected)
     _patch_pool.get = MagicMock(return_value=session)
 

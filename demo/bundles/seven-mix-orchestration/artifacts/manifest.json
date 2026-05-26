@@ -1,10 +1,10 @@
 {
   "artifacts": {
     "replay": {
-      "event_count": 102,
+      "event_count": 107,
       "path": "artifacts/replay.jsonl",
       "python_export": "artifacts/replay.py",
-      "size_bytes": 22968,
+      "size_bytes": 25051,
       "ts_export": "artifacts/replay.ts"
     },
     "supporting_videos": [
@@ -58,13 +58,6 @@
         "role": "player"
       },
       {
-        "id": "mortimer",
-        "kind": "webkit",
-        "path": "artifacts/supporting/ops.mp4",
-        "poster_path": "artifacts/supporting/ops.png",
-        "role": "monitor"
-      },
-      {
         "id": "spectator",
         "kind": "chromium",
         "path": "artifacts/supporting/spectator.mp4",
@@ -73,11 +66,11 @@
       }
     ],
     "video": {
-      "duration_seconds": 25.4,
+      "duration_seconds": 25.32,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 255243,
+      "size_bytes": 731544,
       "width": 1920
     }
   },
@@ -149,15 +142,6 @@
           "role": "player",
           "width": 640,
           "x": 0,
-          "y": 720
-        },
-        {
-          "height": 360,
-          "kind": "webkit",
-          "persona": "mortimer",
-          "role": "monitor",
-          "width": 640,
-          "x": 640,
           "y": 720
         },
         {
@@ -239,15 +223,6 @@
       },
       {
         "height": 360,
-        "kind": "webkit",
-        "persona": "mortimer",
-        "role": "monitor",
-        "width": 640,
-        "x": 640,
-        "y": 720
-      },
-      {
-        "height": 360,
         "kind": "chromium",
         "persona": "spectator",
         "role": "main-site",
@@ -314,14 +289,6 @@
         "role": "player"
       },
       {
-        "id": "mortimer",
-        "kind": "webkit",
-        "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/ops.mp4",
-        "persona": "mortimer",
-        "poster_path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/ops.png",
-        "role": "monitor"
-      },
-      {
         "id": "spectator",
         "kind": "chromium",
         "path": "demo/bundles/seven-mix-orchestration/artifacts/supporting/spectator.mp4",
@@ -370,7 +337,7 @@
     },
     {
       "kind": "webkit",
-      "persona": "mortimer",
+      "persona": "ops",
       "role": "monitor"
     },
     {

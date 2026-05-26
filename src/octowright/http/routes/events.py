@@ -104,7 +104,7 @@ async def session_events(request: Request) -> JSONResponse:
     since, err = _parse_since(request)
     if err is not None:
         return err
-    assert since is not None  # narrow for type-checker
+    assert since is not None  # nosec B101  # narrow for type-checker
     # _tail_jsonl opens + seeks + reads the JSONL synchronously; running it on
     # the event loop blocks every other request and WS push for the duration.
     payload = await asyncio.to_thread(_tail_jsonl, log_path, since)
@@ -152,7 +152,7 @@ async def session_console(request: Request) -> JSONResponse:
     since, err = _parse_since(request)
     if err is not None:
         return err
-    assert since is not None  # narrow for type-checker
+    assert since is not None  # nosec B101  # narrow for type-checker
 
     live = _live_session_or_none(sid)
     if live is not None:
@@ -185,7 +185,7 @@ async def session_downloads(request: Request) -> JSONResponse:
     since, err = _parse_since(request)
     if err is not None:
         return err
-    assert since is not None
+    assert since is not None  # nosec B101
 
     live = _live_session_or_none(sid)
     if live is not None:
@@ -241,6 +241,39 @@ def _parse_since_cursor(raw_since: str | None) -> int:
     return max(0, value)
 
 
+async def _sleep_or_disconnect(websocket: WebSocket, seconds: float) -> bool:
+    """Sleep ``seconds`` OR return early when the client disconnects.
+
+    Returns ``True`` if the sleep elapsed normally, ``False`` if the client
+    disconnected mid-sleep. Without racing the disconnect, cleanup after a
+    client drop waits up to a full poll interval before the next ``send_json``
+    raises ``WebSocketDisconnect``; for the default ``TAIL_POLL_SECONDS=1.0``
+    that's a 1s tail on every closed tab.
+    """
+    sleep_task = asyncio.create_task(asyncio.sleep(seconds))
+    disconnect_task = asyncio.create_task(websocket.receive())
+    try:
+        done, _pending = await asyncio.wait(
+            {sleep_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        for task in (sleep_task, disconnect_task):
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+    if disconnect_task in done:
+        # ``receive()`` resolves on ``websocket.disconnect`` or on any inbound
+        # frame. Either way the loop should terminate — for inbound frames the
+        # contract is "tail is server-push-only; clients send nothing". The
+        # caller catches ``WebSocketDisconnect`` from the result if raised.
+        with contextlib.suppress(Exception):
+            disconnect_task.result()
+        return False
+    return True
+
+
 async def _stream_tail(websocket: WebSocket, sid: str, log_path: Path, cursor: int) -> None:
     """Live-tail loop. Sends only when there's something new (events arrived
     or the session transitioned live→closed); a TAIL_HEARTBEAT_SECONDS-bounded
@@ -263,7 +296,11 @@ async def _stream_tail(websocket: WebSocket, sid: str, log_path: Path, cursor: i
             # Live → closed mid-connection: final push above, then close.
             await websocket.close()
             return
-        await asyncio.sleep(state.TAIL_POLL_SECONDS)
+        # Race the poll-interval sleep against client disconnect so cleanup
+        # tears down in ~10ms instead of waiting up to TAIL_POLL_SECONDS for
+        # the next send_json to surface the disconnect.
+        if not await _sleep_or_disconnect(websocket, state.TAIL_POLL_SECONDS):
+            return
 
 
 class TailEndpoint(WebSocketEndpoint):
@@ -292,6 +329,16 @@ class TailEndpoint(WebSocketEndpoint):
     """
 
     encoding = "json"
+
+    async def dispatch(self) -> None:
+        # Override the default WebSocketEndpoint loop because ``_stream_tail``
+        # already races ``receive()`` against the per-tick sleep so a client
+        # disconnect tears down within ~10ms. The base-class ``dispatch``
+        # would call ``receive()`` again after ``on_connect`` returns —
+        # but our race already consumed the disconnect message, so a second
+        # ``receive()`` would raise RuntimeError and surface as 500.
+        websocket = WebSocket(self.scope, receive=self.receive, send=self.send)
+        await self.on_connect(websocket)
 
     async def on_connect(self, websocket: WebSocket) -> None:
         if not sensitive_allowed_for_connection(websocket):

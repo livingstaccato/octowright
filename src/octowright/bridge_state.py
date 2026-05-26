@@ -5,10 +5,16 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import time
 from pathlib import Path
 from typing import Any
+
+# Monotonic counter disambiguates concurrent snapshots (and survives PID reuse
+# after a follower crash + OS PID recycle) so two writers can't collide on a
+# single tmp filename and one silently overwrite the other's contents.
+_TMP_COUNTER = itertools.count(1)
 
 
 def _empty_state() -> dict[str, Any]:
@@ -58,7 +64,7 @@ def record_snapshot(
     state["events"] = state["events"][-max_events:]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + f".{follower_pid}.tmp")
+        tmp = path.with_suffix(path.suffix + f".{follower_pid}.{next(_TMP_COUNTER)}.tmp")
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
         tmp.replace(path)
     except OSError:

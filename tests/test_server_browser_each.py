@@ -68,18 +68,18 @@ def fake_pool(monkeypatch: pytest.MonkeyPatch) -> _FakePool:
 
 @pytest.mark.asyncio
 async def test_navigate_each_hits_every_live_session_when_ids_omitted(fake_pool: _FakePool) -> None:
-    out = await each.browser_navigate_each("https://example.com")
+    out = await each.browser_navigate_each("https://octowright.com")
     assert set(out.keys()) == {"alpha", "beta"}
     for iid, record in out.items():
         assert record == {
             "ok": True,
-            "result": {"kind": "navigate", "args": ("https://example.com",), "kwargs": {}, "id": iid},
+            "result": {"kind": "navigate", "args": ("https://octowright.com",), "kwargs": {}, "id": iid},
         }
 
 
 @pytest.mark.asyncio
 async def test_navigate_each_respects_instance_ids_filter(fake_pool: _FakePool) -> None:
-    out = await each.browser_navigate_each("https://example.com", instance_ids=["alpha"])
+    out = await each.browser_navigate_each("https://octowright.com", instance_ids=["alpha"])
     assert list(out.keys()) == ["alpha"]
 
 
@@ -113,7 +113,7 @@ async def test_per_instance_error_is_caught_without_failing_other_instances(
     fake = _FakePool(sessions)
     monkeypatch.setattr(each, "pool", fake)
 
-    out = await each.browser_navigate_each("https://example.com")
+    out = await each.browser_navigate_each("https://octowright.com")
     assert out["good"]["ok"] is True
     assert out["bad"]["ok"] is False
     assert "navigate failed for bad" in out["bad"]["error"]
