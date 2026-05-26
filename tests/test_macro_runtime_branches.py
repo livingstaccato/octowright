@@ -342,11 +342,33 @@ class TestScreenshotPathHandling:
         s.screenshot.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_screenshot_path_is_passed_as_pathlib_positional(self) -> None:
+    async def test_screenshot_path_is_passed_as_pathlib_positional(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """session.screenshot receives Path() positional, not the raw string."""
+        from octowright import defaults
+
+        recordings = tmp_path / "recordings"
+        recordings.mkdir(parents=True, exist_ok=True)
+        target = recordings / "x.png"
+        monkeypatch.setattr(defaults, "RECORDINGS_DIR", recordings)
+
         s = _full_session()
-        await _dispatch_via_simple(s, {"action": "screenshot", "path": "/tmp/x.png"})
-        s.screenshot.assert_awaited_once_with(Path("/tmp/x.png"))
+        await _dispatch_via_simple(s, {"action": "screenshot", "path": str(target)})
+        s.screenshot.assert_awaited_once_with(target)
+
+    @pytest.mark.anyio
+    async def test_screenshot_path_outside_recordings_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Replay screenshot paths must stay under RECORDINGS_DIR."""
+        from octowright import defaults
+
+        s = _full_session()
+        monkeypatch.setattr(defaults, "RECORDINGS_DIR", tmp_path / "recordings")
+        with pytest.raises(ValueError, match="screenshot path"):
+            await _dispatch_via_simple(s, {"action": "screenshot", "path": str(tmp_path / "outside.png")})
+        s.screenshot.assert_not_called()
 
 
 # --------------------------------------------------------------------------
