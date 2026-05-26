@@ -81,7 +81,12 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette
         from octowright._trace_propagation import TraceContextExtractionMiddleware
 
         traced_app = TraceContextExtractionMiddleware(tracked_app)
-        routes.append(Mount("/mcp", app=guard_sensitive_asgi_app(traced_app, host=host)))
+        routes.append(
+            Mount(
+                "/mcp",
+                app=guard_sensitive_asgi_app(traced_app, host=host, side_effect_get=True),
+            )
+        )
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
 
