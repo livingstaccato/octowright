@@ -148,7 +148,33 @@ def test_macro_validate_endpoint_reports_lint_issues(client: TestClient) -> None
     body = r.json()
     assert body["ok"] is False
     assert body["issue_count"] == 1
+    assert body["error_count"] == 1
+    assert body["warning_count"] == 0
     assert body["issues"][0]["code"] == "missing_required_field"
+
+
+def test_macro_validate_endpoint_splits_errors_and_warnings(client: TestClient) -> None:
+    """Mixed-severity macro: a missing-selector error + a no-op if_selector warning
+    must populate distinct ``error_count`` / ``warning_count`` fields so the
+    dashboard can render the two classes separately (MCP-SHARED contract)."""
+    macro = {
+        "name": "mixed",
+        "actions": [
+            {"action": "click"},
+            {"action": "if_selector", "selector": "#maybe"},
+        ],
+    }
+    r = client.post("/api/macros/mixed/validate", json={"macro": macro})
+
+    assert r.status_code == 200
+    body = r.json()
+    severities = [issue["severity"] for issue in body["issues"]]
+    assert body["error_count"] == severities.count("error")
+    assert body["warning_count"] == sum(1 for s in severities if s != "error")
+    assert body["error_count"] >= 1
+    assert body["warning_count"] >= 1
+    assert body["issue_count"] == body["error_count"] + body["warning_count"]
+    assert body["ok"] is False
 
 
 def test_macro_update_endpoint_rejects_invalid_macro(client: TestClient) -> None:

@@ -95,12 +95,17 @@ def _issue_payload(macro: dict[str, Any]) -> list[dict[str, Any]]:
 def _validation_body(macro: dict[str, Any]) -> dict[str, Any]:
     issues = _issue_payload(macro)
     error_count = sum(1 for issue in issues if issue["severity"] == "error")
+    # Non-error issues are surfaced separately so the dashboard can render
+    # warnings without recomputing the split client-side; the MCP-SHARED
+    # contract documents warning_count as a required field on this response.
+    warning_count = sum(1 for issue in issues if issue["severity"] != "error")
     return {
         "ok": error_count == 0,
         "valid": error_count == 0,
         "issues": issues,
         "issue_count": len(issues),
         "error_count": error_count,
+        "warning_count": warning_count,
     }
 
 
