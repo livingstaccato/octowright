@@ -424,7 +424,16 @@ class TestMockRoute:
         session = _make_session(tmp_path, page=page)
         captured = _record_calls(session)
         await session.mock_route("**/api/x", status=201, content_type="text/plain")
-        assert ("mock_route", {"pattern": "**/api/x", "status": 201, "content_type": "text/plain"}) in captured
+        assert (
+            "mock_route",
+            {
+                "pattern": "**/api/x",
+                "status": 201,
+                "content_type": "text/plain",
+                "body": None,
+                "headers": {},
+            },
+        ) in captured
 
     @pytest.mark.anyio
     async def test_handler_uses_default_body_and_headers(self, tmp_path: Path) -> None:

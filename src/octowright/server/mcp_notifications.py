@@ -42,7 +42,7 @@ flow through to the follower client transparently — no bridge changes needed.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
@@ -168,7 +168,7 @@ def get_emit_task_or_none() -> asyncio.Task[None] | None:
     """Return the active emit task, or None if not running.  Exposed for tests."""
     for task in asyncio.all_tasks():
         if task.get_name() == "octowright.mcp_notifications":
-            return task  # type: ignore[return-value]
+            return cast("asyncio.Task[None]", task)
     return None
 
 
