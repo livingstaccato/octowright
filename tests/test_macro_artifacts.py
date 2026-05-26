@@ -264,7 +264,10 @@ def test_macro_export_cli_unsupported_action_exits_nonzero_and_writes_evidence(
         macro={
             "name": "unsupported",
             "parameters": ["email"],
-            "actions": [{"action": "not_supported"}],
+            "actions": [
+                {"action": "navigate", "url": "https://example.test/{{email}}"},
+                {"action": "not_supported"},
+            ],
         },
     )
     result = macro_artifacts.export_macro_cli(name="unsupported", args={"email": "me@example.com"})
@@ -288,7 +291,9 @@ def test_macro_export_cli_unsupported_action_exits_nonzero_and_writes_evidence(
     assert result_data["status"] == "failed"
     assert "unsupported macro action" in result_data["error"]
     evidence_data = json.loads((evidence_dir / "evidence.json").read_text(encoding="utf-8"))
-    assert evidence_data["records"][0]["action"]["action"] == "not_supported"
+    assert "me@example.com" not in json.dumps(evidence_data)
+    assert evidence_data["records"][0]["action"]["url"] == "https://example.test/<redacted>"
+    assert evidence_data["records"][1]["action"]["action"] == "not_supported"
 
 
 class FakeSession:
@@ -300,9 +305,15 @@ class FakeSession:
 
 
 def _install_fake_playwright(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakePage:
+        url = "about:blank"
+
+        async def goto(self, url: str) -> None:
+            self.url = url
+
     class FakeBrowser:
         async def new_page(self):
-            return object()
+            return FakePage()
 
         async def close(self) -> None:
             return None

@@ -68,8 +68,30 @@ def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
-def _redact_action(action: dict[str, Any]) -> dict[str, Any]:
-    redacted = dict(action)
+def _sensitive_arg_values(args: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key, value in args.items():
+        lowered = key.lower()
+        if value and any(part in lowered for part in _SENSITIVE_PARTS):
+            values.append(str(value))
+    return values
+
+
+def _redact_value(value: Any, sensitive_values: list[str]) -> Any:
+    if isinstance(value, str):
+        redacted = value
+        for sensitive in sensitive_values:
+            redacted = redacted.replace(sensitive, "<redacted>")
+        return redacted
+    if isinstance(value, dict):
+        return {{key: _redact_value(item, sensitive_values) for key, item in value.items()}}
+    if isinstance(value, list):
+        return [_redact_value(item, sensitive_values) for item in value]
+    return value
+
+
+def _redact_action(action: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    redacted = {{key: _redact_value(value, _sensitive_arg_values(args)) for key, value in action.items()}}
     if redacted.get("action") in {{"fill", "type", "fill_by"}}:
         for key in ("value", "text"):
             if key in redacted:
@@ -105,7 +127,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
             for index, raw_action in enumerate(ACTIONS):
                 action = _resolve(raw_action, args)
                 kind = action.get("action")
-                log_record = {{"event": "action", "index": index, "action": _redact_action(action)}}
+                log_record = {{"event": "action", "index": index, "action": _redact_action(action, args)}}
                 print(json.dumps(log_record, sort_keys=True))
                 if evidence is not None:
                     evidence.record(log_record)
