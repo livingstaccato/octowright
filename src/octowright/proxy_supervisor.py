@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import itertools
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -109,6 +111,11 @@ class InFlightRequest:
     method: str | None
     started_at: float
     deadline: float
+    # Guards against the watchdog and the remote reader both popping the
+    # same id concurrently — without this, a response arriving in the same
+    # asyncio tick as deadline expiry produces two outbound frames for one
+    # request, which is an MCP protocol violation.
+    responded: bool = False
 
 
 class BridgeSupervisor:
@@ -124,6 +131,12 @@ class BridgeSupervisor:
         self.request_timeout_seconds = request_timeout_seconds
         self._in_flight: dict[str | int, InFlightRequest] = {}
         self._initialize_message: SessionMessage | None = None
+        # Replays of the cached initialize use a fresh id per reconnect so the
+        # leader doesn't see duplicate ids within a long-lived follower lifetime;
+        # the matching response is swallowed here rather than forwarded, because
+        # the local client already got its initialize response on the first try.
+        self._replay_id_counter = itertools.count(1)
+        self._internal_replay_ids: set[str | int] = set()
         self.request_timeouts = 0
         self.last_error: str | None = None
         self.remote_session_id: str | None = None
@@ -191,14 +204,31 @@ class BridgeSupervisor:
             )
 
     async def replay_initialize(self, remote_write: Any) -> None:
-        if self._initialize_message is not None:
-            await remote_write.send(self._initialize_message)
+        if self._initialize_message is None:
+            return
+        cached_root = message_root(self._initialize_message)
+        if not isinstance(cached_root, JSONRPCRequest):
+            return
+        replay_id = f"octowright-bridge-replay-{next(self._replay_id_counter)}"
+        self._internal_replay_ids.add(replay_id)
+        replay_request = cached_root.model_copy(update={"id": replay_id})
+        replay_message = SessionMessage(JSONRPCMessage(root=replay_request))
+        await remote_write.send(replay_message)
 
     async def forward_remote_message(self, message: SessionMessage) -> None:
         request_id = message_request_id(message)
+        if request_id is not None and request_id in self._internal_replay_ids:
+            # Bridge-internal initialize replay: the local client has already
+            # been told the session is initialized; forwarding a second
+            # response would be a duplicate id from the client's perspective.
+            self._internal_replay_ids.discard(request_id)
+            return
         if request_id is not None:
             in_flight = self._in_flight.pop(request_id, None)
             if in_flight is not None:
+                if in_flight.responded:
+                    return
+                in_flight.responded = True
                 # End-to-end RPC latency: from when the follower forwarded
                 # the request to when the matching response arrived from
                 # the leader. Outcome label distinguishes success
@@ -211,22 +241,25 @@ class BridgeSupervisor:
                 )
         await self.local_write.send(message)
 
-    async def watch_deadlines(self, interval: float = 0.01) -> None:
+    async def watch_deadlines(self, interval: float = 0.1) -> None:
         while True:
             await anyio.sleep(interval)
             now = time.monotonic()
             expired = [item for item in self._in_flight.values() if item.deadline <= now]
             for item in expired:
-                self._in_flight.pop(item.request_id, None)
+                current = self._in_flight.pop(item.request_id, None)
+                if current is None or current.responded:
+                    continue
+                current.responded = True
                 self.request_timeouts += 1
-                self.last_error = f"request {item.request_id!r} timed out while waiting for leader response"
+                self.last_error = f"request {current.request_id!r} timed out while waiting for leader response"
                 # Record the full timeout duration so dashboards see the
                 # tail latency, not just the success path.
                 _BRIDGE_RPC_DURATION.record(
-                    now - item.started_at,
-                    attributes={"method": item.method or "unknown", "outcome": "timeout"},
+                    now - current.started_at,
+                    attributes={"method": current.method or "unknown", "outcome": "timeout"},
                 )
-                await self.local_write.send(bridge_error(item.request_id, self.last_error))
+                await self.local_write.send(bridge_error(current.request_id, self.last_error))
 
     async def fail_all_in_flight(self, reason: str) -> None:
         pending = list(self._in_flight.values())
@@ -234,6 +267,9 @@ class BridgeSupervisor:
         self.last_error = reason
         now = time.monotonic()
         for item in pending:
+            if item.responded:
+                continue
+            item.responded = True
             _BRIDGE_RPC_DURATION.record(
                 now - item.started_at,
                 attributes={"method": item.method or "unknown", "outcome": "failure"},
@@ -341,53 +377,66 @@ async def run_supervised_proxy(
                 while True:
                     remote_url = resolve_leader_url(leader_mcp_url)
                     try:
+                        # Custom factory installs a request hook that
+                        # injects W3C traceparent so the leader's spans
+                        # chain under the follower's bridge span.
+                        client_cm = streamablehttp_client(
+                            remote_url,
+                            httpx_client_factory=httpx_factory,
+                        )
+                        # Scope the connect timeout to only the handshake
+                        # (__aenter__). Once we have streams, the read loop
+                        # is unconstrained — wrapping it would cancel every
+                        # active bridge session at BRIDGE_CONNECT_TIMEOUT_SECONDS
+                        # and invalidate all in-flight requests.
                         with anyio.fail_after(BRIDGE_CONNECT_TIMEOUT_SECONDS):
-                            # Custom factory installs a request hook that
-                            # injects W3C traceparent so the leader's spans
-                            # chain under the follower's bridge span.
-                            async with streamablehttp_client(
-                                remote_url,
-                                httpx_client_factory=httpx_factory,
-                            ) as (remote_read, remote_write, get_sid):
-                                remote_write_slot.write = remote_write
-                                try:
-                                    supervisor_obj.remote_session_id = get_sid()
-                                except Exception as exc:
-                                    # get_sid() may not be implemented on every
-                                    # transport; log so bridge diagnostics aren't
-                                    # silently misleading when the field is null.
-                                    log.debug("octowright.bridge.get_sid_failed", error=repr(exc))
-                                    supervisor_obj.remote_session_id = None
-                                supervisor_obj.reconnect_attempts = attempt
-                                bridge_state.record_snapshot(
-                                    path=BRIDGE_STATE_PATH,
-                                    follower_pid=__import__("os").getpid(),
-                                    remote_url=remote_url,
-                                    remote_session_id=supervisor_obj.remote_session_id,
-                                    last_error=supervisor_obj.last_error,
-                                    in_flight=supervisor_obj.in_flight_count,
-                                    reconnect_attempts=supervisor_obj.reconnect_attempts,
-                                    request_timeouts=supervisor_obj.request_timeouts,
-                                )
-                                await supervisor_obj.replay_initialize(remote_write)
-                                attempt = 0
-                                async with anyio.create_task_group() as remote_tg:
+                            remote_read, remote_write, get_sid = await client_cm.__aenter__()
+                        try:
+                            remote_write_slot.write = remote_write
+                            try:
+                                supervisor_obj.remote_session_id = get_sid()
+                            except Exception as exc:
+                                # get_sid() may not be implemented on every
+                                # transport; log so bridge diagnostics aren't
+                                # silently misleading when the field is null.
+                                log.debug("octowright.bridge.get_sid_failed", error=repr(exc))
+                                supervisor_obj.remote_session_id = None
+                            supervisor_obj.reconnect_attempts = attempt
+                            bridge_state.record_snapshot(
+                                path=BRIDGE_STATE_PATH,
+                                follower_pid=__import__("os").getpid(),
+                                remote_url=remote_url,
+                                remote_session_id=supervisor_obj.remote_session_id,
+                                last_error=supervisor_obj.last_error,
+                                in_flight=supervisor_obj.in_flight_count,
+                                reconnect_attempts=supervisor_obj.reconnect_attempts,
+                                request_timeouts=supervisor_obj.request_timeouts,
+                            )
+                            await supervisor_obj.replay_initialize(remote_write)
+                            attempt = 0
+                            async with anyio.create_task_group() as remote_tg:
 
-                                    async def _remote_reader() -> None:
-                                        async for message in remote_read:
-                                            if isinstance(message, Exception):
-                                                raise message
-                                            await supervisor_obj.forward_remote_message(message)
+                                async def _remote_reader(reader: Any = remote_read) -> None:
+                                    async for message in reader:
+                                        if isinstance(message, Exception):
+                                            raise message
+                                        await supervisor_obj.forward_remote_message(message)
 
-                                    remote_tg.start_soon(_remote_reader)
-                                    if health_url is not None:
-                                        remote_tg.start_soon(
-                                            monitor_leader_health,
-                                            remote_tg.cancel_scope,
-                                            health_url,
-                                            heartbeat_interval,
-                                            heartbeat_max_failures,
-                                        )
+                                remote_tg.start_soon(_remote_reader)
+                                if health_url is not None:
+                                    remote_tg.start_soon(
+                                        monitor_leader_health,
+                                        remote_tg.cancel_scope,
+                                        health_url,
+                                        heartbeat_interval,
+                                        heartbeat_max_failures,
+                                    )
+                        except BaseException:
+                            exc_type, exc_val, exc_tb = sys.exc_info()
+                            await client_cm.__aexit__(exc_type, exc_val, exc_tb)
+                            raise
+                        else:
+                            await client_cm.__aexit__(None, None, None)
                     except Exception as exc:
                         remote_write_slot.write = None
                         _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})

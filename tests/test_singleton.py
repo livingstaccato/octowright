@@ -147,6 +147,80 @@ async def test_probe_http_alive_against_dead_port() -> None:
     assert await singleton.probe_http_alive(info, timeout=1.0) is False
 
 
+def test_pid_is_alive_windows_reads_last_error_before_closehandle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows, GetLastError must be queried before any other Win32 call.
+    CloseHandle (and the C runtime itself) can clobber the thread-local
+    last-error code, so reading it after would misclassify ERROR_ACCESS_DENIED
+    (alive but owned by another user) as "dead". The test runs on any
+    platform — we inject a fake kernel32 to verify call ordering, since real
+    Windows behaviour can only be reproduced on a Windows host."""
+    from octowright import singleton as _sg
+
+    call_order: list[str] = []
+
+    class FakeKernel32:
+        def OpenProcess(self, _access: int, _inherit: bool, _pid: int) -> int:
+            call_order.append("OpenProcess")
+            return 0  # NULL handle → forces the GetLastError branch
+
+        def CloseHandle(self, _handle: int) -> int:
+            call_order.append("CloseHandle")
+            return 1
+
+        def GetLastError(self) -> int:
+            call_order.append("GetLastError")
+            return 5  # ERROR_ACCESS_DENIED → "alive but not ours"
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    class FakeCtypes:
+        windll = FakeWindll()
+
+    # Replace the lazy __import__("ctypes") so the function picks up our fake
+    # without us having to depend on running on Windows.
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "ctypes":
+            return FakeCtypes
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert _sg._pid_is_alive_windows(12345) is True
+    # The critical invariant: GetLastError must come before CloseHandle is NOT
+    # what we want — when OpenProcess returns NULL we never call CloseHandle.
+    # The real ordering hazard is on the *success* path; verify it there too.
+    assert call_order == ["OpenProcess", "GetLastError"]
+
+    # Success path: OpenProcess returns a non-null handle. CloseHandle is
+    # called; GetLastError is not consulted (early return True), so ordering
+    # is moot. But the *bug* this guards against is: if we ever change the
+    # function to read GetLastError on the success path too, it must come
+    # before CloseHandle. Cover that future-proofing with a second probe.
+    call_order.clear()
+
+    class FakeKernel32Success:
+        def OpenProcess(self, _access: int, _inherit: bool, _pid: int) -> int:
+            call_order.append("OpenProcess")
+            return 0xDEADBEEF
+
+        def CloseHandle(self, _handle: int) -> int:
+            call_order.append("CloseHandle")
+            return 1
+
+        def GetLastError(self) -> int:
+            call_order.append("GetLastError")
+            return 0
+
+    FakeWindll.kernel32 = FakeKernel32Success()  # type: ignore[assignment]
+    assert _sg._pid_is_alive_windows(12345) is True
+    assert call_order == ["OpenProcess", "CloseHandle"]
+
+
 def test_write_lock_atomically_replaces_existing(tmp_path: Path) -> None:
     """write_lock should overwrite an old leader entry without leaving the temp file."""
     lock = tmp_path / "octowright.lock"
