@@ -88,19 +88,7 @@ def load_yaml_scenario(content: str, name: str) -> Scenario:
         )
         raw = {}
     participants = [
-        Participant(
-            persona=p["persona"],
-            kind=p["kind"],
-            role=p.get("role", "player"),
-            url=p.get("url"),
-            startup_macros=p.get("startup_macros"),
-            viewport_w=p.get("viewport_w"),
-            viewport_h=p.get("viewport_h"),
-            stabilize=p.get("stabilize"),
-            record_video=p.get("record_video"),
-            trace=p.get("trace"),
-        )
-        for p in raw.get("participants", [])
+        _load_yaml_participant(p, index=i, scenario_name=name) for i, p in enumerate(raw.get("participants", []))
     ]
     teardown_raw = raw.get("teardown") or {}
     scenario = Scenario(
@@ -113,6 +101,28 @@ def load_yaml_scenario(content: str, name: str) -> Scenario:
     )
     _validate_scenario(scenario)
     return scenario
+
+
+def _load_yaml_participant(raw: Any, *, index: int, scenario_name: str) -> Participant:
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"scenario {scenario_name!r}: participants[{index}] must be a mapping, got {type(raw).__name__}"
+        )
+    for field_name in ("persona", "kind"):
+        if not isinstance(raw.get(field_name), str) or not raw[field_name]:
+            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] missing required {field_name!r}")
+    return Participant(
+        persona=raw["persona"],
+        kind=raw["kind"],
+        role=raw.get("role", "player"),
+        url=raw.get("url"),
+        startup_macros=raw.get("startup_macros"),
+        viewport_w=raw.get("viewport_w"),
+        viewport_h=raw.get("viewport_h"),
+        stabilize=raw.get("stabilize"),
+        record_video=raw.get("record_video"),
+        trace=raw.get("trace"),
+    )
 
 
 def load_python_scenario(path: Path) -> Scenario:
