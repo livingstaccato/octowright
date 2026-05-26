@@ -780,6 +780,55 @@ class TestShutdownPool:
         assert not d.exists()
 
     @pytest.mark.anyio
+    async def test_holds_sessions_lock_while_clearing_session_profile_dirs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Shutdown must hold ``_sessions_lock`` across the snapshot+clear of
+        ``_session_profile_dirs``. If the lock isn't held, a concurrent task
+        blocked on ``_sessions_lock`` could insert a tmpdir during the
+        iterate-then-clear window — leaking it.
+
+        Approach: pre-acquire the lock from a "concurrent" coroutine. Spawn
+        ``shutdown_pool`` while the lock is held; assert it blocks. Then
+        release; assert shutdown completes and the dict is empty.
+        """
+        pool = BrowserPool()
+        pool.close_all = AsyncMock()  # type: ignore[method-assign]
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        pool._session_profile_dirs[("demo", "chromium")] = existing
+
+        release_lock = asyncio.Event()
+        holding_lock = asyncio.Event()
+
+        async def lock_holder() -> None:
+            async with pool._sessions_lock:
+                holding_lock.set()
+                await release_lock.wait()
+                # Inserting under the lock simulates a concurrent
+                # _resolve_session_dir that's racing shutdown.
+                new_tmp = tmp_path / "raced"
+                new_tmp.mkdir()
+                pool._session_profile_dirs[("raced", "chromium")] = new_tmp
+
+        holder_task = asyncio.create_task(lock_holder())
+        await holding_lock.wait()
+        shutdown_task = asyncio.create_task(shutdown_pool(pool))
+        # Give the scheduler a chance — shutdown should be blocked on the lock.
+        await asyncio.sleep(0.01)
+        assert not shutdown_task.done(), "shutdown_pool acquired _sessions_lock while it was held — lock not honored"
+        # Pre-existing entry is still present; cleanup hasn't run yet.
+        assert existing.exists()
+        # Release the holder. shutdown can now acquire, snapshot+clear under
+        # the lock, then rmtree the snapshotted entries. The "raced" entry
+        # added under the same lock by the holder is included in the snapshot.
+        release_lock.set()
+        await holder_task
+        await shutdown_task
+        assert pool._session_profile_dirs == {}
+        assert not existing.exists()
+
+    @pytest.mark.anyio
     async def test_tmpdir_oserror_swallowed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """rmtree raising OSError doesn't propagate (best-effort cleanup)."""
         pool = BrowserPool()
