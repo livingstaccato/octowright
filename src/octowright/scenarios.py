@@ -23,6 +23,10 @@ from octowright.defaults import SCENARIO_TEMPLATES_DIR, SCENARIOS_DIR, SUPPORTED
 
 log = get_logger(__name__)
 
+# Roles consumed by ``ScenarioPool.run_macro(role=...)`` — a typo here
+# silently fans out to zero targets, so reject unknown roles at load time.
+_KNOWN_ROLES = frozenset({"player", "monitor", "spectator"})
+
 
 @dataclass
 class Participant:
@@ -53,6 +57,11 @@ def _validate_scenario(s: Scenario) -> None:
     for p in s.participants:
         if p.kind not in SUPPORTED_KINDS:
             raise ValueError(f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}")
+        if p.role not in _KNOWN_ROLES:
+            raise ValueError(
+                f"scenario {s.name!r}: participant {p.persona!r} has unknown role "
+                f"{p.role!r}; expected one of {sorted(_KNOWN_ROLES)}"
+            )
         key = (p.persona, p.kind)
         if key in seen:
             raise ValueError(f"scenario {s.name!r}: duplicate (persona, kind) pair {key}")
@@ -76,7 +85,7 @@ def load_yaml_scenario(content: str, name: str) -> Scenario:
         Participant(
             persona=p["persona"],
             kind=p["kind"],
-            role=p.get("role", "participant"),
+            role=p.get("role", "player"),
             url=p.get("url"),
             startup_macros=p.get("startup_macros"),
             viewport_w=p.get("viewport_w"),

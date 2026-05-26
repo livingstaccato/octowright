@@ -78,7 +78,7 @@ def test_multi_participant_mixed_engines(scenarios_dir: Path) -> None:
         [
             {"persona": "a", "kind": "webkit", "role": "player"},
             {"persona": "b", "kind": "firefox", "role": "monitor"},
-            {"persona": "c", "kind": "chromium", "role": "mortimer"},
+            {"persona": "c", "kind": "chromium", "role": "spectator"},
         ],
     )
     plan = scenario_plan(name="mixed")
@@ -86,7 +86,7 @@ def test_multi_participant_mixed_engines(scenarios_dir: Path) -> None:
     rows = plan["participants"]
     assert [r["kind"] for r in rows] == ["webkit", "firefox", "chromium"]
     assert [r["persona"] for r in rows] == ["a", "b", "c"]
-    assert [r["role"] for r in rows] == ["player", "monitor", "mortimer"]
+    assert [r["role"] for r in rows] == ["player", "monitor", "spectator"]
     # Each row carries its own launch_kwargs.
     assert rows[0]["launch_kwargs"]["kind"] == "webkit"
     assert rows[1]["launch_kwargs"]["kind"] == "firefox"
@@ -228,10 +228,10 @@ def test_would_launch_matches_participant_count(scenarios_dir: Path) -> None:
         scenarios_dir,
         "count",
         [
-            {"persona": "a", "kind": "webkit", "role": "r1"},
-            {"persona": "b", "kind": "firefox", "role": "r2"},
-            {"persona": "c", "kind": "chromium", "role": "r3"},
-            {"persona": "d", "kind": "webkit", "role": "r4"},
+            {"persona": "a", "kind": "webkit", "role": "player"},
+            {"persona": "b", "kind": "firefox", "role": "monitor"},
+            {"persona": "c", "kind": "chromium", "role": "spectator"},
+            {"persona": "d", "kind": "webkit", "role": "player"},
         ],
     )
     plan = scenario_plan(name="count")
