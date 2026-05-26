@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -21,12 +22,18 @@ _SENSITIVE_KEY_PARTS = (
     "access_key",
     "credential",
 )
-_SENSITIVE_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "email", "username"})
+_SENSITIVE_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "authorization", "email", "username"})
+_CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def is_sensitive_key(key: str) -> bool:
-    normalized = key.lower().replace("-", "_")
-    return normalized in _SENSITIVE_EXACT_KEYS or any(part in normalized for part in _SENSITIVE_KEY_PARTS)
+    normalized = _CAMEL_CASE_BOUNDARY.sub("_", key).lower().replace("-", "_")
+    compact = normalized.replace("_", "")
+    return (
+        normalized in _SENSITIVE_EXACT_KEYS
+        or compact in _SENSITIVE_EXACT_KEYS
+        or any(part in normalized or part.replace("_", "") in compact for part in _SENSITIVE_KEY_PARTS)
+    )
 
 
 def redact_value_for_key(key: str, value: Any) -> Any:

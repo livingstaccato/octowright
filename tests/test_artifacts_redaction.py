@@ -40,5 +40,9 @@ def test_redact_mapping_handles_nested_dicts_and_lists() -> None:
 
 def test_redact_value_for_key_matches_partial_and_exact_keys() -> None:
     assert redact_value_for_key("access-token", "abc") == REDACTED_VALUE
+    assert redact_value_for_key("Authorization", "Bearer abc") == REDACTED_VALUE
+    assert redact_value_for_key("accessKey", "abc") == REDACTED_VALUE
+    assert redact_value_for_key("accesskey", "abc") == REDACTED_VALUE
+    assert redact_value_for_key("apiKey", "abc") == REDACTED_VALUE
     assert redact_value_for_key("pwd", "abc") == REDACTED_VALUE
     assert redact_value_for_key("display_name", "Octo") == "Octo"
