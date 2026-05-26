@@ -102,10 +102,12 @@ class _ProfiledFastMCP(FastMCP):
             return wrap_all
 
         def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
-            # Plain `Callable` isn't guaranteed by the type system to carry
-            # `__name__`; in practice every @mcp.tool target is a `def` (or
-            # async def) which does. Use getattr so ty doesn't object.
-            if getattr(fn, "__name__", "") not in allowed:
+            # Honour an explicit `@mcp.tool(name="…")` override before falling
+            # back to the Python function name. Without this, a tool whose
+            # MCP-visible name diverges from `fn.__name__` would silently be
+            # filtered out (or in) by the wrong identifier.
+            resolved_name = name if name is not None else getattr(fn, "__name__", "")
+            if resolved_name not in allowed:
                 return fn
             return decorator(_track_advisor_usage(fn))
 

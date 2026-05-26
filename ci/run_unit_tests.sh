@@ -9,7 +9,6 @@
 set -euo pipefail
 
 uv run --active pytest -q tests/ \
-    --no-cov \
     --ignore=tests/test_engine_matrix_live.py \
     --ignore=tests/test_badge.py \
     --ignore=tests/test_pill.py \
