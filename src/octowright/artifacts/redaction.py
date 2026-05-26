@@ -24,7 +24,7 @@ _SENSITIVE_KEY_PARTS = (
     "credential",
     "private_key",
 )
-_SENSITIVE_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "email", "username", "cookie", "set_cookie"})
+_SENSITIVE_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "email", "username", "cookie", "cookies", "set_cookie"})
 _CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
