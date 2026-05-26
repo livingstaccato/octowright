@@ -18,6 +18,7 @@ from octowright.artifacts.paths import ArtifactStore
 from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.redaction import redact_mapping
 from octowright.artifacts.reports import write_artifact_manifest, write_run_bundle
+from octowright.artifacts.script_export import write_macro_cli
 from octowright.macros.storage import load_macro, macro_path
 
 
@@ -86,6 +87,39 @@ def macro_digest(
     result = digest_recording_text(path.read_text(encoding="utf-8"), max_chars=max_chars)
     result["source"] = {"type": "recording", "path": str(path)}
     return result
+
+
+def export_macro_cli(
+    *,
+    name: str,
+    out_path: str | None = None,
+    args: dict[str, Any] | None = None,
+    include_evidence: bool = True,
+) -> dict[str, Any]:
+    del include_evidence
+    macro = load_macro(name)
+    args_used = dict(args or {})
+    store = ArtifactStore()
+    target = store.resolve_macro_export_path(name, out_path)
+    write_macro_cli(path=target, name=name, macro=macro, args=args_used)
+
+    manifest_path = store.macro_manifest_path(name)
+    artifact_dir = manifest_path.parent
+    manifest = _manifest_for_plan(
+        name=name,
+        macro=macro,
+        args_used=args_used,
+        missing_args=_missing_args(macro, args_used),
+        artifact_dir=artifact_dir,
+        runs_dir=artifact_dir / "runs",
+        exports_dir=artifact_dir / "exports",
+    )
+    existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
+    if existing_manifest_path is not None:
+        manifest = _merge_existing_manifest(existing_manifest_path, manifest)
+    manifest["exports"] = [{"path": str(target), "kind": "python-cli"}]
+    write_artifact_manifest(manifest_path, manifest)
+    return {"ok": True, "macro": name, "path": str(target), "import_safe": True}
 
 
 async def run_macro_artifact(

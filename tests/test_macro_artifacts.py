@@ -155,6 +155,33 @@ def test_macro_digest_from_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert "Macro login" in result["summary"]
 
 
+def test_macro_export_cli_writes_import_safe_argparse_script(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage, macro_artifacts, recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage)
+
+    result = macro_artifacts.export_macro_cli(
+        name="login",
+        out_path=None,
+        args={"email": "me@example.com", "password": "secret"},  # pragma: allowlist secret
+        include_evidence=True,
+    )
+
+    script_path = Path(result["path"])
+    text = script_path.read_text(encoding="utf-8")
+
+    assert script_path == recordings_dir / "artifacts" / "macros" / "login" / "exports" / "login.py"
+    assert "def run_login(" in text
+    assert "argparse.ArgumentParser" in text
+    assert 'if __name__ == "__main__":' in text
+    assert "asyncio.run" in text
+    assert "me@example.com" not in text
+    assert "secret" not in text
+    assert result["import_safe"] is True
+
+
 class FakeSession:
     def __init__(self, tmp_path: Path) -> None:
         self.instance_id = "inst-1"
