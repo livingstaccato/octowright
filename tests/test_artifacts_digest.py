@@ -61,3 +61,64 @@ def test_digest_recording_text_counts_jsonl_actions(tmp_path: Path) -> None:
     assert "events: 3" in result["summary"]
     assert "malformed: 1" in result["summary"]
     assert "click: 2" in result["summary"]
+
+
+def test_digest_recording_text_sanitizes_token_bearing_urls() -> None:
+    text = json.dumps(
+        {
+            "action": "navigate",
+            "url": "https://user:pass@example.test/path?token=secret#frag",
+        }
+    )
+
+    result = digest_recording_text(text, max_chars=4000)
+
+    assert "first_url: https://example.test/path" in result["summary"]
+    assert "last_url: https://example.test/path" in result["summary"]
+    assert "user" not in result["summary"]
+    assert "pass" not in result["summary"]
+    assert "token" not in result["summary"]
+    assert "secret" not in result["summary"]
+    assert "frag" not in result["summary"]
+
+
+def test_digest_recording_text_reports_same_first_and_last_url() -> None:
+    text = json.dumps({"action": "navigate", "url": "https://example.test/path?token=secret"})
+
+    result = digest_recording_text(text, max_chars=4000)
+
+    assert "first_url: https://example.test/path" in result["summary"]
+    assert "last_url: https://example.test/path" in result["summary"]
+
+
+def test_digest_macro_uses_fallback_for_non_scalar_action_values() -> None:
+    macro = {
+        "name": "bad-actions",
+        "actions": [
+            {"action": {"nested": "secret"}},
+            {"action": ["secret"]},
+            {"action": "click"},
+        ],
+    }
+
+    result = digest_macro(macro, max_chars=4000)
+
+    assert "(invalid): 2" in result["summary"]
+    assert "click: 1" in result["summary"]
+    assert "secret" not in result["summary"]
+    assert "nested" not in result["summary"]
+
+
+def test_digest_macro_uses_fallback_for_non_scalar_parameters() -> None:
+    macro = {
+        "name": "bad-params",
+        "parameters": ["email", {"credential": "hidden-value"}, ["hidden-list"]],
+        "actions": [],
+    }
+
+    result = digest_macro(macro, max_chars=4000)
+
+    assert "parameters: email, (invalid), (invalid)" in result["summary"]
+    assert "credential" not in result["summary"]
+    assert "hidden-value" not in result["summary"]
+    assert "hidden-list" not in result["summary"]
