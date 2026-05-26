@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,14 +33,14 @@ def new_manifest(
         "artifact_version": ARTIFACT_VERSION,
         "artifact_type": artifact_type,
         "name": name,
-        "source": source,
+        "source": copy.deepcopy(source),
         "parameters": redact_mapping(parameters),
         "created_at": stamp,
         "updated_at": stamp,
         "latest_run": None,
-        "exports": exports or [],
-        "critical_points": critical_points or [],
-        "metadata": metadata or {},
+        "exports": copy.deepcopy(exports) if exports is not None else [],
+        "critical_points": copy.deepcopy(critical_points) if critical_points is not None else [],
+        "metadata": copy.deepcopy(metadata) if metadata is not None else {},
     }
 
 

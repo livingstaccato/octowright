@@ -5,10 +5,24 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from octowright.artifacts.models import now_iso
+
+_REDACTED = "<redacted>"
+_SENSITIVE_KEYS = r"(?:password|token|api_key|authorization|cookie|set-cookie)"
+_KEY_VALUE_SECRET = re.compile(rf"\b({_SENSITIVE_KEYS})\s*=\s*([^\s,;]+)", re.IGNORECASE)
+_JSON_SECRET = re.compile(
+    rf'("{_SENSITIVE_KEYS}"\s*:\s*")([^"]*)(")',
+    re.IGNORECASE,
+)
+
+
+def redact_preview(preview: str) -> str:
+    redacted = _KEY_VALUE_SECRET.sub(rf"\1={_REDACTED}", preview)
+    return _JSON_SECRET.sub(rf"\1{_REDACTED}\3", redacted)
 
 
 class EvidenceBuilder:
@@ -53,7 +67,7 @@ class EvidenceBuilder:
                 "path": str(path),
                 "offset": offset,
                 "length": len(preview),
-                "preview": preview,
+                "preview": redact_preview(preview),
                 "ts": now_iso(),
             }
         )

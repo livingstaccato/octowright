@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from octowright._paths import atomic_write_text
+from octowright.artifacts.evidence import redact_preview
 from octowright.artifacts.models import now_iso
 from octowright.artifacts.redaction import redact_mapping
 
@@ -42,11 +43,22 @@ def write_run_bundle(
     result_payload = dict(result)
     result_payload["args_used"] = redact_mapping(result_payload.get("args_used"))
     result_payload["evidence_path"] = str(evidence_path)
+    evidence_payload = _redact_evidence(evidence)
 
     _json_write(result_path, result_payload)
-    _json_write(evidence_path, {"records": evidence})
-    atomic_write_text(summary_path, _render_summary(result_payload, evidence, summary), encoding="utf-8")
+    _json_write(evidence_path, {"records": evidence_payload})
+    atomic_write_text(summary_path, _render_summary(result_payload, evidence_payload, summary), encoding="utf-8")
     return {"result": result_path, "evidence": evidence_path, "summary": summary_path}
+
+
+def _redact_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    records = []
+    for record in evidence:
+        sanitized = dict(record)
+        if sanitized.get("type") == "log_excerpt" and isinstance(sanitized.get("preview"), str):
+            sanitized["preview"] = redact_preview(sanitized["preview"])
+        records.append(sanitized)
+    return records
 
 
 def _render_summary(result: dict[str, Any], evidence: list[dict[str, Any]], summary: str) -> str:
