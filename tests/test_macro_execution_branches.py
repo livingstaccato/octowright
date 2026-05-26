@@ -277,8 +277,8 @@ class TestRunMacroHappyPath:
     ) -> None:
         """Caller args echoed in args_used, with secret-like keys redacted."""
         patched_runners["register"]("m", [])
-        out = await run_macro(fake_session, "m", args={"email": "me@x", "pw": "secret"})
-        assert out["args_used"] == {"email": "me@x", "pw": "<redacted>"}
+        out = await run_macro(fake_session, "m", args={"flow": "checkout", "pw": "secret"})
+        assert out["args_used"] == {"flow": "checkout", "pw": "<redacted>"}
 
     @pytest.mark.anyio
     async def test_args_used_redacts_secret_like_keys(
@@ -290,9 +290,27 @@ class TestRunMacroHappyPath:
         out = await run_macro(
             fake_session,
             "m",
-            args={"username": "alice", sensitive_key: "fixture-value", sensitive_key_two: "fixture-value-two"},
+            args={"flow": "checkout", sensitive_key: "fixture-value", sensitive_key_two: "fixture-value-two"},
         )
-        assert out["args_used"] == {"username": "alice", sensitive_key: "<redacted>", sensitive_key_two: "<redacted>"}
+        assert out["args_used"] == {"flow": "checkout", sensitive_key: "<redacted>", sensitive_key_two: "<redacted>"}
+
+    @pytest.mark.anyio
+    async def test_args_used_redacts_email_and_username(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """``email`` / ``username`` are PII — redact in the response echo even
+        though they were resolved into the action payload at substitution time."""
+        patched_runners["register"]("m", [])
+        out = await run_macro(
+            fake_session,
+            "m",
+            args={"email": "me@x", "username": "alice", "flow": "login"},
+        )
+        assert out["args_used"] == {
+            "email": "<redacted>",
+            "username": "<redacted>",
+            "flow": "login",
+        }
 
     @pytest.mark.anyio
     async def test_args_used_defaults_to_empty_dict(

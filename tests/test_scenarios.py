@@ -135,14 +135,31 @@ def test_duplicate_persona_kind_rejected(fresh_scenarios):
             {
                 "name": "dup",
                 "participants": [
-                    {"persona": "a", "kind": "webkit", "role": "x"},
-                    {"persona": "a", "kind": "webkit", "role": "y"},
+                    {"persona": "a", "kind": "webkit", "role": "player"},
+                    {"persona": "a", "kind": "webkit", "role": "monitor"},
                 ],
             }
         )
     )
     with pytest.raises(ValueError, match="duplicate"):
         scenarios.load_scenario("dup")
+
+
+def test_unknown_role_rejected(fresh_scenarios):
+    """Typos like ``role: plyer`` would silently fan out to zero targets."""
+    scenarios, scen_dir = fresh_scenarios
+    (scen_dir / "bad-role.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "bad-role",
+                "participants": [
+                    {"persona": "a", "kind": "webkit", "role": "plyer"},
+                ],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="unknown role"):
+        scenarios.load_scenario("bad-role")
 
 
 def test_resolve_launch_kwargs_defaults(fresh_scenarios, tmp_path):
