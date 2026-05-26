@@ -24,7 +24,7 @@ _SENSITIVE_KEY_PARTS = (
     "credential",
     "private_key",
 )
-_SENSITIVE_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "email", "username"})
+_SENSITIVE_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "email", "username", "cookie", "set_cookie"})
 _CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
@@ -56,8 +56,8 @@ def redact_value(value: Any) -> Any:
 def redact_mapping(values: Mapping[str, Any] | None) -> dict[str, Any]:
     if not values:
         return {}
-    descriptor = values.get("name", values.get("key"))
-    redact_pair_value = isinstance(descriptor, str) and is_sensitive_key(descriptor)
+    descriptors = (values.get("name"), values.get("key"))
+    redact_pair_value = any(isinstance(descriptor, str) and is_sensitive_key(descriptor) for descriptor in descriptors)
     return {
         str(key): (
             REDACTED_VALUE
