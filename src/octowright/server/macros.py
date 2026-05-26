@@ -104,6 +104,23 @@ def macro_digest(name: str | None = None, recording_path: str | None = None, max
     return macro_artifacts.macro_digest(name=name, recording_path=recording_path, max_chars=max_chars)
 
 
+@mcp.tool(structured_output=False, description="Export a saved macro as an import-safe Python argparse CLI script.")
+def macro_export_cli(
+    name: str,
+    out_path: str | None = None,
+    args: dict[str, Any] | None = None,
+    include_evidence: bool = True,
+) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.export_macro_cli(
+        name=name,
+        out_path=out_path,
+        args=args,
+        include_evidence=include_evidence,
+    )
+
+
 @mcp.tool(
     structured_output=False,
     description=(
