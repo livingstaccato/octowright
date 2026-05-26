@@ -56,4 +56,13 @@ def redact_value(value: Any) -> Any:
 def redact_mapping(values: Mapping[str, Any] | None) -> dict[str, Any]:
     if not values:
         return {}
-    return {str(key): redact_value_for_key(str(key), value) for key, value in values.items()}
+    descriptor = values.get("name", values.get("key"))
+    redact_pair_value = isinstance(descriptor, str) and is_sensitive_key(descriptor)
+    return {
+        str(key): (
+            REDACTED_VALUE
+            if redact_pair_value and str(key) in {"value", "values"}
+            else redact_value_for_key(str(key), value)
+        )
+        for key, value in values.items()
+    }
