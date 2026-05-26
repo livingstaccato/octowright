@@ -130,6 +130,20 @@ def test_digest_recording_text_handles_protocol_relative_no_host_userinfo_urls()
     assert "frag" not in result["summary"]
 
 
+def test_digest_recording_text_rejects_multi_slash_userinfo_like_relative_urls() -> None:
+    text = json.dumps({"action": "navigate", "url": "////user:pass@host/path?token=secret#frag"})
+
+    result = digest_recording_text(text, max_chars=4000)
+
+    assert "first_url: (invalid-url)" in result["summary"]
+    assert "last_url: (invalid-url)" in result["summary"]
+    assert "user" not in result["summary"]
+    assert "pass" not in result["summary"]
+    assert "token" not in result["summary"]
+    assert "secret" not in result["summary"]
+    assert "frag" not in result["summary"]
+
+
 def test_digest_recording_text_handles_unclosed_ipv6_urls() -> None:
     text = json.dumps({"action": "navigate", "url": "https://[::1/path?token=secret#frag"})
 

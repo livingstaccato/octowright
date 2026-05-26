@@ -108,7 +108,7 @@ def _sanitize_url(url: str) -> str:
     if parts.netloc and not hostname:
         return INVALID_URL
     if not hostname:
-        return INVALID_URL if parts.scheme else parts._replace(query="", fragment="").geturl()[:MAX_LABEL_CHARS]
+        return _sanitize_relative_url(parts)
     netloc = _sanitize_hostname(hostname)
     try:
         port = parts.port
@@ -121,3 +121,17 @@ def _sanitize_url(url: str) -> str:
 
 def _sanitize_hostname(hostname: str) -> str:
     return f"[{hostname}]" if ":" in hostname else hostname
+
+
+def _sanitize_relative_url(parts: Any) -> str:
+    if parts.scheme:
+        return INVALID_URL
+    relative_url = parts._replace(query="", fragment="").geturl()[:MAX_LABEL_CHARS]
+    return INVALID_URL if _looks_like_relative_userinfo(relative_url) else relative_url
+
+
+def _looks_like_relative_userinfo(url: str) -> bool:
+    if not url.startswith("/"):
+        return False
+    userinfo_end = url.find("@")
+    return userinfo_end != -1 and ":" in url[:userinfo_end]
