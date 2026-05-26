@@ -60,20 +60,20 @@ async def test_index_serves_static_html() -> None:
             r = await client.get(s.url + "/")
         assert r.status_code == 200
         assert "Octowright Test Range" in r.text
-        assert "/assets/octowright-logo-512.png" in r.text
+        assert "/otto.svg" in r.text
     finally:
         await s.stop()
 
 
 @pytest.mark.anyio
-async def test_logo_asset_served_from_docs_image() -> None:
+async def test_logo_asset_served_as_svg() -> None:
     s = await _start_server()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
-            r = await client.get(s.url + "/assets/octowright-logo-512.png")
+            r = await client.get(s.url + "/otto.svg")
         assert r.status_code == 200
-        assert r.headers["content-type"] == "image/png"
-        assert r.content.startswith(b"\x89PNG")
+        assert r.headers["content-type"].startswith("image/svg+xml")
+        assert b"<svg" in r.content
     finally:
         await s.stop()
 
@@ -85,7 +85,7 @@ async def test_favicon_alias_serves_logo_without_404() -> None:
         async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
             r = await client.get(s.url + "/favicon.ico")
         assert r.status_code == 200
-        assert r.headers["content-type"] == "image/png"
+        assert r.headers["content-type"].startswith("image/svg+xml")
     finally:
         await s.stop()
 

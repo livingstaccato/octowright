@@ -68,6 +68,13 @@ code, .mono { font-family: var(--mono); }
   z-index: 100;
 }
 
+.topbar__logo {
+  display: block;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
 .topbar__title {
   display: flex;
   align-items: center;
@@ -77,13 +84,6 @@ code, .mono { font-family: var(--mono); }
   letter-spacing: -0.02em;
   color: var(--fg);
   margin: 0;
-}
-
-.topbar__title::before {
-  content: '◈';
-  color: var(--accent);
-  font-size: 17px;
-  line-height: 1;
 }
 
 .topbar__hint {
