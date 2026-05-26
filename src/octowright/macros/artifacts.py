@@ -25,6 +25,8 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
     store = ArtifactStore()
     manifest_path = store.macro_manifest_path(name)
     artifact_dir = manifest_path.parent
+    runs_dir = artifact_dir / "runs"
+    exports_dir = artifact_dir / "exports"
 
     manifest = _manifest_for_plan(
         name=name,
@@ -32,6 +34,8 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
         args_used=args_used,
         missing_args=missing_args,
         artifact_dir=artifact_dir,
+        runs_dir=runs_dir,
+        exports_dir=exports_dir,
     )
     if manifest_path.exists():
         manifest = _merge_existing_manifest(manifest_path, manifest)
@@ -46,6 +50,8 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
             "macro_path": str(macro_path(name)),
             "artifact_dir": str(artifact_dir),
             "manifest": str(manifest_path),
+            "runs_dir": str(runs_dir),
+            "exports_dir": str(exports_dir),
         },
     }
 
@@ -53,7 +59,7 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
 def list_macro_artifacts(name: str | None = None, limit: int = 20) -> dict[str, Any]:
     store = ArtifactStore()
     manifests = [store.root / "macros" / artifact_slug(name) / "artifact.json"] if name else _all_macro_manifests(store)
-    artifacts = [_compact_manifest(manifest) for manifest in manifests]
+    artifacts = [_compact_manifest(store, manifest) for manifest in manifests]
     artifacts = [artifact for artifact in artifacts if artifact is not None]
     artifacts.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
     capped = artifacts[: max(0, int(limit))]
@@ -86,6 +92,8 @@ def _manifest_for_plan(
     args_used: dict[str, Any],
     missing_args: list[str],
     artifact_dir: Path,
+    runs_dir: Path,
+    exports_dir: Path,
 ) -> dict[str, Any]:
     return new_manifest(
         artifact_type="macro",
@@ -96,7 +104,11 @@ def _manifest_for_plan(
             "description": macro.get("description"),
             "action_count": len(macro.get("actions", [])) if isinstance(macro.get("actions"), list) else 0,
             "missing_args": missing_args,
-            "paths": {"artifact_dir": str(artifact_dir)},
+            "paths": {
+                "artifact_dir": str(artifact_dir),
+                "runs_dir": str(runs_dir),
+                "exports_dir": str(exports_dir),
+            },
             "ready": not missing_args,
         },
     )
@@ -118,9 +130,14 @@ def _merge_existing_manifest(path: Path, manifest: dict[str, Any]) -> dict[str, 
     return merged
 
 
-def _compact_manifest(path: Path) -> dict[str, Any] | None:
+def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None:
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        contained_path = store._contained(path, label="macro artifact manifest")
+        contained_path.relative_to(store.root.resolve())
+    except (OSError, ValueError):
+        return None
+    try:
+        manifest = json.loads(contained_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
     if not isinstance(manifest, dict):
@@ -136,7 +153,7 @@ def _compact_manifest(path: Path) -> dict[str, Any] | None:
         "exports": manifest.get("exports", []),
         "critical_points": manifest.get("critical_points", []),
         "metadata": manifest.get("metadata", {}),
-        "path": str(path),
+        "path": str(contained_path),
     }
 
 

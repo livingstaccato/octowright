@@ -66,6 +66,9 @@ def test_plan_reports_missing_args_and_paths(monkeypatch: pytest.MonkeyPatch, tm
     assert plan["missing_args"] == ["password"]
     assert plan["args_used"] == {"email": "<redacted>"}
     assert str(recordings_dir / "artifacts" / "macros" / "login") in plan["paths"]["artifact_dir"]
+    assert str(recordings_dir / "artifacts" / "macros" / "login" / "runs") in plan["paths"]["runs_dir"]
+    assert str(recordings_dir / "artifacts" / "macros" / "login" / "exports") in plan["paths"]["exports_dir"]
+    assert str(recordings_dir / "artifacts" / "macros" / "login" / "artifact.json") in plan["paths"]["manifest"]
 
 
 def test_plan_ok_when_all_args_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -106,6 +109,36 @@ def test_list_macro_artifacts_skips_malformed_manifest(monkeypatch: pytest.Monke
     broken = recordings_dir / "artifacts" / "macros" / "broken"
     broken.mkdir(parents=True)
     (broken / "artifact.json").write_text(json.dumps(["not", "a", "manifest"]), encoding="utf-8")
+
+    listed = macro_artifacts.list_macro_artifacts()
+
+    assert [artifact["name"] for artifact in listed["artifacts"]] == ["login"]
+
+
+def test_list_macro_artifacts_skips_symlinked_manifest_outside_recordings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage, macro_artifacts, recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage)
+    macro_artifacts.plan_macro_artifact(
+        "login",
+        args={"email": "me@example.com", "password": "secret"},  # pragma: allowlist secret
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "artifact.json").write_text(
+        json.dumps(
+            {
+                "artifact_type": "macro",
+                "name": "outside",
+                "updated_at": "2999-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    macros_dir = recordings_dir / "artifacts" / "macros"
+    (macros_dir / "outside").symlink_to(outside, target_is_directory=True)
 
     listed = macro_artifacts.list_macro_artifacts()
 
