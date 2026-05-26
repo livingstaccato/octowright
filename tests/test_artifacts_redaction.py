@@ -50,6 +50,13 @@ def test_redact_mapping_redacts_header_pair_value_for_sensitive_name() -> None:
     }
 
 
+def test_redact_mapping_redacts_cookie_collections() -> None:
+    redacted = redact_mapping({"cookies": [{"name": "sid", "value": "abc"}]})
+
+    assert redacted == {"cookies": REDACTED_VALUE}
+    assert "abc" not in str(redacted)
+
+
 def test_redact_mapping_redacts_header_pair_value_for_sensitive_key() -> None:
     assert redact_mapping({"key": "api-key", "value": "abc"}) == {
         "key": "api-key",
