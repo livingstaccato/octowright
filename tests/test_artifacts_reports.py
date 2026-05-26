@@ -90,7 +90,11 @@ def test_write_run_bundle_writes_json_and_markdown(tmp_path: Path) -> None:
 
 
 def test_write_run_bundle_redacts_log_excerpt_preview(tmp_path: Path) -> None:
-    preview = 'password=hunter2 token=abc123 cookie=sessionid=raw "api_key":"key-123" "authorization": "Bearer raw-token"'  # pragma: allowlist secret
+    preview = (
+        "password=hunter2 token=abc123 cookie=sessionid=raw "
+        '"api_key":"key-123" "authorization": "Bearer raw-token" '  # pragma: allowlist secret
+        "authorization: Bearer colon-token Cookie: colon-session token: colon-abc password: colon-password"  # pragma: allowlist secret
+    )  # pragma: allowlist secret
     evidence = EvidenceBuilder()
     record = evidence.log_excerpt(
         path=tmp_path / "recording.jsonl",
@@ -98,6 +102,10 @@ def test_write_run_bundle_redacts_log_excerpt_preview(tmp_path: Path) -> None:
         preview=preview,  # pragma: allowlist secret
     )
     assert "hunter2" not in record["preview"]
+    assert "colon-token" not in record["preview"]
+    assert "colon-session" not in record["preview"]
+    assert "colon-abc" not in record["preview"]
+    assert "colon-password" not in record["preview"]
     raw_evidence = [
         {
             "id": "ev_001",
@@ -139,6 +147,10 @@ def test_write_run_bundle_redacts_log_excerpt_preview(tmp_path: Path) -> None:
     assert "sessionid=raw" not in evidence_text
     assert "key-123" not in evidence_text
     assert "Bearer raw-token" not in evidence_text
+    assert "Bearer colon-token" not in evidence_text
+    assert "colon-session" not in evidence_text
+    assert "colon-abc" not in evidence_text
+    assert "colon-password" not in evidence_text
 
 
 def test_write_run_bundle_uses_atomic_write_text(tmp_path: Path, monkeypatch: Any) -> None:
