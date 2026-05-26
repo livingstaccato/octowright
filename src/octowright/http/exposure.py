@@ -194,46 +194,53 @@ class SensitiveASGIGuard:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         scope_type = scope["type"]
         if scope_type in {"http", "websocket"} and not _sensitive_allowed_for_host(self._host):
-            if scope_type == "websocket":
-                await send({"type": "websocket.close", "code": 1008, "reason": _REMOTE_DISABLED_BODY["error"]})
-                return
-            payload = json.dumps(_REMOTE_DISABLED_BODY).encode("utf-8")
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 403,
-                    "headers": [
-                        (b"content-type", b"application/json"),
-                        (b"content-length", str(len(payload)).encode("ascii")),
-                    ],
-                }
-            )
-            await send({"type": "http.response.body", "body": payload})
+            await _send_blocked_asgi_response(send, scope_type, _REMOTE_DISABLED_BODY)
             return
-        if scope_type == "http":
-            headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope["headers"]}
-            if _cross_origin_blocked_from_parts(
-                method=str(scope.get("method", "GET")),
-                origin=headers.get("origin"),
-                sec_fetch_site=headers.get("sec-fetch-site"),
-                scheme=str(scope.get("scheme", "http")),
-                host=headers.get("host", ""),
-                side_effect_get=self._side_effect_get,
-            ):
-                payload = json.dumps({"error": "cross-origin dashboard request is blocked"}).encode("utf-8")
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 403,
-                        "headers": [
-                            (b"content-type", b"application/json"),
-                            (b"content-length", str(len(payload)).encode("ascii")),
-                        ],
-                    }
-                )
-                await send({"type": "http.response.body", "body": payload})
-                return
+        if scope_type in {"http", "websocket"} and _asgi_cross_origin_blocked(
+            scope, side_effect_get=self._side_effect_get
+        ):
+            await _send_blocked_asgi_response(send, scope_type, {"error": "cross-origin dashboard request is blocked"})
+            return
         await self.app(scope, receive, send)
+
+
+def _asgi_cross_origin_blocked(scope: Scope, *, side_effect_get: bool) -> bool:
+    scope_type = scope["type"]
+    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope["headers"]}
+    scheme = _http_scheme_for_scope(scope)
+    return _cross_origin_blocked_from_parts(
+        method=str(scope.get("method", "GET")) if scope_type == "http" else "GET",
+        origin=headers.get("origin"),
+        sec_fetch_site=headers.get("sec-fetch-site"),
+        scheme=scheme,
+        host=headers.get("host", ""),
+        side_effect_get=side_effect_get if scope_type == "http" else True,
+    )
+
+
+def _http_scheme_for_scope(scope: Scope) -> str:
+    scheme = str(scope.get("scheme", "http"))
+    if scope["type"] == "websocket":
+        return "https" if scheme in {"wss", "https"} else "http"
+    return scheme
+
+
+async def _send_blocked_asgi_response(send: Send, scope_type: str, body: dict[str, str]) -> None:
+    if scope_type == "websocket":
+        await send({"type": "websocket.close", "code": 1008, "reason": body["error"]})
+        return
+    payload = json.dumps(body).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 403,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(payload)).encode("ascii")),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": payload})
 
 
 def guard_sensitive_asgi_app(app: ASGIApp, *, host: str | None = None, side_effect_get: bool = False) -> ASGIApp:

@@ -24,8 +24,9 @@ import pytest
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from octowright import proxy_supervisor, singleton
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
@@ -259,7 +260,12 @@ def _build_guarded_mount_app(host: str, *, side_effect_get: bool = False) -> Sta
     async def _handler(_request: Request) -> Response:
         return JSONResponse({"ok": True})
 
-    mounted = Starlette(routes=[Route("/rpc", _handler, methods=["GET", "POST"])])
+    async def _ws_handler(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"ok": True})
+        await websocket.close()
+
+    mounted = Starlette(routes=[Route("/rpc", _handler, methods=["GET", "POST"]), WebSocketRoute("/ws", _ws_handler)])
     return Starlette(
         routes=[Mount("/mcp", app=guard_sensitive_asgi_app(mounted, host=host, side_effect_get=side_effect_get))]
     )
@@ -281,6 +287,46 @@ def test_guard_sensitive_asgi_app_blocks_cross_origin_post_to_loopback_mount(
 
     assert response.status_code == 403
     assert response.json() == {"error": "cross-origin dashboard request is blocked"}
+
+
+def test_guard_sensitive_asgi_app_blocks_cross_origin_websocket_to_loopback_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(DASHBOARD_REMOTE_ALLOWED_ENV, raising=False)
+    client = TestClient(_build_guarded_mount_app("127.0.0.1"))
+    with (
+        client,
+        pytest.raises(WebSocketDisconnect) as excinfo,
+        client.websocket_connect(
+            "/mcp/ws",
+            headers={
+                "origin": "https://attacker.example",
+                "sec-fetch-site": "cross-site",
+                "host": "127.0.0.1:8765",
+            },
+        ),
+    ):
+        pass
+
+    assert excinfo.value.code == 1008
+
+
+def test_guard_sensitive_asgi_app_allows_same_origin_websocket_to_loopback_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(DASHBOARD_REMOTE_ALLOWED_ENV, raising=False)
+    with (
+        TestClient(_build_guarded_mount_app("127.0.0.1")) as client,
+        client.websocket_connect(
+            "/mcp/ws",
+            headers={
+                "origin": "http://testserver",
+                "sec-fetch-site": "same-origin",
+                "host": "testserver",
+            },
+        ) as websocket,
+    ):
+        assert websocket.receive_json() == {"ok": True}
 
 
 def test_guard_sensitive_asgi_app_allows_same_origin_post_to_loopback_mount(
