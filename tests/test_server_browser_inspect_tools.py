@@ -40,6 +40,7 @@ def _session(log_root: Path | None = None) -> MagicMock:
     s.page.url = "https://octowright.com"
     s.page.title = AsyncMock(return_value="Example")
     s.page.locator.return_value.aria_snapshot = AsyncMock(return_value="aria-content")
+    s.snapshot = AsyncMock(return_value={"aria": "aria-content", "url": "https://octowright.com", "title": "Example"})
     s.screenshot = AsyncMock(return_value=Path("/tmp/shot.png"))
     s.evaluate = AsyncMock(return_value={"k": "v"})
     s.wait_for = AsyncMock(return_value=None)
@@ -55,12 +56,15 @@ def _session(log_root: Path | None = None) -> MagicMock:
 @pytest.mark.anyio
 async def test_snapshot_truncates_and_records(_patch_pool: MagicMock) -> None:
     s = _session()
-    s.page.locator.return_value.aria_snapshot = AsyncMock(return_value="x" * 20)
+    s.snapshot = AsyncMock(return_value={"aria": "x" * 20, "url": "https://octowright.com", "title": "Example"})
     _patch_pool.get.return_value = s
     out = await _inspect.browser_snapshot("i", max_chars=5)
     assert out["truncated"] is True
     assert out["aria_size"] == 20
-    s.recorder.record.assert_called_once()
+    # The MCP tool must route through session.snapshot so the JSONL gets a
+    # "snapshot" event — bypassing it would hide MCP-tool snapshots from
+    # macro replay / golden diffs / the audit trail.
+    s.snapshot.assert_awaited_once_with(selector="body")
 
 
 @pytest.mark.anyio
@@ -136,7 +140,7 @@ async def test_snapshot_default_selector(_patch_pool: MagicMock) -> None:
     s = _session()
     _patch_pool.get.return_value = s
     await _inspect.browser_snapshot("i")
-    s.page.locator.assert_called_once_with("body")
+    s.snapshot.assert_awaited_once_with(selector="body")
 
 
 @pytest.mark.anyio
@@ -302,6 +306,50 @@ async def test_browser_read_markdown_failure(_patch_pool: MagicMock) -> None:
     s.capture_markdown = AsyncMock(return_value=None)
     with pytest.raises(RuntimeError, match="markdown generation"):
         await _inspect.browser_read_markdown("i")
+
+
+@pytest.mark.anyio
+async def test_browser_snapshot_records_event_in_jsonl(_patch_pool: MagicMock, tmp_path: Path) -> None:
+    """Regression: the MCP tool must route through session.snapshot() so the
+    JSONL recording gets a "snapshot" event. Bypassing session.snapshot()
+    (calling page.locator(...).aria_snapshot() directly) would hide
+    MCP-tool snapshots from macro replay, golden diffs, and the audit
+    trail.
+    """
+    import json
+    from types import SimpleNamespace
+    from typing import Any
+
+    from octowright.recorder import Recorder
+    from octowright.session.core import BrowserSession
+
+    log_path = tmp_path / "rec.jsonl"
+    recorder = Recorder(log_path)
+
+    page: Any = SimpleNamespace(url="https://example.com")
+    page.title = AsyncMock(return_value="Ex")
+    page.locator = MagicMock()
+    page.locator.return_value.aria_snapshot = AsyncMock(return_value="- main")
+
+    session = BrowserSession(
+        instance_id="inst",
+        kind="chromium",
+        label=None,
+        url="https://example.com",
+        browser=None,
+        context=SimpleNamespace(),
+        page=page,
+        recorder=recorder,
+        log_path=log_path,
+    )
+    _patch_pool.get.return_value = session
+
+    await _inspect.browser_snapshot("inst", selector="main")
+
+    events = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+    snaps = [e for e in events if e.get("action") == "snapshot"]
+    assert snaps, f"expected a 'snapshot' event in JSONL, got: {events}"
+    assert snaps[0].get("selector") == "main"
 
 
 @pytest.mark.anyio
