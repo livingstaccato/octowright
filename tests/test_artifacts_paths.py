@@ -11,6 +11,17 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _restore_defaults() -> None:
+    yield
+
+    import octowright.artifacts.paths as paths
+    import octowright.defaults as defaults
+
+    importlib.reload(defaults)
+    importlib.reload(paths)
+
+
 def _reload_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     import octowright.defaults as defaults
 
@@ -39,6 +50,18 @@ def test_macro_artifact_dir_rejects_path_escape(monkeypatch: pytest.MonkeyPatch,
     store = paths.ArtifactStore(recordings_dir=recordings_dir)
     with pytest.raises(ValueError, match="outside"):
         store._contained(Path("/tmp/outside"), label="bad path")
+
+
+def test_macro_artifact_dir_rejects_symlinked_artifacts_escape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    paths, recordings_dir = _reload_paths(monkeypatch, tmp_path)
+    recordings_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-artifacts"
+    outside.mkdir()
+    (recordings_dir / "artifacts").symlink_to(outside, target_is_directory=True)
+
+    store = paths.ArtifactStore(recordings_dir=recordings_dir)
+    with pytest.raises(ValueError, match="outside"):
+        store.macro_dir("login")
 
 
 def test_next_run_dir_increments(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
