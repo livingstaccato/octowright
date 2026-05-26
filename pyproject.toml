@@ -89,6 +89,7 @@ artifacts = [
     "src/octowright/server/frontend/*.css",
     "src/octowright/server/frontend/*.js",
     "src/octowright/server/frontend/*.js.map",
+    "src/octowright/server/frontend/*.svg",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -122,6 +123,7 @@ artifacts = [
     "src/octowright/server/frontend/*.css",
     "src/octowright/server/frontend/*.js",
     "src/octowright/server/frontend/*.js.map",
+    "src/octowright/server/frontend/*.svg",
 ]
 
 [dependency-groups]
