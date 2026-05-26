@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
-from octowright.browser_pool.events import SessionClosedEvent
+from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReason
 from octowright.browser_pool.launch_helpers import rotate_har_path
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session_manifest import remove_session as remove_manifest_session
@@ -26,7 +26,7 @@ async def close_browser(
     pool: BrowserPool,
     instance_id: str,
     *,
-    _reason: str = "agent_close",
+    _reason: SessionCloseReason = "agent_close",
 ) -> dict[str, Any]:
     # Remove from the registry before awaiting session.close(); that call fires
     # close events wired by listeners, which should then no-op.
@@ -61,7 +61,7 @@ async def close_browser(
             kind=session.kind,
             label=session.label,
             profile=session.profile,
-            reason=_reason,  # type: ignore[arg-type]
+            reason=_reason,
             log_path=str(session.log_path),
         )
     )
