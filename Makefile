@@ -49,6 +49,9 @@ spdx-fix: ## Normalize SPDX headers in source files
 diagrams: ## Render docs/architecture/*.puml to SVG (requires `plantuml`)
 	bash scripts/render_diagrams.sh docs/architecture
 
+diagrams-png: ## Render diagrams to SVG + 2400-px PNG into /tmp/octowright-diagrams (requires `plantuml` + `rsvg-convert`)
+	bash scripts/render_diagrams.sh docs/architecture --png
+
 export-demos: ## Regenerate demo/tutorial-export/ from demo/bundles/ (no re-recording)
 	uv run --active python scripts/demos/sync_exports.py
 

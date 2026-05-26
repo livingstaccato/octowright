@@ -17,63 +17,78 @@ skinparam arrowColor #2563eb
 skinparam noteBackgroundColor #f9fafb
 skinparam noteBorderColor #d1d5db
 
+' Force vertical flow: session at top, write paths fan DOWN into
+' RECORDINGS_DIR, read-back paths sit in a separate cluster to the
+' side. The old layout had write arrows going down and read arrows
+' going up through the same labels — too many crossings.
+top to bottom direction
+
 [BrowserSession] as SESSION
 
-folder "RECORDINGS_DIR/" as REC {
-  file "<ts>-<kind>-<id>[-label].jsonl\nappend-only action log" as JSONL
-  folder "videos/<uuid8>/" as VDIR {
-    file "<hash>.webm\n(only if record_video=True)" as WEBM
+' ─── WRITE PATHS: every arrow leaves SESSION going down ───────────────
+package "Write paths — session produces artifacts" #f9fafb {
+  folder "RECORDINGS_DIR/" as REC {
+    file "<ts>-<kind>-<id>[-label].jsonl\nappend-only action log" as JSONL
+    folder "videos/<uuid8>/" as VDIR {
+      file "<hash>.webm\n(only if record_video=True)" as WEBM
+    }
+    folder "downloads/<instance_id>/" as DLDIR {
+      file "###-<filename>\n(per page.on('download'))" as DLFILES
+    }
+    file "<id>-fail-<ts>.png\n(diagnostic_bundle screenshot)" as FAILPNG
+    file "<id>-fail-<ts>.html\n(diagnostic_bundle HTML body)" as FAILHTML
+    file "<log>.trace.zip\n(if trace=True;\nshow with `npx playwright show-trace`)" as TRACEZIP
   }
-  folder "downloads/<instance_id>/" as DLDIR {
-    file "###-<filename>\n(per page.on('download'))" as DLFILES
+
+  folder "GOLDENS_DIR/" as GOLD {
+    file "<slug>.json\n(aria-tree baseline + url)" as GOLDFILE
   }
-  file "<id>-fail-<ts>.png\n(diagnostic_bundle screenshot)" as FAILPNG
-  file "<id>-fail-<ts>.html\n(diagnostic_bundle HTML body)" as FAILHTML
-  file "<log>.trace.zip\n(if trace=True;\nshow with `npx playwright show-trace`)" as TRACEZIP
 }
-
-folder "MACROS_DIR/" as MAC {
-  file "<slug>.json\n(macro body + parameters)" as MACFILE
-}
-
-folder "GOLDENS_DIR/" as GOLD {
-  file "<slug>.json\n(aria-tree baseline + url)" as GOLDFILE
-}
-
-folder "SCENARIOS_DIR/" as SCN {
-  file "<name>.yaml or .py\n(declarative or programmatic)" as SCNFILE
-}
-
-cloud "ffmpeg" as FFMPEG
-file "frame-####.png\n(extracted on demand)" as FRAMES
-file "octowright-report-<ts>.xml\n(JUnit XML)" as JUNIT
 
 SESSION --> JSONL : every recorder.record(...)
-SESSION ..> WEBM : Playwright record_video_dir
-SESSION ..> DLFILES : page.on('download')
-SESSION ..> FAILPNG : on macro_run failure
-SESSION ..> FAILHTML : on macro_run failure (≥0.4 KB preview inline)
-SESSION ..> TRACEZIP : on context.tracing.stop()
-
-JSONL ..> MACFILE : macro_save snapshots a recording
-MACFILE ..> SESSION : macro_run replays into a session
-
+SESSION --> WEBM : Playwright record_video_dir
+SESSION --> DLFILES : page.on('download')
+SESSION --> FAILPNG : on macro_run failure
+SESSION --> FAILHTML : on macro_run failure (≥0.4 KB preview inline)
+SESSION --> TRACEZIP : on context.tracing.stop()
 SESSION --> GOLDFILE : golden_save (aria_snapshot)
-GOLDFILE ..> SESSION : golden_assert (diff_trees)
 
-SCNFILE ..> SESSION : scenario_start / verify / fixtures
+' ─── READ-BACK PATHS: things that feed BACK into a session ────────────
+package "Read-back paths — disk drives a session" #fef9c3 {
+  folder "MACROS_DIR/" as MAC {
+    file "<slug>.json\n(macro body + parameters)" as MACFILE
+  }
+  folder "SCENARIOS_DIR/" as SCN {
+    file "<name>.yaml or .py\n(declarative or programmatic)" as SCNFILE
+  }
+}
+
+' JSONL → macro is a save-time snapshot, not a live read; keep it
+' visually distinct (dashed).
+JSONL ..> MACFILE : macro_save snapshots\na recording
+MACFILE --> SESSION : macro_run replays\ninto a session
+GOLDFILE --> SESSION : golden_assert\n(diff_trees)
+SCNFILE --> SESSION : scenario_start /\nverify / fixtures
+
+' ─── DERIVED ARTIFACTS (out-of-band, not a live session output) ───────
+package "Derived artifacts (post-hoc)" #f3f4f6 {
+  cloud "ffmpeg" as FFMPEG
+  file "frame-####.png\n(extracted on demand)" as FRAMES
+  file "octowright-report-<ts>.xml\n(JUnit XML)" as JUNIT
+  [runner.py / scenario_run_as_test] as TESTRUNNER
+}
 
 WEBM --> FFMPEG
 FFMPEG --> FRAMES : browser_extract_frames
+TESTRUNNER --> JUNIT : pass/fail per [test] or per role
 
-[runner.py / scenario_run_as_test] ..> JUNIT : pass/fail per [test] or per role
-
-note right of REC
+' ─── Path defaults ─────────────────────────────────────────────────────
+note bottom of REC
   Default: <octowright-state>/sessions/.
   OCTOWRIGHT_RECORDINGS overrides.
 end note
 
-note right of MAC
+note bottom of MAC
   Default: <octowright-config>/macros/.
   OCTOWRIGHT_MACROS_DIR overrides.
 end note

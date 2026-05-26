@@ -15,8 +15,14 @@ skinparam arrowColor #2563eb
 skinparam noteBorderColor #d1d5db
 skinparam noteBackgroundColor #f9fafb
 
+' Force top-to-bottom layering so user surfaces sit above live state
+' above session modules above the Playwright SDK boundary. This stops
+' the Playwright cloud from being placed off to a side, which used to
+' force session→PW and pool→PW arrows to cross multiple layers.
+top to bottom direction
+
 package "user surfaces" #eff6ff {
-  [server.py\nFastMCP, 63 tools] as SERVER
+  [server.py\nFastMCP (106 tools, slimmable via --profile)] as SERVER
   [cli.py\nclick: serve / test / scenario / persona] as CLI
 }
 
@@ -26,15 +32,9 @@ package "live state" #fef3c7 {
   [ScenarioPool\nscenarios_pool.py] as SPOOL
 }
 
-package "session modules" #fdf4ff {
-  [session/frames.py] as SF
-  [session/downloads.py] as SD
-  [session/locators.py] as SL
-}
-
 package "domain modules" #ecfccb {
   [personas.py\nPersona, load, migrate, creds] as PERSONAS
-  [engine_profiles.py\nengine-profile path layer] as PROFILES
+  [engine_profiles.py\nengine-profile path layer] as ENGPROF
   [scenarios.py\nScenario, Participant, loaders] as SCENARIOS
   [macros/\nstorage, import, substitute, run] as MACROS
   [runner.py\ntest-macro discovery + JUnit] as RUNNER
@@ -43,29 +43,37 @@ package "domain modules" #ecfccb {
   [stabilize.py\ndeterminism init script] as STABILIZE
 }
 
+package "session modules" #fdf4ff {
+  [session/frames.py] as SF
+  [session/downloads.py] as SD
+  [session/locators.py] as SL
+}
+
 package "infrastructure" #f3f4f6 {
   [defaults.py\nenv vars + paths] as DEFAULTS
   [recorder.py\nappend-only JSONL] as RECORDER
   [export.py\nrecording → playwright script] as EXPORT
 }
 
+' Playwright sits below everything that talks to it; only BrowserSession
+' and BrowserPool drive it, so the arrows stay vertical and short.
 cloud "Playwright async API" as PW
 
-' user surfaces drive live state
+' ── user surfaces drive live state ──
 CLI --> POOL
 CLI --> SPOOL
 SERVER --> POOL
 SERVER --> SPOOL
 
-' live state composition
+' ── live state composition ──
 POOL "1" *-- "*" SESSION : owns
 SPOOL "1" o-- "*" SESSION : participants
 SESSION ..> SF
 SESSION ..> SD
 SESSION ..> SL
 
-' domain dependencies
-POOL ..> PROFILES : engine_profile_dir
+' ── domain dependencies ──
+POOL ..> ENGPROF : engine_profile_dir
 POOL ..> STABILIZE : init script
 SCENARIOS ..> PERSONAS : default URL / macros / creds
 SCENARIOS ..> MACROS : run_macro per participant
@@ -77,13 +85,21 @@ SERVER ..> GOLDENS
 SERVER ..> VIDEO
 SERVER ..> MACROS
 
-' artifacts
+' ── artifacts ──
 SESSION ..> RECORDER : every action
 SESSION ..> EXPORT : on demand
-PROFILES --> PERSONAS : delegates path resolution
+ENGPROF --> PERSONAS : delegates path resolution
 
-' playwright
+' ── playwright (kept vertical by top-to-bottom direction) ──
 SESSION --> PW
 POOL --> PW
+
+' Anchor PW below session modules / infrastructure so the SESSION→PW
+' and POOL→PW arrows stay short and vertical instead of crossing the
+' whole diagram diagonally. Without these hints PlantUML places PW
+' wherever Graphviz feels like, usually bottom-left.
+SF -[hidden]down-> PW
+SD -[hidden]down-> PW
+SL -[hidden]down-> PW
 
 @enduml

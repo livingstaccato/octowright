@@ -11,7 +11,9 @@ so GitHub renders the diagrams without needing PlantUML installed by readers.
 | Persona on-disk layout | [`persona-layout.puml`](persona-layout.puml) | [`persona-layout.svg`](persona-layout.svg) |
 | Macro record → save → replay | [`macro-lifecycle.puml`](macro-lifecycle.puml) | [`macro-lifecycle.svg`](macro-lifecycle.svg) |
 | Artifact flow | [`artifact-flow.puml`](artifact-flow.puml) | [`artifact-flow.svg`](artifact-flow.svg) |
-| MCP tool inventory (annotated by capability profile) | [`mcp-tool-surface.puml`](mcp-tool-surface.puml) | [`mcp-tool-surface.svg`](mcp-tool-surface.svg) |
+| MCP tool inventory (high-level by capability profile) | [`mcp-tool-surface.puml`](mcp-tool-surface.puml) | [`mcp-tool-surface.svg`](mcp-tool-surface.svg) |
+
+The full per-tool inventory — every tool by profile, with counts that match `uv run octowright selftest` — lives in [`mcp-tool-inventory.md`](mcp-tool-inventory.md). Treat selftest as the source of truth; the diagram and the markdown table both lag if they drift.
 
 ## API contract
 
@@ -20,13 +22,18 @@ so GitHub renders the diagrams without needing PlantUML installed by readers.
 ## Regenerating
 
 ```bash
-make diagrams
+make diagrams       # SVG only (committed; cheap; what CI runs)
+make diagrams-png   # also rasterises each SVG to a 2400-px PNG in
+                    # /tmp/octowright-diagrams/ for offline review.
+                    # Bump width via OCTOWRIGHT_DIAGRAM_PNG_WIDTH=3600.
 # or, equivalently:
 bash scripts/render_diagrams.sh docs/architecture
+bash scripts/render_diagrams.sh docs/architecture --png
 ```
 
-Requires `plantuml` on PATH (`brew install plantuml` on macOS; PlantUML in turn
-needs Java 8+).
+`make diagrams` requires `plantuml` on PATH (`brew install plantuml`;
+PlantUML needs Java 8+). `make diagrams-png` also requires `rsvg-convert`
+(`brew install librsvg`).
 
 ## Conventions
 
