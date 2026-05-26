@@ -87,14 +87,17 @@ code, .mono { font-family: var(--mono); }
 }
 
 /* Brand lockup — matches site-octowright-com's nav-brand-lockup:
-   lowercase mono, "octo" in ink, "wright" in accent orange. */
+   lowercase mono, "octo" in ink, "wright" in accent orange. The two
+   halves are one continuous word; no gap between them. */
 .topbar__brand {
+  display: inline-block;
   font-family: var(--mono);
   text-transform: lowercase;
   font-weight: 500;
   font-size: 15px;
   letter-spacing: 0;
   color: var(--fg);
+  margin: 0;
 }
 
 .topbar__brand strong {
@@ -108,6 +111,8 @@ code, .mono { font-family: var(--mono); }
   gap: 8px;
   text-decoration: none;
 }
+
+.topbar__brand--link > span { display: inline-block; }
 
 .topbar__brand--link:hover { text-decoration: none; }
 .topbar__brand--link:hover strong { color: var(--accent-hi); }
