@@ -623,3 +623,18 @@ class TestHandleWebsocket:
         ws.on = MagicMock(side_effect=RuntimeError("boom"))
         # Must not raise.
         subj._handle_websocket(ws)
+
+    def test_binary_frame_cache_entry_uses_payload_b64_field(self, tmp_path: Path) -> None:
+        """Binary websocket cache entries use payload_b64 (not payload_text)."""
+        subj = _make_subject(tmp_path)
+        ws = MagicMock()
+        ws.url = "ws://x"
+        ws.id = "ws1"
+        subj._handle_websocket(ws)
+
+        frame_handler = ws.on.call_args_list[0].args[1]
+        frame_handler(SimpleNamespace(payload=b"\x00\x01abc", is_binary=True))
+
+        entry = json.loads(subj.websocket_path.read_text(encoding="utf-8").splitlines()[-1])
+        assert entry["payload_b64"] == base64.b64encode(b"\x00\x01abc").decode("ascii")
+        assert "payload_text" not in entry
