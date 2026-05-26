@@ -481,6 +481,9 @@ def check_credentials(persona: Persona) -> CredentialCheckReport:
     return {
         "persona": persona.name,
         "checked": checked,
-        "ok": passed == total and total > 0,
+        # A persona with zero declared credentials is not broken — it just
+        # has nothing to verify. Treat that as ok so callers can use the flag
+        # as "no missing creds" rather than "creds exist AND resolve".
+        "ok": total == 0 or passed == total,
         "summary": summary,
     }

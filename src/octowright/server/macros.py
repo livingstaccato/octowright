@@ -284,6 +284,7 @@ def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
             }
             for s in stale
         ],
+        "errors": summary["errors"],
     }
 
 

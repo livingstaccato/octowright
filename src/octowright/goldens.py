@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from octowright import defaults
+from octowright._paths import reject_unsafe_path
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -42,7 +43,13 @@ def save_golden(
 ) -> Path:
     """Write / overwrite <slug(name)>.json. Preserves created_at on overwrite."""
     GOLDENS_DIR.mkdir(parents=True, exist_ok=True)
-    path = GOLDENS_DIR / f"{_slug(name)}.json"
+    # slug() preserves "." and "-" so a literal "../etc/passwd" slugs to
+    # itself; the containment check is the security boundary, not slug().
+    path = reject_unsafe_path(
+        GOLDENS_DIR / f"{_slug(name)}.json",
+        GOLDENS_DIR,
+        label=f"golden name {name!r}",
+    )
 
     created_at = _now()
     if path.exists():
@@ -66,7 +73,11 @@ def save_golden(
 
 def load_golden(name: str) -> dict[str, Any]:
     """Return full golden dict. Raises FileNotFoundError if missing."""
-    path = GOLDENS_DIR / f"{_slug(name)}.json"
+    path = reject_unsafe_path(
+        GOLDENS_DIR / f"{_slug(name)}.json",
+        GOLDENS_DIR,
+        label=f"golden name {name!r}",
+    )
     if not path.exists():
         raise FileNotFoundError(f"no golden named {name!r} at {path}")
     return json.loads(path.read_text(encoding="utf-8"))
@@ -98,7 +109,11 @@ def list_goldens() -> list[dict[str, Any]]:
 
 def delete_golden(name: str) -> Path:
     """Delete a golden by name. Raises FileNotFoundError if missing."""
-    path = GOLDENS_DIR / f"{_slug(name)}.json"
+    path = reject_unsafe_path(
+        GOLDENS_DIR / f"{_slug(name)}.json",
+        GOLDENS_DIR,
+        label=f"golden name {name!r}",
+    )
     if not path.exists():
         raise FileNotFoundError(f"no golden named {name!r} at {path}")
     path.unlink()
@@ -127,6 +142,97 @@ def diff_trees(
     return diffs
 
 
+def _identity_key(node: Any, index: int) -> tuple[Any, ...]:
+    # Positional matching produces O(n) spurious diffs when a node is
+    # inserted at the head of a sibling list. Keying by semantic identity
+    # localizes the diff to the actually-added/removed node. Unkeyed
+    # values fall back to ("__index__", index) for legacy positional behavior.
+    if not isinstance(node, dict):
+        return ("__index__", index)
+    role = node.get("role")
+    if role is None:
+        return ("__index__", index)
+    return _identity_key_for_role(node, role, index)
+
+
+def _identity_key_for_role(node: dict, role: Any, index: int) -> tuple[Any, ...]:
+    name = node.get("name")
+    if name is not None:
+        return ("role+name", role, name)
+    ref_id = node.get("ref", node.get("id"))
+    if ref_id is not None:
+        return ("role+ref", role, ref_id)
+    label = node.get("accessible_label") or node.get("label") or node.get("text")
+    if label is not None:
+        return ("role+label", role, label)
+    return ("role+index", role, index)
+
+
+def _diff_unkeyed_lists(exp_list: list[Any], act_list: list[Any], path: str, diffs: list[dict[str, Any]]) -> None:
+    for i in range(max(len(exp_list), len(act_list))):
+        child_path = f"{path}/{i}"
+        if i >= len(exp_list):
+            diffs.append({"path": child_path, "op": "added", "expected": None, "actual": act_list[i]})
+        elif i >= len(act_list):
+            diffs.append({"path": child_path, "op": "removed", "expected": exp_list[i], "actual": None})
+        else:
+            _diff_nodes(exp_list[i], act_list[i], child_path, diffs)
+
+
+def _first_index_by_key(keys: list[tuple[Any, ...]]) -> dict[tuple[Any, ...], int]:
+    out: dict[tuple[Any, ...], int] = {}
+    for i, k in enumerate(keys):
+        out.setdefault(k, i)
+    return out
+
+
+def _diff_matched_pairs(
+    exp_list: list[Any],
+    act_list: list[Any],
+    exp_keys: list[tuple[Any, ...]],
+    act_idx_by_key: dict[tuple[Any, ...], int],
+    path: str,
+    diffs: list[dict[str, Any]],
+) -> set[int]:
+    matched_act: set[int] = set()
+    for i, key in enumerate(exp_keys):
+        child_path = f"{path}/{i}"
+        j = act_idx_by_key.get(key)
+        if j is None:
+            diffs.append({"path": child_path, "op": "removed", "expected": exp_list[i], "actual": None})
+        else:
+            matched_act.add(j)
+            _diff_nodes(exp_list[i], act_list[j], child_path, diffs)
+    return matched_act
+
+
+def _diff_child_lists(
+    exp_list: list[Any],
+    act_list: list[Any],
+    path: str,
+    diffs: list[dict[str, Any]],
+) -> None:
+    exp_keys = [_identity_key(n, i) for i, n in enumerate(exp_list)]
+    act_keys = [_identity_key(n, i) for i, n in enumerate(act_list)]
+
+    # If either side is fully unkeyed, preserve legacy positional behavior
+    # so callers passing lists of scalars or unkeyed dicts see stable diffs.
+    if all(k[0] == "__index__" for k in exp_keys) or all(k[0] == "__index__" for k in act_keys):
+        _diff_unkeyed_lists(exp_list, act_list, path, diffs)
+        return
+
+    act_idx_by_key = _first_index_by_key(act_keys)
+    exp_idx_by_key = _first_index_by_key(exp_keys)
+    matched_act = _diff_matched_pairs(exp_list, act_list, exp_keys, act_idx_by_key, path, diffs)
+
+    for j, key in enumerate(act_keys):
+        # Skip matched indices and keys already accounted for on the expected
+        # side (avoids double-reporting a duplicate-key collision).
+        if j in matched_act or key in exp_idx_by_key:
+            continue
+        diffs.append({"path": f"{path}/{j}", "op": "added", "expected": None, "actual": act_list[j]})
+
+
 def _diff_nodes(
     exp: Any,
     act: Any,
@@ -144,15 +250,7 @@ def _diff_nodes(
             else:
                 _diff_nodes(exp[key], act[key], child_path, diffs)
     elif isinstance(exp, list) and isinstance(act, list):
-        max_len = max(len(exp), len(act))
-        for i in range(max_len):
-            child_path = f"{path}/{i}"
-            if i >= len(exp):
-                diffs.append({"path": child_path, "op": "added", "expected": None, "actual": act[i]})
-            elif i >= len(act):
-                diffs.append({"path": child_path, "op": "removed", "expected": exp[i], "actual": None})
-            else:
-                _diff_nodes(exp[i], act[i], child_path, diffs)
+        _diff_child_lists(exp, act, path, diffs)
     else:
         if exp != act:
             diffs.append({"path": path, "op": "changed", "expected": exp, "actual": act})
