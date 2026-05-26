@@ -61,6 +61,66 @@ def macro_list() -> list[MacroListEntry]:
     return macro_mod.list_macros()
 
 
+@mcp.tool(structured_output=False, description="Plan/update a saved macro artifact manifest without running it.")
+def macro_artifact_plan(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.plan_macro_artifact(name=name, args=args)
+
+
+@mcp.tool(structured_output=False, description="List saved macro artifact manifests, newest first.")
+def macro_artifact_list(name: str | None = None, limit: int = 20) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.list_macro_artifacts(name=name, limit=limit)
+
+
+@mcp.tool(structured_output=False, description="Replay a macro and write an artifact bundle with evidence files.")
+async def macro_artifact_run(
+    instance_id: str,
+    name: str,
+    args: dict[str, Any] | None = None,
+    capture: bool = True,
+    notes: str | None = None,
+    slowmo_ms: int | None = None,
+) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    session = pool.get(instance_id)
+    return await macro_artifacts.run_macro_artifact(
+        session=session,
+        name=name,
+        args=args,
+        capture=capture,
+        notes=notes,
+        slowmo_ms=slowmo_ms,
+    )
+
+
+@mcp.tool(structured_output=False, description="Return a redacted digest for a saved macro or recording JSONL path.")
+def macro_digest(name: str | None = None, recording_path: str | None = None, max_chars: int = 4000) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.macro_digest(name=name, recording_path=recording_path, max_chars=max_chars)
+
+
+@mcp.tool(structured_output=False, description="Export a saved macro as an import-safe Python argparse CLI script.")
+def macro_export_cli(
+    name: str,
+    out_path: str | None = None,
+    args: dict[str, Any] | None = None,
+    include_evidence: bool = True,
+) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.export_macro_cli(
+        name=name,
+        out_path=out_path,
+        args=args,
+        include_evidence=include_evidence,
+    )
+
+
 @mcp.tool(
     structured_output=False,
     description=(

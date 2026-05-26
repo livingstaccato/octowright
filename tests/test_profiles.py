@@ -145,6 +145,19 @@ def test_delete_persona_raises_with_listing_hint(tmp_profiles_dir: Path) -> None
         _profiles.delete_persona("ghost")
 
 
+def test_macros_profile_includes_artifact_tools() -> None:
+    from octowright.server.profiles import PROFILES
+
+    tools = set(PROFILES["macros"])
+    assert {
+        "macro_artifact_plan",
+        "macro_artifact_run",
+        "macro_artifact_list",
+        "macro_digest",
+        "macro_export_cli",
+    } <= tools
+
+
 # ---------------------------------------------------------------------------
 # profile_dir delegation removed — see personas.engine_profile_dir directly.
 # ---------------------------------------------------------------------------

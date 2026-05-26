@@ -118,24 +118,42 @@ def websocket_origin_allowed(websocket: WebSocket) -> bool:
     return is_loopback_host(host_only)
 
 
+def _cross_origin_blocked_from_parts(
+    *,
+    method: str,
+    origin: str | None,
+    sec_fetch_site: str | None,
+    scheme: str,
+    host: str,
+    side_effect_get: bool,
+) -> bool:
+    """Shared cross-origin policy for Request handlers and mounted ASGI apps."""
+    # CORS preflight is always allowed; the follow-up request carries the
+    # method we actually care about and is checked on its own.
+    if method == "OPTIONS":
+        return False
+    if method in {"GET", "HEAD"} and not side_effect_get:
+        return False
+    if origin:
+        same_origin = f"{scheme}://{host}"
+        if origin != same_origin:
+            return True
+    return (sec_fetch_site or "").lower() in {"cross-site", "same-site"}
+
+
 def _cross_origin_blocked(request: Request, *, side_effect_get: bool) -> bool:
     """Block browser-driven unsafe cross-origin requests to localhost dashboard
     APIs. ``side_effect_get`` opts a GET/HEAD route into the same protection
     as POST/PUT/DELETE — use it for endpoints whose handler triggers work on
     the live browser (live screenshot, live markdown capture, etc.)."""
-    # CORS preflight is always allowed; the follow-up request carries the
-    # method we actually care about and is checked on its own.
-    if request.method == "OPTIONS":
-        return False
-    if request.method in {"GET", "HEAD"} and not side_effect_get:
-        return False
-    origin = request.headers.get("origin")
-    if origin:
-        same_origin = f"{request.url.scheme}://{request.headers.get('host', '')}"
-        if origin != same_origin:
-            return True
-    sec_fetch_site = (request.headers.get("sec-fetch-site") or "").lower()
-    return sec_fetch_site in {"cross-site", "same-site"}
+    return _cross_origin_blocked_from_parts(
+        method=request.method,
+        origin=request.headers.get("origin"),
+        sec_fetch_site=request.headers.get("sec-fetch-site"),
+        scheme=request.url.scheme,
+        host=request.headers.get("host", ""),
+        side_effect_get=side_effect_get,
+    )
 
 
 def guard_sensitive_http(
@@ -168,31 +186,62 @@ class SensitiveASGIGuard:
     closure keeps the guard correct regardless of mount nesting.
     """
 
-    def __init__(self, app: ASGIApp, host: str | None = None) -> None:
+    def __init__(self, app: ASGIApp, host: str | None = None, *, side_effect_get: bool = False) -> None:
         self.app = app
         self._host = host
+        self._side_effect_get = side_effect_get
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         scope_type = scope["type"]
         if scope_type in {"http", "websocket"} and not _sensitive_allowed_for_host(self._host):
-            if scope_type == "websocket":
-                await send({"type": "websocket.close", "code": 1008, "reason": _REMOTE_DISABLED_BODY["error"]})
-                return
-            payload = json.dumps(_REMOTE_DISABLED_BODY).encode("utf-8")
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 403,
-                    "headers": [
-                        (b"content-type", b"application/json"),
-                        (b"content-length", str(len(payload)).encode("ascii")),
-                    ],
-                }
-            )
-            await send({"type": "http.response.body", "body": payload})
+            await _send_blocked_asgi_response(send, scope_type, _REMOTE_DISABLED_BODY)
+            return
+        if scope_type in {"http", "websocket"} and _asgi_cross_origin_blocked(
+            scope, side_effect_get=self._side_effect_get
+        ):
+            await _send_blocked_asgi_response(send, scope_type, {"error": "cross-origin dashboard request is blocked"})
             return
         await self.app(scope, receive, send)
 
 
-def guard_sensitive_asgi_app(app: ASGIApp, *, host: str | None = None) -> ASGIApp:
-    return SensitiveASGIGuard(app, host=host)
+def _asgi_cross_origin_blocked(scope: Scope, *, side_effect_get: bool) -> bool:
+    scope_type = scope["type"]
+    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope["headers"]}
+    scheme = _http_scheme_for_scope(scope)
+    return _cross_origin_blocked_from_parts(
+        method=str(scope.get("method", "GET")) if scope_type == "http" else "GET",
+        origin=headers.get("origin"),
+        sec_fetch_site=headers.get("sec-fetch-site"),
+        scheme=scheme,
+        host=headers.get("host", ""),
+        side_effect_get=side_effect_get if scope_type == "http" else True,
+    )
+
+
+def _http_scheme_for_scope(scope: Scope) -> str:
+    scheme = str(scope.get("scheme", "http"))
+    if scope["type"] == "websocket":
+        return "https" if scheme in {"wss", "https"} else "http"
+    return scheme
+
+
+async def _send_blocked_asgi_response(send: Send, scope_type: str, body: dict[str, str]) -> None:
+    if scope_type == "websocket":
+        await send({"type": "websocket.close", "code": 1008, "reason": body["error"]})
+        return
+    payload = json.dumps(body).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 403,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(payload)).encode("ascii")),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": payload})
+
+
+def guard_sensitive_asgi_app(app: ASGIApp, *, host: str | None = None, side_effect_get: bool = False) -> ASGIApp:
+    return SensitiveASGIGuard(app, host=host, side_effect_get=side_effect_get)

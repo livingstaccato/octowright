@@ -446,7 +446,11 @@ def routes() -> list[Route]:
     return [
         Route("/api/sessions", guard_sensitive_http(list_sessions), methods=["GET"]),
         Route("/api/sessions", guard_sensitive_http(session_launch), methods=["POST"]),
-        Route("/api/sessions/{id}", guard_sensitive_http(session_detail), methods=["GET"]),
+        Route(
+            "/api/sessions/{id}",
+            guard_sensitive_http(session_detail, side_effect_get=True),
+            methods=["GET"],
+        ),
         Route("/api/sessions/{id}/recording", guard_sensitive_http(recording_delete), methods=["DELETE"]),
         Route("/api/sessions/{id}/relaunch", guard_sensitive_http(session_relaunch), methods=["POST"]),
         Route("/api/sessions/{id}", guard_sensitive_http(session_close), methods=["DELETE"]),
