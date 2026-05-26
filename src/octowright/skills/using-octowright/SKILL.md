@@ -48,10 +48,21 @@ Never "guess" a persona or launch a raw browser without checking for existing st
 - **PREFER**: Use the suggested persona to maintain login state and credentials.
 - **STABILIZE**: Set `stabilize: true` in `browser_launch` for mission-critical tasks (it adds a brief settling delay).
 
-### 2. Mandatory Teardown
-Resource leaks cause system instability.
-- **ALWAYS** call `browser_close` immediately after a task finishes (or fails).
+### 2. Teardown — User-Facing vs Agent-Internal
+
+Distinguish two kinds of browser launches; teardown discipline differs.
+
+**Agent-internal** (you launched it to do scripted work the user won't see directly — taking a snapshot, recording a macro, verifying a fact):
+- **ALWAYS** call `browser_close` immediately after the task finishes.
 - **EMERGENCY**: Use `browser_close_all` if you lose track of session IDs.
+
+**User-facing** (the user said "show me", "open", "navigate to", "launch", "let me see", or otherwise wants to look at or interact with the window):
+- **LEAVE IT OPEN.** The user controls when to close. They may keep clicking, resizing, or inspecting after you finish.
+- **DO NOT pass `viewport_w` / `viewport_h`** unless the user gave a specific size. Without those args, the launch defaults to a responsive viewport so the user can resize the window naturally — locking it to a fixed size breaks that affordance.
+- **DO NOT** call `browser_close` or `browser_close_all` unless the user asks you to.
+- If you genuinely need to take a screenshot of a user-facing browser, prefer the HTTP route `GET /api/sessions/{id}/screenshot/now` (returns image bytes inline; doesn't touch the user's window or close anything).
+
+If you can't tell which kind of launch a task wants, lean toward leaving it open — the cost of a lingering browser is small; the cost of closing a window the user was still using is large.
 
 ### 3. Debugging Hierarchy
 When an action fails (e.g., selector not found):
@@ -122,7 +133,9 @@ octowright restart --timeout 30           # extend shutdown / health-probe budge
 
 | Mistake | Consequence | Fix |
 | :--- | :--- | :--- |
-| Leaving browsers open | Memory exhaustion, "Zombie" processes. | Always `browser_close` in a `finally` block logic. |
+| Leaving an agent-internal browser open | Memory exhaustion, "Zombie" processes. | `browser_close` in a `finally` block logic. (User-facing browsers, where the user said "show me", stay open until *they* close them.) |
+| Closing a user-facing browser the user is still looking at | User loses their view; resizing/inspection interrupted. | If the user said "show me", "open", "navigate", leave it open. Only `browser_close` when the user asks. |
+| Passing `viewport_w` / `viewport_h` on a user-facing launch | Window viewport is locked; user can't resize naturally. | Omit the viewport args; the default is responsive. Only set a viewport when the user gave a specific size or the launch is for an internal screenshot. |
 | Manual login repetition | High token usage, fragile scripts. | Use **Personas** to persist session state. |
 | Guessing selectors | Frequent failures due to DOM changes. | Use `browser_snapshot` for the A11y tree. |
 | Overlooking iframes | Tools fail to find elements that are visible. | Use `browser_list_frames` then `browser_switch_frame`. |
@@ -131,7 +144,8 @@ octowright restart --timeout 30           # extend shutdown / health-probe budge
 If you catch yourself doing these, you are violating the Octowright workflow:
 - Launching a browser without calling `browser_suggest_for_url` first.
 - Attempting to "manually" log in when a Persona already exists.
-- Forgetting to call `browser_close` because "I'm not done yet" (Close it! You can always re-launch).
+- Forgetting to call `browser_close` after **agent-internal** work (close it! you can always re-launch).
+- Calling `browser_close` on a **user-facing** browser the user asked you to open (don't — they're still using it).
 - Guessing selectors after a failure instead of checking `browser_snapshot`.
 
 ## Rationalization Table
@@ -139,7 +153,8 @@ If you catch yourself doing these, you are violating the Octowright workflow:
 | Excuse | Reality |
 | :--- | :--- |
 | "It's just a quick check, I don't need a persona." | Raw browsers are fragile and lack cookies. `suggest_for_url` takes 2 seconds and saves minutes of manual login. |
-| "I'll close the browser at the very end of the session." | If the agent crashes or exceeds its turn limit, the browser becomes a "Zombie". Close it AFTER EACH TASK. |
+| "I'll close the browser at the very end of the session." | If the agent crashes or exceeds its turn limit, the browser becomes a "Zombie". Close internal-use browsers AFTER EACH TASK. (User-facing browsers stay open — the user closes them.) |
+| "I'll set viewport_w/h so the screenshot is reproducible." | Locks the user's window to a fixed viewport so they can't resize. Only set a viewport for agent-internal screenshot work, or when the user explicitly asked for a size. |
 | "I know the selector by heart." | Sites change. `browser_snapshot` provides the A11y tree which is more durable than your memory. |
 
 ## Quick Reference
@@ -152,7 +167,9 @@ If you catch yourself doing these, you are violating the Octowright workflow:
 | Start session | `browser_launch(kind, profile, ...)` |
 | Robust interaction | `browser_click(..., wait_for="visible")` |
 | Fix failing macro | `browser_snapshot` -> `macro_save` |
-| Cleanup | `browser_close` |
+| Cleanup (agent-internal browser) | `browser_close` |
+| Cleanup (user-facing browser) | Don't — user closes when they're done |
+| Screenshot a user-facing window without disturbing it | `curl /api/sessions/{id}/screenshot/now` |
 | Probe daemon health | `curl http://127.0.0.1:8765/api/health` |
 | Daemon is wedged | `octowright restart` (shell, not MCP) |
 | MCP `Transport closed` | Probe health, retry once, then run `scripts/bridge_reconnect_smoke.py` |
