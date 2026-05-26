@@ -81,6 +81,7 @@ async def macro_artifact_run(
     name: str,
     args: dict[str, Any] | None = None,
     capture: bool = True,
+    notes: str | None = None,
     slowmo_ms: int | None = None,
 ) -> dict[str, Any]:
     from octowright.macros import artifacts as macro_artifacts
@@ -91,6 +92,7 @@ async def macro_artifact_run(
         name=name,
         args=args,
         capture=capture,
+        notes=notes,
         slowmo_ms=slowmo_ms,
     )
 
