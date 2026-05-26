@@ -33,3 +33,39 @@ def test_yaml_participant_must_be_mapping() -> None:
 
     with pytest.raises(ValueError, match=r"participants\[0\].*mapping"):
         load_yaml_scenario(content, "bad")
+
+
+def test_yaml_participant_startup_macros_must_be_list_of_strings() -> None:
+    content = yaml.safe_dump(
+        {
+            "name": "bad",
+            "participants": [{"persona": "a", "kind": "webkit", "startup_macros": "login"}],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"participants\[0\].*startup_macros.*list of strings"):
+        load_yaml_scenario(content, "bad")
+
+
+def test_yaml_participant_viewports_must_be_integers_not_booleans() -> None:
+    content = yaml.safe_dump(
+        {
+            "name": "bad",
+            "participants": [{"persona": "a", "kind": "webkit", "viewport_w": True}],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"participants\[0\].*viewport_w.*integer"):
+        load_yaml_scenario(content, "bad")
+
+
+def test_yaml_participant_flags_must_be_booleans() -> None:
+    content = yaml.safe_dump(
+        {
+            "name": "bad",
+            "participants": [{"persona": "a", "kind": "webkit", "trace": "yes"}],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"participants\[0\].*trace.*boolean"):
+        load_yaml_scenario(content, "bad")
