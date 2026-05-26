@@ -13,6 +13,8 @@ guard.
 
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -166,3 +168,53 @@ async def test_atomic_write_via_writer_target_is_symlink_outside_safe_dir(tmp_pa
     assert outside_target.read_text() == "untouched"
     assert target.read_text() == "safe-payload"
     assert not target.is_symlink()
+
+
+# ---------------------------------------------------------------------------
+# atomic write helpers preserve the target's existing mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses ACLs/read-only attributes, not POSIX mode bits")
+def test_atomic_write_text_preserves_existing_target_mode(tmp_path: Path) -> None:
+    from octowright._paths import atomic_write_text
+
+    target = tmp_path / "perm.txt"
+    target.write_text("old")
+    os.chmod(target, 0o644)
+
+    atomic_write_text(target, "new")
+
+    assert target.read_text() == "new"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses ACLs/read-only attributes, not POSIX mode bits")
+def test_atomic_write_text_leaves_new_file_at_tempfile_default(tmp_path: Path) -> None:
+    from octowright._paths import atomic_write_text
+
+    target = tmp_path / "fresh.txt"
+    atomic_write_text(target, "hello")
+
+    assert target.read_text() == "hello"
+    # No prior file → no mode to inherit; NamedTemporaryFile's 0o600 default
+    # carries through. Documenting the behaviour so a future change is intentional.
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses ACLs/read-only attributes, not POSIX mode bits")
+async def test_atomic_write_via_writer_preserves_existing_target_mode(tmp_path: Path) -> None:
+    from octowright._paths import atomic_write_via_writer
+
+    target = tmp_path / "perm.txt"
+    target.write_text("old")
+    os.chmod(target, 0o640)
+
+    async def writer(tmp: Path) -> None:
+        tmp.write_text("new")
+
+    await atomic_write_via_writer(target, writer)
+
+    assert target.read_text() == "new"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640

@@ -88,19 +88,7 @@ def load_yaml_scenario(content: str, name: str) -> Scenario:
         )
         raw = {}
     participants = [
-        Participant(
-            persona=p["persona"],
-            kind=p["kind"],
-            role=p.get("role", "player"),
-            url=p.get("url"),
-            startup_macros=p.get("startup_macros"),
-            viewport_w=p.get("viewport_w"),
-            viewport_h=p.get("viewport_h"),
-            stabilize=p.get("stabilize"),
-            record_video=p.get("record_video"),
-            trace=p.get("trace"),
-        )
-        for p in raw.get("participants", [])
+        _load_yaml_participant(p, index=i, scenario_name=name) for i, p in enumerate(raw.get("participants", []))
     ]
     teardown_raw = raw.get("teardown") or {}
     scenario = Scenario(
@@ -113,6 +101,71 @@ def load_yaml_scenario(content: str, name: str) -> Scenario:
     )
     _validate_scenario(scenario)
     return scenario
+
+
+def _load_yaml_participant(raw: Any, *, index: int, scenario_name: str) -> Participant:
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"scenario {scenario_name!r}: participants[{index}] must be a mapping, got {type(raw).__name__}"
+        )
+    _validate_required_participant_strings(raw, index=index, scenario_name=scenario_name)
+    startup_macros = _validate_startup_macros(raw.get("startup_macros"), index=index, scenario_name=scenario_name)
+    _validate_optional_ints(raw, ("viewport_w", "viewport_h"), index=index, scenario_name=scenario_name)
+    _validate_optional_bools(raw, ("stabilize", "record_video", "trace"), index=index, scenario_name=scenario_name)
+    return Participant(
+        persona=raw["persona"],
+        kind=raw["kind"],
+        role=raw.get("role", "player"),
+        url=raw.get("url"),
+        startup_macros=startup_macros,
+        viewport_w=raw.get("viewport_w"),
+        viewport_h=raw.get("viewport_h"),
+        stabilize=raw.get("stabilize"),
+        record_video=raw.get("record_video"),
+        trace=raw.get("trace"),
+    )
+
+
+def _validate_required_participant_strings(raw: dict[str, Any], *, index: int, scenario_name: str) -> None:
+    for field_name in ("persona", "kind"):
+        if not isinstance(raw.get(field_name), str) or not raw[field_name]:
+            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] missing required {field_name!r}")
+
+
+def _validate_startup_macros(value: Any, *, index: int, scenario_name: str) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str) or not isinstance(value, list) or not all(isinstance(macro, str) for macro in value):
+        raise ValueError(
+            f"scenario {scenario_name!r}: participants[{index}] 'startup_macros' must be a list of strings"
+        )
+    return value
+
+
+def _validate_optional_ints(
+    raw: dict[str, Any],
+    fields: tuple[str, ...],
+    *,
+    index: int,
+    scenario_name: str,
+) -> None:
+    for field_name in fields:
+        value = raw.get(field_name)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be an integer")
+
+
+def _validate_optional_bools(
+    raw: dict[str, Any],
+    fields: tuple[str, ...],
+    *,
+    index: int,
+    scenario_name: str,
+) -> None:
+    for field_name in fields:
+        value = raw.get(field_name)
+        if value is not None and not isinstance(value, bool):
+            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be a boolean")
 
 
 def load_python_scenario(path: Path) -> Scenario:

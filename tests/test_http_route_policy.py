@@ -41,6 +41,7 @@ from octowright.http.routes.registry import all_routes
 # open).
 _SIDE_EFFECT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\blive\.capture_\w+"),
+    re.compile(r"\.aria_snapshot\b"),
     re.compile(r"\.page\.screenshot\b"),
     re.compile(r"\.page\.evaluate\b"),
     re.compile(r"\.page\.snapshot\b"),
