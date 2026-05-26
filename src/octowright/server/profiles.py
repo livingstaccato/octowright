@@ -88,9 +88,14 @@ PROFILES: dict[str, list[str]] = {
     ],
     # Macro recording, replay, lint, repair, compile.
     "macros": [
+        "macro_artifact_list",
+        "macro_artifact_plan",
+        "macro_artifact_run",
         "macro_compile",
         "macro_delete",
+        "macro_digest",
         "macro_explain",
+        "macro_export_cli",
         "macro_lint",
         "macro_list",
         "macro_repair_preview",
