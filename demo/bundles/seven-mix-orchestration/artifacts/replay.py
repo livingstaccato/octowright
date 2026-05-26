@@ -23,6 +23,10 @@ async def main() -> None:
         browser = await p.chromium.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
+        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"))
+        browser = await p.chromium.launch(headless=False)
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=p6&colour=%231e88e5"))
         browser = await p.chromium.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
@@ -31,23 +35,19 @@ async def main() -> None:
         browser = await p.webkit.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
-        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935"))
-        browser = await p.webkit.launch(headless=False)
-        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=operator&colour=%23000"))
         browser = await p.webkit.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
-        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=p3&colour=%23fdd835"))
+        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"))
         browser = await p.webkit.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
-        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"))
-        browser = await p.chromium.launch(headless=False)
+        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935"))
+        browser = await p.webkit.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
-        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"))
+        await page.goto(_resolve_bundle_url("http://127.0.0.1:7900/canvas.html?role=p3&colour=%23fdd835"))
         browser = await p.firefox.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
@@ -94,26 +94,6 @@ async def main() -> None:
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
-            await page.click('[data-testid="tile-3-5"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-3-5"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-3-5"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-5-7"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-5-7"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
             await page.click('[data-testid="tile-2-2"]')
         try:
             await page.get_by_role("player", name="").click()
@@ -126,19 +106,15 @@ async def main() -> None:
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
-            await page.click('[data-testid="tile-5-7"]')
+            await page.click('[data-testid="tile-3-5"]')
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
-            await page.click('[data-testid="tile-5-7"]')
+            await page.click('[data-testid="tile-3-5"]')
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
-            await page.click('[data-testid="tile-7-3"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-7-3"]')
+            await page.click('[data-testid="tile-3-5"]')
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
@@ -150,25 +126,19 @@ async def main() -> None:
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
-            await page.click('[data-testid="tile-7-3"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-8-8"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-8-8"]')
-        await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
+            await page.click('[data-testid="tile-5-7"]')
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
             await page.click('[data-testid="tile-5-7"]')
-        await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
-            await page.click('[data-testid="tile-7-3"]')
+            await page.click('[data-testid="tile-5-7"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-5-7"]')
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
@@ -180,8 +150,43 @@ async def main() -> None:
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
+            await page.click('[data-testid="tile-7-3"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-7-3"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-7-3"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-5-7"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-7-3"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
             await page.click('[data-testid="tile-8-8"]')
-        await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-7-3"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-8-8"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-8-8"]')
+        try:
+            await page.get_by_role("player", name="").click()
+        except Exception:
+            await page.click('[data-testid="tile-8-8"]')
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
@@ -195,19 +200,14 @@ async def main() -> None:
             await page.get_by_role("player", name="").click()
         except Exception:
             await page.click('[data-testid="tile-8-8"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-7-3"]')
+        await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
+        await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
         await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
         try:
             await page.get_by_role("player", name="").click()
         except Exception:
             await page.click('[data-testid="tile-8-8"]')
-        try:
-            await page.get_by_role("player", name="").click()
-        except Exception:
-            await page.click('[data-testid="tile-8-8"]')
+        await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
         await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
         await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length")
         await page.wait_for_selector("#grid")
