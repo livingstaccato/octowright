@@ -42,7 +42,7 @@ participants:
   - persona: ops
     kind: firefox
     role: monitor
-    url: https://example.com/monitor
+    url: https://octowright.com/monitor
 
 fixtures:
   mock_routes:

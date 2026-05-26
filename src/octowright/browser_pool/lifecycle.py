@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
+from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReason
 from octowright.browser_pool.launch_helpers import rotate_har_path
+from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session_manifest import remove_session as remove_manifest_session
 
 if TYPE_CHECKING:
@@ -20,7 +22,12 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-async def close_browser(pool: BrowserPool, instance_id: str) -> dict[str, Any]:
+async def close_browser(
+    pool: BrowserPool,
+    instance_id: str,
+    *,
+    _reason: SessionCloseReason = "agent_close",
+) -> dict[str, Any]:
     # Remove from the registry before awaiting session.close(); that call fires
     # close events wired by listeners, which should then no-op.
     async with pool._sessions_lock:
@@ -44,6 +51,19 @@ async def close_browser(pool: BrowserPool, instance_id: str) -> dict[str, Any]:
         kind=session.kind,
         profile=session.profile,
         log_path=str(session.log_path),
+    )
+    # Notify MCP clients that the session has closed. ``_reason`` is
+    # ``agent_close`` for explicit tool calls and ``shutdown`` when the pool
+    # tears down on daemon exit.
+    session_event_bus.publish_nowait(
+        SessionClosedEvent(
+            instance_id=instance_id,
+            kind=session.kind,
+            label=session.label,
+            profile=session.profile,
+            reason=_reason,
+            log_path=str(session.log_path),
+        )
     )
     return {
         "closed": True,
@@ -145,13 +165,22 @@ async def handoff_browser(
 
 
 async def shutdown_pool(pool: BrowserPool) -> None:
-    await pool.close_all()
+    # Use the ``shutdown`` reason so MCP clients can distinguish daemon exit
+    # from an agent explicitly calling ``browser_close_all``.
+    await pool.close_all(_reason="shutdown")
     if pool._pw is not None:
         await pool._pw.stop()
         pool._pw = None
-    for tmpdir in pool._session_profile_dirs.values():
+    # Hold ``_sessions_lock`` across the snapshot-and-clear so a concurrent
+    # ``_resolve_session_dir`` (which mints tmpdirs under the same lock) can't
+    # slip a new entry into the dict between our iteration and ``.clear()``.
+    # Without this, a launch racing shutdown would create a tmpdir that the
+    # cleanup loop has already iterated past, leaking the directory.
+    async with pool._sessions_lock:
+        tmpdirs = list(pool._session_profile_dirs.values())
+        pool._session_profile_dirs.clear()
+    for tmpdir in tmpdirs:
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
         except OSError:
             pass
-    pool._session_profile_dirs.clear()

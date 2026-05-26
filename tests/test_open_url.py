@@ -24,7 +24,7 @@ from octowright.recorder import Recorder
 from octowright.session import BrowserSession
 
 
-def _make_page(url: str = "https://example.com") -> MagicMock:
+def _make_page(url: str = "https://octowright.com") -> MagicMock:
     p = MagicMock()
     p.url = url
     p.close = AsyncMock()
@@ -34,7 +34,7 @@ def _make_page(url: str = "https://example.com") -> MagicMock:
     return p
 
 
-def _make_session(tmp_path: Path, url: str = "https://example.com") -> BrowserSession:
+def _make_session(tmp_path: Path, url: str = "https://octowright.com") -> BrowserSession:
     log_path = tmp_path / "test.jsonl"
     recorder = Recorder(log_path)
     page = _make_page(url)
@@ -66,10 +66,10 @@ def _last_logged(tmp_path: Path) -> dict:
 @pytest.mark.anyio
 async def test_open_url_tab_appends_page_and_navigates(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    new_page = _make_page("https://target.example.com")
+    new_page = _make_page("https://target.octowright.com")
     session.context.new_page = AsyncMock(return_value=new_page)
 
-    result = await session.open_url("https://target.example.com", target="tab")
+    result = await session.open_url("https://target.octowright.com", target="tab")
 
     session.context.new_page.assert_awaited_once()
     new_page.goto.assert_awaited_once()
@@ -77,7 +77,7 @@ async def test_open_url_tab_appends_page_and_navigates(tmp_path: Path) -> None:
         "ok": True,
         "target": "tab",
         "page_index": 1,
-        "url": "https://target.example.com",
+        "url": "https://target.octowright.com",
     }
     assert session.pages[1] is new_page
 
@@ -85,16 +85,16 @@ async def test_open_url_tab_appends_page_and_navigates(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_open_url_tab_records_open_event(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    new_page = _make_page("https://target.example.com")
+    new_page = _make_page("https://target.octowright.com")
     session.context.new_page = AsyncMock(return_value=new_page)
 
-    await session.open_url("https://target.example.com", target="tab")
+    await session.open_url("https://target.octowright.com", target="tab")
 
     last = _last_logged(tmp_path)
     assert last["action"] == "open_url"
     assert last["target"] == "tab"
     assert last["page_index"] == 1
-    assert last["url"] == "https://target.example.com"
+    assert last["url"] == "https://target.octowright.com"
 
 
 @pytest.mark.anyio
@@ -106,7 +106,7 @@ async def test_open_url_tab_reports_navigation_failure(tmp_path: Path) -> None:
     new_page.goto = AsyncMock(side_effect=TimeoutError("nav timeout"))
     session.context.new_page = AsyncMock(return_value=new_page)
 
-    result = await session.open_url("https://slow.example.com", target="tab")
+    result = await session.open_url("https://slow.octowright.com", target="tab")
 
     assert result["ok"] is False
     assert "nav timeout" in result["error"]
@@ -148,7 +148,7 @@ async def test_open_url_tab_logs_warning_on_nav_failure(tmp_path: Path, monkeypa
     new_page.goto = AsyncMock(side_effect=TimeoutError("nav timeout"))
     session.context.new_page = AsyncMock(return_value=new_page)
 
-    await session.open_url("https://slow.example.com", target="tab")
+    await session.open_url("https://slow.octowright.com", target="tab")
 
     events = [name for name, _ in cap.events]
     assert "octowright.open_url.nav_failed" in events
@@ -165,11 +165,11 @@ async def test_open_url_window_logs_warning_on_load_state_failure(
     monkeypatch.setattr(_ops, "log", cap)
 
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     popup.wait_for_load_state = AsyncMock(side_effect=TimeoutError("load state timeout"))
     session.page.expect_popup = MagicMock(return_value=_FakePopupCtx(popup))
 
-    await session.open_url("https://popup.example.com", target="window")
+    await session.open_url("https://popup.octowright.com", target="window")
 
     events = [name for name, _ in cap.events]
     assert "octowright.open_url.nav_failed" in events
@@ -206,21 +206,21 @@ class _FakePopupCtx:
 @pytest.mark.anyio
 async def test_open_url_window_uses_evaluate_and_appends_popup(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session.page.expect_popup = MagicMock(return_value=_FakePopupCtx(popup))
 
-    result = await session.open_url("https://popup.example.com", target="window", width=900, height=700)
+    result = await session.open_url("https://popup.octowright.com", target="window", width=900, height=700)
 
     session.page.expect_popup.assert_called_once()
     session.page.evaluate.assert_awaited_once()
     # The evaluate call passes our url + size dict.
     args = session.page.evaluate.await_args
-    assert args.args[1] == {"u": "https://popup.example.com", "w": 900, "h": 700}
+    assert args.args[1] == {"u": "https://popup.octowright.com", "w": 900, "h": 700}
     assert result == {
         "ok": True,
         "target": "window",
         "page_index": 1,
-        "url": "https://popup.example.com",
+        "url": "https://popup.octowright.com",
     }
     assert session.pages[1] is popup
 
@@ -228,10 +228,10 @@ async def test_open_url_window_uses_evaluate_and_appends_popup(tmp_path: Path) -
 @pytest.mark.anyio
 async def test_open_url_window_records_open_event(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    popup = _make_page("https://popup.example.com")
+    popup = _make_page("https://popup.octowright.com")
     session.page.expect_popup = MagicMock(return_value=_FakePopupCtx(popup))
 
-    await session.open_url("https://popup.example.com", target="window")
+    await session.open_url("https://popup.octowright.com", target="window")
 
     last = _last_logged(tmp_path)
     assert last["action"] == "open_url"

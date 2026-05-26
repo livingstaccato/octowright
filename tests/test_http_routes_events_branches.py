@@ -498,6 +498,13 @@ class _FakeWebSocket:
         self.close_code = code
         self.close_reason = reason
 
+    async def receive(self) -> dict[str, Any]:
+        # _stream_tail races receive() against the per-tick sleep; in tests the
+        # sleep is monkeypatched to return immediately so receive must outlive
+        # it — sleep forever and let the cancel branch tear it down.
+        await asyncio.Event().wait()
+        return {"type": "websocket.disconnect"}  # pragma: no cover
+
 
 def _patch_stream_tail_loop(
     monkeypatch: pytest.MonkeyPatch,
@@ -693,3 +700,50 @@ class TestCloseUnknownOrClosed:
         assert ws.close_code == 1008
         assert ws.close_reason is not None
         assert "ghostid" in ws.close_reason
+
+
+# ─── _sleep_or_disconnect — disconnect race tears down promptly ─────────────
+
+
+class _RaceWebSocket:
+    """Fake WS whose ``receive`` resolves at a configurable time."""
+
+    def __init__(self, disconnect_after: float | None) -> None:
+        self._disconnect_after = disconnect_after
+
+    async def receive(self) -> dict[str, Any]:
+        if self._disconnect_after is None:
+            await asyncio.Event().wait()  # never returns
+        await asyncio.sleep(self._disconnect_after)
+        return {"type": "websocket.disconnect"}
+
+    async def send_json(self, payload: dict[str, Any]) -> None:  # pragma: no cover
+        raise AssertionError("should not be called in this test")
+
+    async def close(self, code: int | None = None, reason: str | None = None) -> None:  # pragma: no cover
+        return None
+
+
+class TestSleepOrDisconnect:
+    @pytest.mark.anyio
+    async def test_disconnect_during_sleep_returns_within_ms(self) -> None:
+        """A disconnect mid-sleep must tear down well under the sleep budget.
+
+        Sleep budget: 1.0s. Disconnect at 10ms. Total elapsed should be ~10ms,
+        not ~1s. Allow 200ms slop for CI scheduler jitter — even that is 5x
+        better than the pre-fix worst case of TAIL_POLL_SECONDS.
+        """
+        ws = _RaceWebSocket(disconnect_after=0.01)
+        loop = asyncio.get_event_loop()
+        t0 = loop.time()
+        ok = await _events._sleep_or_disconnect(ws, seconds=1.0)  # type: ignore[arg-type]
+        elapsed = loop.time() - t0
+        assert ok is False
+        assert elapsed < 0.2, f"cleanup took {elapsed:.3f}s, expected <0.2s"
+
+    @pytest.mark.anyio
+    async def test_sleep_completes_normally_when_no_disconnect(self) -> None:
+        """When the client stays connected, the sleep elapses and returns True."""
+        ws = _RaceWebSocket(disconnect_after=None)
+        ok = await _events._sleep_or_disconnect(ws, seconds=0.02)  # type: ignore[arg-type]
+        assert ok is True

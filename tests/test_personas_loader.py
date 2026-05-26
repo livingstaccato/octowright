@@ -255,10 +255,10 @@ def test_create_persona_minimal_writes_yaml_and_returns_dir(tmp_path, fresh_pers
 def test_create_persona_with_display_name_and_default_url(tmp_path, fresh_personas):
     """Mutation: dropping the ``if display_name`` / ``if default_url`` branch
     would either always include or always exclude the fields."""
-    pdir = fresh_personas.create_persona("ziggy", display_name="Zazzle Ziggy", default_url="https://example.com")
+    pdir = fresh_personas.create_persona("ziggy", display_name="Zazzle Ziggy", default_url="https://octowright.com")
     doc = yaml.safe_load((pdir / "profile.yaml").read_text())
     assert doc["display_name"] == "Zazzle Ziggy"
-    assert doc["default_url"] == "https://example.com"
+    assert doc["default_url"] == "https://octowright.com"
 
 
 def test_create_persona_existing_yaml_raises_with_path(tmp_path, fresh_personas):

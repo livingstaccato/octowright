@@ -74,7 +74,7 @@ def anyio_backend() -> str:
 
 def _ok_page(html: str = "<x/>") -> MagicMock:
     page = MagicMock()
-    page.url = "https://example.com"
+    page.url = "https://octowright.com"
     page.title = AsyncMock(return_value="Title")
     page.content = AsyncMock(return_value=html)
     page.screenshot = AsyncMock()
@@ -142,7 +142,7 @@ class TestDiagnosticBundle:
         inst = _build(tmp_path, page=page)
         bundle = await inst.diagnostic_bundle()
         assert bundle["title"] is None
-        assert bundle["url"] == "https://example.com"
+        assert bundle["url"] == "https://octowright.com"
 
     @pytest.mark.anyio
     async def test_html_failure_records_html_error_repr(self, tmp_path: Path) -> None:

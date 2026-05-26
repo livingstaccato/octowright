@@ -36,6 +36,8 @@ from octowright import skill_distribution as _sd
 from octowright.skill_distribution import (
     SKILL_NAME,
     InstallResult,
+    _antigravity_destination,
+    _antigravity_plugin_destination,
     _claude_plugin_destination,
     _codex_destination,
     _codex_plugin_destination,
@@ -46,6 +48,7 @@ from octowright.skill_distribution import (
     doctor_distributed_assets,
     install_distributed_assets,
     install_plugin_manifests,
+    install_skill_to_antigravity,
     install_skill_to_codex,
     render_json,
     render_table,
@@ -170,6 +173,38 @@ class TestPluginDestinations:
         """codex_plugin destination uses the explicit cwd argument."""
         assert _codex_plugin_destination(tmp_path) == tmp_path / ".codex-plugin" / "plugin.json"
 
+    def test_antigravity_plugin_uses_cwd_default(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """antigravity_plugin_destination respects Path.cwd() as default."""
+        monkeypatch.chdir(tmp_path)
+        assert _antigravity_plugin_destination() == tmp_path / ".antigravity-plugin" / "plugin.json"
+
+    def test_antigravity_plugin_explicit_cwd(self, tmp_path: Path) -> None:
+        """antigravity_plugin destination uses the explicit cwd argument."""
+        assert _antigravity_plugin_destination(tmp_path) == tmp_path / ".antigravity-plugin" / "plugin.json"
+
+
+# ─── _antigravity_destination ────────────────────────────────────────────────
+
+
+class TestAntigravityDestination:
+    def test_uses_antigravity_home_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """ANTIGRAVITY_HOME env var overrides default."""
+        from octowright import defaults as _defaults
+
+        monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(tmp_path / "custom"))
+        # The skill name "using-octowright" is stripped of its "using-" prefix.
+        result = _antigravity_destination()
+        assert result == tmp_path / "custom" / "plugins" / "octowright"
+
+    def test_tilde_expands(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ANTIGRAVITY_HOME=~/foo value gets expanduser()'d."""
+        from octowright import defaults as _defaults
+
+        monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", "~/foo")
+        result = _antigravity_destination()
+        assert "~" not in str(result)
+        assert result.parts[-2:] == ("plugins", "octowright")
+
 
 # ─── install_skill_to_codex ─────────────────────────────────────────────────
 
@@ -262,26 +297,102 @@ class TestInstallSkillToCodex:
         assert codex_home.exists()
 
 
+# ─── install_skill_to_antigravity ───────────────────────────────────────────
+
+
+@pytest.fixture
+def antigravity_home_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Redirect ANTIGRAVITY_HOME (via defaults.ANTIGRAVITY_HOME) to a writable tmp dir."""
+    from octowright import defaults as _defaults
+
+    home = tmp_path / ".gemini-config"
+    monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(home))
+    return home
+
+
+class TestInstallSkillToAntigravity:
+    def test_fresh_install_writes_skill_tree(self, antigravity_home_fixture: Path) -> None:
+        """No existing destination → installed=True, skill files copied,
+        plugin.json + mcp_config.json written so agy auto-wires the server."""
+        result = install_skill_to_antigravity()
+        assert result.installed is True
+        assert result.updated is False
+        assert result.reason == "installed"
+        assert result.target == "antigravity"
+        assert result.hash_match is True
+        dest = antigravity_home_fixture / "plugins" / "octowright"
+        assert (dest / "skills" / SKILL_NAME / "SKILL.md").exists()
+        assert (dest / "plugin.json").exists()
+        mcp_config = dest / "mcp_config.json"
+        assert mcp_config.exists()
+        import json as _json
+
+        parsed = _json.loads(mcp_config.read_text())
+        assert parsed["mcpServers"]["octowright"]["command"] == "uvx"
+        assert parsed["mcpServers"]["octowright"]["args"] == ["octowright", "serve"]
+
+    def test_destination_str_in_result(self, antigravity_home_fixture: Path) -> None:
+        """destination field is the str of the resolved plugin directory."""
+        result = install_skill_to_antigravity()
+        assert result.destination == str(antigravity_home_fixture / "plugins" / "octowright")
+
+    def test_already_installed_no_force_skips(self, antigravity_home_fixture: Path) -> None:
+        """Second call without force → reason='already_installed', installed=False."""
+        install_skill_to_antigravity()
+        result = install_skill_to_antigravity()
+        assert result.installed is False
+        assert result.updated is False
+        assert result.reason == "already_installed"
+        assert result.hash_match is True
+
+    def test_dry_run_new_destination_reports_will_install(self, antigravity_home_fixture: Path) -> None:
+        """dry_run on fresh dir → installed=True, updated=False, reason='dry_run'."""
+        result = install_skill_to_antigravity(dry_run=True)
+        assert result.reason == "dry_run"
+        assert result.installed is True
+        assert result.updated is False
+        assert not (antigravity_home_fixture / "plugins" / "octowright").exists()
+
+    def test_force_overwrites_existing(self, antigravity_home_fixture: Path) -> None:
+        """force=True on existing install → reinstall, updated=True."""
+        install_skill_to_antigravity()
+        dest = antigravity_home_fixture / "plugins" / "octowright"
+        skill_md = dest / "skills" / SKILL_NAME / "SKILL.md"
+        skill_md.write_text("local mod\n")
+        result = install_skill_to_antigravity(force=True)
+        assert result.reason == "installed"
+        assert result.installed is True
+        assert result.updated is True
+        assert skill_md.read_text() != "local mod\n"
+
+    def test_creates_parent_dirs(self, antigravity_home_fixture: Path) -> None:
+        """Parent dirs are created when missing."""
+        assert not antigravity_home_fixture.exists()
+        install_skill_to_antigravity()
+        assert antigravity_home_fixture.exists()
+
+
 # ─── install_plugin_manifests ───────────────────────────────────────────────
 
 
 class TestInstallPluginManifests:
-    def test_returns_two_results_one_per_target(self, tmp_path: Path) -> None:
-        """Always emits a result per (claude, codex_plugin) target."""
+    def test_returns_three_results_one_per_target(self, tmp_path: Path) -> None:
+        """Always emits a result per (claude, codex_plugin, antigravity_plugin) target."""
         results = install_plugin_manifests(cwd=tmp_path)
-        assert [r.target for r in results] == ["claude", "codex_plugin"]
+        assert [r.target for r in results] == ["claude", "codex_plugin", "antigravity_plugin"]
 
-    def test_fresh_install_writes_both(self, tmp_path: Path) -> None:
-        """Both manifest files are written on first call."""
+    def test_fresh_install_writes_all(self, tmp_path: Path) -> None:
+        """All three manifest files are written on first call."""
         results = install_plugin_manifests(cwd=tmp_path)
         assert all(r.installed for r in results)
         assert (tmp_path / ".claude-plugin" / "plugin.json").exists()
         assert (tmp_path / ".codex-plugin" / "plugin.json").exists()
+        assert (tmp_path / ".antigravity-plugin" / "plugin.json").exists()
 
     def test_install_uses_lf_newlines(self, tmp_path: Path) -> None:
         """write_text(..., newline='\\n') — file content has no \\r."""
         install_plugin_manifests(cwd=tmp_path)
-        for sub in (".claude-plugin", ".codex-plugin"):
+        for sub in (".claude-plugin", ".codex-plugin", ".antigravity-plugin"):
             content = (tmp_path / sub / "plugin.json").read_bytes()
             assert b"\r" not in content
 
@@ -321,7 +432,7 @@ class TestInstallPluginManifests:
         install_plugin_manifests(cwd=tmp_path)
         (tmp_path / ".claude-plugin" / "plugin.json").write_text('{ "drift": true }\n')
         results = install_plugin_manifests(cwd=tmp_path, force=True)
-        # Both targets reinstalled.
+        # All three targets reinstalled.
         assert all(r.installed for r in results)
         assert all(r.updated for r in results)
         # Content restored.
@@ -332,27 +443,42 @@ class TestInstallPluginManifests:
 # ─── install_distributed_assets dispatch ────────────────────────────────────
 
 
+@pytest.fixture
+def _antigravity_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Redirect ANTIGRAVITY_HOME (via defaults.ANTIGRAVITY_HOME) to a writable tmp dir."""
+    from octowright import defaults as _defaults
+
+    home = tmp_path / ".gemini-config"
+    monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(home))
+    return home
+
+
 class TestInstallDistributedAssets:
-    def test_target_codex_only(self, codex_home: Path, tmp_path: Path) -> None:
+    def test_target_codex_only(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
         """target='codex' → 1 result, only the skill (no plugin manifests)."""
         results = install_distributed_assets(target="codex", cwd=tmp_path)
         assert [r.target for r in results] == ["codex"]
 
-    def test_target_claude_only(self, codex_home: Path, tmp_path: Path) -> None:
-        """target='claude' → 2 results (claude + codex_plugin)."""
+    def test_target_claude_only(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
+        """target='claude' → 3 results (claude + codex_plugin + antigravity_plugin)."""
         results = install_distributed_assets(target="claude", cwd=tmp_path)
-        assert [r.target for r in results] == ["claude", "codex_plugin"]
+        assert [r.target for r in results] == ["claude", "codex_plugin", "antigravity_plugin"]
 
-    def test_target_all(self, codex_home: Path, tmp_path: Path) -> None:
-        """target='all' → 3 results in order."""
+    def test_target_antigravity_only(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
+        """target='antigravity' → 1 result (the agy skill install)."""
+        results = install_distributed_assets(target="antigravity", cwd=tmp_path)
+        assert [r.target for r in results] == ["antigravity"]
+
+    def test_target_all(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
+        """target='all' → 5 results in order."""
         results = install_distributed_assets(target="all", cwd=tmp_path)
-        assert [r.target for r in results] == ["codex", "claude", "codex_plugin"]
+        assert [r.target for r in results] == ["codex", "antigravity", "claude", "codex_plugin", "antigravity_plugin"]
 
-    def test_target_unknown_returns_empty(self, codex_home: Path, tmp_path: Path) -> None:
+    def test_target_unknown_returns_empty(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
         """Unknown target → empty list (no exception)."""
         assert install_distributed_assets(target="unknown", cwd=tmp_path) == []
 
-    def test_dry_run_passthrough(self, codex_home: Path, tmp_path: Path) -> None:
+    def test_dry_run_passthrough(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
         """dry_run flag flows through to all sub-installs."""
         results = install_distributed_assets(target="all", dry_run=True, cwd=tmp_path)
         assert all(r.reason == "dry_run" for r in results)
@@ -362,22 +488,29 @@ class TestInstallDistributedAssets:
 
 
 class TestStatusDistributedAssets:
-    def test_codex_only_when_target_codex(self, codex_home: Path, tmp_path: Path) -> None:
+    def test_codex_only_when_target_codex(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
         """target='codex' → 1 status entry."""
         results = status_distributed_assets(target="codex", cwd=tmp_path)
         assert [r.target for r in results] == ["codex"]
 
-    def test_claude_only_when_target_claude(self, codex_home: Path, tmp_path: Path) -> None:
-        """target='claude' → 2 status entries."""
+    def test_claude_only_when_target_claude(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
+        """target='claude' → 3 status entries (claude + codex_plugin + antigravity_plugin)."""
         results = status_distributed_assets(target="claude", cwd=tmp_path)
-        assert [r.target for r in results] == ["claude", "codex_plugin"]
+        assert [r.target for r in results] == ["claude", "codex_plugin", "antigravity_plugin"]
 
-    def test_all_returns_three(self, codex_home: Path, tmp_path: Path) -> None:
-        """target='all' → 3 entries in canonical order."""
+    def test_antigravity_only_when_target_antigravity(
+        self, codex_home: Path, _antigravity_home: Path, tmp_path: Path
+    ) -> None:
+        """target='antigravity' → 1 status entry."""
+        results = status_distributed_assets(target="antigravity", cwd=tmp_path)
+        assert [r.target for r in results] == ["antigravity"]
+
+    def test_all_returns_five(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
+        """target='all' → 5 entries in canonical order."""
         results = status_distributed_assets(target="all", cwd=tmp_path)
-        assert [r.target for r in results] == ["codex", "claude", "codex_plugin"]
+        assert [r.target for r in results] == ["codex", "antigravity", "claude", "codex_plugin", "antigravity_plugin"]
 
-    def test_missing_reports_missing_reason(self, codex_home: Path, tmp_path: Path) -> None:
+    def test_missing_reports_missing_reason(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
         """No installs yet → reason='missing', installed=False, hash_match=False."""
         results = status_distributed_assets(target="all", cwd=tmp_path)
         for r in results:
@@ -385,8 +518,8 @@ class TestStatusDistributedAssets:
             assert r.installed is False
             assert r.hash_match is False
 
-    def test_present_reports_present_reason(self, codex_home: Path, tmp_path: Path) -> None:
-        """After install, all three report reason='present'."""
+    def test_present_reports_present_reason(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
+        """After install, all five report reason='present'."""
         install_distributed_assets(target="all", cwd=tmp_path)
         results = status_distributed_assets(target="all", cwd=tmp_path)
         for r in results:
@@ -394,7 +527,7 @@ class TestStatusDistributedAssets:
             assert r.installed is True
             assert r.hash_match is True
 
-    def test_drift_breaks_hash_match(self, codex_home: Path, tmp_path: Path) -> None:
+    def test_drift_breaks_hash_match(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
         """Local edit to a manifest → hash_match=False but installed=True."""
         install_distributed_assets(target="all", cwd=tmp_path)
         manifest = tmp_path / ".claude-plugin" / "plugin.json"
@@ -484,10 +617,10 @@ class TestRenderJson:
 
 
 class TestDoctorDistributedAssets:
-    def test_returns_at_least_five_checks(self, tmp_path: Path) -> None:
-        """3 packaged-asset + 2 repo-dir checks = 5 items minimum."""
+    def test_returns_at_least_seven_checks(self, tmp_path: Path) -> None:
+        """4 packaged-asset + 3 repo-dir checks (claude, codex, antigravity) = 7 items minimum."""
         results = doctor_distributed_assets(cwd=tmp_path)
-        assert len(results) == 5
+        assert len(results) == 7
 
     def test_packaged_skill_check_passes_for_real_install(self, tmp_path: Path) -> None:
         """packaged_skill SKILL.md is shipped with the wheel — installed=True."""
@@ -498,9 +631,9 @@ class TestDoctorDistributedAssets:
         assert skill.hash_match is True
 
     def test_packaged_manifest_checks_pass(self, tmp_path: Path) -> None:
-        """Both packaged manifests are present in the wheel."""
+        """All three packaged manifests are present in the wheel."""
         results = doctor_distributed_assets(cwd=tmp_path)
-        for target in ("packaged_manifest_claude", "packaged_manifest_codex"):
+        for target in ("packaged_manifest_claude", "packaged_manifest_codex", "packaged_manifest_antigravity"):
             entry = next(r for r in results if r.target == target)
             assert entry.installed is True
             assert entry.reason == "ok"
@@ -509,26 +642,27 @@ class TestDoctorDistributedAssets:
         """If cwd parent doesn't exist → reason='missing_parent', hash_match=False."""
         nonexistent = tmp_path / "nope" / "deeper"
         results = doctor_distributed_assets(cwd=nonexistent)
-        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir"):
+        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir", "repo_antigravity_plugin_dir"):
             entry = next(r for r in results if r.target == target)
             assert entry.reason == "missing_parent"
             assert entry.hash_match is False
             assert entry.installed is False
 
     def test_repo_dirs_ok_when_parent_exists(self, tmp_path: Path) -> None:
-        """If cwd exists (parent of the .{claude,codex}-plugin dirs) → reason='ok'."""
+        """If cwd exists (parent of the .{claude,codex,antigravity}-plugin dirs) → reason='ok'."""
         results = doctor_distributed_assets(cwd=tmp_path)
-        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir"):
+        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir", "repo_antigravity_plugin_dir"):
             entry = next(r for r in results if r.target == target)
             assert entry.reason == "ok"
             assert entry.hash_match is True
 
     def test_repo_dir_installed_when_actually_present(self, tmp_path: Path) -> None:
-        """If the .claude-plugin / .codex-plugin dir exists, installed=True."""
+        """If the .claude-plugin / .codex-plugin / .antigravity-plugin dir exists, installed=True."""
         (tmp_path / ".claude-plugin").mkdir()
         (tmp_path / ".codex-plugin").mkdir()
+        (tmp_path / ".antigravity-plugin").mkdir()
         results = doctor_distributed_assets(cwd=tmp_path)
-        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir"):
+        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir", "repo_antigravity_plugin_dir"):
             entry = next(r for r in results if r.target == target)
             assert entry.installed is True
 

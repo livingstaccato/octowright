@@ -21,7 +21,7 @@ from octowright.macros import storage as macro_storage
 def mock_session() -> MagicMock:
     session = MagicMock()
     session.snapshot = AsyncMock(
-        return_value={"aria": '- textbox "Email Address"\n- button "Submit"', "url": "https://example.com"}
+        return_value={"aria": '- textbox "Email Address"\n- button "Submit"', "url": "https://octowright.com"}
     )
     session.diagnostic_bundle = AsyncMock(return_value={"screenshot": "fail.png"})
     return session
@@ -29,12 +29,12 @@ def mock_session() -> MagicMock:
 
 @pytest.mark.anyio
 async def test_suggest_fix_finds_match(mock_session: MagicMock) -> None:
-    action = {"action": "fill", "selector": "#email", "value": "test@example.com"}
+    action = {"action": "fill", "selector": "#email", "value": "test@octowright.test"}
 
     suggestion = await macros._suggest_fix(mock_session, action)
 
     assert suggestion is not None
-    assert "I was trying to Fill '#email' with 'test@example.com'" in suggestion
+    assert "I was trying to Fill '#email' with 'test@octowright.test'" in suggestion
     assert "but '#email' failed" in suggestion
     assert "Current A11y tree:" in suggestion
     assert '- textbox "Email Address"' in suggestion
@@ -58,7 +58,7 @@ async def test_suggest_fix_reflects_dom_change(mock_session: MagicMock) -> None:
     action = {"action": "click", "selector": "#login-btn"}
 
     # Change the mock snapshot to simulate a DOM change
-    mock_session.snapshot.return_value = {"aria": '- button "Login NOW"', "url": "https://example.com"}
+    mock_session.snapshot.return_value = {"aria": '- button "Login NOW"', "url": "https://octowright.com"}
 
     suggestion = await macros._suggest_fix(mock_session, action)
 

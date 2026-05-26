@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Network Lab | Octowright Test Range</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="page-shell">
+  <a class="mini-brand" href="/"><img src="/otto.svg" alt="">Octowright Test Range</a>
+  <header class="page-header">
+    <div class="page-title">
+      <h1>Network Lab</h1>
+      <p>Deterministic fetch targets for request capture, response assertions, latency waits, and expected error handling.</p>
+    </div>
+    <span class="tag">ID: NETWORK</span>
+  </header>
+  <section class="tool-grid">
+    <article class="lab-panel">
+      <h2>Requests</h2>
+      <div class="button-row">
+        <button id="ping-request" type="button" data-testid="network-ping">GET /api/ping</button>
+        <button id="echo-request" type="button" data-testid="network-echo">POST /api/echo</button>
+        <button id="delay-request" type="button" data-testid="network-delay">GET /api/delay</button>
+        <button id="error-request" type="button" data-testid="network-error">GET /api/error</button>
+      </div>
+    </article>
+    <article class="lab-panel">
+      <h2>Response</h2>
+      <pre id="network-result" class="result-box" aria-live="polite">No request sent.</pre>
+    </article>
+  </section>
+</main>
+<script src="/network-lab.js"></script>
+</body>
+</html>

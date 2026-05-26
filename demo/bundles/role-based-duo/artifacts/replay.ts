@@ -16,14 +16,14 @@ const resolveBundleUrl = (raw: string): string => {
   let ctx!: BrowserContext;
   let page!: Page;
 
-  browser = await chromium.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/dashboard.html"));
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("http://127.0.0.1:7900/form-flow.html"));
+  browser = await chromium.launch({ headless: false });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/dashboard.html"));
   await page.waitForSelector("#name");
   try {
     await page.getByRole("player", { name: "Full name" }).fill("Octavia Wright");
@@ -37,9 +37,9 @@ const resolveBundleUrl = (raw: string): string => {
   }
   await page.waitForSelector(".step--active #email");
   try {
-    await page.getByRole("player", { name: "Email" }).fill("octavia@example.com");
+    await page.getByRole("player", { name: "Email" }).fill("octavia@octowright.test");
   } catch {
-    await page.fill("#email", "octavia@example.com");
+    await page.fill("#email", "octavia@octowright.test");
   }
   try {
     await page.getByRole("player", { name: "Next" }).click();

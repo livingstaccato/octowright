@@ -69,17 +69,17 @@ class TestFormatStatus:
     def test_with_invocation_stack_uses_chain_separator(self) -> None:
         """' > '.join — mutating the separator would change the format."""
         # describe_action lives in octowright.macros.descriptions; just assert format shape.
-        result = _format_status(["outer", "inner"], {"action": "navigate", "url": "https://example.com"})
+        result = _format_status(["outer", "inner"], {"action": "navigate", "url": "https://octowright.com"})
         assert result.startswith("outer > inner | ")
 
     def test_empty_stack_omits_separator(self) -> None:
         """No chain → no `chain | ` prefix."""
-        result = _format_status([], {"action": "navigate", "url": "https://example.com"})
+        result = _format_status([], {"action": "navigate", "url": "https://octowright.com"})
         assert " | " not in result
 
     def test_none_stack_omits_separator(self) -> None:
         """None stack treated same as empty."""
-        result = _format_status(None, {"action": "navigate", "url": "https://example.com"})
+        result = _format_status(None, {"action": "navigate", "url": "https://octowright.com"})
         assert " | " not in result
 
     def test_type_text_is_redacted_before_visible_status(self) -> None:
@@ -277,8 +277,8 @@ class TestRunMacroHappyPath:
     ) -> None:
         """Caller args echoed in args_used, with secret-like keys redacted."""
         patched_runners["register"]("m", [])
-        out = await run_macro(fake_session, "m", args={"email": "me@x", "pw": "secret"})
-        assert out["args_used"] == {"email": "me@x", "pw": "<redacted>"}
+        out = await run_macro(fake_session, "m", args={"flow": "checkout", "pw": "secret"})
+        assert out["args_used"] == {"flow": "checkout", "pw": "<redacted>"}
 
     @pytest.mark.anyio
     async def test_args_used_redacts_secret_like_keys(
@@ -290,9 +290,27 @@ class TestRunMacroHappyPath:
         out = await run_macro(
             fake_session,
             "m",
-            args={"username": "alice", sensitive_key: "fixture-value", sensitive_key_two: "fixture-value-two"},
+            args={"flow": "checkout", sensitive_key: "fixture-value", sensitive_key_two: "fixture-value-two"},
         )
-        assert out["args_used"] == {"username": "alice", sensitive_key: "<redacted>", sensitive_key_two: "<redacted>"}
+        assert out["args_used"] == {"flow": "checkout", sensitive_key: "<redacted>", sensitive_key_two: "<redacted>"}
+
+    @pytest.mark.anyio
+    async def test_args_used_redacts_email_and_username(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """``email`` / ``username`` are PII — redact in the response echo even
+        though they were resolved into the action payload at substitution time."""
+        patched_runners["register"]("m", [])
+        out = await run_macro(
+            fake_session,
+            "m",
+            args={"email": "me@x", "username": "alice", "flow": "login"},
+        )
+        assert out["args_used"] == {
+            "email": "<redacted>",
+            "username": "<redacted>",
+            "flow": "login",
+        }
 
     @pytest.mark.anyio
     async def test_args_used_defaults_to_empty_dict(
@@ -671,13 +689,13 @@ class TestRunSequenceShape:
     async def test_failure_step_carries_args_used(
         self, fake_session: _FakeSession, patched_runners: dict[str, Any]
     ) -> None:
-        """Failure step args_used field reflects the per-step args input."""
+        """Failure steps redact secret-like args the same way as run_macro."""
         patched_runners["register"]("a", [{"action": "click", "selector": "#x"}])
         patched_runners["raise_on"]["click"] = ValueError("boom")
         out = await run_sequence(
             session=fake_session,
             names=["a"],
-            args_list=[{"foo": "bar"}],
+            args_list=[{"foo": "bar", "pwd": "not_a_real_pw"}],  # pragma: allowlist secret
             stop_on_failure=False,
         )
-        assert out["steps"][0]["args_used"] == {"foo": "bar"}
+        assert out["steps"][0]["args_used"] == {"foo": "bar", "pwd": "<redacted>"}

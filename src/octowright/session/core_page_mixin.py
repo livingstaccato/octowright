@@ -10,7 +10,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from provide.telemetry import get_logger
@@ -177,10 +177,15 @@ class SessionPageMixin(SessionLike):
         self.pages.pop(index)
         await target.close()
         self.recorder.record("close_page", index=index, was_active=was_active)
+        # Re-derive active_index after the await: a popup _on_page_close
+        # listener can fire synchronously during target.close() and mutate
+        # self.pages. self.page may no longer be in self.pages, in which case
+        # we fall back to 0 rather than raising ValueError on the return.
+        active_index = self.pages.index(self.page) if self.page in self.pages else 0
         return {
             "closed_index": index,
             "was_active": was_active,
-            "active_index": self.pages.index(self.page),
+            "active_index": active_index,
             "page_count": len(self.pages),
         }
 
@@ -318,9 +323,13 @@ class SessionPageMixin(SessionLike):
         # Atomic write via the shared helper — defeats the symlink-swap
         # window between the caller's containment check and Playwright's
         # write. See ``octowright._paths.atomic_write_via_writer`` for the
-        # full reasoning.
+        # full reasoning. The temp sibling has a ``.tmp`` suffix so the
+        # final path suffix is the only signal of image format; pass it
+        # explicitly so Playwright doesn't try to infer from ``.tmp``.
+        img_type: Literal["jpeg", "png"] = "jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "png"
+
         async def _write(tmp: Path) -> None:
-            await self.page.screenshot(path=str(tmp))
+            await self.page.screenshot(path=str(tmp), type=img_type)
 
         from octowright._paths import atomic_write_via_writer
 
@@ -328,11 +337,12 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("screenshot", path=str(path))
         return path
 
-    async def snapshot(self) -> dict[str, Any]:
-        # Playwright 1.50+ removed `page.accessibility.snapshot()` in favor of
-        # `aria_snapshot()` on a Locator, which returns a YAML-flavored string.
-        aria_yaml = await self.page.locator("html").aria_snapshot()
-        self.recorder.record("snapshot")
+    async def snapshot(self, selector: str | None = None) -> dict[str, Any]:
+        # selector=None preserves the legacy "html"-root JSONL event so existing
+        # macro replays / golden diffs don't drift; explicit selectors are recorded.
+        aria_yaml = await self.page.locator(selector or "html").aria_snapshot()
+        record_kwargs = {"selector": selector} if selector is not None else {}
+        self.recorder.record("snapshot", **record_kwargs)
         return {"aria": aria_yaml, "url": self.page.url, "title": await self.page.title()}
 
     async def evaluate(self, expression: str) -> Any:

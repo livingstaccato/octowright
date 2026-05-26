@@ -65,7 +65,7 @@ def test_cleanup_stale_dry_run_removes_nothing(tmp_path: Path) -> None:
     p = _make_profile(tmp_path, "old", "chromium", age_days=45)
     stale = find_stale_profiles(tmp_path, days=30.0)
     summary = cleanup_stale(stale, dry_run=True)
-    assert summary == {"removed_count": 0, "removed_bytes": 0}
+    assert summary == {"removed_count": 0, "removed_bytes": 0, "errors": []}
     assert p.exists()
 
 
@@ -75,7 +75,26 @@ def test_cleanup_stale_apply_removes_dir(tmp_path: Path) -> None:
     summary = cleanup_stale(stale, dry_run=False)
     assert summary["removed_count"] == 1
     assert summary["removed_bytes"] > 0
+    assert summary["errors"] == []
     assert not p.exists()
+
+
+def test_cleanup_stale_surfaces_rmtree_oserror(tmp_path: Path, monkeypatch) -> None:
+    """A failed rmtree must land in ``errors`` rather than being silently swallowed."""
+    import octowright.profile_cleanup as _pc
+
+    p = _make_profile(tmp_path, "broken", "chromium", age_days=45)
+    stale = find_stale_profiles(tmp_path, days=30.0)
+
+    def _boom(path, **kwargs):
+        raise OSError("simulated permission denied")
+
+    monkeypatch.setattr(_pc.shutil, "rmtree", _boom)
+    summary = cleanup_stale(stale, dry_run=False)
+    assert summary["removed_count"] == 0
+    assert len(summary["errors"]) == 1
+    assert summary["errors"][0]["path"] == str(p)
+    assert "simulated permission denied" in summary["errors"][0]["error"]
 
 
 def test_cleanup_removes_orphaned_persona_dir_when_empty(tmp_path: Path) -> None:

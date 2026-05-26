@@ -33,7 +33,7 @@ from octowright.server._state import mcp, pool
         "Save the current recording of a live instance as a named, reusable macro. "
         "`parameters` is a dict mapping parameter NAME to its literal VALUE in this "
         "recording — those values get replaced by {{name}} placeholders in the saved "
-        'macro. Example: parameters={"email":"me@example.com","password":"hunter2"}. '
+        'macro. Example: parameters={"email":"me@octowright.test","password":"hunter2"}. '
         "Drops launch/close/snapshot entries by default. Returns the saved macro path."
     ),
 )
@@ -284,6 +284,7 @@ def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
             }
             for s in stale
         ],
+        "errors": summary["errors"],
     }
 
 

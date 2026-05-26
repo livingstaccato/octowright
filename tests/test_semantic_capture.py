@@ -16,7 +16,7 @@ def mock_session(tmp_path: Path) -> BrowserSession:
     # Build a BrowserSession around a mock page
     # page.locator is SYNCHRONOUS in Playwright, so it must be a MagicMock.
     page = MagicMock()
-    page.url = "https://example.com"
+    page.url = "https://octowright.com"
 
     recorder = MagicMock()
 
@@ -24,7 +24,7 @@ def mock_session(tmp_path: Path) -> BrowserSession:
         instance_id="test",
         kind="chromium",
         label="test-label",
-        url="https://example.com",
+        url="https://octowright.com",
         page=page,
         context=MagicMock(),
         browser=MagicMock(),
@@ -75,7 +75,7 @@ async def test_fill_records_semantic_metadata(mock_session: BrowserSession):
     mock_session.page.locator.return_value = locator_mock
 
     # Action: Fill the input
-    await mock_session.fill("#email", "test@example.com")
+    await mock_session.fill("#email", "test@octowright.test")
 
     # Verification
     fill_record = None

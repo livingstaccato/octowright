@@ -9,7 +9,7 @@
     {"action": "fill", "selector": "#name", "value": "Octavia Wright"},
     {"action": "click", "selector": "#next-1"},
     {"action": "wait_for", "selector": ".step--active #email", "timeout_ms": 5000},
-    {"action": "fill", "selector": "#email", "value": "octavia@example.com"},
+    {"action": "fill", "selector": "#email", "value": "octavia@octowright.test"},
     {"action": "click", "selector": "#next-2"},
     {"action": "wait_for", "selector": ".step--active #notes", "timeout_ms": 5000},
     {"action": "fill", "selector": "#notes", "value": "Demo run — replay this to see the dashboard fill again."},

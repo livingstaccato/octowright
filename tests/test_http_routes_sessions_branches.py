@@ -134,11 +134,11 @@ def _write_recording(rec_dir: Path, instance_id: str, *, kind: str = "chromium")
             "ts": "2026-01-01T00:00:00Z",
             "action": "launch",
             "kind": kind,
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "label": None,
             "profile": None,
         },
-        {"ts": "2026-01-01T00:00:01Z", "action": "navigate", "url": "https://example.com/x"},
+        {"ts": "2026-01-01T00:00:01Z", "action": "navigate", "url": "https://octowright.com/x"},
         {"ts": "2026-01-01T00:00:02Z", "action": "close"},
     ]
     p.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -548,7 +548,7 @@ class TestSessionRelaunchEdges:
             "ts": "2026-01-01T00:00:00Z",
             "action": "launch",
             "kind": "chromium",
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "label": None,
             "profile": None,
             **launch_extra,
@@ -684,7 +684,7 @@ def test_launch_recording_persists_relaunch_relevant_options(tmp_path: Path) -> 
         label="temporary",
         profile=None,
         user_data_dir=str(tmp_path / "profile"),
-        target_url="https://example.com",
+        target_url="https://octowright.com",
         headless=False,
         log_viewport={"mode": "fluid"},
         stabilize=True,
@@ -720,14 +720,14 @@ class TestSessionDetailLiveEdges:
         locator = MagicMock()
         locator.aria_snapshot = AsyncMock(return_value="- button 'OK'")
         page.locator = MagicMock(return_value=locator)
-        page.url = "https://example.com"
+        page.url = "https://octowright.com"
         recorder = SimpleNamespace(event_count=5, action_count=3)
         return SimpleNamespace(
             instance_id=instance_id,
             kind="chromium",
             label=None,
             profile=None,
-            url="https://example.com",
+            url="https://octowright.com",
             log_path=str(log_path),
             video_path=None,
             trace_path=None,

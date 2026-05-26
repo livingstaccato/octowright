@@ -37,7 +37,7 @@ def _import_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def _write_recording(tmp_path: Path, lines: list[dict[str, Any]] | None = None) -> Path:
     p = tmp_path / "recording.jsonl"
     rows = lines or [
-        {"ts": "2026-04-24T10:00:00Z", "action": "navigate", "url": "https://example.com"},
+        {"ts": "2026-04-24T10:00:00Z", "action": "navigate", "url": "https://octowright.com"},
     ]
     p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
     return p

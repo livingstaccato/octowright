@@ -152,7 +152,7 @@ async def test_load_event_schedules_markdown_capture(monkeypatch: pytest.MonkeyP
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="load",
         ephemeral=True,
@@ -206,7 +206,7 @@ async def test_main_frame_navigation_is_recorded(monkeypatch: pytest.MonkeyPatch
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="nav",
         ephemeral=True,
@@ -220,14 +220,14 @@ async def test_main_frame_navigation_is_recorded(monkeypatch: pytest.MonkeyPatch
     assert handlers, "expected framenavigated handler installed by _wire_listeners"
 
     # Synthesise the user typing a URL.
-    page.main_frame.url = "https://example.com/about"
+    page.main_frame.url = "https://octowright.com/about"
     for cb in handlers:
         cb(page.main_frame)
 
     entries = _read_recorder(session)
     nav_entries = [e for e in entries if e["action"] == "user_navigation"]
     assert len(nav_entries) == 1, entries
-    assert nav_entries[0]["url"] == "https://example.com/about"
+    assert nav_entries[0]["url"] == "https://octowright.com/about"
     assert nav_entries[0]["page_index"] == 0
 
 
@@ -238,7 +238,7 @@ async def test_subframe_navigation_ignored(monkeypatch: pytest.MonkeyPatch) -> N
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="iframe",
         ephemeral=True,
@@ -248,7 +248,7 @@ async def test_subframe_navigation_ignored(monkeypatch: pytest.MonkeyPatch) -> N
     session = pool._sessions[result["instance_id"]]
     page = session.pages[0]
 
-    other_frame = _FakeFrame("https://ads.example.com/banner")  # NOT the main frame
+    other_frame = _FakeFrame("https://ads.octowright.com/banner")  # NOT the main frame
     for cb in _framenav_handlers(page):
         cb(other_frame)
 
@@ -265,7 +265,7 @@ async def test_about_blank_navigation_ignored(monkeypatch: pytest.MonkeyPatch) -
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="blank",
         ephemeral=True,
@@ -293,7 +293,7 @@ async def test_dedup_against_mcp_navigate(monkeypatch: pytest.MonkeyPatch) -> No
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="dedup",
         ephemeral=True,
@@ -304,9 +304,9 @@ async def test_dedup_against_mcp_navigate(monkeypatch: pytest.MonkeyPatch) -> No
     page = session.pages[0]
 
     # Simulate the MCP-driven navigate path setting the marker first…
-    session._last_mcp_navigation = "https://example.com/page2"
+    session._last_mcp_navigation = "https://octowright.com/page2"
     # …then Playwright firing framenavigated for that same URL.
-    page.main_frame.url = "https://example.com/page2"
+    page.main_frame.url = "https://octowright.com/page2"
     for cb in _framenav_handlers(page):
         cb(page.main_frame)
 
@@ -323,7 +323,7 @@ async def test_user_nav_after_mcp_nav_to_different_url_records(monkeypatch: pyte
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="diverge",
         ephemeral=True,
@@ -333,15 +333,15 @@ async def test_user_nav_after_mcp_nav_to_different_url_records(monkeypatch: pyte
     session = pool._sessions[result["instance_id"]]
     page = session.pages[0]
 
-    session._last_mcp_navigation = "https://example.com/a"
-    page.main_frame.url = "https://example.com/b"  # user-typed URL, different
+    session._last_mcp_navigation = "https://octowright.com/a"
+    page.main_frame.url = "https://octowright.com/b"  # user-typed URL, different
     for cb in _framenav_handlers(page):
         cb(page.main_frame)
 
     entries = _read_recorder(session)
     nav_entries = [e for e in entries if e["action"] == "user_navigation"]
     assert len(nav_entries) == 1
-    assert nav_entries[0]["url"] == "https://example.com/b"
+    assert nav_entries[0]["url"] == "https://octowright.com/b"
 
 
 @pytest.mark.anyio
@@ -353,7 +353,7 @@ async def test_session_navigate_sets_dedup_marker(monkeypatch: pytest.MonkeyPatc
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="marker",
         ephemeral=True,
@@ -362,8 +362,8 @@ async def test_session_navigate_sets_dedup_marker(monkeypatch: pytest.MonkeyPatc
     )
     session = pool._sessions[result["instance_id"]]
 
-    await session.navigate("https://example.com/marker-test")
-    assert session._last_mcp_navigation == "https://example.com/marker-test"
+    await session.navigate("https://octowright.com/marker-test")
+    assert session._last_mcp_navigation == "https://octowright.com/marker-test"
 
 
 @pytest.mark.anyio
@@ -375,7 +375,7 @@ async def test_popup_page_also_gets_framenavigated_handler(monkeypatch: pytest.M
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="popup",
         ephemeral=True,
@@ -390,14 +390,14 @@ async def test_popup_page_also_gets_framenavigated_handler(monkeypatch: pytest.M
     handlers = _framenav_handlers(popup)
     assert handlers, "popup page must get framenavigated handler too"
 
-    popup.main_frame.url = "https://popup.example.com/landing"
+    popup.main_frame.url = "https://popup.octowright.com/landing"
     for cb in handlers:
         cb(popup.main_frame)
 
     entries = _read_recorder(session)
     nav_entries = [e for e in entries if e["action"] == "user_navigation"]
     assert len(nav_entries) == 1
-    assert nav_entries[0]["url"] == "https://popup.example.com/landing"
+    assert nav_entries[0]["url"] == "https://popup.octowright.com/landing"
     assert nav_entries[0]["page_index"] == 1
 
 
@@ -408,7 +408,7 @@ async def test_popup_page_also_gets_load_handler(monkeypatch: pytest.MonkeyPatch
     pool = BrowserPool()
     result = await pool.launch(
         kind="chromium",
-        url="https://example.com",
+        url="https://octowright.com",
         headed=False,
         label="popup",
         ephemeral=True,

@@ -123,9 +123,11 @@ def _cross_origin_blocked(request: Request, *, side_effect_get: bool) -> bool:
     APIs. ``side_effect_get`` opts a GET/HEAD route into the same protection
     as POST/PUT/DELETE — use it for endpoints whose handler triggers work on
     the live browser (live screenshot, live markdown capture, etc.)."""
-    if request.method in {"GET", "HEAD", "OPTIONS"} and not side_effect_get:
-        return False
+    # CORS preflight is always allowed; the follow-up request carries the
+    # method we actually care about and is checked on its own.
     if request.method == "OPTIONS":
+        return False
+    if request.method in {"GET", "HEAD"} and not side_effect_get:
         return False
     origin = request.headers.get("origin")
     if origin:

@@ -224,14 +224,14 @@ def test_post_sessions_happy_path(
         "kind": "chromium",
         "label": "qa-1",
         "profile": None,
-        "url": "https://example.com",
+        "url": "https://octowright.com",
         "log_path": "/tmp/deadbeef0001.jsonl",
         "record_video": True,
         "trace": True,
     }
     r = client.post(
         "/api/sessions",
-        json={"kind": "chromium", "url": "https://example.com", "label": "qa-1"},
+        json={"kind": "chromium", "url": "https://octowright.com", "label": "qa-1"},
     )
     assert r.status_code == 201, r.text
     body = r.json()
@@ -239,7 +239,7 @@ def test_post_sessions_happy_path(
     assert body["id"] == "deadbeef0001"
     assert body["kind"] == "chromium"
     assert body["label"] == "qa-1"
-    assert body["url"] == "https://example.com"
+    assert body["url"] == "https://octowright.com"
     assert body["live"] is True
     assert body["log_path"] == str(Path("/tmp/deadbeef0001.jsonl"))
     assert "started_at" in body
@@ -247,7 +247,7 @@ def test_post_sessions_happy_path(
     assert len(pool.launch_calls) == 1
     call = pool.launch_calls[0]
     assert call["kind"] == "chromium"
-    assert call["url"] == "https://example.com"
+    assert call["url"] == "https://octowright.com"
     assert call["label"] == "qa-1"
 
 
@@ -306,7 +306,7 @@ def test_post_sessions_forwards_all_optional_kwargs(
         "har": True,
         "har_path": "captures/a.har",
         "har_mode": "full",
-        "har_url_filter": "example.com",
+        "har_url_filter": "octowright.com",
         "har_content": "embed",
         "badge": False,
         "badge_position": "top-left",
@@ -830,7 +830,7 @@ def test_post_session_relaunch_happy_path(
         "abc123abc123",
         {
             "kind": "firefox",
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "profile": "microdosing",
             "label": None,
             "viewport": {"w": 1280, "h": 800},
@@ -863,7 +863,7 @@ def test_post_session_relaunch_preserves_extended_launch_fields(
         "relaunchext01",
         {
             "kind": "chromium",
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "profile": "dante",
             "label": "qa",
             "viewport": {"w": 1440, "h": 900},
@@ -873,7 +873,7 @@ def test_post_session_relaunch_preserves_extended_launch_fields(
             "har": True,
             "har_path": str(har_path),
             "har_mode": "full",
-            "har_url_filter": "example.com",
+            "har_url_filter": "octowright.com",
             "har_content": "embed",
             "badge": False,
             "badge_position": "top-left",
@@ -891,7 +891,7 @@ def test_post_session_relaunch_preserves_extended_launch_fields(
     assert call["har"] is True
     assert call["har_path"] == str(isolated_recordings / "demo.1.har")
     assert call["har_mode"] == "full"
-    assert call["har_url_filter"] == "example.com"
+    assert call["har_url_filter"] == "octowright.com"
     assert call["har_content"] == "embed"
     assert call["badge"] is False
     assert call["badge_position"] == "top-left"
@@ -944,7 +944,7 @@ def test_post_session_relaunch_passes_video_flag(
         "video12absdf",
         {
             "kind": "chromium",
-            "url": "https://example.com",
+            "url": "https://octowright.com",
             "profile": None,
             "label": "rec",
             "viewport": None,

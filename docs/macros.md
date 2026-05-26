@@ -38,12 +38,12 @@ browser_launch kind=webkit profile=disc-1 url=https://discord.com/login
 # 2. Snapshot those actions as a macro. Tell Octowright which literal values
 #    should be parameters.
 macro_save instance_id=<id> name=discord-login \
-           parameters={"email":"me@example.com","password":"hunter2"}
+           parameters={"email":"me@octowright.test","password":"hunter2"}
 
 # 3. Replay later, against any instance, with any args.
 browser_launch kind=webkit profile=disc-2 url=https://discord.com/login
 macro_run instance_id=<new-id> name=discord-login \
-          args={"email":"other@example.com","password":"correcthorsebatterystaple"}
+          args={"email":"other@octowright.test","password":"correcthorsebatterystaple"}
 ```
 
 Lifecycle actions (`launch`, `close`, `snapshot`) are dropped by default — macros
@@ -122,7 +122,7 @@ macro_compile yaml_text='
 name: login-smoke
 parameters: [email, password]
 actions:
-  - navigate: "https://example.com/login"
+  - navigate: "https://octowright.com/login"
   - fill: {selector: "#email", value: "{{email}}"}
   - fill: {selector: "#password", value: "{{password}}"}
   - try_each:

@@ -154,7 +154,7 @@ def test_each_candidate_key_can_trigger_credential_warning(candidate_key: str) -
 
 def test_selector_field_not_inspected_for_credentials() -> None:
     """Non-candidate keys like 'selector' are skipped even if they contain emails."""
-    issues = lint_macro(_macro([{"action": "click", "selector": '[data-email="me@example.com"]'}]))
+    issues = lint_macro(_macro([{"action": "click", "selector": '[data-email="me@octowright.test"]'}]))
     assert all(i.code != "looks_like_credential" for i in issues)
 
 

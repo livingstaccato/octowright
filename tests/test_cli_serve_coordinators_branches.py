@@ -544,6 +544,13 @@ def leader_stubs(monkeypatch: pytest.MonkeyPatch) -> _LeaderStubs:
 
     monkeypatch.setattr(_server_state.mcp, "run_stdio_async", fake_stdio)
 
+    # serve.py wraps the stdio task in run_stdio_with_notifications now.
+    # Patch the function the leader actually imports so the real stdio
+    # server doesn't try to grab stdin/stdout in the test harness.
+    from octowright.server import mcp_notifications as _mcp_notif_mod
+
+    monkeypatch.setattr(_mcp_notif_mod, "run_stdio_with_notifications", lambda _mcp: fake_stdio())
+
     from octowright import http as _http_pkg
 
     monkeypatch.setattr(_http_pkg, "serve_app", fake_http)

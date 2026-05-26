@@ -3,10 +3,10 @@ import { appendTimelineEvents, renderTimeline } from "./timeline.js";
 import type { RecordingEvent } from "./types.js";
 
 const SAMPLE_EVENTS: RecordingEvent[] = [
-  { ts: "2026-04-24T13:45:00.000Z", action: "navigate", url: "https://example.com" },
+  { ts: "2026-04-24T13:45:00.000Z", action: "navigate", url: "https://octowright.com" },
   { ts: "2026-04-24T13:45:02.500Z", action: "click", selector: "#login" },
   { ts: "2026-04-24T13:45:05.000Z", action: "fill", value: "tim" },
-  { ts: "2026-04-24T13:45:08.000Z", action: "expect_url", url: "https://example.com/dash" },
+  { ts: "2026-04-24T13:45:08.000Z", action: "expect_url", url: "https://octowright.com/dash" },
 ];
 
 let container: HTMLDivElement;

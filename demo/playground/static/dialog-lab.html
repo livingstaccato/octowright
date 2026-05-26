@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dialog & Popup Lab | Octowright Test Range</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="page-shell">
+  <a class="mini-brand" href="/"><img src="/otto.svg" alt="">Octowright Test Range</a>
+  <header class="page-header">
+    <div class="page-title">
+      <h1>Dialog & Popup Lab</h1>
+      <p>Exercise browser dialogs and popup handling with deterministic buttons and visible result state.</p>
+    </div>
+    <span class="tag">ID: DIALOG</span>
+  </header>
+  <section class="tool-grid">
+    <article class="lab-panel">
+      <h2>Native Dialogs</h2>
+      <p>Trigger alert, confirm, and prompt flows for dialog policy and wait handling.</p>
+      <div class="button-row">
+        <button id="alert-button" type="button" data-testid="dialog-alert">Open alert</button>
+        <button id="confirm-button" type="button" data-testid="dialog-confirm">Open confirm</button>
+        <button id="prompt-button" type="button" data-testid="dialog-prompt">Open prompt</button>
+      </div>
+      <pre id="dialog-result" class="result-box" aria-live="polite">No dialog opened yet.</pre>
+    </article>
+    <article class="lab-panel">
+      <h2>Popup Window</h2>
+      <p>Open a same-origin popup page to test new-page detection, focus changes, and close behavior.</p>
+      <div class="button-row">
+        <button id="popup-button" type="button" data-testid="popup-open">Open popup</button>
+      </div>
+      <pre id="popup-result" class="result-box" aria-live="polite">Popup waiting.</pre>
+    </article>
+  </section>
+</main>
+<script src="/dialog-lab.js"></script>
+</body>
+</html>

@@ -301,18 +301,6 @@ class SessionIOMixin(SessionLike):
                 return text[:max_chars] + "…"
             return text
 
-        def _serialise_binary_payload(payload: Any) -> str | None:
-            if isinstance(payload, bytes | bytearray | memoryview):
-                return base64.b64encode(bytes(payload)).decode("ascii")
-            if isinstance(payload, str) and _looks_like_binary_text(payload):
-                try:
-                    decoded = ast.literal_eval(payload)
-                except Exception:
-                    return None
-                if isinstance(decoded, bytes | bytearray | memoryview):
-                    return base64.b64encode(bytes(decoded)).decode("ascii")
-            return None
-
         if not hasattr(websocket, "on"):
             return
 
@@ -332,8 +320,6 @@ class SessionIOMixin(SessionLike):
                     payload_preview=_preview_payload(payload, is_binary=is_binary),
                     payload_size=(len(payload) if payload is not None and hasattr(payload, "__len__") else None),
                 )
-                payload_b64 = _serialise_binary_payload(payload)
-                cache_entry_payload = payload_b64 if payload_b64 is not None else payload
                 cache_payload_size = None
                 if isinstance(payload, bytes | bytearray | memoryview):
                     cache_payload_size = len(payload)
@@ -355,7 +341,7 @@ class SessionIOMixin(SessionLike):
                         id_=socket_id,
                         url=url,
                         payload_preview=_preview_payload(payload, is_binary=is_binary),
-                        payload=cache_entry_payload,
+                        payload=payload,
                         payload_size=cache_payload_size,
                     )
                 except Exception:

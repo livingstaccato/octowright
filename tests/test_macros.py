@@ -18,10 +18,23 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Sentinel value used wherever a "password" substitution arg is exercised.
+# Renamed away from realistic strings ("s3cr3t" / "pass123") because the
+# detect-secrets pre-commit hook fires on the "password" keyword regardless
+# of value; the obviously-synthetic name plus a single module-level constant
+# keeps the test diff free of allowlist-secret pragmas at every call site.
+PW_FIXTURE = "fixture-not-a-real-secret"  # pragma: allowlist secret
+
+
 SAMPLE_RECORDING = [
-    {"ts": "2026-04-24T10:00:00.000Z", "action": "launch", "url": "https://example.com"},
+    {"ts": "2026-04-24T10:00:00.000Z", "action": "launch", "url": "https://octowright.com"},
     {"ts": "2026-04-24T10:00:01.000Z", "action": "navigate", "url": "https://discord.com/login"},
-    {"ts": "2026-04-24T10:00:02.000Z", "action": "fill", "selector": "input[name=email]", "value": "me@example.com"},
+    {
+        "ts": "2026-04-24T10:00:02.000Z",
+        "action": "fill",
+        "selector": "input[name=email]",
+        "value": "me@octowright.test",
+    },
     {"ts": "2026-04-24T10:00:03.000Z", "action": "fill", "selector": "input[name=password]", "value": "hunter2"},
     {"ts": "2026-04-24T10:00:04.000Z", "action": "click", "selector": "button[type=submit]"},
     {"ts": "2026-04-24T10:00:05.000Z", "action": "snapshot"},
@@ -70,7 +83,7 @@ def test_save_macro_writes_expected_shape(monkeypatch: pytest.MonkeyPatch, tmp_p
         recording_path=rec,
         name="discord-login",
         description="Log in to Discord",
-        parameters={"email": "me@example.com", "password": "hunter2"},
+        parameters={"email": "me@octowright.test", "password": "hunter2"},
     )
 
     assert path.exists()
@@ -155,7 +168,7 @@ def test_save_macro_preserves_semantic_metadata_on_css_actions(monkeypatch: pyte
             {
                 "action": "fill",
                 "selector": "#email",
-                "value": "me@example.com",
+                "value": "me@octowright.test",
                 "label": "Email",
             },
         ],
@@ -166,7 +179,7 @@ def test_save_macro_preserves_semantic_metadata_on_css_actions(monkeypatch: pyte
 
     assert actions == [
         {"action": "click", "selector": "#login", "role": "button", "role_name": "Log in"},
-        {"action": "fill", "selector": "#email", "value": "me@example.com", "label": "Email"},
+        {"action": "fill", "selector": "#email", "value": "me@octowright.test", "label": "Email"},
     ]
 
 
@@ -251,10 +264,10 @@ def test_substitute_replaces_placeholders(monkeypatch: pytest.MonkeyPatch, tmp_p
         {"action": "fill", "selector": "input[name=pw]", "value": "{{password}}"},
         {"action": "click", "selector": "button"},
     ]
-    result = m.substitute(actions, {"email": "cosmo@example.com", "password": "s3cr3t"})
+    result = m.substitute(actions, {"email": "cosmo@octowright.test", "password": PW_FIXTURE})
 
-    assert result[0]["value"] == "cosmo@example.com"
-    assert result[1]["value"] == "s3cr3t"
+    assert result[0]["value"] == "cosmo@octowright.test"
+    assert result[1]["value"] == PW_FIXTURE
     assert result[2]["selector"] == "button"
 
 
@@ -285,7 +298,7 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     saved_path = m.save_macro(
         recording_path=rec,
         name="replay-test",
-        parameters={"email": "me@example.com", "password": "hunter2"},
+        parameters={"email": "me@octowright.test", "password": "hunter2"},
         include_launch=True,
     )
 
@@ -338,7 +351,7 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     result = await m.run_macro(
         fake,  # type: ignore[arg-type]
         "replay-test",
-        args={"email": "cosmo@example.com", "password": "pass123"},
+        args={"email": "cosmo@octowright.test", "password": PW_FIXTURE},
     )
 
     assert result["macro"] == "replay-test"
@@ -354,8 +367,8 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
     # fill calls used substituted values
     fill_calls = [(name, args) for name, args, _ in calls if name == "fill"]
     fill_values = [args[1] for _, args in fill_calls]
-    assert "cosmo@example.com" in fill_values
-    assert "pass123" in fill_values
+    assert "cosmo@octowright.test" in fill_values
+    assert PW_FIXTURE in fill_values
 
     # click was called (button[type=submit])
     click_calls = [name for name, _, _ in calls if name == "click"]
@@ -380,18 +393,18 @@ async def test_run_macro_macro_call_dispatches_nested_actions(monkeypatch: pytes
         tmp_path,
         "signup-parent",
         [
-            {"action": "navigate", "url": "https://example.com"},
+            {"action": "navigate", "url": "https://octowright.com"},
             {"action": "macro_call", "name": "signup-child", "args": {"email": "{{email}}"}},
         ],
     )
 
     session = _CallAwareFakeSession()
-    result = await m.run_macro(session, "signup-parent", args={"email": "person@example.com"})
+    result = await m.run_macro(session, "signup-parent", args={"email": "person@octowright.test"})
 
     assert result["macro"] == "signup-parent"
     # 1 navigate + 1 macro_call wrapper + 2 child actions = 4 executed.
     assert result["executed"] == 4
-    assert session.calls[1] == ("fill", ("#email", "person@example.com"), None)
+    assert session.calls[1] == ("fill", ("#email", "person@octowright.test"), None)
     assert session.calls[2] == ("click", ("#submit",), None)
 
 
@@ -447,7 +460,7 @@ async def test_run_macro_macro_call_enforces_depth_limit(monkeypatch: pytest.Mon
     monkeypatch.setattr(macro_execution, "MAX_MACRO_CALL_DEPTH", 2, raising=False)
     _save_macro_file(m, tmp_path, "root", [{"action": "macro_call", "name": "second"}])
     _save_macro_file(m, tmp_path, "second", [{"action": "macro_call", "name": "third"}])
-    _save_macro_file(m, tmp_path, "third", [{"action": "navigate", "url": "https://example.com"}])
+    _save_macro_file(m, tmp_path, "third", [{"action": "navigate", "url": "https://octowright.com"}])
     session = _CallAwareFakeSession()
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -578,7 +591,7 @@ def _save_minimal_macro(m: Any, tmp_path: Path, name: str) -> None:
         "parameters": [],
         "created_at": "2026-01-01T00:00:00Z",
         "updated_at": "2026-01-01T00:00:00Z",
-        "actions": [{"action": "navigate", "url": "https://example.com"}],
+        "actions": [{"action": "navigate", "url": "https://octowright.com"}],
     }
     (tmp_path / "macros" / f"{name}.json").write_text(json.dumps(macro), encoding="utf-8")
 
@@ -777,7 +790,7 @@ async def test_run_macro_captures_diagnostic_bundle_on_failure(monkeypatch: pyte
         "created_at": "2026-01-01T00:00:00Z",
         "updated_at": "2026-01-01T00:00:00Z",
         "actions": [
-            {"action": "navigate", "url": "https://example.com"},
+            {"action": "navigate", "url": "https://octowright.com"},
             {"action": "click", "selector": "#does-not-exist"},
         ],
     }

@@ -199,21 +199,28 @@ async def test_reconnect_replays_initialize_only_once_per_session() -> None:
     await supervisor_obj.forward_remote_message(_response("init-only"))
     assert supervisor_obj.in_flight_count == 0
 
-    # Reconnect #1 -> replay should resend the cached initialize with the
-    # SAME request id, without inflating in_flight_count.
+    # Reconnect #1 -> replay should resend the cached initialize but
+    # under a fresh internal id so the leader sees a unique request and
+    # any response the leader produces won't double-deliver to the local
+    # client (which already received the original ``init-only`` response).
+    # Internal-replay ids are namespaced ``octowright-bridge-replay-N``.
     session_two = await connector.connect()
     await supervisor_obj.replay_initialize(session_two.remote_write)
     replayed_one = await session_two.received.receive()
     assert supervisor.message_method(replayed_one) == "initialize"
-    assert supervisor.message_request_id(replayed_one) == "init-only"
+    replay_one_id = supervisor.message_request_id(replayed_one)
+    assert isinstance(replay_one_id, str) and replay_one_id.startswith("octowright-bridge-replay-")
+    assert replay_one_id != "init-only"
     assert supervisor_obj.in_flight_count == 0  # replay must not re-track
 
-    # Reconnect #2 -> still the same cached message.
+    # Reconnect #2 -> another fresh replay id (distinct from #1).
     session_three = await connector.connect()
     await supervisor_obj.replay_initialize(session_three.remote_write)
     replayed_two = await session_three.received.receive()
     assert supervisor.message_method(replayed_two) == "initialize"
-    assert supervisor.message_request_id(replayed_two) == "init-only"
+    replay_two_id = supervisor.message_request_id(replayed_two)
+    assert isinstance(replay_two_id, str) and replay_two_id.startswith("octowright-bridge-replay-")
+    assert replay_two_id != replay_one_id
     assert supervisor_obj.in_flight_count == 0
 
     assert connector.connect_count == 3

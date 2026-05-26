@@ -52,7 +52,7 @@ def test_load_demo_bundle_reads_demo_yaml_fields(tmp_path: Path) -> None:
                 "default_seed": "seed/stage.html",
                 "role_seeds": {"guest": "seed/guest.html"},
                 "macros": [
-                    {"name": "login", "role": "host", "args": {"email": "demo@example.com"}},
+                    {"name": "login", "role": "host", "args": {"email": "demo@octowright.test"}},
                 ],
                 "verify_report": "artifacts/report.xml",
                 "extras": ["participant-roster"],
@@ -83,7 +83,7 @@ def test_load_demo_bundle_reads_demo_yaml_fields(tmp_path: Path) -> None:
     assert len(bundle.recording.macros) == 1
     assert bundle.recording.macros[0].name == "login"
     assert bundle.recording.macros[0].role == "host"
-    assert bundle.recording.macros[0].args == {"email": "demo@example.com"}
+    assert bundle.recording.macros[0].args == {"email": "demo@octowright.test"}
     assert bundle.recording.verify_report == "artifacts/report.xml"
     assert bundle.recording.extras == ["participant-roster"]
     assert bundle.presentation.mode == "single-clean"

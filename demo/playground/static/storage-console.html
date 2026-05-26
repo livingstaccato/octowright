@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Storage Console | Octowright Test Range</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="page-shell">
+  <a class="mini-brand" href="/"><img src="/otto.svg" alt="">Octowright Test Range</a>
+  <header class="page-header">
+    <div class="page-title">
+      <h1>Storage Console</h1>
+      <p>Exercise browser profile persistence with localStorage, sessionStorage, and cookies in one deterministic view.</p>
+    </div>
+    <span class="tag">ID: STORAGE</span>
+  </header>
+  <section class="tool-grid">
+    <article class="lab-panel">
+      <h2>Write State</h2>
+      <label for="storage-key">Key</label>
+      <input id="storage-key" data-testid="storage-key" type="text" value="octowright.demo">
+      <label for="storage-value">Value</label>
+      <input id="storage-value" data-testid="storage-value" type="text" value="profile-state">
+      <div class="button-row">
+        <button id="write-storage" data-testid="write-storage" type="button">Write state</button>
+        <button id="clear-storage" data-testid="clear-storage" class="ghost-button" type="button">Clear state</button>
+      </div>
+    </article>
+    <article class="lab-panel">
+      <h2>Current State</h2>
+      <pre id="storage-result" class="result-box" aria-live="polite">State not loaded.</pre>
+    </article>
+  </section>
+</main>
+<script src="/storage-console.js"></script>
+</body>
+</html>

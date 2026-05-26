@@ -50,12 +50,12 @@ SAMPLE_TREE: dict[str, Any] = {
 
 def test_save_golden_writes_expected_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     g = _import_goldens(monkeypatch, tmp_path)
-    path = g.save_golden(name="My Page", tree=SAMPLE_TREE, url="https://example.com", description="smoke test")
+    path = g.save_golden(name="My Page", tree=SAMPLE_TREE, url="https://octowright.com", description="smoke test")
     assert path.exists()
     data = json.loads(path.read_text())
     assert data["name"] == "My Page"
     assert data["description"] == "smoke test"
-    assert data["url"] == "https://example.com"
+    assert data["url"] == "https://octowright.com"
     assert data["tree"] == SAMPLE_TREE
     assert "created_at" in data
     assert "updated_at" in data
@@ -77,7 +77,7 @@ def test_save_golden_preserves_created_at_on_overwrite(monkeypatch: pytest.Monke
 
 def test_load_golden_returns_full_dict(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     g = _import_goldens(monkeypatch, tmp_path)
-    g.save_golden(name="load-me", tree=SAMPLE_TREE, url="https://example.com")
+    g.save_golden(name="load-me", tree=SAMPLE_TREE, url="https://octowright.com")
     data = g.load_golden("load-me")
     assert data["name"] == "load-me"
     assert data["tree"] == SAMPLE_TREE
@@ -185,3 +185,161 @@ def test_diff_trees_array_length_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_p
     removed = [d for d in diffs if d["op"] == "removed"]
     assert len(removed) >= 1
     assert "children/1" in removed[0]["path"]
+
+
+def test_diff_trees_inserted_head_does_not_cascade(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Inserting a notification banner at index 0 must produce exactly one
+    ``added`` diff, not an O(n) cascade of ``changed`` diffs as positional
+    matching would generate."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    expected = {
+        "role": "RootWebArea",
+        "name": "App",
+        "children": [
+            {"role": "heading", "name": "First"},
+            {"role": "paragraph", "name": "Second"},
+            {"role": "paragraph", "name": "Third"},
+        ],
+    }
+    actual = {
+        "role": "RootWebArea",
+        "name": "App",
+        "children": [
+            {"role": "alert", "name": "Saved!"},
+            {"role": "heading", "name": "First"},
+            {"role": "paragraph", "name": "Second"},
+            {"role": "paragraph", "name": "Third"},
+        ],
+    }
+    diffs = g.diff_trees(expected, actual)
+    assert len(diffs) == 1, f"expected single added diff, got {diffs!r}"
+    assert diffs[0]["op"] == "added"
+    assert diffs[0]["actual"] == {"role": "alert", "name": "Saved!"}
+
+
+def test_diff_trees_sibling_reorder_no_diff(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Swapping two siblings with identical (role, name) should produce no
+    diff — identity-keyed matching treats them as semantically equivalent.
+    Order is not a semantic property of an accessibility tree under this
+    diff: a re-ordered toolbar that exposes the same affordances is the same
+    UI to a screen reader, and we want goldens to ratchet on *content*, not
+    layout sequence."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    expected = {
+        "children": [
+            {"role": "button", "name": "Save"},
+            {"role": "button", "name": "Cancel"},
+        ],
+    }
+    actual = {
+        "children": [
+            {"role": "button", "name": "Cancel"},
+            {"role": "button", "name": "Save"},
+        ],
+    }
+    assert g.diff_trees(expected, actual) == []
+
+
+def test_diff_trees_removed_middle_child(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Removing a middle child produces a single ``removed`` diff."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    expected = {
+        "children": [
+            {"role": "link", "name": "Home"},
+            {"role": "link", "name": "About"},
+            {"role": "link", "name": "Contact"},
+        ],
+    }
+    actual = {
+        "children": [
+            {"role": "link", "name": "Home"},
+            {"role": "link", "name": "Contact"},
+        ],
+    }
+    diffs = g.diff_trees(expected, actual)
+    assert len(diffs) == 1
+    assert diffs[0]["op"] == "removed"
+    assert diffs[0]["expected"] == {"role": "link", "name": "About"}
+
+
+def test_diff_trees_changed_within_matched_child(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A field change on a node matched by (role, name) surfaces as
+    ``changed``, not as a remove+add pair."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    expected = {
+        "children": [
+            {"role": "button", "name": "Save", "disabled": False},
+        ],
+    }
+    actual = {
+        "children": [
+            {"role": "button", "name": "Save", "disabled": True},
+        ],
+    }
+    diffs = g.diff_trees(expected, actual)
+    assert len(diffs) == 1
+    assert diffs[0]["op"] == "changed"
+    assert diffs[0]["expected"] is False
+    assert diffs[0]["actual"] is True
+
+
+def test_diff_trees_unkeyed_list_falls_back_to_positional(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A list of plain strings carries no identity signal — fall back to
+    positional matching so we still surface diffs for fully unkeyed lists."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    expected = {"tags": ["alpha", "beta", "gamma"]}
+    actual = {"tags": ["alpha", "BETA", "gamma"]}
+    diffs = g.diff_trees(expected, actual)
+    assert len(diffs) == 1
+    assert diffs[0]["op"] == "changed"
+    assert diffs[0]["expected"] == "beta"
+    assert diffs[0]["actual"] == "BETA"
+
+
+def test_diff_trees_role_only_uses_label_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Nodes with role but no name use the label/text fallback so siblings
+    of the same role are still distinguishable."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    expected = {
+        "children": [
+            {"role": "paragraph", "text": "Intro"},
+            {"role": "paragraph", "text": "Body"},
+        ],
+    }
+    actual = {
+        "children": [
+            {"role": "paragraph", "text": "Body"},
+            {"role": "paragraph", "text": "Intro"},
+        ],
+    }
+    assert g.diff_trees(expected, actual) == []
+
+
+# ---------------------------------------------------------------------------
+# Path containment — defense in depth around _slug()
+# ---------------------------------------------------------------------------
+
+
+def test_save_golden_rejects_path_traversal_slug(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """If ``_slug`` ever returns a traversal-shaped value, ``reject_unsafe_path``
+    is the boundary that stops the write from escaping GOLDENS_DIR."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    # Force _slug to return a traversal segment; the containment guard must
+    # raise rather than letting the write escape GOLDENS_DIR.
+    monkeypatch.setattr(g, "_slug", lambda name: "../etc/passwd")
+    with pytest.raises(ValueError, match="resolves outside"):
+        g.save_golden(name="anything", tree=SAMPLE_TREE)
+
+
+def test_load_golden_rejects_path_traversal_slug(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    g = _import_goldens(monkeypatch, tmp_path)
+    monkeypatch.setattr(g, "_slug", lambda name: "../etc/passwd")
+    with pytest.raises(ValueError, match="resolves outside"):
+        g.load_golden("anything")
+
+
+def test_delete_golden_rejects_path_traversal_slug(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    g = _import_goldens(monkeypatch, tmp_path)
+    monkeypatch.setattr(g, "_slug", lambda name: "../etc/passwd")
+    with pytest.raises(ValueError, match="resolves outside"):
+        g.delete_golden("anything")

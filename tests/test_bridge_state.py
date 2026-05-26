@@ -65,3 +65,62 @@ def test_read_state_recovers_from_corrupt_json(tmp_path: Path) -> None:
     path.write_text("{not json")
     data = bridge_state.read_state(path)
     assert data == {"followers": {}, "events": []}
+
+
+def test_concurrent_snapshots_with_reused_pid_dont_collide(tmp_path: Path) -> None:
+    """Two writers that share a PID (e.g. OS recycled a dead follower's PID)
+    must both succeed and the on-disk state must reflect one of them, not
+    a corrupted half-write or an OSError from racing the same tmp path."""
+    import threading
+
+    path = tmp_path / "bridge-state.json"
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def worker(session_tag: str) -> None:
+        try:
+            barrier.wait(timeout=2.0)
+            for _ in range(10):
+                bridge_state.record_snapshot(
+                    path=path,
+                    follower_pid=4242,
+                    remote_url=f"http://127.0.0.1/{session_tag}/mcp/",
+                    remote_session_id=session_tag,
+                    last_error=None,
+                    in_flight=0,
+                    reconnect_attempts=0,
+                    request_timeouts=0,
+                )
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=worker, args=("session-a",))
+    t2 = threading.Thread(target=worker, args=("session-b",))
+    t1.start()
+    t2.start()
+    t1.join(timeout=5.0)
+    t2.join(timeout=5.0)
+
+    assert not errors, f"concurrent writers raised: {errors!r}"
+    assert path.exists()
+    data = json.loads(path.read_text())
+    final_session = data["followers"]["4242"]["remote_session_id"]
+    assert final_session in {"session-a", "session-b"}
+
+
+def test_record_snapshot_leaves_no_tmp_files(tmp_path: Path) -> None:
+    """The atomic replace must consume the staging file — no `*.tmp` leak."""
+    path = tmp_path / "bridge-state.json"
+    for i in range(5):
+        bridge_state.record_snapshot(
+            path=path,
+            follower_pid=1000 + i,
+            remote_url="http://127.0.0.1/mcp/",
+            remote_session_id=f"sid-{i}",
+            last_error=None,
+            in_flight=0,
+            reconnect_attempts=0,
+            request_timeouts=0,
+        )
+    leftovers = sorted(tmp_path.glob("*.tmp"))
+    assert leftovers == []

@@ -124,7 +124,14 @@ class SessionInteractionMixin(SessionLike):
             await self.page.unroute(url_pattern, self._active_routes[url_pattern])
         await self.page.route(url_pattern, _handler)
         self._active_routes[url_pattern] = _handler
-        self.recorder.record("mock_route", pattern=url_pattern, status=status, content_type=content_type)
+        self.recorder.record(
+            "mock_route",
+            pattern=url_pattern,
+            status=status,
+            content_type=content_type,
+            body=body,
+            headers=headers or {},
+        )
         return {"ok": True, "pattern": url_pattern, "status": status}
 
     async def unmock_route(self, url_pattern: str) -> dict[str, Any]:

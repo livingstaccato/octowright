@@ -17,7 +17,7 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	uv run --active ruff format --check .
 	uv run --active mypy src/octowright
 	uv run --active ty check src/octowright
-	uv run --active bandit -q -r src/octowright -s B101,B110,B112,B404,B405
+	uv run --active bandit -q -r src/octowright -s B110,B112,B404,B405
 	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
 	uv run --active python scripts/check_spdx_headers.py
 	uv run --active python scripts/check_max_loc.py
@@ -48,6 +48,9 @@ spdx-fix: ## Normalize SPDX headers in source files
 
 diagrams: ## Render docs/architecture/*.puml to SVG (requires `plantuml`)
 	bash scripts/render_diagrams.sh docs/architecture
+
+diagrams-png: ## Render diagrams to SVG + 2400-px PNG into /tmp/octowright-diagrams (requires `plantuml` + `rsvg-convert`)
+	bash scripts/render_diagrams.sh docs/architecture --png
 
 export-demos: ## Regenerate demo/tutorial-export/ from demo/bundles/ (no re-recording)
 	uv run --active python scripts/demos/sync_exports.py

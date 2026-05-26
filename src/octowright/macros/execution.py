@@ -66,7 +66,11 @@ _SENSITIVE_ARG_KEY_PARTS = (
     "access_key",
     "credential",
 )
-_SENSITIVE_ARG_EXACT_KEYS = frozenset({"pw", "pwd", "auth"})
+# ``email`` and ``username`` are exact-match only: the lint module already
+# flags raw email-shaped values as PII; redacting them in the response keeps
+# the args_used echo from leaking the user's identity even when the value
+# was supplied via plain ``{{email}}`` template substitution.
+_SENSITIVE_ARG_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "email", "username"})
 
 
 def _redact_args_for_response(args: Mapping[str, Any]) -> dict[str, Any]:
@@ -422,7 +426,9 @@ async def run_sequence(
                 steps.append({**outcome, "ok": True})
             except Exception as exc:
                 all_ok = False
-                steps.append({"macro": name, "ok": False, "error": str(exc), "args_used": step_args})
+                steps.append(
+                    {"macro": name, "ok": False, "error": str(exc), "args_used": _redact_args_for_response(step_args)}
+                )
                 if stop_on_failure:
                     raise
 

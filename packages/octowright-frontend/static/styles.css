@@ -68,6 +68,13 @@ code, .mono { font-family: var(--mono); }
   z-index: 100;
 }
 
+.topbar__logo {
+  display: block;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
 .topbar__title {
   display: flex;
   align-items: center;
@@ -79,11 +86,47 @@ code, .mono { font-family: var(--mono); }
   margin: 0;
 }
 
-.topbar__title::before {
-  content: '◈';
+/* Brand lockup — matches site-octowright-com's nav-brand-lockup:
+   lowercase mono, "octo" in ink, "wright" in accent orange. The two
+   halves are one continuous word; no gap between them.
+
+   Monospace fonts leave a natural visual gap between the round-letter
+   ``o`` and the wide-letter ``w``; the weight change at that boundary
+   makes the gap stand out. Use the same weight on both halves (color
+   alone marks the split) and tighten letter-spacing slightly. */
+.topbar__brand {
+  display: inline-block;
+  font-family: var(--mono);
+  text-transform: lowercase;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.04em;
+  color: var(--fg);
+  margin: 0;
+}
+
+.topbar__brand strong {
   color: var(--accent);
-  font-size: 17px;
-  line-height: 1;
+  font-weight: inherit;
+}
+
+.topbar__brand--link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.topbar__brand--link > span { display: inline-block; }
+
+.topbar__brand--link:hover { text-decoration: none; }
+.topbar__brand--link:hover strong { color: var(--accent-hi); }
+
+.topbar__sep {
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 14px;
+  margin: 0 4px;
 }
 
 .topbar__hint {

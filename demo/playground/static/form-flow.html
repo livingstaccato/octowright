@@ -2,30 +2,35 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Form flow</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Form Flow | Octowright Test Range</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<main class="form-root">
-  <header>
-    <h1>Multi-step form</h1>
-    <p>Each <strong>Next</strong> button posts the current step to <code>/api/form-step</code>. The monitor dashboard renders each post as a new row.</p>
+<main class="page-shell form-root">
+  <a class="mini-brand" href="/"><img src="/otto.svg" alt="">Octowright Test Range</a>
+  <header class="page-header">
+    <div class="page-title">
+      <h1>Form Flow</h1>
+      <p>Drive a deterministic three-step form. Each Next or Submit posts to <code>/api/form-step</code> and appears in the monitor table.</p>
+    </div>
+    <span class="tag">ID: FORM</span>
   </header>
   <ol id="steps" class="steps">
     <li class="step step--active" data-step="1">
-      <h2>Step 1 &mdash; Identity</h2>
+      <h2>Step 1 - Identity</h2>
       <label for="name">Full name</label>
       <input id="name" name="name" type="text" autocomplete="off">
       <button id="next-1" type="button">Next</button>
     </li>
     <li class="step" data-step="2">
-      <h2>Step 2 &mdash; Contact</h2>
+      <h2>Step 2 - Contact</h2>
       <label for="email">Email</label>
       <input id="email" name="email" type="email" autocomplete="off">
       <button id="next-2" type="button">Next</button>
     </li>
     <li class="step" data-step="3">
-      <h2>Step 3 &mdash; Confirm</h2>
+      <h2>Step 3 - Confirm</h2>
       <label for="notes">Notes</label>
       <textarea id="notes" name="notes"></textarea>
       <button id="submit" type="button">Submit</button>

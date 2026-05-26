@@ -93,7 +93,7 @@ function makeDetail(overrides: Partial<SessionDetail> = {}): SessionDetail {
     kind: "chromium",
     label: "demo",
     profile: null,
-    url: "https://example.com",
+    url: "https://octowright.com",
     started_at: "2026-04-24T12:00:00.000Z",
     live: false,
     log_path: "/tmp/x.jsonl",
@@ -169,7 +169,7 @@ describe("appendForTest", () => {
   it("delegates to appendTimelineEvents without throwing", () => {
     const target = document.createElement("div");
     const events: RecordingEvent[] = [
-      { ts: "2026-04-24T12:00:00.000Z", action: "navigate", url: "https://example.com" },
+      { ts: "2026-04-24T12:00:00.000Z", action: "navigate", url: "https://octowright.com" },
     ];
     // Should not throw; appendTimelineEvents is mocked so DOM output is absent.
     expect(() => appendForTest(events, target, "2026-04-24T12:00:00.000Z")).not.toThrow();

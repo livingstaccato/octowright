@@ -33,7 +33,7 @@ class FakeFrame:
 
 class FakePage:
     def __init__(self) -> None:
-        self.url = "https://example.com"
+        self.url = "https://octowright.com"
         self.click = AsyncMock()
         self.type = AsyncMock()
         self.fill = AsyncMock()
@@ -79,7 +79,7 @@ def _make_session(tmp_path: Path) -> BrowserSession:
         instance_id="iframe-test",
         kind="chromium",
         label=None,
-        url="https://example.com",
+        url="https://octowright.com",
         browser=None,  # type: ignore[arg-type]
         context=MagicMock(),
         page=page,  # type: ignore[arg-type]
@@ -179,19 +179,19 @@ async def test_reset_frame_clears_active_frame(tmp_path: Path) -> None:
 
 def test_list_frames_shape(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
-    main = FakeFrame(name="", url="https://example.com")
-    child = FakeFrame(name="inner", url="https://widget.example.com")
+    main = FakeFrame(name="", url="https://octowright.com")
+    child = FakeFrame(name="inner", url="https://widget.octowright.com")
     s.page.frames = [main, child]  # type: ignore[attr-defined]
     frames = s.list_frames()
     assert len(frames) == 2
-    assert frames[0] == {"index": 0, "name": "", "url": "https://example.com", "is_active": False}
-    assert frames[1] == {"index": 1, "name": "inner", "url": "https://widget.example.com", "is_active": False}
+    assert frames[0] == {"index": 0, "name": "", "url": "https://octowright.com", "is_active": False}
+    assert frames[1] == {"index": 1, "name": "inner", "url": "https://widget.octowright.com", "is_active": False}
 
 
 def test_list_frames_marks_active(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
-    main = FakeFrame(name="", url="https://example.com")
-    child = FakeFrame(name="inner", url="https://widget.example.com")
+    main = FakeFrame(name="", url="https://octowright.com")
+    child = FakeFrame(name="inner", url="https://widget.octowright.com")
     s.page.frames = [main, child]  # type: ignore[attr-defined]
     s.active_frame = child
     frames = s.list_frames()
@@ -207,8 +207,8 @@ def test_list_frames_marks_active(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_switch_frame_by_name_sets_active(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
-    inner = FakeFrame(name="inner", url="https://widget.example.com")
-    s.page.frames = [FakeFrame(name="", url="https://example.com"), inner]  # type: ignore[attr-defined]
+    inner = FakeFrame(name="inner", url="https://widget.octowright.com")
+    s.page.frames = [FakeFrame(name="", url="https://octowright.com"), inner]  # type: ignore[attr-defined]
     result = await s.switch_frame(name="inner")
     assert s.active_frame is inner
     assert result["name"] == "inner"
@@ -232,7 +232,7 @@ async def test_switch_frame_by_name_raises_if_not_found(tmp_path: Path) -> None:
 async def test_switch_frame_by_url_pattern(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
     child = FakeFrame(name="stripe", url="https://js.stripe.com/v3/")
-    s.page.frames = [FakeFrame(name="", url="https://example.com"), child]  # type: ignore[attr-defined]
+    s.page.frames = [FakeFrame(name="", url="https://octowright.com"), child]  # type: ignore[attr-defined]
     result = await s.switch_frame(url_pattern=r"stripe\.com")
     assert s.active_frame is child
     assert "stripe" in result["url"]
@@ -246,8 +246,8 @@ async def test_switch_frame_by_url_pattern(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_switch_frame_by_selector(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
-    child = FakeFrame(name="inner", url="https://widget.example.com")
-    s.page.frames = [FakeFrame(name="", url="https://example.com"), child]  # type: ignore[attr-defined]
+    child = FakeFrame(name="inner", url="https://widget.octowright.com")
+    s.page.frames = [FakeFrame(name="", url="https://octowright.com"), child]  # type: ignore[attr-defined]
     # FakePage.frame_locator returns the first frame (index 0) in frames list,
     # but we specifically need it to return child. Patch it.
     s.page.frames.insert(0, child)  # type: ignore[attr-defined]

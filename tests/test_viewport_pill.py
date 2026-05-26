@@ -61,7 +61,19 @@ async def test_viewport_pill_requires_one_second_alt_hold() -> None:
         await page.mouse.click(x, y)
         assert await page.locator("#__octowright_viewport_modal__").count() == 0
 
-        await page.wait_for_timeout(1100)
+        # Poll until the JS-side 1s-Alt-hold timer has fired (pill flips its
+        # pointer-events to "auto"). Robust against slow CI runners where a
+        # plain 1100ms wait left only ~100ms slack — flaky on macos amd64.
+        await pill.evaluate(
+            """async (node) => {
+                const deadline = Date.now() + 4000;
+                while (Date.now() < deadline) {
+                    if (getComputedStyle(node).pointerEvents === 'auto') return;
+                    await new Promise((r) => setTimeout(r, 50));
+                }
+                throw new Error('viewport pill never became interactive');
+            }"""
+        )
         await page.mouse.click(x, y)
         assert await page.locator("#__octowright_viewport_modal__").count() == 1
         await page.keyboard.up("Alt")
@@ -119,10 +131,24 @@ async def test_viewport_pill_is_quiet_bottom_indicator_with_compact_popover() ->
         box = await pill.bounding_box()
         assert box is not None
         await page.keyboard.down("Alt")
-        await page.wait_for_timeout(1100)
+        # Wait until the pill's pointer-events flip to "auto" — that's the
+        # JS-side signal that the 1s Alt-hold timer fired. Using a polling
+        # wait instead of a fixed sleep keeps the test reliable on slow CI
+        # runners where setTimeout can lag past the historical 100ms slack.
+        await pill.evaluate(
+            """async (node) => {
+                const deadline = Date.now() + 4000;
+                while (Date.now() < deadline) {
+                    if (getComputedStyle(node).pointerEvents === 'auto') return;
+                    await new Promise((r) => setTimeout(r, 50));
+                }
+                throw new Error('viewport pill never became interactive');
+            }"""
+        )
         await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
 
         popover = page.locator("#__octowright_viewport_modal__")
+        await page.wait_for_selector("#__octowright_viewport_modal__", timeout=2000)
         assert await popover.count() == 1
         text = await popover.text_content()
         assert text is not None

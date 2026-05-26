@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "octowright": {
+      "command": "uvx",
+      "args": ["octowright", "serve"]
+    }
+  }
+}

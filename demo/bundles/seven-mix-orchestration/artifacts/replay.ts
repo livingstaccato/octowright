@@ -16,42 +16,42 @@ const resolveBundleUrl = (raw: string): string => {
   let ctx!: BrowserContext;
   let page!: Page;
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=spectator&colour=%23999"));
-  browser = await chromium.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p7&colour=%238e24aa"));
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p6&colour=%231e88e5"));
-  browser = await firefox.launch({ headless: true });
+  browser = await chromium.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p4&colour=%2343a047"));
-  browser = await firefox.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p5&colour=%2300acc1"));
-  browser = await webkit.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935"));
-  browser = await webkit.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p3&colour=%23fdd835"));
-  browser = await webkit.launch({ headless: true });
-  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"));
-  browser = await webkit.launch({ headless: true });
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p7&colour=%238e24aa"));
+  browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=operator&colour=%23000"));
+  browser = await webkit.launch({ headless: false });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p2&colour=%23fb8c00"));
+  browser = await webkit.launch({ headless: false });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p1&colour=%23e53935"));
+  browser = await webkit.launch({ headless: false });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p3&colour=%23fdd835"));
+  browser = await firefox.launch({ headless: false });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p4&colour=%2343a047"));
+  browser = await firefox.launch({ headless: false });
+  ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  page = await ctx.newPage();
+  await page.goto(resolveBundleUrl("http://127.0.0.1:7900/canvas.html?role=p5&colour=%2300acc1"));
   await page.waitForSelector("[data-testid=\"tile-0-0\"]");
   await page.waitForSelector("[data-testid=\"tile-0-0\"]");
   await page.waitForSelector("[data-testid=\"tile-0-0\"]");
@@ -59,11 +59,6 @@ const resolveBundleUrl = (raw: string): string => {
   await page.waitForSelector("[data-testid=\"tile-0-0\"]");
   await page.waitForSelector("[data-testid=\"tile-0-0\"]");
   await page.waitForSelector("[data-testid=\"tile-0-0\"]");
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-2-2\"]");
-  }
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
@@ -102,7 +97,7 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
-    await page.click("[data-testid=\"tile-3-5\"]");
+    await page.click("[data-testid=\"tile-2-2\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
@@ -137,12 +132,7 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
-    await page.click("[data-testid=\"tile-5-7\"]");
-  }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-5-7\"]");
+    await page.click("[data-testid=\"tile-3-5\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
@@ -172,7 +162,7 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
-    await page.click("[data-testid=\"tile-7-3\"]");
+    await page.click("[data-testid=\"tile-5-7\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
@@ -192,7 +182,17 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
+    await page.click("[data-testid=\"tile-5-7\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
     await page.click("[data-testid=\"tile-7-3\"]");
+  }
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-8-8\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
@@ -217,18 +217,14 @@ const resolveBundleUrl = (raw: string): string => {
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
-    await page.click("[data-testid=\"tile-8-8\"]");
+    await page.click("[data-testid=\"tile-7-3\"]");
   }
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
     await page.click("[data-testid=\"tile-8-8\"]");
   }
-  try {
-    await page.getByRole("player", { name: "" }).click();
-  } catch {
-    await page.click("[data-testid=\"tile-8-8\"]");
-  }
+  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   try {
     await page.getByRole("player", { name: "" }).click();
   } catch {
@@ -237,7 +233,11 @@ const resolveBundleUrl = (raw: string): string => {
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
-  await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
+  try {
+    await page.getByRole("player", { name: "" }).click();
+  } catch {
+    await page.click("[data-testid=\"tile-8-8\"]");
+  }
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
   await page.evaluate("document.querySelectorAll('.tile[data-claimed]').length");
@@ -247,6 +247,9 @@ const resolveBundleUrl = (raw: string): string => {
   await page.evaluate("window.scrollTo({top: 0, behavior: 'smooth'}); window.scrollY");
   await page.waitForSelector("#grid");
   await page.evaluate("document.querySelector('#grid').scrollIntoView({block: 'center', behavior: 'smooth'}); window.scrollY");
+  await page.hover("[data-testid='tile-2-2']");
+  await page.hover("[data-testid='tile-5-5']");
+  await page.hover("[data-testid='tile-8-8']");
   if (browser !== null) {
     await browser.close();
   } else {

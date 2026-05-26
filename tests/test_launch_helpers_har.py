@@ -105,10 +105,10 @@ def test_build_har_kwargs_passes_through_url_filter_and_content(
         har=True,
         har_path_opt="capture.har",
         har_mode="full",
-        har_url_filter="https://example.com/**",
+        har_url_filter="https://octowright.com/**",
         har_content="embed",
         log_path=log_path,
     )
-    assert kwargs["record_har_url_filter"] == "https://example.com/**"
+    assert kwargs["record_har_url_filter"] == "https://octowright.com/**"
     assert kwargs["record_har_content"] == "embed"
     assert kwargs["record_har_mode"] == "full"

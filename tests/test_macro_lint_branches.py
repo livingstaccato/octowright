@@ -67,7 +67,7 @@ def _only(issues: list[Issue], code: str) -> Issue:
         ({"actions": [{"action": "try_each", "branches": []}]}, "try_each_empty_branches", "error"),
         ({"actions": [{"action": "try_each", "branches": [[]]}]}, "try_each_branch_empty", "warning"),
         (
-            {"actions": [{"action": "fill", "selector": "#x", "value": "me@example.com"}]},
+            {"actions": [{"action": "fill", "selector": "#x", "value": "me@octowright.test"}]},
             "looks_like_credential",
             "warning",
         ),
@@ -222,9 +222,9 @@ def test_message_substrings(macro_in: dict[str, Any], code: str, must_contain: s
 
 def test_credential_warning_includes_field_and_value() -> None:
     """The credential warning quotes the literal value AND the field key."""
-    issues = lint_macro(_macro([{"action": "fill", "selector": "#e", "value": "me@example.com"}]))
+    issues = lint_macro(_macro([{"action": "fill", "selector": "#e", "value": "me@octowright.test"}]))
     issue = _only(issues, "looks_like_credential")
-    assert "me@example.com" in issue.message
+    assert "me@octowright.test" in issue.message
     assert "'value'" in issue.message
     assert "{{email}}" in issue.message
 

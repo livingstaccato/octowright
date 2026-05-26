@@ -139,16 +139,36 @@ jobs:
         env:
           OCTOWRIGHT_HEADLESS: "1"
         run: bash ci/run_unit_tests.sh
+      # Two-phase pytest: integration_local writes junitxml (artifact),
+      # then the main suite runs. Script keeps the logic out of YAML so the
+      # bash line continuations survive Windows' default-PowerShell parser.
       - name: Run unit tests (headless, Windows verbose)
         if: ${{ env.ACT != 'true' && runner.os == 'Windows' }}
+        shell: bash
         env:
           OCTOWRIGHT_HEADLESS: "1"
-        run: uv run --active pytest -vv tests/ --tb=short -ra --color=no
+          RUNNER_OS: ${{ runner.os }}
+          RUNNER_ARCH: ${{ matrix.arch }}
+          VERBOSE: "1"
+        run: bash ci/run_integration_and_main.sh
       - name: Run unit tests (headless)
         if: ${{ env.ACT != 'true' && runner.os != 'Windows' }}
         env:
           OCTOWRIGHT_HEADLESS: "1"
-        run: uv run --active pytest -q tests/
+          RUNNER_OS: ${{ runner.os }}
+          RUNNER_ARCH: ${{ matrix.arch }}
+        run: bash ci/run_integration_and_main.sh
+      - name: Upload integration-local media + reports
+        if: ${{ env.ACT != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: integration-local-${{ runner.os }}-${{ matrix.arch }}
+          path: |
+            .ci/integration-local-*.xml
+            .ci/recordings/
+            demo/bundles/role-based-duo/artifacts/
+            demo/bundles/seven-mix-orchestration/artifacts/
+          if-no-files-found: warn
       # Coverage gate (Linux only): re-runs `coverage report` so the
       # --cov-fail-under threshold in pyproject.toml becomes a dedicated
       # failing step instead of a buried tail of pytest output.

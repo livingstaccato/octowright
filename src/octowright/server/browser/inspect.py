@@ -65,11 +65,15 @@ async def browser_snapshot(
     max_chars: int | None = None,
 ) -> BrowserSnapshotResult:
     session = pool.get(instance_id)
-    aria = await session.page.locator(selector).aria_snapshot()
+    # Route through session.snapshot so the JSONL gets a "snapshot" event;
+    # bypassing it would make MCP-tool snapshots invisible to macro replay,
+    # golden diffs, and the audit trail.
+    snap = await session.snapshot(selector=selector)
+    aria = snap["aria"]
     cap = None if full else (max_chars or DEFAULT_PREVIEW_CHARS)
     out: BrowserSnapshotResult = {
-        "url": session.page.url,
-        "title": await session.page.title(),
+        "url": snap["url"],
+        "title": snap["title"],
     }
     if cap is not None and len(aria) > cap:
         out["aria"] = aria[:cap]
@@ -80,7 +84,6 @@ async def browser_snapshot(
         out["aria"] = aria
         out["truncated"] = False
         out["aria_size"] = len(aria)
-    session.recorder.record("snapshot", selector=selector, truncated=out["truncated"])
     return out
 
 
