@@ -44,6 +44,7 @@ export interface SessionDetail extends SessionSummary {
   trace_path: string | null;
   markdown_path: string | null;
   websocket_path: string | null;
+  event_count: number;
   action_count: number;
   console_count: number;
   download_count: number;
@@ -128,6 +129,7 @@ export interface MacroValidationResponse {
   issues: MacroValidationIssue[];
   issue_count?: number;
   error_count?: number;
+  warning_count?: number;
   message?: string;
 }
 
