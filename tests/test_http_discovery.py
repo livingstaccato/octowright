@@ -211,3 +211,25 @@ def test_find_recording_for_rebuilds_when_dir_mtime_changes(tmp_path: Path) -> N
 
     # Now the previously-unknown id should be findable.
     assert discovery._find_recording_for("notyetidwxyz", rec) == new_jsonl
+
+
+def test_resolve_artifact_path_rejects_closed_session_path_outside_recordings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rec = tmp_path / "recordings"
+    jsonl = _write_recording(rec, "artoutsidex1")
+    outside = tmp_path / "outside.webm"
+    outside.write_bytes(b"x")
+
+    from octowright.http import state as http_state
+
+    monkeypatch.setattr(http_state, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(discovery, "_live_session_or_none", lambda _sid: None)
+    monkeypatch.setattr(discovery, "_find_recording_for", lambda _sid, _root: jsonl)
+    monkeypatch.setattr(
+        discovery.session_artifact_cache,
+        "scan_artifacts",
+        lambda _p: {"video_path": str(outside)},
+    )
+
+    assert discovery._resolve_artifact_path("artoutsidex1", "video_path") is None
