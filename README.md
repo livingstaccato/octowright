@@ -123,19 +123,19 @@ uv run python scripts/demos/record_heroes.py
 
 ## Distributed Skill Pack
 
-Octowright ships a packaged skill named `using-octowright` for Codex and
+Octowright ships a packaged skill named `octowright` for Codex and
 project-local plugin manifests for compatible runtimes such as Claude Code and Codex.
 
 Install everything:
 
 ```bash
-uv run octowright skill install using-octowright --target all
+uv run octowright skill install octowright --target all
 ```
 
 Check status and drift:
 
 ```bash
-uv run octowright skill status using-octowright --target all
+uv run octowright skill status octowright --target all
 ```
 
 Run diagnostics:
