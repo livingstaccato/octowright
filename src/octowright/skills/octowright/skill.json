@@ -1,5 +1,5 @@
 {
-  "name": "using-octowright",
+  "name": "octowright",
   "version": "1",
   "description": "Operational guidance for using Octowright browser automation tools.",
   "targets": [

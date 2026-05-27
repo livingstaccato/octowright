@@ -8,7 +8,7 @@ Octowright ships first-class support for [Antigravity CLI](https://github.com/an
 uv run octowright skill install --target antigravity
 ```
 
-This copies the `using-octowright` skill into `~/.gemini/config/plugins/octowright/` — the
+This copies the `octowright` skill into `~/.gemini/config/plugins/octowright/` — the
 plugin store that `agy` shares with Gemini CLI. Override the store root with the
 `ANTIGRAVITY_HOME` env var (default `~/.gemini/config`) if your `agy` installation uses a
 non-default path.
@@ -97,7 +97,7 @@ mismatch means local drift from the shipped copy).
   that Gemini CLI manages. Changes to plugins there may affect both tools.
 - **No hooks support yet.** The agy plugin manifest supports a `hooks.json` but Octowright
   does not currently ship any hooks for agy. Session-start guidance is delivered via the
-  `using-octowright` skill instead.
+  `octowright` skill instead.
 - **`uvx` required for the default config.** The default `mcp_config.json` uses
   `uvx octowright serve` for portability. Without `uv` installed, edit `mcp_config.json`
   to point at your install path directly.
