@@ -17,7 +17,7 @@ from pathlib import Path
 from octowright import defaults
 from octowright.version import VERSION
 
-SKILL_NAME = "using-octowright"
+SKILL_NAME = "octowright"
 
 
 @dataclass
@@ -70,7 +70,7 @@ def _antigravity_destination() -> Path:
     # agy shares ~/.gemini/config as its plugin store; read ANTIGRAVITY_HOME
     # at call time so monkeypatch overrides work in tests.
     agy_home = Path(defaults.ANTIGRAVITY_HOME).expanduser()
-    return agy_home / "plugins" / SKILL_NAME.removeprefix("using-")
+    return agy_home / "plugins" / SKILL_NAME
 
 
 def _claude_plugin_destination(cwd: Path | None = None) -> Path:
@@ -149,7 +149,7 @@ def install_skill_to_codex(*, dry_run: bool = False, force: bool = False) -> Ins
 
 
 def install_skill_to_antigravity(*, dry_run: bool = False, force: bool = False) -> InstallResult:
-    """Install the using-octowright skill and plugin manifest into the agy store.
+    """Install the octowright skill and plugin manifest into the agy store.
 
     agy shares ~/.gemini/config/plugins/ as its plugin installation root.
     Each plugin dir contains plugin.json + mcp_config.json + a skills/

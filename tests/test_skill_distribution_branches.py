@@ -192,7 +192,7 @@ class TestAntigravityDestination:
         from octowright import defaults as _defaults
 
         monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(tmp_path / "custom"))
-        # The skill name "using-octowright" is stripped of its "using-" prefix.
+        # SKILL_NAME is used directly as the agy plugin directory name.
         result = _antigravity_destination()
         assert result == tmp_path / "custom" / "plugins" / "octowright"
 
