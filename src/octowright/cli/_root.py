@@ -31,11 +31,7 @@ logging.getLogger("provide.telemetry._otel").setLevel(logging.WARNING)
 def cli(ctx: click.Context) -> None:
     """octowright — MCP server that drives multiple headed Playwright browsers in parallel."""
     if ctx.invoked_subcommand is None:
-        # Late import to avoid a circular: serve.py imports `cli` from here
-        # at module import time, so we can't import serve at module top-level.
-        from octowright.cli.serve import serve
-
-        ctx.invoke(serve)
+        click.echo(ctx.get_help())
 
 
 def main() -> None:
