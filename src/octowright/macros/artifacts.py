@@ -10,7 +10,10 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from provide.telemetry import get_logger
+
 import octowright.macros as macro_mod
+from octowright._tracing import counter, set_attrs, span
 from octowright.artifacts.digest import digest_macro, digest_recording_text
 from octowright.artifacts.evidence import EvidenceBuilder
 from octowright.artifacts.models import new_manifest, new_run_result
@@ -20,6 +23,14 @@ from octowright.artifacts.redaction import redact_mapping
 from octowright.artifacts.reports import write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.macros.storage import load_macro, macro_path
+
+log = get_logger("octowright.artifacts.verification")
+
+
+def _cap_macro(name: str) -> str:
+    if len(name) > 100:
+        return name[:97] + "..."
+    return name
 
 
 def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -133,6 +144,7 @@ async def run_macro_artifact(
     capture: bool = True,
     notes: str | None = None,
     slowmo_ms: int | None = None,
+    verify: bool = True,
 ) -> dict[str, Any]:
     macro = load_macro(name)
     args_used = dict(args or {})
@@ -197,17 +209,41 @@ async def run_macro_artifact(
     manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
     write_artifact_manifest(manifest_path, manifest)
 
+    verification_status = "not_configured"
+    verification_paths = {}
+    critical_points = manifest.get("critical_points", [])
+    if verify and critical_points:
+        v_res = macro_artifact_verify(name, run_dir.name)
+        if v_res.get("ok"):
+            verification_status = v_res.get("status", "unknown")
+            verification_paths = v_res.get("paths", {})
+
+    with span("octowright.macro.artifact.run") as s:
+        set_attrs(s, macro=name, run_id=run_dir.name, verify=verify)
+        counter("octowright_macro_artifact_run_total").add(
+            1, attributes={"macro": _cap_macro(name), "status": status, "verified": str(bool(critical_points))}
+        )
+        log.info(
+            "octowright.macro.artifact.run.complete",
+            artifact_type="macro",
+            name=name,
+            run_id=run_dir.name,
+            status=status,
+        )
+
     return {
         "ok": status == "ok",
         "macro": name,
         "run_id": run_dir.name,
         "summary": summary,
+        "verification_status": verification_status,
         "paths": {
             "run_dir": str(run_dir),
             "manifest": str(manifest_path),
             "summary": str(paths["summary"]),
             "evidence": str(paths["evidence"]),
             "result": str(paths["result"]),
+            **verification_paths,
         },
     }
 
@@ -336,3 +372,118 @@ def _missing_args(macro: dict[str, Any], args: dict[str, Any]) -> list[str]:
     else:
         required = []
     return [parameter for parameter in required if parameter not in args]
+
+
+def macro_artifact_critical_points_get(name: str) -> dict[str, Any]:
+    store = ArtifactStore()
+    manifest_path = store.macro_manifest_path(name)
+    manifest = _compact_manifest(store, manifest_path)
+    if not manifest:
+        return {"ok": False, "error": "Manifest not found."}
+    return {
+        "ok": True,
+        "critical_points": manifest.get("critical_points", []),
+        "paths": {"manifest": str(manifest_path)},
+    }
+
+
+def macro_artifact_critical_points_set(name: str, critical_points: list[dict[str, Any]]) -> dict[str, Any]:
+    store = ArtifactStore()
+    manifest_path = store.macro_manifest_path(name)
+    manifest = _compact_manifest(store, manifest_path)
+    if not manifest:
+        macro = load_macro(name)
+        manifest = _manifest_for_plan(
+            name=name,
+            macro=macro,
+            args_used={},
+            missing_args=_missing_args(macro, {}),
+            artifact_dir=manifest_path.parent,
+            runs_dir=manifest_path.parent / "runs",
+            exports_dir=manifest_path.parent / "exports",
+        )
+
+    normalized_cps = []
+    for i, cp in enumerate(critical_points):
+        normalized = dict(cp)
+        if "id" not in normalized or not normalized["id"]:
+            normalized["id"] = f"CP{i + 1}"
+        if "status" not in normalized:
+            normalized["status"] = "unknown"
+        if "checks" not in normalized:
+            normalized["checks"] = []
+        normalized_cps.append(normalized)
+
+    manifest["critical_points"] = normalized_cps
+    write_artifact_manifest(manifest_path, manifest)
+    log.info("octowright.macro.artifact.critical_points.updated", artifact_type="macro", name=name)
+    return {"ok": True, "critical_points": normalized_cps}
+
+
+def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any]:
+    from octowright.artifacts.verification import evaluate_checks
+
+    store = ArtifactStore()
+    artifact_dir = store.macro_dir(name)
+    manifest_path = artifact_dir / "artifact.json"
+    manifest = _compact_manifest(store, manifest_path)
+    if not manifest:
+        return {"ok": False, "error": "Manifest not found."}
+
+    critical_points = manifest.get("critical_points", [])
+    if not critical_points:
+        return {"ok": False, "error": "No critical points configured."}
+
+    target_run_id = run_id or (manifest.get("latest_run") or {}).get("run_id")
+    if not target_run_id:
+        return {"ok": False, "error": "No runs exist to verify."}
+
+    run_dir = artifact_dir / "runs" / target_run_id
+    if not (run_dir / "result.json").exists() or not (run_dir / "evidence.json").exists():
+        return {"ok": False, "error": "Run bundle incomplete."}
+
+    try:
+        import json
+
+        result = json.loads((run_dir / "result.json").read_text("utf-8"))
+        evidence_records = json.loads((run_dir / "evidence.json").read_text("utf-8")).get("records", [])
+    except Exception as e:
+        return {"ok": False, "error": f"Failed reading bundle: {e}"}
+
+    v_res = evaluate_checks("macro", critical_points, result, evidence_records)
+
+    verification_path = run_dir / "verification.json"
+    import json
+
+    from octowright._paths import atomic_write_text
+
+    atomic_write_text(verification_path, json.dumps(v_res, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    manifest["critical_points"] = v_res["critical_points"]
+    write_artifact_manifest(manifest_path, manifest)
+
+    return {"ok": True, "status": v_res["status"], "paths": {"verification": str(verification_path)}}
+
+
+def macro_artifact_status(name: str) -> dict[str, Any]:
+    store = ArtifactStore()
+    manifest_path = store.macro_manifest_path(name)
+    manifest = _compact_manifest(store, manifest_path)
+    if not manifest:
+        return {"ok": False, "error": "Manifest not found."}
+
+    critical_points = manifest.get("critical_points", [])
+    passed = sum(1 for cp in critical_points if cp.get("status") == "passed")
+    failed = sum(1 for cp in critical_points if cp.get("status") == "failed")
+
+    return {
+        "ok": True,
+        "latest_run": manifest.get("latest_run"),
+        "verification_status": "passed"
+        if (critical_points and passed == len(critical_points))
+        else "failed"
+        if failed > 0
+        else "unknown",
+        "counts": {"total": len(critical_points), "passed": passed, "failed": failed},
+        "paths": {"manifest": str(manifest_path)},
+    }
