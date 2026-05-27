@@ -42,7 +42,7 @@ uv run octowright scenario list  # list loaded scenarios
 uv run octowright persona list   # list saved personas (also: persona create/show/delete)
 uv run octowright cleanup        # prune stale recordings + abandoned profiles
 uv run octowright init           # scaffold a starter octowright project tree
-uv run octowright skill          # install/inspect the using-octowright agent skill
+uv run octowright skill          # install/inspect the octowright agent skill
 uv run octowright takeover       # detect + disable competing Playwright MCP plugins
 uv run octowright test           # run the JSONL-driven test suite (CI-friendly)
 ```
