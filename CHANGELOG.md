@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-05-27
+
+### Fixed
+- **`octowright` with no subcommand now shows help** instead of silently
+  starting the daemon. Users on a new machine who run `octowright` without
+  arguments see the command listing and usage, not a running MCP server.
+- **Python 3.13 `RuntimeError: Attempted to exit cancel scope in a different task`**
+  — the follower bridge's `proxy_supervisor` was manually calling
+  `streamablehttp_client.__aenter__()` / `.__aexit__()`. Python 3.13 changed
+  async generator finalization to run cleanup in a separate asyncio task;
+  anyio cancel scopes cannot span task boundaries, producing a noisy traceback
+  on every follower teardown. Fixed by switching to
+  `async with streamablehttp_client(...)` with a `CancelScope` + `deadline = math.inf`
+  trick that preserves the connect-only timeout without constraining the read
+  loop.
+
+[0.6.1]: https://github.com/livingstaccato/octowright/compare/v0.6.0...v0.6.1
+
 ## [0.6.0] - 2026-05-27
 
 ### Added
