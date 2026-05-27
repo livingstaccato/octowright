@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import itertools
-import sys
+import math
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -376,67 +376,70 @@ async def run_supervised_proxy(
                 httpx_factory = tracing_httpx_client_factory()
                 while True:
                     remote_url = resolve_leader_url(leader_mcp_url)
+                    # Use async with (not manual __aenter__/__aexit__) so the
+                    # context manager's async generator is entered and exited
+                    # in the same coroutine. Python 3.13 finalizes abandoned
+                    # async generators in a separate asyncio task; anyio cancel
+                    # scopes cannot span task boundaries, producing
+                    # "Attempted to exit cancel scope in a different task" on
+                    # teardown when __aexit__ was called manually.
+                    # CancelScope + deadline scopes the timeout to the connect
+                    # handshake only: once inside the async with block the
+                    # deadline is extended to infinity so the read loop is
+                    # unconstrained and long-running sessions aren't killed.
                     try:
-                        # Custom factory installs a request hook that
-                        # injects W3C traceparent so the leader's spans
-                        # chain under the follower's bridge span.
-                        client_cm = streamablehttp_client(
-                            remote_url,
-                            httpx_client_factory=httpx_factory,
+                        _connect_scope = anyio.CancelScope(
+                            deadline=anyio.current_time() + BRIDGE_CONNECT_TIMEOUT_SECONDS
                         )
-                        # Scope the connect timeout to only the handshake
-                        # (__aenter__). Once we have streams, the read loop
-                        # is unconstrained — wrapping it would cancel every
-                        # active bridge session at BRIDGE_CONNECT_TIMEOUT_SECONDS
-                        # and invalidate all in-flight requests.
-                        with anyio.fail_after(BRIDGE_CONNECT_TIMEOUT_SECONDS):
-                            remote_read, remote_write, get_sid = await client_cm.__aenter__()
-                        try:
-                            remote_write_slot.write = remote_write
-                            try:
-                                supervisor_obj.remote_session_id = get_sid()
-                            except Exception as exc:
-                                # get_sid() may not be implemented on every
-                                # transport; log so bridge diagnostics aren't
-                                # silently misleading when the field is null.
-                                log.debug("octowright.bridge.get_sid_failed", error=repr(exc))
-                                supervisor_obj.remote_session_id = None
-                            supervisor_obj.reconnect_attempts = attempt
-                            bridge_state.record_snapshot(
-                                path=BRIDGE_STATE_PATH,
-                                follower_pid=__import__("os").getpid(),
-                                remote_url=remote_url,
-                                remote_session_id=supervisor_obj.remote_session_id,
-                                last_error=supervisor_obj.last_error,
-                                in_flight=supervisor_obj.in_flight_count,
-                                reconnect_attempts=supervisor_obj.reconnect_attempts,
-                                request_timeouts=supervisor_obj.request_timeouts,
+                        with _connect_scope:
+                            async with streamablehttp_client(
+                                remote_url,
+                                httpx_client_factory=httpx_factory,
+                            ) as (remote_read, remote_write, get_sid):
+                                _connect_scope.deadline = math.inf
+                                remote_write_slot.write = remote_write
+                                try:
+                                    supervisor_obj.remote_session_id = get_sid()
+                                except Exception as exc:
+                                    # get_sid() may not be implemented on every
+                                    # transport; log so bridge diagnostics aren't
+                                    # silently misleading when the field is null.
+                                    log.debug("octowright.bridge.get_sid_failed", error=repr(exc))
+                                    supervisor_obj.remote_session_id = None
+                                supervisor_obj.reconnect_attempts = attempt
+                                bridge_state.record_snapshot(
+                                    path=BRIDGE_STATE_PATH,
+                                    follower_pid=__import__("os").getpid(),
+                                    remote_url=remote_url,
+                                    remote_session_id=supervisor_obj.remote_session_id,
+                                    last_error=supervisor_obj.last_error,
+                                    in_flight=supervisor_obj.in_flight_count,
+                                    reconnect_attempts=supervisor_obj.reconnect_attempts,
+                                    request_timeouts=supervisor_obj.request_timeouts,
+                                )
+                                await supervisor_obj.replay_initialize(remote_write)
+                                attempt = 0
+                                async with anyio.create_task_group() as remote_tg:
+
+                                    async def _remote_reader(reader: Any = remote_read) -> None:
+                                        async for message in reader:
+                                            if isinstance(message, Exception):
+                                                raise message
+                                            await supervisor_obj.forward_remote_message(message)
+
+                                    remote_tg.start_soon(_remote_reader)
+                                    if health_url is not None:
+                                        remote_tg.start_soon(
+                                            monitor_leader_health,
+                                            remote_tg.cancel_scope,
+                                            health_url,
+                                            heartbeat_interval,
+                                            heartbeat_max_failures,
+                                        )
+                        if _connect_scope.cancelled_caught:
+                            raise TimeoutError(
+                                f"connection to {remote_url!r} timed out after {BRIDGE_CONNECT_TIMEOUT_SECONDS}s"
                             )
-                            await supervisor_obj.replay_initialize(remote_write)
-                            attempt = 0
-                            async with anyio.create_task_group() as remote_tg:
-
-                                async def _remote_reader(reader: Any = remote_read) -> None:
-                                    async for message in reader:
-                                        if isinstance(message, Exception):
-                                            raise message
-                                        await supervisor_obj.forward_remote_message(message)
-
-                                remote_tg.start_soon(_remote_reader)
-                                if health_url is not None:
-                                    remote_tg.start_soon(
-                                        monitor_leader_health,
-                                        remote_tg.cancel_scope,
-                                        health_url,
-                                        heartbeat_interval,
-                                        heartbeat_max_failures,
-                                    )
-                        except BaseException:
-                            exc_type, exc_val, exc_tb = sys.exc_info()
-                            await client_cm.__aexit__(exc_type, exc_val, exc_tb)
-                            raise
-                        else:
-                            await client_cm.__aexit__(None, None, None)
                     except Exception as exc:
                         remote_write_slot.write = None
                         _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
