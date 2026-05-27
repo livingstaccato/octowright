@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-uv run --active octowright skill install using-octowright --target all --dry-run
-uv run --active octowright skill install using-octowright --target all
-uv run --active octowright skill status using-octowright --target all --json
+uv run --active octowright skill install octowright --target all --dry-run
+uv run --active octowright skill install octowright --target all
+uv run --active octowright skill status octowright --target all --json
 uv run --active octowright skill doctor --json
