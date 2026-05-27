@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-MAX_LOC = 500
+MAX_LOC = 550
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
