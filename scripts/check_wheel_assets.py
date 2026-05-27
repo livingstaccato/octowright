@@ -10,8 +10,8 @@ import tarfile
 import zipfile
 
 REQUIRED_PACKAGE_FILES = {
-    "octowright/skills/using-octowright/SKILL.md",
-    "octowright/skills/using-octowright/skill.json",
+    "octowright/skills/octowright/SKILL.md",
+    "octowright/skills/octowright/skill.json",
     "octowright/skills/manifests/claude-plugin.json",
     "octowright/skills/manifests/codex-plugin.json",
     # Built SPA — the wheel and sdist must include the dashboard the HTTP app
