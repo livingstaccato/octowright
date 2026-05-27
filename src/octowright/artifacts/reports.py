@@ -34,6 +34,7 @@ def write_run_bundle(
     result: dict[str, Any],
     evidence: list[dict[str, Any]],
     summary: str,
+    verification: dict[str, Any] | None = None,
 ) -> dict[str, Path]:
     run_dir.mkdir(parents=True, exist_ok=True)
     result_path = run_dir / "result.json"
@@ -47,8 +48,18 @@ def write_run_bundle(
 
     _json_write(result_path, result_payload)
     _json_write(evidence_path, {"records": evidence_payload})
-    atomic_write_text(summary_path, _render_summary(result_payload, evidence_payload, summary), encoding="utf-8")
-    return {"result": result_path, "evidence": evidence_path, "summary": summary_path}
+
+    paths = {"result": result_path, "evidence": evidence_path}
+    if verification is not None:
+        verification_path = run_dir / "verification.json"
+        _json_write(verification_path, verification)
+        paths["verification"] = verification_path
+
+    atomic_write_text(
+        summary_path, _render_summary(result_payload, evidence_payload, summary, verification), encoding="utf-8"
+    )
+    paths["summary"] = summary_path
+    return paths
 
 
 def _redact_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -61,7 +72,9 @@ def _redact_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return records
 
 
-def _render_summary(result: dict[str, Any], evidence: list[dict[str, Any]], summary: str) -> str:
+def _render_summary(
+    result: dict[str, Any], evidence: list[dict[str, Any]], summary: str, verification: dict[str, Any] | None = None
+) -> str:
     lines = [
         f"# Macro Artifact Run: {result.get('macro', '')}",
         "",
@@ -83,4 +96,28 @@ def _render_summary(result: dict[str, Any], evidence: list[dict[str, Any]], summ
         label = record.get("label") or record.get("description") or record.get("type")
         lines.append(f"- `{record.get('id')}` `{record.get('type')}`: {label}")
     lines.append("")
+
+    if verification is not None:
+        lines.append("## Verification and Critical Points")
+        lines.append("")
+        v_status = verification.get("status", "unknown")
+        lines.append(f"**Verification Status**: `{v_status}`")
+        lines.append("")
+        cps = verification.get("critical_points", [])
+        if not cps:
+            lines.append("No critical points evaluated.")
+        else:
+            for cp in cps:
+                lines.append(f"### {cp.get('id', 'CP')}: {cp.get('description', 'Unknown')}")
+                lines.append(f"- Status: `{cp.get('status', 'unknown')}`")
+                checks = cp.get("checks", [])
+                if checks:
+                    lines.append("- Checks:")
+                    for c in checks:
+                        lines.append(
+                            f"  - `{c.get('type', 'unknown')}`: `{c.get('status', 'unknown')}` - {c.get('message', '')}"
+                        )
+                lines.append("")
+        lines.append("")
+
     return "\n".join(lines)
