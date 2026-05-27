@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from octowright._paths import atomic_write_text
+from octowright.macros.storage import load_macro
 
 _SEMANTIC_LOCATOR_KEYS = ("role", "label", "text", "test_id")
 
@@ -223,6 +224,42 @@ def _py_select_option(entry: dict) -> str:
     return f"        await page.select_option({sel!r})"
 
 
+def _py_cond_while(e: dict) -> str | None:
+    c = ""
+    if e.get("selector"):
+        c = f"await page.locator({e['selector']!r}).count() > 0"
+    elif e.get("expression"):
+        c = f"await page.evaluate({e['expression']!r})"
+    elif e.get("text"):
+        c = f"{e['text']!r} in await page.locator('body').inner_text()"
+    if not c:
+        return None
+    a = e["action"]
+    p = "if " if a in ("if", "if_not") else "while "
+    if a in ("if_not", "while_not"):
+        c = f"not ({c})"
+    return f"        {p}{c}:"
+
+
+def _ts_cond_while(e: dict) -> str | None:
+    c = ""
+    import json
+
+    if e.get("selector"):
+        c = f"await page.locator({json.dumps(e['selector'])}).count() > 0"
+    elif e.get("expression"):
+        c = f"await page.evaluate({json.dumps(e['expression'])})"
+    elif e.get("text"):
+        c = f"(await page.locator('body').innerText()).includes({json.dumps(e['text'])})"
+    if not c:
+        return None
+    a = e["action"]
+    p = "if " if a in ("if", "if_not") else "while "
+    if a in ("if_not", "while_not"):
+        c = f"!({c})"
+    return f"  {p}({c}) {{"
+
+
 _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "launch": _py_launch,
     "navigate": lambda e: f"        await page.goto(_resolve_bundle_url({e['url']!r}))",
@@ -240,6 +277,40 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "drag": lambda e: f"        await page.drag_and_drop({e['source']!r}, {e['target']!r})",
     "navigate_back": lambda _e: "        await page.go_back()",
     "resize": lambda e: f"        await page.set_viewport_size({{'width': {e['width']}, 'height': {e['height']}}})",
+    "expect_url": lambda e: (
+        f"        if not __import__('re').search({e['pattern']!r}, page.url): raise RuntimeError('URL mismatch')"
+        if e.get("mode", "regex") == "regex"
+        else (
+            f"        if page.url != {e['pattern']!r}: raise RuntimeError('URL mismatch')"
+            if e.get("mode") == "equals"
+            else f"        if {e['pattern']!r} not in page.url: raise RuntimeError('URL mismatch')"
+        )
+    ),
+    "expect_text": lambda e: (
+        f"        if {e['text']!r} not in await page.locator({e['selector']!r}).inner_text(): raise RuntimeError('Text mismatch')"
+    ),
+    "expect_selector": lambda e: (
+        f"        if await page.locator({e['selector']!r}).count() == 0: raise RuntimeError('Selector mismatch')"
+    ),
+    "expect_js": lambda e: (
+        f"        if not await page.evaluate({e['expression']!r}): raise RuntimeError('JS mismatch')"
+    ),
+    "open_url": lambda e: f"        page = await ctx.new_page()\n        await page.goto({e['url']!r})",
+    "switch_page": lambda e: f"        page = ctx.pages[{e['index']}]",
+    "close_page": lambda _e: "        await page.close()",
+    "reset_frame": lambda _e: "        pass",
+    "mock_route": lambda e: (
+        f"        await page.route({e['url_pattern']!r}, lambda route: route.fulfill(status={e.get('status', 200)}, body={e.get('body', '')!r}))"
+    ),
+    "unmock_route": lambda e: f"        await page.unroute({e['url_pattern']!r})",
+    "set_dialog_policy": lambda e: (
+        f"        page.on('dialog', lambda dialog: asyncio.create_task(dialog.{e['policy']}()))"
+    ),
+    "set_input_files": lambda e: f"        await page.set_input_files({e['selector']!r}, {e.get('files', [])!r})",
+    "if": _py_cond_while,
+    "if_not": _py_cond_while,
+    "while": _py_cond_while,
+    "while_not": _py_cond_while,
 }
 
 
@@ -366,6 +437,40 @@ _TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "drag": lambda e: f"  await page.dragAndDrop({json.dumps(e['source'])}, {json.dumps(e['target'])});",
     "navigate_back": lambda _e: "  await page.goBack();",
     "resize": lambda e: f"  await page.setViewportSize({{ width: {e['width']}, height: {e['height']} }});",
+    "expect_url": lambda e: (
+        f"  if (!new RegExp({json.dumps(e['pattern'])}).test(page.url())) throw new Error('URL mismatch');"
+        if e.get("mode", "regex") == "regex"
+        else (
+            f"  if (page.url() !== {json.dumps(e['pattern'])}) throw new Error('URL mismatch');"
+            if e.get("mode") == "equals"
+            else f"  if (!page.url().includes({json.dumps(e['pattern'])})) throw new Error('URL mismatch');"
+        )
+    ),
+    "expect_text": lambda e: (
+        f"  if (!(await page.locator({json.dumps(e['selector'])}).innerText()).includes({json.dumps(e['text'])})) throw new Error('Text mismatch');"
+    ),
+    "expect_selector": lambda e: (
+        f"  if (await page.locator({json.dumps(e['selector'])}).count() === 0) throw new Error('Selector mismatch');"
+    ),
+    "expect_js": lambda e: (
+        f"  if (!(await page.evaluate({json.dumps(e['expression'])}))) throw new Error('JS mismatch');"
+    ),
+    "open_url": lambda e: f"  page = await ctx.newPage();\n  await page.goto({json.dumps(e['url'])});",
+    "switch_page": lambda e: f"  page = ctx.pages()[{e['index']}];",
+    "close_page": lambda _e: "  await page.close();",
+    "reset_frame": lambda _e: "  // reset_frame",
+    "mock_route": lambda e: (
+        f"  await page.route({json.dumps(e['url_pattern'])}, route => route.fulfill({{ status: {e.get('status', 200)}, body: {json.dumps(e.get('body', ''))} }}));"
+    ),
+    "unmock_route": lambda e: f"  await page.unroute({json.dumps(e['url_pattern'])});",
+    "set_dialog_policy": lambda e: f"  page.on('dialog', dialog => dialog.{e['policy']}());",
+    "set_input_files": lambda e: (
+        f"  await page.setInputFiles({json.dumps(e['selector'])}, {json.dumps(e.get('files', []))});"
+    ),
+    "if": _ts_cond_while,
+    "if_not": _ts_cond_while,
+    "while": _ts_cond_while,
+    "while_not": _ts_cond_while,
 }
 
 
@@ -374,27 +479,68 @@ def _ts_line(entry: dict) -> str | None:
     return handler(entry) if handler else None
 
 
-def export_script(log_path: Path, out_path: Path, fmt: str = "python") -> Path:
+def export_script(log_path: Path, out_path: Path, fmt: str = "python", manifest: dict | None = None) -> Path:
+
     if fmt not in ("python", "ts"):
         raise ValueError(f"fmt must be 'python' or 'ts', got {fmt!r}")
 
     header, footer, line_fn = _renderer(fmt)
     lines: list[str] = [header]
-    with log_path.open("r", encoding="utf-8") as fh:
-        for raw in fh:
-            raw = raw.strip()
-            if not raw:
+
+    def process_entries(entries: list[dict], current_indent: int) -> int:
+        for entry in entries:
+            action = entry.get("action")
+            if not action:
                 continue
-            entry = json.loads(raw)
+
+            if action == "macro_call":
+                name = entry.get("name")
+                if name:
+                    try:
+                        macro = load_macro(name)
+                        current_indent = process_entries(macro.get("actions", []), current_indent)
+                    except Exception:
+                        pass
+                continue
+
+            if action == "end_block":
+                current_indent = max(0, current_indent - 1)
+                if fmt == "ts":
+                    lines.append(("  " * (1 + current_indent)) + "}")
+                continue
+
             rendered = line_fn(entry)
             if rendered is not None:
-                lines.append(rendered)
+                base = "        " if fmt == "python" else "  "
+                extra = "    " * current_indent if fmt == "python" else "  " * current_indent
+
+                indented_lines = []
+                for line in rendered.split("\n"):
+                    if line.startswith(base):
+                        indented_lines.append(base + extra + line[len(base) :])
+                    else:
+                        indented_lines.append(line)
+                lines.append("\n".join(indented_lines))
+
+            if action in ("if", "if_not", "while", "while_not"):
+                current_indent += 1
+        return current_indent
+
+    with log_path.open("r", encoding="utf-8") as fh:
+        raw_entries = [json.loads(line) for line in fh if line.strip()]
+        process_entries(raw_entries, 0)
+
     lines.append(footer)
+
+    if manifest and "critical_points" in manifest:
+        lines.append("")
+        comment_prefix = "#" if fmt == "python" else "//"
+        lines.append(f"{comment_prefix} Critical Points:")
+        for cp in manifest["critical_points"]:
+            lines.append(f"{comment_prefix} - {cp}")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write via the shared helper — defeats the symlink-swap window
-    # between the caller's containment check and the final write, and
-    # cleans up the staging file on failure. See ``octowright._paths``.
-    atomic_write_text(out_path, "\n".join(lines))
+    atomic_write_text(out_path, "\n".join(lines) + "\n")
     return out_path
 
 
