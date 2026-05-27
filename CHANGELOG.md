@@ -5,12 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-05-22
+## [0.5.0] - 2026-05-26
 
-349 commits since `v0.3.0`. Highlights below; see `git log v0.3.0..v0.4.0` for
+465 commits since `v0.3.0`. Highlights below; see `git log v0.3.0..v0.5.0` for
 the full record.
 
 ### Added
+
+#### Macro artifacts subsystem
+- Safe artifact path store anchored under `RECORDINGS_DIR` (path containment,
+  symlink resolution before prefix check).
+- Artifact planning (`macro_artifact_plan`) and bounded digest tools.
+- Artifact run execution with evidence and run report generation.
+- Export macros as import-safe standalone CLI scripts.
+- Shared report redaction: bearer tokens, cookies (all variants), private key
+  fields, common auth key variants, colon-style log previews, summary URLs
+  (IPv6-safe; rejects protocol-relative and userinfo-like URLs).
+
+#### OpenTelemetry integration
+- Tracing and metrics via `provide.telemetry` — noop by default; enabled with
+  `PROVIDE_TRACE_ENABLED=true` / `PROVIDE_METRICS_ENABLED=true`.
+- W3C `traceparent` propagation from follower→leader: `httpx` request hook
+  injects the header; leader-side ASGI middleware extracts it so tool-handler
+  spans chain under the follower's `bridge.forward_rpc` span.
+- `octowright.mcp.request` span in the leader-side extraction middleware (ends
+  on `http.response.start` to avoid buffering long-lived SSE streams).
+- WS-cache batched flush — single flush per drain instead of flush-per-frame.
+
+#### Antigravity (agy) plugin integration
+- First-class `agy` plugin support: ships `mcp_config` in the skill pack,
+  tracks all plugin manifests, version-guards the plugin list.
+- `octowright skill` installs and inspects the skill for both Claude Code and
+  Antigravity clients.
+
+#### MCP push notifications
+- `notifications/octowright/session_closed` pushed on every session eviction
+  (external close and `pool.close`).
 
 #### MCP follower bridge reliability
 - Supervised bridge that keeps the local stdio follower alive while the remote
@@ -98,6 +128,11 @@ the full record.
 
 ### Changed
 
+- Scenario YAML loader validates participant shape; unknown roles warn instead
+  of raise to support custom role vocabularies without blocking.
+- Scenario role vocabulary extended with domain-specific roles:
+  `main-site`, `recorder`, `replayer`, `form`, `counter`, `arithmetic`.
+- Coverage gate enforced in CI at 83% floor.
 - License switched to Apache-2.0 with SPDX headers across all source files.
 - All env-var-driven defaults consolidated into `src/octowright/defaults.py`.
 - HTTP API contract documented in `docs/architecture/MCP-SHARED-CONTRACT.md`.
@@ -112,9 +147,15 @@ the full record.
 
 ### Fixed
 
+- Bridge connect-timeout scope, double-response race, replay-id collision.
+- WebSocket `/tail` disconnect race + `shutdown_pool` lock.
+- `warm_close` re-threading; `browser_screenshot` atomic write.
+- Secrets redaction in JSONL export: locator fills and sequence failure args.
+- Macro lint schema aligned with IO recording semantics.
 - Cross-origin guard now blocks GET requests to side-effect routes
   (`/api/sessions/{id}/screenshot/now`, `/api/sessions/{id}/markdown`) via a
-  per-route `side_effect_get` marker.
+  per-route `side_effect_get` marker; cross-origin policy applied to mounted
+  ASGI apps (FastMCP transport).
 - Dashboard origin controls hardened; persona endpoints validate slugs and
   verify containment.
 - `browser process` cleanup ensured for persistent contexts on session close.
@@ -125,14 +166,29 @@ the full record.
 - UTF-8 file IO across recorder / macro storage / persona YAML.
 - CI: build the frontend SPA before the wheel build in the test matrix; ship
   the SPA in both wheel and sdist (`check_wheel_assets` validates both).
-- Tests no longer hardcode `/Users/tim` paths.
-- `octowright restart` works on Windows; POSIX-only daemonize test is skipped
-  there.
+- Tests no longer hardcode `/Users/tim` paths; POSIX-only daemonize test
+  skipped on Windows.
 - Sdist member normalisation in `check_wheel_assets` no longer silently masks
   malformed entries.
 
 ### Security
 
+- **`OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS`** — shell `*_cmd` credential resolution
+  is now default-deny; set to `1` to opt in. Previously allowed by default.
+- **`OCTOWRIGHT_ALLOW_PY_SCENARIOS`** — `.py` scenario loading is now
+  default-deny; set to `1` to opt in. Previously allowed by default.
+- **`OCTOWRIGHT_REDACT_INPUTS`** — record-time scrubbing of typed/filled values
+  in JSONL: `off` records literals, `passwords` (default) redacts
+  `<input type="password">` and SPA custom-password inputs, `all` redacts every
+  typed/filled value.
+- Lockfile `chmod 0o600` + parent directory `chmod 0o700`.
+- Screenshot path-traversal TOCTOU window closed.
+- SPA mount guarded by bind-host check.
+- Atomic writes for macro JSON and persona YAML (crash-safe, no partial-write
+  window).
+- Path containment for replay artifacts and reports: all paths resolved and
+  checked against `RECORDINGS_DIR` before write; symlinks resolved before the
+  prefix check.
 - `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD` env var to allow non-loopback access to
   sensitive dashboard / MCP endpoints; loopback bind by default. Documented
   the RCE-equivalent surface implication when combined with a non-loopback
@@ -147,5 +203,5 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
-[0.4.0]: https://github.com/livingstaccato/octowright/compare/v0.3.0...v0.4.0
+[0.5.0]: https://github.com/livingstaccato/octowright/compare/v0.3.0...v0.5.0
 [0.3.0]: https://github.com/livingstaccato/octowright/releases/tag/v0.3.0
