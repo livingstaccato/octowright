@@ -34,10 +34,10 @@ def test_ensure_dir_reports_creation_then_existence(tmp_path: Path) -> None:
 def test_write_sample_persona_creates_yaml_with_app_hosts(tmp_path: Path) -> None:
     path, status = scaffold.write_sample_persona(tmp_path)
     assert status == "created"
-    assert path == tmp_path / "sample" / "profile.yaml"
+    assert path == tmp_path / "default" / "profile.yaml"
     doc = yaml.safe_load(path.read_text())
-    assert doc["name"] == "sample"
-    assert doc["display_name"] == "Sample Persona"
+    assert doc["name"] == "default"
+    assert doc["display_name"] == "Default Persona"
     assert doc["default_url"] == "https://octowright.com/"
     assert doc["app"]["hosts"] == ["octowright.com"]
 
@@ -48,16 +48,16 @@ def test_write_sample_persona_skips_when_exists(tmp_path: Path) -> None:
     assert status == "exists"
     # Content should be untouched.
     doc = yaml.safe_load(path.read_text())
-    assert doc["name"] == "sample"
+    assert doc["name"] == "default"
 
 
 def test_write_sample_persona_force_overwrites(tmp_path: Path) -> None:
     scaffold.write_sample_persona(tmp_path)
-    target = tmp_path / "sample" / "profile.yaml"
+    target = tmp_path / "default" / "profile.yaml"
     target.write_text("name: tampered\n")  # simulate user edit
     path, status = scaffold.write_sample_persona(tmp_path, force=True)
     assert status == "overwritten"
-    assert yaml.safe_load(path.read_text())["name"] == "sample"
+    assert yaml.safe_load(path.read_text())["name"] == "default"
 
 
 def test_write_sample_scenario_yaml_loads_back_clean(tmp_path: Path) -> None:
@@ -66,7 +66,7 @@ def test_write_sample_scenario_yaml_loads_back_clean(tmp_path: Path) -> None:
     doc = yaml.safe_load(path.read_text())
     assert doc["name"] == "sample-solo"
     assert len(doc["participants"]) == 1
-    assert doc["participants"][0]["persona"] == "sample"
+    assert doc["participants"][0]["persona"] == "default"
     assert doc["participants"][0]["kind"] == "webkit"
 
 
@@ -178,7 +178,7 @@ def test_init_cli_first_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     result = CliRunner().invoke(cli, ["init"])
     assert result.exit_code == 0, result.output
     assert "scaffolding complete" in result.output
-    assert (profiles / "sample" / "profile.yaml").exists()
+    assert (profiles / "default" / "profile.yaml").exists()
     assert (macros / "sample-page-ready.json").exists()
     assert (scenarios / "sample-solo.yaml").exists()
     # MCP registration block is in the output.
