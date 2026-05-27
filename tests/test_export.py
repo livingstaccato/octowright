@@ -446,3 +446,95 @@ def test_cleans_up_temp_file_on_write_failure(tmp_path: Path, monkeypatch: pytes
     assert not out_path.exists()
     # Sanity: real os.replace is unaffected by the monkeypatch outside this call.
     _ = real_replace
+
+
+def test_export_manifest_critical_points(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl", [{"action": "launch", "kind": "webkit", "url": "https://x", "headed": True}]
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python", manifest={"critical_points": ["CP 1", "CP 2"]})
+    src = out.read_text()
+    assert "# Critical Points:" in src
+    assert "# - CP 1" in src
+    assert "# - CP 2" in src
+
+
+def test_export_macro_call_inlining(tmp_path: Path, monkeypatch) -> None:
+    # We must mock load_macro to return our inline actions
+    def fake_load_macro(name):
+        if name == "my_macro":
+            return {"actions": [{"action": "click", "selector": "#inline-btn"}]}
+        raise ValueError()
+
+    monkeypatch.setattr("octowright.export.load_macro", fake_load_macro)
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "webkit", "url": "https://x", "headed": True},
+            {"action": "macro_call", "name": "my_macro"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    src = out.read_text()
+    assert "await page.click('#inline-btn')" in src
+    assert "my_macro" not in src
+
+
+def test_export_missing_actions_python(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "webkit", "url": "https://x", "headed": True},
+            {"action": "expect_url", "pattern": "x", "mode": "regex"},
+            {"action": "expect_text", "selector": "body", "text": "hello"},
+            {"action": "expect_selector", "selector": "#btn"},
+            {"action": "expect_js", "expression": "1===1"},
+            {"action": "open_url", "url": "https://y"},
+            {"action": "switch_page", "index": 1},
+            {"action": "close_page"},
+            {"action": "mock_route", "url_pattern": "*", "status": 200, "body": "hi"},
+            {"action": "unmock_route", "url_pattern": "*"},
+            {"action": "set_dialog_policy", "policy": "accept"},
+            {"action": "set_input_files", "selector": "input", "files": ["/tmp/x"]},
+            {"action": "if", "selector": "#foo"},
+            {"action": "click", "selector": "#bar"},
+            {"action": "end_block"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    src = out.read_text()
+    assert _python_compiles(src)
+    assert "__import__('re').search('x', page.url)" in src
+    assert "'hello' not in await page.locator('body').inner_text()" in src
+    assert "await page.locator('#btn').count() == 0" in src
+    assert "await page.evaluate('1===1')" in src
+    assert "page = await ctx.new_page()" in src
+    assert "page = ctx.pages[1]" in src
+    assert "await page.close()" in src
+    assert "lambda route: route.fulfill(status=200, body='hi')" in src
+    assert "await page.unroute('*')" in src
+    assert "lambda dialog: asyncio.create_task(dialog.accept())" in src
+    assert "await page.set_input_files('input', ['/tmp/x'])" in src
+    assert "if await page.locator('#foo').count() > 0:" in src
+    assert "    await page.click('#bar')" in src
+
+
+def test_export_missing_actions_ts(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "webkit", "url": "https://x", "headed": True},
+            {"action": "expect_url", "pattern": "x", "mode": "regex"},
+            {"action": "open_url", "url": "https://y"},
+            {"action": "if", "selector": "#foo"},
+            {"action": "click", "selector": "#bar"},
+            {"action": "end_block"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.ts", fmt="ts")
+    src = out.read_text()
+    assert 'new RegExp("x").test(page.url())' in src
+    assert "page = await ctx.newPage();" in src
+    assert 'if (await page.locator("#foo").count() > 0) {' in src
+    assert '    await page.click("#bar");' in src
+    assert "  }" in src
