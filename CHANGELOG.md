@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-05-27
+
+### Added
+
+#### Macro artifact workbench — phases 2 and 3
+- **Verification layer** (`macro_artifact_verify`): evaluates critical-point
+  checks against a completed artifact run; check types include `result_status`,
+  `evidence_exists`, `screenshot_exists`, `assertion_passed`, and `log_contains`.
+- `macro_artifact_critical_points_get` / `macro_artifact_critical_points_set`
+  MCP tools for reading and overwriting a run's critical-point definitions.
+- `macro_artifact_status` MCP tool — summary view of a run including verification
+  state, evidence count, and per-check results.
+- `verification.json` written into the run bundle alongside `summary.md` when
+  verification is run; `## Verification and Critical Points` rendered in
+  `summary.md`.
+- Telemetry: `octowright.macro.artifact.run` span + `octowright_macro_artifact_run_total`
+  counter; `octowright.macro.artifact.verify` span + counter.
+
+#### Export engine (phase 2)
+- Expanded JSONL-to-script export fidelity: action parity for all recorded
+  browser actions, deduplication, and idiomatic output formatting.
+- Full export test suite (`tests/test_export.py`).
+
+#### Agent skill — restructured
+- Renamed skill from `using-octowright` → `octowright` (`/octowright:octowright`
+  slash command).
+- Root `SKILL.md` trimmed to overview + rule summaries + quick reference; deep
+  content moved to dedicated reference files.
+- New reference files: `launch-and-personas.md`, `macros-and-advisor.md`,
+  `debugging.md`, `transport-recovery.md`.
+- New command files: `commands/record.md`, `commands/replay.md`,
+  `commands/scenario.md`.
+
+### Fixed
+- CI smoke script updated to use new `octowright` skill name (was `using-octowright`).
+
+[0.6.0]: https://github.com/livingstaccato/octowright/compare/v0.5.0...v0.6.0
+
 ## [0.5.0] - 2026-05-26
 
 465 commits since `v0.3.0`. Highlights below; see `git log v0.3.0..v0.5.0` for
