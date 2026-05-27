@@ -361,3 +361,31 @@ async def macro_explain(actions: list[dict[str, Any]]) -> dict[str, str]:
     from octowright.macros.semantic import explain_macro
 
     return explain_macro(actions)
+
+
+@mcp.tool()
+async def macro_artifact_critical_points_get(name: str) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.macro_artifact_critical_points_get(name)
+
+
+@mcp.tool()
+async def macro_artifact_critical_points_set(name: str, critical_points: list[dict[str, Any]]) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.macro_artifact_critical_points_set(name, critical_points)
+
+
+@mcp.tool()
+async def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.macro_artifact_verify(name, run_id)
+
+
+@mcp.tool()
+async def macro_artifact_status(name: str) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.macro_artifact_status(name)
