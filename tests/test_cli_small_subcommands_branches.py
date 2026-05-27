@@ -322,7 +322,7 @@ class TestSkillInstall:
         """Passing a name other than SKILL_NAME → ClickException with hint."""
         import octowright.cli.skill as _skill_mod
 
-        monkeypatch.setattr(_skill_mod, "SKILL_NAME", "using-octowright")
+        monkeypatch.setattr(_skill_mod, "SKILL_NAME", "octowright")
         result = runner.invoke(_root.cli, ["skill", "install", "wrong-name"])
         assert result.exit_code != 0
         assert "unknown skill" in result.output.lower() or "unknown skill" in (result.stderr or "").lower()
@@ -368,7 +368,7 @@ class TestSkillStatus:
         """Unknown skill name fails with ClickException."""
         import octowright.cli.skill as _skill_mod
 
-        monkeypatch.setattr(_skill_mod, "SKILL_NAME", "using-octowright")
+        monkeypatch.setattr(_skill_mod, "SKILL_NAME", "octowright")
         result = runner.invoke(_root.cli, ["skill", "status", "wrong"])
         assert result.exit_code != 0
 

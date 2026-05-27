@@ -114,7 +114,7 @@ the full record.
 - `octowright cleanup` to prune stale recordings / screenshots / videos / traces.
 - `octowright takeover` to detect and disable competing Playwright MCP plugins.
 - `octowright test` JSONL-driven test suite runner.
-- `octowright skill` to install / inspect the using-octowright agent skill,
+- `octowright skill` to install / inspect the octowright agent skill,
   with skill-pack distribution baked into the wheel.
 - `octowright selftest` to list MCP tools without a client.
 - `--log-level` flag and watchdog / shutdown visibility on `octowright serve`.
