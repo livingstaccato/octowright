@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-SAMPLE_PERSONA_NAME = "sample"
+SAMPLE_PERSONA_NAME = "default"
 SAMPLE_SCENARIO_NAME = "sample-solo"
 SAMPLE_MACRO_NAME = "sample-page-ready"
 
@@ -46,7 +46,7 @@ def write_sample_persona(profiles_dir: Path, *, force: bool = False) -> tuple[Pa
         return target, "exists"
     doc: dict[str, Any] = {
         "name": SAMPLE_PERSONA_NAME,
-        "display_name": "Sample Persona",
+        "display_name": "Default Persona",
         "default_url": "https://octowright.com/",
         "default_macros": [],
         "credentials": {},
