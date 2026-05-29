@@ -66,6 +66,11 @@ def _codex_destination() -> Path:
     return codex_home / "skills" / SKILL_NAME
 
 
+def _claude_skill_destination() -> Path:
+    claude_home = Path(defaults.CLAUDE_HOME).expanduser()
+    return claude_home / "skills" / SKILL_NAME
+
+
 def _antigravity_destination() -> Path:
     # agy shares ~/.gemini/config as its plugin store; read ANTIGRAVITY_HOME
     # at call time so monkeypatch overrides work in tests.
@@ -88,41 +93,22 @@ def _antigravity_plugin_destination(cwd: Path | None = None) -> Path:
     return root / ".antigravity-plugin" / "plugin.json"
 
 
-def install_skill_to_codex(*, dry_run: bool = False, force: bool = False) -> InstallResult:
+def _install_skill_tree(target: str, destination: Path, *, dry_run: bool, force: bool) -> InstallResult:
     source = _packaged_skill_path()
-    destination = _codex_destination()
     source_skill = source / "SKILL.md"
     source_hash = _sha256(source_skill)
 
     if destination.exists() and not force:
         existing_skill = destination / "SKILL.md"
         hash_match = existing_skill.exists() and _sha256(existing_skill) == source_hash
-        return InstallResult(
-            target="codex",
-            destination=str(destination),
-            installed=False,
-            updated=False,
-            reason="already_installed",
-            version=_version(),
-            hash_match=hash_match,
-        )
+        return InstallResult(target, str(destination), False, False, "already_installed", _version(), hash_match)
 
     if dry_run:
         return InstallResult(
-            target="codex",
-            destination=str(destination),
-            installed=not destination.exists(),
-            updated=destination.exists(),
-            reason="dry_run",
-            version=_version(),
-            hash_match=False,
+            target, str(destination), not destination.exists(), destination.exists(), "dry_run", _version(), False
         )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    # Stage into a sibling temp dir so a mid-copy failure can't leave a
-    # corrupted skill on disk. mkdtemp returns a path that already exists;
-    # copytree requires the destination *not* to exist, so we point it at
-    # a child path inside the staging dir.
     staging_parent = Path(tempfile.mkdtemp(prefix=f".{SKILL_NAME}.", dir=str(destination.parent)))
     staging_dir = staging_parent / SKILL_NAME
     try:
@@ -135,17 +121,16 @@ def install_skill_to_codex(*, dry_run: bool = False, force: bool = False) -> Ins
     try:
         os.replace(staging_dir, destination)
     finally:
-        # Drop the now-empty (or stale on error) staging parent.
         shutil.rmtree(staging_parent, ignore_errors=True)
-    return InstallResult(
-        target="codex",
-        destination=str(destination),
-        installed=True,
-        updated=force,
-        reason="installed",
-        version=_version(),
-        hash_match=True,
-    )
+    return InstallResult(target, str(destination), True, force, "installed", _version(), True)
+
+
+def install_skill_to_codex(*, dry_run: bool = False, force: bool = False) -> InstallResult:
+    return _install_skill_tree("codex", _codex_destination(), dry_run=dry_run, force=force)
+
+
+def install_skill_to_claude(*, dry_run: bool = False, force: bool = False) -> InstallResult:
+    return _install_skill_tree("claude_skill", _claude_skill_destination(), dry_run=dry_run, force=force)
 
 
 def install_skill_to_antigravity(*, dry_run: bool = False, force: bool = False) -> InstallResult:
@@ -226,7 +211,7 @@ def install_skill_to_antigravity(*, dry_run: bool = False, force: bool = False) 
 
 
 def install_plugin_manifests(
-    *, dry_run: bool = False, force: bool = False, cwd: Path | None = None
+    *, dry_run: bool = False, force: bool = False, cwd: Path | None = None, targets: set[str] | None = None
 ) -> list[InstallResult]:
     out: list[InstallResult] = []
     for target, name, dest_fn in (
@@ -234,6 +219,8 @@ def install_plugin_manifests(
         ("codex_plugin", "codex-plugin.json", _codex_plugin_destination),
         ("antigravity_plugin", "antigravity-plugin.json", _antigravity_plugin_destination),
     ):
+        if targets is not None and target not in targets:
+            continue
         destination = dest_fn(cwd)
         content = _packaged_manifest(name)
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -298,6 +285,10 @@ def install_distributed_assets(
     if target in {"antigravity", "all"}:
         results.append(install_skill_to_antigravity(dry_run=dry_run, force=force))
     if target in {"claude", "all"}:
+        results.append(install_skill_to_claude(dry_run=dry_run, force=force))
+    if target == "claude":
+        results.extend(install_plugin_manifests(dry_run=dry_run, force=force, cwd=cwd, targets={"claude"}))
+    if target == "all":
         results.extend(install_plugin_manifests(dry_run=dry_run, force=force, cwd=cwd))
     return results
 
@@ -342,11 +333,17 @@ def status_distributed_assets(*, target: str, cwd: Path | None = None) -> list[I
         results.append(_skill_status("antigravity", dest, dest / "skills" / SKILL_NAME / "SKILL.md", source_hash))
 
     if target in {"claude", "all"}:
+        dest = _claude_skill_destination()
+        results.append(_skill_status("claude_skill", dest, dest / "SKILL.md", source_hash))
+
+    if target in {"claude", "all"}:
         for label, manifest_name, dest_fn in (
             ("claude", "claude-plugin.json", _claude_plugin_destination),
             ("codex_plugin", "codex-plugin.json", _codex_plugin_destination),
             ("antigravity_plugin", "antigravity-plugin.json", _antigravity_plugin_destination),
         ):
+            if target == "claude" and label != "claude":
+                continue
             results.append(_manifest_status(label, manifest_name, dest_fn(cwd)))
 
     return results

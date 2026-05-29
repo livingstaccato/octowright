@@ -256,8 +256,6 @@ async def _probe_alive_leader(sn: Any) -> Any | None:
 
 
 async def _respawn_if_leader_gone(*, http_host: str | None, http_port: int | None, idle_grace: float | None) -> None:
-    """After the bridge ends: if the leader is genuinely gone, spawn a
-    replacement daemon and exit. One spawn attempt is enough."""
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
@@ -270,6 +268,8 @@ async def _respawn_if_leader_gone(*, http_host: str | None, http_port: int | Non
             return
         click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
         _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+    if await _daemon.wait_for_daemon() is None:
+        click.echo("octowright: replacement daemon spawn timed out", err=True)
 
 
 async def _serve_singleton(
