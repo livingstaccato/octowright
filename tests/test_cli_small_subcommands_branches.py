@@ -3,16 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Branch-targeted tests for the small CLI subcommand modules.
-
-Bundled because each module is tiny and shares a pytest+CliRunner setup:
-
-- cli/cleanup.py: prune-old-recordings command (--days, --apply, dry-run vs apply)
-- cli/init_cmd.py: scaffold layout command (--force)
-- cli/selftest.py: list registered MCP tools (profile filter awareness)
-- cli/skill.py: install/status/doctor for distributed skill assets
-- cli/watch.py: NOT a click command — formatting helpers used by `scenario start --watch`
-"""
+"""Branch-targeted tests for small CLI subcommand modules."""
 
 from __future__ import annotations
 
@@ -30,9 +21,6 @@ from octowright.cli import _root, cleanup, init_cmd, selftest, skill, watch  # n
 @pytest.fixture
 def runner() -> CliRunner:
     return CliRunner()
-
-
-# ─── cli/cleanup.py ─────────────────────────────────────────────────────────
 
 
 class _FakeStaleFile:
@@ -149,9 +137,6 @@ class TestCleanupCommand:
         assert result.exit_code != 0
 
 
-# ─── cli/init_cmd.py ────────────────────────────────────────────────────────
-
-
 class TestInitCommand:
     def test_default_invocation_calls_scaffold_with_force_false(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -199,9 +184,6 @@ class TestInitCommand:
         monkeypatch.setattr(_scaffold, "render_report", lambda r: rendered.append(r))
         runner.invoke(_root.cli, ["init"])
         assert rendered == [report_obj]
-
-
-# ─── cli/selftest.py ────────────────────────────────────────────────────────
 
 
 class TestSelftestCommand:
@@ -257,12 +239,9 @@ class TestSelftestCommand:
         assert "0 tools registered:" in result.output
 
 
-# ─── cli/skill.py ───────────────────────────────────────────────────────────
-
-
 class TestSkillInstall:
-    def test_default_target_all(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`skill install` uses target=all, dry_run=False, force=False."""
+    def test_default_target_claude(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`skill install` uses target=claude, dry_run=False, force=False."""
         captured: dict[str, Any] = {}
         import octowright.cli.skill as _skill_mod
 
@@ -276,7 +255,7 @@ class TestSkillInstall:
         monkeypatch.setattr(_skill_mod, "render_table", lambda _r: "TABLE-OUTPUT")
         result = runner.invoke(_root.cli, ["skill", "install"])
         assert result.exit_code == 0
-        assert captured == {"target": "all", "dry_run": False, "force": False}
+        assert captured == {"target": "claude", "dry_run": False, "force": False}
         assert "TABLE-OUTPUT" in result.output
 
     def test_target_codex(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -392,9 +371,6 @@ class TestSkillDoctor:
         monkeypatch.setattr(_skill_mod, "render_json", lambda _r: '"doctor-json"')
         result = runner.invoke(_root.cli, ["skill", "doctor", "--json"])
         assert "doctor-json" in result.output
-
-
-# ─── cli/watch.py (helpers, not a click command) ───────────────────────────
 
 
 class TestFormatHeadline:

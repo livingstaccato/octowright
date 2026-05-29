@@ -8,6 +8,7 @@ from __future__ import annotations
 import itertools
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,17 +52,12 @@ log = get_logger(__name__)
 
 @dataclass
 class _RemoteWriteSlot:
-    """A nullable handle to the leader's incoming-stream send channel.
-
-    The bridge has two coroutines that race for the same slot: the local
-    forwarder reads it on every inbound stdio frame, and the remote
-    supervisor sets/clears it on reconnect. Previously this was a
-    ``dict[str, Any]`` masquerading as a nullable channel — works at runtime
-    but hides the nullability from the type checker. A one-attribute
-    dataclass makes the ``None`` state explicit.
-    """
-
     write: Any | None = None
+
+
+@dataclass
+class _RemoteResetSlot:
+    cancel_scope: Any | None = None
 
 
 def message_root(message: SessionMessage) -> Any:
@@ -241,7 +237,7 @@ class BridgeSupervisor:
                 )
         await self.local_write.send(message)
 
-    async def watch_deadlines(self, interval: float = 0.1) -> None:
+    async def watch_deadlines(self, interval: float = 0.1, reset_slot: _RemoteResetSlot | None = None) -> None:
         while True:
             await anyio.sleep(interval)
             now = time.monotonic()
@@ -260,6 +256,8 @@ class BridgeSupervisor:
                     attributes={"method": current.method or "unknown", "outcome": "timeout"},
                 )
                 await self.local_write.send(bridge_error(current.request_id, self.last_error))
+                if reset_slot is not None and reset_slot.cancel_scope is not None:
+                    reset_slot.cancel_scope.cancel()
 
     async def fail_all_in_flight(self, reason: str) -> None:
         pending = list(self._in_flight.values())
@@ -328,6 +326,7 @@ async def monitor_leader_health(
     health_url: str,
     interval: float,
     max_failures: int,
+    on_failure: Callable[[], None] | None = None,
 ) -> None:
     failures = 0
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -343,8 +342,19 @@ async def monitor_leader_health(
                 continue
             failures += 1
             if failures >= max_failures:
+                if on_failure is not None:
+                    on_failure()
                 cancel_scope.cancel()
                 return
+
+
+async def leader_health_alive(health_url: str) -> bool:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.get(health_url)
+        except (httpx.HTTPError, OSError):
+            return False
+    return response.status_code == 200
 
 
 async def run_supervised_proxy(
@@ -362,6 +372,12 @@ async def run_supervised_proxy(
         )
         async with anyio.create_task_group() as local_tg:
             remote_write_slot = _RemoteWriteSlot()
+            remote_reset_slot = _RemoteResetSlot()
+            leader_health_failed = False
+
+            def _mark_leader_health_failed() -> None:
+                nonlocal leader_health_failed
+                leader_health_failed = True
 
             async def _local_forwarder() -> None:
                 async for message in local_read:
@@ -420,26 +436,27 @@ async def run_supervised_proxy(
                                 await supervisor_obj.replay_initialize(remote_write)
                                 attempt = 0
                                 async with anyio.create_task_group() as remote_tg:
+                                    remote_reset_slot.cancel_scope = remote_tg.cancel_scope
 
                                     async def _remote_reader(reader: Any = remote_read) -> None:
-                                        async for message in reader:
-                                            if isinstance(message, Exception):
-                                                raise message
-                                            await supervisor_obj.forward_remote_message(message)
+                                        try:
+                                            async for message in reader:
+                                                if isinstance(message, Exception):
+                                                    raise message
+                                                await supervisor_obj.forward_remote_message(message)
+                                        finally:
+                                            remote_tg.cancel_scope.cancel()
 
                                     remote_tg.start_soon(_remote_reader)
-                                    if health_url is not None:
-                                        remote_tg.start_soon(
-                                            monitor_leader_health,
-                                            remote_tg.cancel_scope,
-                                            health_url,
-                                            heartbeat_interval,
-                                            heartbeat_max_failures,
-                                        )
+                                remote_reset_slot.cancel_scope = None
                         if _connect_scope.cancelled_caught:
                             raise TimeoutError(
                                 f"connection to {remote_url!r} timed out after {BRIDGE_CONNECT_TIMEOUT_SECONDS}s"
                             )
+                        if health_url is not None and not await leader_health_alive(health_url):
+                            _mark_leader_health_failed()
+                            local_tg.cancel_scope.cancel()
+                            return
                     except Exception as exc:
                         remote_write_slot.write = None
                         _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
@@ -455,9 +472,24 @@ async def run_supervised_proxy(
                             reconnect_attempts=attempt,
                             request_timeouts=supervisor_obj.request_timeouts,
                         )
+                        if health_url is not None and not await leader_health_alive(health_url):
+                            _mark_leader_health_failed()
+                            local_tg.cancel_scope.cancel()
+                            return
                         await anyio.sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
                         attempt += 1
 
             local_tg.start_soon(_local_forwarder)
             local_tg.start_soon(_remote_supervisor)
-            local_tg.start_soon(supervisor_obj.watch_deadlines)
+            local_tg.start_soon(supervisor_obj.watch_deadlines, 0.1, remote_reset_slot)
+            if health_url is not None:
+                local_tg.start_soon(
+                    monitor_leader_health,
+                    local_tg.cancel_scope,
+                    health_url,
+                    heartbeat_interval,
+                    heartbeat_max_failures,
+                    _mark_leader_health_failed,
+                )
+        if leader_health_failed:
+            raise RuntimeError("leader health check failed")

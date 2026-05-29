@@ -28,7 +28,7 @@ def skill() -> None:
 @click.option(
     "--target",
     type=click.Choice(["codex", "antigravity", "claude", "all"]),
-    default="all",
+    default="claude",
     show_default=True,
     help="Install destination: codex (~/.codex/skills/), antigravity (~/.gemini/config/plugins/), claude (.claude-plugin/), or all.",
 )

@@ -243,6 +243,8 @@ def octowright_status() -> dict[str, Any]:
             "available_profiles": sorted(PROFILES.keys()),
         }
 
+    bridge_snapshot = bridge_state.read_state(defaults.BRIDGE_STATE_PATH)
+
     return {
         "daemon": {
             "pid": daemon_pid,
@@ -276,7 +278,8 @@ def octowright_status() -> dict[str, Any]:
         "advisor": _advisor.status(),
         "bridge": {
             "state_path": str(defaults.BRIDGE_STATE_PATH),
-            **bridge_state.read_state(defaults.BRIDGE_STATE_PATH),
+            "summary": bridge_state.summarize_state(bridge_snapshot),
+            **bridge_snapshot,
         },
         "metrics": {
             # ``macro_labels_seen`` / ``macro_label_overflow_count`` let an

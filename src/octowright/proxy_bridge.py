@@ -21,6 +21,7 @@ stream.
 
 from __future__ import annotations
 
+from octowright.defaults import BRIDGE_HEALTH_INTERVAL_SECONDS, BRIDGE_HEALTH_MAX_FAILURES
 from octowright.proxy_supervisor import run_supervised_proxy
 
 
@@ -28,8 +29,8 @@ async def run_proxy(
     leader_mcp_url: str,
     *,
     health_url: str | None = None,
-    heartbeat_interval: float = 10.0,
-    heartbeat_max_failures: int = 3,
+    heartbeat_interval: float = BRIDGE_HEALTH_INTERVAL_SECONDS,
+    heartbeat_max_failures: int = BRIDGE_HEALTH_MAX_FAILURES,
 ) -> None:
     """Forward this process's stdio MCP traffic to ``leader_mcp_url``.
 
