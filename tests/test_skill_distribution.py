@@ -20,10 +20,11 @@ def test_install_distributed_assets_dry_run(monkeypatch: pytest.MonkeyPatch, tmp
     from octowright import defaults as _defaults
 
     monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.setattr(_defaults, "CLAUDE_HOME", str(tmp_path / ".claude"))
     monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(tmp_path / ".gemini-config"))
     results = install_distributed_assets(target="all", dry_run=True, force=False, cwd=tmp_path)
-    # codex + antigravity + claude + codex_plugin + antigravity_plugin
-    assert len(results) == 5
+    # codex + antigravity + claude_skill + claude + codex_plugin + antigravity_plugin
+    assert len(results) == 6
     assert all(item.reason == "dry_run" for item in results)
 
 
@@ -31,14 +32,15 @@ def test_install_and_status_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path:
     from octowright import defaults as _defaults
 
     monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.setattr(_defaults, "CLAUDE_HOME", str(tmp_path / ".claude"))
     monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(tmp_path / ".gemini-config"))
     results = install_distributed_assets(target="all", dry_run=False, force=False, cwd=tmp_path)
-    # codex + antigravity + claude + codex_plugin + antigravity_plugin
-    assert len(results) == 5
+    # codex + antigravity + claude_skill + claude + codex_plugin + antigravity_plugin
+    assert len(results) == 6
     assert all(item.installed for item in results)
 
     status = status_distributed_assets(target="all", cwd=tmp_path)
-    assert len(status) == 5
+    assert len(status) == 6
     assert all(item.installed for item in status)
     assert all(item.hash_match for item in status)
 
@@ -61,6 +63,7 @@ def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_
     from octowright import defaults as _defaults
 
     monkeypatch.setattr(_defaults, "CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.setattr(_defaults, "CLAUDE_HOME", str(tmp_path / ".claude"))
     monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(tmp_path / ".gemini-config"))
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=str(tmp_path)):
@@ -70,8 +73,8 @@ def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_
         )
         assert install_result.exit_code == 0, install_result.output
         payload = json.loads(install_result.output)
-        # codex + antigravity + claude + codex_plugin + antigravity_plugin
-        assert len(payload) == 5
+        # codex + antigravity + claude_skill + claude + codex_plugin + antigravity_plugin
+        assert len(payload) == 6
         assert all(item["installed"] for item in payload)
         assert all(item["version"] == VERSION for item in payload)
 
@@ -81,7 +84,7 @@ def test_cli_skill_install_and_status_json(monkeypatch: pytest.MonkeyPatch, tmp_
         )
         assert status_result.exit_code == 0, status_result.output
         status_payload = json.loads(status_result.output)
-        assert len(status_payload) == 5
+        assert len(status_payload) == 6
         assert all(item["installed"] for item in status_payload)
         assert all(item["version"] == VERSION for item in status_payload)
 

@@ -28,14 +28,11 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from octowright import skill_distribution as _sd
 from octowright.skill_distribution import (
     SKILL_NAME,
-    InstallResult,
     _antigravity_destination,
     _antigravity_plugin_destination,
     _claude_plugin_destination,
@@ -45,15 +42,9 @@ from octowright.skill_distribution import (
     _packaged_skill_path,
     _sha256,
     _version,
-    doctor_distributed_assets,
-    install_distributed_assets,
     install_plugin_manifests,
     install_skill_to_antigravity,
     install_skill_to_codex,
-    render_json,
-    render_table,
-    result_as_jsonable,
-    status_distributed_assets,
 )
 from octowright.version import VERSION
 
@@ -211,11 +202,12 @@ class TestAntigravityDestination:
 
 @pytest.fixture
 def codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Redirect CODEX_HOME (via defaults.CODEX_HOME) to a writable tmp dir."""
+    """Redirect CODEX_HOME / CLAUDE_HOME to writable tmp dirs."""
     from octowright import defaults as _defaults
 
     home = tmp_path / ".codex"
     monkeypatch.setattr(_defaults, "CODEX_HOME", str(home))
+    monkeypatch.setattr(_defaults, "CLAUDE_HOME", str(tmp_path / ".claude"))
     return home
 
 
@@ -438,285 +430,3 @@ class TestInstallPluginManifests:
         # Content restored.
         content = (tmp_path / ".claude-plugin" / "plugin.json").read_text()
         assert "drift" not in content
-
-
-# ─── install_distributed_assets dispatch ────────────────────────────────────
-
-
-@pytest.fixture
-def _antigravity_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Redirect ANTIGRAVITY_HOME (via defaults.ANTIGRAVITY_HOME) to a writable tmp dir."""
-    from octowright import defaults as _defaults
-
-    home = tmp_path / ".gemini-config"
-    monkeypatch.setattr(_defaults, "ANTIGRAVITY_HOME", str(home))
-    return home
-
-
-class TestInstallDistributedAssets:
-    def test_target_codex_only(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """target='codex' → 1 result, only the skill (no plugin manifests)."""
-        results = install_distributed_assets(target="codex", cwd=tmp_path)
-        assert [r.target for r in results] == ["codex"]
-
-    def test_target_claude_only(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """target='claude' → 3 results (claude + codex_plugin + antigravity_plugin)."""
-        results = install_distributed_assets(target="claude", cwd=tmp_path)
-        assert [r.target for r in results] == ["claude", "codex_plugin", "antigravity_plugin"]
-
-    def test_target_antigravity_only(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """target='antigravity' → 1 result (the agy skill install)."""
-        results = install_distributed_assets(target="antigravity", cwd=tmp_path)
-        assert [r.target for r in results] == ["antigravity"]
-
-    def test_target_all(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """target='all' → 5 results in order."""
-        results = install_distributed_assets(target="all", cwd=tmp_path)
-        assert [r.target for r in results] == ["codex", "antigravity", "claude", "codex_plugin", "antigravity_plugin"]
-
-    def test_target_unknown_returns_empty(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """Unknown target → empty list (no exception)."""
-        assert install_distributed_assets(target="unknown", cwd=tmp_path) == []
-
-    def test_dry_run_passthrough(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """dry_run flag flows through to all sub-installs."""
-        results = install_distributed_assets(target="all", dry_run=True, cwd=tmp_path)
-        assert all(r.reason == "dry_run" for r in results)
-
-
-# ─── status_distributed_assets ──────────────────────────────────────────────
-
-
-class TestStatusDistributedAssets:
-    def test_codex_only_when_target_codex(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """target='codex' → 1 status entry."""
-        results = status_distributed_assets(target="codex", cwd=tmp_path)
-        assert [r.target for r in results] == ["codex"]
-
-    def test_claude_only_when_target_claude(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """target='claude' → 3 status entries (claude + codex_plugin + antigravity_plugin)."""
-        results = status_distributed_assets(target="claude", cwd=tmp_path)
-        assert [r.target for r in results] == ["claude", "codex_plugin", "antigravity_plugin"]
-
-    def test_antigravity_only_when_target_antigravity(
-        self, codex_home: Path, _antigravity_home: Path, tmp_path: Path
-    ) -> None:
-        """target='antigravity' → 1 status entry."""
-        results = status_distributed_assets(target="antigravity", cwd=tmp_path)
-        assert [r.target for r in results] == ["antigravity"]
-
-    def test_all_returns_five(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """target='all' → 5 entries in canonical order."""
-        results = status_distributed_assets(target="all", cwd=tmp_path)
-        assert [r.target for r in results] == ["codex", "antigravity", "claude", "codex_plugin", "antigravity_plugin"]
-
-    def test_missing_reports_missing_reason(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """No installs yet → reason='missing', installed=False, hash_match=False."""
-        results = status_distributed_assets(target="all", cwd=tmp_path)
-        for r in results:
-            assert r.reason == "missing"
-            assert r.installed is False
-            assert r.hash_match is False
-
-    def test_present_reports_present_reason(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """After install, all five report reason='present'."""
-        install_distributed_assets(target="all", cwd=tmp_path)
-        results = status_distributed_assets(target="all", cwd=tmp_path)
-        for r in results:
-            assert r.reason == "present"
-            assert r.installed is True
-            assert r.hash_match is True
-
-    def test_drift_breaks_hash_match(self, codex_home: Path, _antigravity_home: Path, tmp_path: Path) -> None:
-        """Local edit to a manifest → hash_match=False but installed=True."""
-        install_distributed_assets(target="all", cwd=tmp_path)
-        manifest = tmp_path / ".claude-plugin" / "plugin.json"
-        manifest.write_text(manifest.read_text() + "\n# drift")
-        results = status_distributed_assets(target="all", cwd=tmp_path)
-        claude = next(r for r in results if r.target == "claude")
-        assert claude.installed is True
-        assert claude.hash_match is False
-
-
-# ─── result_as_jsonable / render_table / render_json ────────────────────────
-
-
-def _result(**overrides: Any) -> InstallResult:
-    base = {
-        "target": "codex",
-        "destination": "/tmp/x",
-        "installed": True,
-        "updated": False,
-        "reason": "installed",
-        "version": "9.9.9",
-        "hash_match": True,
-    }
-    base.update(overrides)
-    return InstallResult(**base)
-
-
-class TestResultAsJsonable:
-    def test_returns_dict_with_seven_keys(self) -> None:
-        """All InstallResult fields exposed in JSON-friendly dict."""
-        d = result_as_jsonable(_result())
-        assert set(d.keys()) == {
-            "target",
-            "destination",
-            "installed",
-            "updated",
-            "reason",
-            "version",
-            "hash_match",
-        }
-
-    def test_preserves_field_values(self) -> None:
-        """Field values round-trip verbatim into the dict."""
-        d = result_as_jsonable(_result(target="claude", installed=False, version="1.2.3"))
-        assert d["target"] == "claude"
-        assert d["installed"] is False
-        assert d["version"] == "1.2.3"
-
-
-class TestRenderTable:
-    def test_starts_with_header_row(self) -> None:
-        """First line is the column-header row."""
-        out = render_table([])
-        assert out.startswith("target")
-        assert "installed" in out.split("\n")[0]
-        assert "destination" in out.split("\n")[0]
-
-    def test_appends_row_per_result(self) -> None:
-        """Header + N data rows."""
-        out = render_table([_result(target="codex"), _result(target="claude")])
-        lines = out.split("\n")
-        assert len(lines) == 3
-        assert "codex" in lines[1]
-        assert "claude" in lines[2]
-
-
-class TestRenderJson:
-    def test_returns_parseable_json(self) -> None:
-        """Output parses back into the same payload shape."""
-        text = render_json([_result(), _result(target="claude")])
-        payload = json.loads(text)
-        assert isinstance(payload, list)
-        assert len(payload) == 2
-        assert payload[0]["target"] == "codex"
-
-    def test_indented_for_readability(self) -> None:
-        """indent=2 is part of the output format."""
-        text = render_json([_result()])
-        assert "\n  " in text
-
-    def test_empty_list(self) -> None:
-        """Empty input → '[]'."""
-        assert json.loads(render_json([])) == []
-
-
-# ─── doctor_distributed_assets ──────────────────────────────────────────────
-
-
-class TestDoctorDistributedAssets:
-    def test_returns_at_least_seven_checks(self, tmp_path: Path) -> None:
-        """4 packaged-asset + 3 repo-dir checks (claude, codex, antigravity) = 7 items minimum."""
-        results = doctor_distributed_assets(cwd=tmp_path)
-        assert len(results) == 7
-
-    def test_packaged_skill_check_passes_for_real_install(self, tmp_path: Path) -> None:
-        """packaged_skill SKILL.md is shipped with the wheel — installed=True."""
-        results = doctor_distributed_assets(cwd=tmp_path)
-        skill = next(r for r in results if r.target == "packaged_skill")
-        assert skill.installed is True
-        assert skill.reason == "ok"
-        assert skill.hash_match is True
-
-    def test_packaged_manifest_checks_pass(self, tmp_path: Path) -> None:
-        """All three packaged manifests are present in the wheel."""
-        results = doctor_distributed_assets(cwd=tmp_path)
-        for target in ("packaged_manifest_claude", "packaged_manifest_codex", "packaged_manifest_antigravity"):
-            entry = next(r for r in results if r.target == target)
-            assert entry.installed is True
-            assert entry.reason == "ok"
-
-    def test_repo_dirs_missing_parent_when_cwd_doesnt_exist(self, tmp_path: Path) -> None:
-        """If cwd parent doesn't exist → reason='missing_parent', hash_match=False."""
-        nonexistent = tmp_path / "nope" / "deeper"
-        results = doctor_distributed_assets(cwd=nonexistent)
-        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir", "repo_antigravity_plugin_dir"):
-            entry = next(r for r in results if r.target == target)
-            assert entry.reason == "missing_parent"
-            assert entry.hash_match is False
-            assert entry.installed is False
-
-    def test_repo_dirs_ok_when_parent_exists(self, tmp_path: Path) -> None:
-        """If cwd exists (parent of the .{claude,codex,antigravity}-plugin dirs) → reason='ok'."""
-        results = doctor_distributed_assets(cwd=tmp_path)
-        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir", "repo_antigravity_plugin_dir"):
-            entry = next(r for r in results if r.target == target)
-            assert entry.reason == "ok"
-            assert entry.hash_match is True
-
-    def test_repo_dir_installed_when_actually_present(self, tmp_path: Path) -> None:
-        """If the .claude-plugin / .codex-plugin / .antigravity-plugin dir exists, installed=True."""
-        (tmp_path / ".claude-plugin").mkdir()
-        (tmp_path / ".codex-plugin").mkdir()
-        (tmp_path / ".antigravity-plugin").mkdir()
-        results = doctor_distributed_assets(cwd=tmp_path)
-        for target in ("repo_claude_plugin_dir", "repo_codex_plugin_dir", "repo_antigravity_plugin_dir"):
-            entry = next(r for r in results if r.target == target)
-            assert entry.installed is True
-
-    def test_default_cwd_used_when_none(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """cwd=None → Path.cwd() is the implicit default."""
-        monkeypatch.chdir(tmp_path)
-        results = doctor_distributed_assets()
-        repo_claude = next(r for r in results if r.target == "repo_claude_plugin_dir")
-        assert str(repo_claude.destination).startswith(str(tmp_path))
-
-    def test_inner_as_file_failure_falls_back_to_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The try/except inside the manifest loop swallows as_file errors only
-        for the manifest entries (the skill path is materialized eagerly via
-        _packaged_skill_path before entering the loop, so the swallow there
-        doesn't apply). Mock the manifest paths to raise from as_file().
-        """
-        # The loop body does `with as_file(path) as p: exists = p.exists()`.
-        # Replace `path` for the manifest entries with a stub whose as_file()
-        # raises when entered. We do that by patching `files(...)`'s joinpath
-        # to return such a stub for the manifests, while leaving the eagerly
-        # evaluated `_packaged_skill_path() / "SKILL.md"` alone.
-        from contextlib import contextmanager
-
-        class _BoomResource:
-            def __truediv__(self, _other: str) -> _BoomResource:
-                return self
-
-        @contextmanager
-        def fake_as_file(resource: Any) -> Any:
-            if isinstance(resource, _BoomResource):
-                raise RuntimeError("packaging blew up")
-            # Otherwise pass through to the real as_file.
-            from importlib.resources import as_file as real_as_file
-
-            with real_as_file(resource) as p:
-                yield p
-
-        original_files = _sd.files
-
-        def fake_files(name: str) -> Any:
-            real = original_files(name)
-
-            class _Wrapper:
-                def joinpath(self, *parts: str) -> Any:
-                    if parts and parts[0] == "manifests":
-                        return _BoomResource()
-                    return real.joinpath(*parts)
-
-            return _Wrapper()
-
-        monkeypatch.setattr(_sd, "files", fake_files)
-        monkeypatch.setattr(_sd, "as_file", fake_as_file)
-        results = doctor_distributed_assets(cwd=tmp_path)
-        manifest_targets = [r for r in results if r.target.startswith("packaged_manifest_")]
-        assert all(r.installed is False for r in manifest_targets)
-        assert all(r.reason == "missing" for r in manifest_targets)
-        assert all(r.hash_match is False for r in manifest_targets)

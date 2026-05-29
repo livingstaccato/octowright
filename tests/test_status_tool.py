@@ -60,6 +60,11 @@ def test_status_includes_bridge_diagnostics(monkeypatch, tmp_path: Path) -> None
     assert snap["bridge"]["followers"]["321"]["remote_session_id"] == "sid-321"
     assert snap["bridge"]["followers"]["321"]["in_flight"] == 2
     assert snap["bridge"]["events"][-1]["last_error"] == "remote leader session reset"
+    assert snap["bridge"]["summary"]["follower_count"] == 1
+    assert snap["bridge"]["summary"]["total_in_flight"] == 2
+    assert snap["bridge"]["summary"]["total_reconnect_attempts"] == 4
+    assert snap["bridge"]["summary"]["total_request_timeouts"] == 1
+    assert snap["bridge"]["summary"]["latest_error"] == "remote leader session reset"
 
 
 def test_advisor_status_tool_returns_named_status(monkeypatch, tmp_path: Path) -> None:

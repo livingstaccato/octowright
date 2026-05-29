@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from octowright import proxy_bridge as _bridge
+from octowright.defaults import BRIDGE_HEALTH_INTERVAL_SECONDS, BRIDGE_HEALTH_MAX_FAILURES
 
 
 @pytest.fixture
@@ -38,8 +39,8 @@ async def test_run_proxy_delegates_default_arguments(monkeypatch: pytest.MonkeyP
         {
             "leader_mcp_url": "http://leader.example/mcp/",
             "health_url": None,
-            "heartbeat_interval": 10.0,
-            "heartbeat_max_failures": 3,
+            "heartbeat_interval": BRIDGE_HEALTH_INTERVAL_SECONDS,
+            "heartbeat_max_failures": BRIDGE_HEALTH_MAX_FAILURES,
         }
     ]
 

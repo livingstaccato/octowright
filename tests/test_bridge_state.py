@@ -67,6 +67,73 @@ def test_read_state_recovers_from_corrupt_json(tmp_path: Path) -> None:
     assert data == {"followers": {}, "events": []}
 
 
+def test_summarize_state_totals_followers_and_latest_error() -> None:
+    data = {
+        "followers": {
+            "1": {
+                "ts": 10.0,
+                "last_error": "older",
+                "in_flight": 1,
+                "reconnect_attempts": 2,
+                "request_timeouts": 3,
+            },
+            "2": {
+                "ts": 20.0,
+                "last_error": "newer",
+                "in_flight": 4,
+                "reconnect_attempts": 5,
+                "request_timeouts": 6,
+            },
+        },
+        "events": [{"event": "snapshot"}, {"event": "snapshot"}],
+    }
+
+    assert bridge_state.summarize_state(data) == {
+        "follower_count": 2,
+        "event_count": 2,
+        "total_in_flight": 5,
+        "total_reconnect_attempts": 7,
+        "total_request_timeouts": 9,
+        "latest_error": "newer",
+    }
+
+
+def test_summarize_state_ignores_bad_shapes() -> None:
+    data = {
+        "followers": {
+            "bad": "not a snapshot",
+            "ok": {
+                "ts": 1.0,
+                "last_error": "",
+                "in_flight": -1,
+                "reconnect_attempts": "many",
+                "request_timeouts": 2,
+            },
+        },
+        "events": "not events",
+    }
+
+    assert bridge_state.summarize_state(data) == {
+        "follower_count": 2,
+        "event_count": 0,
+        "total_in_flight": 0,
+        "total_reconnect_attempts": 0,
+        "total_request_timeouts": 2,
+        "latest_error": None,
+    }
+
+
+def test_summarize_state_handles_non_dict_followers() -> None:
+    assert bridge_state.summarize_state({"followers": "bad", "events": []}) == {
+        "follower_count": 0,
+        "event_count": 0,
+        "total_in_flight": 0,
+        "total_reconnect_attempts": 0,
+        "total_request_timeouts": 0,
+        "latest_error": None,
+    }
+
+
 def test_concurrent_snapshots_with_reused_pid_dont_collide(tmp_path: Path) -> None:
     """Two writers that share a PID (e.g. OS recycled a dead follower's PID)
     must both succeed and the on-disk state must reflect one of them, not
