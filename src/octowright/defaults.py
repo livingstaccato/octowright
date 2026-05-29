@@ -67,6 +67,9 @@ LOCK_PATH = Path(os.environ.get("OCTOWRIGHT_LOCK_PATH", str(_STATE_DIR / "octowr
 # expanduser()'d at consumer-call time so ~ in the env value still works.
 CODEX_HOME = os.environ.get("CODEX_HOME", "~/.codex")
 
+# Claude Code skill install root.
+CLAUDE_HOME = os.environ.get("CLAUDE_HOME", "~/.claude")
+
 # Antigravity CLI (agy) config root for the skill-distribution copy step.
 # agy shares ~/.gemini/config as its plugin store; override ANTIGRAVITY_HOME
 # to redirect installs to a test tree without touching the user's live config.
@@ -123,6 +126,8 @@ BROWSER_LAUNCH_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BROWSER_LAUNCH
 BRIDGE_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_REQUEST_TIMEOUT_SECONDS", "20"))
 BRIDGE_CONNECT_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_CONNECT_TIMEOUT_SECONDS", "10"))
 BRIDGE_RECONNECT_MAX_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_RECONNECT_MAX_SECONDS", "5"))
+BRIDGE_HEALTH_INTERVAL_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_HEALTH_INTERVAL_SECONDS", "2"))
+BRIDGE_HEALTH_MAX_FAILURES = int(os.environ.get("OCTOWRIGHT_BRIDGE_HEALTH_MAX_FAILURES", "2"))
 BRIDGE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_BRIDGE_STATE", str(_STATE_DIR / "bridge-state.json")))
 
 # Per-action delay applied to macros, useful for visually following execution.
