@@ -71,6 +71,7 @@ PROFILES: dict[str, list[str]] = {
         "capture_search",
         "browser_click_by",
         "browser_console_messages",
+        "browser_each",
         "browser_evaluate",
         "browser_expect_js",
         "browser_expect_selector",

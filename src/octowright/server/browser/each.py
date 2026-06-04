@@ -3,15 +3,14 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Fan-out variants of common per-browser actions.
+"""Consolidated fan-out tool: browser_each.
 
-`browser_navigate`, `browser_resize`, etc. operate on one instance. When you
-want the same action across N live browsers (e.g. a responsive sweep), the
-LLM had to fire N parallel tool calls. These variants take the same args
-plus an optional `instance_ids` list and dispatch concurrently via
-`asyncio.gather`, returning a dict keyed by instance_id.
+Replaces the five individual browser_*_each tools (navigate, resize, evaluate,
+wait_for, screenshot) with a single tool dispatched by `action`.
 
 If `instance_ids` is omitted, every live browser in the pool runs the action.
+One failing instance is isolated — its error is returned under its key and
+does not cancel the others.
 """
 
 from __future__ import annotations
@@ -32,8 +31,7 @@ async def _gather(
     instance_ids: list[str],
     work: Any,
 ) -> dict[str, dict[str, Any]]:
-    """Run `work(instance_id)` for each id concurrently. Catch per-instance
-    errors so one failure doesn't tank the whole call."""
+    """Run work(instance_id) for each id concurrently."""
 
     async def _one(iid: str) -> tuple[str, dict[str, Any]]:
         try:
@@ -46,98 +44,97 @@ async def _gather(
     return dict(pairs)
 
 
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Navigate multiple browsers to the same URL in parallel. Pass "
-        "instance_ids to scope; omit to navigate every live browser. "
-        "Returns {<instance_id>: {ok, result|error}}."
-    ),
-)
-async def browser_navigate_each(
-    url: str,
-    instance_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    ids = _select_instance_ids(instance_ids)
-    return await _gather(ids, lambda iid: pool.get(iid).navigate(url))
+_ACTIONS = frozenset({"navigate", "resize", "evaluate", "wait_for", "screenshot"})
 
 
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Resize multiple browser viewports to width x height CSS pixels in "
-        "parallel. Pass instance_ids to scope; omit to resize every live "
-        "browser. Returns {<instance_id>: {ok, result|error}}."
-    ),
-)
-async def browser_resize_each(
-    width: int,
-    height: int,
-    instance_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    ids = _select_instance_ids(instance_ids)
-    return await _gather(ids, lambda iid: pool.get(iid).resize(width, height))
+async def _act_navigate(session: Any, kwargs: dict[str, Any]) -> Any:
+    url = kwargs.get("url")
+    if url is None:
+        raise ValueError("url is required for navigate")
+    return await session.navigate(url)
 
 
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Evaluate a JavaScript expression across multiple browsers in "
-        "parallel. Same evaluate semantics as browser_evaluate; result per "
-        "instance is the stringified return value (truncated at 4000 chars "
-        "per instance). Pass instance_ids to scope; omit for all live "
-        "browsers. Returns {<instance_id>: {ok, result|error}}."
-    ),
-)
-async def browser_evaluate_each(
-    expression: str,
-    instance_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    ids = _select_instance_ids(instance_ids)
-    return await _gather(ids, lambda iid: pool.get(iid).evaluate(expression))
+async def _act_resize(session: Any, kwargs: dict[str, Any]) -> Any:
+    width, height = kwargs.get("width"), kwargs.get("height")
+    if width is None or height is None:
+        raise ValueError(f"{'width' if width is None else 'height'} is required for resize")
+    return await session.resize(width, height)
 
 
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Wait for a selector or text to appear across multiple browsers in "
-        "parallel. Provide exactly one of selector or text, or neither for "
-        "network-idle. Pass instance_ids to scope; omit for all live "
-        "browsers. Returns {<instance_id>: {ok, result|error}}."
-    ),
-)
-async def browser_wait_for_each(
-    selector: str | None = None,
-    text: str | None = None,
-    timeout_ms: int | None = None,
-    instance_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    ids = _select_instance_ids(instance_ids)
-    return await _gather(
-        ids,
-        lambda iid: pool.get(iid).wait_for(selector=selector, text=text, timeout_ms=timeout_ms),
+async def _act_evaluate(session: Any, kwargs: dict[str, Any]) -> Any:
+    expression = kwargs.get("expression")
+    if expression is None:
+        raise ValueError("expression is required for evaluate")
+    return await session.evaluate(expression)
+
+
+async def _act_wait_for(session: Any, kwargs: dict[str, Any]) -> Any:
+    return await session.wait_for(
+        selector=kwargs.get("selector"),
+        text=kwargs.get("text"),
+        timeout_ms=kwargs.get("timeout_ms"),
     )
 
 
-async def _shoot(iid: str) -> dict[str, str]:
-    session = pool.get(iid)
+async def _act_screenshot(session: Any, _kwargs: dict[str, Any]) -> Any:
     target = session.log_path.with_suffix(".png")
     out = await session.screenshot(target)
     return {"path": str(out)}
 
 
+_DISPATCH: dict[str, Any] = {
+    "navigate": _act_navigate,
+    "resize": _act_resize,
+    "evaluate": _act_evaluate,
+    "wait_for": _act_wait_for,
+    "screenshot": _act_screenshot,
+}
+
+
+async def _dispatch(action: str, iid: str, **kwargs: Any) -> Any:
+    handler = _DISPATCH.get(action)
+    if handler is None:
+        raise ValueError(f"unknown action {action!r}; expected {' | '.join(sorted(_ACTIONS))}")
+    return await handler(pool.get(iid), kwargs)
+
+
 @mcp.tool(
     structured_output=False,
     description=(
-        "Take a screenshot of multiple browsers in parallel. Each screenshot "
-        "is written next to that instance's recording (path is auto-derived "
-        "from the log_path). Pass instance_ids to scope; omit for all live "
-        "browsers. Returns {<instance_id>: {ok, result|error}}, where "
-        "result.path is the written file path."
+        "Run one browser action across multiple sessions in parallel. "
+        "action must be one of: navigate | resize | evaluate | wait_for | screenshot.\n"
+        "Pass instance_ids to scope the fan-out; omit to target every live browser.\n"
+        "Per-action required params:\n"
+        "  navigate  — url (str)\n"
+        "  resize    — width (int), height (int)\n"
+        "  evaluate  — expression (str)\n"
+        "  wait_for  — selector (str) or text (str) or neither for network-idle; "
+        "optional timeout_ms (int)\n"
+        "  screenshot — no extra params; each screenshot is written next to the "
+        "instance's recording and the path is returned.\n"
+        "Returns {<instance_id>: {ok, result|error}} — one failing instance does "
+        "not cancel the others."
     ),
 )
-async def browser_screenshot_each(
+async def browser_each(
+    action: str,
     instance_ids: list[str] | None = None,
+    url: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    expression: str | None = None,
+    selector: str | None = None,
+    text: str | None = None,
+    timeout_ms: int | None = None,
 ) -> dict[str, Any]:
     ids = _select_instance_ids(instance_ids)
-    return await _gather(ids, _shoot)
+    kwargs: dict[str, Any] = {
+        "url": url,
+        "width": width,
+        "height": height,
+        "expression": expression,
+        "selector": selector,
+        "text": text,
+        "timeout_ms": timeout_ms,
+    }
+    return await _gather(ids, lambda iid: _dispatch(action, iid, **kwargs))
