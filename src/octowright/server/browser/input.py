@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Input tools: click / type / fill / press_key + ARIA-locator variants + file uploads."""
+"""Input tools: click / type / fill / press_key + file uploads."""
 
 from __future__ import annotations
 
@@ -23,15 +23,48 @@ from octowright.session.upload_paths import validate_upload_path  # noqa: F401
 @mcp.tool(
     structured_output=False,
     description=(
-        "Click an element by CSS selector. Use this for buttons, links, checkboxes, "
-        "and any clickable element. Prefer browser_click_by when you have an aria role, "
-        "label, or data-testid (it's more resilient to DOM changes). "
-        "Don't use this to enter text — use browser_fill (instant) or browser_type (per-keystroke)."
+        "Click an element. Provide a CSS `selector` OR one ARIA locator "
+        "(role / label / text / test_id) — not both.\n"
+        "ARIA locators are preferred: they survive DOM restructuring because "
+        "they describe intent, not structure. Use `selector` as a fallback "
+        "for elements that have no accessible name.\n"
+        "  role      — ARIA role ('button', 'link', 'checkbox', …); "
+        "combine with role_name to target by accessible name.\n"
+        "  label     — element associated with an <label> or aria-label.\n"
+        "  text      — element whose visible text matches (partial by default).\n"
+        "  test_id   — element with a matching data-testid attribute.\n"
+        "  selector  — CSS / XPath selector (fallback for ARIA-less elements).\n"
+        "Pass response_mode='brief' to get a browser_brief snapshot in the "
+        "same call."
     ),
 )
-async def browser_click(instance_id: str, selector: str, response_mode: str | None = None) -> dict[str, Any]:
+async def browser_click(
+    instance_id: str,
+    selector: str | None = None,
+    role: str | None = None,
+    role_name: str | None = None,
+    role_exact: bool = False,
+    label: str | None = None,
+    text: str | None = None,
+    test_id: str | None = None,
+    timeout_ms: int | None = None,
+    response_mode: str | None = None,
+) -> dict[str, Any]:
     session = pool.get(instance_id)
-    await session.click(selector)
+    if role or label or text or test_id:
+        await session.click_by(
+            role=role,
+            role_name=role_name,
+            role_exact=role_exact,
+            label=label,
+            text=text,
+            test_id=test_id,
+            timeout_ms=timeout_ms,
+        )
+    elif selector:
+        await session.click(selector)
+    else:
+        raise ValueError("provide a selector or at least one ARIA locator (role/label/text/test_id)")
     res: dict[str, Any] = {"ok": True}
     if response_mode == "brief":
         res["brief"] = await browser_brief(instance_id)
@@ -41,7 +74,7 @@ async def browser_click(instance_id: str, selector: str, response_mode: str | No
 @mcp.tool(
     structured_output=False,
     description=(
-        "Type text into a selector ONE KEYSTROKE AT A TIME (with optional delay_ms). "
+        "Type text into an element ONE KEYSTROKE AT A TIME (with optional delay_ms). "
         "Use this when the page reacts to per-keystroke events (autocomplete, masked "
         "inputs, app-level keystroke handlers). For ordinary form fields prefer "
         "browser_fill — it's much faster because it sets the value in one shot. "
@@ -56,14 +89,43 @@ async def browser_type(instance_id: str, selector: str, text: str, delay_ms: int
 @mcp.tool(
     structured_output=False,
     description=(
-        "Fill an <input> or <textarea> by setting its value in one shot. "
-        "USE THIS BY DEFAULT for form fields — it's ~10x faster than browser_type and "
-        "fires a synthetic input event. Switch to browser_type only when the page needs "
-        "per-keystroke events (autocomplete, masked inputs)."
+        "Fill an <input> or <textarea>. Provide `value` plus a CSS `selector` OR "
+        "one ARIA locator (role / label / test_id).\n"
+        "ARIA locators are preferred — more resilient to DOM changes.\n"
+        "  label    — element associated with a <label> or aria-label.\n"
+        "  role     — ARIA role ('textbox', 'searchbox', …); "
+        "combine with role_name for specificity.\n"
+        "  test_id  — data-testid attribute.\n"
+        "  selector — CSS / XPath selector (fallback).\n"
+        "USE THIS BY DEFAULT for form fields — ~10x faster than browser_type "
+        "because it sets the value in one shot. Switch to browser_type only "
+        "when the page needs per-keystroke events."
     ),
 )
-async def browser_fill(instance_id: str, selector: str, value: str) -> dict[str, Any]:
-    await pool.get(instance_id).fill(selector, value)
+async def browser_fill(
+    instance_id: str,
+    value: str,
+    selector: str | None = None,
+    role: str | None = None,
+    role_name: str | None = None,
+    label: str | None = None,
+    test_id: str | None = None,
+    timeout_ms: int | None = None,
+) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    if role or label or test_id:
+        await session.fill_by(
+            value,
+            role=role,
+            role_name=role_name,
+            label=label,
+            test_id=test_id,
+            timeout_ms=timeout_ms,
+        )
+    elif selector:
+        await session.fill(selector, value)
+    else:
+        raise ValueError("provide a selector or at least one ARIA locator (role/label/test_id)")
     return {"ok": True}
 
 
@@ -79,61 +141,6 @@ async def browser_fill(instance_id: str, selector: str, value: str) -> dict[str,
 async def browser_press_key(instance_id: str, key: str) -> dict[str, Any]:
     await pool.get(instance_id).press_key(key)
     return {"ok": True}
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Click an element matched by an ARIA role, label, visible text, or data-testid. "
-        "More resilient than CSS selectors. Provide exactly one of role/label/text/test_id. "
-        "When role is used, role_name narrows to an accessible name (e.g. 'Submit')."
-    ),
-)
-async def browser_click_by(
-    instance_id: str,
-    role: str | None = None,
-    role_name: str | None = None,
-    role_exact: bool = False,
-    label: str | None = None,
-    text: str | None = None,
-    test_id: str | None = None,
-    timeout_ms: int | None = None,
-) -> dict[str, Any]:
-    return await pool.get(instance_id).click_by(
-        role=role,
-        role_name=role_name,
-        role_exact=role_exact,
-        label=label,
-        text=text,
-        test_id=test_id,
-        timeout_ms=timeout_ms,
-    )
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Fill an input matched by ARIA role, label, or data-testid. Provide value plus "
-        "exactly one of role/label/test_id."
-    ),
-)
-async def browser_fill_by(
-    instance_id: str,
-    value: str,
-    role: str | None = None,
-    role_name: str | None = None,
-    label: str | None = None,
-    test_id: str | None = None,
-    timeout_ms: int | None = None,
-) -> dict[str, Any]:
-    return await pool.get(instance_id).fill_by(
-        value,
-        role=role,
-        role_name=role_name,
-        label=label,
-        test_id=test_id,
-        timeout_ms=timeout_ms,
-    )
 
 
 @mcp.tool(
@@ -176,9 +183,6 @@ async def browser_set_input_files(
     selector: str,
     paths: list[str],
 ) -> dict[str, Any]:
-    # Tool-level shape check stays here; per-path allowlist validation
-    # now lives in BrowserSession.set_input_files so macro replay can't
-    # bypass it. See octowright.session.upload_paths.validate_upload_path.
     if not isinstance(paths, list) or not paths:
         raise ValueError("paths must be a non-empty list of file paths")
     return await pool.get(instance_id).set_input_files(selector, paths)
