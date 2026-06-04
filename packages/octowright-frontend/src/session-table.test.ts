@@ -26,6 +26,24 @@ describe("renderSessionTable", () => {
     expect(table.textContent).toContain("bad-date");
   });
 
+  it("shows lock badge and css class for protected sessions", () => {
+    const table = renderSessionTable([{ ...row, live: true, protected: true }], true, {
+      onRelaunch: vi.fn(),
+      onDelete: vi.fn(),
+    });
+    expect(table.querySelector(".protected-badge")).not.toBeNull();
+    expect(table.querySelector("tr.protected-session")).not.toBeNull();
+  });
+
+  it("shows no lock badge for unprotected sessions", () => {
+    const table = renderSessionTable([{ ...row, live: true, protected: false }], true, {
+      onRelaunch: vi.fn(),
+      onDelete: vi.fn(),
+    });
+    expect(table.querySelector(".protected-badge")).toBeNull();
+    expect(table.querySelector("tr.protected-session")).toBeNull();
+  });
+
   it("wires closed-session relaunch and delete buttons", () => {
     const onRelaunch = vi.fn();
     const onDelete = vi.fn();
