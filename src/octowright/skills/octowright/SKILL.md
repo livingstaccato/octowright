@@ -103,6 +103,7 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Persist a preference | `octowright_advisor_set_preference(suggestion_type, preference)` |
 | Start user-facing session | `browser_launch(kind, profile, protected=True, ...)` |
 | Start agent-internal session | `browser_launch(kind, ephemeral=True, ...)` |
+| Protect/unprotect after launch | `browser_set_protected(instance_id, protected=True/False)` |
 | Robust interaction by aria role/label/test-id | `browser_click_by(role=, label=, test_id=, timeout_ms=)` |
 | Wait for element/text/JS expression | `browser_wait_for(instance_id, selector=, text=, expression=, timeout_ms=)` |
 | Fix failing macro | `browser_snapshot` → `macro_save` |

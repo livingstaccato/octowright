@@ -329,6 +329,23 @@ async def browser_close_all(force: bool = False) -> dict[str, Any]:
 @mcp.tool(
     structured_output=False,
     description=(
+        "Set or clear the protected flag on a live browser session. "
+        "protected=True — browser_close / browser_close_all will refuse to close it "
+        "without force=True (use for any browser the user is actively watching). "
+        "protected=False — removes the protection so the browser can be closed normally. "
+        "Returns {instance_id, protected} confirming the new state."
+    ),
+)
+async def browser_set_protected(instance_id: str, protected: bool) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    session.protected = protected
+    publish_dashboard_invalidation_nowait("sessions")
+    return {"instance_id": instance_id, "protected": protected}
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Navigate an instance to a URL. Use this to go to a new page; do NOT use for "
         "in-app routing that the SPA handles via clicks (use browser_click instead). "
         "Equivalent to typing the URL in the address bar and hitting enter. "
@@ -430,8 +447,10 @@ async def browser_open_url(
         "is a dict accepting any subset of the LaunchOptions fields used by "
         "browser_launch: kind, url, headed, label, profile, viewport_w, viewport_h, "
         "stabilize, record_video, trace, har, har_path, har_mode, har_url_filter, "
-        "har_content, badge, badge_position, tile, ephemeral, session. Returns "
-        "{launched: [...], errors: [...]}."
+        "har_content, badge, badge_position, tile, ephemeral, session, protected. "
+        "Set protected=True in a spec to mark that browser as user-owned — "
+        "browser_close / browser_close_all will refuse to close it without force=True. "
+        "Returns {launched: [...], errors: [...]}."
     ),
 )
 async def browser_spawn_roster(specs: list[dict[str, Any]]) -> dict[str, Any]:

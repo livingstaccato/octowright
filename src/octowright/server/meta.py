@@ -183,7 +183,8 @@ def octowright_advisor_record_macro_observation(source: str, signature: str, sum
         "the daemon's identity, current persistence default (persistent vs ephemeral), "
         "live browser/scenario counts, available personas, and the dashboard URL. "
         "Returns daemon PID + uptime, defaults block (ephemeral_default, headed_default, "
-        "idle_grace_seconds, badge_position), pool counts, persona names, and dashboard URL. "
+        "idle_grace_seconds, badge_position), pool counts (live_browsers, protected_browsers), "
+        "persona names, and dashboard URL. "
         "Lets the user confirm what mode they're in without surprise."
     ),
 )
@@ -265,6 +266,7 @@ def octowright_status() -> dict[str, Any]:
         },
         "pool": {
             "live_browsers": pool.active_count(),
+            "protected_browsers": pool.protected_count(),
             "live_scenarios": len(scenario_pool.list_live()),
             "stale_manifest_sessions": stale_preview,
             "stale_manifest_count": stale_count,
