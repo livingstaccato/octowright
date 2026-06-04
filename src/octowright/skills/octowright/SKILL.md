@@ -106,6 +106,7 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Protect/unprotect after launch | `browser_set_protected(instance_id, protected=True/False)` |
 | Robust interaction by aria role/label/test-id | `browser_click_by(role=, label=, test_id=, timeout_ms=)` |
 | Wait for element/text/JS expression | `browser_wait_for(instance_id, selector=, text=, expression=, timeout_ms=)` |
+| Same action across N browsers | `browser_each(action, instance_ids?, ...)` — navigate \| resize \| evaluate \| wait_for \| screenshot |
 | Fix failing macro | `browser_snapshot` → `macro_save` |
 | Cleanup agent-internal browser | `browser_close` |
 | Screenshot user-facing window without disturbing it | `GET /api/sessions/{id}/screenshot/now` |
