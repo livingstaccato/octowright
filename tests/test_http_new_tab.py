@@ -26,13 +26,17 @@ def test_new_tab_content_type_is_html() -> None:
 
 def test_new_tab_contains_wordmark() -> None:
     text = _client().get("/new-tab").text
-    assert "Octowright" in text or ("Octo" in text and "wright" in text)
-    assert "browser ready" in text
+    assert "octowright" in text.lower()
+
+
+def test_new_tab_wordmark_is_lowercase() -> None:
+    text = _client().get("/new-tab").text
+    assert "octo" in text and "wright" in text
+    assert "Octowright" not in text
 
 
 def test_new_tab_references_otto_svg_locally() -> None:
-    text = _client().get("/new-tab").text
-    assert "/otto.svg" in text
+    assert "/otto.svg" in _client().get("/new-tab").text
 
 
 def test_new_tab_has_no_external_requests() -> None:
