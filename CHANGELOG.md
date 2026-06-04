@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-06-04
+
+### Added
+- **`browser_set_protected`** MCP tool — set or clear the protected flag on a
+  live browser session after launch, without closing and relaunching.
+- **`pool.protected_browsers`** count in `octowright_status()["pool"]` — LLMs
+  can now see how many sessions are off-limits at a glance.
+- **`browser_spawn_roster`** description updated to mention `protected` field
+  in each spec dict; also added to the `core` capability profile.
+
+[0.6.4]: https://github.com/livingstaccato/octowright/compare/v0.6.3...v0.6.4
+
 ## [0.6.3] - 2026-06-04
 
 ### Added
