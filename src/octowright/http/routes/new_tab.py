@@ -30,8 +30,7 @@ _HTML = """\
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      /* --tint-h / --tint-s set by JS; base lightness per color scheme */
-      background: hsl(var(--tint-h, 30), var(--tint-s, 50%), 98%);
+      background: #f5f2ee; /* overwritten immediately by JS */
       transition: background 90s linear;
       color: #1a1a1a;
       font-family: "JetBrains Mono", "SFMono-Regular", "Courier New", monospace;
@@ -41,10 +40,7 @@ _HTML = """\
       user-select: none;
     }
     @media (prefers-color-scheme: dark) {
-      html, body {
-        background: hsl(var(--tint-h, 240), var(--tint-s, 10%), 5%);
-        color: #e8e8f0;
-      }
+      html, body { background: #08100d; color: #e8e8f0; }
     }
     .card { text-align: center; }
     .otto {
@@ -58,10 +54,7 @@ _HTML = """\
       font-weight: 600;
       letter-spacing: 0.04em;
     }
-    .wordmark strong {
-      color: #be4b1f;
-      font-weight: 600;
-    }
+    .wordmark strong { color: #be4b1f; font-weight: 600; }
     @media (prefers-color-scheme: dark) {
       .wordmark strong { color: #e05a24; }
     }
@@ -73,21 +66,31 @@ _HTML = """\
     <div class="wordmark">octo<strong>wright</strong></div>
   </div>
   <script>
-    // Map hour (0-24) to a warm/cool hue and subtle saturation.
-    // Dawn/dusk → warm orange-peach; noon → sky; midnight → cool blue.
     function timeTint() {
       var h = new Date().getHours() + new Date().getMinutes() / 60;
-      var t = (h / 24) * Math.PI * 2; // 0..2π over 24h
-      // Hue: warm(~30) at dawn(6) and dusk(18), cool(~210) at noon, deep(~240) at midnight
-      var hue = 120 - 100 * Math.cos(t);               // 20..220, peaks midday cool
-      // Saturation: higher at dawn/dusk, lower at noon and midnight
-      var sat = 30 + 20 * Math.abs(Math.sin(t));        // 30..50%
-      // In dark mode these are dampened further by the low lightness (5%)
-      document.documentElement.style.setProperty('--tint-h', Math.round(hue));
-      document.documentElement.style.setProperty('--tint-s', Math.round(sat) + '%');
+      var t = (h / 24) * Math.PI * 2;
+      // midnight→warm orange-red, noon→sky blue, dawn/dusk→golden
+      var hue = Math.round(120 - 100 * Math.cos(t));          // 20..220
+      var sat = Math.round(35 + 35 * Math.abs(Math.sin(t)));   // 35..70%
+      var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      // Light: 84-91% swing - clearly noticeable pastels without washing out
+      // Dark:  6-14% swing - visible color shift on near-black
+      var lit = dark
+        ? Math.round(6 + 8 * Math.abs(Math.sin(t / 2 + 0.5)))
+        : Math.round(84 + 7 * (Math.cos(t) * 0.5 + 0.5));
+      var bg = 'hsl(' + hue + ',' + sat + '%,' + lit + '%)';
+      document.documentElement.style.background = bg;
+      document.body.style.background = bg;
     }
+    // Paint instantly on load, then re-enable slow transition for minute-ticks.
+    document.documentElement.style.transition = 'none';
+    document.body.style.transition = 'none';
     timeTint();
-    setInterval(timeTint, 60000); // recalculate each minute; CSS transition handles smoothing
+    setTimeout(function() {
+      document.documentElement.style.transition = '';
+      document.body.style.transition = '';
+      setInterval(timeTint, 60000);
+    }, 50);
   </script>
 </body>
 </html>

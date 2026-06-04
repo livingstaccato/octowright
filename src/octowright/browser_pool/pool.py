@@ -33,7 +33,7 @@ from octowright.browser_pool.options import LaunchOptions
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.visuals import _tile_args_for_chromium
-from octowright.defaults import DEFAULT_URL, HEADLESS_DEFAULT, RECORDINGS_DIR
+from octowright.defaults import HEADLESS_DEFAULT, RECORDINGS_DIR, get_default_url
 from octowright.recorder import new_log_path
 from octowright.session import BrowserSession
 
@@ -97,7 +97,7 @@ class BrowserPool:
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
-        target_url = launch_options.url or DEFAULT_URL
+        target_url = launch_options.url or get_default_url()
         log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
 
         viewport_kwargs, log_viewport, explicit_size, viewport_info = _build_viewport_kwargs(
