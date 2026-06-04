@@ -14,7 +14,7 @@ from octowright import _format as fmt
 from octowright import resolve as resolve_mod
 from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
-from octowright.defaults import BROWSER_LAUNCH_TIMEOUT_SECONDS
+from octowright.defaults import BROWSER_LAUNCH_TIMEOUT_SECONDS, PROTECT_BROWSERS_DEFAULT
 from octowright.server._state import mcp, pool
 from octowright.server.browser.inspect import browser_brief
 
@@ -69,7 +69,11 @@ async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
         "Pass session=True for a tmpdir profile that lives for the daemon's lifetime "
         "only — state survives close+relaunch within the same daemon, but is wiped on "
         "daemon shutdown. Useful for 'this session only' scopes. Mutually exclusive "
-        "with ephemeral=True. Returns instance_id."
+        "with ephemeral=True. "
+        "Pass protected=True (or set OCTOWRIGHT_PROTECT_BROWSERS=1) to mark this browser "
+        "as user-owned: browser_close and browser_close_all will refuse to close it "
+        "unless force=True is passed. Use this for any browser the user is actively "
+        "watching. Returns instance_id."
     ),
 )
 async def browser_launch(
@@ -93,6 +97,7 @@ async def browser_launch(
     tile: bool = False,
     ephemeral: bool = False,
     session: bool = False,
+    protected: bool = PROTECT_BROWSERS_DEFAULT,
 ) -> dict[str, Any]:
     # Single source of truth: LaunchOptions.to_pool_kwargs() — adding a launch
     # field is a one-line edit in options.py, not four parallel sites.
@@ -117,6 +122,7 @@ async def browser_launch(
         tile=tile,
         ephemeral=ephemeral,
         session=session,
+        protected=protected,
     )
     result = await _pool_launch_with_deadline(**options.to_pool_kwargs())
     publish_dashboard_invalidation_nowait("sessions")
@@ -181,6 +187,7 @@ async def browser_quick_launch(
     tile: bool = False,
     ephemeral: bool = False,
     session: bool = False,
+    protected: bool = PROTECT_BROWSERS_DEFAULT,
 ) -> dict[str, Any]:
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
@@ -210,6 +217,7 @@ async def browser_quick_launch(
             tile=tile,
             ephemeral=ephemeral,
             session=session,
+            protected=protected,
         )
 
     if profile:
@@ -259,15 +267,60 @@ def browser_list() -> dict[str, Any]:
     }
 
 
-@mcp.tool(structured_output=False, description="Close one browser instance by id.")
-async def browser_close(instance_id: str) -> dict[str, Any]:
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Close one browser instance by id. "
+        "If the browser was launched with protected=True (or OCTOWRIGHT_PROTECT_BROWSERS=1 "
+        "is set), you must pass force=True to confirm the close — this prevents other "
+        "agents from accidentally closing a user-visible browser."
+    ),
+)
+async def browser_close(instance_id: str, force: bool = False) -> dict[str, Any]:
+    session = pool.maybe_get(instance_id)
+    if session is not None and session.protected and not force:
+        return {
+            "error": (
+                f"browser {instance_id!r} is protected — pass force=True to close it. "
+                "Protected browsers are meant to stay open for the user. "
+                "Only close it if the user explicitly asked you to."
+            )
+        }
     result = await pool.close(instance_id)
     publish_dashboard_invalidation_nowait("sessions")
     return result
 
 
-@mcp.tool(structured_output=False, description="Close every live browser instance.")
-async def browser_close_all() -> dict[str, Any]:
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Close every live browser instance. "
+        "If any browser was launched with protected=True (or OCTOWRIGHT_PROTECT_BROWSERS=1 "
+        "is set), you must pass force=True to confirm — skips protected browsers otherwise."
+    ),
+)
+async def browser_close_all(force: bool = False) -> dict[str, Any]:
+    if not force:
+        protected_ids = [s.instance_id for s in pool.iter_sessions() if s.protected]
+        if protected_ids:
+            non_protected = [s.instance_id for s in pool.iter_sessions() if not s.protected]
+            if non_protected:
+                await asyncio.gather(*(pool.close(iid) for iid in non_protected), return_exceptions=True)
+                publish_dashboard_invalidation_nowait("sessions")
+                return {
+                    "closed": non_protected,
+                    "skipped_protected": protected_ids,
+                    "message": (
+                        f"Closed {len(non_protected)} unprotected browser(s); "
+                        f"skipped {len(protected_ids)} protected browser(s). "
+                        "Pass force=True to also close protected browsers."
+                    ),
+                }
+            return {
+                "closed": [],
+                "skipped_protected": protected_ids,
+                "message": (f"All {len(protected_ids)} browser(s) are protected. Pass force=True to close them."),
+            }
     result = await pool.close_all()
     publish_dashboard_invalidation_nowait("sessions")
     return result

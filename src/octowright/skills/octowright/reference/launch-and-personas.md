@@ -38,19 +38,21 @@ Launched to do scripted work the user won't see directly: snapshots, macro recor
 
 **Rules:**
 - **Always** call `browser_close` immediately after the task finishes.
-- Use `browser_close_all` if you lose track of session IDs.
+- Use `browser_close_all` if you lose track of session IDs. Note: it skips any `protected` browsers automatically (pass `force=True` to override).
 - Never leave these open "for later" — if the agent crashes, the browser becomes a zombie.
+- Pass `ephemeral=True` when login state doesn't matter (saves a profile write).
 
 ### User-Facing Launches
 
 The user said "show me", "open", "navigate to", "launch", "let me see", or otherwise wants to look at or interact with the window.
 
 **Rules:**
+- **Pass `protected=True`** at launch. This marks the browser as user-owned: `browser_close` and `browser_close_all` will refuse to close it unless `force=True` is explicitly passed. It's a safeguard against other agents accidentally closing the window.
 - **Leave it open.** The user controls when to close.
 - **Do not** pass `viewport_w` / `viewport_h` unless the user gave a specific size. Without those args, the launch defaults to a responsive viewport so the user can resize naturally.
-- **Do not** call `browser_close` or `browser_close_all` unless the user asks.
+- **Do not** call `browser_close` on a protected browser unless the user explicitly asks — and then pass `force=True`.
 - If you need a screenshot of a user-facing browser, use `GET /api/sessions/{id}/screenshot/now` — it returns image bytes without touching the window.
 
 ### When You Can't Tell
 
-Lean toward leaving it open. The cost of a lingering browser is small; the cost of closing a window the user was still using is large.
+Lean toward `protected=True` and leaving it open. The cost of a lingering browser is small; the cost of closing a window the user was still using is large.

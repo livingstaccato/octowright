@@ -87,6 +87,7 @@ def build_launch_result(
     har_url_filter: str | None,
     har_content: str | None,
     log_viewport: Any,
+    protected: bool = False,
     video_dir: Path | None,
 ) -> dict[str, Any]:
     """Assemble the dict returned to MCP callers from ``BrowserPool.launch``.
@@ -105,6 +106,7 @@ def build_launch_result(
         "trace": trace,
         "har": bool(har_path),
         "viewport": log_viewport,
+        "protected": protected,
     }
     if video_dir is not None:
         result["video_dir"] = str(video_dir)
@@ -152,6 +154,7 @@ def _build_session_object(
         user_data_dir=Path(user_data_dir) if user_data_dir is not None else None,
         profile=profile,
         stabilize=launch_options.stabilize,
+        protected=launch_options.protected,
         trace=launch_options.trace,
         har_path=har_path,
         viewport_mode=viewport_info.mode.value,
@@ -313,6 +316,7 @@ async def post_context_setup(
             har_content=launch_options.har_content,
             log_viewport=log_viewport,
             video_dir=video_dir,
+            protected=launch_options.protected,
         )
     except asyncio.CancelledError:
         await cleanup_failed_launch(
