@@ -40,14 +40,15 @@ Diff output identifies which aria-tree nodes changed. Use this to distinguish a 
 
 ## Role-Based Selectors
 
-Prefer `browser_click_by` with `role=` / `label=` / `test_id=` over CSS selectors when the site exposes proper ARIA roles:
+Prefer ARIA locator params on `browser_click` / `browser_fill` over CSS selectors when the site exposes proper ARIA roles — they survive DOM restructuring:
 
 ```
-browser_click_by(instance_id, role="button", label="Submit")
-browser_click_by(instance_id, test_id="login-btn")
+browser_click(instance_id, role="button", label="Submit")
+browser_click(instance_id, test_id="login-btn")
+browser_fill(instance_id, "user@example.com", label="Email")
 ```
 
-Role-based selectors survive DOM restructuring; CSS selectors don't.
+Fall back to `selector=` only for elements that have no accessible name.
 
 ## Waiting for State
 

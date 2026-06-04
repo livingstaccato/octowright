@@ -24,10 +24,8 @@ from octowright.server.browser import views as _views  # noqa: F401
 from octowright.server.browser.each import browser_each
 from octowright.server.browser.input import (
     browser_click,
-    browser_click_by,
     browser_drag,
     browser_fill,
-    browser_fill_by,
     browser_get_text_by,
     browser_hover,
     browser_press_key,
@@ -91,7 +89,6 @@ __all__ = [
     "browser_brief",
     "browser_capture_and_close",
     "browser_click",
-    "browser_click_by",
     "browser_close",
     "browser_close_all",
     "browser_console_messages",
@@ -105,7 +102,6 @@ __all__ = [
     "browser_expect_url",
     "browser_export_script",
     "browser_fill",
-    "browser_fill_by",
     "browser_get_text_by",
     "browser_hover",
     "browser_launch",
