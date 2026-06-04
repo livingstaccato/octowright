@@ -26,7 +26,7 @@ export function renderSessionTable(
   table.setAttribute("data-testid", live ? "table-live-sessions" : "table-closed-sessions");
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
-  for (const col of ["id", "kind", "profile / label", "url", "started"]) {
+  for (const col of ["", "id", "kind", "profile / label", "url", "started"]) {
     const th = document.createElement("th");
     th.textContent = col;
     headRow.append(th);
@@ -42,7 +42,18 @@ export function renderSessionTable(
   for (const row of rows) {
     const tr = document.createElement("tr");
     tr.setAttribute("data-session-id", row.id);
+    if (row.protected) tr.classList.add("protected-session");
+    const lockTd = document.createElement("td");
+    lockTd.className = "col-protected";
+    if (row.protected) {
+      const lock = document.createElement("span");
+      lock.className = "protected-badge";
+      lock.textContent = "🔒";
+      lock.setAttribute("title", "Protected — browser_close requires force=True");
+      lockTd.append(lock);
+    }
     tr.append(
+      lockTd,
       cell(linkCell(row.id, `/sessions/${encodeURIComponent(row.id)}`)),
       cell(textCell(row.kind)),
       cell(textCell(row.label ?? row.profile ?? "")),

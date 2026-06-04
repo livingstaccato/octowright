@@ -35,9 +35,12 @@ class LaunchOptions:
     tile: bool = False
     ephemeral: bool = False
     session: bool = False
+    protected: bool = False
 
     @classmethod
     def from_mapping(cls, options: dict[str, Any]) -> LaunchOptions:
+        from octowright.defaults import PROTECT_BROWSERS_DEFAULT
+
         launch_options = cls(
             kind=options.get("kind", "chromium"),
             url=options.get("url"),
@@ -59,6 +62,7 @@ class LaunchOptions:
             tile=options.get("tile", False),
             ephemeral=options.get("ephemeral", False),
             session=options.get("session", False),
+            protected=options.get("protected", PROTECT_BROWSERS_DEFAULT),
         )
         launch_options.validate()
         return launch_options
@@ -171,6 +175,7 @@ class LaunchOptions:
             "tile": self.tile,
             "ephemeral": self.ephemeral,
             "session": self.session,
+            "protected": self.protected,
         }
 
     def with_har_rotated(self) -> LaunchOptions:

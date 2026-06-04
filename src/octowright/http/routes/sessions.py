@@ -175,6 +175,7 @@ def _live_summary_from_launch(result: dict[str, Any]) -> dict[str, Any]:
         "url": result.get("url"),
         "started_at": started_at,
         "live": True,
+        "protected": result.get("protected", False),
         "log_path": str(log_path),
         "event_count": 1,  # launch event is written before HTTP response
         "console_count": 0,

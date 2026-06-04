@@ -54,6 +54,7 @@ class TestToPoolKwargs:
             tile=True,
             ephemeral=False,
             session=True,
+            protected=True,
         )
         assert opts.to_pool_kwargs() == {
             "kind": "firefox",
@@ -76,6 +77,7 @@ class TestToPoolKwargs:
             "tile": True,
             "ephemeral": False,
             "session": True,
+            "protected": True,
         }
 
     def test_defaults(self) -> None:

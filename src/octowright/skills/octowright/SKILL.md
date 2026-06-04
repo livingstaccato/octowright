@@ -53,7 +53,7 @@ Match the call to the launch shape. Call `browser_suggest_for_url` for real-inte
 
 **Agent-internal** work: always call `browser_close` immediately after the task.
 
-**User-facing** work (user said "show me", "open", "navigate", "let me see"): leave it open. Don't pass `viewport_w`/`viewport_h`. Don't call `browser_close` unless asked.
+**User-facing** work (user said "show me", "open", "navigate", "let me see"): pass `protected=True` on launch. Leave the window open. Don't pass `viewport_w`/`viewport_h`. Don't call `browser_close` unless asked — and even then you'll need `force=True` on a protected browser.
 
 **Full details:** `reference/launch-and-personas.md`
 
@@ -76,7 +76,7 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Mistake | Consequence | Fix |
 |:--------|:------------|:----|
 | Leaving an agent-internal browser open | Memory exhaustion, zombie processes | `browser_close` after each task |
-| Closing a user-facing browser the user is still using | User loses their view | If user said "show me", leave it open |
+| Closing a user-facing browser the user is still using | User loses their view | Pass `protected=True` on user-facing launches; `browser_close` will refuse without `force=True` |
 | Passing `viewport_w`/`viewport_h` on a user-facing launch | Viewport locked; user can't resize | Omit viewport args; only set for agent-internal screenshot work |
 | Manual login repetition | High token usage, fragile scripts | Use Personas to persist session state |
 | Guessing selectors | Frequent failures on DOM changes | Use `browser_snapshot` for the aria-tree |
@@ -101,7 +101,8 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Check Advisor guidance | `octowright_advisor_status` |
 | Record repeated workflow | `octowright_advisor_record_macro_observation(source="llm", signature, summary)` |
 | Persist a preference | `octowright_advisor_set_preference(suggestion_type, preference)` |
-| Start session | `browser_launch(kind, profile, ...)` |
+| Start user-facing session | `browser_launch(kind, profile, protected=True, ...)` |
+| Start agent-internal session | `browser_launch(kind, ephemeral=True, ...)` |
 | Robust interaction by aria role/label/test-id | `browser_click_by(role=, label=, test_id=, timeout_ms=)` |
 | Wait for element/text/JS expression | `browser_wait_for(instance_id, selector=, text=, expression=, timeout_ms=)` |
 | Fix failing macro | `browser_snapshot` → `macro_save` |

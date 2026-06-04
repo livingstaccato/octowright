@@ -51,6 +51,7 @@ def _fake_session(
     har_path: Any = None,
     user_data_dir: Any = None,
     stabilize: bool = False,
+    protected: bool = False,
     trace: bool = False,
 ) -> Any:
     return SimpleNamespace(
@@ -63,6 +64,7 @@ def _fake_session(
         har_path=har_path,
         user_data_dir=user_data_dir,
         stabilize=stabilize,
+        protected=protected,
         trace=trace,
         page=SimpleNamespace(url=url),
         video_path=None,
@@ -254,11 +256,11 @@ class TestListSessions:
         assert isinstance(rows[0]["log_path"], str)
 
     def test_field_set_exact(self) -> None:
-        """Each row carries exactly seven fields — adding/dropping fields breaks."""
+        """Each row carries exactly these fields — adding/dropping fields breaks."""
         pool = BrowserPool()
         pool._sessions["a"] = _fake_session(instance_id="a")
         rows = pool.list_sessions()
-        assert set(rows[0]) == {"instance_id", "kind", "label", "profile", "url", "log_path", "har_path"}
+        assert set(rows[0]) == {"instance_id", "kind", "label", "profile", "url", "log_path", "har_path", "protected"}
 
 
 class TestProfileInUse:

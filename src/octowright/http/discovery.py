@@ -95,6 +95,7 @@ def _live_summary(session: Any) -> dict[str, Any]:
         "url": session.url,
         "started_at": started_at,
         "live": True,
+        "protected": getattr(session, "protected", False),
         "log_path": str(log_path),
         "event_count": int(getattr(getattr(session, "recorder", None), "event_count", 0)),
         "console_count": int(getattr(session, "console_count", len(getattr(session, "console", ())))),

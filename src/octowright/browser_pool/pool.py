@@ -231,6 +231,7 @@ class BrowserPool:
                 "url": s.url,
                 "log_path": str(s.log_path),
                 "har_path": str(s.har_path) if s.har_path else None,
+                "protected": s.protected,
             }
             for s in tuple(self._sessions.values())
         ]
