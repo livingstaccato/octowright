@@ -47,6 +47,16 @@ def _clear_ambient_otlp_export_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_actual_http_port() -> None:
+    """Reset the runtime-resolved HTTP port so tests don't bleed port state."""
+    import octowright.defaults as _d
+
+    _d._bound_http_port = None
+    yield  # type: ignore[misc]
+    _d._bound_http_port = None
+
+
 def _free_port() -> int:
     """Return an OS-assigned free TCP port on 127.0.0.1.
 

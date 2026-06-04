@@ -21,6 +21,25 @@ os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
 _DEFAULT_PORT = os.environ.get("OCTOWRIGHT_HTTP_PORT", "8765")
 DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", f"http://127.0.0.1:{_DEFAULT_PORT}/new-tab")
 
+# Runtime-resolved port — set by the HTTP server once it successfully binds
+# (which may differ from _DEFAULT_PORT when auto-bump fires). All internal
+# browser-launch paths use get_default_url() so no-URL launches always point
+# at the real port.
+_bound_http_port: int | None = None
+
+
+def set_actual_http_port(port: int) -> None:
+    global _bound_http_port
+    _bound_http_port = port
+
+
+def get_default_url() -> str:
+    if os.environ.get("OCTOWRIGHT_DEFAULT_URL"):
+        return os.environ["OCTOWRIGHT_DEFAULT_URL"]
+    port = _bound_http_port if _bound_http_port is not None else int(_DEFAULT_PORT)
+    return f"http://127.0.0.1:{port}/new-tab"
+
+
 DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
 DEFAULT_VIEWPORT_H = int(os.environ.get("OCTOWRIGHT_VIEWPORT_H", "800"))
 
