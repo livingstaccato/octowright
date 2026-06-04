@@ -7,7 +7,7 @@
 GET /otto.svg  — Otto the Octowright logo served locally.
 
 Self-contained; no external network requests, no JS frameworks, no session
-data. Identifies the browser as octowright-managed and shows a ready state.
+data. Background tint shifts slowly with the time of day.
 """
 
 from __future__ import annotations
@@ -25,32 +25,26 @@ _HTML = """\
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Octowright — ready</title>
+  <title>octowright</title>
   <style>
-    :root {
-      --bg:    #fdf8f1;
-      --fg:    #1a1a1a;
-      --brand: #be4b1f;
-      --muted: #6b6b6b;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg:    #0c0c0e;
-        --fg:    #e8e8f0;
-        --brand: #e05a24;
-        --muted: #9090a0;
-      }
-    }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      background: var(--bg);
-      color: var(--fg);
+      /* --tint-h / --tint-s set by JS; base lightness per color scheme */
+      background: hsl(var(--tint-h, 30), var(--tint-s, 50%), 98%);
+      transition: background 90s linear;
+      color: #1a1a1a;
       font-family: "JetBrains Mono", "SFMono-Regular", "Courier New", monospace;
       display: flex;
       align-items: center;
       justify-content: center;
       user-select: none;
+    }
+    @media (prefers-color-scheme: dark) {
+      html, body {
+        background: hsl(var(--tint-h, 240), var(--tint-s, 10%), 5%);
+        color: #e8e8f0;
+      }
     }
     .card { text-align: center; }
     .otto {
@@ -65,40 +59,36 @@ _HTML = """\
       letter-spacing: 0.04em;
     }
     .wordmark strong {
-      color: var(--brand);
+      color: #be4b1f;
       font-weight: 600;
     }
-    .status {
-      margin-top: 0.5rem;
-      font-size: 0.75rem;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.4em;
-      letter-spacing: 0.06em;
-      text-transform: lowercase;
-    }
-    .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #4caf50;
-      flex-shrink: 0;
-      animation: pulse 2.4s ease-in-out infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.3; }
+    @media (prefers-color-scheme: dark) {
+      .wordmark strong { color: #e05a24; }
     }
   </style>
 </head>
 <body>
   <div class="card">
-    <img src="/otto.svg" alt="Otto the Octowright" class="otto" width="96" height="96">
-    <div class="wordmark">Octo<strong>wright</strong></div>
-    <div class="status"><span class="dot"></span>browser ready</div>
+    <img src="/otto.svg" alt="Otto" class="otto" width="96" height="96">
+    <div class="wordmark">octo<strong>wright</strong></div>
   </div>
+  <script>
+    // Map hour (0-24) to a warm/cool hue and subtle saturation.
+    // Dawn/dusk → warm orange-peach; noon → sky; midnight → cool blue.
+    function timeTint() {
+      var h = new Date().getHours() + new Date().getMinutes() / 60;
+      var t = (h / 24) * Math.PI * 2; // 0..2π over 24h
+      // Hue: warm(~30) at dawn(6) and dusk(18), cool(~210) at noon, deep(~240) at midnight
+      var hue = 120 - 100 * Math.cos(t);               // 20..220, peaks midday cool
+      // Saturation: higher at dawn/dusk, lower at noon and midnight
+      var sat = 30 + 20 * Math.abs(Math.sin(t));        // 30..50%
+      // In dark mode these are dampened further by the low lightness (5%)
+      document.documentElement.style.setProperty('--tint-h', Math.round(hue));
+      document.documentElement.style.setProperty('--tint-s', Math.round(sat) + '%');
+    }
+    timeTint();
+    setInterval(timeTint, 60000); // recalculate each minute; CSS transition handles smoothing
+  </script>
 </body>
 </html>
 """
