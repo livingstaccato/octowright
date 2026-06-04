@@ -19,7 +19,7 @@ from starlette.routing import Route
 import octowright.http.state as state
 from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation
-from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
+from octowright.defaults import SUPPORTED_KINDS, get_default_url
 from octowright.http.artifacts import _build_cache_components
 from octowright.http.discovery import (
     _closed_sessions,
@@ -211,7 +211,7 @@ async def session_launch(request: Request) -> JSONResponse:
     # in lock-step with the MCP browser_launch surface — a new launch field
     # is one edit in options.py, not three call sites.
     launch_kwargs = LaunchOptions.from_mapping(
-        {**payload, "kind": kind, "url": payload.get("url") or DEFAULT_URL}
+        {**payload, "kind": kind, "url": payload.get("url") or get_default_url()}
     ).to_pool_kwargs()
 
     pool = state.pool

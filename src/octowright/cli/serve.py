@@ -333,6 +333,9 @@ async def _run_leader(
     bound_port = http_port if http_port is not None else HTTP_PORT
 
     def _on_http_bound(host: str, port: int) -> None:
+        from octowright.defaults import set_actual_http_port
+
+        set_actual_http_port(port)
         if no_singleton:
             return
         info = _sn.make_leader_info(host, port)
