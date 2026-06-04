@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Smoke tests for GET /new-tab — the default browser landing page."""
+"""Smoke tests for GET /new-tab and GET /otto.svg."""
 
 from __future__ import annotations
 
@@ -17,24 +17,33 @@ def _client() -> TestClient:
 
 
 def test_new_tab_returns_200() -> None:
-    resp = _client().get("/new-tab")
-    assert resp.status_code == 200
+    assert _client().get("/new-tab").status_code == 200
 
 
 def test_new_tab_content_type_is_html() -> None:
-    resp = _client().get("/new-tab")
-    assert "text/html" in resp.headers["content-type"]
+    assert "text/html" in _client().get("/new-tab").headers["content-type"]
 
 
-def test_new_tab_contains_otto_branding() -> None:
-    resp = _client().get("/new-tab")
-    assert "Octowright" in resp.text
-    assert "browser ready" in resp.text
+def test_new_tab_contains_wordmark() -> None:
+    text = _client().get("/new-tab").text
+    assert "Octowright" in text or ("Octo" in text and "wright" in text)
+    assert "browser ready" in text
+
+
+def test_new_tab_references_otto_svg_locally() -> None:
+    text = _client().get("/new-tab").text
+    assert "/otto.svg" in text
 
 
 def test_new_tab_has_no_external_requests() -> None:
-    """The page must be self-contained — no src/href pointing outside 127.0.0.1."""
-    resp = _client().get("/new-tab")
-    text = resp.text
+    text = _client().get("/new-tab").text
     for external in ("https://", "http://fonts.", "cdn.", "googleapis"):
         assert external not in text, f"found external reference: {external}"
+
+
+def test_otto_svg_returns_200() -> None:
+    assert _client().get("/otto.svg").status_code == 200
+
+
+def test_otto_svg_content_type() -> None:
+    assert "svg" in _client().get("/otto.svg").headers["content-type"]

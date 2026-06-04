@@ -4,6 +4,7 @@
 #
 
 """GET /new-tab — default landing page for browser_launch with no URL.
+GET /otto.svg  — Otto the Octowright logo served locally.
 
 Self-contained; no external network requests, no JS frameworks, no session
 data. Identifies the browser as octowright-managed and shows a ready state.
@@ -11,8 +12,12 @@ data. Identifies the browser as octowright-managed and shows a ready state.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from starlette.requests import Request
-from starlette.responses import HTMLResponse
+from starlette.responses import FileResponse, HTMLResponse
+
+_OTTO_SVG = Path(__file__).resolve().parent.parent / "otto.svg"
 
 _HTML = """\
 <!DOCTYPE html>
@@ -23,17 +28,17 @@ _HTML = """\
   <title>Octowright — ready</title>
   <style>
     :root {
-      --bg: #0c0c0e;
-      --fg: #e8e8f0;
-      --fg-2: #9090a0;
-      --accent: #e87028;
+      --bg:    #fdf8f1;
+      --fg:    #1a1a1a;
+      --brand: #be4b1f;
+      --muted: #6b6b6b;
     }
-    @media (prefers-color-scheme: light) {
+    @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #f4f4f6;
-        --fg: #18181e;
-        --fg-2: #48485a;
-        --accent: #e87028;
+        --bg:    #0c0c0e;
+        --fg:    #e8e8f0;
+        --brand: #e05a24;
+        --muted: #9090a0;
       }
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,28 +46,38 @@ _HTML = """\
       height: 100%;
       background: var(--bg);
       color: var(--fg);
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-family: "JetBrains Mono", "SFMono-Regular", "Courier New", monospace;
       display: flex;
       align-items: center;
       justify-content: center;
       user-select: none;
     }
     .card { text-align: center; }
-    .otto { font-size: 3rem; line-height: 1; margin-bottom: 1rem; }
-    .name {
-      font-size: 1.125rem;
-      font-weight: 600;
-      letter-spacing: 0.03em;
+    .otto {
+      width: 96px;
+      height: 96px;
+      margin: 0 auto 1.25rem;
+      display: block;
     }
-    .name em { color: var(--accent); font-style: normal; }
+    .wordmark {
+      font-size: 1.25rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .wordmark strong {
+      color: var(--brand);
+      font-weight: 600;
+    }
     .status {
       margin-top: 0.5rem;
-      font-size: 0.8125rem;
-      color: var(--fg-2);
+      font-size: 0.75rem;
+      color: var(--muted);
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 0.4em;
+      letter-spacing: 0.06em;
+      text-transform: lowercase;
     }
     .dot {
       width: 6px;
@@ -74,14 +89,14 @@ _HTML = """\
     }
     @keyframes pulse {
       0%, 100% { opacity: 1; }
-      50%       { opacity: 0.35; }
+      50%       { opacity: 0.3; }
     }
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="otto">&#x1F419;</div>
-    <div class="name">Otto the <em>Octowright</em></div>
+    <img src="/otto.svg" alt="Otto the Octowright" class="otto" width="96" height="96">
+    <div class="wordmark">Octo<strong>wright</strong></div>
     <div class="status"><span class="dot"></span>browser ready</div>
   </div>
 </body>
@@ -91,3 +106,7 @@ _HTML = """\
 
 async def new_tab(_: Request) -> HTMLResponse:
     return HTMLResponse(_HTML)
+
+
+async def otto_svg(_: Request) -> FileResponse:
+    return FileResponse(str(_OTTO_SVG), media_type="image/svg+xml")
