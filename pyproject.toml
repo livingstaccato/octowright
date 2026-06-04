@@ -90,6 +90,7 @@ artifacts = [
     "src/octowright/server/frontend/*.js",
     "src/octowright/server/frontend/*.js.map",
     "src/octowright/server/frontend/*.svg",
+    "src/octowright/http/*.svg",
 ]
 
 [tool.hatch.build.targets.sdist]

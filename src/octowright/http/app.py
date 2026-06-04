@@ -31,7 +31,7 @@ from octowright.http.mcp_session_tracker import (
 )
 from octowright.http.metrics import HttpMetricsMiddleware, metrics_enabled
 from octowright.http.routes import all_routes
-from octowright.http.routes.new_tab import new_tab
+from octowright.http.routes.new_tab import new_tab, otto_svg
 
 log = get_logger(__name__)
 
@@ -91,9 +91,10 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
 
-    # /new-tab is the default landing page for browser_launch with no URL.
-    # Registered before the SPA catchall mount so it isn't swallowed by StaticFiles.
+    # /new-tab + /otto.svg: default landing page for browser_launch with no URL.
+    # Registered before the SPA catchall mount so they aren't swallowed by StaticFiles.
     routes.append(Route("/new-tab", new_tab, methods=["GET"]))
+    routes.append(Route("/otto.svg", otto_svg, methods=["GET"]))
     routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.octowright_http_host = host
