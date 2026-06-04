@@ -24,6 +24,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
         url="https://octowright.com",
         log_path="/tmp/demo.jsonl",
         har_path=None,
+        protected=False,
     )
     pool._sessions["abc123"] = session  # type: ignore[assignment]
 
@@ -40,6 +41,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
             "url": "https://octowright.com",
             "log_path": "/tmp/demo.jsonl",
             "har_path": None,
+            "protected": False,
         }
     ]
 

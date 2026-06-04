@@ -8,6 +8,7 @@ export interface SessionSummary {
   url: string | null;
   started_at: string;
   live: boolean;
+  protected?: boolean;
   log_path: string;
 }
 

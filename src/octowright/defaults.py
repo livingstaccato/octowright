@@ -110,6 +110,11 @@ def _detect_headless_default() -> bool:
 
 HEADLESS_DEFAULT = _detect_headless_default()
 
+# When OCTOWRIGHT_PROTECT_BROWSERS=1, every browser is protected at launch and
+# browser_close / browser_close_all require force=True. Per-launch override via
+# the browser_launch `protected` parameter.
+PROTECT_BROWSERS_DEFAULT: bool = os.environ.get("OCTOWRIGHT_PROTECT_BROWSERS", "").strip() == "1"
+
 SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
 DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))

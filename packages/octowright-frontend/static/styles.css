@@ -243,6 +243,26 @@ code, .mono { font-family: var(--mono); }
   padding-right: 4px !important;
 }
 
+.col-protected {
+  width: 24px;
+  text-align: center;
+  padding: 0 4px !important;
+}
+
+.protected-badge {
+  font-size: 0.8em;
+  opacity: 0.7;
+  cursor: default;
+}
+
+.protected-session td {
+  background: color-mix(in srgb, var(--bg) 92%, var(--accent) 8%);
+}
+
+.data-table tr.protected-session:hover td {
+  background: color-mix(in srgb, var(--bg-2) 88%, var(--accent) 12%);
+}
+
 .row-action {
   opacity: 0;
   transition: opacity 0.1s;
