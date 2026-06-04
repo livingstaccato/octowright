@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
-from octowright.defaults import DEFAULT_URL, SUPPORTED_KINDS
+from octowright.defaults import SUPPORTED_KINDS, get_default_url
 
 
 @dataclass(frozen=True)
@@ -102,7 +102,7 @@ class LaunchOptions:
         return cls.from_mapping(
             {
                 "kind": record.get("kind", "chromium"),
-                "url": record.get("url") or DEFAULT_URL,
+                "url": record.get("url") or get_default_url(),
                 "label": record.get("label"),
                 "profile": record.get("profile"),
                 "viewport_w": viewport.get("w") if viewport else None,
