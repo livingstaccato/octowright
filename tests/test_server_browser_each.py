@@ -3,14 +3,14 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Tests for ``octowright.server.browser.each`` — the fan-out variants.
-
-The shared fixture builds a tiny in-memory fake pool with two recorded
-sessions so each tool can be exercised without spinning real browsers.
+"""Regression tests for browser_each — kept alongside the TDD suite in
+test_browser_each_consolidated.py to guard the helper internals (_gather,
+_select_instance_ids, _dispatch) independently of the MCP tool wrapper.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,6 +23,7 @@ class _FakeSession:
     def __init__(self, instance_id: str, *, raise_on: str | None = None) -> None:
         self.instance_id = instance_id
         self._raise_on = raise_on
+        self.log_path = Path(f"/tmp/{instance_id}.jsonl")
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
     async def _record(self, kind: str, *args: Any, **kwargs: Any) -> Any:
@@ -42,6 +43,10 @@ class _FakeSession:
 
     async def wait_for(self, *, selector: str | None, text: str | None, timeout_ms: int | None) -> Any:
         return await self._record("wait_for", selector=selector, text=text, timeout_ms=timeout_ms)
+
+    async def screenshot(self, path: Path) -> Path:
+        await self._record("screenshot", path)
+        return path
 
 
 class _FakePool:
@@ -68,7 +73,7 @@ def fake_pool(monkeypatch: pytest.MonkeyPatch) -> _FakePool:
 
 @pytest.mark.asyncio
 async def test_navigate_each_hits_every_live_session_when_ids_omitted(fake_pool: _FakePool) -> None:
-    out = await each.browser_navigate_each("https://octowright.com")
+    out = await each.browser_each("navigate", url="https://octowright.com")
     assert set(out.keys()) == {"alpha", "beta"}
     for iid, record in out.items():
         assert record == {
@@ -79,26 +84,26 @@ async def test_navigate_each_hits_every_live_session_when_ids_omitted(fake_pool:
 
 @pytest.mark.asyncio
 async def test_navigate_each_respects_instance_ids_filter(fake_pool: _FakePool) -> None:
-    out = await each.browser_navigate_each("https://octowright.com", instance_ids=["alpha"])
+    out = await each.browser_each("navigate", url="https://octowright.com", instance_ids=["alpha"])
     assert list(out.keys()) == ["alpha"]
 
 
 @pytest.mark.asyncio
 async def test_resize_each_forwards_width_height(fake_pool: _FakePool) -> None:
-    out = await each.browser_resize_each(1920, 1080)
+    out = await each.browser_each("resize", width=1920, height=1080)
     assert out["alpha"]["result"]["args"] == (1920, 1080)
 
 
 @pytest.mark.asyncio
 async def test_evaluate_each_returns_per_instance_results(fake_pool: _FakePool) -> None:
-    out = await each.browser_evaluate_each("location.href")
+    out = await each.browser_each("evaluate", expression="location.href")
     assert out["alpha"]["result"]["args"] == ("location.href",)
     assert out["beta"]["result"]["args"] == ("location.href",)
 
 
 @pytest.mark.asyncio
 async def test_wait_for_each_passes_kwargs(fake_pool: _FakePool) -> None:
-    out = await each.browser_wait_for_each(selector="main", timeout_ms=5000)
+    out = await each.browser_each("wait_for", selector="main", timeout_ms=5000)
     assert out["alpha"]["result"]["kwargs"] == {"selector": "main", "text": None, "timeout_ms": 5000}
 
 
@@ -113,7 +118,7 @@ async def test_per_instance_error_is_caught_without_failing_other_instances(
     fake = _FakePool(sessions)
     monkeypatch.setattr(each, "pool", fake)
 
-    out = await each.browser_navigate_each("https://octowright.com")
+    out = await each.browser_each("navigate", url="https://octowright.com")
     assert out["good"]["ok"] is True
     assert out["bad"]["ok"] is False
     assert "navigate failed for bad" in out["bad"]["error"]
@@ -121,5 +126,5 @@ async def test_per_instance_error_is_caught_without_failing_other_instances(
 
 def test_real_pool_is_untouched_after_test_run() -> None:
     """Sanity: the monkeypatching above must not bleed to the real pool."""
-    assert _real_pool is not None  # not None; live pool object still referenced
+    assert _real_pool is not None
     assert hasattr(_real_pool, "list_sessions")

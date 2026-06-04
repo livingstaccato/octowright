@@ -20,15 +20,8 @@ from octowright.server.browser import network as _network  # noqa: F401
 from octowright.server.browser import trace as _trace  # noqa: F401
 from octowright.server.browser import views as _views  # noqa: F401
 
-# Re-export selected tool functions for direct test access (`from octowright import server;
-# server.browser_open_trace(...)`).
-from octowright.server.browser.each import (
-    browser_evaluate_each,
-    browser_navigate_each,
-    browser_resize_each,
-    browser_screenshot_each,
-    browser_wait_for_each,
-)
+# Re-export selected tool functions for direct test access.
+from octowright.server.browser.each import browser_each
 from octowright.server.browser.input import (
     browser_click,
     browser_click_by,
@@ -70,6 +63,7 @@ from octowright.server.browser.lifecycle import (
     browser_quick_launch,
     browser_relaunch_fluid,
     browser_resize,
+    browser_set_protected,
     browser_spawn_roster,
     browser_suggest_for_url,
     browser_viewport_status,
@@ -103,8 +97,8 @@ __all__ = [
     "browser_console_messages",
     "browser_downloads",
     "browser_drag",
+    "browser_each",
     "browser_evaluate",
-    "browser_evaluate_each",
     "browser_expect_js",
     "browser_expect_selector",
     "browser_expect_text",
@@ -120,7 +114,6 @@ __all__ = [
     "browser_mock_route",
     "browser_navigate",
     "browser_navigate_back",
-    "browser_navigate_each",
     "browser_network_requests",
     "browser_open_trace",
     "browser_open_url",
@@ -131,12 +124,11 @@ __all__ = [
     "browser_relaunch_fluid",
     "browser_reset_frame",
     "browser_resize",
-    "browser_resize_each",
     "browser_screenshot",
-    "browser_screenshot_each",
     "browser_select_option",
     "browser_set_dialog_policy",
     "browser_set_input_files",
+    "browser_set_protected",
     "browser_snapshot",
     "browser_spawn_roster",
     "browser_suggest_for_url",
@@ -148,7 +140,6 @@ __all__ = [
     "browser_viewport_sync",
     "browser_wait_for",
     "browser_wait_for_download",
-    "browser_wait_for_each",
     "page_close",
     "page_list",
     "page_switch",
