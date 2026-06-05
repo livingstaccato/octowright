@@ -146,12 +146,18 @@ def _title_tag_for(
     return f" [{tag}]"
 
 
-# Badge corner positions, mapped to (vertical-css-prop, horizontal-css-prop).
-# Used by the badge init script to decide which two CSS edges to anchor to.
+# Badge positions mapped to CSS anchor properties.
+# "vertical"/"horizontal" name the CSS edge to set; "v_offset"/"h_offset"
+# override the default 8px inset (used for center slots); "transform" applies
+# a CSS transform so center-axis slots land exactly on-center.
 _BADGE_POSITIONS: dict[str, dict[str, str]] = {
     "top-left": {"vertical": "top", "horizontal": "left"},
+    "top-center": {"vertical": "top", "horizontal": "left", "transform": "translateX(-50%)", "h_offset": "50%"},
     "top-right": {"vertical": "top", "horizontal": "right"},
+    "left-center": {"vertical": "top", "horizontal": "left", "transform": "translateY(-50%)", "v_offset": "50%"},
+    "right-center": {"vertical": "top", "horizontal": "right", "transform": "translateY(-50%)", "v_offset": "50%"},
     "bottom-left": {"vertical": "bottom", "horizontal": "left"},
+    "bottom-center": {"vertical": "bottom", "horizontal": "left", "transform": "translateX(-50%)", "h_offset": "50%"},
     "bottom-right": {"vertical": "bottom", "horizontal": "right"},
 }
 _BADGE_POSITION_DEFAULT = "bottom-right"
