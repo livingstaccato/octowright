@@ -42,6 +42,34 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+# URLs that indicate a user-opened blank tab (Cmd+T / Ctrl+T) rather than a
+# programmatic popup. We redirect these to the daemon's own /new-tab page.
+_BLANK_URLS = frozenset({"", "about:blank", "chrome://newtab/", "about:newtab"})
+
+# Task references kept alive to prevent GC mid-flight (satisfies RUF006).
+_redirect_tasks: set[asyncio.Task[None]] = set()
+
+
+def _make_new_tab_redirector() -> Any:
+    """Return a sync page-event handler that redirects blank new tabs to /new-tab."""
+
+    def _on_new_page(new_page: Any) -> None:
+        async def _redirect() -> None:
+            from octowright.defaults import get_default_url
+
+            await asyncio.sleep(0.4)
+            try:
+                if new_page.url in _BLANK_URLS:
+                    await new_page.goto(get_default_url())
+            except Exception:
+                pass
+
+        task = asyncio.create_task(_redirect())
+        _redirect_tasks.add(task)
+        task.add_done_callback(_redirect_tasks.discard)
+
+    return _on_new_page
+
 
 async def cleanup_failed_launch(
     *,
@@ -253,6 +281,7 @@ async def post_context_setup(
         _wire_user_navigation_logger(new_session)
         _wire_listeners(new_session, page)
         context.on("page", new_session._register_popup)
+        context.on("page", _make_new_tab_redirector())
 
         await wire_init_scripts(
             context,
