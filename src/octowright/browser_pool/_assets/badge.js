@@ -3,6 +3,7 @@
     const TAG = __TAG__;
     const COLOR = __COLOR__;
     const POS = __POS__;
+    const OPACITY = __OPACITY__;
     const ID = "__octowright_badge__";
     const inject = () => {
         if (!document.body) return;
@@ -17,11 +18,12 @@
             font: "bold 12px ui-monospace, Menlo, monospace",
             borderRadius: "4px", boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
             textShadow: "0 0 2px rgba(0,0,0,0.7)",
-            opacity: "0.72",
+            opacity: String(OPACITY),
             pointerEvents: "none", userSelect: "none",
         };
         styles[POS.vertical] = "8px";
         styles[POS.horizontal] = "8px";
+        if (POS.transform) styles.transform = POS.transform;
         Object.assign(div.style, styles);
         document.body.appendChild(div);
     };
