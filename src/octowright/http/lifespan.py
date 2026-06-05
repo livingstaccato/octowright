@@ -42,6 +42,7 @@ def _port_is_free(host: str, port: int) -> bool:
         except OSError:
             continue
         try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(sockaddr)
             checked = True
         except OSError:
@@ -87,6 +88,13 @@ async def serve_app(
 
     app = build_app(mcp_leader=mcp_leader, host=host)
 
+    # SO_REUSEADDR lets a restarted daemon bind immediately even if the old
+    # socket is still in TIME_WAIT. SO_REUSEPORT (where available) goes further
+    # and allows concurrent binds on the same port — handy during hot-restarts.
+    _socket_opts = [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)]
+    if hasattr(socket, "SO_REUSEPORT"):
+        _socket_opts.append((socket.SOL_SOCKET, socket.SO_REUSEPORT, 1))
+
     config = uvicorn.Config(
         app=app,
         host=host,
@@ -95,6 +103,7 @@ async def serve_app(
         access_log=False,
         # Reuse the running loop — this is the whole point of the sidecar.
         loop="asyncio",
+        socket_options=_socket_opts,
     )
     server = uvicorn.Server(config)
     state._RUNTIME_HOST = host
