@@ -79,7 +79,7 @@ CLI (Click)
 
 **Disk-write containment**: every path the daemon writes that flows from an LLM-supplied or recording-supplied string is anchored under `defaults.RECORDINGS_DIR`. `browser_export_script`'s `out_path`, `browser_screenshot`'s output path, and the HAR path recovered by `LaunchOptions.from_launch_record` are all resolved-and-contained against `RECORDINGS_DIR` (symlinks resolved before the prefix check); a poisoned JSONL launch record can't redirect HAR writes anywhere on disk, and an LLM can't escape the recordings root via `..` or symlinks. `recorder.new_log_path` likewise sanitizes the operator-supplied label before it joins the base dir.
 
-**Transport recovery**: If an Octowright MCP call returns `Transport closed` or times out, first check daemon health with `curl http://127.0.0.1:8765/api/health`. If health is good, retry one Octowright MCP call; the follower bridge should fail fast and reconnect for the next call. If the same client handle still fails, run `uv run --active python scripts/bridge_reconnect_smoke.py` to distinguish a broken client handle from a broken daemon. Do not run `octowright restart` unless daemon health fails or the user explicitly asks for a restart.
+**Transport recovery**: If an Octowright MCP call returns `Transport closed` or times out, first check daemon health with `curl http://127.0.0.1:6286/api/health`. If health is good, retry one Octowright MCP call; the follower bridge should fail fast and reconnect for the next call. If the same client handle still fails, run `uv run --active python scripts/bridge_reconnect_smoke.py` to distinguish a broken client handle from a broken daemon. Do not run `octowright restart` unless daemon health fails or the user explicitly asks for a restart.
 
 ### Key Files
 
@@ -104,7 +104,9 @@ CLI (Click)
 | `src/octowright/scenarios.py` | `Scenario`/`Participant` models + YAML/Python loaders |
 | `src/octowright/personas.py` | Persona metadata + credential resolution |
 | `src/octowright/resolve.py` | `suggest_for_url()` — persona ranking by URL |
-| `src/octowright/defaults.py` | All env-var-driven defaults (port, paths, timeouts) |
+| `src/octowright/defaults.py` | All env-var-driven defaults (port, paths, timeouts). `get_default_url()` resolves the actual bound port at runtime; `get_default_label()` derives username/repo from CWD + git. |
+| `src/octowright/http/routes/new_tab.py` | `GET /new-tab` — default landing page for `browser_launch` with no URL. Serves Otto logo, wordmark, live status strip (version, commit, uptime, browser count). Time-based background tint. `GET /otto.svg`. |
+| `.octowright/config.yaml` | Per-project config file (project root or any parent). Supports `label:`, `persona:`, `profile:`. Read by `get_default_label()` / `browser_launch` at daemon startup. `octowright init` scaffolds a starter copy. |
 | `tools/octowright_demos/` | **Out-of-wheel** demo-bundle generation (catalog, indexer, runtime, exports). Imported by `scripts/demos/*` and `tests/test_demos_*`; not part of the shipped package. |
 | `demo/bundles/` | Source-of-truth demo bundles (`demo.yaml` + recorded artifacts). Tracked in git. Re-recording requires browser sessions. |
 | `demo/tutorial-export/` | **Derived; gitignored.** Verbatim mirror of `demo/bundles/.../artifacts/` plus generated JSON manifests, consumed by `site-octowright-com`'s sync workflow. Regenerate with `make export-demos` (no browsers needed — just `shutil.copytree` + JSON writes). |
@@ -161,9 +163,11 @@ Octowright Advisor is local and deterministic. It records bounded MCP tool-usage
 ## Env Var Configuration
 
 All defaults are in `src/octowright/defaults.py`. Key vars:
-- `OCTOWRIGHT_HTTP_PORT` — HTTP dashboard port (default 8765, auto-bumps if busy)
+- `OCTOWRIGHT_HTTP_PORT` — HTTP dashboard port (default 6286, auto-bumps if busy)
 - `OCTOWRIGHT_HTTP_HOST` — HTTP dashboard bind host (default 127.0.0.1)
 - `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD` — set to `1` to allow non-loopback access to sensitive dashboard/MCP endpoints. **Warning:** there is no auth layer; combining a non-loopback `OCTOWRIGHT_HTTP_HOST` with this flag exposes RCE-equivalent surface (the MCP transport drives browsers) to the network. Use only behind your own auth gateway.
+- `OCTOWRIGHT_DEFAULT_URL` — override the URL opened on `browser_launch` with no `url` argument (default resolves from the bound port at runtime; always points at `/new-tab` on the local daemon)
+- `OCTOWRIGHT_DEFAULT_LABEL` — override the auto-detected default browser label (see `.octowright/config.yaml` for per-project configuration)
 - `OCTOWRIGHT_HEADLESS` — force headless mode
 - `OCTOWRIGHT_IDLE_GRACE` — seconds before auto-exit (default 300)
 - `OCTOWRIGHT_PROFILES_DIR` — override profile storage root
