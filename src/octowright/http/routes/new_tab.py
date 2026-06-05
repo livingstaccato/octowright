@@ -183,8 +183,11 @@ _HTML_TMPL = """\
         }})
         .catch(function() {{}});
     }}
-    refreshBrowsers();
-    setInterval(refreshBrowsers, 10000);
+    // Delay first fetch so the session is registered before we count it.
+    setTimeout(function() {{
+      refreshBrowsers();
+      setInterval(refreshBrowsers, 10000);
+    }}, 2000);
   </script>
 </body>
 </html>
