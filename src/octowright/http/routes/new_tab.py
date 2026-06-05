@@ -186,7 +186,7 @@ _HTML_TMPL = """\
     // Delay first fetch so the session is registered before we count it.
     setTimeout(function() {{
       refreshBrowsers();
-      setInterval(refreshBrowsers, 10000);
+      setInterval(refreshBrowsers, 3000);
     }}, 2000);
   </script>
 </body>
