@@ -143,13 +143,14 @@ async def test_serve_app_sets_runtime_and_calls_on_bound(monkeypatch: pytest.Mon
         def __init__(self, config: _FakeConfig) -> None:
             self.config = config
 
-        async def serve(self) -> None:
+        async def serve(self, **_kwargs: object) -> None:
             assert _http_state._RUNTIME_HOST == "127.0.0.1"
             assert _http_state._RUNTIME_PORT == 8123
 
     fake_uvicorn = types.SimpleNamespace(Config=_FakeConfig, Server=_FakeServer)
     monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
     monkeypatch.setattr(_http_lifespan, "_pick_port", lambda *_args, **_kwargs: 8123)
+    monkeypatch.setattr(_http_lifespan, "_bind_server_socket", lambda *_args, **_kwargs: None)
 
     def _on_bound(host: str, port: int) -> None:
         bound_calls.append((host, port))
@@ -181,12 +182,13 @@ async def test_serve_app_cleans_runtime_state_on_server_error(monkeypatch: pytes
         def __init__(self, config: _FakeConfig) -> None:
             self.config = config
 
-        async def serve(self) -> None:
+        async def serve(self, **_kwargs: object) -> None:
             raise RuntimeError("serve failed")
 
     fake_uvicorn = types.SimpleNamespace(Config=_FakeConfig, Server=_FakeServer)
     monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
     monkeypatch.setattr(_http_lifespan, "_pick_port", lambda *_args, **_kwargs: 9001)
+    monkeypatch.setattr(_http_lifespan, "_bind_server_socket", lambda *_args, **_kwargs: None)
 
     with pytest.raises(RuntimeError, match="serve failed"):
         await _http_lifespan.serve_app(host="127.0.0.1", port=9000, retries=0)
