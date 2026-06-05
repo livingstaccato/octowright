@@ -14,7 +14,12 @@ from octowright import _format as fmt
 from octowright import resolve as resolve_mod
 from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
-from octowright.defaults import BROWSER_LAUNCH_TIMEOUT_SECONDS, PROTECT_BROWSERS_DEFAULT, get_default_label
+from octowright.defaults import (
+    BROWSER_LAUNCH_TIMEOUT_SECONDS,
+    PROTECT_BROWSERS_DEFAULT,
+    _read_project_config,
+    get_default_label,
+)
 from octowright.server._state import mcp, pool
 from octowright.server.browser.inspect import browser_brief
 
@@ -100,19 +105,26 @@ async def browser_launch(
     protected: bool = PROTECT_BROWSERS_DEFAULT,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
-    # default to username/repo so the browser has a human name and a persistent
-    # profile. Explicit label=None on an ephemeral launch stays ephemeral.
+    # apply context-aware defaults so the browser has a human name and a
+    # persistent profile. Explicit ephemeral=True bypasses this entirely.
     if label is None and profile is None and not ephemeral and not session:
+        proj_cfg = _read_project_config()
         label = get_default_label()
-        # If a persona exists whose name matches the project slug, adopt its profile
-        # so credentials and saved state carry over automatically.
-        if profile is None:
-            _proj = label.split("/")[-1] if "/" in label else label
+        # .octowright/config.yaml persona: wins; then try matching a persona by
+        # the project slug; fallback leaves profile as None (auto-promoted from label).
+        cfg_persona = str(proj_cfg.get("persona", "")).strip()
+        cfg_profile = str(proj_cfg.get("profile", "")).strip()
+        if cfg_profile:
+            profile = cfg_profile
+        elif cfg_persona:
+            profile = cfg_persona
+        else:
+            _slug = label.split("/")[-1] if "/" in label else label
             try:
                 from octowright.personas import load_persona
 
-                load_persona(_proj)
-                profile = _proj
+                load_persona(_slug)
+                profile = _slug
             except Exception:
                 pass
 
