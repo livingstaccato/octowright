@@ -200,6 +200,8 @@ HEADLESS_DEFAULT = _detect_headless_default()
 # the browser_launch `protected` parameter.
 PROTECT_BROWSERS_DEFAULT: bool = os.environ.get("OCTOWRIGHT_PROTECT_BROWSERS", "").strip() == "1"
 
+BADGE_OPACITY: float = float(os.environ.get("OCTOWRIGHT_BADGE_OPACITY", "0.35"))
+
 SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
 DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))
