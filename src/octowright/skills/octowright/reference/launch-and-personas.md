@@ -5,6 +5,20 @@ description: Reference for browser_suggest_for_url decision logic, stabilize fla
 
 # Launch & Personas Reference
 
+## Default Label and Profile
+
+`browser_launch` (and `browser_quick_launch`) with no `label`/`profile`/`ephemeral` args auto-detect:
+
+1. **`.octowright/config.yaml`** in the nearest parent directory — `label:`, `persona:`, `profile:` keys override everything else.
+2. **Git repo basename** — if the daemon started inside a git repo, the repo name becomes the label (e.g. `octowright`, `site-octowright-com`).
+3. **Username** — fallback when not inside a git repo.
+
+The label is also used as the persistent profile name unless `profile:` is set explicitly. This means repeated no-arg launches return to the same saved session state.
+
+Override with `OCTOWRIGHT_DEFAULT_LABEL` env var or by passing `label=` explicitly.
+
+Ephemeral launches (`ephemeral=True`) skip this entirely — they never get a default label or profile.
+
 ## When to Call `browser_suggest_for_url`
 
 Call it when **all three** are true:

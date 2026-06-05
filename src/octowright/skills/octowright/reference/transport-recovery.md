@@ -41,7 +41,7 @@ Push notifications flow through the follower→leader bridge automatically. Foll
 
 ```dot
 graph TD
-    Symptom["MCP tool call returns 'Transport closed'<br/>or hangs"] --> Health{"curl http://127.0.0.1:8765/api/health<br/>returns 200?"}
+    Symptom["MCP tool call returns 'Transport closed'<br/>or hangs"] --> Health{"curl http://127.0.0.1:6286/api/health<br/>returns 200?"}
     Health -- "Yes — daemon is alive" --> Retry["Retry one Octowright MCP call.<br/>The follower bridge should fail fast<br/>and reconnect for the next call."]
     Retry --> Smoke["If the same client handle still fails,<br/>run scripts/bridge_reconnect_smoke.py<br/>to separate client-handle failure<br/>from daemon failure."]
     Health -- "No — port doesn't answer" --> DaemonFix["The daemon itself is gone or wedged.<br/>Run: octowright restart"]
@@ -51,7 +51,7 @@ graph TD
 
 ## Transport Recovery Steps
 
-1. Check daemon health: `curl http://127.0.0.1:8765/api/health`
+1. Check daemon health: `curl http://127.0.0.1:6286/api/health`
 2. If health is good, retry one Octowright MCP call. The follower bridge should fail fast and reconnect.
 3. If the same client handle still fails, run `uv run --active python scripts/bridge_reconnect_smoke.py` to distinguish a broken client handle from a broken daemon.
 4. Do not run `octowright restart` unless daemon health fails or the user explicitly asks.
