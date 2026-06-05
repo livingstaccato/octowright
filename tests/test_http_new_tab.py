@@ -51,3 +51,31 @@ def test_otto_svg_returns_200() -> None:
 
 def test_otto_svg_content_type() -> None:
     assert "svg" in _client().get("/otto.svg").headers["content-type"]
+
+
+def test_new_tab_contains_version() -> None:
+    text = _client().get("/new-tab").text
+    assert "v" in text
+    assert "uptime" in text or "STARTED_AT" in text
+
+
+def test_new_tab_contains_commit_placeholder_or_value() -> None:
+    text = _client().get("/new-tab").text
+    assert "commit" in text or "rev-parse" in text or "browser-count" in text
+
+
+def test_new_tab_fetches_sessions_api() -> None:
+    assert "/api/sessions" in _client().get("/new-tab").text
+
+
+def test_new_tab_has_dashboard_link() -> None:
+    text = _client().get("/new-tab").text
+    assert 'href="/"' in text or "dashboard" in text
+
+
+def test_new_tab_has_uptime_element() -> None:
+    assert 'id="uptime"' in _client().get("/new-tab").text
+
+
+def test_new_tab_has_browser_count_element() -> None:
+    assert 'id="browser-count"' in _client().get("/new-tab").text
