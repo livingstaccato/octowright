@@ -61,20 +61,48 @@ def _detect_git_repo_name() -> str | None:
 
 
 @lru_cache(maxsize=1)
-def get_default_label() -> str:
-    """Default browser label: username, or username/repo when inside a git repo.
+def _read_project_config() -> dict[str, object]:
+    """Walk up from CWD looking for .octowright/config.yaml.
 
-    Overridable via OCTOWRIGHT_DEFAULT_LABEL. Cached so the git probe runs once.
+    Returns the parsed YAML dict, or {} if not found / unreadable.
+    The file can set: label, persona, profile.
+    """
+    try:
+        import yaml  # type: ignore[import-untyped]
+
+        for parent in [Path.cwd(), *Path.cwd().parents]:
+            cfg = parent / ".octowright" / "config.yaml"
+            if cfg.is_file():
+                return yaml.safe_load(cfg.read_text()) or {}
+            if parent == parent.parent:
+                break
+    except Exception:
+        pass
+    return {}
+
+
+@lru_cache(maxsize=1)
+def get_default_label() -> str:
+    """Default browser label, in priority order:
+
+    1. OCTOWRIGHT_DEFAULT_LABEL env var
+    2. ``label:`` in the nearest .octowright/config.yaml
+    3. Basename of the nearest git repo root
+    4. Current username
     """
     env = os.environ.get("OCTOWRIGHT_DEFAULT_LABEL", "").strip()
     if env:
         return env
-    try:
-        username = getpass.getuser()
-    except Exception:
-        username = "user"
+    cfg_label = str(_read_project_config().get("label", "")).strip()
+    if cfg_label:
+        return cfg_label
     repo = _detect_git_repo_name()
-    return f"{username}/{repo}" if repo else username
+    if repo:
+        return repo
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "user"
 
 
 DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
