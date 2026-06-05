@@ -95,6 +95,47 @@ def write_sample_macro(macros_dir: Path, *, force: bool = False) -> tuple[Path, 
     return target, "overwritten" if force else "created"
 
 
+def write_project_config(target_dir: Path, *, force: bool = False) -> tuple[Path, str]:
+    """Write a starter .octowright/config.yaml in target_dir.
+
+    Returns (path, status) where status is 'created' | 'exists' | 'overwritten'.
+    """
+    cfg_dir = target_dir / ".octowright"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    target = cfg_dir / "config.yaml"
+    if target.exists() and not force:
+        return target, "exists"
+    import getpass
+    import subprocess
+
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=2)
+        repo_name = Path(r.stdout.strip()).name if r.returncode == 0 else ""
+    except Exception:
+        repo_name = ""
+    try:
+        username = getpass.getuser()
+    except Exception:
+        username = "user"
+    label = repo_name or username
+    doc = f"""\
+# octowright project config
+# Picked up automatically by browser_launch when this file is present.
+# Override any field or delete to fall back to octowright's auto-detection.
+
+# Human-readable label for browsers launched from this project.
+label: {label}
+
+# Persona to adopt (must match a profile.yaml in your profiles dir).
+# persona: {label}
+
+# Override the persistent profile name (defaults to label).
+# profile: {label}
+"""
+    target.write_text(doc, encoding="utf-8")
+    return target, "overwritten" if force else "created"
+
+
 def mcp_registration_block(install_dir: Path | None = None) -> str:
     """Render the JSON snippet a user pastes into .mcp.json or ~/.claude.json.
 
@@ -125,6 +166,7 @@ def scaffold_all(
     macros_dir: Path,
     scenarios_dir: Path,
     *,
+    target_dir: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     """Run every scaffolding step and return a structured report.
@@ -132,7 +174,7 @@ def scaffold_all(
     Report shape:
         {
           "dirs": {profiles: {path, created}, macros: ..., scenarios: ...},
-          "files": {persona: {path, status}, scenario: ..., macro: ...},
+          "files": {persona: {path, status}, scenario: ..., macro: ..., project_config: ...},
           "mcp_block": "<json snippet>",
         }
     """
@@ -144,12 +186,15 @@ def scaffold_all(
     persona_path, persona_status = write_sample_persona(profiles_dir, force=force)
     scenario_path, scenario_status = write_sample_scenario(scenarios_dir, force=force)
     macro_path, macro_status = write_sample_macro(macros_dir, force=force)
+    cfg_dir = target_dir if target_dir is not None else Path.cwd()
+    cfg_path, cfg_status = write_project_config(cfg_dir, force=force)
     return {
         "dirs": dirs,
         "files": {
             "persona": {"path": str(persona_path), "status": persona_status},
             "scenario": {"path": str(scenario_path), "status": scenario_status},
             "macro": {"path": str(macro_path), "status": macro_status},
+            "project_config": {"path": str(cfg_path), "status": cfg_status},
         },
         "mcp_block": mcp_registration_block(),
     }
@@ -163,7 +208,7 @@ def render_report(report: dict[str, Any], stream: Any = None) -> None:
     for name, info in report["dirs"].items():
         marker = "+" if info["created"] else "·"
         print(f"  {marker} {name:10s} {info['path']}", file=out)
-    print("\nsample files:", file=out)
+    print("\nfiles:", file=out)
     for name, info in report["files"].items():
         marker = {"created": "+", "overwritten": "*", "exists": "·"}[info["status"]]
         print(f"  {marker} {name:10s} {info['path']}  ({info['status']})", file=out)

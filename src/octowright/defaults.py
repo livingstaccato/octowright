@@ -21,7 +21,7 @@ from octowright.config_paths import user_cache_dir, user_config_dir, user_state_
 # they load, so this lands before setup_telemetry() runs.
 os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
 
-_DEFAULT_PORT = os.environ.get("OCTOWRIGHT_HTTP_PORT", "8765")
+_DEFAULT_PORT = os.environ.get("OCTOWRIGHT_HTTP_PORT", "6286")
 DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", f"http://127.0.0.1:{_DEFAULT_PORT}/new-tab")
 
 # Runtime-resolved port — set by the HTTP server once it successfully binds
@@ -238,7 +238,7 @@ METRICS_MACRO_LABEL_CAP = int(os.environ.get("OCTOWRIGHT_METRICS_MACRO_LABEL_CAP
 # `octowright serve` is invoked. Bind defaults to localhost only because the
 # debugger UI exposes raw recordings, video, and trace data.
 HTTP_HOST = os.environ.get("OCTOWRIGHT_HTTP_HOST", "127.0.0.1")
-HTTP_PORT = int(os.environ.get("OCTOWRIGHT_HTTP_PORT", "8765"))
+HTTP_PORT = int(os.environ.get("OCTOWRIGHT_HTTP_PORT", "6286"))
 # When the configured port is in use, try this many higher ports before giving up.
 HTTP_PORT_RETRIES = 5
 DASHBOARD_REMOTE_ALLOWED_ENV = "OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD"
