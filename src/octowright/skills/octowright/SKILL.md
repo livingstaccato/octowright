@@ -101,8 +101,9 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Check Advisor guidance | `octowright_advisor_status` |
 | Record repeated workflow | `octowright_advisor_record_macro_observation(source="llm", signature, summary)` |
 | Persist a preference | `octowright_advisor_set_preference(suggestion_type, preference)` |
-| Start user-facing session | `browser_launch(kind, profile, protected=True, ...)` |
-| Start agent-internal session | `browser_launch(kind, ephemeral=True, ...)` |
+| Start user-facing session | `browser_launch(protected=True)` — label/profile auto-set from git repo + username |
+| Start agent-internal session | `browser_launch(ephemeral=True)` |
+| Launch to a URL immediately | `browser_quick_launch(url, ...)` — same auto-label as `browser_launch` |
 | Protect/unprotect after launch | `browser_set_protected(instance_id, protected=True/False)` |
 | Click by ARIA role/label/text/test-id | `browser_click(instance_id, role=, label=, text=, test_id=, timeout_ms=)` |
 | Fill by ARIA role/label/test-id | `browser_fill(instance_id, value, label=, role=, test_id=, timeout_ms=)` |
@@ -111,7 +112,7 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Fix failing macro | `browser_snapshot` → `macro_save` |
 | Cleanup agent-internal browser | `browser_close` |
 | Screenshot user-facing window without disturbing it | `GET /api/sessions/{id}/screenshot/now` |
-| Probe daemon health | `curl http://127.0.0.1:8765/api/health` |
+| Probe daemon health | `curl http://127.0.0.1:6286/api/health` |
 | Daemon is wedged | `octowright restart` (shell, not MCP) |
 | MCP `Transport closed` | See `reference/transport-recovery.md` |
 | Session evicted unexpectedly | See `reference/transport-recovery.md` |

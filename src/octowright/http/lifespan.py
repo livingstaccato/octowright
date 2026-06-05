@@ -61,6 +61,25 @@ def _pick_port(host: str, preferred: int, retries: int) -> int | None:
     return None
 
 
+def _bind_server_socket(host: str, port: int) -> socket.socket:
+    """Create a pre-bound server socket with SO_REUSEADDR + SO_REUSEPORT.
+
+    Holding the socket while uvicorn starts means no other process can steal
+    the port in the gap between _port_is_free() and uvicorn's own bind.
+    SO_REUSEPORT (where available) lets a restarted daemon bind to a port
+    whose old socket is still in TIME_WAIT.
+    """
+    addrinfos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    family, socktype, proto, _, sockaddr = addrinfos[0]
+    s = socket.socket(family, socktype, proto)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, "SO_REUSEPORT"):
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    s.bind(sockaddr)
+    s.set_inheritable(True)
+    return s
+
+
 async def serve_app(
     *,
     host: str = HTTP_HOST,
@@ -88,13 +107,19 @@ async def serve_app(
 
     app = build_app(mcp_leader=mcp_leader, host=host)
 
+    # Pre-bind with SO_REUSEADDR + SO_REUSEPORT so a restarted daemon claims
+    # the port immediately, and no other process can steal it between the
+    # _port_is_free probe and uvicorn's own bind.
+    srv_socket = _bind_server_socket(host, bound)
+
+    # When sockets= is given, uvicorn skips its own bind; host/port in Config
+    # become metadata only (used for display/logging).
     config = uvicorn.Config(
         app=app,
         host=host,
         port=bound,
         log_level="warning",
         access_log=False,
-        # Reuse the running loop — this is the whole point of the sidecar.
         loop="asyncio",
     )
     server = uvicorn.Server(config)
@@ -105,8 +130,10 @@ async def serve_app(
     if on_bound is not None:
         on_bound(host, bound)
     try:
-        await server.serve()
+        await server.serve(sockets=[srv_socket])
     finally:
+        if srv_socket is not None:
+            srv_socket.close()
         state._RUNTIME_HOST = None
         state._RUNTIME_PORT = None
         state.log.info("octowright.http.stopped", host=host, port=bound)
