@@ -65,7 +65,7 @@ def _log_first_done(
     "http_port",
     type=int,
     default=None,
-    help="HTTP debugger port (overrides OCTOWRIGHT_HTTP_PORT, default 8765).",
+    help="HTTP debugger port (overrides OCTOWRIGHT_HTTP_PORT, default 6286).",
 )
 @click.option(
     "--http-host",

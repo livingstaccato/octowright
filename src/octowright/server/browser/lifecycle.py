@@ -221,6 +221,25 @@ async def browser_quick_launch(
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
 
+    if label is None and profile is None and not ephemeral and not session:
+        proj_cfg = _read_project_config()
+        label = get_default_label()
+        cfg_persona = str(proj_cfg.get("persona", "")).strip()
+        cfg_profile = str(proj_cfg.get("profile", "")).strip()
+        if cfg_profile:
+            profile = cfg_profile
+        elif cfg_persona:
+            profile = cfg_persona
+        else:
+            _slug = label.split("/")[-1] if "/" in label else label
+            try:
+                from octowright.personas import load_persona
+
+                load_persona(_slug)
+                profile = _slug
+            except Exception:
+                pass
+
     def _build_options(*, profile_for_launch: str | None, kind_for_launch: str) -> LaunchOptions:
         # Reuses the LaunchOptions schema so this site never drifts from
         # browser_launch above. The two variant fields (profile/kind) come

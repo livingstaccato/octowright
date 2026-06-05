@@ -110,6 +110,9 @@ def test_port_is_free_requires_all_resolved_addresses_to_bind(monkeypatch: pytes
             self.socktype = socktype
             self.proto = proto
 
+        def setsockopt(self, *_args: object) -> None:
+            pass
+
         def bind(self, sockaddr: tuple[object, ...]) -> None:
             bind_attempts.append(sockaddr)
             if self.family == socket.AF_INET:

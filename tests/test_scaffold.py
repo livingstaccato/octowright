@@ -99,7 +99,7 @@ def test_scaffold_all_first_run_creates_everything(tmp_path: Path) -> None:
     profiles = tmp_path / "profiles"
     macros = tmp_path / "macros"
     scenarios = tmp_path / "scenarios"
-    report = scaffold.scaffold_all(profiles, macros, scenarios)
+    report = scaffold.scaffold_all(profiles, macros, scenarios, target_dir=tmp_path)
 
     # Every dir was created on this run.
     assert all(d["created"] for d in report["dirs"].values())
@@ -115,8 +115,8 @@ def test_scaffold_all_idempotent_second_run(tmp_path: Path) -> None:
     profiles = tmp_path / "profiles"
     macros = tmp_path / "macros"
     scenarios = tmp_path / "scenarios"
-    scaffold.scaffold_all(profiles, macros, scenarios)
-    report = scaffold.scaffold_all(profiles, macros, scenarios)
+    scaffold.scaffold_all(profiles, macros, scenarios, target_dir=tmp_path)
+    report = scaffold.scaffold_all(profiles, macros, scenarios, target_dir=tmp_path)
 
     # Dirs already existed.
     assert not any(d["created"] for d in report["dirs"].values())
@@ -129,8 +129,8 @@ def test_scaffold_all_force_overwrites_existing_files(tmp_path: Path) -> None:
     profiles = tmp_path / "profiles"
     macros = tmp_path / "macros"
     scenarios = tmp_path / "scenarios"
-    scaffold.scaffold_all(profiles, macros, scenarios)
-    report = scaffold.scaffold_all(profiles, macros, scenarios, force=True)
+    scaffold.scaffold_all(profiles, macros, scenarios, target_dir=tmp_path)
+    report = scaffold.scaffold_all(profiles, macros, scenarios, target_dir=tmp_path, force=True)
     for f in report["files"].values():
         assert f["status"] == "overwritten"
 
@@ -139,13 +139,13 @@ def test_render_report_writes_to_passed_stream(tmp_path: Path) -> None:
     profiles = tmp_path / "profiles"
     macros = tmp_path / "macros"
     scenarios = tmp_path / "scenarios"
-    report = scaffold.scaffold_all(profiles, macros, scenarios)
+    report = scaffold.scaffold_all(profiles, macros, scenarios, target_dir=tmp_path)
     buf = io.StringIO()
     scaffold.render_report(report, stream=buf)
     text = buf.getvalue()
     assert "octowright init" in text
     assert "directories:" in text
-    assert "sample files:" in text
+    assert "files:" in text
     # MCP block must be present in the rendered output.
     assert '"mcpServers"' in text
     # Next-step nudge.

@@ -221,9 +221,12 @@ async def test_canonical_pool_launch_wraps_initial_navigation_error(monkeypatch:
 
     monkeypatch.setattr(pool, "_ensure_pw", _fake_ensure_pw)
 
-    with pytest.raises(RuntimeError) as exc:
-        await pool.launch(kind="chromium", url="https://example.invalid", ephemeral=True)
-    _assert_octowright_sanity(exc, "playwright_network_unreachable")
+    # Navigation failures no longer kill the browser — the session stays alive
+    # and the error is reported in nav_warning so the caller can see it without
+    # losing the instance.
+    result = await pool.launch(kind="chromium", url="https://example.invalid", ephemeral=True)
+    assert "nav_warning" in result
+    assert "ERR_NAME_NOT_RESOLVED" in result["nav_warning"] or result["nav_warning"]
 
 
 @pytest.mark.anyio

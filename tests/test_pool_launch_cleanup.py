@@ -106,10 +106,10 @@ async def test_launch_failure_closes_context_browser_and_recorder(
     # the _launch_impl → launch_pipeline split.
     monkeypatch.setattr("octowright.browser_pool.launch_pipeline.Recorder", fake_recorder)
 
-    with pytest.raises(RuntimeError):
-        await pool.launch(kind="chromium", url="https://octowright.com", headed=False)
-
-    assert context.closed is True
-    assert browser.closed is True
-    assert recorder_holder["recorder"].closed is True
-    assert pool.list_sessions() == []
+    # Navigation failures no longer tear down the browser — the session stays
+    # registered and the error is surfaced as nav_warning in the result.
+    result = await pool.launch(kind="chromium", url="https://octowright.com", headed=False)
+    assert "nav_warning" in result
+    assert context.closed is False
+    assert browser.closed is False
+    assert len(pool.list_sessions()) == 1

@@ -300,13 +300,9 @@ async def post_context_setup(
         if launch_options.trace:
             await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
-        from octowright.session.core_page_mixin import _reject_unsafe_url
-
-        _reject_unsafe_url(target_url)
-        await page.goto(target_url)
-
-        new_session._schedule_markdown_capture()
-
+        # Register the session BEFORE navigating so a failed goto doesn't
+        # destroy the browser. A nav error is logged and returned in the result
+        # but the instance stays alive and usable.
         async with pool._sessions_lock:
             pool._sessions[instance_id] = new_session
         _safe_manifest_record(
@@ -330,7 +326,24 @@ async def post_context_setup(
             headed=not headless,
             log_path=str(log_path),
         )
-        return build_launch_result(
+
+        from octowright.session.core_page_mixin import _reject_unsafe_url
+
+        nav_error: str | None = None
+        _reject_unsafe_url(target_url)
+        try:
+            await page.goto(target_url)
+        except Exception as _nav_exc:
+            nav_error = str(_nav_exc)
+            log.warning(
+                "octowright.browser.launch_nav_failed",
+                instance_id=instance_id,
+                url=target_url,
+                error=nav_error,
+            )
+
+        new_session._schedule_markdown_capture()
+        result = build_launch_result(
             instance_id=instance_id,
             kind=kind,
             label=label,
@@ -347,6 +360,9 @@ async def post_context_setup(
             video_dir=video_dir,
             protected=launch_options.protected,
         )
+        if nav_error is not None:
+            result["nav_warning"] = nav_error
+        return result
     except asyncio.CancelledError:
         await cleanup_failed_launch(
             registered=registered,

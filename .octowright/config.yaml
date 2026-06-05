@@ -1,0 +1,12 @@
+# octowright project config
+# Picked up automatically by browser_launch when this file is present.
+# Override any field or delete to fall back to octowright's auto-detection.
+
+# Human-readable label for browsers launched from this project.
+label: octowright
+
+# Persona to adopt (must match a profile.yaml in your profiles dir).
+# persona: octowright
+
+# Override the persistent profile name (defaults to label).
+# profile: octowright
