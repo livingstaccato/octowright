@@ -88,7 +88,6 @@ def test_badge_script_has_popup_template_vars() -> None:
 @pytest.mark.anyio
 async def test_wire_init_scripts_substitutes_dashboard_url(monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.browser_pool.visuals as vis
-    import octowright.defaults as defs
 
     # Pre-warm all non-badge caches so the monkeypatched _read_asset (which
     # returns "" for non-badge.js names) cannot poison them.
@@ -102,7 +101,7 @@ async def test_wire_init_scripts_substitutes_dashboard_url(monkeypatch: pytest.M
         lambda name: "const d=__DASHBOARD_URL__;const i=__INSTANCE_ID__;" if name == "badge.js" else "",
     )
     vis._badge_script.cache_clear()
-    monkeypatch.setattr(defs, "get_default_url", lambda: "http://127.0.0.1:6286/new-tab")
+    monkeypatch.setattr(vis, "get_default_url", lambda: "http://127.0.0.1:6286/new-tab")
 
     scripts: list[str] = []
 
