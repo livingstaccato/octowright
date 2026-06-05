@@ -3,13 +3,14 @@ Date: 2026-06-05
 
 ## Scope
 
-Five related changes across the badge JS, visuals layer, defaults, skill docs, and README:
+Six changes across the badge JS, visuals layer, defaults, browser pool, skill docs, and README:
 
 1. Badge opacity — configurable, default reduced to 0.35
 2. Badge positions — expand from 4 corners to all 8 slots
 3. Badge Alt-click info popup — same interaction model as the macro pill
 4. `nav_warning` docstring — document the survive-navigation-failure behavior
 5. README + `.octowright` scaffold — port reference and caching note
+6. Reliable new-tab redirect — Cmd+T always opens `/new-tab`, not Chrome's default
 
 ---
 
@@ -109,6 +110,33 @@ Existing 4 corners unchanged.
 ```
 
 ---
+
+## 6. Reliable New-Tab Redirect
+
+**Problem:** The current `_make_new_tab_redirector` in `launch_pipeline.py` uses `asyncio.sleep(0.4)` then checks `page.url`. This is unreliable — sometimes Chrome hasn't finished navigating to `chrome://newtab/` yet, or the navigation from `chrome://newtab/` fails silently because it's a privileged URL.
+
+**Fix:** Replace the fixed sleep + single-check pattern with a page `framenavigated` event listener that fires as soon as the URL is known, plus a fallback `domcontentloaded` check:
+
+```python
+async def _redirect() -> None:
+    # Wait for either a navigated event or a timeout
+    try:
+        await new_page.wait_for_url(
+            lambda url: url not in _BLANK_URLS or ...,
+            timeout=1000
+        )
+    except Exception:
+        pass
+    # After settling, redirect if still on a blank/newtab URL
+    if new_page.url in _BLANK_URLS or not new_page.url:
+        await new_page.goto(get_default_url())
+```
+
+More precisely: use `page.wait_for_load_state("domcontentloaded", timeout=800)` to wait for the page to finish its initial navigation, then check the URL. This handles both fast and slow Chrome newtab navigations without a fixed sleep.
+
+Also add `"chrome://newtab"` (without trailing slash) to `_BLANK_URLS` as a defensive measure.
+
+For **Chromium only**: additionally pass `--new-tab-url=<get_default_url()>` as a Chromium launch argument so the OS-level Cmd+T produces the right URL natively, before Playwright even fires the `page` event. This is the belt-and-suspenders guarantee. Firefox and WebKit use only the event-based redirect.
 
 ## What Is NOT in Scope
 
