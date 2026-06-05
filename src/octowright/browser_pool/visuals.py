@@ -12,7 +12,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright.defaults import BADGE_OPACITY
+from octowright.defaults import BADGE_OPACITY, get_default_url
 
 log = get_logger(__name__)
 
@@ -309,12 +309,15 @@ async def wire_init_scripts(
         # of the same persona share one color. Engine emoji handles engine
         # differentiation.
         color_seed = profile or label or instance_id[:6]
+        dashboard_url = get_default_url().removesuffix("/new-tab")
         badge_script = (
             _badge_script()
             .replace("__TAG__", _json.dumps(badge_text))
             .replace("__COLOR__", _json.dumps(_badge_color_for(color_seed)))
             .replace("__POS__", _json.dumps(_BADGE_POSITIONS[badge_position]))
             .replace("__OPACITY__", _json.dumps(BADGE_OPACITY))
+            .replace("__DASHBOARD_URL__", _json.dumps(dashboard_url))
+            .replace("__INSTANCE_ID__", _json.dumps(instance_id))
         )
         await context.add_init_script(script=badge_script)
 
