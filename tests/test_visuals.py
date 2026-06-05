@@ -16,7 +16,8 @@ def test_badge_script_uses_opacity_template_variable() -> None:
     assert "__OPACITY__" in _badge_script()
 
 
-def test_wire_init_scripts_substitutes_opacity(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.anyio
+async def test_wire_init_scripts_substitutes_opacity(monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.browser_pool.visuals as vis
 
     monkeypatch.setattr(vis, "_read_asset", lambda name: "const o=__OPACITY__;" if name == "badge.js" else "")
@@ -28,19 +29,20 @@ def test_wire_init_scripts_substitutes_opacity(monkeypatch: pytest.MonkeyPatch) 
         async def add_init_script(self, *, script: str) -> None:
             scripts.append(script)
 
-    import asyncio
-
-    asyncio.get_event_loop().run_until_complete(
-        vis.wire_init_scripts(
-            FakeCtx(),
-            profile=None,
-            label="x",
-            instance_id="fakeid000001",
-            kind="chromium",
-            badge=True,
-            badge_position="bottom-right",
-            stabilize=False,
-        )
+    await vis.wire_init_scripts(
+        FakeCtx(),
+        profile=None,
+        label="x",
+        instance_id="fakeid000001",
+        kind="chromium",
+        badge=True,
+        badge_position="bottom-right",
+        stabilize=False,
     )
     vis._badge_script.cache_clear()
     assert any("__OPACITY__" not in s and "0.35" in s for s in scripts)
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"

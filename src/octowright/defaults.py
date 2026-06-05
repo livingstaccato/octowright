@@ -68,7 +68,7 @@ def _read_project_config() -> dict[str, object]:
     The file can set: label, persona, profile.
     """
     try:
-        import yaml  # type: ignore[import-untyped]
+        import yaml
 
         for parent in [Path.cwd(), *Path.cwd().parents]:
             cfg = parent / ".octowright" / "config.yaml"
