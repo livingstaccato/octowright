@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+import getpass
 import os
 import platform
+import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 from octowright.config_paths import user_cache_dir, user_config_dir, user_state_dir
@@ -38,6 +41,40 @@ def get_default_url() -> str:
         return os.environ["OCTOWRIGHT_DEFAULT_URL"]
     port = _bound_http_port if _bound_http_port is not None else int(_DEFAULT_PORT)
     return f"http://127.0.0.1:{port}/new-tab"
+
+
+@lru_cache(maxsize=1)
+def _detect_git_repo_name() -> str | None:
+    """Return the basename of the nearest git repo root, or None."""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if r.returncode == 0:
+            return Path(r.stdout.strip()).name or None
+    except Exception:
+        pass
+    return None
+
+
+@lru_cache(maxsize=1)
+def get_default_label() -> str:
+    """Default browser label: username, or username/repo when inside a git repo.
+
+    Overridable via OCTOWRIGHT_DEFAULT_LABEL. Cached so the git probe runs once.
+    """
+    env = os.environ.get("OCTOWRIGHT_DEFAULT_LABEL", "").strip()
+    if env:
+        return env
+    try:
+        username = getpass.getuser()
+    except Exception:
+        username = "user"
+    repo = _detect_git_repo_name()
+    return f"{username}/{repo}" if repo else username
 
 
 DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
