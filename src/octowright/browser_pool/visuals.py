@@ -12,6 +12,8 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.defaults import BADGE_OPACITY
+
 log = get_logger(__name__)
 
 
@@ -301,8 +303,6 @@ async def wire_init_scripts(
         # of the same persona share one color. Engine emoji handles engine
         # differentiation.
         color_seed = profile or label or instance_id[:6]
-        from octowright.defaults import BADGE_OPACITY
-
         badge_script = (
             _badge_script()
             .replace("__TAG__", _json.dumps(badge_text))
