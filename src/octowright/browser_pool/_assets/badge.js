@@ -21,8 +21,8 @@
             opacity: String(OPACITY),
             pointerEvents: "none", userSelect: "none",
         };
-        styles[POS.vertical] = "8px";
-        styles[POS.horizontal] = "8px";
+        styles[POS.vertical] = POS.v_offset || "8px";
+        styles[POS.horizontal] = POS.h_offset || "8px";
         if (POS.transform) styles.transform = POS.transform;
         Object.assign(div.style, styles);
         document.body.appendChild(div);

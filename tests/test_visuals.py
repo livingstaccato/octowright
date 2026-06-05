@@ -43,6 +43,33 @@ async def test_wire_init_scripts_substitutes_opacity(monkeypatch: pytest.MonkeyP
     assert any("__OPACITY__" not in s and "0.35" in s for s in scripts)
 
 
+def test_all_eight_positions_exist() -> None:
+    from octowright.browser_pool.visuals import _BADGE_POSITIONS
+
+    expected = {
+        "top-left",
+        "top-center",
+        "top-right",
+        "left-center",
+        "right-center",
+        "bottom-left",
+        "bottom-center",
+        "bottom-right",
+    }
+    assert expected == set(_BADGE_POSITIONS.keys())
+
+
+def test_center_positions_have_transform() -> None:
+    from octowright.browser_pool.visuals import _BADGE_POSITIONS
+
+    for key in ("top-center", "bottom-center"):
+        assert "transform" in _BADGE_POSITIONS[key]
+        assert "translateX(-50%)" in _BADGE_POSITIONS[key]["transform"]
+    for key in ("left-center", "right-center"):
+        assert "transform" in _BADGE_POSITIONS[key]
+        assert "translateY(-50%)" in _BADGE_POSITIONS[key]["transform"]
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"

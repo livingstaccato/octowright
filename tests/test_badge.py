@@ -209,13 +209,17 @@ def test_visuals_asset_loaders_are_cached() -> None:
     assert info.hits >= 1
 
 
-def test_badge_positions_cover_all_four_corners() -> None:
+def test_badge_positions_cover_all_eight_positions() -> None:
     from octowright.browser_pool.visuals import _BADGE_POSITIONS
 
     assert set(_BADGE_POSITIONS.keys()) == {
         "top-left",
+        "top-center",
         "top-right",
+        "left-center",
+        "right-center",
         "bottom-left",
+        "bottom-center",
         "bottom-right",
     }
 
