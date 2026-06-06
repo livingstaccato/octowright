@@ -54,6 +54,11 @@ def _viewport_pill_script() -> str:
     return _read_asset("viewport_pill.js")
 
 
+@functools.cache
+def _newtab_shortcut_script() -> str:
+    return _read_asset("newtab_shortcut.js")
+
+
 # Curated emoji pool for per-persona/per-label visual identity. 33 picks: mostly
 # animals and food, no people/places. Avoids 🦊/🌐/🧭 (reserved for engines below)
 # and avoids skin-tone modifiers / ZWJ sequences for cross-platform reliability.
@@ -338,6 +343,14 @@ async def wire_init_scripts(
     }
     viewport_script = _viewport_pill_script().replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
     await context.add_init_script(script=viewport_script)
+
+    # WebKit has no browser-chrome Cmd+T; inject a page-level handler so the
+    # shortcut still opens /new-tab. Chromium/Firefox handle it natively (and
+    # the service-worker extension / page-event redirector cover those), so we
+    # skip them here to avoid double-opening a tab.
+    if kind == "webkit":
+        shortcut_script = _newtab_shortcut_script().replace("__TARGET__", _json.dumps(get_default_url()))
+        await context.add_init_script(script=shortcut_script)
 
     if stabilize:
         await context.add_init_script(script=render_stabilize_script())
