@@ -113,6 +113,42 @@ async def test_spawn_roster_partial_failure(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.anyio
+async def test_spawn_roster_cancelled_child_closes_launched_siblings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cancelled child launch must not leak the siblings that did launch.
+
+    The successfully-launched browsers must be fully closed *before* the
+    CancelledError re-propagates — a detached create_task close would leave the
+    recorded closes empty at the point the exception surfaces.
+    """
+    import asyncio
+
+    pool = _make_pool()
+    closed: list[str] = []
+
+    async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("label") == "cancelme":
+            raise asyncio.CancelledError
+        return _launch_result(label=kwargs.get("label"))
+
+    async def _fake_close(instance_id: str, **_kwargs: Any) -> None:
+        closed.append(instance_id)
+
+    monkeypatch.setattr(pool, "launch", _fake_launch)
+    monkeypatch.setattr(pool, "close", _fake_close)
+
+    specs = [
+        {"kind": "webkit", "label": "alpha"},
+        {"kind": "webkit", "label": "cancelme"},
+        {"kind": "webkit", "label": "gamma"},
+    ]
+
+    with pytest.raises(asyncio.CancelledError):
+        await pool.spawn_roster(specs)
+
+    assert sorted(closed) == ["fake-alpha", "fake-gamma"]
+
+
+@pytest.mark.anyio
 async def test_spawn_roster_empty_specs(monkeypatch: pytest.MonkeyPatch) -> None:
     pool = _make_pool()
     monkeypatch.setattr(pool, "launch", AsyncMock(return_value=_launch_result()))

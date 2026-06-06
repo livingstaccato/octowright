@@ -958,6 +958,48 @@ class TestSafeCleanupOnLaunchFailure:
         # Must not raise.
         await _safe_cleanup_on_launch_failure(context=context, browser=browser, video_dir=video_dir)
 
+    @pytest.mark.anyio
+    async def test_cleanup_completes_under_cancellation(self) -> None:
+        """A cancellation arriving mid-cleanup must not abort the sequence and
+        leak the browser: every close must still run to completion before the
+        cancellation is delivered."""
+        import anyio
+
+        from octowright.browser_pool.pool import _safe_cleanup_on_launch_failure
+
+        started = anyio.Event()
+        release = anyio.Event()
+        closed: list[str] = []
+
+        async def _ctx_close() -> None:
+            started.set()
+            await release.wait()
+            closed.append("context")
+
+        async def _browser_close() -> None:
+            closed.append("browser")
+
+        context = MagicMock()
+        context.close = _ctx_close
+        browser = MagicMock()
+        browser.close = _browser_close
+
+        holder: dict[str, anyio.CancelScope] = {}
+
+        async def _run() -> None:
+            with anyio.CancelScope() as scope:
+                holder["scope"] = scope
+                await _safe_cleanup_on_launch_failure(context=context, browser=browser, video_dir=None)
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(_run)
+            await started.wait()
+            # Cancel while the first close is in flight, then let it proceed.
+            holder["scope"].cancel()
+            release.set()
+
+        assert closed == ["context", "browser"]
+
 
 class TestSessionsLock:
     @pytest.mark.anyio
