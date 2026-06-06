@@ -312,10 +312,13 @@ class TestBuildLaunchKwargs:
 
     @pytest.mark.anyio
     async def test_no_args_when_tile_false(self) -> None:
-        """tile=False → no args."""
+        """tile=False + chromium → only --new-tab-url arg, no tiling flags."""
         pool = BrowserPool()
         out = await pool._build_launch_kwargs(tile=False, kind="chromium", headless=False)
-        assert out == {}
+        assert "args" in out
+        assert any("--new-tab-url" in a for a in out["args"])
+        # No tiling flags present
+        assert not any("--window-position" in a or "--window-size" in a for a in out["args"])
 
     @pytest.mark.anyio
     async def test_no_args_for_firefox(self) -> None:
@@ -334,11 +337,14 @@ class TestBuildLaunchKwargs:
 
     @pytest.mark.anyio
     async def test_no_args_when_headless(self) -> None:
-        """Headless tile is meaningless — short-circuits."""
+        """Headless chromium gets --new-tab-url but no tiling flags; counter stays 0."""
         pool = BrowserPool()
         out = await pool._build_launch_kwargs(tile=True, kind="chromium", headless=True)
-        assert out == {}
+        assert "args" in out
+        assert any("--new-tab-url" in a for a in out["args"])
+        # Tiling is meaningless headless — tile counter must not advance
         assert pool._tile_counter == 0
+        assert not any("--window-position" in a or "--window-size" in a for a in out["args"])
 
 
 # ─── _resolve_session_dir ────────────────────────────────────────────────────

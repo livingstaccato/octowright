@@ -358,16 +358,24 @@ class BrowserPool:
         await shutdown_pool(self)
 
     async def _build_launch_kwargs(self, *, tile: bool, kind: str, headless: bool) -> dict[str, Any]:
-        """Chromium-only window tiling. Holds ``_tile_lock`` only for the
-        read+increment of ``_tile_counter`` so parallel spawn_roster launches
-        don't share the same slot. No-op for firefox/webkit (no equivalent CLI
-        hook) and headless runs."""
+        """Chromium-only window tiling and new-tab URL override.
+
+        For Chromium: always injects --new-tab-url so Cmd+T opens /new-tab
+        natively. Tile args are appended when tile=True and not headless.
+        Firefox/WebKit: no equivalent CLI hooks; the context page-event
+        redirector in launch_pipeline.py handles those engines.
+        """
+        from octowright.defaults import get_default_url
+
         out: dict[str, Any] = {}
-        if tile and kind == "chromium" and not headless:
-            async with self._tile_lock:
-                tile_index = self._tile_counter
-                self._tile_counter += 1
-            out["args"] = _tile_args_for_chromium(tile_index)
+        if kind == "chromium":
+            args = [f"--new-tab-url={get_default_url()}"]
+            if tile and not headless:
+                async with self._tile_lock:
+                    tile_index = self._tile_counter
+                    self._tile_counter += 1
+                args.extend(_tile_args_for_chromium(tile_index))
+            out["args"] = args
         return out
 
     async def _resolve_session_dir(
