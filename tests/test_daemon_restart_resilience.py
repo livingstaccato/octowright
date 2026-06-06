@@ -3,26 +3,29 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""SKETCH — opt-in multi-process test documenting daemon-restart behavior.
+"""Opt-in multi-process tests documenting the bridge's two distinct drop modes.
 
-What it actually proves (verified live, 2026-06-06): restarting the daemon
-DISCONNECTS connected followers. `proxy_bridge.run_proxy` returns when the
-leader goes away (its health watchdog tears the bridge down), then
-`_serve_singleton` respawns a replacement daemon and *returns* — so the
-follower process exits and its MCP client's stdio closes. The follower does
-NOT transparently reconnect across a full restart; the client must reconnect
-(a new session, for stdio clients). The respawn exists so the *next* client
-finds a live leader quickly, not to keep the current one alive.
+Both verified live (2026-06-06):
 
-(The in-place reconnect that `proxy_supervisor` does is for a *transient*
-leader stream drop while the leader process is still alive — a different,
-narrower case this test does not cover.)
+1. **Full restart / leader gone** (`test_restart_disconnects_*`): `octowright
+   restart` (or any leader kill/crash/idle-exit) makes `proxy_bridge.run_proxy`
+   return — `_serve_singleton` respawns a replacement daemon and *returns*, so
+   the follower process exits and its MCP client's stdio closes. The client must
+   reconnect (a new session, for stdio clients). The respawn just lets the *next*
+   client find a live leader quickly.
+
+2. **Transient drop, leader alive** (`test_transient_drop_*`): when the MCP
+   stream drops but `/api/health` keeps answering, `proxy_supervisor` reconnects
+   in place — the client session SURVIVES and the daemon pid is unchanged. This
+   is induced with a byte-level TCP proxy whose connections are force-closed
+   while the daemon keeps running.
 
 Skipped unless OCTOWRIGHT_RUN_DAEMON_IT=1 (slow; spawns real processes).
 
 SAFETY: hermetic via env (own OCTOWRIGHT_LOCK_PATH + state dirs + ephemeral
 port) so it never touches a real daemon, and every `restart` passes
-`--keep-browsers` so the machine's real browsers are never reaped.
+`--keep-browsers` so the machine's real browsers are never reaped. The
+transient test never kills the daemon, so it reaps nothing.
 """
 
 from __future__ import annotations
@@ -37,9 +40,13 @@ from pathlib import Path
 from typing import Any
 
 import anyio
+import httpx
 import pytest
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+from octowright import singleton
+from octowright.singleton import LeaderInfo
 
 pytestmark = [
     pytest.mark.skipif(
@@ -163,3 +170,114 @@ async def test_restart_disconnects_followers_then_a_fresh_client_reconnects(tmp_
         assert after["daemon"]["pid"] != old_pid, "expected a freshly respawned daemon"
 
     _restart(bin_, env, cwd, "--no-start")  # teardown
+
+
+async def _wait_health(port: int, timeout: float = 40.0) -> None:
+    async with httpx.AsyncClient(timeout=5) as client:
+        with anyio.fail_after(timeout):
+            while True:
+                try:
+                    if (await client.get(f"http://127.0.0.1:{port}/api/health")).status_code == 200:
+                        return
+                except Exception:
+                    pass
+                await anyio.sleep(0.3)
+
+
+class _Proxy:
+    """A byte-level TCP proxy whose live connections can be force-closed, to
+    induce a transient stream drop without touching the leader process."""
+
+    def __init__(self, target_port: int) -> None:
+        self._target = target_port
+        self.conns: set[tuple[Any, Any]] = set()
+
+    async def _pump(self, src: Any, dst: Any) -> None:
+        try:
+            while True:
+                await dst.send(await src.receive())
+        except Exception:
+            pass
+
+    async def handle(self, client: Any) -> None:
+        try:
+            leader = await anyio.connect_tcp("127.0.0.1", self._target)
+        except Exception:
+            await client.aclose()
+            return
+        pair = (client, leader)
+        self.conns.add(pair)
+        try:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(self._pump, client, leader)
+                tg.start_soon(self._pump, leader, client)
+        finally:
+            self.conns.discard(pair)
+
+    async def drop_all(self) -> int:
+        pairs = list(self.conns)
+        for client, leader in pairs:
+            for stream in (client, leader):
+                try:
+                    await stream.aclose()
+                except Exception:
+                    pass
+        self.conns.clear()
+        return len(pairs)
+
+
+@pytest.mark.anyio
+async def test_transient_drop_reconnects_in_place_while_leader_stays_alive(tmp_path: Path) -> None:
+    leader_port = _free_port()
+    proxy_port = _free_port()
+    env = _hermetic_env(tmp_path, leader_port)
+    bin_ = _octowright_bin()
+    cwd = str(tmp_path)
+    lockpath = tmp_path / "octowright.lock"
+
+    daemon = subprocess.Popen(  # nosec B603
+        [bin_, "serve", "--daemon-mode", "--http-host", "127.0.0.1", "--http-port", str(leader_port)],
+        env=env,
+        cwd=cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        await _wait_health(leader_port)
+        info = singleton.read_lock(lockpath)
+        assert info is not None
+        daemon_pid = info.pid
+
+        proxy = _Proxy(leader_port)
+        listener = await anyio.create_tcp_listener(local_host="127.0.0.1", local_port=proxy_port)
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(listener.serve, proxy.handle)
+            # Route the follower through the proxy (lockfile stays valid: pid alive).
+            singleton.write_lock(
+                LeaderInfo(
+                    pid=info.pid,
+                    http_host="127.0.0.1",
+                    http_port=proxy_port,
+                    mcp_url=f"http://127.0.0.1:{proxy_port}/mcp/",
+                    started_at=info.started_at,
+                ),
+                lockpath,
+            )
+            params = StdioServerParameters(command=bin_, args=["serve"], cwd=cwd, env=env)
+            async with stdio_client(params) as (r, w), ClientSession(r, w) as client_a:
+                with anyio.fail_after(45):
+                    await client_a.initialize()
+                assert (await _status_with_retry(client_a))["daemon"]["pid"] == daemon_pid
+
+                assert await proxy.drop_all() > 0, "expected live proxied connections to drop"
+
+                # Leader still alive → supervisor reconnects in place; session survives.
+                after = await _status_with_retry(client_a)
+                assert after["daemon"]["pid"] == daemon_pid, "leader must NOT have restarted"
+            tg.cancel_scope.cancel()
+    finally:
+        daemon.terminate()
+        try:
+            daemon.wait(timeout=20)
+        except Exception:
+            daemon.kill()
