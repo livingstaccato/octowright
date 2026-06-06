@@ -83,6 +83,8 @@ CLI (Click)
 
 **Transport recovery**: If an Octowright MCP call returns `Transport closed` or times out, first check daemon health with `curl http://127.0.0.1:6286/api/health`. If health is good, retry one Octowright MCP call; the follower bridge should fail fast and reconnect for the next call. If the same client handle still fails, run `uv run --active python scripts/bridge_reconnect_smoke.py` to distinguish a broken client handle from a broken daemon. Do not run `octowright restart` unless daemon health fails or the user explicitly asks for a restart.
 
+**Leader-mode observability**: `octowright_status()["daemon"]["mode"]` reports how the answering leader is running: `"daemon"` (a detached daemon — the resilient default; restarting it leaves followers connected and they reconnect), `"inline"` (the leader is running *inside* an MCP client's own process — fragile: if that client exits or is restarted, every browser dies and other clients lose their backend), or `"unknown"` (leader not yet wired). For `"inline"`, `daemon["inline_reason"]` is `"no_singleton"` (deliberate, via `--no-singleton`) or `"daemon_spawn_failed"` (the fallback when the detached daemon couldn't be spawned — `cli/serve.py` also emits a loud stderr warning in this case). An agent seeing `mode == "inline"` with reason `daemon_spawn_failed` should treat the session as fragile and avoid `octowright restart` (which would kill that very leader).
+
 ### Key Files
 
 | Path | Role |
