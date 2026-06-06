@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-async def _shielded_rollback_close(
+async def shielded_rollback_close(
     pool: BrowserPool,
     instance_ids: list[str],
     *,
@@ -102,7 +102,7 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
             # Cancellation during a user-initiated launch is not a "soft success" —
             # close the siblings that did launch (shielded + awaited so the
             # cleanup completes) before propagating the cancellation up.
-            await _shielded_rollback_close(
+            await shielded_rollback_close(
                 pool,
                 [info["instance_id"] for info in launched],
                 logger=log,
