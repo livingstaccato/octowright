@@ -15,7 +15,7 @@ import anyio
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
-from octowright.browser_pool.roster import _shielded_rollback_close
+from octowright.browser_pool.roster import shielded_rollback_close
 from octowright.mcp_types import (
     ScenarioParticipantOutcome,
     ScenarioRemapEntry,
@@ -212,7 +212,7 @@ class ScenarioPool:
         with anyio.CancelScope(shield=True):
             async with self._live_lock:
                 self._live.pop(scenario_id, None)
-            await _shielded_rollback_close(
+            await shielded_rollback_close(
                 browser_pool,
                 launched_ids,
                 logger=log,
