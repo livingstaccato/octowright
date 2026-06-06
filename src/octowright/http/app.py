@@ -23,7 +23,7 @@ from provide.telemetry import get_logger
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route
 
-from octowright.http.exposure import guard_sensitive_asgi_app
+from octowright.http.exposure import guard_sensitive_asgi_app, guard_sensitive_http
 from octowright.http.frontend import _frontend_routes
 from octowright.http.mcp_session_tracker import (
     McpSessionTracker,
@@ -93,7 +93,12 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette
 
     # /new-tab + /otto.svg: default landing page for browser_launch with no URL.
     # Registered before the SPA catchall mount so they aren't swallowed by StaticFiles.
-    routes.append(Route("/new-tab", new_tab, methods=["GET"]))
+    # /new-tab is guarded: it server-renders the octowright version, git commit, and
+    # daemon start time, so a DNS-rebinding page must not read it cross-origin — the
+    # Host-header check rejects a non-loopback Host. The local browser always reaches
+    # it with a loopback Host, so the landing-page UX is unchanged. /otto.svg is an
+    # inert logo with no secrets, so it stays public.
+    routes.append(Route("/new-tab", guard_sensitive_http(new_tab), methods=["GET"]))
     routes.append(Route("/otto.svg", otto_svg, methods=["GET"]))
     routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
