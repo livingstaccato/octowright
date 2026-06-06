@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -113,3 +114,28 @@ async def test_launch_failure_closes_context_browser_and_recorder(
     assert context.closed is False
     assert browser.closed is False
     assert len(pool.list_sessions()) == 1
+
+
+@pytest.mark.anyio
+async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
+    """Redirector must call wait_for_load_state, not asyncio.sleep."""
+    from octowright.browser_pool.launch_pipeline import _make_new_tab_redirector
+
+    waited: list[str] = []
+    navigated: list[str] = []
+
+    class FakePage:
+        url = "about:blank"
+
+        async def wait_for_load_state(self, state: str, *, timeout: float) -> None:
+            waited.append(state)
+
+        async def goto(self, url: str) -> None:
+            navigated.append(url)
+
+    handler = _make_new_tab_redirector()
+    handler(FakePage())
+    await asyncio.sleep(0.05)  # let the async task run
+
+    assert "domcontentloaded" in waited
+    assert len(navigated) == 1

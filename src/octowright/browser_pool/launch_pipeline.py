@@ -44,20 +44,35 @@ log = get_logger(__name__)
 
 # URLs that indicate a user-opened blank tab (Cmd+T / Ctrl+T) rather than a
 # programmatic popup. We redirect these to the daemon's own /new-tab page.
-_BLANK_URLS = frozenset({"", "about:blank", "chrome://newtab/", "about:newtab"})
+_BLANK_URLS = frozenset(
+    {
+        "",
+        "about:blank",
+        "chrome://newtab/",
+        "chrome://newtab",  # trailing-slash variants
+        "about:newtab",
+    }
+)
 
 # Task references kept alive to prevent GC mid-flight (satisfies RUF006).
 _redirect_tasks: set[asyncio.Task[None]] = set()
 
 
 def _make_new_tab_redirector() -> Any:
-    """Return a sync page-event handler that redirects blank new tabs to /new-tab."""
+    """Return a sync page-event handler that redirects blank new tabs to /new-tab.
+
+    Waits for domcontentloaded (up to 800 ms) so the URL is settled before
+    checking — more reliable than a fixed sleep.
+    """
 
     def _on_new_page(new_page: Any) -> None:
         async def _redirect() -> None:
             from octowright.defaults import get_default_url
 
-            await asyncio.sleep(0.4)
+            try:
+                await new_page.wait_for_load_state("domcontentloaded", timeout=800)
+            except Exception:
+                pass
             try:
                 if new_page.url in _BLANK_URLS:
                     await new_page.goto(get_default_url())
