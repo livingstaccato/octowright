@@ -122,6 +122,9 @@ def write_project_config(target_dir: Path, *, force: bool = False) -> tuple[Path
 # octowright project config
 # Picked up automatically by browser_launch when this file is present.
 # Override any field or delete to fall back to octowright's auto-detection.
+#
+# Note: the daemon caches this file at startup.
+# Changes take effect after `octowright restart`.
 
 # Human-readable label for browsers launched from this project.
 label: {label}

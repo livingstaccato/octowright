@@ -168,6 +168,7 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD` — set to `1` to allow non-loopback access to sensitive dashboard/MCP endpoints. **Warning:** there is no auth layer; combining a non-loopback `OCTOWRIGHT_HTTP_HOST` with this flag exposes RCE-equivalent surface (the MCP transport drives browsers) to the network. Use only behind your own auth gateway.
 - `OCTOWRIGHT_DEFAULT_URL` — override the URL opened on `browser_launch` with no `url` argument (default resolves from the bound port at runtime; always points at `/new-tab` on the local daemon)
 - `OCTOWRIGHT_DEFAULT_LABEL` — override the auto-detected default browser label (see `.octowright/config.yaml` for per-project configuration)
+- `OCTOWRIGHT_BADGE_OPACITY` — corner badge opacity (float 0.0–1.0, default 0.35). Lower = more translucent.
 - `OCTOWRIGHT_HEADLESS` — force headless mode
 - `OCTOWRIGHT_IDLE_GRACE` — seconds before auto-exit (default 300)
 - `OCTOWRIGHT_PROFILES_DIR` — override profile storage root
