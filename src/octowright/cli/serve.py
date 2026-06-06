@@ -29,6 +29,18 @@ _log = get_logger(__name__)
 
 _SignalHandler = Callable[[int, FrameType | None], Any] | int | None
 
+# Emitted when the detached daemon fails to spawn and this client process has to
+# run the leader inline. That makes this MCP client the leader: if it exits or is
+# restarted, every browser dies and other clients lose their backend. Surfaced
+# loudly here and via octowright_status()["daemon"]["mode"] == "inline".
+_INLINE_FALLBACK_WARNING = (
+    "octowright: WARNING — daemon spawn timed out; running the leader INLINE in this "
+    "process. This MCP client is now the leader: if it exits or is restarted, every "
+    "browser dies and any other clients lose their backend. Fix the daemon-spawn "
+    "failure (check the HTTP port and daemon logs) or start a standalone "
+    "`octowright serve` leader, then reconnect."
+)
+
 
 def _log_first_done(
     event: str,
@@ -200,10 +212,14 @@ async def _serve_async(
     }
     # Direct-leader paths: daemon-mode (the spawned daemon runs leader code
     # directly) and --no-singleton (legacy inline mode, no daemon, no follower).
+    from octowright.server import _state
+
     if daemon_mode:
+        _state.set_leader_mode("daemon")
         await _run_leader(**leader_kwargs, no_singleton=False, arm_watchdog_immediately=True)
         return
     if no_singleton:
+        _state.set_leader_mode("inline", inline_reason="no_singleton")
         await _run_leader(**leader_kwargs, no_singleton=True)
         return
     await _serve_singleton(leader_kwargs, http_host=http_host, http_port=http_port, idle_grace=idle_grace)
@@ -232,8 +248,12 @@ async def _ensure_leader_or_inline(
     spawned = await _daemon.wait_for_daemon()
     if spawned is None:
         # Daemon didn't come up — run leader inline so the user at least gets
-        # a working server (browsers die on this process's exit).
-        click.echo("octowright: daemon spawn timed out; running leader inline", err=True)
+        # a working server (browsers die on this process's exit). Surface the
+        # degraded, fragile state loudly and via octowright_status.
+        from octowright.server import _state
+
+        click.echo(_INLINE_FALLBACK_WARNING, err=True)
+        _state.set_leader_mode("inline", inline_reason="daemon_spawn_failed")
         await _run_leader(**leader_kwargs, no_singleton=False)
         return None
     return spawned
