@@ -29,6 +29,27 @@ log = get_logger("octowright.server")
 pool = BrowserPool()
 scenario_pool = _scenario_pool_mod.ScenarioPool()
 
+# Records how this process's leader was started, so octowright_status can flag
+# the fragile inline-fallback mode — a client that became the in-process leader
+# because the detached daemon failed to spawn (killing that client then kills
+# every browser). Set by cli.serve at leader startup; stays "unknown" in
+# processes that never run the leader (pure followers, or before serve wires it).
+_LEADER_MODE: dict[str, str | None] = {"mode": "unknown", "inline_reason": None}
+
+
+def set_leader_mode(mode: str, *, inline_reason: str | None = None) -> None:
+    """Record this process's leader mode. ``mode`` is ``"daemon"`` for a detached
+    daemon leader, ``"inline"`` when the leader runs inside this process, or
+    ``"unknown"``. ``inline_reason`` explains an inline leader — ``"no_singleton"``
+    (deliberate) or ``"daemon_spawn_failed"`` (the fragile fallback)."""
+    _LEADER_MODE["mode"] = mode
+    _LEADER_MODE["inline_reason"] = inline_reason
+
+
+def leader_mode_snapshot() -> dict[str, str | None]:
+    """Return a copy of the recorded leader-mode state."""
+    return dict(_LEADER_MODE)
+
 
 def _track_advisor_usage(fn: Callable[..., Any]) -> Callable[..., Any]:
     tool_name = getattr(fn, "__name__", "")
