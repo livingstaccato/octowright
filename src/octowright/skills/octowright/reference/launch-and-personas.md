@@ -61,10 +61,10 @@ Launched to do scripted work the user won't see directly: snapshots, macro recor
 The user said "show me", "open", "navigate to", "launch", "let me see", or otherwise wants to look at or interact with the window.
 
 **Rules:**
-- **Pass `protected=True`** at launch. This marks the browser as user-owned: `browser_close` and `browser_close_all` will refuse to close it unless `force=True` is explicitly passed. It's a safeguard against other agents accidentally closing the window. If you forgot to set it at launch, call `browser_set_protected(instance_id, protected=True)` at any time.
+- **Pass `protected=True`** at launch. This marks the browser as user-owned: close-capable tools (`browser_close`, `browser_close_all`, `browser_capture_and_close`) will refuse to close it unless `force=True` is explicitly passed. It's a safeguard against other agents accidentally closing the window. If you forgot to set it at launch, call `browser_set_protected(instance_id, protected=True)` at any time.
 - **Leave it open.** The user controls when to close.
 - **Do not** pass `viewport_w` / `viewport_h` unless the user gave a specific size. Without those args, the launch defaults to a responsive viewport so the user can resize naturally.
-- **Do not** call `browser_close` on a protected browser unless the user explicitly asks — and then pass `force=True`.
+- **Do not** call close-capable tools on a protected browser unless the user explicitly asks — and then pass `force=True`.
 - If you need a screenshot of a user-facing browser, use `GET /api/sessions/{id}/screenshot/now` — it returns image bytes without touching the window.
 
 ### When You Can't Tell

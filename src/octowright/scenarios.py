@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from provide.telemetry import get_logger
@@ -29,6 +29,8 @@ log = get_logger(__name__)
 # the warning catches actual typos without breaking domain-specific role
 # vocabularies used by existing scenarios and demo bundles.
 _KNOWN_ROLES = frozenset({"player", "monitor", "spectator"})
+_FIXTURE_KEYS = frozenset({"dialog_policy", "mock_routes"})
+_DIALOG_POLICIES = frozenset({"accept", "dismiss", "manual"})
 
 
 @dataclass
@@ -56,6 +58,7 @@ class Scenario:
 
 
 def _validate_scenario(s: Scenario) -> None:
+    s.fixtures = _validate_fixtures(s.fixtures, scenario_name=s.name)
     seen: set[tuple[str, str]] = set()
     for p in s.participants:
         if p.kind not in SUPPORTED_KINDS:
@@ -95,7 +98,7 @@ def load_yaml_scenario(content: str, name: str) -> Scenario:
         name=raw.get("name", name),
         participants=participants,
         description=raw.get("description"),
-        fixtures=dict(raw.get("fixtures") or {}),
+        fixtures=_validate_fixtures(raw.get("fixtures"), scenario_name=name),
         teardown_macro=(teardown_raw.get("macro") if isinstance(teardown_raw, dict) else None),
         verify=dict(raw.get("verify") or {}),
     )
@@ -130,6 +133,108 @@ def _validate_required_participant_strings(raw: dict[str, Any], *, index: int, s
     for field_name in ("persona", "kind"):
         if not isinstance(raw.get(field_name), str) or not raw[field_name]:
             raise ValueError(f"scenario {scenario_name!r}: participants[{index}] missing required {field_name!r}")
+
+
+def _validate_fixtures(value: Any, *, scenario_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"scenario {scenario_name!r}: fixtures must be a mapping")
+    unknown = sorted(set(value) - _FIXTURE_KEYS)
+    if unknown:
+        raise ValueError(f"scenario {scenario_name!r}: fixtures contain unknown keys: {unknown}")
+
+    fixtures: dict[str, Any] = {}
+    if "dialog_policy" in value:
+        dialog_policy = value["dialog_policy"]
+        if dialog_policy not in _DIALOG_POLICIES:
+            raise ValueError(
+                f"scenario {scenario_name!r}: fixtures.dialog_policy must be one of accept, dismiss, manual"
+            )
+        fixtures["dialog_policy"] = dialog_policy
+    if "mock_routes" in value:
+        fixtures["mock_routes"] = _validate_mock_routes(value["mock_routes"], scenario_name=scenario_name)
+    return fixtures
+
+
+def _validate_mock_routes(value: Any, *, scenario_name: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError(f"scenario {scenario_name!r}: fixtures.mock_routes must be a list")
+    routes: list[dict[str, Any]] = []
+    for index, route in enumerate(value):
+        routes.append(_validate_mock_route(route, index=index, scenario_name=scenario_name))
+    return routes
+
+
+def _validate_mock_route(route: Any, *, index: int, scenario_name: str) -> dict[str, Any]:
+    if not isinstance(route, dict):
+        raise ValueError(f"scenario {scenario_name!r}: fixtures.mock_routes[{index}] must be a mapping")
+    route_spec = cast(dict[str, Any], route)
+    pattern = _validate_mock_route_pattern(route_spec, index=index, scenario_name=scenario_name)
+    normalized: dict[str, Any] = {"pattern": pattern}
+    _copy_optional_mock_route_fields(route_spec, normalized, index=index, scenario_name=scenario_name)
+    extra = sorted(set(route_spec) - {"pattern", "status", "body", "content_type", "headers"})
+    if extra:
+        raise ValueError(f"scenario {scenario_name!r}: fixtures.mock_routes[{index}] unknown keys: {extra}")
+    return normalized
+
+
+def _validate_mock_route_pattern(route: dict[str, Any], *, index: int, scenario_name: str) -> str:
+    pattern = route.get("pattern")
+    if not isinstance(pattern, str) or not pattern:
+        raise ValueError(
+            f"scenario {scenario_name!r}: fixtures.mock_routes[{index}].pattern must be a non-empty string"
+        )
+    return pattern
+
+
+def _copy_optional_mock_route_fields(
+    route: dict[str, Any],
+    normalized: dict[str, Any],
+    *,
+    index: int,
+    scenario_name: str,
+) -> None:
+    if "status" in route:
+        normalized["status"] = _validate_mock_route_status(route["status"], index=index, scenario_name=scenario_name)
+    if "body" in route:
+        normalized["body"] = _validate_mock_route_body(route["body"], index=index, scenario_name=scenario_name)
+    if "content_type" in route:
+        normalized["content_type"] = _validate_mock_route_content_type(
+            route["content_type"], index=index, scenario_name=scenario_name
+        )
+    if "headers" in route:
+        normalized["headers"] = _validate_mock_route_headers(route["headers"], index=index, scenario_name=scenario_name)
+
+
+def _validate_mock_route_status(value: Any, *, index: int, scenario_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not 100 <= value <= 599:
+        raise ValueError(
+            f"scenario {scenario_name!r}: fixtures.mock_routes[{index}].status must be an integer from 100 to 599"
+        )
+    return value
+
+
+def _validate_mock_route_body(value: Any, *, index: int, scenario_name: str) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"scenario {scenario_name!r}: fixtures.mock_routes[{index}].body must be a string or null")
+    return value
+
+
+def _validate_mock_route_content_type(value: Any, *, index: int, scenario_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"scenario {scenario_name!r}: fixtures.mock_routes[{index}].content_type must be a non-empty string"
+        )
+    return value
+
+
+def _validate_mock_route_headers(value: Any, *, index: int, scenario_name: str) -> dict[str, str]:
+    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        raise ValueError(
+            f"scenario {scenario_name!r}: fixtures.mock_routes[{index}].headers must be a mapping of strings"
+        )
+    return dict(value)
 
 
 def _validate_startup_macros(value: Any, *, index: int, scenario_name: str) -> list[str] | None:

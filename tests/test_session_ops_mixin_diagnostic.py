@@ -125,6 +125,14 @@ class TestDiagnosticBundle:
         assert bundle["console_tail"] == ["msg45", "msg46", "msg47", "msg48", "msg49"]
 
     @pytest.mark.anyio
+    async def test_console_tail_defaults_to_empty(self, tmp_path: Path) -> None:
+        """Default diagnostic payloads should not inline console text."""
+        inst = _build(tmp_path, page=_ok_page())
+        inst.console = ["secret-token"]
+        bundle = await inst.diagnostic_bundle()
+        assert bundle["console_tail"] == []
+
+    @pytest.mark.anyio
     async def test_url_swallow_keeps_other_fields(self, tmp_path: Path) -> None:
         """page.url access raising must not abort the rest of the bundle."""
         page = _ok_page()
@@ -166,7 +174,7 @@ class TestDiagnosticBundle:
         bundle = await inst.diagnostic_bundle()
         assert bundle["html_size"] == len(html)
         assert bundle["html_sha256"] == hashlib.sha256(html.encode("utf-8")).hexdigest()
-        assert bundle["html_preview"] == html[:DEFAULT_PREVIEW_CHARS]
+        assert bundle["html_preview"] is None
         assert Path(bundle["html_path"]).read_text(encoding="utf-8") == html
         assert "html" not in bundle
 
@@ -193,7 +201,7 @@ class TestDiagnosticBundle:
         """Preview is exactly DEFAULT_PREVIEW_CHARS long when html exceeds it."""
         html = "Z" * (DEFAULT_PREVIEW_CHARS * 2)
         inst = _build(tmp_path, page=_ok_page(html))
-        bundle = await inst.diagnostic_bundle()
+        bundle = await inst.diagnostic_bundle(html_preview_chars=DEFAULT_PREVIEW_CHARS)
         assert len(bundle["html_preview"]) == DEFAULT_PREVIEW_CHARS
 
     @pytest.mark.anyio

@@ -179,8 +179,11 @@ class TestScenarioFieldDefaults:
         assert isinstance(s.fixtures, dict)
 
     def test_fixtures_explicit_dict_preserved(self) -> None:
-        s = load_yaml_scenario(yaml.safe_dump({"name": "x", "participants": [], "fixtures": {"k": "v"}}), "x")
-        assert s.fixtures == {"k": "v"}
+        s = load_yaml_scenario(
+            yaml.safe_dump({"name": "x", "participants": [], "fixtures": {"dialog_policy": "dismiss"}}),
+            "x",
+        )
+        assert s.fixtures == {"dialog_policy": "dismiss"}
 
     def test_fixtures_null_treated_as_empty(self) -> None:
         """`fixtures: ~` (null) hits the `or {}` fallback."""
@@ -405,9 +408,11 @@ class TestLoadScenarioTemplate:
 
     def test_substitution_uses_str_of_value(self, templates_dir: Path) -> None:
         """Non-string args get str()-ified."""
-        (templates_dir / "num.yaml").write_text('name: num\nparticipants: []\nfixtures:\n  count: "{{n}}"\n')
+        (templates_dir / "num.yaml").write_text(
+            'name: num\nparticipants: []\nfixtures:\n  mock_routes:\n    - pattern: "**/api/{{n}}"\n'
+        )
         s = load_scenario_template("num", {"n": 5})
-        assert s.fixtures == {"count": "5"}
+        assert s.fixtures == {"mock_routes": [{"pattern": "**/api/5"}]}
 
     def test_substitution_only_replaces_double_braces(self, templates_dir: Path) -> None:
         """Single brace {x} should NOT be substituted; only {{x}}."""

@@ -12,7 +12,7 @@ import ipaddress
 import json
 import os
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
+from typing import Protocol, TypeVar, cast
 
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, Response
@@ -22,6 +22,12 @@ from starlette.websockets import WebSocket
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
 
 ResponseT = TypeVar("ResponseT", bound=Response)
+
+
+class _SensitiveGuardedHandler(Protocol):
+    __octowright_sensitive_guard__: bool
+
+
 _DEFAULT_HTTP_HOST = "127.0.0.1"
 _REMOTE_DISABLED_BODY = {
     "error": "remote dashboard access is disabled",
@@ -174,6 +180,7 @@ def guard_sensitive_http(
             return JSONResponse({"error": "cross-origin dashboard request is blocked"}, status_code=403)
         return await handler(request)
 
+    cast(_SensitiveGuardedHandler, guarded).__octowright_sensitive_guard__ = True
     return guarded
 
 
