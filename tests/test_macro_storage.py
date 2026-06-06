@@ -375,6 +375,40 @@ def test_save_macro_falls_back_when_existing_is_corrupt(monkeypatch: pytest.Monk
     assert data["name"] == "corrupt"
 
 
+def test_save_macro_rejects_slug_collision_with_different_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Two distinct names that slug to the same file must not silently overwrite.
+
+    "report sync" and "report-sync" both slug to report-sync.json. The second
+    save targets the first macro's file under a different display name — reject
+    it instead of clobbering the existing macro.
+    """
+    s = _import_storage(monkeypatch, tmp_path)
+    rec = _write_recording(tmp_path)
+
+    s.save_macro(recording_path=rec, name="report sync")
+    assert s.macro_path("report sync") == s.macro_path("report-sync")
+
+    with pytest.raises(ValueError, match="report sync"):
+        s.save_macro(recording_path=rec, name="report-sync")
+
+    # The original macro is left intact — its name was not clobbered.
+    data = json.loads(s.macro_path("report sync").read_text(encoding="utf-8"))
+    assert data["name"] == "report sync"
+
+
+def test_save_macro_same_name_resave_does_not_trip_collision_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Re-saving under the identical name is an update, not a collision."""
+    s = _import_storage(monkeypatch, tmp_path)
+    rec = _write_recording(tmp_path)
+
+    s.save_macro(recording_path=rec, name="same-name")
+    # Must not raise — same display name maps to the same file by design.
+    out = s.save_macro(recording_path=rec, name="same-name")
+    assert json.loads(out.read_text(encoding="utf-8"))["name"] == "same-name"
+
+
 # ---------------------------------------------------------------------------
 # write_macro
 # ---------------------------------------------------------------------------
