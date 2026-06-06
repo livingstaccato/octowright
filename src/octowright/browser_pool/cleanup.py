@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import anyio
+
 from octowright.recorder import Recorder
 
 
@@ -37,11 +39,18 @@ async def cleanup_on_launch_failure(
     browser: Any | None,
     video_dir: Path | None,
 ) -> None:
-    """Best-effort teardown shared by launch failure paths."""
-    await safe_close(context)
-    await safe_close(browser)
-    persistent_browser = getattr(context, "browser", None) if browser is None else None
-    await safe_close(persistent_browser)
+    """Best-effort teardown shared by launch failure paths.
+
+    The close sequence runs under a shielded cancel scope so an in-flight
+    cancellation (client disconnect / daemon teardown) can't abort it after the
+    context is closed but before the browser — which would orphan the Playwright
+    driver process. Each close is awaited; failures are swallowed by safe_close.
+    """
+    with anyio.CancelScope(shield=True):
+        await safe_close(context)
+        await safe_close(browser)
+        persistent_browser = getattr(context, "browser", None) if browser is None else None
+        await safe_close(persistent_browser)
     remove_empty_video_dir(video_dir)
 
 
