@@ -71,9 +71,21 @@ def save_macro(
     if dest.exists():
         try:
             existing = json.loads(dest.read_text(encoding="utf-8"))
-            created_at = existing.get("created_at", created_at)
         except (json.JSONDecodeError, OSError):
-            pass
+            existing = None
+        if existing is not None:
+            # slug() collapses distinct names onto the same file (e.g.
+            # "report sync" and "report-sync" → report-sync.json). Re-saving
+            # under the SAME display name is an update; a DIFFERENT name would
+            # silently clobber an unrelated macro, so reject it.
+            existing_name = existing.get("name")
+            if existing_name is not None and existing_name != name:
+                raise ValueError(
+                    f"macro name {name!r} collides with existing macro {existing_name!r} "
+                    f"(both map to {dest.name}); choose a distinct name or delete the existing "
+                    f"macro first with `macro_delete name={existing_name!r}`"
+                )
+            created_at = existing.get("created_at", created_at)
 
     now = now_iso()
     macro: dict[str, Any] = {
