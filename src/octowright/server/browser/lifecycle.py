@@ -78,7 +78,11 @@ async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
         "Pass protected=True (or set OCTOWRIGHT_PROTECT_BROWSERS=1) to mark this browser "
         "as user-owned: browser_close and browser_close_all will refuse to close it "
         "unless force=True is passed. Use this for any browser the user is actively "
-        "watching. Returns instance_id."
+        "watching. Returns instance_id. "
+        "If the initial navigation fails (network error, bad URL, DNS failure, etc.) the "
+        "browser instance is NOT destroyed — it stays alive and registered. The return dict "
+        "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
+        "to retry navigation or go to a different URL without re-launching."
     ),
 )
 async def browser_launch(
@@ -192,7 +196,11 @@ def browser_suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]
         "requires you to pick one via browser_launch. "
         "5. If suggest says ephemeral_ok, launches with no profile. "
         "Returns {instance_id, url, profile_used} on success, or {ambiguous: true, matches: [...]} "
-        "if you need to ask the user."
+        "if you need to ask the user. "
+        "If the initial navigation fails (network error, bad URL, DNS failure, etc.) the "
+        "browser instance is NOT destroyed — it stays alive and registered. The return dict "
+        "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
+        "to retry navigation or go to a different URL without re-launching."
     ),
 )
 async def browser_quick_launch(
