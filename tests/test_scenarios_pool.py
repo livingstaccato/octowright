@@ -48,7 +48,7 @@ class _Session:
 class _Pool:
     def __init__(self) -> None:
         self.sessions = {"a": _Session("a"), "b": _Session("b")}
-        self.closed: list[str] = []
+        self.closed: list[tuple[str, bool]] = []
         self.spawn_error = False
 
     async def spawn_roster(self, _reqs):
@@ -65,8 +65,8 @@ class _Pool:
     def get(self, instance_id: str):
         return self.sessions[instance_id]
 
-    async def close(self, instance_id: str):
-        self.closed.append(instance_id)
+    async def close(self, instance_id: str, *, force: bool = False):
+        self.closed.append((instance_id, force))
 
 
 def _live() -> LiveScenario:
@@ -224,6 +224,7 @@ async def test_start_stop_tail_macro_sync(monkeypatch: pytest.MonkeyPatch) -> No
 
     summary = await sp.stop(scenario_id=live.scenario_id, browser_pool=pool)
     assert set(summary["closed"]) == {"a", "b"}
+    assert set(pool.closed[-2:]) == {("a", True), ("b", True)}
 
 
 @pytest.mark.anyio
@@ -244,7 +245,7 @@ async def test_start_launch_failure_closes_partials(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(RuntimeError):
         await sp.start(name="demo", browser_pool=pool)
-    assert pool.closed == ["a"]
+    assert pool.closed == [("a", True)]
 
 
 @pytest.mark.anyio
@@ -273,7 +274,7 @@ async def test_startup_macro_failure_closes_participants(monkeypatch: pytest.Mon
 
     with pytest.raises(RuntimeError, match="startup macro failures"):
         await sp.start(name="demo", browser_pool=pool)
-    assert pool.closed == ["a", "b"]
+    assert pool.closed == [("a", True), ("b", True)]
     assert sp.list_live() == []
 
 
@@ -304,8 +305,48 @@ async def test_start_cancelled_during_fixtures_completes_rollback(monkeypatch: p
 
     with pytest.raises(asyncio.CancelledError):
         await sp.start(name="demo", browser_pool=pool)
-    assert pool.closed == ["a", "b"]
+    assert pool.closed == [("a", True), ("b", True)]
     assert sp.list_live() == []
+
+
+@pytest.mark.anyio
+async def test_run_macro_rejects_explicit_role_with_no_matches() -> None:
+    sp = ScenarioPool()
+    live = _live()
+    sp._live[live.scenario_id] = live
+
+    with pytest.raises(ValueError, match=r"scenario 'sid'.*role 'typo'"):
+        await sp.run_macro(scenario_id="sid", macro="m", browser_pool=_Pool(), role="typo")
+
+
+@pytest.mark.anyio
+async def test_run_macro_rejects_explicit_empty_role_with_no_matches() -> None:
+    sp = ScenarioPool()
+    live = _live()
+    sp._live[live.scenario_id] = live
+
+    with pytest.raises(ValueError, match=r"scenario 'sid'.*role ''"):
+        await sp.run_macro(scenario_id="sid", macro="m", browser_pool=_Pool(), role="")
+
+
+@pytest.mark.anyio
+async def test_wait_for_sync_rejects_explicit_role_with_no_matches() -> None:
+    sp = ScenarioPool()
+    live = _live()
+    sp._live[live.scenario_id] = live
+
+    with pytest.raises(ValueError, match=r"scenario 'sid'.*role 'typo'"):
+        await sp.wait_for_sync(scenario_id="sid", browser_pool=_Pool(), role="typo", selector="#x")
+
+
+@pytest.mark.anyio
+async def test_wait_for_sync_rejects_explicit_empty_role_with_no_matches() -> None:
+    sp = ScenarioPool()
+    live = _live()
+    sp._live[live.scenario_id] = live
+
+    with pytest.raises(ValueError, match=r"scenario 'sid'.*role ''"):
+        await sp.wait_for_sync(scenario_id="sid", browser_pool=_Pool(), role="", selector="#x")
 
 
 @pytest.mark.anyio

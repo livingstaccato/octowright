@@ -216,7 +216,7 @@ class TestRunSuite:
         assert result["failed"] == 0
         assert result["results"][0]["ok"] is True
         fake_pool.launch.assert_called_once()
-        fake_pool.close.assert_called_once_with("abc123")
+        fake_pool.close.assert_called_once_with("abc123", force=True)
 
     @pytest.mark.asyncio
     async def test_one_failing_test(self, fake_pool: MagicMock, tmp_path: Path) -> None:
@@ -245,7 +245,7 @@ class TestRunSuite:
         assert result["results"][0]["ok"] is False
         assert "RuntimeError" in result["results"][0]["error"]
         # close must still be called even on failure
-        fake_pool.close.assert_called_once_with("abc123")
+        fake_pool.close.assert_called_once_with("abc123", force=True)
 
     @pytest.mark.asyncio
     async def test_tag_filter(self, fake_pool: MagicMock, tmp_path: Path) -> None:
@@ -467,7 +467,7 @@ class TestRunSuite:
         assert report_path.exists()
         tree = ET.parse(report_path)
         assert tree.getroot().attrib["failures"] == "1"
-        fake_pool.close.assert_called_once_with("i-ok")
+        fake_pool.close.assert_called_once_with("i-ok", force=True)
 
     @pytest.mark.asyncio
     async def test_close_failure_returns_failed_result_and_still_writes_report(
@@ -508,7 +508,7 @@ class TestRunSuite:
         assert report_path.exists()
         tree = ET.parse(report_path)
         assert tree.getroot().attrib["failures"] == "0"
-        fake_pool.close.assert_called_once_with("abc123")
+        fake_pool.close.assert_called_once_with("abc123", force=True)
 
     @pytest.mark.asyncio
     async def test_rejects_max_parallel_less_than_one(self, fake_pool: MagicMock, tmp_path: Path) -> None:

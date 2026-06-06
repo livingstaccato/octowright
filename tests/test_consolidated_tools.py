@@ -34,6 +34,7 @@ def _patch_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
 def _stub_session(method_name: str, return_value: object) -> MagicMock:
     """Build a session-like mock whose `method_name` is an AsyncMock."""
     session = MagicMock()
+    session.protected = False
     session.log_path = Path("/tmp/test.jsonl")
     session.page = MagicMock()
     session.page.url = "https://octowright.com"
@@ -158,7 +159,7 @@ async def test_browser_capture_and_close(
     assert result["closed"] is True
     assert "aria" in result
     session.screenshot.assert_awaited_once()
-    pool.close.assert_awaited_once_with("inst-1")
+    pool.close.assert_awaited_once_with("inst-1", force=False)
 
 
 @pytest.mark.anyio

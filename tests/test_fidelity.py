@@ -46,7 +46,7 @@ async def test_diagnostic_bundle_writes_html_to_disk(fake_session: BrowserSessio
     assert Path(bundle["html_path"]).exists()
     assert bundle["html_size"] > 0
     assert bundle["html_sha256"]
-    assert len(bundle["html_preview"]) <= DEFAULT_PREVIEW_CHARS
+    assert bundle["html_preview"] is None
     # Full HTML not included by default
     assert "html" not in bundle
 
@@ -60,7 +60,7 @@ async def test_diagnostic_bundle_full_includes_inline_html(fake_session: Browser
 
 @pytest.mark.anyio
 async def test_diagnostic_bundle_preview_is_capped(fake_session: BrowserSession, tmp_path: Path) -> None:
-    bundle = await fake_session.diagnostic_bundle(screenshot_dir=tmp_path)
+    bundle = await fake_session.diagnostic_bundle(screenshot_dir=tmp_path, html_preview_chars=DEFAULT_PREVIEW_CHARS)
     # Content is "<html><body>" + "x"*10000 — well over cap
     assert bundle["html_size"] > DEFAULT_PREVIEW_CHARS
     assert len(bundle["html_preview"]) == DEFAULT_PREVIEW_CHARS

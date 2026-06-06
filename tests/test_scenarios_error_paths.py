@@ -62,7 +62,7 @@ class _FakePool:
         self._launched = launched or []
         self._errors = errors or []
         self._close_failures = close_failures or set()
-        self.close_calls: list[str] = []
+        self.close_calls: list[tuple[str, bool]] = []
         self.spawn_calls: list[list[dict[str, Any]]] = []
         self._sessions: dict[str, Any] = {}
 
@@ -82,8 +82,8 @@ class _FakePool:
     def maybe_get(self, instance_id: str) -> Any | None:
         return self._sessions.get(instance_id)
 
-    async def close(self, instance_id: str) -> None:
-        self.close_calls.append(instance_id)
+    async def close(self, instance_id: str, *, force: bool = False) -> None:
+        self.close_calls.append((instance_id, force))
         if instance_id in self._close_failures:
             raise RuntimeError(f"close failed for {instance_id}")
 
@@ -131,7 +131,7 @@ async def test_start_rolls_back_launches_when_spawn_roster_returns_errors(
     # Error message references the failing-participant payload
     assert "boom" in str(excinfo.value)
     # Both successfully-launched browsers were closed during rollback
-    assert sorted(pool.close_calls) == ["i-a", "i-b"]
+    assert sorted(pool.close_calls) == [("i-a", True), ("i-b", True)]
     # No live scenarios remain
     assert sp.list_live() == []
 
@@ -171,7 +171,7 @@ async def test_start_propagates_close_failure_during_rollback_without_swallowing
     ):
         await sp.start(name="rb", browser_pool=pool)
     # Both close()s were attempted (failure on i-a didn't short-circuit i-b)
-    assert sorted(pool.close_calls) == ["i-a", "i-b"]
+    assert sorted(pool.close_calls) == [("i-a", True), ("i-b", True)]
     # Rollback close failure was logged via the structured event key
     assert any("scenario.rollback.close_failed" in rec.message for rec in caplog.records)
     assert sp.list_live() == []
@@ -209,7 +209,7 @@ async def test_startup_macros_failure_triggers_full_rollback(
 
     with pytest.raises(RuntimeError, match="startup-macro-exploded"):
         await sp.start(name="sm", browser_pool=pool)
-    assert sorted(pool.close_calls) == ["i-a", "i-b"]
+    assert sorted(pool.close_calls) == [("i-a", True), ("i-b", True)]
     assert sp.list_live() == []
     assert sp.maybe_get("sm") is None
 
@@ -309,7 +309,7 @@ async def test_stop_closes_every_participant_even_when_one_close_fails(
         summary = await sp.stop(scenario_id="sid-stop", browser_pool=pool)
 
     # close() was attempted on every participant despite the middle one raising
-    assert pool.close_calls == ["i-a", "i-b", "i-c"]
+    assert pool.close_calls == [("i-a", True), ("i-b", True), ("i-c", True)]
     # Closed list excludes the failing one
     assert set(summary["closed"]) == {"i-a", "i-c"}
     # Teardown error captured the failing instance

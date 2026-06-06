@@ -57,3 +57,5 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 ### All-only (28) — register only when no `--profile` filter is active
 
 `browser_capture_and_close`, `browser_downloads`, `browser_drag`, `browser_evaluate_each`, `browser_hover`, `browser_list_frames`, `browser_mock_route`, `browser_navigate_back`, `browser_navigate_each`, `browser_network_requests`, `browser_open_trace`, `browser_open_url`, `browser_reset_frame`, `browser_resize_each`, `browser_screenshot_each`, `browser_select_option`, `browser_set_dialog_policy`, `browser_set_input_files`, `browser_spawn_roster`, `browser_switch_frame`, `browser_unmock_route`, `browser_wait_for_download`, `browser_wait_for_each`, `page_close`, `page_list`, `page_switch`, `recordings_cleanup`, `run_test_suite`
+
+Close-capable tools (`browser_close`, `browser_close_all`, `browser_capture_and_close`) honor protected sessions. They refuse protected browsers unless the caller passes `force=True`; `browser_capture_and_close` performs that check before screenshot/snapshot capture so refused calls do not create artifacts.

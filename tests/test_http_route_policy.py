@@ -24,7 +24,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 
 from octowright.http.routes.registry import all_routes
 
@@ -105,3 +105,30 @@ def test_side_effect_get_routes_are_flagged() -> None:
         "GET routes drive the live browser but were not registered with side_effect_get=True; "
         "this leaves a CSRF hole — wrap with guard_sensitive_http(..., side_effect_get=True): " + ", ".join(offenders)
     )
+
+
+def test_sensitive_api_http_routes_are_guarded() -> None:
+    """Every sensitive /api HTTP route must be wrapped by guard_sensitive_http."""
+    exemptions = {"/api/health"}
+    offenders: list[str] = []
+    for route in all_routes():
+        if not isinstance(route, Route) or not route.path.startswith("/api/"):
+            continue
+        if route.path in exemptions:
+            continue
+        if not getattr(route.endpoint, "__octowright_sensitive_guard__", False):
+            offenders.append(route.path)
+
+    assert not offenders, "sensitive /api HTTP routes are missing guard_sensitive_http: " + ", ".join(offenders)
+
+
+def test_api_websocket_routes_are_explicitly_audited() -> None:
+    """WebSocket routes cannot use guard_sensitive_http, so enumerate the approved in-handler guard."""
+    sockets = [route for route in all_routes() if isinstance(route, WebSocketRoute) and route.path.startswith("/api/")]
+    assert [route.path for route in sockets] == ["/api/sessions/{id}/tail"]
+
+    endpoint = sockets[0].endpoint
+    assert getattr(endpoint, "__name__", "") == "TailEndpoint"
+    source = inspect.getsource(endpoint)
+    assert "sensitive_allowed_for_connection" in source
+    assert "websocket_origin_allowed" in source
