@@ -79,3 +79,16 @@ def test_new_tab_has_uptime_element() -> None:
 
 def test_new_tab_has_browser_count_element() -> None:
     assert 'id="browser-count"' in _client().get("/new-tab").text
+
+
+def test_new_tab_rejects_dns_rebinding_host() -> None:
+    """/new-tab server-renders version + commit + start time, so a non-loopback
+    Host (DNS rebinding) must be refused rather than leaked cross-origin."""
+    response = _client().get("/new-tab", headers={"host": "malicious.example:6286"})
+    assert response.status_code == 403
+    assert response.json()["error"] == "remote dashboard access is disabled"
+
+
+def test_new_tab_allowed_for_explicit_loopback_host() -> None:
+    response = _client().get("/new-tab", headers={"host": "127.0.0.1:6286"})
+    assert response.status_code == 200
