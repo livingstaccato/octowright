@@ -154,7 +154,7 @@ Notes:
 ## Dashboard
 
 `octowright serve` boots two things in one process: the MCP stdio server (what
-your client talks to) and a Starlette HTTP server on `http://127.0.0.1:8765/` (what
+your client talks to) and a Starlette HTTP server on `http://127.0.0.1:6286/` (what
 *you* look at). One stable URL, pinned in your browser, replaces the old dance
 of copying log paths and shelling out to `npx playwright show-trace` by hand.
 
@@ -203,7 +203,7 @@ logging so frontend log lines are correlated with the Python server's
 frontend has zero runtime dependency on Node — Node is only needed at build
 time and for the optional `npx playwright show-trace` deep-dive.
 
-If port 8765 is taken, the server walks up to 5 higher ports and picks the
+If port 6286 is taken, the server walks up to 5 higher ports and picks the
 first free one (or logs a warning and continues without the HTTP layer if all
 are busy — MCP keeps running). Override the default with `OCTOWRIGHT_HTTP_PORT`
 or bind to a different host with `OCTOWRIGHT_HTTP_HOST` (default `127.0.0.1`).
@@ -613,7 +613,7 @@ On Windows, config uses `%APPDATA%\octowright\`, while state and cache use
 | `OCTOWRIGHT_VIEWPORT_W` / `OCTOWRIGHT_VIEWPORT_H` | `1280` / `800` | Default viewport. Used in headless mode and when dimensions are explicitly passed to `browser_launch`. In headed mode with neither set, context launches with `no_viewport=True` so the page tracks the OS window. |
 | `OCTOWRIGHT_HEADLESS` | auto | Explicit `0` / `1` overrides headless mode. Auto-detected: headed on macOS or Linux+display, headless on CI (`CI=true`) or Linux without `$DISPLAY` / `$WAYLAND_DISPLAY`. |
 | `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` | — | Per-navigation / per-action timeouts. |
-| `OCTOWRIGHT_HTTP_HOST` / `OCTOWRIGHT_HTTP_PORT` | `127.0.0.1` / `8765` | Dashboard bind address. Binding to `0.0.0.0` makes the HTTP sidecar reachable on your network, but sensitive dashboard/API/MCP routes stay blocked unless `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1` is also set. Only enable remote dashboard access on trusted networks because it exposes live browser state and local artifacts. If the port is in use, the server walks up 5 higher ports automatically. |
+| `OCTOWRIGHT_HTTP_HOST` / `OCTOWRIGHT_HTTP_PORT` | `127.0.0.1` / `6286` | Dashboard bind address. Binding to `0.0.0.0` makes the HTTP sidecar reachable on your network, but sensitive dashboard/API/MCP routes stay blocked unless `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1` is also set. Only enable remote dashboard access on trusted networks because it exposes live browser state and local artifacts. If the port is in use, the server walks up 5 higher ports automatically. |
 | `OCTOWRIGHT_IDLE_GRACE` | `300` | Seconds before auto-exit when the browser pool is empty. Use `--keep-alive` to disable. |
 
 ## CLI
