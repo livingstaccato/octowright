@@ -125,6 +125,41 @@ async def test_wire_init_scripts_substitutes_dashboard_url(monkeypatch: pytest.M
     assert "fakeid000001" in badge_script
 
 
+@pytest.mark.anyio
+async def test_webkit_gets_newtab_shortcut_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WebKit pages get the Cmd+T shortcut handler; Chromium/Firefox do not."""
+    import octowright.browser_pool.visuals as vis
+
+    monkeypatch.setattr(vis, "get_default_url", lambda: "http://127.0.0.1:6286/new-tab")
+
+    async def _scripts_for(kind: str) -> list[str]:
+        captured: list[str] = []
+
+        class FakeCtx:
+            async def add_init_script(self, *, script: str) -> None:
+                captured.append(script)
+
+        await vis.wire_init_scripts(
+            FakeCtx(),
+            profile=None,
+            label="x",
+            instance_id="fakeid000001",
+            kind=kind,
+            badge=False,
+            badge_position="bottom-right",
+            stabilize=False,
+        )
+        return captured
+
+    webkit_scripts = await _scripts_for("webkit")
+    assert any('e.code === "KeyT"' in s for s in webkit_scripts)
+    assert any("http://127.0.0.1:6286/new-tab" in s and "window.open" in s for s in webkit_scripts)
+
+    for other in ("chromium", "firefox"):
+        scripts = await _scripts_for(other)
+        assert not any('e.code === "KeyT"' in s for s in scripts), f"{other} should not get the shortcut"
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
