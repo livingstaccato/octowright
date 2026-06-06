@@ -320,9 +320,9 @@ def test_guard_sensitive_asgi_app_allows_same_origin_websocket_to_loopback_mount
         client.websocket_connect(
             "/mcp/ws",
             headers={
-                "origin": "http://testserver",
+                "origin": "http://127.0.0.1:8765",
                 "sec-fetch-site": "same-origin",
-                "host": "testserver",
+                "host": "127.0.0.1:8765",
             },
         ) as websocket,
     ):
@@ -337,9 +337,9 @@ def test_guard_sensitive_asgi_app_allows_same_origin_post_to_loopback_mount(
         response = client.post(
             "/mcp/rpc",
             headers={
-                "origin": "http://testserver",
+                "origin": "http://127.0.0.1:8765",
                 "sec-fetch-site": "same-origin",
-                "host": "testserver",
+                "host": "127.0.0.1:8765",
             },
         )
 

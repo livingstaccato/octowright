@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import types
 from pathlib import Path
 from typing import Any
@@ -142,6 +143,28 @@ def test_is_loopback_host_rejects_remote_binds() -> None:
     assert is_loopback_host("0.0.0.0") is False
     assert is_loopback_host("::") is False
     assert is_loopback_host("192.168.1.20") is False
+    assert is_loopback_host(None) is False
+
+
+@pytest.mark.parametrize(
+    ("raw_host", "expected"),
+    [
+        ("127.0.0.1:6286", True),
+        ("localhost:6286", True),
+        ("[::1]:6286", True),
+        ("::1", True),
+        ("::ffff:127.0.0.1", True),
+        ("malicious.example:6286", False),
+        ("192.168.1.20:6286", False),
+        ("[::1", False),  # malformed bracket (no closing ]) → treated as-is, not loopback
+        ("", False),
+        (None, False),
+    ],
+)
+def test_request_host_loopback_allowed_parses_host_header(raw_host: str | None, expected: bool) -> None:
+    from octowright.http.exposure import request_host_loopback_allowed
+
+    assert request_host_loopback_allowed(raw_host) is expected
 
 
 def test_api_routes_are_explicitly_guarded_or_public(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,7 +267,10 @@ def test_tail_websocket_rejects_cross_origin_browser_handshake() -> None:
     with (
         TestClient(_http.build_app()) as client,
         pytest.raises(WebSocketDisconnect) as exc,
-        client.websocket_connect("/api/sessions/s1/tail", headers={"origin": "http://evil.example"}),
+        client.websocket_connect(
+            "/api/sessions/s1/tail",
+            headers={"origin": "http://evil.example", "host": "127.0.0.1:8765"},
+        ),
     ):
         pass
 
@@ -284,7 +310,7 @@ def test_tail_websocket_allows_same_origin_browser_handshake(
         TestClient(_http.build_app()) as client,
         client.websocket_connect(
             "/api/sessions/sameorigin1/tail",
-            headers={"origin": "http://testserver"},
+            headers={"origin": "http://127.0.0.1:8765", "host": "127.0.0.1:8765"},
         ) as ws,
     ):
         exc = _drain_until_disconnect(ws)
@@ -306,7 +332,10 @@ def test_tail_websocket_allows_no_origin_header(
     invalidate_recording_index()
     with (
         TestClient(_http.build_app()) as client,
-        client.websocket_connect("/api/sessions/noorigin001/tail") as ws,
+        client.websocket_connect(
+            "/api/sessions/noorigin001/tail",
+            headers={"host": "127.0.0.1:8765"},
+        ) as ws,
     ):
         exc = _drain_until_disconnect(ws)
     assert exc.code == 1008
@@ -329,7 +358,7 @@ def test_tail_websocket_allows_loopback_origin(
         TestClient(_http.build_app()) as client,
         client.websocket_connect(
             "/api/sessions/loopback001/tail",
-            headers={"origin": "http://127.0.0.1:9999"},
+            headers={"origin": "http://127.0.0.1:9999", "host": "127.0.0.1:8765"},
         ) as ws,
     ):
         exc = _drain_until_disconnect(ws)
@@ -353,7 +382,7 @@ def test_tail_websocket_rejects_malformed_origin(
         pytest.raises(WebSocketDisconnect) as exc,
         client.websocket_connect(
             "/api/sessions/malformed01/tail",
-            headers={"origin": "no-scheme-here"},
+            headers={"origin": "no-scheme-here", "host": "127.0.0.1:8765"},
         ),
     ):
         pass
@@ -376,7 +405,7 @@ def test_tail_websocket_allows_loopback_ipv6_origin_with_bracket_and_port(
         TestClient(_http.build_app()) as client,
         client.websocket_connect(
             "/api/sessions/ipv6brkt001/tail",
-            headers={"origin": "http://[::1]:9000"},
+            headers={"origin": "http://[::1]:9000", "host": "127.0.0.1:8765"},
         ) as ws,
     ):
         exc = _drain_until_disconnect(ws)
@@ -404,12 +433,27 @@ def test_health_route_is_unguarded_on_remote_bind(monkeypatch: pytest.MonkeyPatc
     assert response.json()["ok"] is True
 
 
+def test_dns_rebinding_host_rejected_for_sensitive_api_route() -> None:
+    with TestClient(_http.build_app(host="127.0.0.1")) as client:
+        response = client.post(
+            "/api/sessions/s1/navigate",
+            json={"url": "https://octowright.com"},
+            headers={
+                "host": "malicious.example:6286",
+                "origin": "http://malicious.example:6286",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json() == REMOTE_DISABLED_BODY
+
+
 def test_cross_origin_unsafe_api_request_is_rejected() -> None:
     with TestClient(_http.build_app()) as client:
         response = client.post(
             "/api/sessions",
             json={"kind": "chromium"},
-            headers={"origin": "https://evil.example"},
+            headers={"origin": "https://evil.example", "host": "127.0.0.1:8765"},
         )
 
     assert response.status_code == 403
@@ -417,11 +461,14 @@ def test_cross_origin_unsafe_api_request_is_rejected() -> None:
 
 
 def test_same_origin_unsafe_api_request_is_allowed() -> None:
+    # A real same-origin browser request carries a loopback Host (the dashboard
+    # binds to 127.0.0.1); the Origin matches it. Both must be loopback now that
+    # the DNS-rebinding guard rejects non-loopback Host headers.
     with TestClient(_http.build_app()) as client:
         response = client.post(
             "/api/sessions/s1/navigate",
             json={"url": "https://octowright.com"},
-            headers={"origin": "http://testserver"},
+            headers={"origin": "http://127.0.0.1:8765", "host": "127.0.0.1:8765"},
         )
 
     assert response.status_code != 403
@@ -459,7 +506,7 @@ def test_fetch_metadata_cross_site_unsafe_api_request_is_rejected() -> None:
         response = client.post(
             "/api/sessions",
             json={"kind": "chromium"},
-            headers={"sec-fetch-site": "cross-site"},
+            headers={"sec-fetch-site": "cross-site", "host": "127.0.0.1:8765"},
         )
 
     assert response.status_code == 403
@@ -469,7 +516,7 @@ def test_fetch_metadata_cross_site_unsafe_api_request_is_rejected() -> None:
 @pytest.mark.parametrize("path", ["/api/sessions/s1/screenshot/now", "/api/sessions/s1/markdown"])
 def test_cross_origin_live_capture_get_request_is_rejected(path: str) -> None:
     with TestClient(_http.build_app()) as client:
-        response = client.get(path, headers={"origin": "https://evil.example"})
+        response = client.get(path, headers={"origin": "https://evil.example", "host": "127.0.0.1:8765"})
 
     assert response.status_code == 403
     assert response.json()["error"] == "cross-origin dashboard request is blocked"
@@ -477,7 +524,7 @@ def test_cross_origin_live_capture_get_request_is_rejected(path: str) -> None:
 
 def test_cross_origin_regular_read_get_request_is_allowed() -> None:
     with TestClient(_http.build_app()) as client:
-        response = client.get("/api/sessions", headers={"origin": "https://evil.example"})
+        response = client.get("/api/sessions", headers={"origin": "https://evil.example", "host": "127.0.0.1:8765"})
 
     assert response.status_code != 403
 
@@ -513,6 +560,30 @@ def test_spa_denied_on_remote_bind_without_opt_in(
     assert deep_link_response.json() == REMOTE_DISABLED_BODY
 
 
+def test_dns_rebinding_host_rejected_for_spa_static_mount(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
+    bundle = tmp_path / "frontend"
+    bundle.mkdir()
+    (bundle / "index.html").write_text("<!doctype html><title>dashboard</title>", encoding="utf-8")
+    monkeypatch.setattr(_http_state, "FRONTEND_DIR", bundle)
+
+    app = _http.build_app(host="127.0.0.1")
+    with TestClient(app) as client:
+        response = client.get(
+            "/",
+            headers={
+                "host": "malicious.example:6286",
+                "origin": "http://malicious.example:6286",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json() == REMOTE_DISABLED_BODY
+
+
 def test_spa_allowed_on_loopback_without_opt_in(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -528,8 +599,8 @@ def test_spa_allowed_on_loopback_without_opt_in(
 
     app = _http.build_app(host="127.0.0.1")
     with TestClient(app) as client:
-        index_response = client.get("/")
-        asset_response = client.get("/app.js")
+        index_response = client.get("/", headers={"host": "127.0.0.1:8765"})
+        asset_response = client.get("/app.js", headers={"host": "127.0.0.1:8765"})
 
     assert index_response.status_code == 200
     assert "dashboard" in index_response.text
@@ -587,7 +658,179 @@ def test_mcp_mount_allowed_on_loopback_without_opt_in(monkeypatch: pytest.Monkey
     app = _http.build_app(mcp_leader=True)
 
     with TestClient(app) as client:
-        response = client.get("/mcp/")
+        response = client.get("/mcp/", headers={"host": "127.0.0.1:8765"})
 
     assert response.status_code == 200
     assert response.json() == {"mcp": True}
+
+
+def test_dns_rebinding_host_rejected_for_mcp_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
+    _install_fake_mcp(monkeypatch)
+    app = _http.build_app(mcp_leader=True, host="127.0.0.1")
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/mcp/",
+            headers={
+                "host": "malicious.example:6286",
+                "origin": "http://malicious.example:6286",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json() == REMOTE_DISABLED_BODY
+
+
+def test_dns_rebinding_host_allowed_for_mcp_mount_with_remote_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", "1")
+    _install_fake_mcp(monkeypatch)
+    app = _http.build_app(mcp_leader=True, host="127.0.0.1")
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/mcp/",
+            headers={
+                "host": "malicious.example:6286",
+                "origin": "http://malicious.example:6286",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"mcp": True}
+
+
+def test_cross_origin_unsafe_request_blocked_for_mcp_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A loopback Host passes the rebinding guard, but a foreign Origin on an
+    unsafe (POST) request to the mounted ASGI app is still cross-origin blocked."""
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
+    _install_fake_mcp(monkeypatch)
+    app = _http.build_app(mcp_leader=True, host="127.0.0.1")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/mcp/",
+            headers={"host": "127.0.0.1:8765", "origin": "http://evil.example"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "cross-origin dashboard request is blocked"
+
+
+# --- Direct unit coverage for the exposure helpers and ASGI guard branches ---
+
+
+def _collecting_send() -> tuple[list[dict[str, Any]], Any]:
+    messages: list[dict[str, Any]] = []
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    return messages, send
+
+
+async def _noop_receive() -> dict[str, Any]:
+    return {"type": "http.request"}
+
+
+def test_cross_origin_blocked_from_parts_allows_cors_preflight() -> None:
+    from octowright.http.exposure import _cross_origin_blocked_from_parts
+
+    assert (
+        _cross_origin_blocked_from_parts(
+            method="OPTIONS",
+            origin="http://evil.example",
+            sec_fetch_site="cross-site",
+            scheme="http",
+            host="127.0.0.1:8765",
+            side_effect_get=True,
+        )
+        is False
+    )
+
+
+def test_http_scheme_for_scope_maps_schemes() -> None:
+    from octowright.http.exposure import _http_scheme_for_scope
+
+    assert _http_scheme_for_scope({"type": "websocket", "scheme": "wss"}) == "https"
+    assert _http_scheme_for_scope({"type": "websocket", "scheme": "ws"}) == "http"
+    assert _http_scheme_for_scope({"type": "http", "scheme": "https"}) == "https"
+
+
+def test_asgi_cross_origin_blocked_parses_headers_when_not_supplied() -> None:
+    """The back-compat path: a direct caller omits the parsed ``headers`` dict,
+    so the function re-derives it from the scope."""
+    from octowright.http.exposure import _asgi_cross_origin_blocked
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "headers": [(b"host", b"127.0.0.1:8765"), (b"origin", b"http://evil.example")],
+    }
+    assert _asgi_cross_origin_blocked(scope, side_effect_get=False) is True
+
+
+def test_sensitive_asgi_guard_passes_through_non_http_scope() -> None:
+    """Lifespan (and any non-http/websocket) scopes bypass the guard entirely."""
+    from octowright.http.exposure import SensitiveASGIGuard
+
+    seen: list[str] = []
+
+    async def inner_app(scope: Any, receive: Any, send: Any) -> None:
+        seen.append(scope["type"])
+
+    guard = SensitiveASGIGuard(inner_app, host="127.0.0.1")
+    messages, send = _collecting_send()
+    asyncio.run(guard({"type": "lifespan"}, _noop_receive, send))
+
+    assert seen == ["lifespan"]
+    assert messages == []
+
+
+def test_sensitive_asgi_guard_closes_websocket_on_dns_rebinding_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-loopback Host on a websocket scope is closed with 1008 before the
+    inner app runs."""
+    from octowright.http.exposure import SensitiveASGIGuard
+
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
+
+    async def inner_app(scope: Any, receive: Any, send: Any) -> None:
+        raise AssertionError("inner app must not run for a blocked websocket")
+
+    guard = SensitiveASGIGuard(inner_app, host="127.0.0.1")
+    scope = {"type": "websocket", "headers": [(b"host", b"malicious.example:6286")]}
+    messages, send = _collecting_send()
+    asyncio.run(guard(scope, _noop_receive, send))
+
+    assert messages == [{"type": "websocket.close", "code": 1008, "reason": "remote dashboard access is disabled"}]
+
+
+def test_sensitive_asgi_guard_closes_cross_origin_websocket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A loopback Host passes the rebinding guard, but a foreign Origin on a
+    websocket scope is closed with 1008 as cross-origin."""
+    from octowright.http.exposure import SensitiveASGIGuard
+
+    monkeypatch.delenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raising=False)
+
+    async def inner_app(scope: Any, receive: Any, send: Any) -> None:
+        raise AssertionError("inner app must not run for a blocked websocket")
+
+    guard = SensitiveASGIGuard(inner_app, host="127.0.0.1")
+    scope = {
+        "type": "websocket",
+        "scheme": "ws",
+        "headers": [(b"host", b"127.0.0.1:8765"), (b"origin", b"http://evil.example")],
+    }
+    messages, send = _collecting_send()
+    asyncio.run(guard(scope, _noop_receive, send))
+
+    assert messages == [
+        {"type": "websocket.close", "code": 1008, "reason": "cross-origin dashboard request is blocked"}
+    ]

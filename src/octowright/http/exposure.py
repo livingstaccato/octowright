@@ -67,11 +67,40 @@ def _sensitive_allowed_for_app(app: object) -> bool:
 
 
 def sensitive_allowed_for_request(request: Request) -> bool:
-    return _sensitive_allowed_for_app(request.app)
+    return sensitive_allowed_for_connection(request)
+
+
+def request_host_loopback_allowed(raw_host: str | None) -> bool:
+    """Return true iff an incoming HTTP Host header names localhost/loopback.
+
+    Defends against DNS Rebinding: even if the app bound to loopback, an
+    attacker can point a malicious DNS name at 127.0.0.1. The browser will
+    connect to the local port but send ``Host: malicious.com``. We must ensure
+    the requested Host is explicitly a loopback name/IP. Shared by the
+    Starlette request/WebSocket guard and the mounted-ASGI guard so both apply
+    the same policy.
+    """
+    if raw_host is None:
+        return False
+    stripped = raw_host.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("["):
+        bracket_close = stripped.rfind("]")
+        host_only = stripped[: bracket_close + 1] if bracket_close != -1 else stripped
+    elif stripped.count(":") == 1:
+        host_only = stripped.rsplit(":", 1)[0]
+    else:
+        host_only = stripped
+    return is_loopback_host(host_only)
 
 
 def sensitive_allowed_for_connection(connection: HTTPConnection) -> bool:
-    return _sensitive_allowed_for_app(connection.app)
+    if not _sensitive_allowed_for_app(connection.app):
+        return False
+    if remote_dashboard_allowed():
+        return True
+    return request_host_loopback_allowed(connection.headers.get("host"))
 
 
 def _origin_host_from_origin(origin: str) -> str | None:
@@ -200,20 +229,37 @@ class SensitiveASGIGuard:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         scope_type = scope["type"]
-        if scope_type in {"http", "websocket"} and not _sensitive_allowed_for_host(self._host):
-            await _send_blocked_asgi_response(send, scope_type, _REMOTE_DISABLED_BODY)
-            return
-        if scope_type in {"http", "websocket"} and _asgi_cross_origin_blocked(
-            scope, side_effect_get=self._side_effect_get
-        ):
-            await _send_blocked_asgi_response(send, scope_type, {"error": "cross-origin dashboard request is blocked"})
-            return
+        if scope_type in {"http", "websocket"}:
+            headers = _headers_from_scope(scope)
+            if not _sensitive_allowed_for_host(self._host):
+                await _send_blocked_asgi_response(send, scope_type, _REMOTE_DISABLED_BODY)
+                return
+            if not remote_dashboard_allowed() and not request_host_loopback_allowed(headers.get("host")):
+                await _send_blocked_asgi_response(send, scope_type, _REMOTE_DISABLED_BODY)
+                return
+            if _asgi_cross_origin_blocked(scope, headers=headers, side_effect_get=self._side_effect_get):
+                await _send_blocked_asgi_response(
+                    send,
+                    scope_type,
+                    {"error": "cross-origin dashboard request is blocked"},
+                )
+                return
         await self.app(scope, receive, send)
 
 
-def _asgi_cross_origin_blocked(scope: Scope, *, side_effect_get: bool) -> bool:
+def _headers_from_scope(scope: Scope) -> dict[str, str]:
+    return {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope["headers"]}
+
+
+def _asgi_cross_origin_blocked(
+    scope: Scope,
+    *,
+    headers: dict[str, str] | None = None,
+    side_effect_get: bool,
+) -> bool:
     scope_type = scope["type"]
-    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope["headers"]}
+    if headers is None:
+        headers = _headers_from_scope(scope)
     scheme = _http_scheme_for_scope(scope)
     return _cross_origin_blocked_from_parts(
         method=str(scope.get("method", "GET")) if scope_type == "http" else "GET",
