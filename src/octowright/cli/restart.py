@@ -157,6 +157,13 @@ def _port_is_free(host: str, port: int) -> bool:
         except OSError:
             continue
         try:
+            # Match the daemon's bind options so this pre-flight check agrees
+            # with what the new daemon can actually do: SO_REUSEADDR lets a
+            # TIME_WAIT socket (from the daemon we just stopped) read as free,
+            # so restart doesn't sit through the full TIME_WAIT timeout. An
+            # actively-listening socket still blocks the bind, so a not-yet-dead
+            # daemon is still correctly reported busy.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(sockaddr)
             checked = True
         except OSError:
