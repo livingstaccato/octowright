@@ -318,7 +318,12 @@ async def post_context_setup(
         _wire_user_navigation_logger(new_session)
         _wire_listeners(new_session, page)
         context.on("page", new_session._register_popup)
-        context.on("page", _make_new_tab_redirector())
+        # Chromium redirects new tabs via the service-worker extension (see
+        # _build_launch_kwargs) — attaching the page-event redirector there too
+        # would race it and uselessly attempt a goto on the detach-prone NTP.
+        # Firefox/WebKit have no extension hook, so they use the redirector.
+        if kind != "chromium":
+            context.on("page", _make_new_tab_redirector())
 
         await wire_init_scripts(
             context,
