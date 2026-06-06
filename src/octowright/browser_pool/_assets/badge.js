@@ -25,12 +25,19 @@
         if (getOverlay()) return;
         const isRight = POS.horizontal === "right" && !POS.h_offset;
 
+        // Mirror the badge's centering transform so a center-anchored popup
+        // sits centered on the same axis instead of extending off to one side.
+        const transforms = [];
+        if (POS.h_offset === "50%") transforms.push("translateX(-50%)");
+        if (POS.v_offset === "50%") transforms.push("translateY(-50%)");
+
         const ov = document.createElement("div");
         ov.id = OVERLAY_ID;
         Object.assign(ov.style, {
             position: "fixed", zIndex: "2147483646",
             [POS.vertical]: POS.v_offset || "44px",
             [isRight ? "right" : "left"]: isRight ? "8px" : (POS.h_offset || "8px"),
+            transform: transforms.join(" "),
             background: "rgba(14,14,30,0.97)",
             color: "#e8e8f0",
             fontFamily: "ui-monospace, Menlo, 'Courier New', monospace",
