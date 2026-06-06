@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-06-06
+
+### Added
+- **`/new-tab` landing page** — the default destination for `browser_launch`
+  with no `url`. A self-contained page served by the local HTTP server: Otto
+  logo, lowercase `octowright` wordmark, a live status strip (version · short
+  commit · uptime · live browser count · dashboard link), and a background tint
+  that shifts with the time of day. Replaces the old `octowright.com` default,
+  which caused cert/network failures offline.
+- **Cmd+T new-tab override on all three engines** — pressing Cmd+T (or Ctrl+T)
+  now lands on `/new-tab`. Chromium uses a generated unpacked background
+  service-worker extension (no settings-override prompt); Firefox uses a context
+  page-event redirector; WebKit uses an injected keydown handler (opens a window,
+  since its shell has no tab bar).
+- **Context-aware default browser label** — a no-label/no-profile launch derives
+  a human-readable label and persistent profile from (in priority)
+  `OCTOWRIGHT_DEFAULT_LABEL`, `.octowright/config.yaml`, the git repo name, or
+  the username — instead of a random instance ID. A persona matching the project
+  slug is auto-adopted.
+- **`.octowright/config.yaml` project config** — `label` / `persona` / `profile`
+  keys, read from the nearest parent directory. Scaffolded by `octowright init`.
+- **Configurable, richer badge** — `OCTOWRIGHT_BADGE_OPACITY` (default 0.35, more
+  translucent); all 8 badge positions including the four center anchors; an
+  Alt-click info popup showing session id/label/url with dashboard and recording
+  links.
+- **`browser_each`** — a single fan-out tool (navigate / resize / evaluate /
+  wait_for / screenshot across N browsers) replacing the five `browser_*_each`
+  tools.
+- **`nav_warning`** — a failed initial navigation leaves the browser alive and
+  reports the error in the launch result instead of destroying the instance.
+- New env vars: `OCTOWRIGHT_DEFAULT_URL`, `OCTOWRIGHT_DEFAULT_LABEL`,
+  `OCTOWRIGHT_BADGE_OPACITY`.
+
+### Changed
+- **Default HTTP port 8765 → 6286** ("OCTO"). Override with
+  `OCTOWRIGHT_HTTP_PORT`.
+- **`browser_click` / `browser_fill` take ARIA locator params directly**
+  (`role`, `label`, `text`, `test_id`) — folded in from the removed
+  `browser_click_by` / `browser_fill_by`.
+- No-URL launches resolve the actual bound HTTP port at launch time, so they
+  work even when the port auto-bumped.
+
+### Fixed
+- **`octowright restart` binds immediately** instead of waiting out the old
+  socket's TIME_WAIT — the daemon and the restart pre-flight both set
+  `SO_REUSEADDR` / `SO_REUSEPORT` (restart dropped from ~12s to ~2s).
+- **A failed initial navigation no longer tears down the browser** (see
+  `nav_warning`).
+- **Programmatic `window.open` popups are no longer hijacked** by the new-tab
+  redirect — only opener-less (user-opened) tabs are redirected.
+- New-tab status-strip browser-count off-by-one.
+
+### Removed
+- **`browser_click_by`, `browser_fill_by`** — merged into `browser_click` /
+  `browser_fill`.
+- **`browser_navigate_each`, `browser_resize_each`, `browser_evaluate_each`,
+  `browser_wait_for_each`, `browser_screenshot_each`** — merged into
+  `browser_each`.
+
+[0.7.0]: https://github.com/livingstaccato/octowright/compare/v0.6.4...v0.7.0
+
 ## [0.6.4] - 2026-06-04
 
 ### Added
