@@ -17,7 +17,7 @@ from typing import Any, cast
 from octowright import advisor as _advisor
 from octowright import takeover as _takeover
 from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
-from octowright.server._state import mcp, pool, scenario_pool
+from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool
 from octowright.server.registry import registered_tool_names
 
 _STATUS_STALE_LIMIT = 20
@@ -245,6 +245,7 @@ def octowright_status() -> dict[str, Any]:
         }
 
     bridge_snapshot = bridge_state.read_state(defaults.BRIDGE_STATE_PATH)
+    leader = leader_mode_snapshot()
 
     return {
         "daemon": {
@@ -253,6 +254,11 @@ def octowright_status() -> dict[str, Any]:
             "is_daemon_self": daemon_pid == os.getpid(),
             "uptime_seconds": round(daemon_uptime, 1) if daemon_uptime is not None else None,
             "lockfile": str(_singleton.LOCK_PATH),
+            # "daemon" = detached daemon leader (resilient); "inline" = leader runs
+            # inside this process (fragile — see inline_reason); "unknown" before
+            # the leader is wired. inline_reason: "no_singleton" | "daemon_spawn_failed".
+            "mode": leader["mode"],
+            "inline_reason": leader["inline_reason"],
         },
         "defaults": {
             # Persistent profiles are the default for named launches; ephemeral
