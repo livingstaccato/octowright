@@ -12,6 +12,7 @@ from typing import Any
 
 from octowright import _format as fmt
 from octowright import resolve as resolve_mod
+from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import (
@@ -76,9 +77,9 @@ async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
         "daemon shutdown. Useful for 'this session only' scopes. Mutually exclusive "
         "with ephemeral=True. "
         "Pass protected=True (or set OCTOWRIGHT_PROTECT_BROWSERS=1) to mark this browser "
-        "as user-owned: browser_close and browser_close_all will refuse to close it "
-        "unless force=True is passed. Use this for any browser the user is actively "
-        "watching. Returns instance_id. "
+        "as user-owned: close-capable tools (browser_close, browser_close_all, "
+        "browser_capture_and_close) will refuse to close it unless force=True is passed. "
+        "Use this for any browser the user is actively watching. Returns instance_id. "
         "If the initial navigation fails (network error, bad URL, DNS failure, etc.) the "
         "browser instance is NOT destroyed — it stays alive and registered. The return dict "
         "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
@@ -333,16 +334,12 @@ def browser_list() -> dict[str, Any]:
     ),
 )
 async def browser_close(instance_id: str, force: bool = False) -> dict[str, Any]:
-    session = pool.maybe_get(instance_id)
-    if session is not None and session.protected and not force:
+    try:
+        result = await pool.close(instance_id, force=force)
+    except ProtectedBrowserCloseError as exc:
         return {
-            "error": (
-                f"browser {instance_id!r} is protected — pass force=True to close it. "
-                "Protected browsers are meant to stay open for the user. "
-                "Only close it if the user explicitly asked you to."
-            )
+            "error": str(exc),
         }
-    result = await pool.close(instance_id)
     publish_dashboard_invalidation_nowait("sessions")
     return result
 
@@ -356,28 +353,7 @@ async def browser_close(instance_id: str, force: bool = False) -> dict[str, Any]
     ),
 )
 async def browser_close_all(force: bool = False) -> dict[str, Any]:
-    if not force:
-        protected_ids = [s.instance_id for s in pool.iter_sessions() if s.protected]
-        if protected_ids:
-            non_protected = [s.instance_id for s in pool.iter_sessions() if not s.protected]
-            if non_protected:
-                await asyncio.gather(*(pool.close(iid) for iid in non_protected), return_exceptions=True)
-                publish_dashboard_invalidation_nowait("sessions")
-                return {
-                    "closed": non_protected,
-                    "skipped_protected": protected_ids,
-                    "message": (
-                        f"Closed {len(non_protected)} unprotected browser(s); "
-                        f"skipped {len(protected_ids)} protected browser(s). "
-                        "Pass force=True to also close protected browsers."
-                    ),
-                }
-            return {
-                "closed": [],
-                "skipped_protected": protected_ids,
-                "message": (f"All {len(protected_ids)} browser(s) are protected. Pass force=True to close them."),
-            }
-    result = await pool.close_all()
+    result = await pool.close_all(force=force)
     publish_dashboard_invalidation_nowait("sessions")
     return result
 
@@ -386,8 +362,8 @@ async def browser_close_all(force: bool = False) -> dict[str, Any]:
     structured_output=False,
     description=(
         "Set or clear the protected flag on a live browser session. "
-        "protected=True — browser_close / browser_close_all will refuse to close it "
-        "without force=True (use for any browser the user is actively watching). "
+        "protected=True — close-capable tools will refuse to close it without "
+        "force=True (use for any browser the user is actively watching). "
         "protected=False — removes the protection so the browser can be closed normally. "
         "Returns {instance_id, protected} confirming the new state."
     ),
@@ -505,7 +481,7 @@ async def browser_open_url(
         "stabilize, record_video, trace, har, har_path, har_mode, har_url_filter, "
         "har_content, badge, badge_position, tile, ephemeral, session, protected. "
         "Set protected=True in a spec to mark that browser as user-owned — "
-        "browser_close / browser_close_all will refuse to close it without force=True. "
+        "close-capable tools will refuse to close it without force=True. "
         "Returns {launched: [...], errors: [...]}."
     ),
 )

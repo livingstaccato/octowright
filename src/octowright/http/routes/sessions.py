@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import octowright.http.state as state
+from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
@@ -33,7 +34,7 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.recording_sidecars import is_recording_sidecar
-from octowright.http.routes._common import _read_json_body
+from octowright.http.routes._common import _parse_bool, _read_json_body
 from octowright.http.session_artifacts import session_artifact_cache
 
 
@@ -255,8 +256,19 @@ async def session_close(request: Request) -> JSONResponse:
             {"error": f"no live session with id {sid!r}; closed sessions cannot be re-closed"},
             status_code=404,
         )
+    raw_force = request.query_params.get("force")
+    force = False
+    if raw_force is not None:
+        parsed_force = _parse_bool(raw_force)
+        if parsed_force is None:
+            return JSONResponse({"error": f"invalid force={raw_force!r}, must be bool"}, status_code=400)
+        force = parsed_force
     try:
-        result = await pool.close(sid)
+        result = await pool.close(sid, force=force)
+    except ProtectedBrowserCloseError as e:
+        return JSONResponse({"error": str(e).replace("force=True", "force=true")}, status_code=409)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         state.log.exception("octowright.http.session_close_failed", instance_id=sid)
         return JSONResponse({"error": f"close failed: {e}"}, status_code=500)

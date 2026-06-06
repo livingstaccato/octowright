@@ -86,7 +86,7 @@ class _FakePool:
         self._sessions[iid] = SimpleNamespace(instance_id=iid)
         return result
 
-    async def close(self, instance_id: str) -> dict[str, Any]:
+    async def close(self, instance_id: str, *, force: bool = False) -> dict[str, Any]:
         if self.close_raises is not None:
             raise self.close_raises
         self._sessions.pop(instance_id, None)

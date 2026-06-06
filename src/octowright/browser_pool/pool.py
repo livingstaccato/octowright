@@ -320,11 +320,22 @@ class BrowserPool:
         # cannot interleave in flight. Idempotent: returns None on miss.
         return self._sessions.pop(instance_id, None)
 
-    async def close(self, instance_id: str, *, _reason: SessionCloseReason = "agent_close") -> dict[str, Any]:
-        return await close_browser(self, instance_id, _reason=_reason)
+    async def close(
+        self,
+        instance_id: str,
+        *,
+        force: bool = False,
+        _reason: SessionCloseReason = "agent_close",
+    ) -> dict[str, Any]:
+        return await close_browser(self, instance_id, force=force, _reason=_reason)
 
-    async def close_all(self, *, _reason: SessionCloseReason = "agent_close") -> dict[str, Any]:
-        return await _close_all(self, _reason=_reason)
+    async def close_all(
+        self,
+        *,
+        force: bool = False,
+        _reason: SessionCloseReason = "agent_close",
+    ) -> dict[str, Any]:
+        return await _close_all(self, force=force, _reason=_reason)
 
     async def handoff(
         self,

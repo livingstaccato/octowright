@@ -53,7 +53,7 @@ Match the call to the launch shape. Call `browser_suggest_for_url` for real-inte
 
 **Agent-internal** work: always call `browser_close` immediately after the task.
 
-**User-facing** work (user said "show me", "open", "navigate", "let me see"): pass `protected=True` on launch. Leave the window open. Don't pass `viewport_w`/`viewport_h`. Don't call `browser_close` unless asked — and even then you'll need `force=True` on a protected browser.
+**User-facing** work (user said "show me", "open", "navigate", "let me see"): pass `protected=True` on launch. Leave the window open. Don't pass `viewport_w`/`viewport_h`. Don't call close-capable tools (`browser_close`, `browser_close_all`, `browser_capture_and_close`) unless asked — and even then you'll need `force=True` on a protected browser.
 
 **Full details:** `reference/launch-and-personas.md`
 
@@ -76,7 +76,7 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Mistake | Consequence | Fix |
 |:--------|:------------|:----|
 | Leaving an agent-internal browser open | Memory exhaustion, zombie processes | `browser_close` after each task |
-| Closing a user-facing browser the user is still using | User loses their view | Pass `protected=True` on user-facing launches; `browser_close` will refuse without `force=True` |
+| Closing a user-facing browser the user is still using | User loses their view | Pass `protected=True` on user-facing launches; close-capable tools will refuse without `force=True` |
 | Passing `viewport_w`/`viewport_h` on a user-facing launch | Viewport locked; user can't resize | Omit viewport args; only set for agent-internal screenshot work |
 | Manual login repetition | High token usage, fragile scripts | Use Personas to persist session state |
 | Guessing selectors | Frequent failures on DOM changes | Use `browser_snapshot` for the aria-tree |
@@ -111,6 +111,7 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Same action across N browsers | `browser_each(action, instance_ids?, ...)` — navigate \| resize \| evaluate \| wait_for \| screenshot |
 | Fix failing macro | `browser_snapshot` → `macro_save` |
 | Cleanup agent-internal browser | `browser_close` |
+| Capture and close an agent-internal browser | `browser_capture_and_close`; pass `force=True` only if the protected browser close was explicitly requested |
 | Screenshot user-facing window without disturbing it | `GET /api/sessions/{id}/screenshot/now` |
 | Probe daemon health | `curl http://127.0.0.1:6286/api/health` |
 | Daemon is wedged | `octowright restart` (shell, not MCP) |

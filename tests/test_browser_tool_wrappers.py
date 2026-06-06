@@ -143,50 +143,77 @@ async def test_browser_navigate_forwards_to_session(_patch_pool: MagicMock) -> N
 @pytest.mark.anyio
 async def test_browser_close_calls_pool(_patch_pool: MagicMock) -> None:
     _patch_pool.close = AsyncMock(return_value={"closed": True})
-    _patch_pool.maybe_get.return_value = None  # unprotected session
 
     result = await _lifecycle.browser_close("inst-1")
 
-    _patch_pool.close.assert_awaited_once_with("inst-1")
+    _patch_pool.close.assert_awaited_once_with("inst-1", force=False)
     assert result == {"closed": True}
 
 
 @pytest.mark.anyio
-async def test_browser_close_protected_requires_force(_patch_pool: MagicMock) -> None:
-    _patch_pool.close = AsyncMock(return_value={"closed": True})
-    mock_session = MagicMock()
-    mock_session.protected = True
-    _patch_pool.maybe_get.return_value = mock_session
+async def test_browser_close_protected_error_comes_from_pool(_patch_pool: MagicMock) -> None:
+    from octowright.browser_pool.errors import ProtectedBrowserCloseError
+
+    _patch_pool.close = AsyncMock(
+        side_effect=ProtectedBrowserCloseError("browser 'inst-1' is protected; pass force=True to close it")
+    )
 
     result = await _lifecycle.browser_close("inst-1")
 
-    _patch_pool.close.assert_not_awaited()
+    _patch_pool.close.assert_awaited_once_with("inst-1", force=False)
     assert "error" in result
     assert "force=True" in result["error"]
 
 
 @pytest.mark.anyio
+async def test_browser_close_reraises_unrelated_value_error(_patch_pool: MagicMock) -> None:
+    _patch_pool.close = AsyncMock(side_effect=ValueError("protected word in unrelated lower-level failure"))
+
+    with pytest.raises(ValueError, match="lower-level failure"):
+        await _lifecycle.browser_close("inst-1")
+
+
+@pytest.mark.anyio
 async def test_browser_close_protected_force_closes(_patch_pool: MagicMock) -> None:
     _patch_pool.close = AsyncMock(return_value={"closed": True})
-    mock_session = MagicMock()
-    mock_session.protected = True
-    _patch_pool.maybe_get.return_value = mock_session
 
     result = await _lifecycle.browser_close("inst-1", force=True)
 
-    _patch_pool.close.assert_awaited_once_with("inst-1")
+    _patch_pool.close.assert_awaited_once_with("inst-1", force=True)
     assert result == {"closed": True}
 
 
 @pytest.mark.anyio
 async def test_browser_close_all_calls_pool(_patch_pool: MagicMock) -> None:
     _patch_pool.close_all = AsyncMock(return_value={"closed": ["a", "b"]})
-    _patch_pool.iter_sessions.return_value = []  # no protected sessions
 
     result = await _lifecycle.browser_close_all()
 
-    _patch_pool.close_all.assert_awaited_once_with()
+    _patch_pool.close_all.assert_awaited_once_with(force=False)
     assert result == {"closed": ["a", "b"]}
+
+
+@pytest.mark.anyio
+async def test_browser_close_all_force_calls_pool_force(_patch_pool: MagicMock) -> None:
+    _patch_pool.close_all = AsyncMock(return_value={"closed": ["a", "b"]})
+
+    result = await _lifecycle.browser_close_all(force=True)
+
+    _patch_pool.close_all.assert_awaited_once_with(force=True)
+    assert result == {"closed": ["a", "b"]}
+
+
+@pytest.mark.anyio
+async def test_browser_close_all_skips_protected_and_closes_unprotected_with_force_false(
+    _patch_pool: MagicMock,
+) -> None:
+    _patch_pool.close_all = AsyncMock(return_value={"closed": ["unprotected"], "skipped_protected": ["protected"]})
+
+    result = await _lifecycle.browser_close_all()
+
+    _patch_pool.close_all.assert_awaited_once_with(force=False)
+    assert result["closed"] == ["unprotected"]
+    assert result["skipped_protected"] == ["protected"]
 
 
 @pytest.mark.anyio

@@ -49,7 +49,7 @@ export function renderSessionTable(
       const lock = document.createElement("span");
       lock.className = "protected-badge";
       lock.textContent = "🔒";
-      lock.setAttribute("title", "Protected — browser_close requires force=True");
+      lock.setAttribute("title", "Protected — close-capable tools require force=True");
       lockTd.append(lock);
     }
     tr.append(

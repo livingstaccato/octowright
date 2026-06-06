@@ -92,7 +92,7 @@ async def run_suite(
         finally:
             if iid is not None:
                 try:
-                    await pool.close(iid)
+                    await pool.close(iid, force=True)
                 except Exception as e:
                     close_err = repr(e)
                     if ok:

@@ -251,7 +251,7 @@ async def reap_descendant_browsers_on_shutdown(pool: Any, *, log: Any) -> None:
     browsers aren't touched. Best-effort; logs but never raises.
     """
     try:
-        await pool.close_all()
+        await pool.close_all(force=True)
     except Exception as exc:
         log.warning("octowright.shutdown.pool_close_failed", error=repr(exc))
     try:

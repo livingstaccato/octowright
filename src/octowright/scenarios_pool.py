@@ -38,6 +38,10 @@ class LiveScenario:
     participants: list[dict[str, Any]]
 
 
+class ScenarioRoleNotFoundError(ValueError):
+    """Raised when an explicit role filter matches no live participant."""
+
+
 class ScenarioPool:
     def __init__(self) -> None:
         self._live: dict[str, LiveScenario] = {}
@@ -68,6 +72,12 @@ class ScenarioPool:
             {"scenario_id": ls.scenario_id, "name": ls.name, "participants": ls.participants}
             for ls in self._live.values()
         ]
+
+    def _participants_for_role(self, live: LiveScenario, role: str | None) -> list[dict[str, Any]]:
+        targets = [p for p in live.participants if role is None or p["role"] == role]
+        if role is not None and not targets:
+            raise ScenarioRoleNotFoundError(f"scenario {live.scenario_id!r} has no participants with role {role!r}")
+        return targets
 
     def remap_participant(
         self,
@@ -169,7 +179,7 @@ class ScenarioPool:
             if result["errors"]:
                 for launched in result["launched"]:
                     try:
-                        await browser_pool.close(launched["instance_id"])
+                        await browser_pool.close(launched["instance_id"], force=True)
                     except Exception as exc:
                         # Cleanup-after-error path: surface failures so a stuck
                         # browser leaking after a partial-roster crash is auditable.
@@ -236,7 +246,7 @@ class ScenarioPool:
                     summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
         for p in live.participants:
             try:
-                await browser_pool.close(p["instance_id"])
+                await browser_pool.close(p["instance_id"], force=True)
                 summary["closed"].append(p["instance_id"])
             except Exception as e:
                 summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
@@ -278,7 +288,7 @@ class ScenarioPool:
         from octowright import macros as _macros
 
         live = self.get(scenario_id)
-        targets = [p for p in live.participants if role is None or p["role"] == role]
+        targets = self._participants_for_role(live, role)
         # Wrap the fan-out so the per-participant macro.run spans nest under a
         # single scenario-scoped parent. ``targeted`` records whether the role
         # filter narrowed the fan-out at all (None role = fan to every
@@ -324,7 +334,7 @@ class ScenarioPool:
         import re as _re
 
         live = self.get(scenario_id)
-        targets = [p for p in live.participants if role is None or p["role"] == role]
+        targets = self._participants_for_role(live, role)
 
         async def _wait(p: dict[str, Any]) -> ScenarioParticipantOutcome:
             session = browser_pool.get(p["instance_id"])

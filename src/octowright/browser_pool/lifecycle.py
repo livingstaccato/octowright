@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
+from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReason
 from octowright.browser_pool.launch_helpers import rotate_har_path
 from octowright.browser_pool.session_event_bus import session_event_bus
@@ -26,14 +27,21 @@ async def close_browser(
     pool: BrowserPool,
     instance_id: str,
     *,
+    force: bool = False,
     _reason: SessionCloseReason = "agent_close",
 ) -> dict[str, Any]:
+    session = pool.get(instance_id)
+    if getattr(session, "protected", False) and not force:
+        raise ProtectedBrowserCloseError(
+            f"browser {instance_id!r} is protected; pass force=True to close it. "
+            "Protected browsers are meant to stay open for the user."
+        )
     # Remove from the registry before awaiting session.close(); that call fires
     # close events wired by listeners, which should then no-op.
     async with pool._sessions_lock:
-        session = pool._sessions.pop(instance_id, None)
-    if session is None:
-        raise KeyError(pool._missing_session_message(instance_id))
+        if instance_id not in pool._sessions:
+            raise KeyError(pool._missing_session_message(instance_id))
+        session = pool._sessions.pop(instance_id)
     # Always run manifest cleanup even if session.close() raises (e.g. a
     # hung browser process) — the session is already evicted from the pool,
     # so the manifest entry would otherwise be orphaned. The session's own
@@ -167,7 +175,7 @@ async def handoff_browser(
 async def shutdown_pool(pool: BrowserPool) -> None:
     # Use the ``shutdown`` reason so MCP clients can distinguish daemon exit
     # from an agent explicitly calling ``browser_close_all``.
-    await pool.close_all(_reason="shutdown")
+    await pool.close_all(_reason="shutdown", force=True)
     if pool._pw is not None:
         await pool._pw.stop()
         pool._pw = None

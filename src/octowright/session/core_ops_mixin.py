@@ -35,6 +35,12 @@ def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _html_preview(html: str, html_preview_chars: int) -> str | None:
+    if html_preview_chars <= 0:
+        return None
+    return html[: min(html_preview_chars, DEFAULT_PREVIEW_CHARS)]
+
+
 class SessionOpsMixin(SessionLike):
     active_frame: Any | None
     video_path: Path | None
@@ -55,21 +61,20 @@ class SessionOpsMixin(SessionLike):
         self,
         *,
         screenshot_dir: Path | None = None,
-        console_tail: int = 25,
+        console_tail: int = 0,
+        html_preview_chars: int = 0,
         html_full: bool = False,
     ) -> dict[str, Any]:
         """Capture a screenshot + last N console messages + page HTML metadata.
 
         HTML is always written to disk (next to the screenshot) so callers can
         fetch it on demand without dragging it through the MCP response. Inline
-        fields: html_path, html_size, html_sha256, html_preview (first
-        DEFAULT_PREVIEW_CHARS chars). Pass html_full=True to also include the
-        full HTML inline (rarely needed; mostly for tests).
+        fields are opt-in: console_tail=N includes the last N console messages,
+        html_preview_chars=N includes the first N HTML chars, and html_full=True
+        includes the full HTML inline (rarely needed; mostly for tests).
         """
-        import hashlib
-
         bundle: dict[str, Any] = {
-            "console_tail": list(self.console)[-console_tail:],
+            "console_tail": list(self.console)[-console_tail:] if console_tail > 0 else [],
             "url": None,
             "title": None,
             "html_path": None,
@@ -80,6 +85,17 @@ class SessionOpsMixin(SessionLike):
         }
         if html_full:
             bundle["html"] = None
+        await self._capture_diagnostic_page_meta(bundle)
+        await self._capture_diagnostic_html(
+            bundle,
+            screenshot_dir=screenshot_dir,
+            html_preview_chars=html_preview_chars,
+            html_full=html_full,
+        )
+        await self._capture_diagnostic_screenshot(bundle, screenshot_dir=screenshot_dir)
+        return bundle
+
+    async def _capture_diagnostic_page_meta(self, bundle: dict[str, Any]) -> None:
         try:
             bundle["url"] = self.page.url
         except Exception:
@@ -88,6 +104,17 @@ class SessionOpsMixin(SessionLike):
             bundle["title"] = await self.page.title()
         except Exception:
             pass
+
+    async def _capture_diagnostic_html(
+        self,
+        bundle: dict[str, Any],
+        *,
+        screenshot_dir: Path | None,
+        html_preview_chars: int,
+        html_full: bool,
+    ) -> None:
+        import hashlib
+
         try:
             html = await self.page.content()
             h_dir = screenshot_dir or self.log_path.parent
@@ -97,11 +124,18 @@ class SessionOpsMixin(SessionLike):
             bundle["html_path"] = str(h_path)
             bundle["html_size"] = len(html)
             bundle["html_sha256"] = hashlib.sha256(html.encode("utf-8")).hexdigest()
-            bundle["html_preview"] = html[:DEFAULT_PREVIEW_CHARS]
+            bundle["html_preview"] = _html_preview(html, html_preview_chars)
             if html_full:
                 bundle["html"] = html
         except Exception as e:
             bundle["html_error"] = repr(e)
+
+    async def _capture_diagnostic_screenshot(
+        self,
+        bundle: dict[str, Any],
+        *,
+        screenshot_dir: Path | None,
+    ) -> None:
         try:
             target = (screenshot_dir or self.log_path.parent) / f"{self.instance_id}-fail-{_timestamp()}.png"
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -109,7 +143,6 @@ class SessionOpsMixin(SessionLike):
             bundle["screenshot"] = str(target)
         except Exception as e:
             bundle["screenshot_error"] = repr(e)
-        return bundle
 
     async def switch_frame(
         self,

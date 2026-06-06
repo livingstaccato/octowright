@@ -264,6 +264,20 @@ class TestLoadPythonScenario:
         with pytest.raises(ValueError, match="unsupported kind"):
             load_python_scenario(path)
 
+    def test_python_load_validates_fixtures(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad_fixture.py"
+        path.write_text(
+            "from octowright.scenarios import Scenario, Participant\n"
+            "def build():\n"
+            "    return Scenario(\n"
+            "        name='bad-fixture',\n"
+            "        participants=[Participant(persona='a', kind='webkit', role='player')],\n"
+            "        fixtures={'legacy_toggle': True},\n"
+            "    )\n"
+        )
+        with pytest.raises(ValueError, match=r"fixtures.*unknown.*legacy_toggle"):
+            load_python_scenario(path)
+
 
 # ---------------------------------------------------------------------------
 # load_scenario dispatch + list_scenarios
@@ -427,6 +441,7 @@ class _StubPool:
         self.spawn_errors = spawn_errors or []
         self._spawn_launched = spawn_launched
         self.closed: list[str] = []
+        self.close_calls: list[tuple[str, bool]] = []
         self.close_fails = close_fails or set()
         self.close_delay = close_delay
         self.sessions: dict[str, _StubSession] = {}
@@ -456,11 +471,12 @@ class _StubPool:
             raise KeyError(instance_id)
         return self.sessions[instance_id]
 
-    async def close(self, instance_id: str) -> dict[str, Any]:
+    async def close(self, instance_id: str, *, force: bool = False) -> dict[str, Any]:
         if self.close_delay:
             await asyncio.sleep(self.close_delay)
         if instance_id in self.close_fails:
             raise RuntimeError(f"forced close failure for {instance_id}")
+        self.close_calls.append((instance_id, force))
         self.closed.append(instance_id)
         self.sessions.pop(instance_id, None)
         return {"closed": True}

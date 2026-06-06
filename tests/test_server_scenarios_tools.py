@@ -88,6 +88,26 @@ async def test_scenario_spawn_template_and_stop_run_wait_tail(_patch_deps: dict[
     assert tailed["cursors"]["i1"] == 0
 
 
+@pytest.mark.anyio
+async def test_scenario_run_macro_propagates_missing_role(_patch_deps: dict[str, MagicMock]) -> None:
+    _patch_deps["scenario_pool"].run_macro = AsyncMock(
+        side_effect=ValueError("scenario 'sid' has no participants with role ''")
+    )
+
+    with pytest.raises(ValueError, match="role ''"):
+        await _scenarios.scenario_run_macro("sid", "m1", role="")
+
+
+@pytest.mark.anyio
+async def test_scenario_wait_for_sync_propagates_missing_role(_patch_deps: dict[str, MagicMock]) -> None:
+    _patch_deps["scenario_pool"].wait_for_sync = AsyncMock(
+        side_effect=ValueError("scenario 'sid' has no participants with role ''")
+    )
+
+    with pytest.raises(ValueError, match="role ''"):
+        await _scenarios.scenario_wait_for_sync("sid", selector="#x", role="")
+
+
 def test_scenario_participants_filter(_patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch) -> None:
     live = SimpleNamespace(
         participants=[

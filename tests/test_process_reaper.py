@@ -15,11 +15,27 @@ from __future__ import annotations
 import signal
 import subprocess
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from octowright import process_reaper
+
+
+@pytest.mark.anyio
+async def test_shutdown_reaper_force_closes_pool_before_process_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = MagicMock()
+    pool.close_all = AsyncMock()
+    log = MagicMock()
+    monkeypatch.setattr(
+        process_reaper,
+        "reap_orphan_browsers",
+        lambda **_kw: {"killed": [], "still_alive": [], "errors": []},
+    )
+
+    await process_reaper.reap_descendant_browsers_on_shutdown(pool, log=log)
+
+    pool.close_all.assert_awaited_once_with(force=True)
 
 
 def _ps_completed(stdout: str) -> subprocess.CompletedProcess[str]:

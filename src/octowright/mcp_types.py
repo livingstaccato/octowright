@@ -288,6 +288,7 @@ class BrowserPathResult(TypedDict):
 
 
 class BrowserCaptureAndCloseResult(TypedDict, total=False):
+    error: str
     title: str
     url: str
     screenshot_path: str

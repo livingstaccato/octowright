@@ -69,3 +69,55 @@ def test_yaml_participant_flags_must_be_booleans() -> None:
 
     with pytest.raises(ValueError, match=r"participants\[0\].*trace.*boolean"):
         load_yaml_scenario(content, "bad")
+
+
+def test_yaml_fixtures_reject_unknown_keys() -> None:
+    content = yaml.safe_dump(
+        {
+            "name": "bad",
+            "participants": [{"persona": "a", "kind": "webkit"}],
+            "fixtures": {"dialog_policy": "dismiss", "legacy_toggle": True},
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"fixtures.*unknown.*legacy_toggle"):
+        load_yaml_scenario(content, "bad")
+
+
+def test_yaml_fixture_dialog_policy_must_be_supported_policy() -> None:
+    content = yaml.safe_dump(
+        {
+            "name": "bad",
+            "participants": [{"persona": "a", "kind": "webkit"}],
+            "fixtures": {"dialog_policy": "ignore"},
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"fixtures\.dialog_policy.*accept.*dismiss.*manual"):
+        load_yaml_scenario(content, "bad")
+
+
+def test_yaml_fixture_mock_routes_must_be_valid_route_specs() -> None:
+    content = yaml.safe_dump(
+        {
+            "name": "bad",
+            "participants": [{"persona": "a", "kind": "webkit"}],
+            "fixtures": {"mock_routes": [{"pattern": "", "status": True}]},
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"fixtures\.mock_routes\[0\]\.pattern.*non-empty string"):
+        load_yaml_scenario(content, "bad")
+
+
+def test_yaml_fixture_mock_route_status_must_be_http_status() -> None:
+    content = yaml.safe_dump(
+        {
+            "name": "bad",
+            "participants": [{"persona": "a", "kind": "webkit"}],
+            "fixtures": {"mock_routes": [{"pattern": "**/api", "status": 999}]},
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"fixtures\.mock_routes\[0\]\.status.*100.*599"):
+        load_yaml_scenario(content, "bad")

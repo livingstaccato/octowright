@@ -31,7 +31,9 @@ describe("renderSessionTable", () => {
       onRelaunch: vi.fn(),
       onDelete: vi.fn(),
     });
-    expect(table.querySelector(".protected-badge")).not.toBeNull();
+    const badge = table.querySelector(".protected-badge");
+    expect(badge).not.toBeNull();
+    expect(badge?.getAttribute("title")).toBe("Protected — close-capable tools require force=True");
     expect(table.querySelector("tr.protected-session")).not.toBeNull();
   });
 
