@@ -11,9 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import anyio
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
+from octowright.browser_pool.roster import _shielded_rollback_close
 from octowright.mcp_types import (
     ScenarioParticipantOutcome,
     ScenarioRemapEntry,
@@ -192,22 +194,30 @@ class ScenarioPool:
             try:
                 await _apply_fixtures(browser_pool, live, spec.fixtures)
                 await _run_startup_macros(browser_pool, live)
-            except Exception:
-                async with self._live_lock:
-                    self._live.pop(scenario_id, None)
-                for launched in result["launched"]:
-                    try:
-                        await browser_pool.close(launched["instance_id"])
-                    except Exception as exc:
-                        # Cleanup-after-error path: surface failures so a stuck
-                        # browser leaking after a partial-roster crash is auditable.
-                        log.warning(
-                            "scenario.rollback.close_failed",
-                            instance_id=launched["instance_id"],
-                            error=repr(exc),
-                        )
+            except BaseException:
+                # CancelledError is a BaseException, so catch it here too — but the
+                # rollback must *complete* before we re-raise, so run it shielded.
+                await self._rollback_start(
+                    scenario_id,
+                    browser_pool,
+                    [entry["instance_id"] for entry in result["launched"]],
+                )
                 raise
             return live
+
+    async def _rollback_start(self, scenario_id: str, browser_pool: Any, launched_ids: list[str]) -> None:
+        """Shielded teardown for a scenario that failed or was cancelled during
+        fixture application / startup macros: drop bookkeeping and close every
+        launched browser before the original exception re-propagates."""
+        with anyio.CancelScope(shield=True):
+            async with self._live_lock:
+                self._live.pop(scenario_id, None)
+            await _shielded_rollback_close(
+                browser_pool,
+                launched_ids,
+                logger=log,
+                event="scenario.rollback.close_failed",
+            )
 
     async def stop(self, *, scenario_id: str, browser_pool: Any) -> ScenarioStopResult:
         async with self._live_lock:
