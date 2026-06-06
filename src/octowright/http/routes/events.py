@@ -61,6 +61,7 @@ async def dashboard_events_endpoint(request: Request) -> StreamingResponse:
         async with dashboard_events.subscribe() as subscription:
             yield _sse_frame("hello", {"ok": True})
             disconnect_task = asyncio.create_task(_wait_for_dashboard_disconnect(request))
+            event_task: asyncio.Task[Any] | None = None
             try:
                 while not disconnect_task.done():
                     event_task = asyncio.create_task(subscription.get())
@@ -82,6 +83,10 @@ async def dashboard_events_endpoint(request: Request) -> StreamingResponse:
                         await event_task
                     yield _sse_comment("heartbeat")
             finally:
+                if event_task is not None and not event_task.done():
+                    event_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await event_task
                 disconnect_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await disconnect_task

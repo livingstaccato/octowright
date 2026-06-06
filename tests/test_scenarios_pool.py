@@ -278,6 +278,37 @@ async def test_startup_macro_failure_closes_participants(monkeypatch: pytest.Mon
 
 
 @pytest.mark.anyio
+async def test_start_cancelled_during_fixtures_completes_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CancelledError during fixture application must still close every launched
+    participant — and the rollback must *complete* before the cancellation
+    re-propagates (detached create_task closes would leave pool.closed empty)."""
+    import asyncio
+
+    import octowright.scenarios as scenarios_mod
+    import octowright.scenarios_pool as pool_mod
+
+    sp = ScenarioPool()
+    pool = _Pool()
+    spec = _Spec(
+        name="demo",
+        participants=[_ParticipantSpec("cosmo", "r1"), _ParticipantSpec("ziggy", "r2")],
+        fixtures={},
+    )
+    monkeypatch.setattr(scenarios_mod, "load_scenario", lambda name: spec)
+    monkeypatch.setattr(scenarios_mod, "resolve_launch_kwargs", lambda p: {"persona": p.persona})
+
+    async def _cancel_fixtures(*_a: Any, **_k: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(pool_mod, "_apply_fixtures", _cancel_fixtures)
+
+    with pytest.raises(asyncio.CancelledError):
+        await sp.start(name="demo", browser_pool=pool)
+    assert pool.closed == ["a", "b"]
+    assert sp.list_live() == []
+
+
+@pytest.mark.anyio
 async def test_start_requires_name_or_spec() -> None:
     sp = ScenarioPool()
     pool = _Pool()

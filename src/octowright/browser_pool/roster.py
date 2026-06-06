@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+import anyio
 from provide.telemetry import get_logger
 
 from octowright._tracing import set_attrs, span
@@ -18,6 +19,29 @@ if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
 
 log = get_logger(__name__)
+
+
+async def _shielded_rollback_close(
+    pool: BrowserPool,
+    instance_ids: list[str],
+    *,
+    logger: Any,
+    event: str,
+) -> None:
+    """Close ``instance_ids`` best-effort while unwinding an error/cancellation.
+
+    Wrapped in a shielded cancel scope so an incoming ``CancelledError`` can't
+    abort the loop before every browser is closed, and each close is *awaited*
+    (not deferred as a detached ``create_task``, which the event loop may never
+    run during teardown). Close failures are logged, never raised — the caller
+    re-raises the original exception once cleanup completes.
+    """
+    with anyio.CancelScope(shield=True):
+        for instance_id in instance_ids:
+            try:
+                await pool.close(instance_id)
+            except Exception as exc:
+                logger.warning(event, instance_id=instance_id, error=repr(exc))
 
 
 async def close_all(pool: BrowserPool, *, _reason: SessionCloseReason = "agent_close") -> dict[str, Any]:
@@ -75,5 +99,14 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
                 launched.append(result)
         set_attrs(sp, launched=len(launched), failed=len(errors))
         if cancelled:
+            # Cancellation during a user-initiated launch is not a "soft success" —
+            # close the siblings that did launch (shielded + awaited so the
+            # cleanup completes) before propagating the cancellation up.
+            await _shielded_rollback_close(
+                pool,
+                [info["instance_id"] for info in launched],
+                logger=log,
+                event="octowright.spawn_roster.rollback_close_failed",
+            )
             raise cancelled[0]
         return {"launched": launched, "errors": errors}
