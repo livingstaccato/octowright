@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -15,6 +17,42 @@ from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.http import state
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _read_json_body
+from octowright.scenarios_pool import ScenarioRoleNotFoundError
+
+
+def _is_scenario_role_not_found_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and type(exc).__name__ == "ScenarioRoleNotFoundError"
+
+
+def _scenario_run_macro_request(
+    payload: object,
+) -> tuple[str | None, str | None, dict[str, Any] | None, JSONResponse | None]:
+    if not isinstance(payload, dict):
+        return None, None, None, JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    body = cast(dict[str, Any], payload)
+
+    macro = body.get("macro")
+    if not isinstance(macro, str) or not macro.strip():
+        return (
+            None,
+            None,
+            None,
+            JSONResponse({"error": "macro is required and must be a non-empty string"}, status_code=400),
+        )
+
+    role = body.get("role")
+    if role is not None and (not isinstance(role, str) or not role):
+        return (
+            None,
+            None,
+            None,
+            JSONResponse({"error": "role must be a non-empty string when provided"}, status_code=400),
+        )
+
+    args = body.get("args") or {}
+    if not isinstance(args, dict):
+        return None, None, None, JSONResponse({"error": "args must be a JSON object"}, status_code=400)
+    return macro, role, args, None
 
 
 async def list_scenarios(_request: Request) -> JSONResponse:
@@ -98,17 +136,9 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
     payload, err = await _read_json_body(request)
     if err is not None:
         return err
-    if not isinstance(payload, dict):
-        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
-
-    macro = payload.get("macro")
-    if not isinstance(macro, str) or not macro.strip():
-        return JSONResponse({"error": "macro is required and must be a non-empty string"}, status_code=400)
-
-    role = payload.get("role")
-    args = payload.get("args") or {}
-    if not isinstance(args, dict):
-        return JSONResponse({"error": "args must be a JSON object"}, status_code=400)
+    macro, role, args, err = _scenario_run_macro_request(payload)
+    if err is not None:
+        return err
 
     spool = state.scenario_pool
     pool = state.pool
@@ -120,12 +150,16 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
     try:
         result = await spool.run_macro(
             scenario_id=sid,
-            macro=macro,
+            macro=macro or "",
             browser_pool=pool,
             role=role,
-            args=args,
+            args=args or {},
         )
+    except ScenarioRoleNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
+        if _is_scenario_role_not_found_error(e):
+            return JSONResponse({"error": str(e)}, status_code=400)
         state.log.exception(
             "octowright.http.scenario_run_macro_failed",
             scenario_id=sid,

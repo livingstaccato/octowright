@@ -528,6 +528,38 @@ class TestCloseBrowser:
         assert "no browsers are live" in str(exc.value)
 
     @pytest.mark.anyio
+    async def test_pool_close_refuses_protected_without_force(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Protected sessions stay registered unless caller opts in with force=True."""
+        pool = BrowserPool()
+        sess = _fake_session(protected=True)
+        pool._sessions[sess.instance_id] = sess
+
+        from octowright.browser_pool import lifecycle as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        with pytest.raises(ValueError, match=r"protected.*force=True"):
+            await pool.close(sess.instance_id)
+
+        assert pool._sessions[sess.instance_id] is sess
+        sess.close.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_pool_close_force_closes_protected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """force=True is the explicit protected-close override."""
+        pool = BrowserPool()
+        sess = _fake_session(protected=True)
+        pool._sessions[sess.instance_id] = sess
+
+        from octowright.browser_pool import lifecycle as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        result = await pool.close(sess.instance_id, force=True)
+
+        assert result["closed"] is True
+        assert sess.instance_id not in pool._sessions
+        sess.close.assert_awaited_once()
+
+    @pytest.mark.anyio
     async def test_evicts_session_before_close(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The session is removed from _sessions BEFORE session.close() is awaited."""
         pool = BrowserPool()
@@ -650,16 +682,93 @@ class TestCloseAll:
         pool = BrowserPool()
         pool._sessions["a"] = _fake_session(instance_id="a")
         pool._sessions["b"] = _fake_session(instance_id="b")
-        called: list[str] = []
+        called: list[tuple[str, bool]] = []
 
-        async def fake_close(iid: str, **_kw: Any) -> dict[str, Any]:
-            called.append(iid)
+        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
+            called.append((iid, force))
             return {"closed": True}
 
         pool.close = fake_close  # type: ignore[method-assign]
         result = await close_all(pool)
         assert sorted(result["closed"]) == ["a", "b"]
-        assert sorted(called) == ["a", "b"]
+        assert sorted(called) == [("a", False), ("b", False)]
+
+    @pytest.mark.anyio
+    async def test_force_passed_to_each_close(self) -> None:
+        """close_all(force=True) intentionally overrides protected sessions."""
+        pool = BrowserPool()
+        pool._sessions["a"] = _fake_session(instance_id="a", protected=True)
+        called: list[tuple[str, bool]] = []
+
+        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
+            called.append((iid, force))
+            return {"closed": True}
+
+        pool.close = fake_close  # type: ignore[method-assign]
+        result = await close_all(pool, force=True)
+        assert result == {"closed": ["a"]}
+        assert called == [("a", True)]
+
+    @pytest.mark.anyio
+    async def test_skips_protected_without_force(self) -> None:
+        """close_all reports protected sessions skipped from the owner-layer guard."""
+        from octowright.browser_pool.errors import ProtectedBrowserCloseError
+
+        pool = BrowserPool()
+        pool._sessions["a"] = _fake_session(instance_id="a", protected=True)
+        pool._sessions["b"] = _fake_session(instance_id="b", protected=False)
+        called: list[tuple[str, bool]] = []
+
+        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
+            called.append((iid, force))
+            if iid == "a":
+                raise ProtectedBrowserCloseError("browser 'a' is protected; pass force=True to close it")
+            return {"closed": True}
+
+        pool.close = fake_close  # type: ignore[method-assign]
+        result = await close_all(pool)
+        assert result["closed"] == ["b"]
+        assert result["skipped_protected"] == ["a"]
+        assert "force=True" in result["message"]
+        assert sorted(called) == [("a", False), ("b", False)]
+
+    @pytest.mark.anyio
+    async def test_reports_non_protected_close_failures(self) -> None:
+        """close_all returns failures so callers can distinguish them from an empty pool."""
+        pool = BrowserPool()
+        pool._sessions["a"] = _fake_session(instance_id="a")
+        pool._sessions["b"] = _fake_session(instance_id="b")
+
+        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
+            if iid == "a":
+                raise RuntimeError("page crashed")
+            if iid == "b":
+                raise ValueError("not protected, just invalid")
+            return {"closed": True}
+
+        pool.close = fake_close  # type: ignore[method-assign]
+        result = await close_all(pool)
+        assert result["closed"] == []
+        assert result["failed"] == [
+            {"instance_id": "a", "error": "RuntimeError: page crashed"},
+            {"instance_id": "b", "error": "ValueError: not protected, just invalid"},
+        ]
+
+    @pytest.mark.anyio
+    async def test_shielded_rollback_force_closes(self) -> None:
+        """Rollback cleanup must not be blocked by protected-session guards."""
+        from octowright.browser_pool.roster import shielded_rollback_close
+
+        pool = BrowserPool()
+        called: list[tuple[str, bool]] = []
+
+        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
+            called.append((iid, force))
+            return {"closed": True}
+
+        pool.close = fake_close  # type: ignore[method-assign]
+        await shielded_rollback_close(pool, ["a"], logger=MagicMock(), event="rollback")
+        assert called == [("a", True)]
 
 
 class TestSpawnRoster:
@@ -763,6 +872,7 @@ class TestShutdownPool:
         pool._pw = fake_pw
         await shutdown_pool(pool)
         assert order == ["close_all", "stop"]
+        pool.close_all.assert_awaited_once_with(_reason="shutdown", force=True)
         assert pool._pw is None
 
     @pytest.mark.anyio

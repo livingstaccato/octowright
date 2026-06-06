@@ -74,7 +74,8 @@ class SessionLike(Protocol):
         self,
         *,
         screenshot_dir: Path | None = None,
-        console_tail: int = 25,
+        console_tail: int = 0,
+        html_preview_chars: int = 0,
         html_full: bool = False,
     ) -> dict[str, Any]: ...
 

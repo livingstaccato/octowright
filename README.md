@@ -279,7 +279,7 @@ appends a record to that instance's JSONL log.
 | `browser_launch` | Launch a new headed browser. `kind` = `chromium` / `firefox` / `webkit`. Returns `instance_id`. |
 | `browser_suggest_for_url` | Pre-launch: which saved persona owns this URL? Disambiguates `"open discord.com"` requests. |
 | `browser_list` | List all live instances. |
-| `browser_close` / `browser_close_all` | Close one / all. |
+| `browser_close` / `browser_close_all` | Close one / all. Protected browsers require `force=True`; `browser_close_all` skips protected browsers unless forced and reports failures. |
 | `browser_spawn_roster` | Launch N browsers in parallel from a list of launch specs. |
 | `browser_navigate` | Navigate a specific instance. |
 | `browser_navigate_back` | Go back one entry in the browser's history. Returns `{ok, url, title}`; `ok=False` when there's no previous page. |
@@ -408,6 +408,11 @@ browser_close_all
 browser_launch kind=webkit profile=disc-1 url=https://discord.com/app
 ...
 ```
+
+Protected sessions are intended for user-facing windows. Any close-capable
+tool refuses them unless the call explicitly confirms with `force=True`;
+this includes `browser_close`, `browser_close_all`, and
+`browser_capture_and_close`.
 
 `profile_list` enumerates saved profiles; `profile_delete` wipes one (refuses while a
 live instance is using it). Exported replay scripts embed the absolute `user_data_dir`

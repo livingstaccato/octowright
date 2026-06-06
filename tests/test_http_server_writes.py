@@ -66,10 +66,11 @@ class _FakePool:
     def __init__(self) -> None:
         self._sessions: dict[str, SimpleNamespace] = {}
         self.launch_calls: list[dict[str, Any]] = []
-        self.close_calls: list[str] = []
+        self.close_calls: list[dict[str, Any]] = []
         self.launch_result: dict[str, Any] | None = None
         self.close_result: dict[str, Any] | None = None
         self.launch_raises: BaseException | None = None
+        self.close_raises: BaseException | None = None
         self.next_instance_id: str = "fakeinst0001"
 
     async def launch(self, **kwargs: Any) -> dict[str, Any]:
@@ -94,8 +95,15 @@ class _FakePool:
         self._sessions[iid] = SimpleNamespace(instance_id=iid)
         return result
 
-    async def close(self, instance_id: str) -> dict[str, Any]:
-        self.close_calls.append(instance_id)
+    async def close(self, instance_id: str, *, force: bool = False) -> dict[str, Any]:
+        from octowright.browser_pool.errors import ProtectedBrowserCloseError
+
+        self.close_calls.append({"instance_id": instance_id, "force": force})
+        if self.close_raises is not None:
+            raise self.close_raises
+        sess = self._sessions.get(instance_id)
+        if getattr(sess, "protected", False) and not force:
+            raise ProtectedBrowserCloseError(f"browser {instance_id!r} is protected; pass force=True to close it")
         self._sessions.pop(instance_id, None)
         if self.close_result is not None:
             return self.close_result
@@ -143,6 +151,7 @@ class _FakeScenarioPool:
         self.start_raises: BaseException | None = None
         self.stop_result: dict[str, Any] | None = None
         self.run_macro_result: dict[str, Any] | None = None
+        self.run_macro_raises: BaseException | None = None
 
     def list_live(self) -> list[dict[str, Any]]:
         return []
@@ -185,6 +194,8 @@ class _FakeScenarioPool:
         self.run_macro_calls.append(
             {"scenario_id": scenario_id, "macro": macro, "role": role, "args": args},
         )
+        if self.run_macro_raises is not None:
+            raise self.run_macro_raises
         return self.run_macro_result or {
             "scenario_id": scenario_id,
             "macro": macro,
@@ -418,7 +429,7 @@ def test_delete_session_happy_path(
     assert body["closed"] is True
     assert body["instance_id"] == "liveiid00001"
     assert "log_path" in body
-    assert pool.close_calls == ["liveiid00001"]
+    assert pool.close_calls == [{"instance_id": "liveiid00001", "force": False}]
 
 
 def test_delete_session_publishes_dashboard_invalidation(
@@ -488,6 +499,55 @@ def test_delete_session_happy_path_with_cache_report(
     assert body["cache"]["components"]["video"]["size_bytes"] == video_path.stat().st_size
     assert body["cache"]["components"]["jsonl"]["size_bytes"] == log_path.stat().st_size
     assert body["cache"]["components"]["jsonl"]["path"] == str(log_path)
+
+
+def test_delete_session_protected_without_force_409(
+    client: TestClient,
+    fakes: dict[str, Any],
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    sid = "protected001"
+    pool._sessions[sid] = SimpleNamespace(instance_id=sid, protected=True)
+
+    r = client.delete(f"/api/sessions/{sid}")
+
+    assert r.status_code == 409
+    body = r.json()
+    assert "protected" in body["error"]
+    assert "force=true" in body["error"].lower()
+    assert sid in pool._sessions
+    assert pool.close_calls == [{"instance_id": sid, "force": False}]
+
+
+def test_delete_session_protected_force_closes(
+    client: TestClient,
+    fakes: dict[str, Any],
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    sid = "protected002"
+    pool._sessions[sid] = SimpleNamespace(instance_id=sid, protected=True)
+
+    r = client.delete(f"/api/sessions/{sid}?force=true")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["closed"] is True
+    assert sid not in pool._sessions
+    assert pool.close_calls == [{"instance_id": sid, "force": True}]
+
+
+def test_delete_session_invalid_force_400(
+    client: TestClient,
+    fakes: dict[str, Any],
+) -> None:
+    pool: _FakePool = fakes["pool"]
+    sid = "protected003"
+    pool._sessions[sid] = SimpleNamespace(instance_id=sid, protected=True)
+
+    r = client.delete(f"/api/sessions/{sid}?force=maybe")
+
+    assert r.status_code == 400
+    assert "invalid force" in r.json()["error"]
+    assert pool.close_calls == []
 
 
 def test_delete_session_writes_console_and_download_indexes(
@@ -805,6 +865,41 @@ def test_post_scenario_run_macro_args_must_be_object_400(
     )
     assert r.status_code == 400
     assert "args" in r.json()["error"]
+
+
+def test_post_scenario_run_macro_role_must_be_non_empty_string_400(
+    client: TestClient,
+    fakes: dict[str, Any],
+) -> None:
+    spool: _FakeScenarioPool = fakes["scenario_pool"]
+    spool._live["scenrolebad1"] = SimpleNamespace(scenario_id="scenrolebad1")
+
+    r = client.post(
+        "/api/scenarios/scenrolebad1/run_macro",
+        json={"macro": "x", "role": ""},
+    )
+
+    assert r.status_code == 400
+    assert "role" in r.json()["error"]
+
+
+def test_post_scenario_run_macro_role_not_found_returns_400(
+    client: TestClient,
+    fakes: dict[str, Any],
+) -> None:
+    from octowright.scenarios_pool import ScenarioRoleNotFoundError
+
+    spool: _FakeScenarioPool = fakes["scenario_pool"]
+    spool._live["scenrolebad2"] = SimpleNamespace(scenario_id="scenrolebad2")
+    spool.run_macro_raises = ScenarioRoleNotFoundError("scenario 'scenrolebad2' has no participants with role 'typo'")
+
+    r = client.post(
+        "/api/scenarios/scenrolebad2/run_macro",
+        json={"macro": "x", "role": "typo"},
+    )
+
+    assert r.status_code == 400
+    assert "role 'typo'" in r.json()["error"]
 
 
 # ---------------------------------------------------------------------------

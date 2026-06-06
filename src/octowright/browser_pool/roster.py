@@ -12,6 +12,7 @@ import anyio
 from provide.telemetry import get_logger
 
 from octowright._tracing import set_attrs, span
+from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
@@ -39,21 +40,51 @@ async def shielded_rollback_close(
     with anyio.CancelScope(shield=True):
         for instance_id in instance_ids:
             try:
-                await pool.close(instance_id)
+                await pool.close(instance_id, force=True)
             except Exception as exc:
                 logger.warning(event, instance_id=instance_id, error=repr(exc))
 
 
-async def close_all(pool: BrowserPool, *, _reason: SessionCloseReason = "agent_close") -> dict[str, Any]:
+async def close_all(
+    pool: BrowserPool,
+    *,
+    force: bool = False,
+    _reason: SessionCloseReason = "agent_close",
+) -> dict[str, Any]:
     # Close every session concurrently. A single hung browser would otherwise
     # block daemon shutdown if we awaited them serially; gather + return_exceptions
     # lets the rest tear down even if one raises or stalls.
     ids = [session.instance_id for session in pool.iter_sessions()]
-    results = await asyncio.gather(*(pool.close(iid, _reason=_reason) for iid in ids), return_exceptions=True)
+    results = await asyncio.gather(
+        *(pool.close(iid, force=force, _reason=_reason) for iid in ids),
+        return_exceptions=True,
+    )
+    closed: list[str] = []
+    skipped_protected: list[str] = []
+    failed: list[dict[str, str]] = []
     for iid, result in zip(ids, results, strict=True):
         if isinstance(result, BaseException):
-            log.warning("octowright.browser.close_all_failed", instance_id=iid, error=repr(result))
-    return {"closed": ids}
+            if isinstance(result, ProtectedBrowserCloseError):
+                skipped_protected.append(iid)
+            else:
+                log.warning("octowright.browser.close_all_failed", instance_id=iid, error=repr(result))
+                failed.append({"instance_id": iid, "error": f"{type(result).__name__}: {result}"})
+        else:
+            closed.append(iid)
+    body: dict[str, Any] = {"closed": closed}
+    if failed:
+        body["failed"] = failed
+    if skipped_protected:
+        body["skipped_protected"] = skipped_protected
+        if closed:
+            body["message"] = (
+                f"Closed {len(closed)} unprotected browser(s); "
+                f"skipped {len(skipped_protected)} protected browser(s). "
+                "Pass force=True to also close protected browsers."
+            )
+        else:
+            body["message"] = f"All {len(skipped_protected)} browser(s) are protected. Pass force=True to close them."
+    return body
 
 
 async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[str, Any]:

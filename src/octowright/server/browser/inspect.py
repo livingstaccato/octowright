@@ -182,15 +182,24 @@ def browser_recording_path(instance_id: str) -> BrowserPathResult:
         "ONE-SHOT TEARDOWN: Captures a screenshot and page title, then closes the browser. "
         "Use this as the final step of a task to ensure resources are freed. "
         "If snapshot=True, also includes an aria-tree snapshot. "
-        "Returns {title, url, screenshot_path, aria (optional), closed: true}."
+        "If the browser is protected, pass force=True to confirm before any capture side effects run. "
+        "Returns {title, url, screenshot_path, aria (optional), closed: true}; protected refusal returns {error}."
     ),
 )
 async def browser_capture_and_close(
     instance_id: str,
     screenshot_path: str | None = None,
     snapshot: bool = True,
+    force: bool = False,
 ) -> BrowserCaptureAndCloseResult:
     session = pool.get(instance_id)
+    if getattr(session, "protected", False) and not force:
+        return {
+            "error": (
+                f"browser {instance_id!r} is protected; pass force=True to capture and close it. "
+                "Protected browsers are meant to stay open for the user."
+            )
+        }
     title = await session.page.title()
     url = session.page.url
 
@@ -206,7 +215,7 @@ async def browser_capture_and_close(
         aria = aria_full[:DEFAULT_PREVIEW_CHARS]
 
     # Close
-    await pool.close(instance_id)
+    await pool.close(instance_id, force=force)
 
     res: BrowserCaptureAndCloseResult = {
         "title": title,

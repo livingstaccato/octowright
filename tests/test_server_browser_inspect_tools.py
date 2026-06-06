@@ -32,6 +32,7 @@ def recordings_dir(tmp_path: Path) -> Path:
 
 def _session(log_root: Path | None = None) -> MagicMock:
     s = MagicMock()
+    s.protected = False
     # Default log path lives under the patched RECORDINGS_DIR so the
     # containment-checked screenshot/capture default paths pass. Callers can
     # pass an explicit log_root when they need to assert on disk.
@@ -262,6 +263,43 @@ async def test_browser_capture_and_close_with_snapshot(_patch_pool: MagicMock, r
     out = await _inspect.browser_capture_and_close("i", snapshot=True)
     assert out["closed"] is True
     assert out["aria"] == "aria-content"
+    _patch_pool.close.assert_awaited_once_with("i", force=False)
+
+
+@pytest.mark.anyio
+async def test_browser_capture_and_close_refuses_protected_before_side_effects(
+    _patch_pool: MagicMock,
+    recordings_dir: Path,
+) -> None:
+    s = _session(recordings_dir)
+    s.protected = True
+    _patch_pool.get.return_value = s
+    _patch_pool.close = AsyncMock()
+
+    out = await _inspect.browser_capture_and_close("i", snapshot=True)
+
+    assert "error" in out
+    assert "force=True" in out["error"]
+    s.screenshot.assert_not_awaited()
+    s.page.locator.assert_not_called()
+    _patch_pool.close.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_browser_capture_and_close_force_closes_protected(
+    _patch_pool: MagicMock,
+    recordings_dir: Path,
+) -> None:
+    s = _session(recordings_dir)
+    s.protected = True
+    _patch_pool.get.return_value = s
+    _patch_pool.close = AsyncMock(return_value={"closed": True})
+
+    out = await _inspect.browser_capture_and_close("i", snapshot=False, force=True)
+
+    assert out["closed"] is True
+    s.screenshot.assert_awaited_once()
+    _patch_pool.close.assert_awaited_once_with("i", force=True)
 
 
 # ─── path-traversal regression for screenshot/capture ────────────────────────
