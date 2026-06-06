@@ -57,6 +57,47 @@ def _reset_actual_http_port() -> None:
     _d._bound_http_port = None
 
 
+# The dashboard binds to a loopback address, so a real browser always sends a
+# loopback Host header. Starlette's TestClient otherwise defaults to the
+# non-loopback `http://testserver`, which the DNS-rebinding guard in
+# `http/exposure.py` now (correctly) rejects on every sensitive route. Default
+# the test client to a loopback base URL so endpoint tests model real traffic;
+# tests that exercise the rebinding/remote-bind guards still override `base_url`
+# or pass an explicit `host` header to assert the rejection paths.
+_DASHBOARD_LOOPBACK_BASE_URL = "http://127.0.0.1"
+
+
+_DASHBOARD_LOOPBACK_HOST = "127.0.0.1"
+
+
+@pytest.fixture(autouse=True)
+def _loopback_dashboard_testclient(monkeypatch: pytest.MonkeyPatch) -> None:
+    import starlette.testclient as _starlette_testclient
+
+    original_init = _starlette_testclient.TestClient.__init__
+    original_ws_connect = _starlette_testclient.TestClient.websocket_connect
+
+    def _init(self: object, *args: object, **kwargs: object) -> None:
+        # HTTP requests derive the Host header from base_url; only inject the
+        # default when the caller didn't set base_url itself — positionally
+        # (args beyond `app`) or by keyword.
+        if "base_url" not in kwargs and len(args) < 2:
+            kwargs["base_url"] = _DASHBOARD_LOOPBACK_BASE_URL
+        original_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    def _websocket_connect(self: object, url: object, *args: object, **kwargs: object) -> object:
+        # websocket_connect ignores base_url for the Host header (it always
+        # sends `testserver`), so inject a loopback Host unless the test set one.
+        headers = dict(kwargs.get("headers") or {})  # type: ignore[arg-type]
+        if not any(str(key).lower() == "host" for key in headers):
+            headers["host"] = _DASHBOARD_LOOPBACK_HOST
+        kwargs["headers"] = headers
+        return original_ws_connect(self, url, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_starlette_testclient.TestClient, "__init__", _init)
+    monkeypatch.setattr(_starlette_testclient.TestClient, "websocket_connect", _websocket_connect)
+
+
 def _free_port() -> int:
     """Return an OS-assigned free TCP port on 127.0.0.1.
 
