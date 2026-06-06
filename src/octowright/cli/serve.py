@@ -301,6 +301,22 @@ async def _run_follower(leader_mcp_url: str) -> None:
     await run_proxy(leader_mcp_url, health_url=health_url)
 
 
+def _reap_orphan_session_dirs(no_singleton: bool) -> None:
+    """Sweep ``session=True`` tmpdirs left by a crashed predecessor.
+
+    The singleton election guarantees we're the only leader, so any pre-existing
+    ``octowright-session-*`` tmpdir is from a dead daemon and is safe to remove.
+    Skipped under ``--no-singleton``, where a sibling daemon may own live dirs.
+    """
+    if no_singleton:
+        return
+    from octowright.browser_pool.session_dirs import reap_stale_session_dirs
+
+    reaped = reap_stale_session_dirs()
+    if reaped["removed"]:
+        _log.info("octowright.session_dirs.reaped", count=len(reaped["removed"]))
+
+
 async def _run_leader(
     *,
     http_host: str | None,
@@ -331,6 +347,8 @@ async def _run_leader(
     grace = idle_grace if idle_grace is not None else IDLE_GRACE_SECONDS
     bound_host = http_host or HTTP_HOST
     bound_port = http_port if http_port is not None else HTTP_PORT
+
+    _reap_orphan_session_dirs(no_singleton)
 
     def _on_http_bound(host: str, port: int) -> None:
         from octowright.defaults import set_actual_http_port

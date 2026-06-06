@@ -32,6 +32,7 @@ from octowright.browser_pool.lifecycle import close_browser, handoff_browser, sh
 from octowright.browser_pool.options import LaunchOptions
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
+from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
 from octowright.browser_pool.visuals import _tile_args_for_chromium
 from octowright.defaults import HEADLESS_DEFAULT, RECORDINGS_DIR, get_default_url
 from octowright.recorder import new_log_path
@@ -410,7 +411,7 @@ class BrowserPool:
         async with self._sessions_lock:
             existing = self._session_profile_dirs.get(session_key)
             if existing is None or not existing.exists():
-                tmp = Path(tempfile.mkdtemp(prefix=f"octowright-session-{session_name}-{kind}-"))
+                tmp = Path(tempfile.mkdtemp(prefix=f"{SESSION_TMPDIR_PREFIX}{session_name}-{kind}-"))
                 self._session_profile_dirs[session_key] = tmp
                 existing = tmp
         return str(existing)
