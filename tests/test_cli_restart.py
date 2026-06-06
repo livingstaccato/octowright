@@ -302,3 +302,32 @@ def test_resolve_octowright_entry_prefers_venv_neighbour(monkeypatch: pytest.Mon
     monkeypatch.setattr(_restart_mod.sys, "executable", str(fake_python))
     resolved = _restart_mod._resolve_octowright_entry()
     assert resolved == str(fake_octowright)
+
+
+def test_port_is_free_sets_reuseaddr_so_time_wait_does_not_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pre-flight check must set SO_REUSEADDR so a TIME_WAIT socket from the
+    just-stopped daemon reads as free — matching what the new daemon (which also
+    sets SO_REUSEADDR/SO_REUSEPORT) can actually bind. Without it, restart sits
+    through the full TIME_WAIT timeout for nothing."""
+    import socket as _socket
+
+    opts: list[tuple[int, int, int]] = []
+
+    class _FakeSocket:
+        def __init__(self, family: int, socktype: int, proto: int) -> None:
+            pass
+
+        def setsockopt(self, level: int, optname: int, value: int) -> None:
+            opts.append((level, optname, value))
+
+        def bind(self, sockaddr: tuple[object, ...]) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(_restart_mod.socket, "getaddrinfo", lambda *_a, **_k: [(2, 1, 6, "", ("127.0.0.1", 6286))])
+    monkeypatch.setattr(_restart_mod.socket, "socket", _FakeSocket)
+
+    assert _restart_mod._port_is_free("127.0.0.1", 6286) is True
+    assert (_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1) in opts
