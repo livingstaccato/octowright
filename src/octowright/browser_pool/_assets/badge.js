@@ -29,7 +29,7 @@
         ov.id = OVERLAY_ID;
         Object.assign(ov.style, {
             position: "fixed", zIndex: "2147483646",
-            [POS.vertical]: "44px",
+            [POS.vertical]: POS.v_offset || "44px",
             [isRight ? "right" : "left"]: isRight ? "8px" : (POS.h_offset || "8px"),
             background: "rgba(14,14,30,0.97)",
             color: "#e8e8f0",
