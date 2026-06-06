@@ -358,24 +358,30 @@ class BrowserPool:
         await shutdown_pool(self)
 
     async def _build_launch_kwargs(self, *, tile: bool, kind: str, headless: bool) -> dict[str, Any]:
-        """Chromium-only window tiling and new-tab URL override.
+        """Chromium-only window tiling + new-tab-page override extension.
 
-        For Chromium: always injects --new-tab-url so Cmd+T opens /new-tab
-        natively. Tile args are appended when tile=True and not headless.
-        Firefox/WebKit: no equivalent CLI hooks; the context page-event
-        redirector in launch_pipeline.py handles those engines.
+        Headed Chromium loads a tiny unpacked extension that overrides the
+        new-tab page to redirect to the daemon's /new-tab. Chromium's
+        privileged NTP detaches Playwright handles, so a post-open page.goto
+        redirect is unreliable — the extension is the robust path. Old headless
+        can't load extensions, so it's skipped there (no user pressing Cmd+T in
+        headless anyway). Firefox/WebKit have no equivalent CLI hook; their new
+        tabs are handled by the page-event redirector in launch_pipeline.py.
         """
+        from octowright.browser_pool.newtab_extension import ensure_newtab_extension
         from octowright.defaults import get_default_url
 
         out: dict[str, Any] = {}
-        if kind == "chromium":
-            args = [f"--new-tab-url={get_default_url()}"]
-            if tile and not headless:
-                async with self._tile_lock:
-                    tile_index = self._tile_counter
-                    self._tile_counter += 1
-                args.extend(_tile_args_for_chromium(tile_index))
-            out["args"] = args
+        if kind != "chromium" or headless:
+            return out
+        ext_dir = ensure_newtab_extension(get_default_url())
+        args = [f"--disable-extensions-except={ext_dir}", f"--load-extension={ext_dir}"]
+        if tile:
+            async with self._tile_lock:
+                tile_index = self._tile_counter
+                self._tile_counter += 1
+            args.extend(_tile_args_for_chromium(tile_index))
+        out["args"] = args
         return out
 
     async def _resolve_session_dir(

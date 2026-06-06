@@ -47,7 +47,7 @@ def get_default_url() -> str:
 def _detect_git_repo_name() -> str | None:
     """Return the basename of the nearest git repo root, or None."""
     try:
-        r = subprocess.run(
+        r = subprocess.run(  # nosec B603 B607 - fixed git argv, no user input
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,

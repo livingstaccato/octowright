@@ -42,39 +42,61 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-# URLs that indicate a user-opened blank tab (Cmd+T / Ctrl+T) rather than a
-# programmatic popup. We redirect these to the daemon's own /new-tab page.
-_BLANK_URLS = frozenset(
-    {
-        "",
-        "about:blank",
-        "chrome://newtab/",
-        "chrome://newtab",  # trailing-slash variants
-        "about:newtab",
-    }
+# Exact blank/new-tab URLs that mean "user opened an empty tab" (Cmd+T / Ctrl+T)
+# rather than a programmatic popup to a real URL. Firefox uses about:newtab /
+# about:home; WebKit and window.open('') land on about:blank.
+_BLANK_URLS = frozenset({"", "about:blank", "about:newtab", "about:home"})
+
+# Engine new-tab-page URL prefixes. Chromium's own NTP is normally replaced by
+# the new-tab override extension (see newtab_extension.py), but match it
+# defensively here in case the extension didn't load (e.g. old headless).
+_BLANK_URL_PREFIXES = (
+    "chrome://newtab",
+    "chrome://new-tab-page",
+    "chrome-search://local-ntp",
 )
 
 # Task references kept alive to prevent GC mid-flight (satisfies RUF006).
 _redirect_tasks: set[asyncio.Task[None]] = set()
 
 
+def _is_blank_newtab_url(url: str | None) -> bool:
+    """True when ``url`` is an engine new-tab/blank page we should redirect."""
+    if not url:
+        return True
+    if url in _BLANK_URLS:
+        return True
+    return any(url.startswith(prefix) for prefix in _BLANK_URL_PREFIXES)
+
+
 def _make_new_tab_redirector() -> Any:
     """Return a sync page-event handler that redirects blank new tabs to /new-tab.
 
     Waits for domcontentloaded (up to 800 ms) so the URL is settled before
-    checking — more reliable than a fixed sleep.
+    checking — more reliable than a fixed sleep. This is the Firefox/WebKit
+    path (and a Chromium fallback); Chromium normally never reaches the goto
+    because the new-tab override extension already replaced the NTP.
     """
 
     def _on_new_page(new_page: Any) -> None:
         async def _redirect() -> None:
             from octowright.defaults import get_default_url
 
+            # Only redirect user-opened tabs (Cmd+T), never programmatic popups.
+            # A window.open(...) popup has an opener page; a fresh Cmd+T tab does
+            # not. Skipping opened popups leaves app-controlled windows alone.
+            try:
+                opener = await new_page.opener()
+            except Exception:
+                opener = None
+            if opener is not None:
+                return
             try:
                 await new_page.wait_for_load_state("domcontentloaded", timeout=800)
             except Exception:
                 pass
             try:
-                if new_page.url in _BLANK_URLS:
+                if _is_blank_newtab_url(new_page.url):
                     await new_page.goto(get_default_url())
             except Exception:
                 pass

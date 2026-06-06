@@ -127,6 +127,9 @@ async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
     class FakePage:
         url = "about:blank"
 
+        async def opener(self) -> None:
+            return None  # no opener → a user-opened tab, eligible for redirect
+
         async def wait_for_load_state(self, state: str, *, timeout: float) -> None:
             waited.append(state)
 
@@ -138,4 +141,52 @@ async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
     await asyncio.sleep(0.05)  # let the async task run
 
     assert "domcontentloaded" in waited
-    assert len(navigated) == 1
+    assert len(navigated) == 1  # redirected to /new-tab
+
+
+@pytest.mark.anyio
+async def test_new_tab_redirector_skips_programmatic_popups() -> None:
+    """A popup with an opener (window.open) must NOT be redirected."""
+    from octowright.browser_pool.launch_pipeline import _make_new_tab_redirector
+
+    navigated: list[str] = []
+    opener_page = object()
+
+    class FakePopup:
+        url = "about:blank"
+
+        async def opener(self) -> object:
+            return opener_page  # has an opener → programmatic popup
+
+        async def wait_for_load_state(self, state: str, *, timeout: float) -> None:
+            pass
+
+        async def goto(self, url: str) -> None:
+            navigated.append(url)
+
+    handler = _make_new_tab_redirector()
+    handler(FakePopup())
+    await asyncio.sleep(0.05)
+
+    assert navigated == []  # left alone
+
+
+def test_is_blank_newtab_url_matches_engine_new_tabs() -> None:
+    """Blank/new-tab detection covers Chromium, Firefox, and WebKit new tabs."""
+    from octowright.browser_pool.launch_pipeline import _is_blank_newtab_url
+
+    # Blank + Firefox + WebKit
+    assert _is_blank_newtab_url("")
+    assert _is_blank_newtab_url(None)
+    assert _is_blank_newtab_url("about:blank")
+    assert _is_blank_newtab_url("about:newtab")
+    assert _is_blank_newtab_url("about:home")
+    # Chromium NTP variants (fallback when the extension didn't load)
+    assert _is_blank_newtab_url("chrome://newtab/")
+    assert _is_blank_newtab_url("chrome://new-tab-page/")
+    assert _is_blank_newtab_url("chrome-search://local-ntp/local-ntp.html")
+    # Real URLs must NOT be treated as blank
+    assert not _is_blank_newtab_url("https://example.com")
+    assert not _is_blank_newtab_url("http://127.0.0.1:6286/new-tab")
+    # The extension's own page is not "blank" — it self-redirects
+    assert not _is_blank_newtab_url("chrome-extension://abc/newtab.html")

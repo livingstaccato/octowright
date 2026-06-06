@@ -35,7 +35,7 @@ def _version() -> str:
 @lru_cache(maxsize=1)
 def _commit() -> str:
     try:
-        r = subprocess.run(
+        r = subprocess.run(  # nosec B603 B607 - fixed git argv, no user input
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,

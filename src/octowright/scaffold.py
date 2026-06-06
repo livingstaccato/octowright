@@ -109,7 +109,9 @@ def write_project_config(target_dir: Path, *, force: bool = False) -> tuple[Path
     import subprocess
 
     try:
-        r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=2)
+        r = subprocess.run(  # nosec B603 B607 - fixed git argv, no user input
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=2
+        )
         repo_name = Path(r.stdout.strip()).name if r.returncode == 0 else ""
     except Exception:
         repo_name = ""
