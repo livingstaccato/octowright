@@ -10,6 +10,11 @@
     const OVERLAY_ID = "__octowright_badge_overlay__";
 
     let altDown = false;
+    // Tracks the active outside-click listener so closeOverlay() can remove it
+    // no matter which path closed the popup (outside click, Escape, badge
+    // re-click). Without this, every open/close that isn't via an outside click
+    // leaks a listener that keeps firing on subsequent clicks.
+    let outsideClickListener = null;
 
     function getBadge() { return document.getElementById(BADGE_ID); }
     function getOverlay() { return document.getElementById(OVERLAY_ID); }
@@ -19,6 +24,10 @@
         if (ov) ov.remove();
         const b = getBadge();
         if (b) { b.style.opacity = String(OPACITY); b.style.cursor = "default"; }
+        if (outsideClickListener) {
+            document.removeEventListener("click", outsideClickListener);
+            outsideClickListener = null;
+        }
     }
 
     function openOverlay() {
@@ -90,12 +99,12 @@
         document.body.appendChild(ov);
 
         setTimeout(() => {
-            document.addEventListener("click", function outside(e) {
+            outsideClickListener = (e) => {
                 if (!ov.contains(e.target) && e.target !== getBadge()) {
                     closeOverlay();
-                    document.removeEventListener("click", outside);
                 }
-            });
+            };
+            document.addEventListener("click", outsideClickListener);
         }, 0);
     }
 
