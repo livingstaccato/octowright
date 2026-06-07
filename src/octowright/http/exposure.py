@@ -57,6 +57,18 @@ def remote_dashboard_allowed() -> bool:
     return os.environ.get(DASHBOARD_REMOTE_ALLOWED_ENV) == "1"
 
 
+def _host_without_port(value: str) -> str:
+    """Strip an optional ``:port`` from a ``host`` / ``host:port`` value, leaving
+    ``[ipv6]`` literals intact for ``is_loopback_host`` to unwrap. One canonical
+    parser shared by the Host-header and WebSocket-Origin loopback checks."""
+    if value.startswith("["):
+        bracket_close = value.rfind("]")
+        return value[: bracket_close + 1] if bracket_close != -1 else value
+    if value.count(":") == 1:
+        return value.rsplit(":", 1)[0]
+    return value
+
+
 def _sensitive_allowed_for_host(host: str | None) -> bool:
     return is_loopback_host(host) or remote_dashboard_allowed()
 
@@ -85,14 +97,7 @@ def request_host_loopback_allowed(raw_host: str | None) -> bool:
     stripped = raw_host.strip()
     if not stripped:
         return False
-    if stripped.startswith("["):
-        bracket_close = stripped.rfind("]")
-        host_only = stripped[: bracket_close + 1] if bracket_close != -1 else stripped
-    elif stripped.count(":") == 1:
-        host_only = stripped.rsplit(":", 1)[0]
-    else:
-        host_only = stripped
-    return is_loopback_host(host_only)
+    return is_loopback_host(_host_without_port(stripped))
 
 
 def sensitive_allowed_for_connection(connection: HTTPConnection) -> bool:
@@ -139,18 +144,10 @@ def websocket_origin_allowed(websocket: WebSocket) -> bool:
         return False
     if origin_host == websocket.headers.get("host", ""):
         return True
-    # Strip any path/query that snuck through (Origin is host-only per spec).
+    # Strip any path/query that snuck through (Origin is host-only per spec),
+    # then the optional :port via the shared canonical parser.
     bare_host = origin_host.split("/", 1)[0]
-    # Strip optional :port (IPv6 literals are wrapped in [..] so the rsplit
-    # on the last ':' only trims the port).
-    if bare_host.startswith("["):
-        bracket_close = bare_host.rfind("]")
-        host_only = bare_host[: bracket_close + 1] if bracket_close != -1 else bare_host
-    elif bare_host.count(":") == 1:
-        host_only = bare_host.rsplit(":", 1)[0]
-    else:
-        host_only = bare_host
-    return is_loopback_host(host_only)
+    return is_loopback_host(_host_without_port(bare_host))
 
 
 def _cross_origin_blocked_from_parts(
