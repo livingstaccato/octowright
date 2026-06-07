@@ -20,6 +20,7 @@ from octowright.defaults import (
     PROTECT_BROWSERS_DEFAULT,
     _read_project_config,
     get_default_label,
+    project_config_str,
 )
 from octowright.server._state import mcp, pool
 from octowright.server.browser.inspect import browser_brief
@@ -117,8 +118,8 @@ async def browser_launch(
         label = get_default_label()
         # .octowright/config.yaml persona: wins; then try matching a persona by
         # the project slug; fallback leaves profile as None (auto-promoted from label).
-        cfg_persona = str(proj_cfg.get("persona", "")).strip()
-        cfg_profile = str(proj_cfg.get("profile", "")).strip()
+        cfg_persona = project_config_str(proj_cfg, "persona")
+        cfg_profile = project_config_str(proj_cfg, "profile")
         if cfg_profile:
             profile = cfg_profile
         elif cfg_persona:
@@ -233,8 +234,8 @@ async def browser_quick_launch(
     if label is None and profile is None and not ephemeral and not session:
         proj_cfg = _read_project_config()
         label = get_default_label()
-        cfg_persona = str(proj_cfg.get("persona", "")).strip()
-        cfg_profile = str(proj_cfg.get("profile", "")).strip()
+        cfg_persona = project_config_str(proj_cfg, "persona")
+        cfg_profile = project_config_str(proj_cfg, "profile")
         if cfg_profile:
             profile = cfg_profile
         elif cfg_persona:
