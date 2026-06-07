@@ -81,6 +81,15 @@ def _read_project_config() -> dict[str, object]:
     return {}
 
 
+def project_config_str(cfg: dict[str, object], key: str) -> str:
+    """Return ``cfg[key]`` as a stripped string, treating a missing key OR a
+    null value as ``""``. PyYAML parses a bare ``key:`` (no value) as ``None``,
+    and ``str(None)`` would otherwise leak the literal ``"None"`` into a
+    label/persona/profile. Shared by ``get_default_label`` and the launch
+    config resolution so the null-safety lives in one place."""
+    return str(cfg.get(key) or "").strip()
+
+
 @lru_cache(maxsize=1)
 def get_default_label() -> str:
     """Default browser label, in priority order:
@@ -93,7 +102,7 @@ def get_default_label() -> str:
     env = os.environ.get("OCTOWRIGHT_DEFAULT_LABEL", "").strip()
     if env:
         return env
-    cfg_label = str(_read_project_config().get("label", "")).strip()
+    cfg_label = project_config_str(_read_project_config(), "label")
     if cfg_label:
         return cfg_label
     repo = _detect_git_repo_name()
