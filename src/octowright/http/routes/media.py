@@ -332,7 +332,11 @@ async def trace_open(request: Request) -> JSONResponse:
 
 def routes() -> list[Route]:
     return [
-        Route("/api/sessions/{id}/frame", guard_sensitive_http(session_frame), methods=["GET"]),
+        Route(
+            "/api/sessions/{id}/frame",
+            guard_sensitive_http(session_frame, side_effect_get=True),
+            methods=["GET"],
+        ),
         Route("/api/sessions/{id}/video", guard_sensitive_http(session_video), methods=["GET"]),
         Route("/api/sessions/{id}/trace", guard_sensitive_http(session_trace), methods=["GET"]),
         Route(
