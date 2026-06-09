@@ -396,5 +396,6 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
+[0.8.0]: https://github.com/livingstaccato/octowright/compare/v0.7.0...v0.8.0
 [0.5.0]: https://github.com/livingstaccato/octowright/compare/v0.3.0...v0.5.0
 [0.3.0]: https://github.com/livingstaccato/octowright/releases/tag/v0.3.0
