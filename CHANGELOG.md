@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `browser_capture_and_close` (url + aria), `browser_read_markdown` (url), and
   `golden_save` (url) now follow the active frame instead of mixing frame
   content with top-page metadata.
+- **Stale documentation corrected** — `8765` → `6286` dashboard-port references in
+  the getting-started and troubleshooting docs (the port moved in 0.7.0), and the
+  MCP tool-surface counts across the docs and architecture diagrams now reflect the
+  real 111-tool surface.
 
 ## [0.7.0] - 2026-06-06
 
