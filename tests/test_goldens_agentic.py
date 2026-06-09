@@ -39,6 +39,29 @@ def mock_pool(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_golden_save_url_follows_snapshotted_document(monkeypatch, temp_goldens):
+    """golden_save records the URL of the snapshotted document (frame-aware via
+    session.snapshot), not the top page — so a golden taken inside an iframe
+    isn't mislabeled with the parent page's URL."""
+    from octowright.server import _state, goldens
+    from octowright.server.goldens import golden_save
+
+    session = MagicMock()
+    # snapshot() is frame-aware and surfaces the frame's url in the returned tree.
+    session.snapshot = AsyncMock(return_value={"role": "Root", "url": "https://widget.octowright.com/inner"})
+    session.page.url = "https://top.octowright.com/"  # top page differs from the frame
+    mpool = MagicMock()
+    mpool.get.return_value = session
+    monkeypatch.setattr(_state, "pool", mpool)
+    monkeypatch.setattr(goldens, "pool", mpool)
+
+    await golden_save("inst-1", name="frame-golden")
+
+    data = json.loads((temp_goldens / "frame-golden.json").read_text())
+    assert data["url"] == "https://widget.octowright.com/inner"
+
+
+@pytest.mark.anyio
 async def test_golden_save_creates_file(mock_pool, temp_goldens):
     from octowright.server.goldens import golden_save
 

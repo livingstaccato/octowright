@@ -78,6 +78,24 @@ def test_macro_repair_preview_forwards_to_core(_patch_deps: dict[str, MagicMock]
     fake_macros.repair_preview.assert_called_once_with("demo")
 
 
+def test_macro_repair_apply_forwards_to_core(_patch_deps: dict[str, MagicMock]) -> None:
+    fake_macros = _patch_deps["macros"]
+    fake_macros.repair_apply.return_value = {
+        "macro": "demo",
+        "action_index": 0,
+        "applied": True,
+        "original_action": {"action": "click", "selector": "#x", "label": "L"},
+        "replacement_action": {"action": "click_by", "label": "L"},
+        "path": "/tmp/demo.json",
+    }
+
+    out = _macros.macro_repair_apply("demo", 0)
+
+    assert out["applied"] is True
+    assert out["replacement_action"] == {"action": "click_by", "label": "L"}
+    fake_macros.repair_apply.assert_called_once_with("demo", 0)
+
+
 def test_macro_compile_returns_compiled_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.macros.dsl as dsl_mod
 

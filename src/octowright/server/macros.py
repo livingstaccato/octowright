@@ -18,6 +18,7 @@ from octowright.mcp_types import (
     MacroLintIssue,
     MacroLintResult,
     MacroListEntry,
+    MacroRepairApplyResult,
     MacroRepairPreviewResult,
     MacroRunResult,
     MacroSaveResult,
@@ -213,6 +214,24 @@ def macro_lint(name: str) -> MacroLintResult:
 )
 def macro_repair_preview(name: str) -> MacroRepairPreviewResult:
     return macro_mod.repair_preview(name)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Apply a stored-heuristic repair to ONE action of a saved macro and save it in place: "
+        "rewrite a brittle selector-based click/fill into its semantic click_by/fill_by form "
+        "(using the role/label/text/test_id captured at record time), dropping the stale CSS "
+        "selector. Call macro_repair_preview first to see which action_index values are "
+        "repairable. Raises if the index is out of range or the action has no stored semantic "
+        "locator — re-record or hand-edit those. Returns {macro, action_index, applied, "
+        "original_action, replacement_action, path}."
+    ),
+)
+def macro_repair_apply(name: str, action_index: int) -> MacroRepairApplyResult:
+    result = macro_mod.repair_apply(name, action_index)
+    publish_dashboard_invalidation_nowait("macros")
+    return result
 
 
 @mcp.tool(
