@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml mcp-tool-surface
-title MCP tool inventory by capability profile (106 tools total — slim with --profile=core,...)
+title MCP tool inventory by capability profile (111 tools total — slim with --profile=core,...)
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -30,14 +30,14 @@ note as LEGEND #fef3c7
 end note
 
 package "Row 1 — profiles you usually compose" as ROW1 #ffffff {
-  package "core (15)" as P_CORE #eff6ff {
-    rectangle "minimum to drive a browser:\nbrowser_launch / list / close / navigate\nbrowser_suggest_for_url / quick_launch\nbrowser_click / fill / type / press_key\nbrowser_screenshot / brief / read_markdown\nbrowser_wait_for" as R_CORE
+  package "core (16)" as P_CORE #eff6ff {
+    rectangle "minimum to drive a browser:\nbrowser_launch / list / close / close_all\nbrowser_navigate / suggest_for_url / quick_launch\nbrowser_click / fill / type / press_key\nbrowser_screenshot / brief / read_markdown\nbrowser_wait_for / set_protected" as R_CORE
   }
-  package "advanced (22)" as P_ADV #fef3c7 {
-    rectangle "inspection, ARIA locators, assertions,\nviewport sync, capture cache, export script,\nrelaunch:\nbrowser_click_by / fill_by / get_text_by\nbrowser_expect_url / _text / _selector / _js\nbrowser_evaluate / snapshot / console_messages\nbrowser_recording_path / tail_recording\nbrowser_resize / viewport_status / sync\nbrowser_export_script / relaunch_fluid\ncapture_create / get / list / search / cleanup" as R_ADV
+  package "advanced (21)" as P_ADV #fef3c7 {
+    rectangle "inspection, ARIA locators, assertions,\nviewport sync, capture cache, export script,\nrelaunch, fan-out:\nbrowser_get_text_by / evaluate / snapshot\nbrowser_expect_url / _text / _selector / _js\nbrowser_console_messages / each\nbrowser_recording_path / tail_recording\nbrowser_resize / viewport_status / sync\nbrowser_export_script / relaunch_fluid\ncapture_create / get / list / search / cleanup" as R_ADV
   }
-  package "macros (9)" as P_MAC #e0f2fe {
-    rectangle "record → save → replay pipeline:\nmacro_save / list / run / delete\nmacro_run_sequence\nmacro_lint / repair_preview\nmacro_compile / explain" as R_MAC
+  package "macros (15)" as P_MAC #e0f2fe {
+    rectangle "record → save → repair → replay + artifacts:\nmacro_save / list / run / delete\nmacro_run_sequence\nmacro_lint / repair_preview / repair_apply\nmacro_compile / explain\nmacro_artifact_plan / run / list\nmacro_digest / export_cli" as R_MAC
   }
 }
 
@@ -57,8 +57,8 @@ package "Row 3 — always available regardless of profile" as ROW3 #ffffff {
   package "always-on meta + Advisor (7)" as P_META #f5f5f4 {
     rectangle "registers under every profile:\noctowright_status / storage_report\noctowright_dashboard_url / check_takeover\noctowright_advisor_status\noctowright_advisor_set_preference\noctowright_advisor_record_macro_observation" as R_META
   }
-  package "all-only (28)" as P_ALL #f0fdf4 {
-    rectangle "registers only when no --profile filter is active:\nframes/tabs/popups (browser_switch_frame /\nreset_frame / list_frames /\npage_list / page_switch / page_close),\nnetwork + dialogs (browser_mock_route /\nunmock_route / set_dialog_policy /\nnetwork_requests / wait_for_download /\ndownloads),\ntrace (browser_open_trace),\nroster (browser_spawn_roster /\nbrowser_open_url / navigate_back),\nfan-out (browser_*_each),\ninteraction extras (hover / drag /\nselect_option / set_input_files /\ncapture_and_close),\nrecordings_cleanup, run_test_suite" as R_ALL
+  package "all-only (27)" as P_ALL #f0fdf4 {
+    rectangle "registers only when no --profile filter is active:\nframes/tabs/popups (browser_switch_frame /\nreset_frame / list_frames /\npage_list / page_switch / page_close),\nnetwork + dialogs (browser_mock_route /\nunmock_route / set_dialog_policy /\nnetwork_requests / wait_for_download /\ndownloads),\ntrace (browser_open_trace),\nroster (browser_spawn_roster /\nbrowser_open_url / navigate_back),\ninteraction extras (hover / drag /\nselect_option / set_input_files /\ncapture_and_close),\nmacro artifact extras (macro_artifact_status /\nverify / critical_points_get / set),\nrecordings_cleanup, run_test_suite" as R_ALL
   }
 }
 

@@ -28,9 +28,19 @@ Task: $ARGUMENTS
 
 4. **Verify.** After the macro completes, use `browser_snapshot` to confirm
    the expected end state. If the macro failed, check the error message —
-   a selector failure usually means the site changed; use `macro_repair_preview`
-   to get a suggested fix.
+   a selector failure usually means the site changed.
 
-5. **Report.** Tell the user whether the macro succeeded, how long it took,
+5. **Repair (if a selector failed).** Don't immediately re-record. Work the
+   resilience ladder:
+   - `macro_repair_preview(name)` to see which action indices have a stored
+     semantic replacement (`click` → `click_by`, etc.).
+   - For an offered index, `macro_repair_apply(name, action_index=<n>)` rewrites
+     that brittle selector into its semantic form, drops the stale CSS, and saves
+     in place. Then `macro_run` again.
+   - Only if the flow itself moved/restructured (no stored semantic locator, or
+     repair still fails) tell the user the macro needs **re-recording** — macros
+     are a disposable cache, not hand-maintained code.
+
+6. **Report.** Tell the user whether the macro succeeded, how long it took,
    and the final page state. If it failed, include the specific action that
-   failed and the repair suggestion.
+   failed and whether you repaired it, suggested a repair, or recommend re-recording.

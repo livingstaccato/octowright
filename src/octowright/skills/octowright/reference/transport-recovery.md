@@ -56,6 +56,34 @@ graph TD
 3. If the same client handle still fails, run `uv run --active python scripts/bridge_reconnect_smoke.py` to distinguish a broken client handle from a broken daemon.
 4. Do not run `octowright restart` unless daemon health fails or the user explicitly asks.
 
+## When Octowright Won't Come Back (do NOT fake a browser)
+
+Two failure modes (see the flowchart): a **transient** drop recovers on one retry; a **gone** leader (killed, crashed, idle-exited, restarted) closes the client's stdio and the session **cannot recover in-session** — the human must reconnect.
+
+**Signals Octowright is gone, not just slow:**
+- Octowright tools are absent from your available tool list.
+- A browser tool returns `Transport closed` / times out **and one retry still fails**.
+- `octowright_status` itself is unreachable.
+
+**The hard rule — never substitute a browser:** When Octowright is unavailable, do NOT open a URL with a shell command (`open`, `xdg-open`, `start`, `Bash`, `osascript`) and treat it as fulfilling a browser request. That launches an **unmanaged** browser you cannot drive, snapshot, fill, or record — it is NOT an Octowright session. Reporting "I opened a browser" for it is a false success: the user asked for the driven, recorded browser and got a tab you can't touch. This exact mistake (shell `open` reported as success) is the failure this section exists to prevent.
+
+**Do not claim a browser is open** unless an Octowright tool returned a live `instance_id`.
+
+**Required response when Octowright is down — stop and tell the user plainly:**
+1. "Octowright's MCP server is disconnected — I can't drive a browser until it's reconnected."
+2. If the daemon is down (`curl http://127.0.0.1:6286/api/health` fails), have them run `octowright restart` (or restart the `octowright serve` process).
+3. Reconnect Octowright **in the MCP client they're using** — the command differs per client (see the table below). Give them the steps for *their* client, not a generic "reconnect."
+4. Ask them to say when it shows connected, then resume with `browser_launch`.
+
+### Reconnecting (steps vary by client — ask, don't guess)
+
+Octowright talks to the MCP client over **stdio**, and stdio MCP servers generally do **not** auto-reconnect, so a manual reconnect or a client restart is needed — unlike HTTP/SSE servers, which some clients silently retry.
+
+The exact reconnect command depends on the client **and its version**, and these UIs change often. Do NOT state a reconnect command you're not certain applies to the user's setup — a confident-but-wrong instruction sends them in circles.
+
+- **Claude Code** (the one to state confidently): `/mcp` → select **octowright** → **Reconnect**. If it stays failed, restart Claude Code.
+- **Any other client:** first **ask the user which MCP client they're using** (and version if they know it). Then have them use *that* client's own MCP **reconnect / refresh / toggle** control — usually under its MCP or Tools settings — or, if it has none, **restart the client app**. If you don't know the exact steps for their client, say so and ask them to reconnect via its MCP settings (or check that client's MCP docs) rather than guessing.
+
 ## `octowright restart`
 
 ```bash

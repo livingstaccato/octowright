@@ -22,7 +22,7 @@ skinparam noteBackgroundColor #f9fafb
 top to bottom direction
 
 package "user surfaces" #eff6ff {
-  [server.py\nFastMCP (106 tools, slimmable via --profile)] as SERVER
+  [server.py\nFastMCP (111 tools, slimmable via --profile)] as SERVER
   [cli.py\nclick: serve / test / scenario / persona] as CLI
 }
 
@@ -36,7 +36,7 @@ package "domain modules" #ecfccb {
   [personas.py\nPersona, load, migrate, creds] as PERSONAS
   [engine_profiles.py\nengine-profile path layer] as ENGPROF
   [scenarios.py\nScenario, Participant, loaders] as SCENARIOS
-  [macros/\nstorage, import, substitute, run] as MACROS
+  [macros/\nstorage, import, substitute, run, repair] as MACROS
   [runner.py\ntest-macro discovery + JUnit] as RUNNER
   [goldens.py\naria-tree snapshots + diff] as GOLDENS
   [video.py\nffmpeg frame extraction] as VIDEO
@@ -53,6 +53,7 @@ package "infrastructure" #f3f4f6 {
   [defaults.py\nenv vars + paths] as DEFAULTS
   [recorder.py\nappend-only JSONL] as RECORDER
   [export.py\nrecording → playwright script] as EXPORT
+  [upgrade.py\npost-upgrade "what's new" notice] as UPGRADE
 }
 
 ' Playwright sits below everything that talks to it; only BrowserSession
@@ -84,6 +85,8 @@ SERVER ..> RUNNER
 SERVER ..> GOLDENS
 SERVER ..> VIDEO
 SERVER ..> MACROS
+SERVER ..> UPGRADE : upgrade block in octowright_status
+CLI ..> UPGRADE : announce on leader start
 
 ' ── artifacts ──
 SESSION ..> RECORDER : every action

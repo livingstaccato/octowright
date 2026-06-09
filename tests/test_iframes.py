@@ -19,6 +19,16 @@ from octowright.session import BrowserSession
 # ---------------------------------------------------------------------------
 
 
+class _FakeLocator:
+    """Minimal locator whose aria_snapshot() returns a fixed string."""
+
+    def __init__(self, aria: str) -> None:
+        self._aria = aria
+
+    async def aria_snapshot(self) -> str:
+        return self._aria
+
+
 class FakeFrame:
     def __init__(self, name: str = "", url: str = "about:blank") -> None:
         self.name = name
@@ -29,6 +39,7 @@ class FakeFrame:
         self.evaluate = AsyncMock(return_value="frame-result")
         self.wait_for_selector = AsyncMock()
         self.wait_for_function = AsyncMock()
+        self.locator = MagicMock(return_value=_FakeLocator("frame-aria"))
 
 
 class FakePage:
@@ -43,6 +54,8 @@ class FakePage:
         self.wait_for_load_state = AsyncMock()
         self.keyboard = MagicMock()
         self.keyboard.press = AsyncMock()
+        self.locator = MagicMock(return_value=_FakeLocator("page-aria"))
+        self.title = AsyncMock(return_value="Page Title")
         self.frames: list[Any] = []
         self._on_handlers: dict[str, Any] = {}
 
@@ -156,6 +169,35 @@ async def test_wait_for_selector_uses_frame_when_active(tmp_path: Path) -> None:
     await s.wait_for("#el", None, None)
     frame.wait_for_selector.assert_called_once()
     s.page.wait_for_selector.assert_not_called()  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# snapshot routes through _target (aria must descend into the switched frame)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_snapshot_uses_page_when_no_frame(tmp_path: Path) -> None:
+    s = _make_session(tmp_path)
+    result = await s.snapshot()
+    assert result["aria"] == "page-aria"
+    assert result["url"] == "https://octowright.com"
+    assert result["title"] == "Page Title"
+
+
+@pytest.mark.anyio
+async def test_snapshot_uses_frame_when_active(tmp_path: Path) -> None:
+    """After switch_frame, snapshot must show the frame's aria-tree, not the top page."""
+    s = _make_session(tmp_path)
+    frame = FakeFrame(name="inner", url="https://widget.octowright.com")
+    s.active_frame = frame
+    result = await s.snapshot()
+    assert result["aria"] == "frame-aria"
+    # url reflects the document the aria came from (the frame), not the top page.
+    assert result["url"] == "https://widget.octowright.com"
+    # title stays page-level — frames have no title() in Playwright.
+    assert result["title"] == "Page Title"
+    s.page.locator.assert_not_called()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

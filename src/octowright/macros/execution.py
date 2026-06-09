@@ -17,17 +17,24 @@ from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
 from octowright.macros.descriptions import describe_action
+from octowright.macros.repair import repair_apply as repair_apply_impl
 from octowright.macros.repair import repair_preview as repair_preview_impl
 from octowright.macros.repair import suggest_fix as _suggest_fix
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
-from octowright.macros.storage import load_macro
+from octowright.macros.storage import load_macro, write_macro
 from octowright.macros.substitution import (
     SEMANTIC_LOCATOR_KEYS,
     action_kwargs,
     strip_non_aria_noise,
     substitute,
 )
-from octowright.mcp_types import MacroRepairPreviewResult, MacroRunResult, MacroSequenceResult, MacroSequenceStep
+from octowright.mcp_types import (
+    MacroRepairApplyResult,
+    MacroRepairPreviewResult,
+    MacroRunResult,
+    MacroSequenceResult,
+    MacroSequenceStep,
+)
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -283,6 +290,16 @@ async def _dispatch_simple(session: SessionLike, action: dict[str, Any]) -> tupl
 
 def repair_preview(name: str) -> MacroRepairPreviewResult:
     return repair_preview_impl(name, load_macro=load_macro, semantic_keys=SEMANTIC_LOCATOR_KEYS)
+
+
+def repair_apply(name: str, action_index: int) -> MacroRepairApplyResult:
+    return repair_apply_impl(
+        name,
+        action_index,
+        load_macro=load_macro,
+        write_macro=write_macro,
+        semantic_keys=SEMANTIC_LOCATOR_KEYS,
+    )
 
 
 async def run_macro(

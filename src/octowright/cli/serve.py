@@ -370,6 +370,13 @@ async def _run_leader(
 
     _reap_orphan_session_dirs(no_singleton)
 
+    # First run after an update: announce "what's new" (octowright.upgrade) — records
+    # the notice for octowright_status and echoes a banner (human terminal inline, log otherwise).
+    from octowright import upgrade as _upgrade
+    from octowright.server._state import set_upgrade_notice
+
+    _upgrade.announce_upgrade_if_changed(set_notice=set_upgrade_notice, echo=lambda b: click.echo(b, err=True))
+
     def _on_http_bound(host: str, port: int) -> None:
         from octowright.defaults import set_actual_http_port
 

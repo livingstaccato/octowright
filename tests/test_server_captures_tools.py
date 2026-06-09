@@ -33,7 +33,18 @@ def _session(tmp_path: Path) -> MagicMock:
     (tmp_path / "page.md").write_text("# Page")
     s.log_path = tmp_path / "session.jsonl"
     s.log_path.write_text('{"action":"launch"}\n')
+    # _target() defaults to the page when no frame is switched.
+    s._target.return_value = s.page
     return s
+
+
+def _frame() -> MagicMock:
+    """A switched iframe with its own aria/text/url."""
+    f = MagicMock()
+    f.url = "https://widget.undef.games/inner"
+    f.locator.return_value.aria_snapshot = AsyncMock(return_value='- button "Frame Save"')
+    f.locator.return_value.inner_text = AsyncMock(return_value="Frame alias field")
+    return f
 
 
 @pytest.mark.anyio
@@ -55,6 +66,48 @@ async def test_capture_create_snapshot_uses_capture_store(
     assert out["capture_id"] == "cap_test"
     assert captured["content"] == '- button "Save"'
     assert captured["url"] == "https://warp.undef.games/customize"
+
+
+@pytest.mark.anyio
+async def test_capture_create_snapshot_uses_active_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _patch_pool: MagicMock
+) -> None:
+    """A snapshot capture taken while a frame is active must read the frame, not the top page."""
+    s = _session(tmp_path)
+    s._target.return_value = _frame()
+    _patch_pool.get.return_value = s
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        _tools._captures,
+        "save_capture",
+        lambda **kw: captured.update(kw) or {"capture_id": "c", "preview": "", "truncated": False},
+    )
+
+    await _tools.capture_create("abc", source="snapshot")
+
+    assert captured["content"] == '- button "Frame Save"'
+    assert captured["url"] == "https://widget.undef.games/inner"
+
+
+@pytest.mark.anyio
+async def test_capture_create_text_uses_active_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _patch_pool: MagicMock
+) -> None:
+    """A text capture while a frame is active reads the frame body text."""
+    s = _session(tmp_path)
+    s._target.return_value = _frame()
+    _patch_pool.get.return_value = s
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        _tools._captures,
+        "save_capture",
+        lambda **kw: captured.update(kw) or {"capture_id": "c", "preview": "", "truncated": False},
+    )
+
+    await _tools.capture_create("abc", source="text")
+
+    assert captured["content"] == "Frame alias field"
+    assert captured["url"] == "https://widget.undef.games/inner"
 
 
 @pytest.mark.anyio

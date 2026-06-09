@@ -100,6 +100,15 @@ class MacroRepairPreviewResult(TypedDict):
     suggestions: list[MacroRepairSuggestion]
 
 
+class MacroRepairApplyResult(TypedDict):
+    macro: str
+    action_index: int
+    applied: bool
+    original_action: dict[str, Any]
+    replacement_action: dict[str, Any]
+    path: str
+
+
 class TestSuiteCaseResult(TypedDict, total=False):
     name: str
     ok: bool
