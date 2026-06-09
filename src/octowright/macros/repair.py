@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from octowright.macros.semantic import summarize_action
-from octowright.mcp_types import MacroRepairPreviewResult, MacroRepairSuggestion
+from octowright.mcp_types import MacroRepairApplyResult, MacroRepairPreviewResult, MacroRepairSuggestion
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -100,3 +100,54 @@ def repair_preview(
         )
 
     return {"macro": macro_name, "suggestions": suggestions}
+
+
+def repair_apply(
+    name: str,
+    action_index: int,
+    *,
+    load_macro: Callable[[str], dict[str, Any]],
+    write_macro: Callable[..., Any],
+    semantic_keys: tuple[str, ...],
+) -> MacroRepairApplyResult:
+    """Apply the stored-heuristic semantic replacement for one action and persist the macro.
+
+    Rewrites a brittle selector-based ``click``/``fill`` at ``action_index`` into its
+    ``click_by``/``fill_by`` equivalent (built from the role/label/text/test_id captured at
+    record time) and writes the macro back in place. Raises ``ValueError`` — before any write —
+    when the index is out of range or the action has no stored semantic locator to repair with.
+    """
+    macro = load_macro(name)
+    macro_name = macro.get("name") or name
+    actions = macro.get("actions", [])
+    if not isinstance(actions, list) or not (0 <= action_index < len(actions)):
+        count = len(actions) if isinstance(actions, list) else 0
+        raise ValueError(
+            f"action_index {action_index} is out of range for macro {macro_name!r} "
+            f"({count} actions); run macro_repair_preview to see repairable action indices"
+        )
+
+    action = actions[action_index]
+    if not isinstance(action, dict):
+        raise ValueError(f"action {action_index} in macro {macro_name!r} is not an object; cannot repair")
+
+    replacement = semantic_replacement(action, semantic_keys=semantic_keys)
+    if replacement is None:
+        raise ValueError(
+            f"action {action_index} in macro {macro_name!r} has no stored semantic locator to repair with "
+            "(needs a click/fill with a selector plus role/label/text/test_id); "
+            "run macro_repair_preview for a manual review prompt, or re-record the macro"
+        )
+
+    original = copy.deepcopy(action)
+    actions[action_index] = replacement
+    macro["actions"] = actions
+    path = write_macro(name=macro_name, macro=macro)
+    return {
+        "macro": macro_name,
+        "action_index": action_index,
+        "applied": True,
+        "original_action": original,
+        "replacement_action": replacement,
+        "path": str(path),
+    }

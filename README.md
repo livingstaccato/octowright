@@ -639,7 +639,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 106 tools — every workflow Octowright supports
+The full MCP tool surface is currently 111 tools — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
@@ -650,17 +650,18 @@ find the dashboard, and surface local guidance even under narrow profiles.
 
 | Profile | What | Tool count |
 |---|---|---|
-| `core` | Minimum to drive a browser end-to-end (launch, navigate, click/type/fill, observe, close). | 13 |
-| `advanced` | Inspection, cached captures, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 22 |
-| `macros` | Macro record / list / run / lint / repair / compile. | 9 |
+| `core` | Minimum to drive a browser end-to-end (launch, navigate, click/type/fill, observe, close). | 16 |
+| `advanced` | Inspection, cached captures, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 21 |
+| `macros` | Macro record / list / run / lint / repair / compile + artifact bundles. | 15 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
 | `personas` | Persona + on-disk profile management. | 8 |
+| `goldens` | Accessibility-tree snapshot baselines + diff. | 5 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
-| `all` (or unset) | Default — every tool registers. | 106 |
+| `all` (or unset) | Default — every tool registers. | 111 |
 
 ```bash
-octowright serve --profile=core              # 20 tools — core + always-on
-octowright serve --profile=core,macros       # 29 tools — browser + macro replay + always-on
+octowright serve --profile=core              # 23 tools — core + always-on
+octowright serve --profile=core,macros       # 38 tools — browser + macro pipeline + always-on
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 
@@ -674,7 +675,9 @@ missing, that's where to look. The dict lives in
 Octowright Advisor is a local, deterministic guidance layer exposed through
 always-on MCP tools. `octowright_status` includes an `advisor` block, and
 `octowright_advisor_status` returns the same Advisor snapshot directly:
-preferences, recent usage summary, and current suggestions.
+preferences, recent usage summary, and current suggestions. (`octowright_status`
+also carries an `upgrade` block on the first run after a version change — present
+its highlights to the user as a "what's new" note.)
 
 Advisor currently suggests two things:
 

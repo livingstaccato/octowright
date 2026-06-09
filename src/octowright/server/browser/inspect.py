@@ -201,7 +201,10 @@ async def browser_capture_and_close(
             )
         }
     title = await session.page.title()
-    url = session.page.url
+    # url + aria follow the active frame (like browser_snapshot); the screenshot
+    # stays page-level since it captures the rendered viewport, and title is page-only.
+    frame_target = session._target()
+    url = frame_target.url
 
     # Screenshot — MCP-supplied path is confined to RECORDINGS_DIR.
     target = Path(screenshot_path) if screenshot_path else session.log_path.with_suffix(".png")
@@ -211,7 +214,7 @@ async def browser_capture_and_close(
     # Optional Snapshot
     aria = None
     if snapshot:
-        aria_full = await session.page.locator("html").aria_snapshot()
+        aria_full = await frame_target.locator("html").aria_snapshot()
         aria = aria_full[:DEFAULT_PREVIEW_CHARS]
 
     # Close
@@ -388,7 +391,8 @@ async def browser_read_markdown(
         truncated = True
 
     return {
-        "url": session.page.url,
+        # _target().url so the reported url matches the frame the markdown came from.
+        "url": session._target().url,
         "markdown": text,
         "truncated": truncated,
         "markdown_size": original_size,
@@ -404,13 +408,16 @@ async def browser_read_markdown(
 )
 async def browser_brief(instance_id: str) -> BrowserBriefResult:
     session = pool.get(instance_id)
+    # Route through _target() so brief reflects a switched frame, matching snapshot
+    # and every action tool. title stays page-level — Playwright Frames have none.
+    target = session._target()
     title = await session.page.title()
     # Pull a tiny slice of the body snapshot to provide basic orientation
-    aria = await session.page.locator("body").aria_snapshot()
+    aria = await target.locator("body").aria_snapshot()
     elements = aria[:500] + ("..." if len(aria) > 500 else "")
 
     return {
-        "url": session.page.url,
+        "url": target.url,
         "title": title,
         "elements": elements,
     }

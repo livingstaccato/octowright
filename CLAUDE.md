@@ -156,7 +156,7 @@ TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octo
 
 ### Capability Profiles
 
-The full MCP tool surface is 113 tools. When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface), `advanced` (inspection + cached captures + assertions + viewport controls + ARIA-locator interactions), `macros`, `scenarios`, `goldens` (accessibility-tree snapshot save/diff/verify), `personas`. Unset / `all` keeps every tool (default, back-compat). The six named profiles together cover the profile-scoped tools plus 7 always-on meta/Advisor tools — the remaining tools (snapshots, a handful of less-common views, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,goldens,personas` is **not** equivalent to no filter. Authoritative tool counts live in `src/octowright/server/profiles.py`.
+The full MCP tool surface is 111 tools. When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface), `advanced` (inspection + cached captures + assertions + viewport controls + ARIA-locator interactions), `macros`, `scenarios`, `goldens` (accessibility-tree snapshot save/diff/verify), `personas`. Unset / `all` keeps every tool (default, back-compat). The six named profiles together cover the profile-scoped tools plus 7 always-on meta/Advisor tools — the remaining tools (snapshots, a handful of less-common views, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,goldens,personas` is **not** equivalent to no filter. Authoritative tool counts live in `src/octowright/server/profiles.py`.
 
 **Always-on meta and Advisor tools.** Seven diagnostic/guidance tools are exempt from the profile filter and register under any profile (or no profile): `octowright_status`, `octowright_storage_report`, `octowright_dashboard_url`, `octowright_check_takeover`, `octowright_advisor_status`, `octowright_advisor_set_preference`, and `octowright_advisor_record_macro_observation`. These give the LLM a way to inspect the active profile, inspect storage paths, find the dashboard URL, detect competing MCP plugins, and surface local Advisor guidance regardless of filter. The list is `ALWAYS_ON_TOOLS` in `src/octowright/server/profiles.py`.
 
@@ -167,6 +167,10 @@ The full MCP tool surface is 113 tools. When the LLM only needs a subset, set `O
 ### Octowright Advisor
 
 Octowright Advisor is local and deterministic. It records bounded MCP tool-usage summaries and explicit repeated-workflow observations, then returns suggestions in `octowright_status` and `octowright_advisor_status`. Agents should inspect the `advisor` block after first-touch status. When an agent notices the same manual workflow repeating, call `octowright_advisor_record_macro_observation(source="llm", signature=..., summary=...)`; two matching signatures produce a `macro_candidate` suggestion. Advisor never auto-saves macros — macro candidates remain prompt-only even when the preference is `automatic`. Use `octowright_advisor_set_preference` to persist `yes` / `no` / `automatic` preferences for `macro_candidate` and `profile_change`.
+
+### Post-upgrade "what's new" notice
+
+The first time a leader starts on a new version (the running version differs from the last-seen marker), `octowright.upgrade` records a one-time notice and the leader echoes a banner to stderr (a human terminal in `--no-singleton`/inline mode; the daemon log otherwise). The notice is also surfaced at `octowright_status()["upgrade"]` — `{kind, previous_version, current_version, highlights}`, or `null` when nothing changed — so the agent should, on first-touch status, present the `highlights` to the user as a "what's new" banner. It fires once per version bump (the leader marks the new version seen). Curated highlights live in `octowright.upgrade.HIGHLIGHTS` keyed by version (updated at release time; a CI guard test fails if the current `VERSION` has no entry). The last-seen marker path is `OCTOWRIGHT_UPGRADE_STATE`.
 
 ## Env Var Configuration
 
@@ -182,6 +186,7 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_PROFILES_DIR` — override profile storage root
 - `OCTOWRIGHT_MACROS_DIR` — override macro JSON storage root
 - `OCTOWRIGHT_ADVISOR_STATE` — override the local Advisor state JSON path (preferences, bounded tool usage, macro observations)
+- `OCTOWRIGHT_UPGRADE_STATE` — override the last-seen-version marker path used by the post-upgrade "what's new" notice (see "Post-upgrade notice" above)
 - `OCTOWRIGHT_MACRO_SLOWMO_MS` — default per-action delay during macro replay (0 disables)
 - `OCTOWRIGHT_PROFILE` — comma-separated capability-profile names to slim the LLM tool surface; unset or `all` registers everything (see "Capability Profiles" above)
 - `OCTOWRIGHT_TAIL_POLL_SECONDS` / `OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS` — WS `/tail` poll interval and quiet-stream keepalive cadence (defaults 1.0 / 15.0)

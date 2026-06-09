@@ -17,11 +17,12 @@ from octowright.server._state import mcp, pool
 
 
 async def _capture_snapshot(session: Any, _meta: dict[str, Any], _expression: str | None) -> str:
-    return await session.page.locator("body").aria_snapshot()
+    # _target() so a snapshot capture descends into a switched frame, like browser_snapshot.
+    return await session._target().locator("body").aria_snapshot()
 
 
 async def _capture_text(session: Any, _meta: dict[str, Any], _expression: str | None) -> str:
-    return await session.page.locator("body").inner_text()
+    return await session._target().locator("body").inner_text()
 
 
 async def _capture_evaluate(session: Any, meta: dict[str, Any], expression: str | None) -> str:
@@ -95,7 +96,8 @@ async def capture_create(
     return _captures.save_capture(
         kind=source,
         content=content,
-        url=session.page.url,
+        # _target().url so the capture's url matches the frame the content came from.
+        url=session._target().url,
         title=await session.page.title(),
         instance_id=instance_id,
         source=meta,

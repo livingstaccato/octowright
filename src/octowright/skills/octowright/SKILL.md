@@ -71,6 +71,12 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 
 **Full details:** `reference/macros-and-advisor.md`
 
+### 5. When Octowright Is Unavailable
+
+If Octowright tools vanish from your tool list, or a browser tool returns `Transport closed` / times out and **one retry still fails**, the server is **disconnected**. NEVER open a URL with a shell command (`open`/`xdg-open`/`start`/`osascript`) and report it as a browser — it's unmanaged, undriveable, and not an Octowright session. Don't claim a browser is open without a live `instance_id`. Stop, tell the user Octowright is disconnected, and give them reconnect steps **for the client they're using**. The only one to state confidently is Claude Code: `/mcp` → select **octowright** → **Reconnect**. For any other client, **ask the user which MCP client they're in** and have them use its own MCP reconnect/refresh control (or restart the client) — reconnect UIs vary by client and version, so don't guess an exact command you're unsure of.
+
+**Full details + the ask-don't-guess flow:** `reference/transport-recovery.md`
+
 ## Common Mistakes
 
 | Mistake | Consequence | Fix |
@@ -80,8 +86,9 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Passing `viewport_w`/`viewport_h` on a user-facing launch | Viewport locked; user can't resize | Omit viewport args; only set for agent-internal screenshot work |
 | Manual login repetition | High token usage, fragile scripts | Use Personas to persist session state |
 | Guessing selectors | Frequent failures on DOM changes | Use `browser_snapshot` for the aria-tree |
-| Overlooking iframes | Tools fail to find visible elements | `browser_list_frames` → `browser_switch_frame` |
+| Overlooking iframes | Tools fail to find visible elements | `browser_list_frames` → `browser_switch_frame` → re-run `browser_snapshot` (it descends into the active frame) |
 | Driving 3+ steps without recording an Advisor observation | Macro candidate never surfaces | Record on first occurrence; threshold is two matching signatures |
+| Faking a browser with shell `open` when Octowright is down | User gets an undriveable tab you wrongly report as "opened" | Never substitute `open`/`xdg-open`/`start`; tell the user to reconnect Octowright in their MCP client |
 
 ## Rationalization Table
 
@@ -92,6 +99,7 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | "I'll close the browser at the end of the session." | If the agent crashes or hits its turn limit, the browser becomes a zombie. Close internal-use browsers after each task. |
 | "I'll set viewport_w/h so the screenshot is reproducible." | Locks the user's window so they can't resize. Only set a viewport for agent-internal screenshot work. |
 | "I know the selector by heart." | Sites change. `browser_snapshot` gives the aria-tree, which is more durable. |
+| "Octowright dropped, but I'll just `open` the URL so the user isn't blocked." | A shell-opened browser can't be driven, snapshotted, or recorded — it is NOT Octowright. Reporting it as "opened" misleads the user, who expects the driven/recorded browser. Tell them to reconnect Octowright in their MCP client. |
 
 ## Quick Reference
 
@@ -116,6 +124,7 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 | Probe daemon health | `curl http://127.0.0.1:6286/api/health` |
 | Daemon is wedged | `octowright restart` (shell, not MCP) |
 | MCP `Transport closed` | See `reference/transport-recovery.md` |
+| Octowright tools missing / won't reconnect | Tell the user to reconnect in their MCP client; never fake it with shell `open`. See `reference/transport-recovery.md` |
 | Session evicted unexpectedly | See `reference/transport-recovery.md` |
 
 ## Reference Files

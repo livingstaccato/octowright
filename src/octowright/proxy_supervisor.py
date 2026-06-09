@@ -46,6 +46,19 @@ _BRIDGE_RPC_DURATION = histogram(
 
 BRIDGE_ERROR_CODE = -32000
 BRIDGE_ERROR_PREFIX = "Octowright bridge error:"
+# Appended to every bridge error so the agent that receives it on a failed in-flight
+# call is steered away from the observed failure mode: silently substituting a
+# shell-opened browser (`open`/`xdg-open`/`start`) and reporting it as launched. A
+# fully-dead leader can't send any message, so the skill + MCP server instructions
+# carry the same guidance for that case; this covers the recoverable/timeout path.
+BRIDGE_ERROR_GUIDANCE = (
+    "This is an Octowright transport error, not a browser result. Retry one call; if it "
+    "still fails, Octowright's MCP server is disconnected. Do NOT open a URL with a shell "
+    "command (open/xdg-open/start) as a substitute browser — it cannot be driven, "
+    "inspected, or recorded, and must not be reported as launched. Tell the user Octowright "
+    "is disconnected and they must reconnect/restart it in their MCP client before browser "
+    "tools will work."
+)
 
 log = get_logger(__name__)
 
@@ -94,7 +107,7 @@ def bridge_error(request_id: str | int, reason: str) -> SessionMessage:
                 id=request_id,
                 error=ErrorData(
                     code=BRIDGE_ERROR_CODE,
-                    message=f"{BRIDGE_ERROR_PREFIX} {reason}",
+                    message=f"{BRIDGE_ERROR_PREFIX} {reason} {BRIDGE_ERROR_GUIDANCE}",
                 ),
             )
         )

@@ -51,6 +51,24 @@ def leader_mode_snapshot() -> dict[str, str | None]:
     return dict(_LEADER_MODE)
 
 
+# Holds the post-upgrade "what's new" notice computed once at leader startup
+# (see cli.serve + octowright.upgrade). octowright_status surfaces it so the
+# agent can present highlights on the first run after an update. None when the
+# version is unchanged or before the leader is wired.
+_UPGRADE: dict[str, Any] = {"notice": None}
+
+
+def set_upgrade_notice(notice: dict[str, Any] | None) -> None:
+    """Record the upgrade notice for this leader process (or clear it)."""
+    _UPGRADE["notice"] = notice
+
+
+def upgrade_notice_snapshot() -> dict[str, Any] | None:
+    """Return a copy of the recorded upgrade notice, or None."""
+    notice = _UPGRADE["notice"]
+    return dict(notice) if notice is not None else None
+
+
 def _track_advisor_usage(fn: Callable[..., Any]) -> Callable[..., Any]:
     tool_name = getattr(fn, "__name__", "")
 
@@ -146,7 +164,15 @@ mcp = _ProfiledFastMCP(
         "Use the `profile` arg on browser_launch to persist cookies/localStorage/IndexedDB across runs. "
         "The visible tool surface may be slimmed by OCTOWRIGHT_PROFILE / `octowright serve --profile=...`; "
         "if a tool you expect is missing, the operator picked a narrower capability profile — call "
-        "`octowright_status` to see the active profile."
+        "`octowright_status` to see the active profile. "
+        "If your Octowright tools stop responding (Transport closed / timeout) or disappear from your "
+        "tool list, the server is disconnected — NEVER substitute a shell-opened browser "
+        "(open/xdg-open/start) and report it as launched; that browser cannot be driven, inspected, or "
+        "recorded. Tell the user Octowright is disconnected and give them reconnect steps for the client "
+        "they're using. State confidently only Claude Code: `/mcp` -> select the server -> Reconnect. For "
+        "any other client, ask the user which MCP client they're in and have them use its MCP "
+        "reconnect/refresh control or restart the client — reconnect UIs vary by client and version, so "
+        "don't guess a command you're unsure of. Browser tools won't work until it reconnects."
     ),
 )
 if _allowed_tools is not None:

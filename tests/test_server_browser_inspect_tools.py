@@ -41,6 +41,8 @@ def _session(log_root: Path | None = None) -> MagicMock:
     s.page.url = "https://octowright.com"
     s.page.title = AsyncMock(return_value="Example")
     s.page.locator.return_value.aria_snapshot = AsyncMock(return_value="aria-content")
+    # _target() defaults to the page (no frame switched); brief routes through it.
+    s._target.return_value = s.page
     s.snapshot = AsyncMock(return_value={"aria": "aria-content", "url": "https://octowright.com", "title": "Example"})
     s.screenshot = AsyncMock(return_value=Path("/tmp/shot.png"))
     s.evaluate = AsyncMock(return_value={"k": "v"})
@@ -267,6 +269,42 @@ async def test_browser_capture_and_close_with_snapshot(_patch_pool: MagicMock, r
 
 
 @pytest.mark.anyio
+async def test_browser_capture_and_close_uses_active_frame(_patch_pool: MagicMock, recordings_dir: Path) -> None:
+    """With a frame active, the captured aria + url come from the frame, not the top page."""
+    s = _session(recordings_dir)
+    frame = MagicMock()
+    frame.url = "https://widget.octowright.com/inner"
+    frame.locator.return_value.aria_snapshot = AsyncMock(return_value="frame-html-aria")
+    s._target.return_value = frame
+    _patch_pool.get.return_value = s
+    _patch_pool.close = AsyncMock()
+
+    out = await _inspect.browser_capture_and_close("i", snapshot=True)
+
+    assert out["url"] == "https://widget.octowright.com/inner"
+    assert out["aria"] == "frame-html-aria"
+    # title stays page-level.
+    assert out["title"] == "Example"
+
+
+@pytest.mark.anyio
+async def test_browser_read_markdown_url_uses_active_frame(_patch_pool: MagicMock, tmp_path: Path) -> None:
+    """read_markdown reports the frame's url when a frame is active (content already is)."""
+    s = _session()
+    frame = MagicMock()
+    frame.url = "https://widget.octowright.com/inner"
+    s._target.return_value = frame
+    md_file = tmp_path / "page.md"
+    md_file.write_text("Frame Markdown")
+    s.capture_markdown = AsyncMock(return_value=md_file)
+    _patch_pool.get.return_value = s
+
+    out = await _inspect.browser_read_markdown("i")
+
+    assert out["url"] == "https://widget.octowright.com/inner"
+
+
+@pytest.mark.anyio
 async def test_browser_capture_and_close_refuses_protected_before_side_effects(
     _patch_pool: MagicMock,
     recordings_dir: Path,
@@ -399,6 +437,22 @@ async def test_browser_brief(_patch_pool: MagicMock) -> None:
     assert out["url"] == "https://octowright.com"
     assert out["title"] == "Example"
     assert "elements" in out
+
+
+@pytest.mark.anyio
+async def test_browser_brief_uses_frame_when_active(_patch_pool: MagicMock) -> None:
+    """brief must reflect the switched frame, like snapshot — not the top page."""
+    s = _session()
+    frame = MagicMock()
+    frame.url = "https://widget.octowright.com"
+    frame.locator.return_value.aria_snapshot = AsyncMock(return_value="frame-body-aria")
+    s._target.return_value = frame  # simulate an active frame
+    _patch_pool.get.return_value = s
+    out = await _inspect.browser_brief("i")
+
+    assert out["url"] == "https://widget.octowright.com"  # frame url, not page
+    assert out["title"] == "Example"  # title stays page-level
+    assert "frame-body-aria" in out["elements"]
 
 
 @pytest.fixture

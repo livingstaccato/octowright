@@ -98,6 +98,7 @@ PROFILES: dict[str, list[str]] = {
         "macro_export_cli",
         "macro_lint",
         "macro_list",
+        "macro_repair_apply",
         "macro_repair_preview",
         "macro_run",
         "macro_run_sequence",

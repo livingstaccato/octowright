@@ -338,12 +338,18 @@ class SessionPageMixin(SessionLike):
         return path
 
     async def snapshot(self, selector: str | None = None) -> dict[str, Any]:
+        # Route through _target() so a switched frame's aria-tree is what you see —
+        # every action tool (click/fill/evaluate/wait_for) already respects the
+        # active frame; snapshot must too, or you can act in a frame you can't inspect.
         # selector=None preserves the legacy "html"-root JSONL event so existing
         # macro replays / golden diffs don't drift; explicit selectors are recorded.
-        aria_yaml = await self.page.locator(selector or "html").aria_snapshot()
+        target = self._target()
+        aria_yaml = await target.locator(selector or "html").aria_snapshot()
         record_kwargs = {"selector": selector} if selector is not None else {}
         self.recorder.record("snapshot", **record_kwargs)
-        return {"aria": aria_yaml, "url": self.page.url, "title": await self.page.title()}
+        # url comes from the snapshotted document (frame when active); title is
+        # page-level — Playwright Frames have no title().
+        return {"aria": aria_yaml, "url": target.url, "title": await self.page.title()}
 
     async def evaluate(self, expression: str) -> Any:
         result = await self._target().evaluate(expression)

@@ -115,7 +115,7 @@ engine install workflow and note on CLI-only engine management.
 3. Verify no other process is bound on the selected port:
 
    ```bash
-   lsof -nP -iTCP:8765 -sTCP:LISTEN
+   lsof -nP -iTCP:6286 -sTCP:LISTEN
    ```
 
 If a process other than Octowright owns the port, either kill it or set
@@ -160,7 +160,7 @@ section in the getting-started guide for worked examples.
 1. Check daemon health directly:
 
    ```bash
-   curl http://127.0.0.1:8765/api/health
+   curl http://127.0.0.1:6286/api/health
    ```
 
 2. If health is good, retry one Octowright MCP call. The follower bridge keeps

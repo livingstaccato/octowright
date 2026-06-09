@@ -9,8 +9,8 @@ dir `${XDG_CONFIG_HOME:-~/.config}/octowright/macros/`, and Windows uses
 `%APPDATA%\octowright\macros\`. Override with `OCTOWRIGHT_MACROS_DIR`.
 
 The macro tools (`macro_save`, `macro_run`, `macro_run_sequence`, `macro_list`,
-`macro_delete`, `macro_lint`, `macro_repair_preview`, `macro_compile`,
-`macro_explain`, `macro_artifact_plan`, `macro_artifact_run`,
+`macro_delete`, `macro_lint`, `macro_repair_preview`, `macro_repair_apply`,
+`macro_compile`, `macro_explain`, `macro_artifact_plan`, `macro_artifact_run`,
 `macro_artifact_list`, `macro_digest`, and `macro_export_cli`) belong to the
 `macros` capability profile. By default every tool registers; if your operator
 runs `octowright serve --profile=core`, add `macros` to the spec
@@ -57,6 +57,52 @@ Recorded CSS `click` and `fill` actions may include semantic metadata such as
 ARIA-first hints: it tries `click_by` / `fill_by` with the semantic metadata,
 then falls back to the recorded CSS selector if the semantic locator fails.
 Standalone Python and TypeScript exports follow the same order.
+
+## When a selector breaks
+
+Octowright gives you four levels of selector resilience, cheapest first. Reach
+for re-recording only when the earlier rungs don't apply.
+
+1. **Runtime ARIA fallback (automatic, no action).** As above, replay already
+   tries the stored `role`/`label`/`text`/`test_id` before the recorded CSS
+   selector. A flow whose CSS broke but whose accessible name is unchanged keeps
+   working with zero edits.
+2. **`macro_repair_preview` (inspect).** Non-mutating. Returns, per selector-based
+   action, the stored semantic replacement candidate (`click` → `click_by`) plus a
+   review prompt. Nothing is written — use it to see *which* action indices are
+   repairable before touching anything.
+3. **`macro_repair_apply` (fix one action).** Applies the stored-heuristic
+   replacement for a single `action_index`: it rewrites a brittle selector-based
+   `click`/`fill` into its semantic `click_by`/`fill_by` form (from the
+   role/label/text/test_id captured at record time), **drops the stale CSS
+   selector**, and saves the macro in place. Raises — before writing — if the
+   index is out of range or the action has no stored semantic locator. Typical
+   loop: `macro_repair_preview` → pick an index → `macro_repair_apply` → `macro_run`.
+
+   ```bash
+   macro_repair_preview name=discord-login
+   # action 3 → {"action": "click_by", "role_name": "Log In"}
+   macro_repair_apply name=discord-login action_index=3
+   ```
+
+4. **Re-record (structural change).** When the UI moved, renamed, or restructured
+   the flow itself — not just one selector — the semantic fields are stale too.
+   Re-record the flow rather than hand-patching JSON. Macros are a disposable
+   cache of a flow; the durable source of truth is the plan in your head (or a
+   plain-language test note), not the JSON.
+
+Designing for stable replay in the first place: prefer interactions that capture
+a `test_id` (`data-testid`) or an accessible `role`+name, since those survive CSS
+churn and feed rungs 1–3 directly.
+
+> **Gotcha — prefer role over bare text.** Every launched page carries Octowright's
+> translucent macro **status pill**, whose text echoes the current action
+> description (e.g. `… | click_by text=Go`). A `click_by` / `fill_by` that targets
+> by `text` alone can therefore hit a Playwright **strict-mode collision** — the
+> pill's text matches too. Target by `role` + name (or `test_id`) so the locator
+> resolves to the real control, not the overlay. `macro_repair_apply` carries
+> whichever semantic fields were recorded, so capture `role`/`test_id` at record
+> time to get clean repairs.
 
 ## Conditional / branching actions
 
@@ -221,6 +267,8 @@ under `examples/pill-status-demo/` shows this end-to-end.
 | `macro_compile` | Compile YAML macro DSL to canonical JSON; optionally save it. |
 | `macro_delete` | Remove a saved macro file. |
 | `macro_lint` | Static-analysis pass on a saved macro. |
+| `macro_repair_preview` | Non-mutating: list repairable selector actions with semantic replacement candidates. |
+| `macro_repair_apply` | Rewrite one brittle selector action into its semantic `click_by`/`fill_by` form and save in place. |
 | `macro_artifact_plan` | Validate a saved macro and write/update its artifact manifest without replaying. |
 | `macro_artifact_run` | Replay a macro and write a run bundle with `result.json`, `evidence.json`, and `summary.md`. |
 | `macro_artifact_list` | List macro artifact manifests, newest first. |

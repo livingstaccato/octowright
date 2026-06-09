@@ -63,7 +63,15 @@ def test_bridge_error_message_shape() -> None:
     assert isinstance(root, JSONRPCError)
     assert root.id == "abc"
     assert root.error.code == -32000
-    assert root.error.message == "Octowright bridge error: remote request timed out"
+    msg = root.error.message
+    # Prefix + the specific reason are preserved up front.
+    assert msg.startswith("Octowright bridge error: remote request timed out")
+    # Standing guidance is appended so the agent that sees this error is steered
+    # away from faking a browser with a shell `open` and toward reconnecting the
+    # MCP client — the exact failure this message exists to prevent.
+    assert supervisor.BRIDGE_ERROR_GUIDANCE in msg
+    assert "reconnect" in msg.lower()
+    assert "open" in msg.lower()  # names the shell-fallback trap explicitly
 
 
 @pytest.fixture

@@ -44,6 +44,9 @@ def _stub_session(method_name: str, return_value: object) -> MagicMock:
     html_locator = MagicMock()
     html_locator.aria_snapshot = AsyncMock(return_value="aria tree content")
     session.page.locator = MagicMock(return_value=html_locator)
+    # _target() defaults to the page when no frame is switched (capture_and_close
+    # reads url + aria through it).
+    session._target.return_value = session.page
 
     if method_name:
         setattr(session, method_name, AsyncMock(return_value=return_value))

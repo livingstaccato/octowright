@@ -27,7 +27,9 @@ async def golden_save(
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     tree = await session.snapshot()
-    url = session.page.url
+    # snapshot() is frame-aware and carries the snapshotted document's url; use it so
+    # a golden taken inside an iframe isn't mislabeled with the parent page's url.
+    url = tree.get("url") or session.page.url
     path = goldens_mod.save_golden(name=name, tree=tree, url=url, description=description)
     return {"saved": True, "name": name, "path": str(path)}
 

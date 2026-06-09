@@ -258,6 +258,37 @@ def test_status_reports_macro_label_metrics(monkeypatch) -> None:
     assert snap["metrics"]["macro_label_cap"] == 2
 
 
+def test_status_upgrade_block_none_when_no_notice() -> None:
+    """No version change recorded → upgrade block is None (not absent)."""
+    from octowright.server import _state
+
+    _state.set_upgrade_notice(None)
+    snap = octowright_status()
+    assert "upgrade" in snap
+    assert snap["upgrade"] is None
+
+
+def test_status_surfaces_upgrade_notice_when_set() -> None:
+    """A leader that started after an update surfaces the notice for the agent."""
+    from octowright.server import _state
+
+    notice = {
+        "kind": "upgrade",
+        "previous_version": "0.6.1",
+        "current_version": "0.7.0",
+        "highlights": ["Offline /new-tab landing page"],
+    }
+    _state.set_upgrade_notice(notice)
+    try:
+        snap = octowright_status()
+        assert snap["upgrade"] == notice
+        # The snapshot is a copy — mutating the status result must not bleed into state.
+        snap["upgrade"]["current_version"] = "MUTATED"
+        assert _state.upgrade_notice_snapshot()["current_version"] == "0.7.0"
+    finally:
+        _state.set_upgrade_notice(None)
+
+
 def test_status_metrics_block_present_when_no_overflow(monkeypatch) -> None:
     """The metrics block must always be present, even when no overflow has happened."""
     from octowright.macros import execution as _execution

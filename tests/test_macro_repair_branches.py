@@ -17,12 +17,14 @@ Targets the 70 surviving mutmut mutants in this module by asserting on:
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from octowright.macros.repair import (
+    repair_apply,
     repair_preview,
     replacement_preview,
     semantic_replacement,
@@ -434,6 +436,91 @@ class TestRepairPreviewReplacementBranch:
         s = result["suggestions"][0]
         assert s["replacement_action"] == {"action": "fill_by", "label": "Email", "value": "me@x"}
         assert s["action_preview"] == "Fill by 'Email' with 'me@x'"
+
+
+# ─── repair_apply ────────────────────────────────────────────────────────────
+
+
+class _Writer:
+    """Records write_macro(name=, macro=) calls and returns a deterministic path."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def __call__(self, *, name: str, macro: dict[str, Any]) -> str:
+        self.calls.append({"name": name, "macro": copy.deepcopy(macro)})
+        return f"/tmp/{name}.json"
+
+
+class TestRepairApply:
+    def test_rewrites_selector_action_into_semantic_and_persists(self) -> None:
+        """Happy path: brittle click+selector → click_by, written back, result populated."""
+        macro = _macro(actions=[{"action": "click", "selector": "#submit", "label": "Save"}])
+        writer = _Writer()
+        result = repair_apply(
+            "demo",
+            0,
+            load_macro=lambda _: macro,
+            write_macro=writer,
+            semantic_keys=SEMANTIC_KEYS,
+        )
+        assert result["applied"] is True
+        assert result["macro"] == "demo"
+        assert result["action_index"] == 0
+        assert result["original_action"] == {"action": "click", "selector": "#submit", "label": "Save"}
+        assert result["replacement_action"] == {"action": "click_by", "label": "Save"}
+        assert result["path"] == "/tmp/demo.json"
+        # The persisted macro carries the rewritten action.
+        assert writer.calls[0]["macro"]["actions"][0] == {"action": "click_by", "label": "Save"}
+        assert writer.calls[0]["name"] == "demo"
+
+    def test_uses_macro_name_field_for_write(self) -> None:
+        """macro.get('name') is the write target, not the lookup argument."""
+        macro = _macro(name="from-field", actions=[{"action": "click", "selector": "#x", "label": "L"}])
+        writer = _Writer()
+        result = repair_apply(
+            "from-arg", 0, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS
+        )
+        assert result["macro"] == "from-field"
+        assert writer.calls[0]["name"] == "from-field"
+
+    def test_out_of_range_index_raises_and_does_not_write(self) -> None:
+        """An index past the action list raises before any write side effect."""
+        writer = _Writer()
+        macro = _macro(actions=[{"action": "click", "selector": "#x", "label": "L"}])
+        with pytest.raises(ValueError, match="out of range"):
+            repair_apply("demo", 5, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS)
+        assert writer.calls == []
+
+    def test_negative_index_raises(self) -> None:
+        """Negative indices are rejected rather than silently wrapping."""
+        writer = _Writer()
+        macro = _macro(actions=[{"action": "click", "selector": "#x", "label": "L"}])
+        with pytest.raises(ValueError, match="out of range"):
+            repair_apply("demo", -1, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS)
+        assert writer.calls == []
+
+    def test_action_without_semantic_locator_raises_and_does_not_write(self) -> None:
+        """A bare selector with no stored role/label/text/test_id is not auto-repairable."""
+        writer = _Writer()
+        macro = _macro(actions=[{"action": "click", "selector": "#x"}])
+        with pytest.raises(ValueError, match="no stored semantic locator"):
+            repair_apply("demo", 0, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS)
+        assert writer.calls == []
+
+    def test_only_target_action_replaced(self) -> None:
+        """Sibling actions are preserved verbatim; only the indexed action changes."""
+        writer = _Writer()
+        macro = _macro(
+            actions=[
+                {"action": "navigate", "url": "https://octowright.com"},
+                {"action": "fill", "selector": "#email", "label": "Email", "value": "me@x"},
+            ]
+        )
+        repair_apply("demo", 1, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS)
+        persisted = writer.calls[0]["macro"]["actions"]
+        assert persisted[0] == {"action": "navigate", "url": "https://octowright.com"}
+        assert persisted[1] == {"action": "fill_by", "label": "Email", "value": "me@x"}
 
 
 class TestRepairPreviewLoaderInteraction:

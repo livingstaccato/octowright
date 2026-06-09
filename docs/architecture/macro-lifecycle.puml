@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml macro-lifecycle
-title Macro lifecycle — record, save, replay, test
+title Macro lifecycle — record, save, replay, repair, test
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -40,6 +40,33 @@ if (any action raises?) then (yes)
 else (no)
   :return {macro, executed, skipped, args_used};
 endif
+
+|repair|
+note right
+  When replay fails on a selector, walk the
+  resilience ladder before re-recording.
+  (Runtime already tries the stored semantic
+  locator before the recorded CSS selector.)
+end note
+start
+:macro_repair_preview(name);
+note right
+  Non-mutating: per selector-based action,
+  the stored semantic replacement candidate
+  (click → click_by) + a review prompt.
+end note
+if (stored semantic locator?) then (yes)
+  :macro_repair_apply(name, action_index);
+  note right
+    Rewrites the brittle selector into
+    click_by / fill_by (role/label/text/test_id),
+    drops the stale CSS selector, saves in place.
+  end note
+  :macro_run again;
+else (no / structural change)
+  :re-record the flow\n(macros are a disposable cache);
+endif
+stop
 
 |test mode|
 :octowright test [--tag <tag>];
