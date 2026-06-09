@@ -17,7 +17,7 @@ from typing import Any, cast
 from octowright import advisor as _advisor
 from octowright import takeover as _takeover
 from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
-from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool
+from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool, upgrade_notice_snapshot
 from octowright.server.registry import registered_tool_names
 
 _STATUS_STALE_LIMIT = 20
@@ -184,7 +184,8 @@ def octowright_advisor_record_macro_observation(source: str, signature: str, sum
         "live browser/scenario counts, available personas, and the dashboard URL. "
         "Returns daemon PID + uptime, defaults block (ephemeral_default, headed_default, "
         "idle_grace_seconds, badge_position), pool counts (live_browsers, protected_browsers), "
-        "persona names, and dashboard URL. "
+        "persona names, and dashboard URL, plus an optional `upgrade` block on the first "
+        "run after a version change (present its highlights to the user as a what's-new note). "
         "Lets the user confirm what mode they're in without surprise."
     ),
 )
@@ -300,4 +301,8 @@ def octowright_status() -> dict[str, Any]:
             "macro_label_cap": _macro_execution.METRICS_MACRO_LABEL_CAP,
         },
         "dashboard_url": _http.runtime_url() if http_status["running"] else None,
+        # Present only on the first run after an update (version changed since
+        # last seen) — {kind, previous_version, current_version, highlights}.
+        # Surface these highlights to the user as a "what's new" banner.
+        "upgrade": upgrade_notice_snapshot(),
     }

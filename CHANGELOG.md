@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-06-09
+
+### Added
+- **`macro_repair_apply`** — applies a stored-heuristic repair to one macro
+  action: rewrites a brittle selector-based `click` / `fill` into its semantic
+  `click_by` / `fill_by` form (from the `role` / `label` / `text` / `test_id`
+  captured at record time), drops the stale CSS selector, and saves the macro in
+  place. Completes the repair loop (`macro_repair_preview` → `macro_repair_apply`
+  → `macro_run`); raises before any write on an out-of-range index or an action
+  with no stored semantic locator.
+- **Post-upgrade "what's new" notice** — the first run after a version change
+  records curated highlights, surfaced in `octowright_status()` (`upgrade` block)
+  and echoed once as a startup banner (a human terminal in inline mode, the
+  daemon log otherwise). New `octowright.upgrade` module; `OCTOWRIGHT_UPGRADE_STATE`
+  overrides the last-seen-version marker path.
+- **Dead-server reconnect guidance** — when the octowright MCP transport is
+  disconnected (tools missing, or `Transport closed` that doesn't recover after
+  one retry), the agent is steered to reconnect octowright in its client — asking
+  which client and using its native reconnect rather than guessing — instead of
+  substituting a shell-opened browser it can't drive. Carried in the agent skill,
+  the MCP server instructions, and the follower-bridge error text.
+
+### Changed
+- **`browser_snapshot` and `browser_brief` respect the active frame** — after
+  `browser_switch_frame` they descend into the switched iframe (matching the
+  action tools) instead of always reading the top-level page.
+
+### Fixed
+- **Frame-blind read tools** — `capture_create` (snapshot/text content + url),
+  `browser_capture_and_close` (url + aria), `browser_read_markdown` (url), and
+  `golden_save` (url) now follow the active frame instead of mixing frame
+  content with top-page metadata.
+
 ## [0.7.0] - 2026-06-06
 
 ### Added
