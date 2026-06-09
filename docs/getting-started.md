@@ -84,7 +84,7 @@ Octowright ships a Click-based CLI. Useful subcommands:
 
 ## Slimming the LLM tool surface
 
-The full MCP surface is currently 106 tools. When a workflow only needs a slice (driving
+The full MCP surface is currently 111 tools. When a workflow only needs a slice (driving
 a browser, replaying macros, etc.), pass `--profile` to slim what the LLM
 sees at connection time:
 
@@ -103,7 +103,7 @@ and is what the daemon process inherits when `octowright serve` spawns one.
 
 ## Next steps
 
-- Open the dashboard at `http://127.0.0.1:8765/` while `octowright serve` is running.
+- Open the dashboard at `http://127.0.0.1:6286/` while `octowright serve` is running.
 - Read [personas.md](personas.md) to learn the identity/profile model.
 - Read [macros.md](macros.md) to record and replay flows.
 - Read [scenarios.md](scenarios.md) to orchestrate multiple browsers as a unit.
