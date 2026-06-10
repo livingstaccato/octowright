@@ -19,6 +19,26 @@ from __future__ import annotations
 
 import pytest
 
+# The pill renders its contents inside a CLOSED shadow root (so page automation
+# cannot pierce it — see test_macro_pill_overlay.py). Closed roots are not
+# exposed via host.shadowRoot, so to introspect the internal DOM a test installs
+# this hook BEFORE the pill builds: it wraps attachShadow to stash the pill's
+# root on window. This inspects production behavior without weakening it.
+_CAPTURE_PILL_SHADOW = """() => {
+    const orig = Element.prototype.attachShadow;
+    window.__pillShadow = null;
+    Element.prototype.attachShadow = function (init) {
+        const root = orig.call(this, init);
+        if (this.id === '__octowright_macro_status__') window.__pillShadow = root;
+        return root;
+    };
+}"""
+
+
+def _pill_inner_text(role: str) -> str:
+    """JS expr: textContent of a [data-role] element inside the closed pill shadow."""
+    return f"window.__pillShadow.querySelector('[data-role=\"{role}\"]').textContent"
+
 
 def test_describe_action_uses_first_informative_field() -> None:
     """First non-empty hint field wins so the pill stays single-line."""
@@ -93,6 +113,10 @@ async def test_macro_status_pill_renders_and_responds(tmp_path) -> None:
         # Pill is hidden by default (root element doesn't exist until first show()).
         assert await page.evaluate("!!document.getElementById('__octowright_macro_status__')") is False
 
+        # Capture the pill's CLOSED shadow root before it is built, so the
+        # internal-DOM assertions below can read it (the page itself cannot).
+        await page.evaluate(_CAPTURE_PILL_SHADOW)
+
         # Push a status — root appears, opacity rises, structured DOM is built.
         await page.evaluate(
             "(p) => window.__octowright_macro_status(p)",
@@ -100,14 +124,10 @@ async def test_macro_status_pill_renders_and_responds(tmp_path) -> None:
         )
         assert await page.evaluate("!!document.getElementById('__octowright_macro_status__')") is True
 
-        chip_text = await page.evaluate(
-            "document.querySelector('#__octowright_macro_status__ [data-role=\"chip\"]').textContent"
-        )
+        chip_text = await page.evaluate(_pill_inner_text("chip"))
         assert chip_text == "status"  # matches the launch label
 
-        label_text = await page.evaluate(
-            "document.querySelector('#__octowright_macro_status__ [data-role=\"label\"]').textContent"
-        )
+        label_text = await page.evaluate(_pill_inner_text("label"))
         assert label_text == "demo | click name=Sign in"
 
         opacity = await page.evaluate("document.getElementById('__octowright_macro_status__').style.opacity")
@@ -118,9 +138,7 @@ async def test_macro_status_pill_renders_and_responds(tmp_path) -> None:
         import asyncio
 
         await asyncio.sleep(0.25)
-        elapsed_text = await page.evaluate(
-            "document.querySelector('#__octowright_macro_status__ [data-role=\"elapsed\"]').textContent"
-        )
+        elapsed_text = await page.evaluate(_pill_inner_text("elapsed"))
         # Format is e.g. "0.2s" or "0.3s" — non-empty, ends with 's'.
         assert elapsed_text.endswith("s") and elapsed_text != "0.0s"
 
@@ -146,18 +164,14 @@ async def test_macro_status_pill_renders_and_responds(tmp_path) -> None:
         )
         opacity_done = await page.evaluate("document.getElementById('__octowright_macro_status__').style.opacity")
         assert float(opacity_done) > 0, "done push should leave pill visible"
-        frozen_text = await page.evaluate(
-            "document.querySelector('#__octowright_macro_status__ [data-role=\"elapsed\"]').textContent"
-        )
+        frozen_text = await page.evaluate(_pill_inner_text("elapsed"))
         # Sleep past the AUTO_HIDE_MS budget; pill must stay visible because
         # `done` suspends the auto-hide timer.
         await asyncio.sleep(0.6)
         opacity_after = await page.evaluate("document.getElementById('__octowright_macro_status__').style.opacity")
         assert float(opacity_after) > 0, "done state must not auto-hide"
         # Elapsed text should NOT change after done — the counter is frozen.
-        elapsed_after = await page.evaluate(
-            "document.querySelector('#__octowright_macro_status__ [data-role=\"elapsed\"]').textContent"
-        )
+        elapsed_after = await page.evaluate(_pill_inner_text("elapsed"))
         assert elapsed_after == frozen_text, f"elapsed kept ticking after done: {frozen_text!r} -> {elapsed_after!r}"
 
         # Explicit visible:false still drops opacity back to 0.

@@ -24,6 +24,10 @@
     // `lastRun` when the next start arrives. The modal shows currentRun ?? lastRun.
     let currentRun = null;
     let lastRun = null;
+    // The pill's contents live in a CLOSED shadow root so page automation cannot
+    // see them. Closed shadow roots are not exposed via host.shadowRoot, so we
+    // hold the reference here for our own queries.
+    let pillShadow = null;
 
     const fmtElapsed = (ms) => {
         if (ms == null) return "";
@@ -301,7 +305,13 @@
             paddingRight: "4px",
         });
 
-        root.append(chip, elapsed, sep, label);
+        // Render contents inside a CLOSED shadow root. Playwright (and other
+        // automation) cannot pierce a closed shadow tree, so the label — which
+        // echoes the action text, e.g. "click_by text=Place order" — never
+        // becomes a second get_by_text()/get_by_role() match for the page's own
+        // elements during replay. Must be "closed": OPEN shadow roots ARE pierced.
+        pillShadow = root.attachShadow({ mode: "closed" });
+        pillShadow.append(chip, elapsed, sep, label);
         root.addEventListener("click", onClick);
         document.body.appendChild(root);
         applyInteractive();
@@ -313,9 +323,8 @@
     };
 
     const renderElapsed = () => {
-        const root = document.getElementById(ROOT_ID);
-        if (!root) return;
-        const el = root.querySelector('[data-role="elapsed"]');
+        if (!pillShadow) return;
+        const el = pillShadow.querySelector('[data-role="elapsed"]');
         if (!el) return;
         if (frozenMs != null) {
             el.textContent = fmtElapsed(frozenMs);
@@ -382,7 +391,7 @@
             frozenMs = null;
         }
 
-        const label = root.querySelector('[data-role="label"]');
+        const label = pillShadow ? pillShadow.querySelector('[data-role="label"]') : null;
         if (label) label.textContent = String(payload.text == null ? "" : payload.text);
         renderElapsed();
 
