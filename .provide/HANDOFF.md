@@ -67,7 +67,7 @@ growth) with near-trivial diffs.
       dead-PID follower is pruned when a live follower records; the live one is kept.
 - Verified on the live file: prune dropped 1 dead of 8 on-disk followers (live ones kept).
 
-### P1 — browser **crash** detection & surfacing
+### P1 — browser **crash** detection & surfacing — ⚠️ clean half DONE (2026-06-10)
 - [ ] `src/octowright/browser_pool/listeners.py` → `_wire_close_evictor` / `_evict`. The
       `browser.on("disconnected")` path (L67) evicts and publishes `SessionClosedEvent(
       reason="user_close")` for **both** user-close and crash (comment L110–115:
@@ -75,17 +75,27 @@ growth) with near-trivial diffs.
       `external_disconnect`. Heuristic: a `disconnected` with **no preceding explicit
       `pool.close`** (and/or a non-zero/signal process exit) = crash → publish
       `reason="crashed"`/`external_disconnect`; stash a crash marker keyed by `instance_id`.
-- [ ] Make later tool calls / `browser_list` on a crashed `instance_id` return a clear
-      **"browser `<id>` crashed (signal …) — relaunch"** instead of "unknown instance".
+- [x] DONE: `pool.get` on an externally-evicted instance now returns *"browser `<id>` ended
+      unexpectedly (closed or crashed externally) — relaunch with browser_launch"* instead of a
+      generic "no such id". `_evict_session_nowait` records dropped ids in a bounded
+      `_recently_evicted` map (an explicit agent close pops under the lock first → returns None →
+      not recorded, so it keeps the plain message). Tests in `test_browser_pool_branches.py`.
+      STILL OPEN: the bullets below (distinguishing crash vs user-close, exit-signal capture) —
+      Playwright can't reliably tell them apart (listeners.py:110), so the message honestly says
+      "closed or crashed".
 - [ ] If Octowright owns the child process, capture its exit signal (SIGTRAP/SIGSEGV) for the
       message (`browser_pool/lifecycle.py`, `events.py`).
 
-### P1 — bridge in-flight resilience
-- [ ] `src/octowright/proxy_bridge.py`: retry **idempotent** in-flight calls across a
-      stdio↔leader reconnect (bounded) so a `browser_launch` survives a bridge blip instead of
-      failing with `-32000`; otherwise return a typed "bridge reconnecting — retry" error.
-      Existing smoke tests to extend: `scripts/bridge_reconnect_smoke.py`,
-      `scripts/bridge_dead_leader_smoke.py`.
+### P1 — bridge in-flight resilience — REASSESSED (2026-06-10): mostly already correct
+- [~] The safe behavior is ALREADY implemented in `proxy_supervisor.py`: at-most-once with
+      retry-hint errors (`fail_all_in_flight("leader session unavailable; retry")`, watch_deadlines'
+      `"request N timed out…"`), and it **deliberately does NOT** auto-retry or span across the two
+      coroutines (comment L170–176: "easy to get wrong and hard to test deterministically"). Blind
+      in-flight retry is **UNSAFE** — a `browser_launch` whose response was lost may have already
+      executed on the leader, so retrying double-launches. The real gap is **leader-side
+      idempotency / request dedup** (so a side-effectful call can be safely re-sent after a blip) —
+      a design item, not a quick fix. Do NOT add naive client-side retry. Smoke scripts:
+      `scripts/bridge_reconnect_smoke.py`, `scripts/bridge_dead_leader_smoke.py`.
 - [ ] **Multi-action replay can exceed the bridge request timeout, and partial execution is
       silent.** 2026-06-09: the recorded `order_brightmart` macro (carrying recorder-noise steps —
       see macro hygiene below) `macro_run` timed out twice (`bridge error: request N timed out
