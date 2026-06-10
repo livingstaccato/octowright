@@ -191,3 +191,38 @@ def test_record_snapshot_leaves_no_tmp_files(tmp_path: Path) -> None:
         )
     leftovers = sorted(tmp_path.glob("*.tmp"))
     assert leftovers == []
+
+
+def test_record_snapshot_prunes_dead_followers(tmp_path: Path) -> None:
+    """A follower recording its own snapshot prunes OTHER followers whose PID is
+    dead, so the registry tracks live followers instead of growing unbounded
+    (the leak that grew bridge-state to 641 stale entries / 167 KB)."""
+    import os
+
+    path = tmp_path / "bridge-state.json"
+    dead_pid = 1_000_000_000  # no such process -> ProcessLookupError on os.kill
+
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=dead_pid,
+        remote_url="http://x/mcp/",
+        remote_session_id="stale",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=os.getpid(),
+        remote_url="http://y/mcp/",
+        remote_session_id="live",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+
+    data = json.loads(path.read_text())
+    assert str(os.getpid()) in data["followers"]  # live follower kept
+    assert str(dead_pid) not in data["followers"]  # stale follower pruned
