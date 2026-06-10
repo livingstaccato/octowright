@@ -193,6 +193,29 @@ class TestPoolLookupAPI:
         pool._sessions["abc123"] = sess
         assert pool.get("abc123") is sess
 
+    def test_get_raises_with_relaunch_hint_for_externally_evicted_instance(self) -> None:
+        """A browser dropped via the external-close/crash path (_evict_session_nowait)
+        yields a 'relaunch' message, distinct from the generic 'no such id' — so an
+        agent whose browser crashed knows it died rather than thinking it mistyped."""
+        pool = BrowserPool()
+        pool._sessions["abc123"] = _fake_session()
+        evicted = pool._evict_session_nowait("abc123")
+        assert evicted is not None  # the external-close path actually dropped it
+        with pytest.raises(KeyError) as exc:
+            pool.get("abc123")
+        msg = str(exc.value)
+        assert "abc123" in msg
+        assert "relaunch" in msg.lower()
+
+    def test_evict_session_nowait_miss_does_not_record(self) -> None:
+        """A no-op eviction (id never live) must not mark the id as crashed —
+        get() on a never-seen id keeps the plain 'no such id' message."""
+        pool = BrowserPool()
+        assert pool._evict_session_nowait("never") is None
+        with pytest.raises(KeyError) as exc:
+            pool.get("never")
+        assert "relaunch" not in str(exc.value).lower()
+
     def test_maybe_get_missing_returns_none(self) -> None:
         """maybe_get is the no-raise variant."""
         assert BrowserPool().maybe_get("nope") is None
