@@ -287,8 +287,10 @@ def octowright_status() -> dict[str, Any]:
         "advisor": _advisor.status(),
         "bridge": {
             "state_path": str(defaults.BRIDGE_STATE_PATH),
+            # summary reflects the FULL state (true follower_count); bounded_view caps
+            # the raw followers/events dump so a stale-follower leak can't blow the payload.
             "summary": bridge_state.summarize_state(bridge_snapshot),
-            **bridge_snapshot,
+            **bridge_state.bounded_view(bridge_snapshot),
         },
         "metrics": {
             # ``macro_labels_seen`` / ``macro_label_overflow_count`` let an

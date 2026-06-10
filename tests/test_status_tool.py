@@ -300,3 +300,36 @@ def test_status_metrics_block_present_when_no_overflow(monkeypatch) -> None:
     assert "metrics" in snap
     assert snap["metrics"]["macro_labels_seen"] == 0
     assert snap["metrics"]["macro_label_overflow_count"] == 0
+
+
+def test_status_bridge_block_caps_exposed_followers(monkeypatch, tmp_path: Path) -> None:
+    """octowright_status must not dump an unbounded followers map — a stale-follower
+    leak previously blew the payload past the MCP token limit (242 KB). The exposed
+    dict is capped while ``summary.follower_count`` still reports the TRUE total."""
+    import json
+
+    from octowright import defaults
+
+    state_path = tmp_path / "bridge-state.json"
+    followers = {
+        str(pid): {
+            "event": "snapshot",
+            "follower_pid": pid,
+            "ts": float(pid),
+            "remote_url": "http://127.0.0.1/mcp/",
+            "remote_session_id": f"s{pid}",
+            "last_error": None,
+            "in_flight": 0,
+            "reconnect_attempts": 0,
+            "request_timeouts": 0,
+        }
+        for pid in range(1000, 1060)
+    }
+    state_path.write_text(json.dumps({"followers": followers, "events": []}))
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", state_path)
+
+    snap = octowright_status()
+
+    assert snap["bridge"]["summary"]["follower_count"] == 60  # true count preserved
+    assert len(snap["bridge"]["followers"]) <= 25  # exposed dump bounded
+    assert snap["bridge"]["followers_truncated"] is True
