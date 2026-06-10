@@ -10,13 +10,17 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter
-from octowright.browser_pool.events import SessionClosedEvent
+from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReason, SessionCrashedEvent
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session import BrowserSession
 
 _EVICTED = counter(
     "octowright_browser_evicted_total",
     description="Browsers removed from the pool by an external close signal (not pool.close)",
+)
+_CRASHED = counter(
+    "octowright_browser_crashed_total",
+    description="Browser pages that fired a Playwright crash event (page.on('crash'))",
 )
 
 if TYPE_CHECKING:
@@ -48,6 +52,9 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
     page_close_handler = getattr(session, "_on_page_close", None)
     if page_close_handler is not None:
         page.on("close", page_close_handler)
+    page_crash_handler = getattr(session, "_on_page_crash", None)
+    if page_crash_handler is not None:
+        page.on("crash", page_crash_handler)
     framenav_handler = getattr(session, "_make_framenavigated_handler", None)
     if framenav_handler is not None:
         page.on("framenavigated", framenav_handler(page))
@@ -107,19 +114,19 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             profile=session.profile,
             log_path=str(session.log_path),
         )
-        # Notify MCP clients that the session is gone. Playwright cannot
-        # reliably distinguish "user closed the window" from "browser process
-        # died", so we use ``user_close`` for both signals that arrive here
-        # (page.close / context.close / browser.disconnected). See the
-        # ``SessionClosedEvent`` docstring for the ``external_disconnect``
-        # reservation.
+        # Notify MCP clients that the session is gone. The disconnect event
+        # alone can't tell "user closed the window" from "process died", so we
+        # default to ``user_close`` — UNLESS a ``page.on("crash")`` fired on this
+        # session first (``session._crashed``), which upgrades it to a definite
+        # ``crashed``.
+        reason: SessionCloseReason = "crashed" if getattr(session, "_crashed", False) else "user_close"
         session_event_bus.publish_nowait(
             SessionClosedEvent(
                 instance_id=instance_id,
                 kind=session.kind,
                 label=session.label,
                 profile=session.profile,
-                reason="user_close",
+                reason=reason,
                 log_path=str(session.log_path),
             )
         )
@@ -128,7 +135,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         # calls may raise if the recorder was already closed by an in-flight
         # session.close() — swallow it.
         try:
-            session.recorder.record("close", reason="external")
+            session.recorder.record("close", reason=reason if reason == "crashed" else "external")
             session.recorder.close()
         except Exception as exc:
             # Swallow per the silent-swallow policy: the recorder may already
@@ -161,10 +168,44 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         if not still_open:
             _evict()
 
-    # Expose the per-page close handler so ``_wire_listeners`` can attach it
-    # to the initial page AND any popup page registered later via
+    def _on_page_crash(*_: Any) -> None:
+        # Playwright fired Page 'crash' (renderer process died — "Aw, Snap" /
+        # Target.crashed). The browser process itself is usually still alive, so
+        # we do NOT evict here; we mark the session so that IF it is then evicted
+        # (a crash that brings the process down → disconnected), ``_evict``
+        # reports a definite ``crashed`` instead of an ambiguous ``user_close``.
+        # We also publish a proactive crash notification so the client learns the
+        # page is dead immediately, not only on its next failing tool call.
+        session._crashed = True
+        _CRASHED.add(1, attributes={"kind": session.kind})
+        log.warning(
+            "octowright.browser.page_crashed",
+            instance_id=instance_id,
+            kind=session.kind,
+            profile=session.profile,
+            log_path=str(session.log_path),
+        )
+        session_event_bus.publish_nowait(
+            SessionCrashedEvent(
+                instance_id=instance_id,
+                kind=session.kind,
+                label=session.label,
+                profile=session.profile,
+                scope="renderer",
+                log_path=str(session.log_path),
+            )
+        )
+        # Best-effort recorder marker for post-mortem inspection.
+        try:
+            session.recorder.record("page_crash")
+        except Exception as exc:
+            log.debug("octowright.crash.recorder_failed", instance_id=instance_id, error=repr(exc))
+
+    # Expose the per-page close + crash handlers so ``_wire_listeners`` can
+    # attach them to the initial page AND any popup page registered later via
     # ``context.on("page", session._register_popup)``.
     session._on_page_close = _on_page_close
+    session._on_page_crash = _on_page_crash
 
     session.context.on("close", _evict)
     # Ephemeral browsers fire 'disconnected' on the Browser when the underlying

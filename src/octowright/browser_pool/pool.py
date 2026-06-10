@@ -60,9 +60,10 @@ class BrowserPool:
         self._sessions: dict[str, BrowserSession] = {}
         self._sessions_lock = asyncio.Lock()
         # Instance ids dropped via the external close/crash path
-        # (_evict_session_nowait), insertion-ordered + capped. Lets get() tell an
-        # agent "that browser died — relaunch" instead of a generic "no such id".
-        self._recently_evicted: dict[str, None] = {}
+        # (_evict_session_nowait), insertion-ordered + capped. Maps id -> crashed?
+        # (True when a page.on("crash") was seen) so get() can say "crashed" vs a
+        # generic "ended unexpectedly", instead of a bare "no such id".
+        self._recently_evicted: dict[str, bool] = {}
         # Monotonic counter for window-tile slot assignment. Reading
         # len(_sessions) at launch time would race when N launches run in
         # parallel — they'd all see the same count and grab the same slot.
@@ -208,6 +209,10 @@ class BrowserPool:
 
     def _missing_session_message(self, instance_id: str) -> str:
         if instance_id in self._recently_evicted:
+            if self._recently_evicted[instance_id]:
+                return (
+                    f"browser instance_id={instance_id!r} crashed (its process died) — relaunch it with browser_launch"
+                )
             return (
                 f"browser instance_id={instance_id!r} ended unexpectedly (closed or crashed "
                 f"externally) — relaunch it with browser_launch"
@@ -333,10 +338,12 @@ class BrowserPool:
         # cannot interleave in flight. Idempotent: returns None on miss.
         session = self._sessions.pop(instance_id, None)
         if session is not None:
-            # Remember it died externally (crash / OS close). An explicit agent
-            # close pops under the lock first, so this returns None there and we
-            # skip — agent-closed ids keep the plain "no such id" message.
-            self._recently_evicted[instance_id] = None
+            # Remember it died externally (crash / OS close), and whether a crash
+            # was observed on it, so get() can say "crashed" vs the generic
+            # "ended unexpectedly". An explicit agent close pops under the lock
+            # first, so this returns None there and we skip — agent-closed ids
+            # keep the plain "no such id" message.
+            self._recently_evicted[instance_id] = bool(getattr(session, "_crashed", False))
             if len(self._recently_evicted) > self._RECENTLY_EVICTED_CAP:
                 del self._recently_evicted[next(iter(self._recently_evicted))]
         return session
