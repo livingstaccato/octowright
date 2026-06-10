@@ -107,7 +107,11 @@ class BrowserSession(
     _network_requests_dropped: int = 0
     _last_mcp_navigation: str | None = None
     _on_page_close: Callable[..., None] | None = field(default=None, repr=False)
+    _on_page_crash: Callable[..., None] | None = field(default=None, repr=False)
     _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
+    # Set True by the page.on("crash") listener; lets eviction report a definite
+    # crash (reason="crashed") instead of an ambiguous external close.
+    _crashed: bool = field(default=False, repr=False)
     console_count: int = 0
     download_count: int = 0
     page_count: int = 1
