@@ -50,11 +50,19 @@ class BrowserPool:
     Browser, BrowserContext, and Page.
     """
 
+    # Cap on how many externally-evicted instance ids we remember for the
+    # "relaunch" hint in get(); bounded so a long-lived pool can't leak.
+    _RECENTLY_EVICTED_CAP = 64
+
     def __init__(self) -> None:
         self._pw: Playwright | None = None
         self._pw_lock = asyncio.Lock()
         self._sessions: dict[str, BrowserSession] = {}
         self._sessions_lock = asyncio.Lock()
+        # Instance ids dropped via the external close/crash path
+        # (_evict_session_nowait), insertion-ordered + capped. Lets get() tell an
+        # agent "that browser died — relaunch" instead of a generic "no such id".
+        self._recently_evicted: dict[str, None] = {}
         # Monotonic counter for window-tile slot assignment. Reading
         # len(_sessions) at launch time would race when N launches run in
         # parallel — they'd all see the same count and grab the same slot.
@@ -199,6 +207,11 @@ class BrowserPool:
         return self._sessions[instance_id]
 
     def _missing_session_message(self, instance_id: str) -> str:
+        if instance_id in self._recently_evicted:
+            return (
+                f"browser instance_id={instance_id!r} ended unexpectedly (closed or crashed "
+                f"externally) — relaunch it with browser_launch"
+            )
         known = list(self._sessions)
         hint = (
             "no browsers are live — call browser_launch first"
@@ -318,7 +331,15 @@ class BrowserPool:
         # sync callback, but CPython dict.pop is GIL-atomic and asyncio is
         # single-threaded — so this and the locked pop in close_browser
         # cannot interleave in flight. Idempotent: returns None on miss.
-        return self._sessions.pop(instance_id, None)
+        session = self._sessions.pop(instance_id, None)
+        if session is not None:
+            # Remember it died externally (crash / OS close). An explicit agent
+            # close pops under the lock first, so this returns None there and we
+            # skip — agent-closed ids keep the plain "no such id" message.
+            self._recently_evicted[instance_id] = None
+            if len(self._recently_evicted) > self._RECENTLY_EVICTED_CAP:
+                del self._recently_evicted[next(iter(self._recently_evicted))]
+        return session
 
     async def close(
         self,
