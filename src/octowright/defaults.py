@@ -215,6 +215,12 @@ SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
 DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))
 DEFAULT_ACTION_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_ACTION_TIMEOUT_MS", "15000"))
+# Wall-clock budget for one aria-tree snapshot. A heavy DOM can make
+# locator.aria_snapshot() run long enough to blow BRIDGE_REQUEST_TIMEOUT_SECONDS
+# (20s) — which the agent can't distinguish from a disconnect. Capped below it so
+# browser_snapshot degrades to a typed result ("use read_markdown / a scoped
+# selector") instead of hanging until the transport gives up.
+SNAPSHOT_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_SNAPSHOT_TIMEOUT_SECONDS", "12"))
 # Total wall-clock budget for a browser launch MCP tool call. This must stay
 # below common MCP client call deadlines (120s) so a wedged Playwright launch
 # returns a normal tool error instead of making the client report a transport
