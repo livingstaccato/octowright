@@ -45,11 +45,11 @@ def anyio_backend() -> str:
 def _setup_metric_reader(monkeypatch: pytest.MonkeyPatch | None = None):
     """Install a fresh MeterProvider with an InMemoryMetricReader.
 
-    OTel forbids overriding the global ``MeterProvider`` once set, so we
-    monkeypatch ``octowright._tracing._meter`` to return a meter from a
-    fresh isolated provider on each call. Module-level lazy instruments
-    have a cached ``_instrument`` slot — we also clear that on the well
-    -known macro counters / histograms so a re-resolve happens.
+    Octowright's instruments are now provide.telemetry instruments, which
+    resolve their OTel meter lazily via
+    ``provide.telemetry.metrics.provider.get_meter``. Patch that seam to return
+    a meter from a fresh isolated provider, then force the module-level macro
+    instruments to re-resolve against it (they cache the resolved handle).
     """
     pytest.importorskip("opentelemetry.sdk")
     from opentelemetry.sdk.metrics import MeterProvider
@@ -59,31 +59,32 @@ def _setup_metric_reader(monkeypatch: pytest.MonkeyPatch | None = None):
     provider = MeterProvider(metric_readers=[reader])
     meter = provider.get_meter("octowright")
 
-    from octowright import _tracing as _tr
-
     if monkeypatch is not None:
-        monkeypatch.setattr(_tr, "_meter", lambda: meter)
+        from provide.telemetry.metrics import provider as _pt_metrics_provider
 
-    # Reset cached _instrument on every lazy proxy module-level call site
-    # for macro metrics so they re-resolve against the new meter.
-    from octowright.macros import execution as _execution
+        monkeypatch.setattr(_pt_metrics_provider, "get_meter", lambda *_a, **_k: meter)
 
-    for proxy in (_execution._MACRO_RUN, _execution._MACRO_RUN_DURATION):
-        # Lazy proxies; static _NOOP has no _instrument slot.
-        if hasattr(proxy, "_instrument"):
-            proxy._instrument = None  # type: ignore[attr-defined]
+        # provide.telemetry instruments cache their resolved OTel handle behind
+        # ``_resolved``; clear it on the module-level macro instruments so the
+        # next add()/record() rebinds to the freshly-injected meter.
+        from octowright.macros import execution as _execution
+
+        for proxy in (_execution._MACRO_RUN, _execution._MACRO_RUN_DURATION):
+            if hasattr(proxy, "_resolved"):
+                proxy._resolved = False  # type: ignore[attr-defined]
     return reader
 
 
 def _setup_span_exporter(monkeypatch: pytest.MonkeyPatch | None = None):
     """Install a fresh TracerProvider with an InMemorySpanExporter.
 
-    OTel allows ``set_tracer_provider`` only once before the global is
-    locked. To keep test isolation we monkeypatch the module-level
-    ``_tracer`` resolver in ``octowright._tracing`` to point at our fresh
-    in-memory provider.
+    Octowright's spans now come from provide.telemetry's ``span()``/``@trace``,
+    which resolve the tracer via ``provide.telemetry.tracing.provider``. Patch
+    that seam (and mark a provider configured) so spans land in our in-memory
+    exporter without touching the process-global OTel provider.
     """
     pytest.importorskip("opentelemetry.sdk")
+    import opentelemetry.trace as _otel_trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -92,11 +93,17 @@ def _setup_span_exporter(monkeypatch: pytest.MonkeyPatch | None = None):
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer("octowright")
+    fake_api = SimpleNamespace(
+        get_tracer=lambda *_a, **_k: tracer,
+        get_current_span=_otel_trace.get_current_span,
+    )
 
     if monkeypatch is not None:
-        from octowright import _tracing as _tr
+        from provide.telemetry.tracing import provider as _pt_provider
 
-        monkeypatch.setattr(_tr, "_tracer", lambda _name: tracer)
+        monkeypatch.setattr(_pt_provider, "_HAS_OTEL", True)
+        monkeypatch.setattr(_pt_provider, "_provider_configured", True)
+        monkeypatch.setattr(_pt_provider, "_load_otel_trace_api", lambda: fake_api)
     return exporter
 
 

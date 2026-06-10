@@ -3,375 +3,47 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Smoke + regression tests for octowright._tracing.
+"""Smoke tests for the ``octowright._tracing`` re-export shim.
 
-These verify the tracer/metric helpers behave both when telemetry is off
-(noop everything) and when an in-memory OTel SDK exporter is wired up.
-The key regression test is :func:`test_lazy_counter_binds_to_late_provider`,
-which proves the lazy-instrument fix: a counter built at import time still
-emits datapoints into a ``MeterProvider`` installed *after* construction.
+The span + metric implementations now live in ``provide.telemetry`` (with
+governance, lazy provider rebinding, and trace↔metric correlation) and are
+covered exhaustively by that package's own test suite. Octowright only needs to
+verify that the shim re-exports the expected callables and that basic usage
+works through the ``octowright._tracing`` import path without a configured
+provider (the no-op path).
 """
 
 from __future__ import annotations
 
-from typing import Any
+import provide.telemetry as pt
 
-import pytest
-
-
-def _setup_span_exporter(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Return an InMemorySpanExporter and monkeypatch ``_tracing._tracer``.
-
-    OTel only allows a TracerProvider to be set once per process. To get
-    per-test isolation we build a fresh SDK TracerProvider, attach our
-    exporter, then swap ``octowright._tracing._tracer`` to return a tracer
-    bound to *that* provider — bypassing the global. This is the same
-    pattern ``tests/test_telemetry_fixes.py`` uses.
-    """
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("octowright")
-
-    import octowright._tracing as tracing
-
-    monkeypatch.setattr(tracing, "_tracer", lambda _name: tracer)
-    return exporter
+from octowright import _tracing
 
 
-def _setup_metric_reader(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Return an InMemoryMetricReader and monkeypatch ``_tracing._meter``.
-
-    Mirrors :func:`_setup_span_exporter` for metrics: build a fresh
-    SDK MeterProvider + InMemoryMetricReader, then swap
-    ``octowright._tracing._meter`` so lazy instruments resolve against
-    that provider instead of whichever global another test installed.
-    """
-    from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-
-    reader = InMemoryMetricReader()
-    provider = MeterProvider(metric_readers=[reader])
-    meter = provider.get_meter("octowright")
-
-    import octowright._tracing as tracing
-
-    monkeypatch.setattr(tracing, "_meter", lambda: meter)
-    return reader
+def test_shim_reexports_provide_telemetry_callables() -> None:
+    """Each name octowright imports must be the provide.telemetry implementation."""
+    assert _tracing.span is pt.span
+    assert _tracing.set_attrs is pt.set_attrs
+    assert _tracing.record_exception is pt.record_exception
+    assert _tracing.counter is pt.counter
+    assert _tracing.histogram is pt.histogram
+    assert _tracing._tracer is pt.get_tracer
 
 
-def test_span_noop_when_tracing_disabled() -> None:
+def test_span_and_helpers_safe_without_provider() -> None:
+    """span()/set_attrs()/record_exception() no-op cleanly when tracing is off."""
     from octowright._tracing import record_exception, set_attrs, span
 
-    with span("octowright.test.noop", a=1, b="x", c=None) as sp:
-        # Setting attrs / recording exception on a NoopSpan must not raise.
-        set_attrs(sp, more="ok")
-        try:
-            raise ValueError("kaboom")
-        except ValueError as exc:
-            record_exception(sp, exc)
+    with span("octowright.smoke", kind="test") as sp:
+        set_attrs(sp, extra=1, dropped=None)
+        record_exception(sp, ValueError("noted"))
 
 
-def test_counter_and_histogram_noop_when_metrics_disabled() -> None:
+def test_counter_and_histogram_usable_through_shim() -> None:
+    """counter()/histogram() return recorders whose add()/record() never raise."""
     from octowright._tracing import counter, histogram
 
-    c = counter("octowright_test_counter", description="t", unit="1")
-    c.add(1, attributes={"k": "v"})
-    h = histogram("octowright_test_hist", description="t", unit="s")
-    h.record(0.5, attributes={"k": "v"})
-
-
-def test_span_attribute_filtering() -> None:
-    """None-valued attributes should be silently dropped, not crash the SDK."""
-    from octowright._tracing import span
-
-    with span("octowright.test.attrs", real=1, null=None, listy=[1, 2, 3]):
-        pass
-
-
-def test_set_attrs_with_unusual_types() -> None:
-    """set_attrs should stringify exotic types rather than dropping them."""
-    from octowright._tracing import set_attrs, span
-
-    class Weird:
-        def __str__(self) -> str:
-            return "weird-value"
-
-    with span("octowright.test.weird") as sp:
-        # mixed list (not all primitives) hits the stringify branch;
-        # explicit None hits the skip-None branch in set_attrs.
-        set_attrs(sp, obj=Weird(), mixed=[1, "two", Weird()], skipme=None)
-
-
-def test_record_exception_on_real_span(monkeypatch: pytest.MonkeyPatch) -> None:
-    """record_exception must mark the span as ERROR when the SDK is present."""
-    pytest.importorskip("opentelemetry.sdk")
-    exporter = _setup_span_exporter(monkeypatch)
-
-    from octowright._tracing import record_exception, span
-
-    with span("octowright.test.exc") as sp:
-        try:
-            raise RuntimeError("boom")
-        except RuntimeError as exc:
-            record_exception(sp, exc)
-
-    finished = exporter.get_finished_spans()
-    matched = [s for s in finished if s.name == "octowright.test.exc"]
-    assert matched, "span did not export"
-    assert matched[-1].status.status_code.name == "ERROR"
-
-
-def test_real_span_recorded_with_in_memory_exporter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wires the in-memory exporter to verify spans actually fire when tracing is on."""
-    pytest.importorskip("opentelemetry.sdk")
-    exporter = _setup_span_exporter(monkeypatch)
-
-    from octowright._tracing import span
-
-    with span("octowright.test.real", who="me"):
-        pass
-
-    finished = exporter.get_finished_spans()
-    assert any(s.name == "octowright.test.real" for s in finished)
-
-
-def test_lazy_counter_binds_to_late_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression: a counter built before setup_telemetry() must still emit.
-
-    This is the whole point of the lazy-instrument design — module-level
-    ``counter(...)`` calls run at import time, often before the OTel
-    ``MeterProvider`` is installed. The proxy must defer binding until the
-    first ``.add()``, so it picks up the live provider.
-
-    To prove the deferred-binding behaviour we (1) build the instruments
-    BEFORE wiring the in-memory provider, then (2) swap ``_tracing._meter``
-    to return a meter from a fresh in-memory provider, then (3) record
-    datapoints and assert the reader saw them. With the old
-    ``lru_cache(_meter)`` trap, the instruments would already have been
-    bound to whatever provider was current at construction and the new
-    meter would be ignored.
-    """
-    pytest.importorskip("opentelemetry.sdk")
-    from octowright._tracing import counter, histogram
-
-    # Build the instruments BEFORE the provider is installed (the trap).
-    c = counter("octowright_test_lazy_counter", description="t", unit="1")
-    h = histogram("octowright_test_lazy_hist", description="t", unit="s")
-
-    # Now swap in the fresh in-memory provider via the resolver hook.
-    reader = _setup_metric_reader(monkeypatch)
-
-    c.add(1, attributes={"kind": "chromium"})
-    c.add(2, attributes={"kind": "chromium"})
-    h.record(0.5, attributes={"kind": "chromium"})
-
-    data = reader.get_metrics_data()
-    seen_names: set[str] = set()
-    for resource_metric in data.resource_metrics:
-        for scope_metric in resource_metric.scope_metrics:
-            for metric in scope_metric.metrics:
-                seen_names.add(metric.name)
-
-    assert "octowright_test_lazy_counter" in seen_names
-    assert "octowright_test_lazy_hist" in seen_names
-
-
-def test_lazy_instruments_noop_when_otel_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If OTel isn't importable, counter()/histogram() must return the static noop."""
-    import octowright._tracing as tracing
-
-    monkeypatch.setattr(tracing, "_OTEL_AVAILABLE", False)
-
-    c = tracing.counter("octowright_test_noop_counter")
-    h = tracing.histogram("octowright_test_noop_hist")
-
-    assert c is tracing._NOOP
-    assert h is tracing._NOOP
-
-    # Calls must be safe.
+    c = counter("octowright_shim_counter", description="t", unit="1")
+    h = histogram("octowright_shim_hist", description="t", unit="s")
     c.add(1, attributes={"k": "v"})
     h.record(0.5, attributes={"k": "v"})
-    # _meter() must also bail out.
-    assert tracing._meter() is None
-
-
-def test_lazy_proxy_swallows_resolver_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the meter raises during create_*, the proxy must fall back to NOOP."""
-    import octowright._tracing as tracing
-
-    class BrokenMeter:
-        def create_counter(self, *_args: object, **_kwargs: object) -> object:
-            raise RuntimeError("nope")
-
-        def create_histogram(self, *_args: object, **_kwargs: object) -> object:
-            raise RuntimeError("nope")
-
-    monkeypatch.setattr(tracing, "_meter", lambda: BrokenMeter())
-
-    c = tracing.counter("octowright_test_broken_counter")
-    h = tracing.histogram("octowright_test_broken_hist")
-    # First call resolves -> hits exception -> caches _NOOP -> safe forever.
-    c.add(1, attributes={"k": "v"})
-    c.add(2, attributes={"k": "v"})
-    h.record(0.5, attributes={"k": "v"})
-
-
-def test_meter_returns_none_when_metrics_module_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If opentelemetry.metrics.get_meter raises, _meter() returns None."""
-    import octowright._tracing as tracing
-
-    # Force the available-path; then make get_meter blow up.
-    monkeypatch.setattr(tracing, "_OTEL_AVAILABLE", True)
-    from opentelemetry import metrics as otel_metrics
-
-    def boom(_name: str) -> object:
-        raise RuntimeError("provider misconfigured")
-
-    monkeypatch.setattr(otel_metrics, "get_meter", boom)
-    assert tracing._meter() is None
-
-
-def test_set_attr_swallows_sdk_failure_on_primitive(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If sp.set_attribute raises on a primitive, _set_attr must not propagate."""
-    from octowright._tracing import _set_attr
-
-    class BrokenSpan:
-        def set_attribute(self, _k: str, _v: object) -> None:
-            raise RuntimeError("nope")
-
-    sp = BrokenSpan()
-    _set_attr(sp, "k", "value")  # primitive path
-    _set_attr(sp, "k", [1, 2, 3])  # list path
-    _set_attr(sp, "k", object())  # stringify path
-
-
-def test_record_exception_handles_broken_span() -> None:
-    """record_exception must swallow failures in the span's own methods."""
-    from octowright._tracing import record_exception
-
-    class BrokenSpan:
-        def record_exception(self, _exc: BaseException) -> None:
-            raise RuntimeError("inner")
-
-        def set_status(self, _status: object) -> None:
-            raise RuntimeError("status")
-
-    record_exception(BrokenSpan(), ValueError("boom"))
-
-
-def test_record_exception_with_bare_object() -> None:
-    """record_exception on an object lacking the methods must no-op."""
-    from octowright._tracing import record_exception
-
-    record_exception(object(), ValueError("boom"))
-
-
-def test_lazy_resolve_does_not_cache_noop_when_meter_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_LazyInstrument._resolve must NOT cache _NOOP when _meter() returns None.
-
-    Regression: caching the pre-setup _NOOP would freeze the binding and defeat
-    the whole point of lazy resolution if ``setup_telemetry()`` runs later.
-    The proxy must leave ``_instrument`` as None so the next call re-checks.
-    """
-    import octowright._tracing as tracing
-
-    monkeypatch.setattr(tracing, "_meter", lambda: None)
-
-    proxy = tracing._LazyCounter("create_counter", "octowright_test_no_meter")
-    proxy.add(1)
-    assert proxy._instrument is None
-    # Second call must still re-resolve, not return a cached _NOOP.
-    proxy.add(2)
-    assert proxy._instrument is None
-
-
-def test_lazy_resolve_picks_up_meter_after_late_setup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pre-setup .add() must not poison the proxy: late setup_telemetry must take effect.
-
-    Real-world scenario: module-level ``counter(...)`` calls run at import time;
-    something touches the instrument once before ``setup_telemetry()`` installs the
-    real ``MeterProvider`` (e.g. an early import-time metric on a noop meter). The
-    proxy must NOT cache the noop fallback — otherwise every subsequent ``.add()``
-    silently drops the datapoint for the rest of the process's lifetime.
-    """
-    pytest.importorskip("opentelemetry.sdk")
-    import octowright._tracing as tracing
-
-    # Phase 1: meter is None (pre-setup). .add() must be a true no-op (no cache).
-    monkeypatch.setattr(tracing, "_meter", lambda: None)
-    proxy = tracing._LazyCounter("create_counter", "octowright_test_late_setup")
-    proxy.add(7, attributes={"phase": "pre"})
-    assert proxy._instrument is None
-
-    # Phase 2: setup_telemetry equivalent — swap in a real in-memory provider.
-    from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-
-    reader = InMemoryMetricReader()
-    provider = MeterProvider(metric_readers=[reader])
-    meter = provider.get_meter("octowright")
-    # Ensure the test cleans up the in-memory provider (no leak across tests).
-    monkeypatch.setattr(tracing, "_meter", lambda: meter)
-
-    proxy.add(3, attributes={"phase": "post"})
-    proxy.add(4, attributes={"phase": "post"})
-
-    data = reader.get_metrics_data()
-    found = False
-    total = 0
-    for resource_metric in data.resource_metrics:
-        for scope_metric in resource_metric.scope_metrics:
-            for metric in scope_metric.metrics:
-                if metric.name == "octowright_test_late_setup":
-                    found = True
-                    for point in metric.data.data_points:
-                        total += point.value
-    assert found, "post-setup add() did not land in the meter reader"
-    # Only the post-setup adds (3+4) should be recorded — the pre-setup add(7)
-    # legitimately dropped because no real meter existed at the time.
-    assert total == 7
-
-
-def test_lazy_counter_swallows_add_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the resolved instrument's .add raises, the proxy must swallow."""
-    import octowright._tracing as tracing
-
-    class BrokenInstrument:
-        def add(self, *_args: object, **_kwargs: object) -> None:
-            raise RuntimeError("add boom")
-
-        def record(self, *_args: object, **_kwargs: object) -> None:
-            raise RuntimeError("rec boom")
-
-    class StubMeter:
-        def create_counter(self, *_args: object, **_kwargs: object) -> BrokenInstrument:
-            return BrokenInstrument()
-
-        def create_histogram(self, *_args: object, **_kwargs: object) -> BrokenInstrument:
-            return BrokenInstrument()
-
-    monkeypatch.setattr(tracing, "_meter", lambda: StubMeter())
-
-    c = tracing.counter("octowright_test_add_boom")
-    c.add(1)
-    h = tracing.histogram("octowright_test_rec_boom")
-    h.record(0.5)
-
-
-def test_lazy_instrument_caches_resolved_instrument(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The proxy must resolve the underlying instrument once and reuse it."""
-    pytest.importorskip("opentelemetry.sdk")
-    _setup_metric_reader(monkeypatch)
-
-    from octowright._tracing import _LazyCounter
-
-    proxy = _LazyCounter("create_counter", "octowright_test_cached", description="t", unit="1")
-    proxy.add(1)
-    first = proxy._instrument
-    proxy.add(1)
-    assert proxy._instrument is first
