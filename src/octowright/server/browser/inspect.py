@@ -8,12 +8,13 @@ export_script, expect_url / expect_text / expect_selector / expect_js."""
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 from pathlib import Path
 from typing import Any, cast
 
 from octowright._paths import reject_unsafe_path
-from octowright.defaults import RECORDINGS_DIR
+from octowright.defaults import RECORDINGS_DIR, SNAPSHOT_TIMEOUT_SECONDS
 from octowright.export import export_script as _export_script
 from octowright.mcp_types import (
     BrowserBriefResult,
@@ -35,6 +36,9 @@ from octowright.mcp_types import (
 from octowright.recorder import tail_log
 from octowright.server._state import mcp, pool
 from octowright.session import DEFAULT_PREVIEW_CHARS
+
+# Module-level alias so tests can monkeypatch the snapshot timeout cheaply.
+SNAPSHOT_TIMEOUT_S = SNAPSHOT_TIMEOUT_SECONDS
 
 
 @mcp.tool(
@@ -68,7 +72,20 @@ async def browser_snapshot(
     # Route through session.snapshot so the JSONL gets a "snapshot" event;
     # bypassing it would make MCP-tool snapshots invisible to macro replay,
     # golden diffs, and the audit trail.
-    snap = await session.snapshot(selector=selector)
+    try:
+        snap = await asyncio.wait_for(session.snapshot(selector=selector), timeout=SNAPSHOT_TIMEOUT_S)
+    except TimeoutError:
+        # A heavy DOM can make aria_snapshot() run past the bridge request timeout,
+        # which the agent can't distinguish from a disconnect. Degrade to a typed
+        # result that points at the cheaper observe paths instead of hanging.
+        return {
+            "snapshot_timed_out": True,
+            "timeout_s": SNAPSHOT_TIMEOUT_S,
+            "hint": (
+                "aria snapshot timed out on a heavy DOM — use browser_read_markdown, "
+                "browser_brief, or browser_snapshot with a scoped selector (e.g. selector='main')"
+            ),
+        }
     aria = snap["aria"]
     cap = None if full else (max_chars or DEFAULT_PREVIEW_CHARS)
     out: BrowserSnapshotResult = {
