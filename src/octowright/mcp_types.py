@@ -260,6 +260,11 @@ class BrowserSnapshotResult(TypedDict, total=False):
     truncated: bool
     aria_size: int
     cap: int
+    # Set when the aria snapshot exceeded SNAPSHOT_TIMEOUT_SECONDS on a heavy DOM;
+    # the result then carries a hint toward read_markdown / a scoped selector.
+    snapshot_timed_out: bool
+    timeout_s: float
+    hint: str
 
 
 class BrowserEvaluateResult(TypedDict, total=False):

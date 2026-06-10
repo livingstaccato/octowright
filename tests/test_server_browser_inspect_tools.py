@@ -80,6 +80,27 @@ async def test_snapshot_full_untruncated(_patch_pool: MagicMock) -> None:
 
 
 @pytest.mark.anyio
+async def test_snapshot_degrades_on_timeout(_patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A heavy-DOM aria snapshot that would exceed the bridge timeout must degrade
+    to a typed result with a hint, not hang until the transport gives up."""
+    import asyncio
+
+    s = _session()
+
+    async def _slow(**_: object) -> dict[str, str]:
+        await asyncio.sleep(1.0)
+        return {"aria": "x", "url": "u", "title": "t"}
+
+    s.snapshot = _slow
+    _patch_pool.get.return_value = s
+    monkeypatch.setattr(_inspect, "SNAPSHOT_TIMEOUT_S", 0.05, raising=False)
+
+    out = await _inspect.browser_snapshot("i")
+    assert out["snapshot_timed_out"] is True
+    assert "markdown" in out["hint"].lower()
+
+
+@pytest.mark.anyio
 async def test_evaluate_bytes_and_full(_patch_pool: MagicMock) -> None:
     s = _session()
     s.evaluate = AsyncMock(return_value=b"abc")

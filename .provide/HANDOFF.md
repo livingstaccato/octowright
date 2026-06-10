@@ -95,7 +95,14 @@ growth) with near-trivial diffs.
       the timeout for multi-action ops and return a structured partial-result / idempotent resume
       so a half-applied replay isn't a silent `-32000`. Single-action calls were unaffected.
 
-### P1 — `browser_snapshot` times out on heavy DOMs (no internal bound/fallback)
+### P1 — `browser_snapshot` times out on heavy DOMs ✅ DONE (2026-06-10)
+- [x] `inspect.py:browser_snapshot` wraps `session.snapshot()` in `asyncio.wait_for(timeout=
+      SNAPSHOT_TIMEOUT_SECONDS)` (new default 12s, below the 20s bridge timeout). On timeout it
+      returns a typed degraded result `{snapshot_timed_out, timeout_s, hint}` pointing at
+      browser_read_markdown / browser_brief / a scoped selector, instead of hanging. New fields on
+      `BrowserSnapshotResult`. Test: `test_server_browser_inspect_tools.py::test_snapshot_degrades_on_timeout`.
+
+Original diagnosis (kept for context):
 - [ ] `src/octowright/server/browser/inspect.py` → `browser_snapshot` (~L61) routes through
       `session.snapshot(selector="body")` → Playwright `locator(...).aria_snapshot()`. The
       tree generation has **no internal timeout or size bound**; on a large DOM (e.g. the
