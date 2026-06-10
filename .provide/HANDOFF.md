@@ -114,11 +114,10 @@ growth) with near-trivial diffs.
       not a transport timeout.
 
 ### P1 — macro replay: save-hygiene + progress-pill locator collision
-- [ ] `macro_save` keeps recorder-noise actions that shouldn't replay: a `user_navigation` to
-      Octowright's own `http://127.0.0.1:6286/new-tab` (an artifact of launching blank) and
-      `markdown_cached` entries. They inflate replay time (→ the bridge timeout above) and
-      re-navigating to the internal new-tab on replay is pointless. Drop them at save time the
-      way `launch`/`close`/`snapshot` already are.
+- [x] DONE (2026-06-10): `macros/recording_import.py` adds a `RECORDER_NOISE` set (user_navigation,
+      console, websocket_*, markdown_cached, *_cache_error, etc.) stripped by `iter_macro_actions`
+      alongside `ALWAYS_STRIP`, so `macro_save` no longer bakes passive recorder events into macros.
+      Test: `test_macro_recording_import_branches.py::...::test_strips_recorder_noise`.
 - [ ] **Progress-pill overlay collides with text locators during replay.** Replaying a
       `click_by text="Place order"` failed with a Playwright **strict-mode violation**: Octowright
       injects a status overlay `<span data-role="label">… | click_by text=Place order</span>`
