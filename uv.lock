@@ -1516,7 +1516,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=1.2.0" },
     { name = "playwright", specifier = ">=1.47.0" },
-    { name = "provide-telemetry", extras = ["otel"], specifier = ">=0.4.4" },
+    { name = "provide-telemetry", extras = ["otel"], specifier = ">=0.4.8" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "starlette", specifier = ">=0.40" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -1849,14 +1849,14 @@ wheels = [
 
 [[package]]
 name = "provide-telemetry"
-version = "0.4.6"
+version = "0.4.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "structlog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7c/75/142f4a7733e7eb0f0949f087093148a63e61d597994f9e8cac0ddd8d34b4/provide_telemetry-0.4.6.tar.gz", hash = "sha256:bf8621ae23e87b6590707fba36a2ce64967b114a788763c88ad4c2b42fdde029", size = 79761, upload-time = "2026-05-25T02:15:25.031Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/69/103a75a80bc0eaa5d31aa647dbefe89b04aa52977f79a0e67055cf1c6e05/provide_telemetry-0.4.8.tar.gz", hash = "sha256:17e56b43a4098fa088da16f8e834cc18e6e1a82978508d091fc80ae262be8fe3", size = 83284, upload-time = "2026-06-10T23:25:17.036Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/d9/d336e06693c060bc440e1cf1c0f012ef6453dfd3ac7c68694a98fb761bdc/provide_telemetry-0.4.6-py3-none-any.whl", hash = "sha256:cf1292cd14679e1c15e5495842d4c6cac4e858b3dc59e99ae1969e667a49e4ee", size = 88736, upload-time = "2026-05-25T02:15:23.1Z" },
+    { url = "https://files.pythonhosted.org/packages/10/65/d4591a6742d0ac5414a576038bc1970e86fb6d4ea693960f092a89794a38/provide_telemetry-0.4.8-py3-none-any.whl", hash = "sha256:c47894c176646644c8f5e37900f15dcee2b43c3875cede2e780607172bb889c4", size = 93307, upload-time = "2026-06-10T23:25:15.37Z" },
 ]
 
 [package.optional-dependencies]
