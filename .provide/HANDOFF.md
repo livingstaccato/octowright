@@ -135,25 +135,43 @@ Original diagnosis (kept for context):
       console, websocket_*, markdown_cached, *_cache_error, etc.) stripped by `iter_macro_actions`
       alongside `ALWAYS_STRIP`, so `macro_save` no longer bakes passive recorder events into macros.
       Test: `test_macro_recording_import_branches.py::...::test_strips_recorder_noise`.
-- [ ] **Progress-pill overlay collides with text locators during replay.** Replaying a
-      `click_by text="Place order"` failed with a Playwright **strict-mode violation**: Octowright
-      injects a status overlay `<span data-role="label">… | click_by text=Place order</span>`
-      whose text matches `get_by_text("Place order")` → 2 elements (the real button + the pill).
-      The macro's own instrumentation breaks the macro. Fix: keep the pill out of locator
-      resolution (closed shadow DOM / `aria-hidden` + non-text marker / exclude from `get_by_text`),
-      or have replay scope text locators to content excluding the overlay. Today's workaround:
-      record clicks by role/selector, not text.
-- [ ] Test: record+replay a `click_by text=…` whose only real match is the target; assert the
-      overlay never triggers a strict-mode violation.
+- [x] DONE (2026-06-10): **Progress-pill overlay no longer collides with text locators.** The pill
+      injected a status overlay `<span data-role="label">… | click_by text=Place order</span>` in the
+      **light DOM**; its text matched `get_by_text("Place order")` → 2 elements (the real button + the
+      pill) → Playwright strict-mode violation, so the macro's own instrumentation broke the macro.
+      Fix (`browser_pool/_assets/macro_pill.js`): the pill renders its contents inside a **closed**
+      shadow root (`root.attachShadow({mode:"closed"})`), which Playwright's text/role/css locators
+      cannot pierce — so the only `Place order` match is the real target. Internal queries
+      (label/elapsed) moved to the stored `pillShadow` ref; host styling/click handler/modal stay in
+      light DOM. (Closed, not open: OPEN shadow roots ARE pierced by Playwright.)
+      Note: the Alt+click history **modal** stays in light DOM — it is user-gesture-only and never
+      present during automated replay, so it is not a replay-time collision.
+- [x] Test (`tests/test_macro_pill_overlay.py`, `live_browser`): real chromium, inject the pill,
+      push a status echoing `click_by text=Place order` next to a real "Place order" button, assert
+      `get_by_text("Place order").count() == 1` (was 2 pre-fix) and the pill still renders + the modal
+      still works. `tests/test_pill.py` updated to read the closed shadow via an `attachShadow`-capture
+      test hook (same behavioral assertions; no production test-hooks).
 
-### P2 — OTel context-detach storm
-- [ ] `src/octowright/_tracing.py` → `span()` (~L50–68) is a **sync** `@contextmanager` using
-      `tracer.start_as_current_span(...)` around **async** tool handlers; the span's context
-      token is attached in one asyncio task and detached in another → `ValueError: Token created
-      in a different Context` on every CallToolRequest. Provide an **async-safe** span (attach/
-      detach in the same task, or `opentelemetry.trace.use_span(span, end_on_exit=True)` without
-      crossing the contextvar reset over an `await`).
-- [ ] Test: a `span()` wrapping an awaiting body emits **no** "Failed to detach context" log.
+### P2 — OTel context-detach storm ✅ FIXED UPSTREAM in provide.telemetry (2026-06-10)
+Root-caused: NOT octowright's `_tracing.span()` per se, and NOT an mcp-integration requirement
+(mcp/FastMCP is uninstrumented; it uses its own clean `request_ctx` contextvar). OTel keeps the
+current span in a `contextvars` Token (`start_as_current_span` attaches on enter, detaches on exit).
+When a span's lifetime straddles an async-context boundary — an async generator `aclose()`d from
+another task, a cancelled/GC'd coroutine — the detach runs in a different `contextvars.Context`
+than the attach, `Token.reset()` raises, and `opentelemetry.context.detach` logs a traceback **per
+occurrence**. Reproduced and confirmed it is **independent per-teardown (no cascade)**: the ~1410
+daemon lines were 1410 separate cross-context teardowns of octowright's **background-task** spans,
+logged interleaved with every mcp request type (which is why `ListTools`/`ListPrompts` showed it
+too, despite opening no spans).
+- [x] **Fixed in `provide.telemetry`** (branch `fix/otel-context-detach-storm`, commit `d4a10314`):
+      `setup_tracing()` installs `_SafeContextVarsRuntimeContext`, whose `detach` swallows **only**
+      the benign cross-context `ValueError` (idempotent global swap of
+      `opentelemetry.context._RUNTIME_CONTEXT`); plus a new async-native `provide.telemetry.span()`.
+      TDD, 100% stmt+branch coverage, full suite green (2339), `make lint` green. E2E verified
+      through the public `setup_telemetry()`: 50 cross-context teardowns → **0** detach logs.
+- [ ] **Octowright action: bump the `provide-telemetry` dependency** once that branch is released —
+      the storm then disappears with **no octowright code change**. The old plan to rewrite
+      `octowright._tracing.span()` is moot.
 
 ## Evidence artifacts (this machine, 2026-06-09)
 - daemon log: `~/.local/state/octowright/logs/octowright-daemon.log`
