@@ -97,6 +97,22 @@ class TestIterMacroActionsFilters:
         kept = list(iter_macro_actions(p))
         assert [a["action"] for a in kept] == ["click", "fill", "navigate", "press_key"]
 
+    def test_strips_recorder_noise(self, tmp_path: Path) -> None:
+        """Passive recorder events (user_navigation to the internal new-tab,
+        markdown_cached, console, websocket_*) are not replayable actions and must
+        not leak into a saved macro — they bloat it and inflate replay."""
+        rows = [
+            {"action": "user_navigation", "url": "http://127.0.0.1:6286/new-tab"},
+            {"action": "markdown_cached", "url": "http://localhost:8000/store-b.html"},
+            {"action": "navigate", "url": "http://localhost:8000/store-b.html"},
+            {"action": "console", "text": "hello"},
+            {"action": "fill", "selector": "#qty", "value": "3"},
+            {"action": "click_by", "text": "Place order"},
+        ]
+        p = _write_jsonl(tmp_path, rows)
+        kept = list(iter_macro_actions(p))
+        assert [a["action"] for a in kept] == ["navigate", "fill", "click_by"]
+
 
 class TestIterMacroActionsRowShape:
     def test_yields_full_entry_dict(self, tmp_path: Path) -> None:
