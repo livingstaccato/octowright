@@ -10,7 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-SessionCloseReason = Literal["agent_close", "user_close", "external_disconnect", "shutdown"]
+SessionCloseReason = Literal["agent_close", "user_close", "external_disconnect", "crashed", "shutdown"]
+
+# Where a crash happened. ``renderer`` is a Playwright ``page.on("crash")``
+# (a tab/"Aw, Snap"); a renderer crash that also takes the browser process down
+# additionally evicts the session with ``SessionClosedEvent(reason="crashed")``.
+CrashScope = Literal["renderer", "process"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -24,10 +29,14 @@ class SessionClosedEvent:
       ``close_browser`` before any Playwright close events fire.
     * ``user_close`` — the human closed the window or dismissed all pages;
       the pool was notified by Playwright's page/context/browser events.
-      Playwright does not distinguish "user clicked X" from "browser OOM'd and
-      the OS killed the window" at the event level, so ``user_close`` also
-      covers unexpected crashes where the browser process exits cleanly enough
-      to deliver a ``disconnected`` event.
+      The ``disconnected`` event alone does not distinguish "user clicked X"
+      from "the process died", so ``user_close`` covers external closes where
+      no crash was observed.
+    * ``crashed`` — a Playwright ``page.on("crash")`` fired on this session
+      before it was evicted (renderer crash that also brought the process down).
+      The crash signal is what lets us upgrade an otherwise-ambiguous external
+      disconnect to a definite crash; a proactive ``SessionCrashedEvent`` is
+      also published the moment the crash is observed (see below).
     * ``external_disconnect`` — the browser process disappeared without emitting
       a clean close event (e.g. SIGKILL, OOM without an orderly Playwright
       teardown).  In practice Playwright delivers ``browser.disconnected`` even
@@ -48,4 +57,26 @@ class SessionClosedEvent:
     log_path: str
 
 
-__all__ = ["SessionCloseReason", "SessionClosedEvent"]
+@dataclass(slots=True, frozen=True)
+class SessionCrashedEvent:
+    """Published the moment a browser crash is observed, before any eviction.
+
+    Unlike :class:`SessionClosedEvent` this does NOT mean the session left the
+    pool — a ``renderer`` crash leaves the browser process alive with a dead
+    page. It is a proactive signal so an MCP client learns "this page crashed,
+    reload it or relaunch the browser" immediately, rather than only when its
+    next tool call on the dead page fails.
+    """
+
+    instance_id: str
+    kind: str
+    label: str | None
+    profile: str | None
+    scope: CrashScope
+    log_path: str
+
+
+# Anything the session event bus may carry.
+SessionEvent = SessionClosedEvent | SessionCrashedEvent
+
+__all__ = ["CrashScope", "SessionCloseReason", "SessionClosedEvent", "SessionCrashedEvent", "SessionEvent"]

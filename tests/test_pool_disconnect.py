@@ -196,6 +196,11 @@ def _page_close_handlers(page: Any) -> list[Any]:
     return page.handlers.get("close", [])
 
 
+def _page_crash_handlers(page: Any) -> list[Any]:
+    """Return all callbacks registered via page.on('crash', ...)."""
+    return page.handlers.get("crash", [])
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -261,6 +266,113 @@ async def test_browser_disconnected_evicts_session(monkeypatch: pytest.MonkeyPat
 
     assert iid not in pool._sessions
     assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
+
+
+def _capture_session_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Capture everything published to the session event bus during a test."""
+    from octowright.browser_pool.session_event_bus import session_event_bus
+
+    captured: list[Any] = []
+    monkeypatch.setattr(session_event_bus, "publish_nowait", captured.append)
+    return captured
+
+
+@pytest.mark.anyio
+async def test_page_crash_marks_session_and_notifies(
+    monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
+) -> None:
+    """A renderer crash (page.on('crash')) marks the session and fires a proactive
+    crash notification — without evicting (the browser process is still alive)."""
+    from octowright.browser_pool.events import SessionCrashedEvent
+
+    _install_playwright_stub(monkeypatch)
+    events = _capture_session_events(monkeypatch)
+    pool = BrowserPool()
+
+    result = await pool.launch(
+        kind="chromium", url="https://octowright.com", headed=False, label="crash", viewport_w=None, viewport_h=None
+    )
+    iid = result["instance_id"]
+    session = pool._sessions[iid]
+
+    crash_handlers = _page_crash_handlers(session.page)
+    assert crash_handlers, "expected a page.on('crash') handler on the initial page"
+    for cb in crash_handlers:
+        cb()
+
+    # Marked crashed, but NOT evicted — a renderer crash leaves the process alive.
+    assert session._crashed is True
+    assert iid in pool._sessions
+    # A proactive crash notification was published.
+    crashed = [e for e in events if isinstance(e, SessionCrashedEvent)]
+    assert len(crashed) == 1
+    assert crashed[0].instance_id == iid
+    assert crashed[0].scope == "renderer"
+    assert any("page_crashed" in m for m in listeners_log.messages()), listeners_log.messages()
+
+
+@pytest.mark.anyio
+async def test_eviction_after_crash_reports_reason_crashed(
+    monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
+) -> None:
+    """When a crashed session is then evicted (process death → disconnect), the
+    close event and the relaunch message both say 'crashed', not 'user_close'."""
+    from octowright.browser_pool.events import SessionClosedEvent
+
+    _install_playwright_stub(monkeypatch)
+    events = _capture_session_events(monkeypatch)
+    pool = BrowserPool()
+
+    result = await pool.launch(
+        kind="chromium",
+        url="https://octowright.com",
+        headed=False,
+        label="crash",
+        viewport_w=None,
+        viewport_h=None,
+        ephemeral=True,
+    )
+    iid = result["instance_id"]
+    session = pool._sessions[iid]
+
+    for cb in _page_crash_handlers(session.page):
+        cb()
+    for cb in _disconnect_handlers(session):
+        cb()
+
+    assert iid not in pool._sessions
+    closed = [e for e in events if isinstance(e, SessionClosedEvent)]
+    assert closed and closed[-1].reason == "crashed"
+    # The "relaunch" guidance distinguishes a crash from an ordinary close.
+    assert "crashed" in pool._missing_session_message(iid)
+
+
+@pytest.mark.anyio
+async def test_external_close_without_crash_stays_user_close(
+    monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
+) -> None:
+    """An external close with no crash marker is honestly reported as user_close."""
+    from octowright.browser_pool.events import SessionClosedEvent
+
+    _install_playwright_stub(monkeypatch)
+    events = _capture_session_events(monkeypatch)
+    pool = BrowserPool()
+
+    result = await pool.launch(
+        kind="chromium", url="https://octowright.com", headed=False, label="ext", viewport_w=None, viewport_h=None
+    )
+    iid = result["instance_id"]
+    session = pool._sessions[iid]
+
+    for cb in _close_handlers(session):
+        cb()
+
+    closed = [e for e in events if isinstance(e, SessionClosedEvent)]
+    assert closed and closed[-1].reason == "user_close"
+    # Generic "ended unexpectedly" message, NOT the crash-specific one.
+    message = pool._missing_session_message(iid)
+    assert "ended unexpectedly" in message
+    assert "its process died" not in message
 
 
 @pytest.mark.anyio

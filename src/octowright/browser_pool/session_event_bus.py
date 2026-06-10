@@ -25,7 +25,7 @@ import asyncio
 from contextlib import suppress
 from types import TracebackType
 
-from octowright.browser_pool.events import SessionClosedEvent
+from octowright.browser_pool.events import SessionClosedEvent, SessionCrashedEvent, SessionEvent
 
 _QUEUE_SIZE = 64
 
@@ -33,7 +33,7 @@ _QUEUE_SIZE = 64
 class _Subscriber:
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
-        self.queue: asyncio.Queue[SessionClosedEvent] = asyncio.Queue(maxsize=_QUEUE_SIZE)
+        self.queue: asyncio.Queue[SessionEvent] = asyncio.Queue(maxsize=_QUEUE_SIZE)
 
 
 class SessionEventSubscription:
@@ -42,7 +42,7 @@ class SessionEventSubscription:
     def __init__(self, subscriber: _Subscriber) -> None:
         self._subscriber = subscriber
 
-    async def get(self) -> SessionClosedEvent:
+    async def get(self) -> SessionEvent:
         return await self._subscriber.queue.get()
 
 
@@ -85,7 +85,7 @@ class SessionEventBus:
     def subscribe(self) -> _SessionEventSubscriptionContext:
         return _SessionEventSubscriptionContext(self)
 
-    def publish_nowait(self, event: SessionClosedEvent) -> None:
+    def publish_nowait(self, event: SessionEvent) -> None:
         """Deliver ``event`` to every subscriber.
 
         When called from within the subscriber's asyncio event loop (the
@@ -116,7 +116,7 @@ class SessionEventBus:
                     self._subscribers.discard(subscriber)
 
     @staticmethod
-    def _enqueue(subscriber: _Subscriber, event: SessionClosedEvent) -> None:
+    def _enqueue(subscriber: _Subscriber, event: SessionEvent) -> None:
         queue = subscriber.queue
         if queue.full():
             # Drop oldest to make room; a slow consumer misses stale events
@@ -129,4 +129,11 @@ class SessionEventBus:
 
 session_event_bus = SessionEventBus()
 
-__all__ = ["SessionClosedEvent", "SessionEventBus", "SessionEventSubscription", "session_event_bus"]
+__all__ = [
+    "SessionClosedEvent",
+    "SessionCrashedEvent",
+    "SessionEvent",
+    "SessionEventBus",
+    "SessionEventSubscription",
+    "session_event_bus",
+]

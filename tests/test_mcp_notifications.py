@@ -84,6 +84,29 @@ def test_build_notification_shutdown_reason() -> None:
     assert (root.params or {})["reason"] == "shutdown"
 
 
+def test_build_notification_for_crash_event() -> None:
+    """A SessionCrashedEvent becomes a distinct ``browser_crashed`` notification."""
+    from octowright.browser_pool.events import SessionCrashedEvent
+
+    event = SessionCrashedEvent(
+        instance_id="c1",
+        kind="chromium",
+        label="probe",
+        profile=None,
+        scope="renderer",
+        log_path="/tmp/c1.jsonl",
+    )
+    msg = _build_notification(event)
+    root = msg.message.root
+    assert isinstance(root, JSONRPCNotification)
+    assert root.method == "notifications/octowright/browser_crashed"
+    params = root.params or {}
+    assert params["instance_id"] == "c1"
+    assert params["scope"] == "renderer"
+    assert "hint" in params  # actionable: reload / relaunch
+    assert "reason" not in params  # crash event is not a close event
+
+
 # ─── run_with_notifications integration ──────────────────────────────────────
 
 
