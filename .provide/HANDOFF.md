@@ -67,24 +67,28 @@ growth) with near-trivial diffs.
       dead-PID follower is pruned when a live follower records; the live one is kept.
 - Verified on the live file: prune dropped 1 dead of 8 on-disk followers (live ones kept).
 
-### P1 — browser **crash** detection & surfacing — ⚠️ clean half DONE (2026-06-10)
-- [ ] `src/octowright/browser_pool/listeners.py` → `_wire_close_evictor` / `_evict`. The
-      `browser.on("disconnected")` path (L67) evicts and publishes `SessionClosedEvent(
-      reason="user_close")` for **both** user-close and crash (comment L110–115:
-      "Playwright cannot reliably distinguish…"). `SessionClosedEvent` already reserves
-      `external_disconnect`. Heuristic: a `disconnected` with **no preceding explicit
-      `pool.close`** (and/or a non-zero/signal process exit) = crash → publish
-      `reason="crashed"`/`external_disconnect`; stash a crash marker keyed by `instance_id`.
-- [x] DONE: `pool.get` on an externally-evicted instance now returns *"browser `<id>` ended
-      unexpectedly (closed or crashed externally) — relaunch with browser_launch"* instead of a
-      generic "no such id". `_evict_session_nowait` records dropped ids in a bounded
-      `_recently_evicted` map (an explicit agent close pops under the lock first → returns None →
-      not recorded, so it keeps the plain message). Tests in `test_browser_pool_branches.py`.
-      STILL OPEN: the bullets below (distinguishing crash vs user-close, exit-signal capture) —
-      Playwright can't reliably tell them apart (listeners.py:110), so the message honestly says
-      "closed or crashed".
-- [ ] If Octowright owns the child process, capture its exit signal (SIGTRAP/SIGSEGV) for the
-      message (`browser_pool/lifecycle.py`, `events.py`).
+### P1 — browser **crash** detection & surfacing — ✅ DONE (2026-06-10)
+Re-investigated the "Playwright can't distinguish" claim with evidence. It is true ONLY for the
+`disconnected` event in isolation — but Playwright DOES expose `page.on("crash")` (Target.crashed /
+"Aw, Snap"), which octowright wired nowhere. `Browser.process` is NOT exposed in Playwright Python,
+so the raw exit signal (SIGTRAP) genuinely can't be read — but the crash event is the reliable lever.
+- [x] DONE: wired `page.on("crash")` (initial + popups, via the `_on_page_close` pattern →
+      `session._on_page_crash`). On a crash it sets `session._crashed`, increments
+      `octowright_browser_crashed_total`, logs `octowright.browser.page_crashed`, records a recorder
+      `page_crash` marker, and publishes a **proactive** `SessionCrashedEvent(scope="renderer")` →
+      new MCP notification `notifications/octowright/browser_crashed` (with an actionable `hint`), so
+      the client learns the page died immediately — not only on its next failing tool call.
+- [x] DONE: `_evict` now upgrades the reason to `SessionClosedEvent(reason="crashed")` when a crash
+      was observed on the session (else honest `user_close`); new `"crashed"` value added to
+      `SessionCloseReason`. `pool.get` on a crashed-then-evicted instance says *"crashed (its process
+      died) — relaunch"* vs the generic *"ended unexpectedly"* (`_recently_evicted: dict[str,bool]`).
+- [x] REPRODUCED for real: `tests/test_pool_crash_live.py` (`live_browser`) launches chromium,
+      navigates to `chrome://crash`, and asserts the crash is detected + the proactive event fires.
+      Stub-based tests in `test_pool_disconnect.py` cover the evict-reason upgrade + crash message;
+      `_build_notification` crash branch in `test_mcp_notifications.py`. Full suite green (90.5% cov).
+- [ ] NOT possible via Playwright Python: capturing the child exit signal (SIGTRAP/SIGSEGV) — the
+      managed Chrome is a grandchild of the node driver and `Browser.process` is unexposed. A pure
+      hard-kill that fires NO `page.on("crash")` stays honestly `user_close` (best achievable).
 
 ### P1 — bridge in-flight resilience — REASSESSED (2026-06-10): mostly already correct
 - [~] The safe behavior is ALREADY implemented in `proxy_supervisor.py`: at-most-once with
