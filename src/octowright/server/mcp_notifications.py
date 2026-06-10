@@ -9,9 +9,14 @@ When a browser session leaves the pool (user close, agent close, shutdown), the
 emitter sends a JSON-RPC notification to the connected MCP client without
 waiting for the client to poll.
 
-Notification method:  ``notifications/octowright/session_closed``
+Notification methods:
+  * ``notifications/octowright/session_closed`` — a session left the pool.
+  * ``notifications/octowright/browser_crashed`` — a crash was observed
+    (``page.on("crash")``); the session may still be alive. Params carry
+    ``scope`` ("renderer"/"process") and an actionable ``hint`` instead of a
+    close ``reason``.
 
-Params shape::
+session_closed params shape::
 
     {
       "instance_id": "abc123",
@@ -48,7 +53,11 @@ from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 from provide.telemetry import get_logger
 
-from octowright.browser_pool.session_event_bus import SessionClosedEvent, session_event_bus
+from octowright.browser_pool.session_event_bus import (
+    SessionCrashedEvent,
+    SessionEvent,
+    session_event_bus,
+)
 
 log = get_logger(__name__)
 
@@ -58,8 +67,28 @@ log = get_logger(__name__)
 _active_session_write: Any | None = None
 
 
-def _build_notification(event: SessionClosedEvent) -> SessionMessage:
-    """Convert a pool event into a raw JSON-RPC notification frame."""
+def _build_notification(event: SessionEvent) -> SessionMessage:
+    """Convert a pool event into a raw JSON-RPC notification frame.
+
+    Two shapes: a ``SessionClosedEvent`` (the session left the pool) becomes
+    ``session_closed``; a ``SessionCrashedEvent`` (a crash was observed, session
+    may still be alive) becomes ``browser_crashed`` with an actionable hint.
+    """
+    if isinstance(event, SessionCrashedEvent):
+        crash = JSONRPCNotification(
+            jsonrpc="2.0",
+            method="notifications/octowright/browser_crashed",
+            params={
+                "instance_id": event.instance_id,
+                "kind": event.kind,
+                "label": event.label,
+                "profile": event.profile,
+                "scope": event.scope,
+                "log_path": event.log_path,
+                "hint": "the browser page crashed — reload it, or relaunch the browser with browser_launch",
+            },
+        )
+        return SessionMessage(JSONRPCMessage(root=crash))
     notification = JSONRPCNotification(
         jsonrpc="2.0",
         method="notifications/octowright/session_closed",
@@ -73,6 +102,13 @@ def _build_notification(event: SessionClosedEvent) -> SessionMessage:
         },
     )
     return SessionMessage(JSONRPCMessage(root=notification))
+
+
+def _event_detail(event: SessionEvent) -> str:
+    """Short type-agnostic descriptor for debug logs (closed reason / crash scope)."""
+    if isinstance(event, SessionCrashedEvent):
+        return f"crashed:{event.scope}"
+    return event.reason
 
 
 async def _emit_loop() -> None:
@@ -93,7 +129,7 @@ async def _emit_loop() -> None:
                 log.debug(
                     "octowright.mcp_notifications.no_session",
                     instance_id=event.instance_id,
-                    reason=event.reason,
+                    detail=_event_detail(event),
                 )
                 continue
             try:
@@ -101,7 +137,7 @@ async def _emit_loop() -> None:
                 log.debug(
                     "octowright.mcp_notifications.sent",
                     instance_id=event.instance_id,
-                    reason=event.reason,
+                    detail=_event_detail(event),
                 )
             except Exception as exc:
                 # Write failure means the transport closed; the MCP server will
@@ -110,7 +146,7 @@ async def _emit_loop() -> None:
                 log.debug(
                     "octowright.mcp_notifications.send_failed",
                     instance_id=event.instance_id,
-                    reason=event.reason,
+                    detail=_event_detail(event),
                     error=repr(exc),
                 )
 
