@@ -59,6 +59,29 @@ attributed by route/method/status_code) and exported via OTLP. The
 tests patch `defaults.HTTP_METRICS_ENABLED`) gates metric recording only —
 context propagation and log correlation stay on.
 
+## MCP server-push notifications
+
+Beyond request/response, the leader pushes JSON-RPC notifications to the connected
+MCP client (forwarded through the follower bridge unchanged). They have no `id`
+and require no reply.
+
+```
+notifications/octowright/session_closed   — a session left the pool
+  params: { instance_id, kind, label, profile, reason, log_path }
+  reason: "agent_close" | "user_close" | "external_disconnect" | "crashed" | "shutdown"
+
+notifications/octowright/browser_crashed  — a crash was observed (page.on("crash"));
+                                            the session may still be alive
+  params: { instance_id, kind, label, profile, scope, log_path, hint }
+  scope:  "renderer" | "process"
+  hint:   actionable text ("reload it, or relaunch with browser_launch")
+```
+
+`browser_crashed` fires proactively the moment the crash is seen, so a client
+learns the page died immediately rather than only on its next failing tool call;
+the subsequent `session_closed` (if the session is evicted) carries
+`reason="crashed"`.
+
 ## Write-endpoint request bodies
 
 ```

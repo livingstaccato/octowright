@@ -40,6 +40,18 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.9.0": [
+        "Crashed browsers are caught: a renderer crash (Aw, Snap) pushes a browser_crashed "
+        "notification and a clear 'crashed — relaunch' message instead of an opaque failure.",
+        "Bridge blips no longer double-run side-effectful calls: an in-flight tool call is "
+        "safely auto-resumed after a reconnect (leader-side idempotency), so a browser_launch "
+        "interrupted mid-flight resumes as one browser, not two.",
+        "Long macros don't spuriously time out: macro_run streams progress per step (which "
+        "keeps the bridge alive), and a failure tells you exactly which steps already landed.",
+        "Quieter, cleaner telemetry: the per-call OpenTelemetry error that spammed the daemon "
+        "log is gone, and HTTP metrics now export over OTLP (the /api/metrics scrape endpoint "
+        "is removed — point a collector at the process).",
+    ],
     "0.8.0": [
         "Self-healing macros: macro_repair_apply rewrites a brittle CSS selector into its "
         "semantic click_by/fill_by (from the role/label/text captured at record time) and "

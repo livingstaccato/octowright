@@ -164,8 +164,11 @@ section in the getting-started guide for worked examples.
    ```
 
 2. If health is good, retry one Octowright MCP call. The follower bridge keeps
-   the local stdio process alive, fails broken in-flight calls with explicit
-   JSON-RPC bridge errors, and reconnects later calls to the current leader.
+   the local stdio process alive and reconnects to the current leader. Since
+   v0.9.0 an interrupted in-flight `tools/call` is **safely auto-resumed** on the
+   new session (the leader dedups it via an injected idempotency key, so a
+   side-effectful call runs at most once); calls that can't be resumed still fail
+   with an explicit JSON-RPC bridge error.
 
 3. If the same client handle still fails, run the fresh-client smoke proof:
 
@@ -178,3 +181,24 @@ section in the getting-started guide for worked examples.
 
 4. Run `octowright restart` only if daemon health fails or you intentionally
    want to discard the current daemon and orphan browser state.
+
+**Tuning (v0.9.0)**
+
+These env vars adjust the bridge's timeout and resume behaviour (all have safe
+defaults — you rarely need to touch them):
+
+- `OCTOWRIGHT_BRIDGE_REQUEST_TIMEOUT_SECONDS` (default 20) — flat in-flight
+  deadline for a forwarded request. Long tools override it via per-tool floors:
+  `OCTOWRIGHT_BRIDGE_BROWSER_LAUNCH_TIMEOUT_SECONDS` (~105),
+  `OCTOWRIGHT_BRIDGE_MACRO_RUN_TIMEOUT_SECONDS` (120),
+  `OCTOWRIGHT_BRIDGE_MACRO_SEQUENCE_TIMEOUT_SECONDS` (180). A tool that streams
+  MCP progress (e.g. `macro_run`) re-arms its deadline while progress flows.
+- `OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS` (default 3) — how many times an
+  in-flight request is re-sent across reconnects before it's failed.
+- `OCTOWRIGHT_IDEMPOTENCY` (default on; `0` to disable) — the leader-side dedup
+  that makes resume safe. Disabling it restores the pre-v0.9.0 "fail the call,
+  let the agent retry" behaviour. Related cache bounds:
+  `OCTOWRIGHT_IDEMPOTENCY_TTL_SECONDS` (180),
+  `OCTOWRIGHT_IDEMPOTENCY_MAX_ENTRIES` (256),
+  `OCTOWRIGHT_IDEMPOTENCY_MAX_RESULT_BYTES` (1 MiB),
+  `OCTOWRIGHT_IDEMPOTENCY_INPROGRESS_WAIT_SECONDS` (95).
