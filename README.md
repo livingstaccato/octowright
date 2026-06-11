@@ -700,11 +700,11 @@ that JSON state file for tests or separate deployments.
 Both halves of Octowright use the `provide.telemetry` family for structured
 logging:
 
-- **Python server** uses `provide-telemetry>=0.3` (structlog under the hood).
+- **Python server** uses `provide-telemetry>=0.4.8` (structlog under the hood).
   `setup_telemetry()` is called by `octowright serve`; every module gets a
   logger via `get_logger(__name__)`. Logs land on stderr in development,
   JSON in production (auto-detected).
-- **TypeScript dashboard** uses `@provide-io/telemetry@^0.3.0` (pino under
+- **TypeScript dashboard** uses `@provide-io/telemetry@^0.4.7` (pino under
   the hood). `setupTelemetry()` runs at the top of each entrypoint;
   `getLogger('octowright.frontend.{api,tail,dashboard,session,global}')` per
   module. Logger names mirror the Python convention so log lines are easy
@@ -754,11 +754,16 @@ Signals are no-op if telemetry exporters are not configured/available.
 
 These are separate systems and can be enabled independently.
 
-### Metrics endpoint
+### HTTP metrics
 
-Octowright exposes a lightweight Prometheus-text endpoint at `GET /api/metrics`.
-It includes request totals, per-status counts, per-route counts, and per-route
-duration sum/count for the debugger/API server process. Disable with:
+HTTP request metrics for the debugger/API server are recorded through
+`provide.telemetry`'s `TelemetryMiddleware` and exported via OTLP alongside the
+rest of octowright's telemetry — RED metrics (`http.requests.total`,
+`http.errors.total`, `http.request.duration_ms`) attributed by route, method,
+and status code, plus request-id/session-id log correlation and W3C trace
+propagation. There is no separate Prometheus scrape endpoint; point an OTLP
+collector at the process to consume them. Disable metric recording (propagation
+stays on) with:
 
 ```bash
 export OCTOWRIGHT_HTTP_METRICS=0

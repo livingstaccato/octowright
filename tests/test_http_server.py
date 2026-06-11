@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -27,7 +28,6 @@ from starlette.testclient import TestClient
 
 from octowright import http as _http
 from octowright.http import lifespan as _http_lifespan
-from octowright.http import metrics as _http_metrics
 from octowright.http import state as _http_state
 from octowright.server import _state
 
@@ -95,6 +95,25 @@ def client(isolated_recordings: Path, empty_pool: dict[str, Any]) -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _reset_slo_counters() -> Iterator[None]:
+    """Isolate provide.telemetry's process-global SLO instrument registry per test.
+
+    ``build_app()`` now always installs ``TelemetryMiddleware(auto_slo=True)``, so
+    every request these tests issue records into ``provide.telemetry.slo``'s
+    process-global counters/histograms. Reset that registry around each test so the
+    SLO-reading assertions (``test_http_requests_recorded_via_telemetry`` /
+    ``test_http_metrics_can_be_disabled``) are independent of execution order and no
+    test leaks counter state into the next. Scoped to this module (not a global
+    plugin) so it only clears the narrow SLO registry, leaving the rest of the
+    telemetry runtime untouched."""
+    import provide.telemetry.slo as _slo
+
+    _slo._reset_slo_for_tests()
+    yield
+    _slo._reset_slo_for_tests()
+
+
 def _write_recording(
     rec_dir: Path,
     instance_id: str,
@@ -139,23 +158,36 @@ def test_health(client: TestClient) -> None:
     assert isinstance(body["version"], str)
 
 
-def test_metrics_endpoint_and_counters(client: TestClient) -> None:
-    _http_metrics.HTTP_METRICS = _http_metrics.HttpMetrics()
+def test_metrics_scrape_endpoint_removed(client: TestClient) -> None:
+    """The bespoke Prometheus scrape endpoint is gone — HTTP metrics now flow
+    through provide.telemetry's RED-metrics pipeline (OTLP), not a pull endpoint."""
+    assert client.get("/api/metrics").status_code == 404
+
+
+def test_http_requests_recorded_via_telemetry(client: TestClient) -> None:
+    """Each served request is observed through provide.telemetry's RED metrics
+    via TelemetryMiddleware(auto_slo=True). SLO counters are isolated per test by
+    the autouse ``_reset_slo_counters`` fixture."""
+    import provide.telemetry.slo as _slo
+
     assert client.get("/api/health").status_code == 200
-    assert client.get("/api/sessions").status_code == 200
-    r = client.get("/api/metrics")
-    assert r.status_code == 200
-    text = r.text
-    assert "octowright_http_requests_total" in text
-    assert "octowright_http_requests_by_status" in text
+    counter = _slo._counters.get("http.requests.total")
+    assert counter is not None, "TelemetryMiddleware did not record any RED metrics"
+    assert counter.value >= 1
 
 
-def test_metrics_endpoint_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_http_metrics_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With OCTOWRIGHT_HTTP_METRICS off, the toggle flips auto_slo=False so no RED
+    metrics are recorded; the app still serves (context-propagation stays on).
+    Relies on the autouse ``_reset_slo_counters`` fixture for a clean baseline."""
+    import provide.telemetry.slo as _slo
+
     from octowright import defaults as _defaults
 
     monkeypatch.setattr(_defaults, "HTTP_METRICS_ENABLED", False)
     with TestClient(_http.build_app()) as local_client:
-        assert local_client.get("/api/metrics").status_code == 404
+        assert local_client.get("/api/health").status_code == 200
+    assert _slo._counters.get("http.requests.total") is None
 
 
 def test_list_sessions_empty(client: TestClient) -> None:

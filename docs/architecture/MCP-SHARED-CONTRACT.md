@@ -49,8 +49,15 @@ GET    /api/macros/{name:path}/repair_preview    → {"original": [...], "repair
 POST   /api/macros/{name:path}/validate          → {"error_count": int, "warning_count": int, "issues": [LintIssue, ...]} for the supplied macro body. 400 if `macro` field missing/non-object.
 POST   /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
 GET    /api/health                               → {"ok": true, "version": str}
-GET    /api/metrics                               → text/plain Prometheus exposition format (counters: octowright_http_requests_total{route, status_class}; histograms: octowright_http_request_duration_seconds{route}). Only registered when `OCTOWRIGHT_HTTP_METRICS` is enabled (default on; set to `0`/`false`/`no`/`off` to disable; tests patch `defaults.HTTP_METRICS_ENABLED`). Returns 404 when disabled.
 ```
+
+HTTP request metrics are not exposed as a scrape endpoint: they are recorded
+through `provide.telemetry`'s `TelemetryMiddleware` (RED metrics
+`http.requests.total` / `http.errors.total` / `http.request.duration_ms`,
+attributed by route/method/status_code) and exported via OTLP. The
+`OCTOWRIGHT_HTTP_METRICS` toggle (default on; `0`/`false`/`no`/`off` to disable;
+tests patch `defaults.HTTP_METRICS_ENABLED`) gates metric recording only —
+context propagation and log correlation stay on.
 
 ## Write-endpoint request bodies
 

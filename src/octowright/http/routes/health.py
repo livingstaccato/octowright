@@ -8,11 +8,8 @@
 from __future__ import annotations
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import JSONResponse
 from starlette.routing import Route
-
-from octowright.http.exposure import guard_sensitive_http
-from octowright.http.metrics import HTTP_METRICS, metrics_enabled
 
 
 async def health_endpoint(_request: Request) -> JSONResponse:
@@ -28,17 +25,9 @@ async def health_endpoint(_request: Request) -> JSONResponse:
 
 
 def routes() -> list[Route]:
-    out: list[Route] = [
+    # HTTP metrics are emitted through provide.telemetry's TelemetryMiddleware
+    # (RED metrics → OTLP) in http.app, not a bespoke Prometheus scrape endpoint.
+    return [
         # intentionally unguarded — used by liveness probes / load balancers; exposes only {ok, version}
         Route("/api/health", health_endpoint, methods=["GET"]),
     ]
-    if metrics_enabled():
-        out.append(Route("/api/metrics", guard_sensitive_http(metrics_endpoint), methods=["GET"]))
-    return out
-
-
-async def metrics_endpoint(_request: Request) -> PlainTextResponse:
-    return PlainTextResponse(
-        HTTP_METRICS.render_prometheus(),
-        media_type="text/plain; version=0.0.4; charset=utf-8",
-    )

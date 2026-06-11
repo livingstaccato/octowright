@@ -19,17 +19,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from provide.telemetry import get_logger
+from provide.telemetry import TelemetryMiddleware, get_logger
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route
 
+from octowright import defaults
 from octowright.http.exposure import guard_sensitive_asgi_app, guard_sensitive_http
 from octowright.http.frontend import _frontend_routes
 from octowright.http.mcp_session_tracker import (
     McpSessionTracker,
     McpSessionTrackingMiddleware,
 )
-from octowright.http.metrics import HttpMetricsMiddleware, metrics_enabled
 from octowright.http.routes import all_routes
 from octowright.http.routes.new_tab import new_tab, otto_svg
 
@@ -103,6 +103,11 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette
     routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.octowright_http_host = host
-    if metrics_enabled():
-        app.add_middleware(HttpMetricsMiddleware)
+    # provide.telemetry's ASGI middleware handles HTTP observability uniformly with
+    # the rest of octowright: RED metrics (http.requests/errors/duration), request-id
+    # / session-id log correlation, W3C trace propagation, and cardinality-safe route
+    # normalization. Context propagation is always on; the OCTOWRIGHT_HTTP_METRICS
+    # toggle only gates the RED-metrics recording (auto_slo). Read the default live so
+    # tests patching defaults.HTTP_METRICS_ENABLED take effect without reimport.
+    app.add_middleware(TelemetryMiddleware, auto_slo=defaults.HTTP_METRICS_ENABLED)
     return app
