@@ -28,10 +28,10 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from octowright import proxy_supervisor, singleton
+from octowright import proxy_runtime, singleton
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
 from octowright.http.exposure import guard_sensitive_asgi_app, guard_sensitive_http, is_loopback_host
-from octowright.proxy_supervisor import _leader_url_is_safe, resolve_leader_url
+from octowright.proxy_runtime import _leader_url_is_safe, resolve_leader_url
 from octowright.singleton import LeaderInfo
 
 REMOTE_DISABLED_BODY = {
@@ -163,7 +163,7 @@ def test_resolve_leader_url_falls_back_when_lockfile_url_is_non_loopback(
     monkeypatch.setattr(singleton, "read_lock", lambda: info)
     monkeypatch.setattr(singleton, "is_stale", lambda _info: False)
     cap = _LogCapture()
-    monkeypatch.setattr(proxy_supervisor, "log", cap)
+    monkeypatch.setattr(proxy_runtime, "log", cap)
 
     fallback = "http://127.0.0.1:9999/mcp/"
     assert resolve_leader_url(fallback) == fallback

@@ -22,7 +22,7 @@ stream.
 from __future__ import annotations
 
 from octowright.defaults import BRIDGE_HEALTH_INTERVAL_SECONDS, BRIDGE_HEALTH_MAX_FAILURES
-from octowright.proxy_supervisor import run_supervised_proxy
+from octowright.proxy_runtime import run_supervised_proxy
 
 
 async def run_proxy(

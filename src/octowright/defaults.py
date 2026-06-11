@@ -237,6 +237,48 @@ BRIDGE_HEALTH_INTERVAL_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_HEALTH_
 BRIDGE_HEALTH_MAX_FAILURES = int(os.environ.get("OCTOWRIGHT_BRIDGE_HEALTH_MAX_FAILURES", "2"))
 BRIDGE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_BRIDGE_STATE", str(_STATE_DIR / "bridge-state.json")))
 
+# Per-tool override of the flat BRIDGE_REQUEST_TIMEOUT_SECONDS in-flight deadline,
+# keyed by MCP tool name (the ``name`` field of a ``tools/call``). Some tools run
+# legitimately longer than 20s: a browser_launch has a 90s budget
+# (BROWSER_LAUNCH_TIMEOUT_SECONDS) and a multi-step macro_run can take minutes —
+# without a larger floor the bridge returns a spurious -32000 while the leader is
+# still working, and the macro half-applies. Unlisted tools use the flat default.
+# When a tool emits MCP progress, the follower re-arms these deadlines on each
+# ping (see proxy_supervisor); the floor here covers the pre-first-progress window
+# and tools that emit no progress at all.
+BRIDGE_TOOL_TIMEOUTS: dict[str, float] = {
+    "browser_launch": float(
+        os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_LAUNCH_TIMEOUT_SECONDS", str(BROWSER_LAUNCH_TIMEOUT_SECONDS + 15))
+    ),
+    "macro_run": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_RUN_TIMEOUT_SECONDS", "120")),
+    "macro_run_sequence": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_SEQUENCE_TIMEOUT_SECONDS", "180")),
+}
+
+# Max times the follower re-sends an in-flight request on a fresh leader session
+# after a reconnect (idempotent resume). Past this it fails the request with the
+# usual retry-hint instead of resuming.
+BRIDGE_RESUME_MAX_ATTEMPTS = int(os.environ.get("OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS", "3"))
+
+# Leader-side idempotency cache. The follower injects a stable
+# ``octowrightIdempotencyKey`` into each tools/call's _meta and re-sends it
+# verbatim on resume; the leader caches the result by key so a re-sent
+# side-effectful call runs at most once instead of double-executing.
+# Inline truthy parse (matches _parse_bool_env, which is defined later in this file).
+IDEMPOTENCY_ENABLED = os.environ.get("OCTOWRIGHT_IDEMPOTENCY", "1").strip().lower() not in {"0", "false", "no", "off"}
+# TTL measured from result-store time. MUST exceed the maximum reconnect-to-resend
+# window so a DONE entry is never evicted before the bridge re-sends it:
+#   BRIDGE_RESUME_MAX_ATTEMPTS * (BRIDGE_CONNECT_TIMEOUT_SECONDS + BRIDGE_RECONNECT_MAX_SECONDS)
+#   = 3 * (10 + 5) = 45s.  Default 180s keeps a ~4x margin; keep this invariant if
+# you retune the bridge timeouts above.
+IDEMPOTENCY_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_TTL_SECONDS", "180"))
+IDEMPOTENCY_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_MAX_ENTRIES", "256"))
+# Results larger than this are not cached (a DONE-marker is stored instead so a
+# resend re-runs the cheap, idempotent read) — bounds memory for big snapshots.
+IDEMPOTENCY_MAX_RESULT_BYTES = int(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_MAX_RESULT_BYTES", "1048576"))
+# Backstop: a waiter on an in-progress entry never blocks longer than this before
+# treating it as abandoned and taking over. Just above BROWSER_LAUNCH_TIMEOUT_SECONDS.
+IDEMPOTENCY_INPROGRESS_WAIT_SECONDS = float(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", "95"))
+
 # Per-action delay applied to macros, useful for visually following execution.
 # Sleep happens AFTER pushing status to the pill and BEFORE dispatching the
 # action, so the pill reflects the upcoming action while the user gets time
@@ -337,9 +379,10 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
-# HTTP metrics middleware (Prometheus-style /api/metrics endpoint). On by
-# default; flip to 0/false/no/off to disable instrumentation in production
-# deployments where dashboard-only metric scraping isn't wanted.
+# HTTP RED metrics, recorded through provide.telemetry's TelemetryMiddleware
+# (http.requests/errors/duration → OTLP). On by default; flip to 0/false/no/off
+# to disable metric recording (auto_slo). Context propagation / log correlation
+# stay on regardless. See octowright.http.app.build_app.
 HTTP_METRICS_ENABLED = _parse_bool_env("OCTOWRIGHT_HTTP_METRICS", True)
 
 # Record-time redaction of user-typed input values in the per-session JSONL

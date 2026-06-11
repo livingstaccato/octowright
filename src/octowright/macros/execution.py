@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
@@ -302,12 +303,28 @@ def repair_apply(name: str, action_index: int) -> MacroRepairApplyResult:
     )
 
 
+async def _report_progress(ctx: Any | None, progress: float, total: float, message: str | None) -> None:
+    """Best-effort MCP progress emission for a long-running macro.
+
+    No-ops when there is no Context (direct, non-MCP callers) and never raises out
+    of macro execution — a progress hiccup must not fail the macro. When the
+    follower bridge has injected a progressToken, each notification also re-arms
+    the in-flight deadline so a steadily-progressing macro isn't killed by the
+    flat bridge timeout (see ``proxy_supervisor``).
+    """
+    if ctx is None:
+        return
+    with contextlib.suppress(Exception):
+        await ctx.report_progress(progress, total=total, message=message)
+
+
 async def run_macro(
     session: SessionLike,
     name: str,
     args: dict[str, Any] | None = None,
     *,
     slowmo_ms: int | None = None,
+    ctx: Any | None = None,
 ) -> MacroRunResult:
     with span(
         "octowright.macro.run",
@@ -315,7 +332,7 @@ async def run_macro(
         instance_id=session.instance_id,
         kind=session.kind,
     ):
-        return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms)
+        return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx)
 
 
 async def _run_macro_impl(
@@ -324,6 +341,7 @@ async def _run_macro_impl(
     args: dict[str, Any] | None,
     *,
     slowmo_ms: int | None,
+    ctx: Any | None = None,
 ) -> MacroRunResult:
     macro = load_macro(name)
     effective_args = args or {}
@@ -361,6 +379,13 @@ async def _run_macro_impl(
                 payload: dict[str, Any] = {
                     "macro": name,
                     "failed_at_step": index,
+                    # Partial-state signal: a multi-step macro that fails midway
+                    # has already applied steps 0..index-1 to the live browser.
+                    # Surface both the count and the (credential-redacted)
+                    # descriptors of what landed so the agent can reason about
+                    # the half-applied state instead of seeing an opaque error.
+                    "executed": executed,
+                    "executed_actions": [_redact_action(done) for done in actions[:index]],
                     "failed_action": redacted_action,
                     "original": repr(exc),
                     "bundle": bundle,
@@ -370,6 +395,9 @@ async def _run_macro_impl(
                 raise RuntimeError(payload) from exc
             executed += executed_count
             skipped += skipped_count
+            # Emit progress after each landed step (count up to the total). Drives
+            # the follower bridge's deadline re-arm and any client progress bar.
+            await _report_progress(ctx, index + 1, len(actions), action.get("action"))
         completed_ok = True
     finally:
         elapsed_s = time.monotonic() - macro_started
@@ -417,6 +445,7 @@ async def run_sequence(
     args_list: list[dict[str, Any]] | None = None,
     stop_on_failure: bool = True,
     slowmo_ms: int | None = None,
+    ctx: Any | None = None,
 ) -> MacroSequenceResult:
     # Wrap the whole sequence in a single parent span so the per-macro
     # ``octowright.macro.run`` spans nest underneath it in the trace tree
@@ -439,7 +468,7 @@ async def run_sequence(
         all_ok = True
         for name, step_args in zip(names, resolved_args, strict=True):
             try:
-                outcome = await run_macro(session=session, name=name, args=step_args, slowmo_ms=slowmo_ms)
+                outcome = await run_macro(session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx)
                 steps.append({**outcome, "ok": True})
             except Exception as exc:
                 all_ok = False

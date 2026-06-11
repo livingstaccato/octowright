@@ -13,7 +13,7 @@ import pytest
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCRequest, JSONRPCResponse
 
-from octowright import proxy_supervisor as supervisor
+from octowright import proxy_runtime as supervisor
 
 
 class FailingClient:
