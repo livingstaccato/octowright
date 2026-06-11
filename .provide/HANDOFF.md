@@ -90,24 +90,51 @@ so the raw exit signal (SIGTRAP) genuinely can't be read — but the crash event
       managed Chrome is a grandchild of the node driver and `Browser.process` is unexposed. A pure
       hard-kill that fires NO `page.on("crash")` stays honestly `user_close` (best achievable).
 
-### P1 — bridge in-flight resilience — REASSESSED (2026-06-10): mostly already correct
-- [~] The safe behavior is ALREADY implemented in `proxy_supervisor.py`: at-most-once with
-      retry-hint errors (`fail_all_in_flight("leader session unavailable; retry")`, watch_deadlines'
-      `"request N timed out…"`), and it **deliberately does NOT** auto-retry or span across the two
-      coroutines (comment L170–176: "easy to get wrong and hard to test deterministically"). Blind
-      in-flight retry is **UNSAFE** — a `browser_launch` whose response was lost may have already
-      executed on the leader, so retrying double-launches. The real gap is **leader-side
-      idempotency / request dedup** (so a side-effectful call can be safely re-sent after a blip) —
-      a design item, not a quick fix. Do NOT add naive client-side retry. Smoke scripts:
-      `scripts/bridge_reconnect_smoke.py`, `scripts/bridge_dead_leader_smoke.py`.
-- [ ] **Multi-action replay can exceed the bridge request timeout, and partial execution is
-      silent.** 2026-06-09: the recorded `order_brightmart` macro (carrying recorder-noise steps —
-      see macro hygiene below) `macro_run` timed out twice (`bridge error: request N timed out
-      while waiting for leader response`), half-applied (browser navigated, fill/click never
-      landed, `qty=1`), client saw only `-32000`. A hand-stripped 3-step macro then ran in **62
-      ms**, so the trigger was the inflated step list — but the bridge should still stream/extend
-      the timeout for multi-action ops and return a structured partial-result / idempotent resume
-      so a half-applied replay isn't a silent `-32000`. Single-action calls were unaffected.
+### P1 — bridge in-flight resilience — ✅ DONE (2026-06-11; plan: `.claude/plans/wiggly-chasing-kazoo.md`)
+Both halves landed on the telemetry branch, TDD throughout (27 new tests). Full non-live suite green
+(3949 passed, 90.4% cov); ruff + `mypy src/octowright` clean. Kill switch `OCTOWRIGHT_IDEMPOTENCY=0`
+restores today's fail-safe wire format + behaviour exactly.
+
+**#1 — leader-side idempotency + safe bridge resume** (was the "real gap", now closed):
+- [x] The follower injects a stable `octowrightIdempotencyKey` (`owk-<uuid4>`) into each tools/call's
+      `_meta` and stores the injected frame on the `InFlightRequest` (`proxy_supervisor._inject_meta`,
+      new InFlightRequest fields `idempotency_key`/`outgoing`/`resume_count`).
+- [x] **Leader dedup cache** — new `server/_idempotency.py` (`_idempotent_dispatch`, composed OUTSIDE
+      `_track_advisor_usage` in `_ProfiledFastMCP.tool`). Process-global, lock-guarded, TTL + LRU
+      bounded, success-only. Handles the nasty cases: IN_PROGRESS owned by a dead session →
+      **takeover**; same-session waiter → **bounded await** backstop; any exception incl.
+      `CancelledError` (the reconnect kills the old session's tool coroutine) → **evict→rerun**;
+      over-cap results → DONE-marker (dedup holds, resend re-runs). Read `_meta` key via the lowlevel
+      `request_ctx` contextvar (`RequestParams.Meta` is `extra='allow'`).
+- [x] **Bridge auto-resume** replaces the old blind-fail: on reset, `fail_or_mark_for_resume` KEEPS
+      resumable keyed requests in-flight and fails only the rest; on the next connect's success path
+      (after `replay_initialize`) `resume_in_flight` re-sends them verbatim (same id/key) on the fresh
+      session — the leader dedups, so no double-execution. Deadline re-armed on resume; bounded by
+      `BRIDGE_RESUME_MAX_ATTEMPTS` (3) then failed with the retry-hint. The old "blind retry is unsafe"
+      hazard is gone precisely because the key makes the re-send idempotent.
+- Defaults: `IDEMPOTENCY_{ENABLED,TTL_SECONDS,MAX_ENTRIES,MAX_RESULT_BYTES,INPROGRESS_WAIT_SECONDS}`,
+      `BRIDGE_RESUME_MAX_ATTEMPTS` — with the TTL>resume-window invariant commented in `defaults.py`.
+
+**#2 — multi-action replay timeout + silent partial execution** (the observed `order_brightmart` case):
+- [x] **Per-tool timeout floor** (`BRIDGE_TOOL_TIMEOUTS`, `proxy_supervisor._timeout_for`): browser_launch
+      ~105s / macro_run 120s / macro_run_sequence 180s replace the flat 20s for these tools. Also fixes
+      the latent `browser_launch` (90s) > 20s-bridge-timeout bug.
+- [x] **Progress-driven deadline extension**: `macro_run`/`macro_run_sequence` take a FastMCP `ctx`
+      (hidden from the client schema) and `ctx.report_progress` per step; the bridge injects a synthetic
+      progressToken, re-arms the in-flight deadline on each progress notification, and swallows the
+      synthetic ones (forwards client-supplied ones). A progressing macro never spuriously times out;
+      a genuinely hung one still does, at its per-tool floor.
+- [x] **Structured partial result**: a mid-macro failure payload now carries `executed` (count) +
+      `executed_actions` (credential-redacted descriptors of the steps that landed), so a half-applied
+      replay reports its state instead of an opaque `-32000`.
+- [x] **Live end-to-end smoke** — `tests/test_bridge_idempotency_live.py` (`live_browser`). Spawns a real
+      `octowright serve` (→ leader daemon), connects STRAIGHT to the leader's `/mcp/` with raw JSON-RPC,
+      and sends two `browser_launch` frames carrying the SAME `_meta.octowrightIdempotencyKey` (what a
+      resumed forward looks like on the wire): asserts the same instance + `browser_list count==1` (dedup
+      suppressed the 2nd real launch), then a different key → a 2nd browser (`count==2`). Passed (~8s, one
+      real headless chromium deduped). NOTE discovered while writing it: the follower bridge OVERWRITES any
+      client idempotency key with its own per-request key (correct — keys are bridge-owned; the same key
+      recurs only on resume), so a faithful dedup test must hit the leader directly, not via the follower.
 
 ### P1 — `browser_snapshot` times out on heavy DOMs ✅ DONE (2026-06-10)
 - [x] `inspect.py:browser_snapshot` wraps `session.snapshot()` in `asyncio.wait_for(timeout=
@@ -173,9 +200,65 @@ too, despite opening no spans).
       `opentelemetry.context._RUNTIME_CONTEXT`); plus a new async-native `provide.telemetry.span()`.
       TDD, 100% stmt+branch coverage, full suite green (2339), `make lint` green. E2E verified
       through the public `setup_telemetry()`: 50 cross-context teardowns → **0** detach logs.
-- [ ] **Octowright action: bump the `provide-telemetry` dependency** once that branch is released —
-      the storm then disappears with **no octowright code change**. The old plan to rewrite
-      `octowright._tracing.span()` is moot.
+- [x] **DONE (2026-06-11): bumped `provide-telemetry[otel]>=0.4.8`** — the fix shipped in v0.4.8, so
+      the storm disappears with no octowright code change. octowright went further and adopted the
+      library's span/metrics/middleware wholesale (see the telemetry-adoption section below). The old
+      plan to rewrite `octowright._tracing.span()` is moot.
+
+## provide.telemetry adoption + HTTP metrics migration ✅ DONE (2026-06-11)
+
+Follow-on to the P2 OTel fix: provide.telemetry shipped the cross-context-detach fix **and** new
+APIs (`span()`, `TelemetryMiddleware`) in **v0.4.8**, so octowright adopted them wholesale on branch
+`chore/adopt-provide-telemetry-tracing`.
+
+### Done
+- [x] Bumped `provide-telemetry[otel]>=0.4.8` (commit `8221c75`). Detach storm gone, no octowright
+      code change (the runtime-context guard ships in 0.4.8).
+- [x] Dropped octowright's local `span()`/`set_attrs()`/`record_exception()`/lazy `counter`/
+      `histogram`; `_tracing.py` is now a thin re-export of the **governed** provide.telemetry helpers
+      (commit `0395b46`). ~760 LOC net deleted across the branch. All ~15 `span()` call sites + the
+      metric instruments (launch / evict / crash / navigate / bridge / macro / artifact) ride the
+      library, transitively gaining the cross-context teardown guard.
+- [x] **Migrated HTTP metrics → `provide.telemetry.TelemetryMiddleware(auto_slo=…)`** (uncommitted
+      working tree). Deleted `http/metrics.py` (HttpMetrics / render_prometheus / HttpMetricsMiddleware)
+      and the bespoke `GET /api/metrics` Prometheus scrape endpoint. RED metrics
+      (`http.requests/errors/duration`) + request-id/session-id log correlation + W3C propagation +
+      cardinality-safe route normalization now flow through the library → OTLP, uniform with the rest
+      of octowright. `OCTOWRIGHT_HTTP_METRICS` now gates `auto_slo` only (context propagation stays on).
+      Docs updated (README, architecture README, MCP-SHARED-CONTRACT). Tradeoff: no collector-free
+      local scrape view anymore — point an OTLP collector at the process.
+
+### Comprehensive code review (3 parallel reviewers + adversarial verification) — all actionable items closed
+- [x] MEDIUM — global SLO state leaked across tests (the always-on middleware writes process-global
+      `slo._counters` on every HTTP test). Fixed with a module-scoped autouse `_reset_slo_counters`
+      fixture in `tests/test_http_server.py` using the narrow `slo._reset_slo_for_tests()` (not the
+      heavyweight global plugin). TDD: demonstrated RED contamination → GREEN; order-independent
+      across pytest-randomly seeds.
+- [x] LOW — stale README version strings (`>=0.3` / `^0.3.0`) → corrected to `>=0.4.8` / `^0.4.7`.
+- [~] LOW/info — **PARKED (2026-06-11): `_trace_propagation.py:186-188` `octowright.mcp.request` span
+      uses the raw tracer, skipping provide.telemetry governance** (consent → sampling → backpressure
+      → health → log-id-sync that `_open_span`/`span()` apply). **Decision: leave it on the raw
+      tracer.** Rationale — the raw tracer is the sanctioned escape hatch for manual-lifecycle spans;
+      this span MUST close early at `http.response.start` (the SSE response stays open for minutes;
+      holding the span that long floods the 2048-span batch buffer and silently drops spans), which
+      `span()`'s block scope cannot express. Pre-existing (unchanged by this branch) and intentional.
+      Impact of parking = nil unless consent/sampling gating is configured, and even then only this
+      one low-sensitivity anchor span (carries `method` + `path` only, no payload/PII) escapes
+      provide.telemetry's *extra* governance layer — it still obeys the OTel SDK's TracerProvider
+      sampler. A governed-manual API would cost footgun surface + mutation/coverage upkeep + 4-language
+      parity (or drift) for a niche gain. If ever genuinely needed: a tiny Python-only documented
+      helper — not now. **Do not re-litigate without a concrete sampled-deployment requirement.**
+
+### Verification
+- ruff + `mypy src/octowright` clean; full non-live suite **3922 passed**, coverage **90.4%** (gate 83%).
+- Pre-existing, out-of-scope: mypy flags `tests/test_http_server.py:618` (`at_times[0]` on
+  `list[float] | None` in an unrelated test helper). CI mypy only targets `src/octowright`, so test
+  files aren't type-gated — left as-is.
+
+### Branch state
+- `chore/adopt-provide-telemetry-tracing`: commits `0395b46` (adopt span/metrics) + `8221c75` (pin).
+  The HTTP-middleware migration, the SLO-reset fixture, and the README/doc fixes are **uncommitted**
+  in the working tree (left for the auto-commit flow). Not yet merged to `main`.
 
 ## Evidence artifacts (this machine, 2026-06-09)
 - daemon log: `~/.local/state/octowright/logs/octowright-daemon.log`
