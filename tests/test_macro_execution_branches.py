@@ -265,6 +265,37 @@ class TestRunMacroHappyPath:
         assert out["skipped"] == 0
 
     @pytest.mark.anyio
+    async def test_reports_mcp_progress_per_step(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """With a Context, run_macro emits one MCP progress notification per
+        executed step (counting up to the total), so the follower bridge keeps
+        a long macro alive and a client can render a progress bar."""
+        patched_runners["register"](
+            "m",
+            [
+                {"action": "click", "selector": "#a"},
+                {"action": "click", "selector": "#b"},
+                {"action": "click", "selector": "#c"},
+            ],
+        )
+        ctx = MagicMock()
+        ctx.report_progress = AsyncMock()
+        await run_macro(fake_session, "m", ctx=ctx)
+        assert ctx.report_progress.await_count == 3
+        progresses = [call.args[0] for call in ctx.report_progress.await_args_list]
+        totals = [call.kwargs["total"] for call in ctx.report_progress.await_args_list]
+        assert progresses == [1, 2, 3]
+        assert totals == [3, 3, 3]
+
+    @pytest.mark.anyio
+    async def test_no_progress_without_ctx(self, fake_session: _FakeSession, patched_runners: dict[str, Any]) -> None:
+        """A direct (non-MCP) caller passes no ctx and run_macro still works."""
+        patched_runners["register"]("m", [{"action": "click", "selector": "#a"}])
+        out = await run_macro(fake_session, "m")  # no ctx kwarg
+        assert out["executed"] == 1
+
+    @pytest.mark.anyio
     async def test_macro_name_round_trips(self, fake_session: _FakeSession, patched_runners: dict[str, Any]) -> None:
         """The 'macro' field equals the load name argument."""
         patched_runners["register"]("flow-a", [{"action": "click", "selector": "#x"}])
@@ -449,6 +480,28 @@ class TestRunMacroFailurePath:
         with pytest.raises(RuntimeError) as exc_info:
             await run_macro(fake_session, "m")
         assert exc_info.value.args[0]["failed_at_step"] == 1
+
+    @pytest.mark.anyio
+    async def test_failure_payload_reports_executed_partial_state(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """A half-applied macro reports what already landed — the executed count
+        and the redacted descriptors of the completed steps — so the agent learns
+        the partial state instead of seeing only an opaque failure."""
+        patched_runners["register"](
+            "m",
+            [
+                {"action": "click", "selector": "#a"},
+                {"action": "navigate", "url": "https://x"},
+                {"action": "click", "selector": "#never"},
+            ],
+        )
+        patched_runners["raise_on"]["navigate"] = ValueError("nav-boom")
+        with pytest.raises(RuntimeError) as exc_info:
+            await run_macro(fake_session, "m")
+        payload = exc_info.value.args[0]
+        assert payload["executed"] == 1  # only the first click landed before the failure
+        assert payload["executed_actions"] == [{"action": "click", "selector": "#a"}]
 
 
 # ─── credential redaction ───────────────────────────────────────────────────
