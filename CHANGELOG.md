@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-06-11
+
+### Added
+- **Browser crash detection** — Playwright's `page.on('crash')` (renderer
+  "Aw, Snap" / `Target.crashed`) is now wired. The session is marked crashed, a
+  proactive `notifications/octowright/browser_crashed` notification fires
+  (carrying `instance_id`, `kind`, `scope`, `log_path`, and an actionable
+  `hint`), eviction reports `reason="crashed"`, and a later tool call on a
+  crashed instance says "crashed (its process died) — relaunch" instead of an
+  opaque failure. A pure hard-kill that fires no crash event still reads as a
+  normal external close (Playwright Python can't read the child exit signal).
+- **Idempotent bridge resume** — the follower injects a stable
+  `octowrightIdempotencyKey` into each `tools/call` and re-sends it verbatim
+  after a reconnect; a new leader-side dedup cache (TTL + size bounded,
+  success-only, with dead-session takeover and a bounded await) makes the
+  re-sent call a no-op instead of double-executing a side-effectful tool. The
+  bridge now auto-resumes in-flight requests (bounded by
+  `OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS`, default 3) rather than failing them.
+  Disable with `OCTOWRIGHT_IDEMPOTENCY=0` to restore the prior fail-safe.
+- **Per-tool bridge timeouts + macro progress** — long tools no longer hit the
+  flat 20s in-flight deadline. A per-tool floor (`BRIDGE_TOOL_TIMEOUTS`:
+  browser_launch ~105s, macro_run 120s, macro_run_sequence 180s; env-overridable)
+  replaces the flat default, and `macro_run` / `macro_run_sequence` stream MCP
+  progress per step, which re-arms the deadline while progress flows. A mid-macro
+  failure now reports `executed` + `executed_actions` so a half-applied replay
+  shows exactly what landed.
+- **`browser_snapshot` heavy-DOM degrade** — a snapshot that would exceed
+  `OCTOWRIGHT_SNAPSHOT_TIMEOUT_SECONDS` (12s, kept below the bridge timeout)
+  returns a typed `{snapshot_timed_out, hint}` pointing at
+  `browser_read_markdown` / a scoped selector instead of hanging until the
+  transport gives up.
+
+### Changed
+- **Telemetry now flows through `provide.telemetry` ≥ 0.4.8** — Octowright
+  dropped its local `span()` / metrics helpers for the library's governed
+  equivalents (consent / sampling / backpressure), which also fixes the per-call
+  OpenTelemetry cross-context detach error that previously spammed the daemon
+  log on every tool call. HTTP request metrics moved to the library's
+  `TelemetryMiddleware` (RED metrics + request-id / W3C trace propagation +
+  cardinality-safe routes), exported over OTLP. `OCTOWRIGHT_HTTP_METRICS` now
+  gates metric recording only; context propagation stays on.
+- **Saved macros no longer bake in recorder noise** — passive recorder events
+  (`user_navigation`, console, websocket, markdown-cache, etc.) are stripped at
+  `macro_save`, so replays carry only the intentional steps.
+
+### Removed
+- **Bespoke `/api/metrics` Prometheus scrape endpoint** — HTTP metrics now flow
+  through `provide.telemetry` → OTLP, uniform with the rest of Octowright's
+  telemetry. Point an OTLP collector at the process instead of scraping.
+  **Breaking** for anyone scraping the old endpoint.
+
+### Fixed
+- **Bridge-state / followers registry bounded** — `bridge-state.json` no longer
+  accumulates stale per-PID follower snapshots (dead PIDs are pruned), and
+  `octowright_status` caps the exposed followers/events so the payload can't blow
+  past the MCP client's tool-result limit (a 242 KB status once made the call
+  unusable).
+- **Macro progress-pill locator collision** — the in-page status pill now renders
+  in a closed shadow root, so its echoed action text (e.g. "… | click_by
+  text=Place order") no longer doubles a `get_by_text(...)` match and breaks the
+  macro's own replay.
+- **"Died vs never existed" messaging** — `pool.get` on an instance that was
+  evicted (crashed or closed externally) now reports that it ended unexpectedly
+  and to relaunch, distinct from a never-launched id.
+
 ## [0.8.0] - 2026-06-09
 
 ### Added
@@ -400,6 +465,7 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
+[0.9.0]: https://github.com/livingstaccato/octowright/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/livingstaccato/octowright/compare/v0.7.0...v0.8.0
 [0.5.0]: https://github.com/livingstaccato/octowright/compare/v0.3.0...v0.5.0
 [0.3.0]: https://github.com/livingstaccato/octowright/releases/tag/v0.3.0
