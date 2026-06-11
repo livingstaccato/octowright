@@ -1,5 +1,15 @@
 # Reliable MCP Follower Bridge Design
 
+> **Status update (2026-06-11, v0.9.0):** the original "fail fast, recover for the
+> next call" design below shipped. Its key constraint — *the bridge must not
+> replay non-idempotent in-flight tool calls automatically* — has since been
+> **superseded by leader-side idempotency**: the follower now injects a stable
+> `octowrightIdempotencyKey` into each `tools/call` and the leader dedups a
+> re-sent call, so the bridge **does** auto-resume in-flight requests after a
+> reconnect without double-executing (bounded by `OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS`;
+> disable with `OCTOWRIGHT_IDEMPOTENCY=0`). See the v0.9.0 CHANGELOG entry and
+> `src/octowright/server/_idempotency.py`.
+
 ## Problem
 
 Octowright currently uses a singleton leader plus stdio follower bridge. The
@@ -115,6 +125,9 @@ message should name the bridge layer and say that the remote leader session was
 reset.
 
 The bridge must not replay non-idempotent in-flight tool calls automatically.
+*(Superseded in v0.9.0: in-flight `tools/call` requests now carry an idempotency
+key and the leader dedups a re-send, so the bridge safely auto-resumes them — see
+the status note at the top.)*
 
 ### Notifications
 
