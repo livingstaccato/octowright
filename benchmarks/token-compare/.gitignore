@@ -1,0 +1,9 @@
+# Playwright MCP runtime artifacts (snapshot YAML dumps, console logs)
+.playwright-mcp/
+
+# Python / tooling
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store

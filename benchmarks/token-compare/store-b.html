@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>BrightMart</title>
+<style>
+ body{font:16px system-ui;margin:24px;max-width:520px} h1{font-size:22px}
+ .product{border:1px solid #ccc;border-radius:8px;padding:16px;margin:12px 0}
+ .name{font-weight:600;font-size:18px} .price{margin-top:6px} .desc{color:#333;margin-top:6px}
+ form{margin-top:20px;padding:16px;border:1px solid #ccc;border-radius:8px}
+ label{display:block;margin:8px 0 4px} input{padding:6px 8px;font-size:15px;width:120px}
+ button{margin-top:12px;padding:8px 16px} #msg{margin-top:12px;font-weight:600;color:#0a7d33}
+</style></head><body>
+<h1>BrightMart</h1>
+<div class="product">
+ <div class="name">Aurora Desk Lamp</div>
+ <div class="price">Price: <b id="price">$39.50</b></div>
+ <div class="desc">Warm-dimmable LED desk lamp with USB-C.</div>
+</div>
+<form id="order" onsubmit="placeOrder(event)"><h2>Buy</h2>
+ <label for="qty">Quantity</label><input id="qty" name="qty" type="number" value="1" min="1">
+ <button type="submit">Place order</button><div id="msg" role="status"></div></form>
+<script>
+function placeOrder(ev){ev.preventDefault();
+ const q=document.getElementById('qty').value;
+ document.getElementById('msg').textContent=`Order placed: ${q} × Aurora Desk Lamp`;}
+</script></body></html>

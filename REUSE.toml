@@ -13,6 +13,7 @@ path = [
   "MCP-SHARED-CONTRACT.md",
   "Makefile",
   "README.md",
+  "benchmarks/**",
   "commitlint.config.js",
   "docs/**",
   "examples/**",
