@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp.server.fastmcp import Context
+
 import octowright.macros as macro_mod
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.mcp_types import (
@@ -138,9 +140,13 @@ async def macro_run(
     name: str,
     args: dict[str, Any] | None = None,
     slowmo_ms: int | None = None,
+    ctx: Context | None = None,
 ) -> MacroRunResult:
+    # ``ctx`` is injected by FastMCP (excluded from the client-facing schema). It
+    # lets a long macro stream MCP progress per step, which the follower bridge
+    # uses to keep the call alive past the flat request timeout.
     session = pool.get(instance_id)
-    return await macro_mod.run_macro(session=session, name=name, args=args, slowmo_ms=slowmo_ms)
+    return await macro_mod.run_macro(session=session, name=name, args=args, slowmo_ms=slowmo_ms, ctx=ctx)
 
 
 @mcp.tool(structured_output=False, description="Delete a saved macro by name. Raises if the macro does not exist.")
@@ -165,7 +171,10 @@ async def macro_run_sequence(
     args_list: list[dict[str, Any]] | None = None,
     stop_on_failure: bool = True,
     slowmo_ms: int | None = None,
+    ctx: Context | None = None,
 ) -> MacroSequenceResult:
+    # ``ctx`` (FastMCP-injected, hidden from the client schema) streams per-step
+    # progress through the inner macros so a long sequence keeps the bridge alive.
     session = pool.get(instance_id)
     return await macro_mod.run_sequence(
         session=session,
@@ -173,6 +182,7 @@ async def macro_run_sequence(
         args_list=args_list,
         stop_on_failure=stop_on_failure,
         slowmo_ms=slowmo_ms,
+        ctx=ctx,
     )
 
 

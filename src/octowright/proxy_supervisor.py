@@ -6,29 +6,19 @@
 from __future__ import annotations
 
 import itertools
-import math
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 import anyio
-import httpx
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
 from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 from provide.telemetry import get_logger
 
-from octowright import bridge_state, singleton
-from octowright._trace_propagation import tracing_httpx_client_factory
+from octowright import defaults
 from octowright._tracing import counter, histogram, span
-from octowright.defaults import (
-    BRIDGE_CONNECT_TIMEOUT_SECONDS,
-    BRIDGE_RECONNECT_MAX_SECONDS,
-    BRIDGE_REQUEST_TIMEOUT_SECONDS,
-    BRIDGE_STATE_PATH,
-)
+from octowright.defaults import BRIDGE_TOOL_TIMEOUTS
 
 _BRIDGE_RECONNECT = counter(
     "octowright_bridge_reconnect_total",
@@ -42,6 +32,10 @@ _BRIDGE_RPC_DURATION = histogram(
     "octowright_bridge_rpc_duration_seconds",
     description="End-to-end follower→leader→follower RPC latency, labelled by method and outcome",
     unit="s",
+)
+_BRIDGE_RESUME = counter(
+    "octowright_bridge_resume_total",
+    description="In-flight requests re-sent to the leader after a reconnect (idempotent resume)",
 )
 
 BRIDGE_ERROR_CODE = -32000
@@ -91,6 +85,22 @@ def message_method(message: SessionMessage) -> str | None:
     return None
 
 
+def message_tool_name(message: SessionMessage) -> str | None:
+    """Return the tool name of a ``tools/call`` request (its ``params.name``), else None.
+
+    Lets the bridge apply a per-tool in-flight deadline: the JSON-RPC ``method`` is
+    always ``tools/call``, so the discriminating identity is the tool name in params.
+    """
+    root = message_root(message)
+    if isinstance(root, JSONRPCRequest) and root.method == "tools/call":
+        params = root.params
+        if isinstance(params, dict):
+            name = params.get("name")
+            if isinstance(name, str):
+                return name
+    return None
+
+
 def is_request(message: SessionMessage) -> bool:
     return isinstance(message_root(message), JSONRPCRequest)
 
@@ -120,6 +130,22 @@ class InFlightRequest:
     method: str | None
     started_at: float
     deadline: float
+    # Per-tool deadline budget, re-applied whenever a progress notification
+    # re-arms the deadline (see ``_rearm_deadline``).
+    timeout: float = 0.0
+    # progressToken (client-supplied or bridge-synthetic) tied to this request so
+    # a leader progress notification can be matched back to re-arm the deadline.
+    progress_token: Any = None
+    # The exact frame forwarded to the leader, with bridge ``_meta`` injected
+    # (progressToken + idempotency key). Stored so a reconnect can re-send it
+    # verbatim — same id, same token, same key — for safe resume.
+    outgoing: SessionMessage | None = None
+    # Stable per-request idempotency key (``owk-<uuid4>``) injected into _meta and
+    # reused on every resume so the leader dedups a re-sent side-effectful call.
+    idempotency_key: str | None = None
+    # Number of times this request has been re-sent on a fresh leader session
+    # after a reconnect; bounded by BRIDGE_RESUME_MAX_ATTEMPTS.
+    resume_count: int = 0
     # Guards against the watchdog and the remote reader both popping the
     # same id concurrently — without this, a response arriving in the same
     # asyncio tick as deadline expiry produces two outbound frames for one
@@ -146,6 +172,13 @@ class BridgeSupervisor:
         # the local client already got its initialize response on the first try.
         self._replay_id_counter = itertools.count(1)
         self._internal_replay_ids: set[str | int] = set()
+        # Progress-token bookkeeping: every in-flight progressToken (client or
+        # bridge-synthetic) maps to its request id so a leader progress
+        # notification re-arms the right deadline; the synthetic subset is also
+        # swallowed (never forwarded), since the client never asked for it.
+        self._progress_tokens: dict[Any, str | int] = {}
+        self._synthetic_progress_tokens: set[Any] = set()
+        self._progress_token_counter = itertools.count(1)
         self.request_timeouts = 0
         self.last_error: str | None = None
         self.remote_session_id: str | None = None
@@ -178,26 +211,119 @@ class BridgeSupervisor:
             self.track_local_message(message)
             _BRIDGE_RPC.add(1, attributes={"method": method})
             try:
-                await remote_write.send(message)
+                await remote_write.send(self._outgoing_frame(request_id, message))
             except Exception as exc:
-                # If the failed send was a notification we have nowhere to
-                # return an error to — log so a missing `notifications/*`
-                # round-trip (e.g. notifications/initialized after reconnect)
-                # is at least visible in post-mortem.
-                if not (is_request(message) and request_id is not None):
-                    log.debug(
-                        "octowright.bridge.notification_drop",
-                        method=method,
-                        error=repr(exc),
-                    )
-                # Only clear the slot if it still holds the writer we just
-                # tried to send through. During the await above the remote
-                # supervisor can reconnect and swap in a fresh writer; an
-                # unconditional clear here would nuke that valid new writer
-                # based on the failure of the old one.
-                if remote_write_slot.write is remote_write:
-                    remote_write_slot.write = None
-                await self.fail_all_in_flight("leader session unavailable; retry")
+                await self._handle_forward_failure(message, request_id, method, remote_write, remote_write_slot, exc)
+
+    def _outgoing_frame(self, request_id: str | int | None, message: SessionMessage) -> SessionMessage:
+        """The frame to forward: the tracked one (bridge ``_meta`` injected) when
+        this is a tracked request, else the original (notifications)."""
+        if request_id is not None:
+            tracked = self._in_flight.get(request_id)
+            if tracked is not None and tracked.outgoing is not None:
+                return tracked.outgoing
+        return message
+
+    async def _handle_forward_failure(
+        self,
+        message: SessionMessage,
+        request_id: str | int | None,
+        method: str,
+        remote_write: Any,
+        remote_write_slot: _RemoteWriteSlot,
+        exc: Exception,
+    ) -> None:
+        """A failed outbound send: log a dropped notification, drop the stale writer
+        (only if unchanged), and fail/resume the in-flight requests."""
+        # A failed notification has nowhere to return an error — log it so a missing
+        # notifications/* round-trip (e.g. notifications/initialized after reconnect)
+        # is at least visible in post-mortem.
+        if not (is_request(message) and request_id is not None):
+            log.debug("octowright.bridge.notification_drop", method=method, error=repr(exc))
+        # Only clear the slot if it still holds the writer we just tried to send
+        # through: the remote supervisor may have reconnected and swapped in a fresh
+        # writer during the await, and an unconditional clear would nuke it.
+        if remote_write_slot.write is remote_write:
+            remote_write_slot.write = None
+        # Keep resumable keyed requests in-flight (the reconnect re-sends them); fail
+        # only the non-resumable ones, so one send failure doesn't nuke unrelated work.
+        await self.fail_or_mark_for_resume("leader session unavailable; retry")
+
+    def _timeout_for(self, message: SessionMessage) -> float:
+        """In-flight deadline budget for ``message``.
+
+        Long-running tools (browser_launch, macro_run) get a larger floor from
+        ``BRIDGE_TOOL_TIMEOUTS`` so they don't hit the flat request timeout while
+        the leader is still working; everything else uses the flat default the
+        supervisor was constructed with.
+        """
+        tool = message_tool_name(message)
+        if tool is not None:
+            return BRIDGE_TOOL_TIMEOUTS.get(tool, self.request_timeout_seconds)
+        return self.request_timeout_seconds
+
+    def _inject_meta(self, message: SessionMessage, request_id: str | int) -> tuple[Any, str | None, SessionMessage]:
+        """Rewrite an outgoing ``tools/call`` _meta; return
+        ``(progress_token, idempotency_key, outgoing_message)``.
+
+        Two injections:
+        - **idempotency key** (``owk-<uuid4>``) — always added, stable per logical
+          request, reused verbatim on resume so the leader can dedup a re-sent
+          side-effectful call instead of double-running it.
+        - **progressToken** — the client's is kept (and its progress forwarded);
+          otherwise a synthetic one is injected so the leader streams progress we
+          use only to re-arm the deadline, swallowing it on the way back.
+        """
+        root = message_root(message)
+        if not isinstance(root, JSONRPCRequest):
+            return None, None, message
+        params = dict(root.params) if isinstance(root.params, dict) else {}
+        meta = dict(params.get("_meta") or {})
+        # Idempotency key only when enabled, so the kill switch restores today's
+        # exact wire format. The progressToken below is independent of idempotency.
+        key: str | None = None
+        if defaults.IDEMPOTENCY_ENABLED:
+            key = f"owk-{uuid4().hex}"
+            meta["octowrightIdempotencyKey"] = key
+        client_token = meta.get("progressToken")
+        if client_token is not None:
+            token = client_token
+            self._progress_tokens[client_token] = request_id
+        else:
+            token = f"owpt-{request_id}-{next(self._progress_token_counter)}"
+            self._synthetic_progress_tokens.add(token)
+            self._progress_tokens[token] = request_id
+            meta["progressToken"] = token
+        params["_meta"] = meta
+        new_root = root.model_copy(update={"params": params})
+        return token, key, SessionMessage(JSONRPCMessage(root=new_root))
+
+    def _progress_token_of(self, message: SessionMessage) -> Any:
+        """The progressToken of a ``notifications/progress`` frame, else None."""
+        root = message_root(message)
+        if isinstance(root, JSONRPCNotification) and root.method == "notifications/progress":
+            params = root.params
+            if isinstance(params, dict):
+                return params.get("progressToken")
+        return None
+
+    def _rearm_deadline(self, token: Any) -> None:
+        """Push out the deadline of the request owning ``token`` — progress means
+        the op is alive, so it shouldn't be killed by the flat timeout."""
+        request_id = self._progress_tokens.get(token)
+        if request_id is None:
+            return
+        in_flight = self._in_flight.get(request_id)
+        if in_flight is not None and not in_flight.responded:
+            in_flight.deadline = time.monotonic() + (in_flight.timeout or self.request_timeout_seconds)
+
+    def _discard_progress_token(self, in_flight: InFlightRequest) -> None:
+        """Drop a finished request's progressToken bookkeeping so the maps don't
+        grow without bound over a long-lived follower."""
+        token = in_flight.progress_token
+        if token is not None:
+            self._progress_tokens.pop(token, None)
+            self._synthetic_progress_tokens.discard(token)
 
     def track_local_message(self, message: SessionMessage) -> None:
         request_id = message_request_id(message)
@@ -205,11 +331,25 @@ class BridgeSupervisor:
             self._initialize_message = message
         if is_request(message) and request_id is not None:
             now = time.monotonic()
+            timeout = self._timeout_for(message)
+            progress_token: Any = None
+            idempotency_key: str | None = None
+            outgoing = message
+            # tools/call frames get bridge _meta injected (a progressToken so the
+            # leader streams progress that re-arms the deadline, and an idempotency
+            # key so a re-sent call dedups). The injected frame is stored as
+            # ``outgoing`` so a reconnect can re-send it verbatim.
+            if message_tool_name(message) is not None:
+                progress_token, idempotency_key, outgoing = self._inject_meta(message, request_id)
             self._in_flight[request_id] = InFlightRequest(
                 request_id=request_id,
                 method=message_method(message),
                 started_at=now,
-                deadline=now + self.request_timeout_seconds,
+                deadline=now + timeout,
+                timeout=timeout,
+                progress_token=progress_token,
+                idempotency_key=idempotency_key,
+                outgoing=outgoing,
             )
 
     async def replay_initialize(self, remote_write: Any) -> None:
@@ -225,6 +365,16 @@ class BridgeSupervisor:
         await remote_write.send(replay_message)
 
     async def forward_remote_message(self, message: SessionMessage) -> None:
+        progress_token = self._progress_token_of(message)
+        if progress_token is not None:
+            # Progress means the op is alive: re-arm its deadline. A bridge-
+            # synthetic token is swallowed (the client never asked for it); a
+            # client-supplied token is forwarded through unchanged.
+            self._rearm_deadline(progress_token)
+            if progress_token in self._synthetic_progress_tokens:
+                return
+            await self.local_write.send(message)
+            return
         request_id = message_request_id(message)
         if request_id is not None and request_id in self._internal_replay_ids:
             # Bridge-internal initialize replay: the local client has already
@@ -238,6 +388,7 @@ class BridgeSupervisor:
                 if in_flight.responded:
                     return
                 in_flight.responded = True
+                self._discard_progress_token(in_flight)
                 # End-to-end RPC latency: from when the follower forwarded
                 # the request to when the matching response arrived from
                 # the leader. Outcome label distinguishes success
@@ -260,6 +411,7 @@ class BridgeSupervisor:
                 if current is None or current.responded:
                     continue
                 current.responded = True
+                self._discard_progress_token(current)
                 self.request_timeouts += 1
                 self.last_error = f"request {current.request_id!r} timed out while waiting for leader response"
                 # Record the full timeout duration so dashboards see the
@@ -281,228 +433,60 @@ class BridgeSupervisor:
             if item.responded:
                 continue
             item.responded = True
+            self._discard_progress_token(item)
             _BRIDGE_RPC_DURATION.record(
                 now - item.started_at,
                 attributes={"method": item.method or "unknown", "outcome": "failure"},
             )
             await self.local_write.send(bridge_error(item.request_id, reason))
 
-
-def resolve_leader_url(fallback_url: str) -> str:
-    info = singleton.read_lock()
-    if info is not None and not singleton.is_stale(info):
-        if _leader_url_is_safe(info.mcp_url):
-            return info.mcp_url
-        log.warning(
-            "octowright.bridge.leader_url_rejected",
-            mcp_url=info.mcp_url,
-            reason="non-loopback host without OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1",
+    def _is_resumable(self, item: InFlightRequest) -> bool:
+        """A keyed tools/call with resume budget left can be safely re-sent: the
+        leader dedups on its idempotency key, so a re-send won't double-execute."""
+        return (
+            defaults.IDEMPOTENCY_ENABLED
+            and item.idempotency_key is not None
+            and item.outgoing is not None
+            and item.resume_count < defaults.BRIDGE_RESUME_MAX_ATTEMPTS
         )
-    return fallback_url
 
+    async def fail_or_mark_for_resume(self, reason: str) -> None:
+        """On a connection reset: keep resumable keyed requests in-flight (the
+        success path re-sends them on the fresh session) and fail the rest with the
+        retry-hint. With idempotency disabled, nothing is resumable so this degrades
+        to failing everything — today's fail-safe behaviour.
+        """
+        self.last_error = reason
+        now = time.monotonic()
+        for item in list(self._in_flight.values()):
+            if item.responded or self._is_resumable(item):
+                continue  # resumable ones stay in-flight for resume_in_flight()
+            item.responded = True
+            self._discard_progress_token(item)
+            self._in_flight.pop(item.request_id, None)
+            _BRIDGE_RPC_DURATION.record(
+                now - item.started_at,
+                attributes={"method": item.method or "unknown", "outcome": "failure"},
+            )
+            await self.local_write.send(bridge_error(item.request_id, reason))
 
-def _leader_url_is_safe(mcp_url: str) -> bool:
-    """Refuse to bridge to a leader URL whose host isn't loopback.
-
-    The lockfile is writable by any process running as the same user — a
-    malicious local process (poisoned pip install, sandbox escape, etc.)
-    could overwrite ``mcp_url`` to redirect MCP traffic (including persona
-    credentials substituted into tool args) to an attacker-controlled URL.
-    Validate the host before opening the stream; allow remote URLs only
-    when the operator has explicitly opted in via the env flag the HTTP
-    layer already uses for the same trust boundary.
-    """
-    # Import lazily — http.exposure is a separate layer; we only want the
-    # host classifier, not the full HTTP guard machinery.
-    from urllib.parse import urlparse
-
-    from octowright.http.exposure import is_loopback_host, remote_dashboard_allowed
-
-    try:
-        host = urlparse(mcp_url).hostname
-    except ValueError:
-        return False
-    if host is None:
-        return False
-    return is_loopback_host(host) or remote_dashboard_allowed()
-
-
-def reconnect_delay(attempt: int, *, max_delay: float) -> float:
-    if attempt >= 4:
-        return max_delay
-    base = 0.25 * (2**attempt)
-    return min(base, max_delay)
-
-
-async def monitor_leader_health(
-    cancel_scope: anyio.CancelScope,
-    health_url: str,
-    interval: float,
-    max_failures: int,
-    on_failure: Callable[[], None] | None = None,
-) -> None:
-    failures = 0
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        while True:
-            await anyio.sleep(interval)
-            try:
-                response = await client.get(health_url)
-                ok = response.status_code == 200
-            except (httpx.HTTPError, OSError):
-                ok = False
-            if ok:
-                failures = 0
+    async def resume_in_flight(self, remote_write: Any) -> None:
+        """Re-send still-in-flight resumable requests on a freshly-reconnected
+        session, re-arming each deadline. The leader dedups on the idempotency key,
+        so a re-sent side-effectful call returns its cached result instead of
+        running twice. Called on the success path right after ``replay_initialize``.
+        """
+        now = time.monotonic()
+        for item in list(self._in_flight.values()):
+            if item.responded or not self._is_resumable(item) or item.outgoing is None:
                 continue
-            failures += 1
-            if failures >= max_failures:
-                if on_failure is not None:
-                    on_failure()
-                cancel_scope.cancel()
+            item.resume_count += 1
+            item.deadline = now + (item.timeout or self.request_timeout_seconds)
+            _BRIDGE_RESUME.add(1, attributes={"method": item.method or "unknown"})
+            try:
+                await remote_write.send(item.outgoing)
+            except Exception as exc:
+                # The fresh session died again mid-resume; leave it in-flight for the
+                # next reconnect cycle (or eventual budget exhaustion).
+                log.debug("octowright.bridge.resume_failed", request_id=item.request_id, error=repr(exc))
                 return
-
-
-async def leader_health_alive(health_url: str) -> bool:
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        try:
-            response = await client.get(health_url)
-        except (httpx.HTTPError, OSError):
-            return False
-    return response.status_code == 200
-
-
-async def run_supervised_proxy(
-    *,
-    leader_mcp_url: str,
-    health_url: str | None = None,
-    heartbeat_interval: float = 10.0,
-    heartbeat_max_failures: int = 3,
-) -> None:
-    async with stdio_server() as (local_read, local_write):
-        supervisor_obj = BridgeSupervisor(
-            local_read=local_read,
-            local_write=local_write,
-            request_timeout_seconds=BRIDGE_REQUEST_TIMEOUT_SECONDS,
-        )
-        async with anyio.create_task_group() as local_tg:
-            remote_write_slot = _RemoteWriteSlot()
-            remote_reset_slot = _RemoteResetSlot()
-            leader_health_failed = False
-
-            def _mark_leader_health_failed() -> None:
-                nonlocal leader_health_failed
-                leader_health_failed = True
-
-            async def _local_forwarder() -> None:
-                async for message in local_read:
-                    await supervisor_obj.forward_one_local_message(message, remote_write_slot)
-                local_tg.cancel_scope.cancel()
-
-            async def _remote_supervisor() -> None:
-                attempt = 0
-                # Build the tracing httpx factory once; it's a closure with no
-                # per-connection state, so reusing it across reconnects avoids
-                # an allocation per attempt.
-                httpx_factory = tracing_httpx_client_factory()
-                while True:
-                    remote_url = resolve_leader_url(leader_mcp_url)
-                    # Use async with (not manual __aenter__/__aexit__) so the
-                    # context manager's async generator is entered and exited
-                    # in the same coroutine. Python 3.13 finalizes abandoned
-                    # async generators in a separate asyncio task; anyio cancel
-                    # scopes cannot span task boundaries, producing
-                    # "Attempted to exit cancel scope in a different task" on
-                    # teardown when __aexit__ was called manually.
-                    # CancelScope + deadline scopes the timeout to the connect
-                    # handshake only: once inside the async with block the
-                    # deadline is extended to infinity so the read loop is
-                    # unconstrained and long-running sessions aren't killed.
-                    try:
-                        _connect_scope = anyio.CancelScope(
-                            deadline=anyio.current_time() + BRIDGE_CONNECT_TIMEOUT_SECONDS
-                        )
-                        with _connect_scope:
-                            async with streamablehttp_client(
-                                remote_url,
-                                httpx_client_factory=httpx_factory,
-                            ) as (remote_read, remote_write, get_sid):
-                                _connect_scope.deadline = math.inf
-                                remote_write_slot.write = remote_write
-                                try:
-                                    supervisor_obj.remote_session_id = get_sid()
-                                except Exception as exc:
-                                    # get_sid() may not be implemented on every
-                                    # transport; log so bridge diagnostics aren't
-                                    # silently misleading when the field is null.
-                                    log.debug("octowright.bridge.get_sid_failed", error=repr(exc))
-                                    supervisor_obj.remote_session_id = None
-                                supervisor_obj.reconnect_attempts = attempt
-                                bridge_state.record_snapshot(
-                                    path=BRIDGE_STATE_PATH,
-                                    follower_pid=__import__("os").getpid(),
-                                    remote_url=remote_url,
-                                    remote_session_id=supervisor_obj.remote_session_id,
-                                    last_error=supervisor_obj.last_error,
-                                    in_flight=supervisor_obj.in_flight_count,
-                                    reconnect_attempts=supervisor_obj.reconnect_attempts,
-                                    request_timeouts=supervisor_obj.request_timeouts,
-                                )
-                                await supervisor_obj.replay_initialize(remote_write)
-                                attempt = 0
-                                async with anyio.create_task_group() as remote_tg:
-                                    remote_reset_slot.cancel_scope = remote_tg.cancel_scope
-
-                                    async def _remote_reader(reader: Any = remote_read) -> None:
-                                        try:
-                                            async for message in reader:
-                                                if isinstance(message, Exception):
-                                                    raise message
-                                                await supervisor_obj.forward_remote_message(message)
-                                        finally:
-                                            remote_tg.cancel_scope.cancel()
-
-                                    remote_tg.start_soon(_remote_reader)
-                                remote_reset_slot.cancel_scope = None
-                        if _connect_scope.cancelled_caught:
-                            raise TimeoutError(
-                                f"connection to {remote_url!r} timed out after {BRIDGE_CONNECT_TIMEOUT_SECONDS}s"
-                            )
-                        if health_url is not None and not await leader_health_alive(health_url):
-                            _mark_leader_health_failed()
-                            local_tg.cancel_scope.cancel()
-                            return
-                    except Exception as exc:
-                        remote_write_slot.write = None
-                        _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
-                        await supervisor_obj.fail_all_in_flight(f"remote leader session reset: {exc!r}")
-                        supervisor_obj.last_error = repr(exc)
-                        bridge_state.record_snapshot(
-                            path=BRIDGE_STATE_PATH,
-                            follower_pid=__import__("os").getpid(),
-                            remote_url=remote_url,
-                            remote_session_id=supervisor_obj.remote_session_id,
-                            last_error=supervisor_obj.last_error,
-                            in_flight=supervisor_obj.in_flight_count,
-                            reconnect_attempts=attempt,
-                            request_timeouts=supervisor_obj.request_timeouts,
-                        )
-                        if health_url is not None and not await leader_health_alive(health_url):
-                            _mark_leader_health_failed()
-                            local_tg.cancel_scope.cancel()
-                            return
-                        await anyio.sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
-                        attempt += 1
-
-            local_tg.start_soon(_local_forwarder)
-            local_tg.start_soon(_remote_supervisor)
-            local_tg.start_soon(supervisor_obj.watch_deadlines, 0.1, remote_reset_slot)
-            if health_url is not None:
-                local_tg.start_soon(
-                    monitor_leader_health,
-                    local_tg.cancel_scope,
-                    health_url,
-                    heartbeat_interval,
-                    heartbeat_max_failures,
-                    _mark_leader_health_failed,
-                )
-        if leader_health_failed:
-            raise RuntimeError("leader health check failed")
