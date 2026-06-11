@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Acme Portal</title>
+<style>
+ body{font:16px system-ui;margin:24px;max-width:480px} h1{font-size:22px}
+ form{padding:16px;border:1px solid #ccc;border-radius:8px}
+ label{display:block;margin:8px 0 4px} input{padding:6px 8px;font-size:15px;width:220px}
+ button{margin-top:12px;padding:8px 16px}
+ #status{margin-top:16px;font-weight:600;font-size:18px;color:#0a3d91}
+</style></head><body>
+<h1>Acme Portal</h1>
+<form id="login" onsubmit="login(event)">
+ <label for="u">Username</label><input id="u" name="u" autocomplete="off">
+ <button type="submit">Log in</button>
+</form>
+<button id="check" type="button" onclick="render()">Who am I?</button>
+<div id="status" role="status">Not logged in</div>
+<script>
+ // Session identity lives in localStorage. Within ONE browser context it is shared
+ // across all tabs of this origin; across SEPARATE browser instances/profiles it is
+ // isolated. That difference is exactly what this fixture exposes.
+ function login(ev){ev.preventDefault();
+  const u=document.getElementById('u').value.trim();
+  if(u) localStorage.setItem('acme_user', u);
+  render();}
+ function render(){
+  const u=localStorage.getItem('acme_user');
+  document.getElementById('status').textContent = u ? ('Logged in as: '+u) : 'Not logged in';}
+ render();
+</script></body></html>
