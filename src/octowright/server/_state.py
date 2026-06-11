@@ -19,6 +19,7 @@ from provide.telemetry import get_logger
 
 from octowright import scenarios_pool as _scenario_pool_mod
 from octowright.browser_pool import BrowserPool
+from octowright.server._idempotency import _idempotent_dispatch
 from octowright.server.profiles import active_filter
 
 if TYPE_CHECKING:
@@ -136,7 +137,11 @@ class _ProfiledFastMCP(FastMCP):
         if allowed is None:
 
             def wrap_all(fn: Callable[..., Any]) -> Callable[..., Any]:
-                return decorator(_track_advisor_usage(fn))
+                # Idempotency dedup wraps OUTSIDE advisor tracking so a cache hit
+                # skips both re-execution and double-counting; both layers preserve
+                # the signature via functools.wraps, so FastMCP Context injection
+                # and the input schema still resolve through them.
+                return decorator(_idempotent_dispatch(_track_advisor_usage(fn)))
 
             return wrap_all
 
@@ -148,7 +153,7 @@ class _ProfiledFastMCP(FastMCP):
             resolved_name = name if name is not None else getattr(fn, "__name__", "")
             if resolved_name not in allowed:
                 return fn
-            return decorator(_track_advisor_usage(fn))
+            return decorator(_idempotent_dispatch(_track_advisor_usage(fn)))
 
         return wrap
 
