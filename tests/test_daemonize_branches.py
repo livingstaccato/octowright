@@ -168,6 +168,20 @@ class TestSpawnDaemonArgv:
         i = argv.index("--idle-grace")
         assert argv[i + 1] == "300.0"
 
+    def test_includes_keep_alive_flag_when_set(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """keep_alive=True forwards --keep-alive to the daemon argv (the propagation fix)."""
+        monkeypatch.setattr(_daemon, "_DAEMON_LOG", tmp_path / "d.log")
+        _, captured = _capture_popen(monkeypatch)
+        _daemon.spawn_daemon(http_host=None, http_port=None, idle_grace=None, keep_alive=True)
+        assert "--keep-alive" in captured["args"]
+
+    def test_omits_keep_alive_when_unset(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """keep_alive defaults False → no --keep-alive in the daemon argv."""
+        monkeypatch.setattr(_daemon, "_DAEMON_LOG", tmp_path / "d.log")
+        _, captured = _capture_popen(monkeypatch)
+        _daemon.spawn_daemon(http_host=None, http_port=None, idle_grace=None)
+        assert "--keep-alive" not in captured["args"]
+
     def test_http_host_empty_string_omitted(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """`if http_host` falsy gate — empty string treated as unset."""
         monkeypatch.setattr(_daemon, "_DAEMON_LOG", tmp_path / "d.log")

@@ -158,7 +158,9 @@ def test_status_defaults_block_advertises_persistent_default() -> None:
 def test_status_includes_idle_grace_and_badge_position() -> None:
     snap = octowright_status()
     assert "idle_grace_seconds" in snap["defaults"]
-    assert isinstance(snap["defaults"]["idle_grace_seconds"], int | float)
+    # None when the idle-watchdog is disabled (the default); a number when enabled.
+    idle_grace = snap["defaults"]["idle_grace_seconds"]
+    assert idle_grace is None or isinstance(idle_grace, int | float)
     assert snap["defaults"]["badge_position_default"] == "bottom-right"
 
 

@@ -148,7 +148,7 @@ Silent swallow in **user-action paths** must `log.warning` or `log.debug` instea
 
 ### Idle Watchdog
 
-After the pool sits empty for `OCTOWRIGHT_IDLE_GRACE` seconds (default 300s), the daemon auto-exits. Use `--keep-alive` to disable or `--idle-grace <seconds>` to override.
+The idle watchdog is **disabled by default**: the daemon stays up until an explicit `octowright restart` (or reboot). Auto-exit is opt-in because the daemon holds live browser state and its exit closes the follower's stdio — which breaks every connected MCP client and drops open browsers mid-session, with no transparent wake. Opt into auto-exit (for CI / shared / resource-constrained hosts) by setting `OCTOWRIGHT_IDLE_GRACE=<seconds>` or `--idle-grace <seconds>`; then the daemon exits after the pool sits empty that long. `--keep-alive` force-disables it, and now propagates to the detached daemon (previously it was silently dropped). A non-positive value or `off`/`never`/`none`/`disabled` also disables it.
 
 ### Frontend
 
@@ -182,7 +182,7 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_DEFAULT_LABEL` — override the auto-detected default browser label (see `.octowright/config.yaml` for per-project configuration)
 - `OCTOWRIGHT_BADGE_OPACITY` — corner badge opacity (float 0.0–1.0, default 0.35). Lower = more translucent.
 - `OCTOWRIGHT_HEADLESS` — force headless mode
-- `OCTOWRIGHT_IDLE_GRACE` — seconds before auto-exit (default 300)
+- `OCTOWRIGHT_IDLE_GRACE` — seconds the idle pool waits before the daemon auto-exits. **Unset/off by default** (the daemon never auto-exits). Set a positive number to opt in; `0`/`off`/`never`/`none`/`disabled` keep it off.
 - `OCTOWRIGHT_PROFILES_DIR` — override profile storage root
 - `OCTOWRIGHT_MACROS_DIR` — override macro JSON storage root
 - `OCTOWRIGHT_ADVISOR_STATE` — override the local Advisor state JSON path (preferences, bounded tool usage, macro observations)

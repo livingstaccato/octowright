@@ -36,6 +36,6 @@ async def test_respawn_waits_for_replacement_daemon(monkeypatch: pytest.MonkeyPa
 
     await _serve._respawn_if_leader_gone(http_host="127.0.0.1", http_port=8765, idle_grace=60.0)
 
-    spawn_daemon.assert_called_once_with(http_host="127.0.0.1", http_port=8765, idle_grace=60.0)
+    spawn_daemon.assert_called_once_with(http_host="127.0.0.1", http_port=8765, idle_grace=60.0, keep_alive=False)
     wait_for_daemon.assert_awaited_once()
     assert any("replacement daemon spawn timed out" in line for line in captured)
