@@ -14,6 +14,8 @@ via module globals, so tests monkeypatch them here (``proxy_runtime.X``).
 from __future__ import annotations
 
 import math
+import os
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -30,6 +32,7 @@ from octowright.defaults import (
     BRIDGE_RECONNECT_MAX_SECONDS,
     BRIDGE_REQUEST_TIMEOUT_SECONDS,
     BRIDGE_STATE_PATH,
+    FOLLOWER_EXIT_BACKSTOP_SECONDS,
 )
 from octowright.proxy_supervisor import (
     _BRIDGE_RECONNECT,
@@ -85,6 +88,25 @@ def reconnect_delay(attempt: int, *, max_delay: float) -> float:
         return max_delay
     base = 0.25 * (2**attempt)
     return min(base, max_delay)
+
+
+def _arm_follower_exit_backstop(
+    grace_seconds: float, *, exit_fn: Callable[[int], object] = os._exit
+) -> threading.Timer:
+    """Force the follower to exit if graceful bridge teardown wedges.
+
+    Once the MCP client closes stdin it's gone, so the bridge cancels itself —
+    but the remote SSE read can block in the transport and ignore anyio
+    cancellation, which would leave the follower running forever (bridging to
+    whatever leader is in the lockfile) long after its client. A daemon-thread
+    timer guarantees exit after ``grace_seconds``. The bridge owns no state, so
+    ``os._exit`` is safe. If the normal shutdown wins the race, the process is
+    already gone and the daemon timer is silently abandoned.
+    """
+    timer = threading.Timer(grace_seconds, lambda: exit_fn(0))
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 async def monitor_leader_health(
@@ -148,7 +170,11 @@ async def run_supervised_proxy(
             async def _local_forwarder() -> None:
                 async for message in local_read:
                     await supervisor_obj.forward_one_local_message(message, remote_write_slot)
+                # stdin EOF: the MCP client is gone. Cancel the bridge and arm a
+                # hard-exit backstop so a wedged remote teardown can't keep the
+                # follower alive past its client (the orphaned-follower leak).
                 local_tg.cancel_scope.cancel()
+                _arm_follower_exit_backstop(FOLLOWER_EXIT_BACKSTOP_SECONDS)
 
             async def _remote_supervisor() -> None:
                 attempt = 0
