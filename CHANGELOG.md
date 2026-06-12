@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-06-12
+
+Reliability fixes for the follower/daemon bridge: the daemon no longer
+disconnects clients mid-session, and follower processes no longer leak.
+
+### Changed
+- **Idle watchdog disabled by default.** The daemon holds live browser state, and
+  its idle auto-exit closed the follower's stdio mid-session — breaking the MCP
+  connection and dropping open browsers with no transparent wake (the user had to
+  reconnect by hand). The daemon now stays up until an explicit `octowright
+  restart`. Opt back into auto-exit for CI / shared / resource-constrained hosts
+  with `OCTOWRIGHT_IDLE_GRACE=<seconds>` or `--idle-grace`; `off` / `never` /
+  `none` / `disabled` / `0` / a non-positive value also disable it.
+
+### Fixed
+- **`--keep-alive` now reaches the daemon.** `spawn_daemon` forwards `--keep-alive`
+  to the detached daemon; previously the flag was silently dropped, so it never
+  reached the process that actually owns the watchdog.
+- **Detached daemon stays alive after stdio EOF.** The watchdog task was also what
+  held a discoverable daemon up past its `/dev/null` stdin EOF; with auto-quit off
+  by default the daemon exited the instant it spawned (`daemon_spawn_failed`,
+  falling back to fragile inline mode). The post-EOF "keep serving" phase now keys
+  on being discoverable and waits on the HTTP sidecar, watchdog or not.
+- **Followers no longer outlive their client.** When the MCP client closes stdin,
+  the follower arms a daemon-thread hard-exit backstop, so a wedged remote teardown
+  can't leave an orphaned `octowright serve` process reconnecting forever. Grace is
+  `OCTOWRIGHT_FOLLOWER_EXIT_BACKSTOP_SECONDS` (default 5s).
+
 ## [0.9.0] - 2026-06-11
 
 ### Added
@@ -465,6 +493,7 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
+[0.9.1]: https://github.com/livingstaccato/octowright/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/livingstaccato/octowright/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/livingstaccato/octowright/compare/v0.7.0...v0.8.0
 [0.5.0]: https://github.com/livingstaccato/octowright/compare/v0.3.0...v0.5.0
