@@ -32,7 +32,7 @@ artifact_expectations:
     - artifacts/demo.mp4
     - artifacts/poster.png
 regen:
-  command: uv run python scripts/demos/record_demo.py verify-suite
+  command: uv run python scripts/demos/with_seed_server.py verify-suite
 tutorial_export:
   include: exports/verify-suite.json
 seed_refs:

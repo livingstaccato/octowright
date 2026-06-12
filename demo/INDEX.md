@@ -11,7 +11,7 @@
 - Regen: `uv run python scripts/demos/record_demo.py cross-engine-trio`
 - Artifacts: replay 1/1, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-12 02:11:24 UTC
+- Last generated: 2026-06-12 03:56:39 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`; declared `artifacts/replay.jsonl`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
@@ -24,7 +24,7 @@
 - Regen: `uv run python scripts/demos/record_demo.py macro-replay-loop`
 - Artifacts: replay 2/2, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-12 01:45:52 UTC
+- Last generated: 2026-06-12 03:56:54 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/replay-roundtrip.jsonl`; declared `artifacts/replay.jsonl`, `artifacts/replay-roundtrip.jsonl`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
@@ -37,7 +37,7 @@
 - Regen: `uv run python scripts/demos/with_playground.py role-based-duo`
 - Artifacts: replay 1/1, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-26 03:37:34 UTC
+- Last generated: 2026-06-12 03:55:07 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`; declared `artifacts/replay.jsonl`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
@@ -50,7 +50,7 @@
 - Regen: `uv run python scripts/demos/with_playground.py seven-mix-orchestration`
 - Artifacts: replay 2/2, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-26 03:38:19 UTC
+- Last generated: 2026-06-12 03:56:24 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/participant-roster.json`; declared `artifacts/replay.jsonl`, `artifacts/participant-roster.json`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 
@@ -60,10 +60,10 @@
 - Summary: Three roles each run their own verify macros against the same scenario. Each asserts what its role should see.
 - Tags: `hero`, `verify`, `testing`, `junit`
 - Audiences: `evaluators`, `contributors`, `testers`
-- Regen: `uv run python scripts/demos/record_demo.py verify-suite`
+- Regen: `uv run python scripts/demos/with_seed_server.py verify-suite`
 - Artifacts: replay 2/2, video 2/2
 - Generation status: generated
-- Last generated: 2026-05-16 21:57:23 UTC
+- Last generated: 2026-06-12 04:01:02 UTC
 - Replay artifacts: existing `artifacts/replay.jsonl`, `artifacts/report.xml`; declared `artifacts/replay.jsonl`, `artifacts/report.xml`
 - Video artifacts: existing `artifacts/demo.mp4`, `artifacts/poster.png`; declared `artifacts/demo.mp4`, `artifacts/poster.png`
 

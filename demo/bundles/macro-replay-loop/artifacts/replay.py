@@ -20,20 +20,24 @@ def _resolve_bundle_url(raw: str) -> str:
 
 async def main() -> None:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("https://en.wikipedia.org/wiki/Playwright_(software)"))
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("https://en.wikipedia.org/wiki/Playwright_(software)"))
         await page.wait_for_selector("h1#firstHeading")
+        if "Playwright" not in page.url:
+            raise RuntimeError("URL mismatch")
         await page.get_by_role("recorder", name="History", exact=True).click()
         await page.wait_for_load_state("networkidle")
         await page.get_by_role("recorder", name="References", exact=True).click()
         await page.wait_for_load_state("networkidle")
         await page.wait_for_selector("h1#firstHeading")
+        if "Playwright" not in page.url:
+            raise RuntimeError("URL mismatch")
         await page.get_by_role("replayer", name="History", exact=True).click()
         await page.wait_for_load_state("networkidle")
         await page.get_by_role("replayer", name="References", exact=True).click()

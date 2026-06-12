@@ -16,15 +16,15 @@ const resolveBundleUrl = (raw: string): string => {
   let ctx!: BrowserContext;
   let page!: Page;
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("https://en.wikipedia.org/"));
-  browser = await firefox.launch({ headless: true });
+  browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("https://en.wikipedia.org/"));
-  browser = await webkit.launch({ headless: true });
+  browser = await firefox.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("https://en.wikipedia.org/"));
@@ -52,6 +52,9 @@ const resolveBundleUrl = (raw: string): string => {
   await page.waitForSelector("h1#firstHeading");
   await page.waitForSelector("h1#firstHeading");
   await page.waitForSelector("h1#firstHeading");
+  if (!page.url().includes("Playwright")) throw new Error('URL mismatch');
+  if (!page.url().includes("Playwright")) throw new Error('URL mismatch');
+  if (!page.url().includes("Playwright")) throw new Error('URL mismatch');
   await page.evaluate("window.scrollBy(0, 600); window.scrollY");
   await page.evaluate("window.scrollBy(0, 600); window.scrollY");
   await page.evaluate("window.scrollBy(0, 600); window.scrollY");
@@ -64,3 +67,4 @@ const resolveBundleUrl = (raw: string): string => {
     await ctx.close();
   }
 })();
+
