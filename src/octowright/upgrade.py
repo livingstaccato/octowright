@@ -40,6 +40,16 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.9.1": [
+        "No more mid-session disconnects: the idle watchdog is now OFF by default, so "
+        "the daemon stays up across client blips instead of auto-exiting and tearing down "
+        "your browsers. Opt back into auto-quit with OCTOWRIGHT_IDLE_GRACE on CI/shared hosts.",
+        "Reconnects are seamless: a detached daemon reliably stays alive after a client "
+        "disconnects (no more fragile inline-mode fallback), and --keep-alive now actually "
+        "reaches the daemon it's meant to govern.",
+        "No more orphaned `octowright serve` processes: a follower hard-exits when its MCP "
+        "client closes stdin, instead of lingering and reconnecting forever.",
+    ],
     "0.9.0": [
         "Crashed browsers are caught: a renderer crash (Aw, Snap) pushes a browser_crashed "
         "notification and a clear 'crashed — relaunch' message instead of an opaque failure.",
