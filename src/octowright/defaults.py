@@ -303,16 +303,40 @@ HTTP_PORT_RETRIES = 5
 DASHBOARD_REMOTE_ALLOWED_ENV = "OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD"
 NETWORK_EVENT_LIMIT = int(os.environ.get("OCTOWRIGHT_NETWORK_EVENT_LIMIT", "5000"))
 
-# Idle-watchdog: once the pool sits empty for this many seconds, `octowright
-# serve` exits on its own. Override with --idle-grace or --keep-alive to disable.
-# The poll interval below controls how often the watchdog samples the pool —
-# keep it short so shutdown is snappy.
+
+# Idle-watchdog: when ENABLED, `octowright serve` exits on its own once the pool
+# has sat empty for this many seconds. The poll interval below controls how often
+# the watchdog samples the pool — keep it short so shutdown is snappy.
 #
-# Default raised from 30s to 300s (5 min) so a daemon that's been spawned but
-# is waiting on the first browser_launch survives normal chat-paced workflows
-# (talking with the MCP client, exploring docs, etc.). Truly unused daemons
-# still self-clean within minutes; not hours.
-IDLE_GRACE_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_GRACE", "300"))
+# DEFAULT: DISABLED (None). The daemon holds live browser state, and its exit
+# closes the follower's stdio — which breaks the MCP client's connection and
+# drops every open browser mid-session, with no transparent wake (the user has
+# to reconnect by hand). An idle daemon is cheap (one asyncio server, singleton-
+# locked to one per machine) and dies on reboot, so staying up until an explicit
+# `octowright restart` is the safer default. Opt back into auto-quit for CI /
+# shared / resource-constrained hosts via OCTOWRIGHT_IDLE_GRACE=<seconds> or
+# --idle-grace; force-disable with --keep-alive.
+def _parse_idle_grace(raw: str | None) -> float | None:
+    """Parse OCTOWRIGHT_IDLE_GRACE into a watchdog grace, or None to disable it.
+
+    Returns None (watchdog off — the default) for: unset, blank, a non-positive
+    number, an unparsable value, or the literals ``off`` / ``never`` / ``none``
+    / ``disabled`` / ``0`` (case-insensitive). A positive number enables
+    auto-quit after that many idle seconds.
+    """
+    if raw is None:
+        return None
+    text = raw.strip().lower()
+    if text in ("", "0", "off", "never", "none", "disabled"):
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+IDLE_GRACE_SECONDS: float | None = _parse_idle_grace(os.environ.get("OCTOWRIGHT_IDLE_GRACE"))
 IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
 
 # Per-cache LRU bound on `octowright.http.session_artifacts.SessionArtifactCache`.

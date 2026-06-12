@@ -244,7 +244,8 @@ async def _ensure_leader_or_inline(
         if (found := await _probe_alive_leader(_sn)) is not None:
             return found
         click.echo("octowright: no live leader; spawning daemon", err=True)
-        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+        keep_alive = bool(leader_kwargs.get("keep_alive"))
+        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
     spawned = await _daemon.wait_for_daemon()
     if spawned is None:
         # Daemon didn't come up — run leader inline so the user at least gets
@@ -275,7 +276,9 @@ async def _probe_alive_leader(sn: Any) -> Any | None:
     return info if info and not sn.is_stale(info) and await sn.probe_http_alive(info) else None
 
 
-async def _respawn_if_leader_gone(*, http_host: str | None, http_port: int | None, idle_grace: float | None) -> None:
+async def _respawn_if_leader_gone(
+    *, http_host: str | None, http_port: int | None, idle_grace: float | None, keep_alive: bool = False
+) -> None:
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
@@ -287,7 +290,7 @@ async def _respawn_if_leader_gone(*, http_host: str | None, http_port: int | Non
             click.echo("octowright: leader still healthy, exiting", err=True)
             return
         click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
-        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
     if await _daemon.wait_for_daemon() is None:
         click.echo("octowright: replacement daemon spawn timed out", err=True)
 
@@ -307,7 +310,10 @@ async def _serve_singleton(
     if existing is None:
         return
     await _bridge_to_leader(existing)
-    await _respawn_if_leader_gone(http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+    keep_alive = bool(leader_kwargs.get("keep_alive"))
+    await _respawn_if_leader_gone(
+        http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive
+    )
 
 
 async def _run_follower(leader_mcp_url: str) -> None:
@@ -352,19 +358,13 @@ async def _run_leader(
 
     from octowright import http as _http
     from octowright import singleton as _sn
-    from octowright.defaults import (
-        HTTP_HOST,
-        HTTP_PORT,
-        HTTP_PORT_RETRIES,
-        IDLE_GRACE_SECONDS,
-        IDLE_POLL_SECONDS,
-    )
-    from octowright.idle_watchdog import idle_watchdog
+    from octowright.defaults import HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES, IDLE_GRACE_SECONDS, IDLE_POLL_SECONDS
+    from octowright.idle_watchdog import _resolve_watchdog_grace, idle_watchdog
     from octowright.server import mcp
     from octowright.server._state import pool, scenario_pool
     from octowright.server.mcp_notifications import run_stdio_with_notifications
 
-    grace = idle_grace if idle_grace is not None else IDLE_GRACE_SECONDS
+    grace = _resolve_watchdog_grace(keep_alive=keep_alive, idle_grace=idle_grace, env_default=IDLE_GRACE_SECONDS)
     bound_host = http_host or HTTP_HOST
     bound_port = http_port if http_port is not None else HTTP_PORT
 
@@ -403,8 +403,9 @@ async def _run_leader(
             )
         )
 
+    # grace is None when --keep-alive is set or no idle-grace is configured (the default).
     watch_task: _asyncio.Task[None] | None = None
-    if not keep_alive:
+    if grace is not None:
         watch_task = _asyncio.create_task(
             idle_watchdog(
                 pool,
@@ -534,15 +535,15 @@ async def _run_leader_phases(
     _log_first_done("octowright.leader.first_phase_ended", mcp_task, watch_task, sidecars)
 
     # If only the stdio MCP task ended (the typical "client disconnected"
-    # case) and we're discoverable, keep serving via HTTP-MCP. The watchdog
-    # or a sidecar failure will eventually end us; the user reopening their
-    # MCP client will spawn a new follower that bridges back here without
-    # losing browser state.
-    if mcp_task.done() and discoverable and watch_task is not None and not watch_task.done():
+    # case) and we're discoverable, keep serving via HTTP-MCP — waiting on the
+    # HTTP sidecar (and the watchdog, when one is armed). This must NOT require a
+    # watchdog: with auto-quit disabled (the default) the detached daemon would
+    # otherwise exit the instant its /dev/null stdin EOFs, right after spawn.
+    if mcp_task.done() and discoverable and (watch_task is None or not watch_task.done()):
         click.echo(
             "octowright: stdio client disconnected; leader staying alive for HTTP-MCP "
             "(reconnect by reopening your MCP client; auto-quit governed by --idle-grace)",
             err=True,
         )
-        await _asyncio.wait({watch_task, *sidecars}, return_when=_asyncio.FIRST_COMPLETED)
+        await _asyncio.wait(set(filter(None, (watch_task, *sidecars))), return_when=_asyncio.FIRST_COMPLETED)
         _log_first_done("octowright.leader.second_phase_ended", mcp_task, watch_task, sidecars)
