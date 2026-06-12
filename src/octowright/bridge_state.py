@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import itertools
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -79,21 +78,19 @@ def _int_value(value: Any) -> int:
 def _pid_alive(pid: int) -> bool:
     """True if a process with this PID exists.
 
-    Conservative: ambiguous outcomes (permission denied, or a platform without
-    ``os.kill``) count as ALIVE so live followers are never pruned. Only a
-    definitive "no such process" (or an unusable PID) prunes.
+    Delegates to :func:`octowright.singleton.pid_is_alive`, which is
+    cross-platform — on Windows it uses ``OpenProcess`` rather than
+    ``os.kill(pid, 0)`` (which never reports a dead PID on Windows, so a
+    POSIX-only check treated every dead follower as alive and never pruned).
+    Conservative: ambiguous outcomes (permission denied) count as ALIVE so live
+    followers are never pruned; an unusable/overflowing PID prunes.
     """
+    from octowright.singleton import pid_is_alive
+
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
+        return pid_is_alive(pid)
     except (OverflowError, ValueError):
         return False
-    except OSError:
-        return True
-    except AttributeError:  # os.kill unavailable on this platform
-        return True
-    return True
 
 
 def _prune_dead_followers(followers: dict[str, Any], *, keep_pid: int) -> dict[str, Any]:
