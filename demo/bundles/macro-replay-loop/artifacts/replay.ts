@@ -16,20 +16,22 @@ const resolveBundleUrl = (raw: string): string => {
   let ctx!: BrowserContext;
   let page!: Page;
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("https://en.wikipedia.org/wiki/Playwright_(software)"));
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
   await page.goto(resolveBundleUrl("https://en.wikipedia.org/wiki/Playwright_(software)"));
   await page.waitForSelector("h1#firstHeading");
+  if (!page.url().includes("Playwright")) throw new Error('URL mismatch');
   await page.getByRole("recorder", { name: "History", exact: true }).click();
   await page.waitForLoadState('networkidle');
   await page.getByRole("recorder", { name: "References", exact: true }).click();
   await page.waitForLoadState('networkidle');
   await page.waitForSelector("h1#firstHeading");
+  if (!page.url().includes("Playwright")) throw new Error('URL mismatch');
   await page.getByRole("replayer", { name: "History", exact: true }).click();
   await page.waitForLoadState('networkidle');
   await page.getByRole("replayer", { name: "References", exact: true }).click();
@@ -40,3 +42,4 @@ const resolveBundleUrl = (raw: string): string => {
     await ctx.close();
   }
 })();
+

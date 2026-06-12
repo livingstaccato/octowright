@@ -20,24 +20,28 @@ def _resolve_bundle_url(raw: str) -> str:
 
 async def main() -> None:
     async with async_playwright() as p:
-        browser = await p.webkit.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = await ctx.new_page()
-        await page.goto(
-            _resolve_bundle_url("bundle://seed/verify-stage.html?persona=vs-form&role=form&kind=webkit&slot=0")
-        )
-        browser = await p.webkit.launch(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = await ctx.new_page()
-        await page.goto(
-            _resolve_bundle_url("bundle://seed/verify-stage.html?persona=vs-counter&role=counter&kind=webkit&slot=1")
-        )
-        browser = await p.webkit.launch(headless=True)
+        browser = await p.webkit.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(
             _resolve_bundle_url(
-                "bundle://seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2"
+                "http://127.0.0.1:58535/seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2"
+            )
+        )
+        browser = await p.webkit.launch(headless=False)
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = await ctx.new_page()
+        await page.goto(
+            _resolve_bundle_url(
+                "http://127.0.0.1:58535/seed/verify-stage.html?persona=vs-counter&role=counter&kind=webkit&slot=1"
+            )
+        )
+        browser = await p.webkit.launch(headless=False)
+        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = await ctx.new_page()
+        await page.goto(
+            _resolve_bundle_url(
+                "http://127.0.0.1:58535/seed/verify-stage.html?persona=vs-form&role=form&kind=webkit&slot=0"
             )
         )
         await page.evaluate("document.body.innerHTML = '<input id=user><input id=pass type=password>'")
@@ -46,9 +50,13 @@ async def main() -> None:
         except Exception:
             await page.fill("#user", "cosmo")
         try:
-            await page.get_by_role("form", name="").fill("hunter2")
+            await page.get_by_role("form", name="").fill("<redacted:password>")
         except Exception:
-            await page.fill("#pass", "hunter2")
+            await page.fill("#pass", "<redacted:password>")
+        if not await page.evaluate("document.querySelector('#user').value"):
+            raise RuntimeError("JS mismatch")
+        if not await page.evaluate("document.querySelector('#pass').value"):
+            raise RuntimeError("JS mismatch")
         await page.evaluate(
             "(() => { document.body.innerHTML = ''; const b = document.createElement('button'); b.id = 'btn'; b.textContent = 'click'; b.dataset.n = '0'; b.addEventListener('click', () => { b.dataset.n = String(parseInt(b.dataset.n) + 1); }); document.body.appendChild(b); })()"
         )
@@ -64,6 +72,10 @@ async def main() -> None:
             await page.get_by_role("counter", name="click").click()
         except Exception:
             await page.click("#btn")
+        if not await page.evaluate("document.querySelector('#btn').dataset.n"):
+            raise RuntimeError("JS mismatch")
+        if not await page.evaluate("2 + 2"):
+            raise RuntimeError("JS mismatch")
         if browser is not None:
             await browser.close()
         else:

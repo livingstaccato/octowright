@@ -16,18 +16,18 @@ const resolveBundleUrl = (raw: string): string => {
   let ctx!: BrowserContext;
   let page!: Page;
 
-  browser = await webkit.launch({ headless: true });
+  browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/verify-stage.html?persona=vs-form&role=form&kind=webkit&slot=0"));
-  browser = await webkit.launch({ headless: true });
+  await page.goto(resolveBundleUrl("http://127.0.0.1:58535/seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2"));
+  browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/verify-stage.html?persona=vs-counter&role=counter&kind=webkit&slot=1"));
-  browser = await webkit.launch({ headless: true });
+  await page.goto(resolveBundleUrl("http://127.0.0.1:58535/seed/verify-stage.html?persona=vs-counter&role=counter&kind=webkit&slot=1"));
+  browser = await webkit.launch({ headless: false });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   page = await ctx.newPage();
-  await page.goto(resolveBundleUrl("bundle://seed/verify-stage.html?persona=vs-arithmetic&role=arithmetic&kind=webkit&slot=2"));
+  await page.goto(resolveBundleUrl("http://127.0.0.1:58535/seed/verify-stage.html?persona=vs-form&role=form&kind=webkit&slot=0"));
   await page.evaluate("document.body.innerHTML = '<input id=user><input id=pass type=password>'");
   try {
     await page.getByRole("form", { name: "" }).fill("cosmo");
@@ -35,10 +35,12 @@ const resolveBundleUrl = (raw: string): string => {
     await page.fill("#user", "cosmo");
   }
   try {
-    await page.getByRole("form", { name: "" }).fill("hunter2");
+    await page.getByRole("form", { name: "" }).fill("<redacted:password>");
   } catch {
-    await page.fill("#pass", "hunter2");
+    await page.fill("#pass", "<redacted:password>");
   }
+  if (!(await page.evaluate("document.querySelector('#user').value"))) throw new Error('JS mismatch');
+  if (!(await page.evaluate("document.querySelector('#pass').value"))) throw new Error('JS mismatch');
   await page.evaluate("(() => { document.body.innerHTML = ''; const b = document.createElement('button'); b.id = 'btn'; b.textContent = 'click'; b.dataset.n = '0'; b.addEventListener('click', () => { b.dataset.n = String(parseInt(b.dataset.n) + 1); }); document.body.appendChild(b); })()");
   try {
     await page.getByRole("counter", { name: "click" }).click();
@@ -55,9 +57,12 @@ const resolveBundleUrl = (raw: string): string => {
   } catch {
     await page.click("#btn");
   }
+  if (!(await page.evaluate("document.querySelector('#btn').dataset.n"))) throw new Error('JS mismatch');
+  if (!(await page.evaluate("2 + 2"))) throw new Error('JS mismatch');
   if (browser !== null) {
     await browser.close();
   } else {
     await ctx.close();
   }
 })();
+

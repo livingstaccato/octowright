@@ -57,7 +57,11 @@ async def main() -> None:
             await page.get_by_role("player", name="Submit").click()
         except Exception:
             await page.click("#submit")
+        if "submitted" not in await page.locator("#status").inner_text():
+            raise RuntimeError("Text mismatch")
         await page.wait_for_load_state("networkidle")
+        if not await page.evaluate("document.querySelectorAll('#rows tr:not(.empty)').length >= 3"):
+            raise RuntimeError("JS mismatch")
         if browser is not None:
             await browser.close()
         else:

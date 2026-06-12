@@ -57,10 +57,13 @@ const resolveBundleUrl = (raw: string): string => {
   } catch {
     await page.click("#submit");
   }
+  if (!(await page.locator("#status").innerText()).includes("submitted")) throw new Error('Text mismatch');
   await page.waitForLoadState('networkidle');
+  if (!(await page.evaluate("document.querySelectorAll('#rows tr:not(.empty)').length >= 3"))) throw new Error('JS mismatch');
   if (browser !== null) {
     await browser.close();
   } else {
     await ctx.close();
   }
 })();
+

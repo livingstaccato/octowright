@@ -20,15 +20,15 @@ def _resolve_bundle_url(raw: str) -> str:
 
 async def main() -> None:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("https://en.wikipedia.org/"))
-        browser = await p.firefox.launch(headless=True)
+        browser = await p.webkit.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("https://en.wikipedia.org/"))
-        browser = await p.webkit.launch(headless=True)
+        browser = await p.firefox.launch(headless=False)
         ctx = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
         await page.goto(_resolve_bundle_url("https://en.wikipedia.org/"))
@@ -53,6 +53,12 @@ async def main() -> None:
         await page.wait_for_selector("h1#firstHeading")
         await page.wait_for_selector("h1#firstHeading")
         await page.wait_for_selector("h1#firstHeading")
+        if "Playwright" not in page.url:
+            raise RuntimeError("URL mismatch")
+        if "Playwright" not in page.url:
+            raise RuntimeError("URL mismatch")
+        if "Playwright" not in page.url:
+            raise RuntimeError("URL mismatch")
         await page.evaluate("window.scrollBy(0, 600); window.scrollY")
         await page.evaluate("window.scrollBy(0, 600); window.scrollY")
         await page.evaluate("window.scrollBy(0, 600); window.scrollY")
