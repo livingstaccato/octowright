@@ -1,0 +1,48 @@
+# Lychee link checker configuration for octowright.
+# Docs: https://lychee.cli.rs/#/usage/config
+#
+# Local run (matches CI):
+#   lychee --config .lychee.toml './README.md' './CHANGELOG.md' './AGENTS.md' './docs/**/*.md'
+
+# Up to 64 concurrent network requests, 3 retries each, 30s per-request timeout.
+max_concurrency = 64
+max_retries = 3
+timeout = 30
+
+# A browser-like UA — some hosts reject the default lychee agent.
+user_agent = "Mozilla/5.0 (compatible; lychee/octowright-docs)"
+
+# Treat redirects and GitHub's anonymous rate-limit (429) as OK.
+accept = [200, 204, 301, 302, 307, 308, 429]
+
+# URLs that are valid-by-design but should not be network-checked.
+exclude = [
+    # Local/dev addresses used in examples and as the dashboard's default bind.
+    "^https?://localhost",
+    "^https?://127\\.0\\.0\\.1",
+    "^https?://0\\.0\\.0\\.0",
+    # Placeholder hosts in telemetry/config snippets, e.g. https://<host>/v1/traces.
+    "<host>",
+    # Example/placeholder domains.
+    "^https?://example\\.(com|org|net)",
+    # GitHub dynamic endpoints that require auth or 404 by design.
+    "^https://github\\.com/.*/issues/new",
+    "^https://github\\.com/.*/pulls",
+]
+
+# Generated, vendored, or build-output trees — never sources of canonical links.
+exclude_path = [
+    ".git/",
+    ".venv/",
+    "dist/",
+    "build/",
+    "htmlcov/",
+    "node_modules/",
+    "packages/octowright-frontend/coverage/",
+    "src/octowright/server/frontend/",
+    "demo/tutorial-export/",
+    "__pycache__/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+]

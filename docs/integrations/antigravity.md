@@ -1,6 +1,6 @@
 # Antigravity (agy) Integration
 
-Octowright ships first-class support for [Antigravity CLI](https://github.com/antigravity-dev/antigravity-cli) (`agy`).
+Octowright ships first-class support for [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli) (`agy`).
 
 ## Quick install
 
