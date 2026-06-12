@@ -259,6 +259,14 @@ BRIDGE_TOOL_TIMEOUTS: dict[str, float] = {
 # usual retry-hint instead of resuming.
 BRIDGE_RESUME_MAX_ATTEMPTS = int(os.environ.get("OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS", "3"))
 
+# When the MCP client closes the follower's stdin, the bridge cancels itself and
+# should exit. If the remote SSE teardown wedges (it can block in the transport
+# and ignore anyio cancellation), this is the grace period after which the
+# follower hard-exits anyway, so it never outlives its client (the bridge owns
+# no state). Followers leaking past their client is what accumulated orphaned
+# `octowright serve` processes across idle-restart churn.
+FOLLOWER_EXIT_BACKSTOP_SECONDS = float(os.environ.get("OCTOWRIGHT_FOLLOWER_EXIT_BACKSTOP_SECONDS", "5"))
+
 # Leader-side idempotency cache. The follower injects a stable
 # ``octowrightIdempotencyKey`` into each tools/call's _meta and re-sends it
 # verbatim on resume; the leader caches the result by key so a re-sent
