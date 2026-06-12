@@ -101,12 +101,15 @@ def isolated_lockfile(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Any:
 
 
 def _kwargs() -> dict[str, Any]:
+    # idle_grace is an explicit positive value because the watchdog is now
+    # DISABLED by default (idle_grace=None / unset). These tests exercise the
+    # armed path, so they set a grace; the fake watchdog ignores the value.
     return {
         "http_host": None,
         "http_port": None,
         "no_http": False,
         "keep_alive": False,
-        "idle_grace": None,
+        "idle_grace": 0.05,
         "no_singleton": False,
     }
 
@@ -172,6 +175,39 @@ async def test_leader_exits_when_watchdog_fires_first(stubs: _Stubs, isolated_lo
 
     await asyncio.wait_for(stubs.watchdog_started.wait(), timeout=2.0)
     stubs.watchdog_done.set()
+    await asyncio.wait_for(leader_task, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_leader_skips_watchdog_when_grace_disabled(stubs: _Stubs, isolated_lockfile: Any) -> None:
+    """Default (idle_grace=None) → watchdog never armed; leader still exits on stdio EOF."""
+    kwargs = _kwargs()
+    kwargs["idle_grace"] = None  # the new default: watchdog disabled
+    kwargs["no_http"] = True  # not discoverable, so stdio EOF ends us without hanging
+    leader_task = asyncio.create_task(_serve._run_leader(**kwargs))
+    stubs.stdio_done.set()
+    await asyncio.wait_for(leader_task, timeout=2.0)
+    assert not stubs.watchdog_started.is_set(), "watchdog must not arm when grace is disabled"
+
+
+@pytest.mark.asyncio
+async def test_discoverable_leader_stays_alive_after_eof_without_watchdog(
+    stubs: _Stubs, isolated_lockfile: Any
+) -> None:
+    """Watchdog disabled + discoverable: stdio EOF must NOT exit — wait on the HTTP sidecar.
+
+    Regression guard: a detached daemon's /dev/null stdin EOFs immediately, so
+    without this the daemon exited right after spawn (daemon_spawn_failed → inline).
+    """
+    kwargs = _kwargs()
+    kwargs["idle_grace"] = None  # watchdog off (the new default)
+    leader_task = asyncio.create_task(_serve._run_leader(**kwargs))
+    await asyncio.wait_for(stubs.http_started.wait(), timeout=2.0)
+    assert not stubs.watchdog_started.is_set(), "no watchdog should arm when grace is disabled"
+    stubs.stdio_done.set()  # stdio EOF
+    await asyncio.sleep(0.1)
+    assert not leader_task.done(), "discoverable leader must stay alive after stdio EOF without a watchdog"
+    stubs.http_done.set()  # the HTTP sidecar ends → leader exits
     await asyncio.wait_for(leader_task, timeout=2.0)
 
 

@@ -73,12 +73,18 @@ def spawn_daemon(
     http_host: str | None,
     http_port: int | None,
     idle_grace: float | None,
+    keep_alive: bool = False,
 ) -> int:
     """Spawn a fully detached background ``octowright serve --daemon-mode`` process.
 
     Returns the spawned PID. The process is in a new session with no
     controlling terminal and with stdin/stdout pointed at /dev/null, so
     nothing about the parent's lifecycle can reach it.
+
+    ``keep_alive``/``idle_grace`` are forwarded to the daemon's argv so the
+    follower's choice actually reaches the process that owns the watchdog (the
+    detached daemon, not the follower). Without forwarding ``--keep-alive`` the
+    flag was silently dropped and the daemon kept its own default.
     """
     args: list[str] = [*_resolve_daemon_entrypoint(), "serve", "--daemon-mode"]
     if http_host:
@@ -87,6 +93,8 @@ def spawn_daemon(
         args.extend(["--http-port", str(http_port)])
     if idle_grace is not None:
         args.extend(["--idle-grace", str(idle_grace)])
+    if keep_alive:
+        args.append("--keep-alive")
 
     # Fixed argv (sys.argv[0] + flags); no shell. Daemon spawn for octowright serve.
     proc = subprocess.Popen(  # nosec B603

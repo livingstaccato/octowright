@@ -563,7 +563,7 @@ class TestEnsureLeaderOrInline:
         )
         result = await _serve._ensure_leader_or_inline({}, http_host="127.0.0.1", http_port=8765, idle_grace=None)
         assert result is spawned
-        spawn_daemon.assert_called_once_with(http_host="127.0.0.1", http_port=8765, idle_grace=None)
+        spawn_daemon.assert_called_once_with(http_host="127.0.0.1", http_port=8765, idle_grace=None, keep_alive=False)
 
     @pytest.mark.anyio
     async def test_spawn_timeout_falls_back_to_inline(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -706,7 +706,7 @@ class TestRespawnIfLeaderGone:
         captured: list[str] = []
         monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: captured.append(text))
         await _serve._respawn_if_leader_gone(http_host="0.0.0.0", http_port=9000, idle_grace=300.0)
-        spawn_daemon.assert_called_once_with(http_host="0.0.0.0", http_port=9000, idle_grace=300.0)
+        spawn_daemon.assert_called_once_with(http_host="0.0.0.0", http_port=9000, idle_grace=300.0, keep_alive=False)
         assert any("spawning replacement" in line for line in captured)
 
     @pytest.mark.anyio
