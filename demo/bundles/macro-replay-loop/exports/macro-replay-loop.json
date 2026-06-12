@@ -2,19 +2,19 @@
   "artifact_manifest": {
     "artifacts": {
       "replay": {
-        "event_count": 30,
+        "event_count": 34,
         "path": "artifacts/replay.jsonl",
         "python_export": "artifacts/replay.py",
-        "size_bytes": 7506,
+        "size_bytes": 8906,
         "ts_export": "artifacts/replay.ts"
       },
       "supporting_videos": [],
       "video": {
-        "duration_seconds": 10.08,
+        "duration_seconds": 10.4,
         "height": 1080,
         "path": "artifacts/demo.mp4",
         "poster_path": "artifacts/poster.png",
-        "size_bytes": 1078868,
+        "size_bytes": 1311634,
         "width": 1920
       }
     },
@@ -92,11 +92,11 @@
       "primary_asset": "hero_video"
     },
     "primary": {
-      "duration_seconds": 10.08,
+      "duration_seconds": 10.4,
       "height": 1080,
       "path": "artifacts/demo.mp4",
       "poster_path": "artifacts/poster.png",
-      "size_bytes": 1078868,
+      "size_bytes": 1311634,
       "width": 1920
     },
     "supporting": []

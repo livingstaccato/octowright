@@ -196,7 +196,16 @@ def _rewrite_playground_url(url: str) -> str:
 def _seed_url(
     bundle: DemoBundle, rel_path: str, *, participant: Participant | None = None, slot: int | None = None
 ) -> str:
-    base = (bundle.root / rel_path).resolve().as_uri()
+    # Octowright's navigation guard denies the file:// scheme, so a seed can't be
+    # opened directly from disk. When a static seed server is running
+    # (scripts/demos/with_seed_server.py sets OCTOWRIGHT_SEED_BASE_URL rooted at
+    # the bundle dir) build an http:// URL against it; otherwise fall back to the
+    # file:// URI for offline path computations and tests.
+    seed_base = os.getenv("OCTOWRIGHT_SEED_BASE_URL", "").strip()
+    if seed_base:
+        base = f"{seed_base.rstrip('/')}/{rel_path.lstrip('/')}"
+    else:
+        base = (bundle.root / rel_path).resolve().as_uri()
     if participant is None:
         return base
     query = urlencode(
