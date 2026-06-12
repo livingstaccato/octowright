@@ -1,0 +1,45 @@
+# Validate documentation links with lychee.
+# Policy: this workflow uses only `uses:` action steps — no inline `run:` scripts.
+name: 🔗 Links
+
+on:
+  # Re-check links on any PR that touches docs, the markdown, or this config.
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - ".lychee.toml"
+      - ".github/workflows/links.yml"
+  # Catch external link rot from the outside world once a day.
+  schedule:
+    - cron: "0 6 * * *"
+  # Allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  link-check:
+    name: 🔗 Check documentation links
+    runs-on: ubuntu-24.04
+    steps:
+      # Pull the repository so lychee can read the markdown sources.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Scan README/CHANGELOG/AGENTS + all docs; fail the job on any broken link.
+      - name: Check links with lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --config .lychee.toml
+            './README.md'
+            './CHANGELOG.md'
+            './AGENTS.md'
+            './docs/**/*.md'
+          fail: true
+        env:
+          # Authenticated GitHub requests avoid anonymous rate limiting.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
