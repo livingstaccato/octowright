@@ -28,6 +28,22 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
+def _resolve_watchdog_grace(*, keep_alive: bool, idle_grace: float | None, env_default: float | None) -> float | None:
+    """Seconds to arm the idle-watchdog with, or None to leave it disabled.
+
+    ``--keep-alive`` forces disabled. An explicit ``--idle-grace`` wins over the
+    ``OCTOWRIGHT_IDLE_GRACE`` env default; a non-positive value disables. With
+    nothing set the result is None (the default) so the daemon never auto-quits —
+    tearing down its live browser state mid-session would break the MCP client.
+    """
+    if keep_alive:
+        return None
+    grace = idle_grace if idle_grace is not None else env_default
+    if grace is None or grace <= 0:
+        return None
+    return grace
+
+
 @dataclass
 class _WatchdogState:
     """Mutable state owned by the watchdog loop. armed=True after the pool
