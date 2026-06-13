@@ -18,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from provide.telemetry import get_logger
 
 from octowright import scenarios_pool as _scenario_pool_mod
+from octowright import terminal as _terminal
 from octowright.browser_pool import BrowserPool
 from octowright.server._idempotency import _idempotent_dispatch
 from octowright.server.profiles import active_filter
@@ -25,10 +26,23 @@ from octowright.server.profiles import active_filter
 if TYPE_CHECKING:
     from mcp.types import Icon, ToolAnnotations
 
+    from octowright.terminal.pool import TerminalPool
+
 log = get_logger("octowright.server")
 
 pool = BrowserPool()
 scenario_pool = _scenario_pool_mod.ScenarioPool()
+
+# Terminal sessions are an optional feature (the `octowright[terminal]` extra —
+# see the terminal-sessions design spec §3.2). `terminal_pool` is None on a core
+# install; it is instantiated only when the uterm-backed extra is importable.
+# Phase 2's terminal MCP tools register only when this is non-None, so on a core
+# install they simply do not appear.
+terminal_pool: TerminalPool | None = None
+if _terminal.is_available():
+    from octowright.terminal.pool import TerminalPool as _TerminalPool
+
+    terminal_pool = _TerminalPool()
 
 # Records how this process's leader was started, so octowright_status can flag
 # the fragile inline-fallback mode — a client that became the in-process leader
