@@ -16,7 +16,6 @@ import { renderScreenshotsPanel } from "./screenshots-panel.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
 import { openTail } from "./tail.js";
-import { bootTerminalSession } from "./session-terminal.js";
 import {
   bindContext,
   getLogger,
@@ -534,6 +533,10 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   // Terminal sessions get a dedicated slim layout (no video/trace/tabs). Branch
   // before the browser layout build so the browser path stays untouched.
   if (detail.kind === "terminal") {
+    // Lazy-load the terminal view (xterm + addons, ~250KB) only for terminal
+    // sessions so it never bloats the browser-session debugger bundle. Also
+    // breaks the static session ↔ session-terminal import cycle.
+    const { bootTerminalSession } = await import("./session-terminal.js");
     await bootTerminalSession(root, sessionId, detail, {
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });
