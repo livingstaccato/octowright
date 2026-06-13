@@ -71,13 +71,20 @@ def ensure_connector_registered(connector_type: str) -> None:
     elif connector_type == "telnet":
         from provide.uterm.server.connectors.telnet import TelnetSessionConnector
 
-        # Subclass to skip the uterm-server egress check (_assert_peer_allowed),
-        # which lazily imports fastapi (a uterm-server dep not in octowright's
-        # venv). The egress check guards the uterm hub against SSRF; it's not
-        # applicable here — the user explicitly specifies the BBS host.
+        # Subclass to adapt TelnetSessionConnector for in-process use:
+        # (1) Skip _assert_peer_allowed — it lazily imports fastapi (a
+        #     uterm-server dep not in octowright's venv); the SSRF egress guard
+        #     it provides is for the uterm hub, not for a user-supplied BBS host.
+        # (2) Override _screen() to return the raw CP437-decoded buffer directly
+        #     — no status-header overlay, and CRLF endings preserved (the base
+        #     class does splitlines()+"\n".join() which strips \r, causing xterm
+        #     lines to shift right with convertEol:false).
         class _OctowrightTelnetConnector(TelnetSessionConnector):
             async def _assert_peer_allowed(self) -> None:
                 pass
+
+            def _screen(self) -> str:
+                return self._screen_buffer
 
         register_connector("telnet", _OctowrightTelnetConnector)
 
