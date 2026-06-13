@@ -40,6 +40,61 @@ def test_buffer_rotation_uses_suffix_overlap() -> None:
     assert out == [("terminal_output", {"data": "FG", "cursor": {"row": 0, "col": 0}, "screen_hash": "h"})]
 
 
+def test_clear_to_empty_emits_reset() -> None:
+    # connector.clear() sets buffer="" -> shorter, no overlap. The screen must be
+    # cleared, so emit a reset even though the new delta is empty.
+    t = MessageTranslator()
+    t.feed(_snap("lots of old output"))
+    out = t.feed(_snap(""))
+    assert out == [("terminal_output", {"data": "", "reset": True, "cursor": {"row": 0, "col": 0}, "screen_hash": "h"})]
+
+
+def test_clear_then_fresh_content_emits_reset_with_full_buffer() -> None:
+    # After clear() the buffer rebuilds from empty with unrelated, shorter
+    # content -> reset + the full new buffer (not appended below the stale one).
+    t = MessageTranslator()
+    t.feed(_snap("aaaaaaaaaa\nbbbbbbbbbb\nbash-3.2$ "))
+    out = t.feed(_snap("bash-3.2$ ls\r\nfile\r\n"))
+    assert out == [
+        (
+            "terminal_output",
+            {"data": "bash-3.2$ ls\r\nfile\r\n", "reset": True, "cursor": {"row": 0, "col": 0}, "screen_hash": "h"},
+        )
+    ]
+
+
+def test_cap_slide_with_repeated_lead_char_finds_correct_overlap() -> None:
+    # cur[0] occurs in prev before the real overlap start; the scan must skip
+    # the false occurrence and find the true one (a grown, front-dropped buffer).
+    t = MessageTranslator()
+    t.feed(_snap("CXCDE"))
+    out = t.feed(_snap("CDEFGH"))  # drop "CX", keep "CDE", append "FGH"
+    assert out == [("terminal_output", {"data": "FGH", "cursor": {"row": 0, "col": 0}, "screen_hash": "h"})]
+
+
+def test_grew_but_no_overlap_emits_reset() -> None:
+    # Buffer is at/above its prior length yet shares no overlap (e.g. clear()
+    # followed by a large fresh dump) -> reset + full buffer, never appended.
+    t = MessageTranslator()
+    t.feed(_snap("AAAA"))
+    out = t.feed(_snap("BBBBB"))
+    assert out == [
+        ("terminal_output", {"data": "BBBBB", "reset": True, "cursor": {"row": 0, "col": 0}, "screen_hash": "h"})
+    ]
+
+
+def test_reset_not_fooled_by_coincidental_prompt_overlap() -> None:
+    # The fresh post-clear buffer happens to START with the same prompt the old
+    # buffer ENDED with. A longest-overlap search alone would treat that as a
+    # cap-slide append; the length test correctly classifies it as a reset.
+    t = MessageTranslator()
+    t.feed(_snap("old line 1\r\nold line 2\r\nbash-3.2$ "))
+    out = t.feed(_snap("bash-3.2$ "))  # shorter; shares the "bash-3.2$ " prompt
+    assert out == [
+        ("terminal_output", {"data": "bash-3.2$ ", "reset": True, "cursor": {"row": 0, "col": 0}, "screen_hash": "h"})
+    ]
+
+
 def test_error_message_maps_to_terminal_error() -> None:
     t = MessageTranslator()
     assert t.feed({"type": "error", "message": "boom"}) == [("terminal_error", {"message": "boom"})]
