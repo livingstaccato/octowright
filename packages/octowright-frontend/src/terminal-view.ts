@@ -91,12 +91,14 @@ export function mountTerminalView(container: HTMLElement, opts: TerminalViewOpti
   screen.setAttribute("data-testid", "terminal-screen");
   container.append(screen);
 
-  const { terminal: term, fit } = (opts.terminalFactory ?? defaultFactory)();
+  // Destructured as `fitToContainer` (not `fit`) so biome's noFocusedTests
+  // rule doesn't mistake the bare `fit()` call for a Jest-style focused test.
+  const { terminal: term, fit: fitToContainer } = (opts.terminalFactory ?? defaultFactory)();
   term.open(screen);
 
   const doFit = (): void => {
     try {
-      fit();
+      fitToContainer();
     } catch (err) {
       log.debug({ event: "terminal_view_fit_failed", session_id: opts.sessionId, error: String(err) });
     }
