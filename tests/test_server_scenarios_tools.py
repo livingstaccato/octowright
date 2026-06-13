@@ -27,9 +27,11 @@ def _recordings_dir_under_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 def _patch_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
     fake_pool = MagicMock()
     fake_spool = MagicMock()
+    fake_tpool = MagicMock()
     monkeypatch.setattr(_scenarios, "pool", fake_pool)
     monkeypatch.setattr(_scenarios, "scenario_pool", fake_spool)
-    return {"pool": fake_pool, "scenario_pool": fake_spool}
+    monkeypatch.setattr(_scenarios, "terminal_pool", fake_tpool)
+    return {"pool": fake_pool, "scenario_pool": fake_spool, "terminal_pool": fake_tpool}
 
 
 @pytest.mark.anyio
@@ -52,6 +54,7 @@ def test_scenario_remap_participants_forwards(_patch_deps: dict[str, MagicMock])
         scenario_id="s",
         remaps=[{"old_instance_id": "a", "new_instance_id": "b"}],
         browser_pool=_patch_deps["pool"],
+        terminal_pool=_patch_deps["terminal_pool"],
     )
 
 
