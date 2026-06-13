@@ -7,18 +7,14 @@ class FakeTerminal implements TerminalLike {
   resets = 0;
   disposes = 0;
   openedOn: HTMLElement | null = null;
-  /** Ordered log of reset/write ops, to assert reset-before-write ordering. */
-  ops: string[] = [];
   open(el: HTMLElement): void {
     this.openedOn = el;
   }
   write(data: string): void {
     this.writes.push(data);
-    this.ops.push(`write:${data}`);
   }
   reset(): void {
     this.resets += 1;
-    this.ops.push("reset");
   }
   dispose(): void {
     this.disposes += 1;
@@ -74,20 +70,21 @@ describe("mountTerminalView", () => {
     expect(fake.writes).toEqual([]);
   });
 
-  it("feedEvents resets the screen before writing a reset delta", () => {
+  it("feedEvents prefixes a reset delta with in-stream RIS (\\x1bc), after the prior write", () => {
     const view = mount();
     view.feedEvents([
       { ts: "t", action: "terminal_output", data: "old screen" },
       { ts: "t", action: "terminal_output", data: "fresh after clear", reset: true },
     ]);
-    // reset must come BEFORE the fresh write so the stale screen doesn't linger.
-    expect(fake.ops).toEqual(["write:old screen", "reset", "write:fresh after clear"]);
+    // RIS must be IN the write stream (not an out-of-band term.reset()) so it is
+    // parsed after the prior delta — otherwise the stale screen reappears.
+    expect(fake.writes).toEqual(["old screen", "\x1bcfresh after clear"]);
   });
 
-  it("feedEvents clears on a reset even when the delta is empty (clear to empty)", () => {
+  it("feedEvents writes a bare RIS on a reset with empty data (clear to empty)", () => {
     const view = mount();
     view.feedEvents([{ ts: "t", action: "terminal_output", data: "", reset: true }]);
-    expect(fake.ops).toEqual(["reset", "write:"]);
+    expect(fake.writes).toEqual(["\x1bc"]);
   });
 
   it("fits the terminal to its container on mount", () => {
