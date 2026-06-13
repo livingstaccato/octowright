@@ -83,3 +83,14 @@ async def test_run_as_test_skips_terminal_participants(monkeypatch: pytest.Monke
 
     result = await srv.scenario_run_as_test(scenario_id="sid", out_path=str(tmp_path / "report.xml"))
     assert result["total"] == 0  # terminal participant skipped, no verify case emitted
+
+
+def test_example_browser_plus_terminal_scenario_parses() -> None:
+    from octowright.scenarios import load_yaml_scenario
+
+    path = Path(__file__).resolve().parent.parent / "examples" / "scenarios" / "browser-plus-terminal.yaml"
+    s = load_yaml_scenario(path.read_text(), "browser-plus-terminal")
+    by_kind = {p.kind: p for p in s.participants}
+    assert "chromium" in by_kind and "terminal" in by_kind
+    term = by_kind["terminal"]
+    assert term.connector_type == "pty" and term.role == "operator" and term.command == "/bin/bash"
