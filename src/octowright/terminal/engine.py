@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from typing import Any
+from typing import Any, cast
 
 from provide.uterm.server.connectors import (
     build_connector,
@@ -45,7 +45,10 @@ def ensure_connector_registered(connector_type: str) -> None:
     if connector_type == "pty":
         from provide.uterm.pty.connector import PTYConnector
 
-        register_connector("pty", PTYConnector)
+        # PTYConnector is structurally a connector but not a nominal SessionConnector
+        # subclass, so cast past register_connector's factory-type check (mypy + ty);
+        # uterm's own _register() registers it the same way.
+        register_connector("pty", cast(Any, PTYConnector))
     elif connector_type == "ssh":  # wired in Phase 2; harmless to register early
         from provide.uterm.server.connectors.ssh import SshSessionConnector
 
