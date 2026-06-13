@@ -7,14 +7,18 @@ class FakeTerminal implements TerminalLike {
   resets = 0;
   disposes = 0;
   openedOn: HTMLElement | null = null;
+  /** Ordered log of reset/write ops, to assert reset-before-write ordering. */
+  ops: string[] = [];
   open(el: HTMLElement): void {
     this.openedOn = el;
   }
   write(data: string): void {
     this.writes.push(data);
+    this.ops.push(`write:${data}`);
   }
   reset(): void {
     this.resets += 1;
+    this.ops.push("reset");
   }
   dispose(): void {
     this.disposes += 1;
@@ -68,6 +72,22 @@ describe("mountTerminalView", () => {
     const view = mount();
     view.feedEvents([{ ts: "t", action: "terminal_output" }]);
     expect(fake.writes).toEqual([]);
+  });
+
+  it("feedEvents resets the screen before writing a reset delta", () => {
+    const view = mount();
+    view.feedEvents([
+      { ts: "t", action: "terminal_output", data: "old screen" },
+      { ts: "t", action: "terminal_output", data: "fresh after clear", reset: true },
+    ]);
+    // reset must come BEFORE the fresh write so the stale screen doesn't linger.
+    expect(fake.ops).toEqual(["write:old screen", "reset", "write:fresh after clear"]);
+  });
+
+  it("feedEvents clears on a reset even when the delta is empty (clear to empty)", () => {
+    const view = mount();
+    view.feedEvents([{ ts: "t", action: "terminal_output", data: "", reset: true }]);
+    expect(fake.ops).toEqual(["reset", "write:"]);
   });
 
   it("fits the terminal to its container on mount", () => {
