@@ -87,6 +87,7 @@ class ScenarioPool:
         new_instance_id: str,
         role: str | None = None,
         browser_pool: Any | None = None,
+        terminal_pool: Any | None = None,
     ) -> ScenarioRemapEntry:
         live = self.get(scenario_id)
         matches = [p for p in live.participants if p.get("instance_id") == old_instance_id]
@@ -104,7 +105,9 @@ class ScenarioPool:
         target = matches[0]
         if browser_pool is None:
             raise ValueError("browser_pool is required for remap validation")
-        replacement = browser_pool.maybe_get(new_instance_id)
+        # A terminal participant's replacement must come from the terminal pool.
+        lookup_pool = self._pool_for(target, browser_pool, terminal_pool)
+        replacement = lookup_pool.maybe_get(new_instance_id)
         if replacement is None:
             raise ValueError(f"replacement instance_id={new_instance_id!r} is not live")
         expected_kind = target.get("kind")
@@ -129,7 +132,12 @@ class ScenarioPool:
         }
 
     def remap_participants(
-        self, *, scenario_id: str, remaps: list[dict[str, Any]], browser_pool: Any | None = None
+        self,
+        *,
+        scenario_id: str,
+        remaps: list[dict[str, Any]],
+        browser_pool: Any | None = None,
+        terminal_pool: Any | None = None,
     ) -> ScenarioRemapResult:
         applied: list[ScenarioRemapEntry] = []
         for item in remaps:
@@ -149,6 +157,7 @@ class ScenarioPool:
                     new_instance_id=new_instance_id,
                     role=role,
                     browser_pool=browser_pool,
+                    terminal_pool=terminal_pool,
                 )
             )
         return {"scenario_id": scenario_id, "applied": applied, "count": len(applied)}
@@ -290,7 +299,18 @@ class ScenarioPool:
                     terminal_pool, terminal_ids, logger=log, event="scenario.rollback.close_failed"
                 )
 
-    async def stop(self, *, scenario_id: str, browser_pool: Any) -> ScenarioStopResult:
+    @staticmethod
+    def _pool_for(p: dict[str, Any], browser_pool: Any, terminal_pool: Any | None) -> Any:
+        """The pool that owns participant ``p`` — terminal_pool for terminals, else browser_pool."""
+        if p.get("kind") == "terminal":
+            if terminal_pool is None:
+                raise RuntimeError("terminal participant present but terminal_pool is unavailable")
+            return terminal_pool
+        return browser_pool
+
+    async def stop(
+        self, *, scenario_id: str, browser_pool: Any, terminal_pool: Any | None = None
+    ) -> ScenarioStopResult:
         async with self._live_lock:
             live = self._live.pop(scenario_id, None)
         if live is None:
@@ -300,6 +320,8 @@ class ScenarioPool:
             from octowright import macros as _macros
 
             for p in live.participants:
+                if p.get("kind") == "terminal":
+                    continue  # teardown macros are Playwright-only; terminals are skipped
                 try:
                     session = browser_pool.get(p["instance_id"])
                     await _macros.run_macro(session=session, name=live.spec.teardown_macro, args={})
@@ -307,7 +329,7 @@ class ScenarioPool:
                     summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
         for p in live.participants:
             try:
-                await browser_pool.close(p["instance_id"], force=True)
+                await self._pool_for(p, browser_pool, terminal_pool).close(p["instance_id"], force=True)
                 summary["closed"].append(p["instance_id"])
             except Exception as e:
                 summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
@@ -364,6 +386,12 @@ class ScenarioPool:
         ):
 
             async def _run(p: dict[str, Any]) -> ScenarioParticipantOutcome:
+                if p.get("kind") == "terminal":
+                    return {
+                        "instance_id": p["instance_id"],
+                        "ok": False,
+                        "error": "terminal sessions do not support browser macros",
+                    }
                 session = browser_pool.get(p["instance_id"])
                 try:
                     await _macros.run_macro(session=session, name=macro, args=args or {})
@@ -398,6 +426,12 @@ class ScenarioPool:
         targets = self._participants_for_role(live, role)
 
         async def _wait(p: dict[str, Any]) -> ScenarioParticipantOutcome:
+            if p.get("kind") == "terminal":
+                return {
+                    "instance_id": p["instance_id"],
+                    "ok": False,
+                    "error": "terminal sessions do not support browser sync",
+                }
             session = browser_pool.get(p["instance_id"])
             try:
                 if selector or text:
