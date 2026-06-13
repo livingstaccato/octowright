@@ -31,6 +31,7 @@ from octowright.scenarios import (
     load_yaml_scenario,
     resolve_launch_kwargs,
     resolve_startup_macros,
+    resolve_terminal_launch,
 )
 from octowright.scenarios_pool import ScenarioPool
 
@@ -475,6 +476,45 @@ class TestResolveStartupMacros:
     def test_no_persona_returns_empty_list(self) -> None:
         p = Participant(persona="ghost", kind="webkit", role="r")
         assert resolve_startup_macros(p) == []
+
+
+class TestResolveTerminalLaunch:
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_pty(self) -> None:
+        kw = resolve_terminal_launch(
+            Participant(persona="a", kind="terminal", role="op", connector_type="pty", command="/bin/sh")
+        )
+        assert kw["kind"] == "pty"
+        assert kw["connector_config"] == {"command": "/bin/sh", "cols": 80, "rows": 24}
+        assert kw["profile"] == "a" and kw["protected"] is False and kw["label"] is None
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_pty_is_the_default_connector(self) -> None:
+        kw = resolve_terminal_launch(Participant(persona="a", kind="terminal", role="op"))
+        assert kw["kind"] == "pty"
+        assert kw["connector_config"]["command"] == "/bin/bash"
+
+    def test_ssh_explicit_args_win_over_persona_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _P:
+            app = {"ssh": {"host": "default-host", "user": "deploy", "key_path": "/k", "known_hosts": "/kh"}}
+
+        monkeypatch.setattr(_scenarios, "_load_persona_or_none", lambda name: _P())
+        kw = resolve_terminal_launch(
+            Participant(persona="a", kind="terminal", role="op", connector_type="ssh", host="explicit-host")
+        )
+        cfg = kw["connector_config"]
+        assert kw["kind"] == "ssh"
+        assert cfg["host"] == "explicit-host"  # participant wins
+        assert cfg["username"] == "deploy"  # persona default
+        assert cfg["client_key_path"] == "/k" and cfg["known_hosts"] == "/kh"
+        assert "command" not in cfg and "cols" not in cfg
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_ssh_without_persona_or_args_omits_optionals(self) -> None:
+        kw = resolve_terminal_launch(Participant(persona="ghost", kind="terminal", role="op", connector_type="ssh"))
+        cfg = kw["connector_config"]
+        # No host/user/key/known_hosts anywhere → only the default port survives.
+        assert cfg == {"port": 22}
 
 
 # ---------------------------------------------------------------------------
