@@ -49,13 +49,14 @@ uv run octowright test           # run the JSONL-driven test suite (CI-friendly)
 
 ## Architecture
 
-### Five Concepts
+### Core Concepts
 
 1. **Browser** — One Playwright instance (one engine, one window). Has `instance_id`, records to JSONL.
 2. **Profile** — Persistent on-disk state (`~/.config/octowright/profiles/<persona>/<kind>/`). Survives close/relaunch.
 3. **Persona** — Named identity (display name, default URL, credentials). Owns profiles across engines.
 4. **Scenario** — Pre-declared group of personas launched together with roles, fixtures, and verify macros for testing. Canonical roles are `player`/`monitor`/`spectator`; additional domain-specific roles are also in use (`main-site`, `recorder`, `replayer`, `form`, `counter`, `arithmetic` — see `examples/scenarios/` and `demo/bundles/`). `scenarios._validate_scenario` logs `scenario.unknown_role` on any role outside the canonical set so typos surface in logs without blocking custom role vocabularies.
 5. **Dashboard** — Starlette web UI showing live browsers, recordings, session debugger with embedded video + action timeline.
+6. **Terminal** *(optional — requires the `octowright[terminal]` extra)* — One `provide-uterm` connector driven in-process: a local PTY shell or an SSH session. Has `instance_id`, `kind="terminal"`, and records to the same JSONL format as browsers. Exposed as `terminal_*` MCP tools and surfaced in the dashboard session list alongside browsers. See **Terminal Sessions (optional)** below.
 
 ### Layer Map
 
@@ -68,6 +69,7 @@ CLI (Click)
       │   └─ server/scenarios.py
       │   └─ server/personas.py
       │   └─ server/meta.py
+      │   └─ server/terminal/      ← @mcp.tool terminal_* (optional; registered only with the [terminal] extra)
       └─ HTTP server (Starlette)
           └─ http/routes/*.py      ← JSON/WebSocket endpoints
           └─ frontend/             ← built TypeScript SPA
@@ -99,8 +101,10 @@ CLI (Click)
 | `src/octowright/browser_pool/visuals.py` | Emoji badges, title injection, macro-status pill helpers |
 | `src/octowright/browser_pool/_assets/*.js` | Init scripts injected into every page (title tag, corner badge, macro pill) |
 | `src/octowright/session/core.py` | `BrowserSession` dataclass |
-| `src/octowright/server/_state.py` | Shared singletons: `pool`, `mcp`, `scenario_pool` |
+| `src/octowright/server/_state.py` | Shared singletons: `pool`, `mcp`, `scenario_pool`, and `terminal_pool` (`None` unless the `octowright[terminal]` extra is installed) |
 | `src/octowright/server/browser/lifecycle.py` | MCP tools: `browser_launch`, `browser_close`, `browser_navigate` |
+| `src/octowright/terminal/` (package) | **Optional (`octowright[terminal]`).** In-process `provide-uterm` connector driver. `engine.py` runs the poll loop, `pool.py` is `TerminalPool` (mirrors `BrowserPool`'s surface), `session.py` is `TerminalSession`, `translate.py` maps connector messages → JSONL actions, `redact.py` masks recorded input, `availability.py` is the import-light extra-present detector. All uterm imports are quarantined here. |
+| `src/octowright/server/terminal/lifecycle.py` | **Optional.** MCP tools: `terminal_launch`/`terminal_send_input`/`terminal_snapshot`/`terminal_read`/`terminal_wait_for`/`terminal_close`/`terminal_list`. Registered via `server/_optional_tools.py` only when `terminal_pool` is non-`None`. |
 | `src/octowright/cli/serve.py` | Leader-election + server startup |
 | `src/octowright/http/app.py` | Starlette app factory |
 | `src/octowright/macros/` (package) | Record → save → replay pipeline; `execution.py` runs macros, `storage.py` reads/writes JSON, `runtime.py` dispatches actions, `semantic.py` summarizes recordings into human-readable digests (pure helpers, no MCP-tool registry dep — the `@mcp.tool macro_explain` wrapper lives in `server/macros.py`) |
@@ -154,9 +158,27 @@ The idle watchdog is **disabled by default**: the daemon stays up until an expli
 
 TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `src/types.ts` mirror the Python Pydantic/dataclass models.
 
+### Terminal Sessions (optional)
+
+Terminal sessions are an **optional, plugin-style feature** gated on the `octowright[terminal]` extra (which pulls in `provide-uterm`). On a core install the extra is absent: `octowright.terminal.is_available()` is `False`, `server/_state.terminal_pool` is `None`, and the `terminal_*` tools never register — **core never imports uterm**. Every uterm import is quarantined under `src/octowright/terminal/`.
+
+A terminal session drives one `provide-uterm` `SessionConnector` **in-process** (no hub/WebSocket). The engine's poll loop pumps `connector.poll_messages()`, deltas each cumulative screen snapshot, and appends actions to the **same JSONL recording format** browsers use — `terminal_start` / `terminal_input` / `terminal_output` / `terminal_stop` — so recordings, the dashboard session list, and disk-write containment treat terminals uniformly. `TerminalSession` carries `kind="terminal"` with a `connector_type` of `pty` or `ssh`. `TerminalPool` mirrors `BrowserPool`'s surface (`launch`/`get`/`maybe_get`/`iter_sessions`/`list_sessions`/`close`/`close_all`).
+
+**Tools.** `terminal_launch`, `terminal_send_input`, `terminal_snapshot`, `terminal_read`, `terminal_wait_for`, `terminal_close`, `terminal_list`. They register via `server/_optional_tools.py` (gated on `terminal_pool is not None`) rather than `server/__init__`, so the import-only-`__init__` convention test still passes. They form the `terminals` capability profile. `terminal_close` honors `protected` exactly like browser close — it refuses without `force=True`, raising `ProtectedTerminalCloseError`.
+
+**PTY** (`kind="pty"`): forks a local shell. `command=` (default `/bin/bash`), `cols`/`rows` size the PTY.
+
+**SSH** (`kind="ssh"`, args `host`/`port`/`user`/`key_path`/`password`/`known_hosts`/`insecure_no_host_check`): args map to the uterm SSH connector's config keys (`host`/`port`/`username`/`client_key_path`/`password`/`known_hosts`/`insecure_no_host_check`). The connector **requires `known_hosts`** unless `insecure_no_host_check=true`; a missing value surfaces as a clean `{"ok": false, "error": ...}` (the connector raises `ValueError` synchronously in `build_connector`, caught in `terminal_launch`). Passwords are accepted only as a live arg and never persisted. The SSH connector fixes its own remote PTY size and rejects unknown config keys, so `cols`/`rows`/`command` are PTY-only and never sent to it. <!-- pragma: allowlist secret (arg-name prose, not a credential) -->
+
+**Input redaction** reuses `OCTOWRIGHT_REDACT_INPUTS` (see Env Var Configuration): the connector always receives the real bytes; only the recorded `terminal_input` value is masked.
+
+**Dashboard.** `http/state.py` re-exports `terminal_pool` through the same module-property seam as `pool`/`scenario_pool`. `list_sessions`, `session_detail`, and the `session_close` DELETE endpoint all handle terminals when the pool is present, so a terminal appears in the live list, has a terminal-shaped detail (no browser-only video/console/page fields — `_terminal_session_detail` short-circuits before the browser detail builder), and closes from the dashboard.
+
+**Child-exit EOF.** The poll loop ends a session with `terminal_stop` reason `eof` when `connector.is_connected()` flips. The PTY connector's master fd is non-blocking, so a `b""` read is a true EOF: Linux raises EIO, macOS returns `b""`, and `PTYConnector._read_master` flips `_connected` on either, so EOF is detected cross-platform.
+
 ### Capability Profiles
 
-The full MCP tool surface is 111 tools. When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface), `advanced` (inspection + cached captures + assertions + viewport controls + ARIA-locator interactions), `macros`, `scenarios`, `goldens` (accessibility-tree snapshot save/diff/verify), `personas`. Unset / `all` keeps every tool (default, back-compat). The six named profiles together cover the profile-scoped tools plus 7 always-on meta/Advisor tools — the remaining tools (snapshots, a handful of less-common views, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,goldens,personas` is **not** equivalent to no filter. Authoritative tool counts live in `src/octowright/server/profiles.py`.
+The full MCP tool surface is 111 tools on a core install (118 with the optional `octowright[terminal]` extra, which adds the 7 `terminal_*` tools). When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving surface), `advanced` (inspection + cached captures + assertions + viewport controls + ARIA-locator interactions), `macros`, `scenarios`, `goldens` (accessibility-tree snapshot save/diff/verify), `personas`, and `terminals` (terminal sessions; only has tools to expose when the `octowright[terminal]` extra is installed). Unset / `all` keeps every tool (default, back-compat). The named profiles together cover the profile-scoped tools plus 7 always-on meta/Advisor tools — the remaining tools (snapshots, a handful of less-common views, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,goldens,personas,terminals` is **not** equivalent to no filter. Authoritative tool counts live in `src/octowright/server/profiles.py`.
 
 **Always-on meta and Advisor tools.** Seven diagnostic/guidance tools are exempt from the profile filter and register under any profile (or no profile): `octowright_status`, `octowright_storage_report`, `octowright_dashboard_url`, `octowright_check_takeover`, `octowright_advisor_status`, `octowright_advisor_set_preference`, and `octowright_advisor_record_macro_observation`. These give the LLM a way to inspect the active profile, inspect storage paths, find the dashboard URL, detect competing MCP plugins, and surface local Advisor guidance regardless of filter. The list is `ALWAYS_ON_TOOLS` in `src/octowright/server/profiles.py`.
 
@@ -216,6 +238,9 @@ Span names follow the `octowright.<area>.<verb>` convention. The list below is a
 | `octowright.scenario.start` | `scenario_id`, `scenario_name`, `participants` | `scenarios_pool.ScenarioPool.start` |
 | `octowright.session.close` | `instance_id`, `kind` | `session/core_ops_mixin.SessionOpsMixin.close` |
 | `octowright.session.navigate` | `instance_id`, `kind`, `url` | `session/core_page_mixin.SessionPageMixin.navigate` |
+| `octowright.terminal.close` | `connector_type`, `instance_id` | `terminal/engine.TerminalEngine.stop` *(optional extra)* |
+| `octowright.terminal.launch` | `connector_type`, `instance_id` | `terminal/engine.TerminalEngine.start` *(optional extra)* |
+| `octowright.terminal.send_input` | `connector_type`, `instance_id` | `terminal/engine.TerminalEngine.send_input` *(optional extra)* |
 
 `macro.action` spans nest under their `macro.run` parent, which (when invoked from `macro_run_sequence`) nests under `macro.run_sequence`, so a multi-step macro run renders as a clean tree.
 
@@ -231,6 +256,8 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 | `octowright_browser_closed_total` | counter | `kind` | Browser sessions closed cleanly via `session.close()`. |
 | `octowright_browser_launch_failed_total` | counter | `kind`, `error` | Failed launches. `error` is the exception class name. |
 | `octowright_browser_evicted_total` | counter | `kind` | Browsers removed from the pool by an external close signal (not `pool.close`). |
+| `octowright_terminal_launched_total` | counter | `connector_type` | Terminal sessions launched (after a successful `engine.start()`). *(optional extra)* |
+| `octowright_terminal_closed_total` | counter | `connector_type` | Terminal sessions ended — counted once per session in `_record_stop`, whichever path got there first (explicit close or poll-loop EOF). *(optional extra)* |
 | `octowright_macro_run_total` | counter | `macro`, `status` | Macro runs (`status` is `ok`/`failed`). |
 | `octowright_bridge_reconnect_total` | counter | `reason` | Times the follower bridge reconnected to the leader. |
 | `octowright_bridge_rpc_total` | counter | `method` | JSON-RPC messages forwarded local→remote. |
@@ -239,7 +266,7 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 | `octowright_session_navigate_duration_seconds` | histogram (s) | `kind` | Duration of `session.navigate()` including `page.goto`. |
 | `octowright_bridge_rpc_duration_seconds` | histogram (s) | `method`, `outcome` | End-to-end follower→leader→follower RPC latency. |
 
-The `macro` label is capped at `OCTOWRIGHT_METRICS_MACRO_LABEL_CAP` distinct values (default 256); beyond the cap, names land in an `(overflow)` bucket so long-lived deployments don't unbound their time-series count. The `error` and `method` labels are intrinsically bounded by code paths; `kind` is bounded to the three browser engines plus `unknown`. `octowright_status()["metrics"]` surfaces `macro_labels_seen` and `macro_label_overflow_count` so an operator can see when dynamic macro names (e.g. `migrate-table-{uuid}`) have saturated the cap. The recovery escape hatch is `octowright.macros.execution.reset_macro_label_seen()` — in-process only (not exposed as an MCP tool, by design) for tests or operator process access.
+The `macro` label is capped at `OCTOWRIGHT_METRICS_MACRO_LABEL_CAP` distinct values (default 256); beyond the cap, names land in an `(overflow)` bucket so long-lived deployments don't unbound their time-series count. The `error` and `method` labels are intrinsically bounded by code paths; `kind` is bounded to the three browser engines plus `unknown`; `connector_type` is bounded to `pty`/`ssh`. `octowright_status()["metrics"]` surfaces `macro_labels_seen` and `macro_label_overflow_count` so an operator can see when dynamic macro names (e.g. `migrate-table-{uuid}`) have saturated the cap. The recovery escape hatch is `octowright.macros.execution.reset_macro_label_seen()` — in-process only (not exposed as an MCP tool, by design) for tests or operator process access.
 
 There is intentionally no counter for the ws-cache batched flush — the flush is purely a transport optimization and its frequency is not a useful operational signal.
 
