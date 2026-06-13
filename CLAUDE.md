@@ -156,7 +156,7 @@ The idle watchdog is **disabled by default**: the daemon stays up until an expli
 
 ### Frontend
 
-TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `src/types.ts` mirror the Python Pydantic/dataclass models. Terminal sessions render with **`@xterm/xterm`** (a direct dependency): `terminal-view.ts` wraps an xterm instance behind an injectable factory (unit-testable without a real renderer), and `session-terminal.ts` is the terminal-detail boot path that `session.ts` delegates to for `kind === "terminal"`.
+TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `src/types.ts` mirror the Python Pydantic/dataclass models. Terminal sessions render with **`@xterm/xterm`** plus the `addon-fit` (fit the display to its container — read-only, never resizes the PTY), `addon-web-links` (clickable URLs), and `addon-unicode11` (wide-char/emoji widths) addons: `terminal-view.ts` wraps an xterm instance behind an injectable factory (unit-testable without a real renderer; a `ResizeObserver` + window-resize refit the display), and `session-terminal.ts` is the terminal-detail boot path. `session.ts` **lazily** `import()`s `session-terminal.js` only for `kind === "terminal"`, so xterm + addons (~250 KB) land in a separate chunk that never loads on the browser-session debugger.
 
 ### Terminal Sessions (optional)
 
