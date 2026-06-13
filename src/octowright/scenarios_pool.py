@@ -233,11 +233,10 @@ class ScenarioPool:
         """Launch browser participants via the roster and terminal participants
         individually, keyed back to their original participant index. On any
         failure, close everything launched in either pool and raise."""
-        from octowright.scenarios import resolve_launch_kwargs, resolve_terminal_launch
+        from octowright.scenarios import resolve_launch_kwargs
 
         launched_by_index: dict[int, dict[str, Any]] = {}
         browser_ids: list[str] = []
-        terminal_ids: list[str] = []
         errors: list[Any] = []
 
         if browser_specs:
@@ -248,7 +247,29 @@ class ScenarioPool:
                 for (i, _p), launched in zip(browser_specs, roster["launched"], strict=True):
                     launched_by_index[i] = launched
 
+        terminal_ids = await self._launch_terminals(terminal_pool, terminal_specs, launched_by_index, errors)
+
+        if errors:
+            await self._close_launched(browser_pool, browser_ids, terminal_pool, terminal_ids)
+            raise RuntimeError(f"scenario {effective_name!r}: {len(errors)} participant(s) failed to launch: {errors}")
+        return launched_by_index, browser_ids, terminal_ids
+
+    @staticmethod
+    async def _launch_terminals(
+        terminal_pool: Any | None,
+        terminal_specs: list[tuple[int, Any]],
+        launched_by_index: dict[int, dict[str, Any]],
+        errors: list[Any],
+    ) -> list[str]:
+        """Launch each terminal participant, recording its launched dict by index.
+        Stops early if ``errors`` is already non-empty (the browser roster failed),
+        so a failed browser launch never opens further (esp. remote SSH) sessions."""
+        from octowright.scenarios import resolve_terminal_launch
+
+        terminal_ids: list[str] = []
         for i, p in terminal_specs:
+            if errors:
+                break
             assert terminal_pool is not None  # start() guarantees this when terminal_specs is non-empty
             try:
                 launched = await terminal_pool.launch(**resolve_terminal_launch(p))
@@ -257,11 +278,7 @@ class ScenarioPool:
                 continue
             terminal_ids.append(launched["instance_id"])
             launched_by_index[i] = launched
-
-        if errors:
-            await self._close_launched(browser_pool, browser_ids, terminal_pool, terminal_ids)
-            raise RuntimeError(f"scenario {effective_name!r}: {len(errors)} participant(s) failed to launch: {errors}")
-        return launched_by_index, browser_ids, terminal_ids
+        return terminal_ids
 
     @staticmethod
     async def _close_launched(

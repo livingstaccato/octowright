@@ -55,12 +55,18 @@ def scenario_plan(name: str) -> ScenarioPlanResult:
     spec = scenario_mod.load_scenario(name)
     participants: list[dict[str, Any]] = []
     for p in spec.participants:
+        # Terminals launch via terminal_pool with a connector_config, not the
+        # browser launch kwargs — show the real shape so the dry-run is accurate.
+        if p.kind == "terminal":
+            launch_kwargs = scenario_mod.resolve_terminal_launch(p)
+        else:
+            launch_kwargs = scenario_mod.resolve_launch_kwargs(p)
         participants.append(
             {
                 "persona": p.persona,
                 "kind": p.kind,
                 "role": p.role,
-                "launch_kwargs": scenario_mod.resolve_launch_kwargs(p),
+                "launch_kwargs": launch_kwargs,
                 "startup_macros": scenario_mod.resolve_startup_macros(p),
             }
         )
