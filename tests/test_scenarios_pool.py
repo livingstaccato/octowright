@@ -70,12 +70,45 @@ class _Pool:
         self.closed.append((instance_id, force))
 
 
+class _TerminalPool:
+    """Minimal terminal pool: close (records) + maybe_get (for remap validation)."""
+
+    def __init__(self) -> None:
+        self.closed: list[tuple[str, bool]] = []
+        self._sessions = {"t2": SimpleNamespace(kind="terminal", profile="ops")}
+
+    async def close(self, instance_id: str, *, force: bool = False) -> None:
+        self.closed.append((instance_id, force))
+
+    def maybe_get(self, instance_id: str) -> Any:
+        return self._sessions.get(instance_id)
+
+
 def _live() -> LiveScenario:
     return LiveScenario(
         scenario_id="sid",
         name="demo",
         spec=_Spec("demo", [_ParticipantSpec("cosmo", "r1")], fixtures={}),
         participants=[{"instance_id": "a", "persona": "cosmo", "role": "r1", "kind": "chromium", "log_path": "a.log"}],
+    )
+
+
+def _mixed_live() -> LiveScenario:
+    return LiveScenario(
+        scenario_id="mix",
+        name="mix",
+        spec=_Spec("mix", [], fixtures={}, teardown_macro=None),
+        participants=[
+            {"instance_id": "b", "persona": "dante", "role": "player", "kind": "chromium", "log_path": "b.log"},
+            {
+                "instance_id": "t",
+                "persona": "ops",
+                "role": "operator",
+                "kind": "terminal",
+                "connector_type": "pty",
+                "log_path": "t.log",
+            },
+        ],
     )
 
 
@@ -356,3 +389,55 @@ async def test_start_requires_name_or_spec() -> None:
     pool = _Pool()
     with pytest.raises(ValueError):
         await sp.start(name=None, spec=None, browser_pool=pool)
+
+
+# ---------------------------------------------------------------------------
+# Terminal participants: close routing + browser-only-op guards + remap routing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_stop_routes_terminal_close_to_terminal_pool() -> None:
+    sp = ScenarioPool()
+    live = _mixed_live()
+    sp._live[live.scenario_id] = live
+    bp, tp = _Pool(), _TerminalPool()
+    summary = await sp.stop(scenario_id="mix", browser_pool=bp, terminal_pool=tp)
+    assert ("b", True) in bp.closed and tp.closed == [("t", True)]
+    assert set(summary["closed"]) == {"b", "t"}
+
+
+@pytest.mark.anyio
+async def test_run_macro_reports_terminal_as_unsupported() -> None:
+    sp = ScenarioPool()
+    live = _mixed_live()
+    sp._live[live.scenario_id] = live
+    rm = await sp.run_macro(scenario_id="mix", macro="m", browser_pool=_Pool(), role="operator")
+    assert rm["targeted"] == 1
+    assert rm["results"][0]["ok"] is False
+    assert "browser macros" in rm["results"][0]["error"]
+
+
+@pytest.mark.anyio
+async def test_wait_for_sync_reports_terminal_as_unsupported() -> None:
+    sp = ScenarioPool()
+    live = _mixed_live()
+    sp._live[live.scenario_id] = live
+    ws = await sp.wait_for_sync(scenario_id="mix", browser_pool=_Pool(), role="operator", selector="#x")
+    assert ws["results"][0]["ok"] is False
+    assert "browser sync" in ws["results"][0]["error"]
+
+
+def test_remap_terminal_participant_uses_terminal_pool() -> None:
+    sp = ScenarioPool()
+    live = _mixed_live()
+    sp._live[live.scenario_id] = live
+    tp = _TerminalPool()  # maybe_get("t2") → terminal session with matching profile
+    out = sp.remap_participant(
+        scenario_id="mix",
+        old_instance_id="t",
+        new_instance_id="t2",
+        browser_pool=_Pool(),
+        terminal_pool=tp,
+    )
+    assert out["new_instance_id"] == "t2" and out["role"] == "operator"
