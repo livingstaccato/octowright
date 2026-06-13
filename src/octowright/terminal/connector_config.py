@@ -16,12 +16,34 @@ from typing import Any
 
 from octowright.defaults import SSH_DEFAULT_PORT
 
-__all__ = ["SSH_DEFAULT_PORT", "pty_connector_config", "ssh_connector_config"]
+TELNET_DEFAULT_PORT = 23
+
+__all__ = [
+    "SSH_DEFAULT_PORT",
+    "TELNET_DEFAULT_PORT",
+    "pty_connector_config",
+    "ssh_connector_config",
+    "telnet_connector_config",
+]
 
 
 def pty_connector_config(*, command: str | None, cols: int | None, rows: int | None) -> dict[str, Any]:
     """Build the PTY connector_config, applying the same defaults as terminal_launch."""
     return {"command": command or "/bin/bash", "cols": cols or 80, "rows": rows or 24}
+
+
+def telnet_connector_config(*, host: str | None, port: int) -> dict[str, Any]:
+    """Build the telnet connector_config for TelnetSessionConnector.
+
+    Only ``host`` and ``port`` are supported (``input_mode`` defaults to
+    ``"open"`` inside the connector and is never surfaced to MCP callers).
+    No ``cols``/``rows``/``command`` — the connector hardcodes its own terminal
+    geometry (80x25) to match typical BBS server expectations.
+    """
+    cfg: dict[str, Any] = {"port": port}
+    if host is not None:
+        cfg["host"] = host
+    return cfg
 
 
 def ssh_connector_config(

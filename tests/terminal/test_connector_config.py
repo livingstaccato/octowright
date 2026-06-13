@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from octowright.terminal.connector_config import pty_connector_config, ssh_connector_config
+from octowright.terminal.connector_config import pty_connector_config, ssh_connector_config, telnet_connector_config
 
 
 def test_pty_config_defaults_and_overrides() -> None:
@@ -39,6 +39,27 @@ def test_ssh_config_emits_only_connector_keys() -> None:
         "known_hosts": "/kh",
     }
     assert "cols" not in cfg and "rows" not in cfg and "command" not in cfg
+
+
+def test_telnet_config_host_and_port() -> None:
+    cfg = telnet_connector_config(host="bbs.example.com", port=23)
+    assert cfg == {"host": "bbs.example.com", "port": 23}
+    # No PTY-only or SSH-only keys.
+    assert "command" not in cfg and "cols" not in cfg and "rows" not in cfg
+    assert "username" not in cfg and "known_hosts" not in cfg
+
+
+def test_telnet_config_omits_host_when_none() -> None:
+    cfg = telnet_connector_config(host=None, port=9999)
+    assert cfg == {"port": 9999}
+    assert "host" not in cfg
+
+
+def test_telnet_config_only_emits_valid_connector_keys() -> None:
+    from provide.uterm.server.connectors.telnet import TelnetSessionConnector
+
+    cfg = telnet_connector_config(host="h", port=23)
+    assert set(cfg) <= TelnetSessionConnector._VALID_CONFIG_KEYS
 
 
 def test_ssh_config_insecure_flag_and_password() -> None:

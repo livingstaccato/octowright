@@ -68,6 +68,10 @@ def ensure_connector_registered(connector_type: str) -> None:
         from provide.uterm.server.connectors.ssh import SshSessionConnector
 
         register_connector("ssh", SshSessionConnector)
+    elif connector_type == "telnet":
+        from provide.uterm.server.connectors.telnet import TelnetSessionConnector
+
+        register_connector("telnet", TelnetSessionConnector)
 
 
 class TerminalEngine:
