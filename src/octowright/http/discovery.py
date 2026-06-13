@@ -58,20 +58,57 @@ def _iter_recordings(recordings_dir: Path) -> list[Path]:
     return sorted(recordings_dir.glob("*.jsonl"))
 
 
+def _read_first_opening(jsonl_path: Path) -> dict[str, Any] | None:
+    """Find a recording's opening event: browser ``launch`` or ``terminal_start``.
+
+    Lets closed-session discovery classify a recording's kind. Terminal
+    recordings have no ``launch`` row (they open with ``terminal_start``), so a
+    ``launch``-only scan would mislabel them ``unknown``.
+    """
+    try:
+        with jsonl_path.open(encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("action") in ("launch", "terminal_start"):
+                    return entry
+    except OSError:
+        return None
+    return None
+
+
 def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
     """Build a SessionSummary for a closed-session JSONL on disk."""
     instance_id = _instance_id_from_recording_name(jsonl_path.stem)
     if instance_id is None:
         return None
-    launch = _read_first_launch(jsonl_path) or {}
+    opening = _read_first_opening(jsonl_path) or {}
     stat = jsonl_path.stat()
-    started = launch.get("ts") or _iso(stat.st_ctime)
+    started = opening.get("ts") or _iso(stat.st_ctime)
+    if opening.get("action") == "terminal_start":
+        # Terminal recordings carry connector_type but none of the browser
+        # launch metadata (kind/label/url/profile come from a launch row).
+        return {
+            "id": instance_id,
+            "kind": "terminal",
+            "label": None,
+            "profile": None,
+            "url": None,
+            "started_at": started,
+            "live": False,
+            "log_path": str(jsonl_path),
+        }
     return {
         "id": instance_id,
-        "kind": launch.get("kind") or "unknown",
-        "label": launch.get("label"),
-        "profile": launch.get("profile"),
-        "url": launch.get("url"),
+        "kind": opening.get("kind") or "unknown",
+        "label": opening.get("label"),
+        "profile": opening.get("profile"),
+        "url": opening.get("url"),
         "started_at": started,
         "live": False,
         "log_path": str(jsonl_path),
