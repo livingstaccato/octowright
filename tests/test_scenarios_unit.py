@@ -592,6 +592,61 @@ class _StubPool:
         return {"closed": True}
 
 
+class _StubTerminalSession:
+    """Minimal terminal session — has instance_id + kind; no browser methods."""
+
+    def __init__(self, instance_id: str) -> None:
+        self.instance_id = instance_id
+        self.kind = "terminal"
+
+
+class _StubTerminalPool:
+    """launch / get / maybe_get / close, mirroring TerminalPool's surface."""
+
+    def __init__(self, *, launch_fails: int = 0) -> None:
+        self.launched: list[dict[str, Any]] = []
+        self.closed: list[str] = []
+        self.sessions: dict[str, _StubTerminalSession] = {}
+        self._launch_fails = launch_fails
+
+    async def launch(
+        self,
+        *,
+        kind: str,
+        connector_config: dict[str, Any],
+        label: str | None = None,
+        profile: str | None = None,
+        protected: bool = False,
+    ) -> dict[str, Any]:
+        if self._launch_fails > 0:
+            self._launch_fails -= 1
+            raise RuntimeError("forced terminal launch failure")
+        iid = f"term-{len(self.launched)}"
+        self.launched.append({"instance_id": iid, "kind": kind, "connector_config": connector_config})
+        self.sessions[iid] = _StubTerminalSession(iid)
+        return {
+            "instance_id": iid,
+            "kind": "terminal",
+            "connector_type": kind,
+            "label": label,
+            "profile": profile,
+            "log_path": f"/tmp/{iid}.jsonl",
+        }
+
+    def get(self, instance_id: str) -> _StubTerminalSession:
+        if instance_id not in self.sessions:
+            raise KeyError(instance_id)
+        return self.sessions[instance_id]
+
+    def maybe_get(self, instance_id: str) -> _StubTerminalSession | None:
+        return self.sessions.get(instance_id)
+
+    async def close(self, instance_id: str, *, force: bool = False) -> dict[str, Any]:
+        self.closed.append(instance_id)
+        self.sessions.pop(instance_id, None)
+        return {"closed": True}
+
+
 def _write_trivial_scenario(scenarios_dir: Path, name: str, participants: list[dict[str, Any]], **extra: Any) -> None:
     doc = {"name": name, "participants": participants, **extra}
     (scenarios_dir / f"{name}.yaml").write_text(yaml.safe_dump(doc))
@@ -622,6 +677,53 @@ class TestScenarioPoolStart:
         spool = ScenarioPool()
         with pytest.raises(RuntimeError, match="no participants"):
             await spool.start(name="empty", browser_pool=_StubPool())
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_mixed_browser_and_terminal_launch(self) -> None:
+        spec = Scenario(
+            name="mix",
+            participants=[
+                Participant(persona="dante", kind="chromium", role="player"),
+                Participant(persona="ops", kind="terminal", role="operator", connector_type="pty"),
+            ],
+        )
+        bp, tp = _StubPool(), _StubTerminalPool()
+        spool = ScenarioPool()
+        live = await spool.start(spec=spec, browser_pool=bp, terminal_pool=tp)
+        # Participants preserve original spec order across the partitioned launch.
+        assert [p["kind"] for p in live.participants] == ["chromium", "terminal"]
+        assert live.participants[1]["connector_type"] == "pty"
+        assert live.participants[1]["role"] == "operator"
+        assert len(tp.launched) == 1 and tp.launched[0]["kind"] == "pty"
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_terminal_participant_without_terminal_pool_raises(self) -> None:
+        spec = Scenario(
+            name="t",
+            participants=[Participant(persona="ops", kind="terminal", role="operator")],
+        )
+        spool = ScenarioPool()
+        with pytest.raises(RuntimeError, match="terminal"):
+            await spool.start(spec=spec, browser_pool=_StubPool(), terminal_pool=None)
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_terminal_launch_failure_closes_browsers_and_raises(self) -> None:
+        spec = Scenario(
+            name="mix",
+            participants=[
+                Participant(persona="dante", kind="chromium", role="player"),
+                Participant(persona="ops", kind="terminal", role="operator"),
+            ],
+        )
+        bp, tp = _StubPool(), _StubTerminalPool(launch_fails=1)
+        spool = ScenarioPool()
+        with pytest.raises(RuntimeError, match="failed to launch"):
+            await spool.start(spec=spec, browser_pool=bp, terminal_pool=tp)
+        # The successfully-launched browser must be rolled back.
+        assert bp.closed == ["iid-0"]
 
     @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio

@@ -18,6 +18,7 @@ from octowright.scenarios_pool import LiveScenario, ScenarioPool, _apply_fixture
 class _ParticipantSpec:
     persona: str
     role: str
+    kind: str = "chromium"  # real Participant.kind is required; browser by default here
 
 
 @dataclass
