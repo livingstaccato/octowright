@@ -710,6 +710,36 @@ class TestScenarioPoolStart:
 
     @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
+    async def test_browser_roster_error_skips_terminal_launch(self) -> None:
+        spec = Scenario(
+            name="mix",
+            participants=[
+                Participant(persona="dante", kind="chromium", role="player"),
+                Participant(persona="ops", kind="terminal", role="operator"),
+            ],
+        )
+        bp = _StubPool(
+            spawn_launched=[
+                {
+                    "instance_id": "iid-0",
+                    "kind": "chromium",
+                    "label": None,
+                    "profile": "dante",
+                    "url": None,
+                    "log_path": "/tmp/0.jsonl",
+                }
+            ],
+            spawn_errors=[{"spec": {"kind": "firefox"}, "error": "boom"}],
+        )
+        tp = _StubTerminalPool()
+        spool = ScenarioPool()
+        with pytest.raises(RuntimeError, match="failed to launch"):
+            await spool.start(spec=spec, browser_pool=bp, terminal_pool=tp)
+        assert tp.launched == []  # terminal not opened once the browser roster already errored
+        assert bp.closed == ["iid-0"]
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
     async def test_terminal_launch_failure_closes_browsers_and_raises(self) -> None:
         spec = Scenario(
             name="mix",

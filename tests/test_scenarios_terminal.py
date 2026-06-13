@@ -85,6 +85,28 @@ async def test_run_as_test_skips_terminal_participants(monkeypatch: pytest.Monke
     assert result["total"] == 0  # terminal participant skipped, no verify case emitted
 
 
+def test_scenario_plan_shows_terminal_connector_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.scenarios import Participant, Scenario
+
+    spec = Scenario(
+        name="p",
+        participants=[
+            Participant(persona="ops", kind="terminal", role="operator", connector_type="pty", command="/bin/sh"),
+            Participant(persona="dante", kind="chromium", role="player"),
+        ],
+    )
+    monkeypatch.setattr(srv.scenario_mod, "load_scenario", lambda name: spec)
+    out = srv.scenario_plan(name="p")
+    by_role = {p["role"]: p for p in out["participants"]}
+    term_kwargs = by_role["operator"]["launch_kwargs"]
+    # Terminal dry-run shows the connector config, not browser launch kwargs.
+    assert term_kwargs["kind"] == "pty"
+    assert term_kwargs["connector_config"]["command"] == "/bin/sh"
+    assert "viewport_w" not in term_kwargs
+    browser_kwargs = by_role["player"]["launch_kwargs"]
+    assert browser_kwargs["kind"] == "chromium" and "connector_config" not in browser_kwargs
+
+
 def test_example_browser_plus_terminal_scenario_parses() -> None:
     from octowright.scenarios import load_yaml_scenario
 
