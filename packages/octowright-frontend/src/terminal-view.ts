@@ -128,6 +128,12 @@ export function mountTerminalView(container: HTMLElement, opts: TerminalViewOpti
     feedEvents(events: RecordingEvent[]): void {
       for (const ev of events) {
         if (ev.action === "terminal_output" && typeof ev.data === "string") {
+          // `reset: true` means the connector's buffer was cleared and `data`
+          // is the full new buffer — clear the screen first so the stale screen
+          // doesn't linger above it. A normal delta just appends.
+          if (ev.reset === true) {
+            term.reset();
+          }
           term.write(ev.data);
         }
       }
