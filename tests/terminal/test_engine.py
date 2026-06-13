@@ -86,3 +86,16 @@ async def test_engine_masks_password_source_input(tmp_path: Path, monkeypatch: p
     masked = next(a for a in actions if a["action"] == "terminal_input")
     assert masked["keys"] == "***"
     assert masked["byte_count"] == len(b"s3cret\n")
+
+
+async def test_engine_send_input_on_dead_terminal_is_noop(tmp_path: Path) -> None:
+    recorder = Recorder(tmp_path / "t.jsonl")
+    engine = TerminalEngine("eng-4", "cat", "pty", {"command": "/bin/cat"}, recorder)
+    await engine.start()
+    await engine.stop()  # connector now disconnected
+    # Sending to a dead terminal records no phantom input (and logs a warning).
+    await engine.send_input("ignored\n")
+    recorder.close()
+
+    actions = _read_actions(tmp_path / "t.jsonl")
+    assert not any(a["action"] == "terminal_input" for a in actions)

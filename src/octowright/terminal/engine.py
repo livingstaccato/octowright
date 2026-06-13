@@ -18,6 +18,7 @@ import contextlib
 import re
 from typing import Any, cast
 
+from provide.telemetry import get_logger
 from provide.uterm.server.connectors import (
     build_connector,
     register_connector,
@@ -27,6 +28,8 @@ from provide.uterm.server.connectors import (
 from octowright.recorder import Recorder
 from octowright.terminal import redact
 from octowright.terminal.translate import MessageTranslator
+
+log = get_logger("octowright.terminal")
 
 # Matches HostedSessionRuntime's backoff for connectors with no internal wait.
 _POLL_IDLE_SLEEP_S = 0.05
@@ -66,6 +69,7 @@ class TerminalEngine:
     ) -> None:
         ensure_connector_registered(connector_type)
         cfg = dict(connector_config)
+        self._instance_id = instance_id
         self._connector_type = connector_type
         self._cols = int(cfg.get("cols", 80))
         self._rows = int(cfg.get("rows", 24))
@@ -103,6 +107,11 @@ class TerminalEngine:
             self._recorder.record(action, **fields)
 
     async def send_input(self, text: str, *, password: bool = False) -> None:
+        if not self._connector.is_connected():
+            # User-action path: surface (don't silently swallow) input sent to a
+            # dead terminal — the connector would otherwise drop the bytes quietly.
+            log.warning("terminal.send_input.disconnected", instance_id=self._instance_id)
+            return
         masked = redact.should_mask(at_password_prompt=self._at_password_prompt, password_source=password)
         self._recorder.record("terminal_input", **redact.input_fields(text, masked=masked))
         for msg in await self._connector.handle_input(text):
@@ -111,6 +120,10 @@ class TerminalEngine:
     async def snapshot(self) -> dict[str, Any]:
         msg = await self._connector.get_snapshot()
         self._latest_screen = str(msg.get("screen", ""))
+        # Keep the password-prompt flag fresh so a send_input right after an
+        # on-demand snapshot masks correctly (defense-in-depth; the poll loop
+        # otherwise refreshes it within one _POLL_IDLE_SLEEP_S tick).
+        self._at_password_prompt = redact.is_password_prompt(self._latest_screen)
         return {
             "screen": self._latest_screen,
             "cursor": msg.get("cursor"),
@@ -122,7 +135,7 @@ class TerminalEngine:
         if prompt is None and text is None:
             raise ValueError("wait_for requires either prompt= or text=")
         pattern = re.compile(prompt) if prompt is not None else None
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while loop.time() < deadline:
             screen = self._latest_screen
