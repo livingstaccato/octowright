@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""@mcp.tool surface for driving terminal sessions (PTY / SSH)."""
+"""@mcp.tool surface for driving terminal sessions (PTY / SSH / Telnet)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,15 @@ from typing import Any
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import mcp, terminal_pool
 from octowright.terminal.connector_config import SSH_DEFAULT_PORT as _DEFAULT_SSH_PORT
+from octowright.terminal.connector_config import TELNET_DEFAULT_PORT as _DEFAULT_TELNET_PORT
 from octowright.terminal.connector_config import (
     pty_connector_config as _pty_connector_config,
 )
 from octowright.terminal.connector_config import (
     ssh_connector_config as _ssh_connector_config,
+)
+from octowright.terminal.connector_config import (
+    telnet_connector_config as _telnet_connector_config,
 )
 from octowright.terminal.errors import ProtectedTerminalCloseError
 from octowright.terminal.pool import TerminalPool
@@ -35,14 +39,16 @@ def _pool() -> TerminalPool:
     description=(
         "Launch a terminal session and start recording. kind='pty' runs a local "
         "shell (command=, default /bin/bash); kind='ssh' connects to a remote host "
-        "(host/user/key_path/known_hosts). Returns instance_id for the other terminal_* tools."
+        "(host/user/key_path/known_hosts); kind='telnet' connects to a telnet BBS or "
+        "server (host/port, default port 23) with CP437 decoding and RFC 854 IAC "
+        "negotiation. Returns instance_id for the other terminal_* tools."
     ),
 )
 async def terminal_launch(
     kind: str = "pty",
     command: str | None = None,
     host: str | None = None,
-    port: int = _DEFAULT_SSH_PORT,
+    port: int | None = None,
     user: str | None = None,
     key_path: str | None = None,
     password: str | None = None,
@@ -57,12 +63,17 @@ async def terminal_launch(
     if kind == "ssh":
         cfg = _ssh_connector_config(
             host=host,
-            port=port,
+            port=port if port is not None else _DEFAULT_SSH_PORT,
             user=user,
             key_path=key_path,
             password=password,
             known_hosts=known_hosts,
             insecure_no_host_check=insecure_no_host_check,
+        )
+    elif kind == "telnet":
+        cfg = _telnet_connector_config(
+            host=host,
+            port=port if port is not None else _DEFAULT_TELNET_PORT,
         )
     else:
         cfg = _pty_connector_config(command=command, cols=cols, rows=rows)
