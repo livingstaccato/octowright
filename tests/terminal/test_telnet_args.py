@@ -27,6 +27,7 @@ def test_telnet_connector_config_only_emits_valid_connector_keys() -> None:
 
     cfg = lifecycle._telnet_connector_config(host="h", port=23)
     assert set(cfg) <= TelnetSessionConnector._VALID_CONFIG_KEYS
+    assert cfg.get("hub_overlay") is False
 
 
 def test_telnet_default_port_is_23() -> None:

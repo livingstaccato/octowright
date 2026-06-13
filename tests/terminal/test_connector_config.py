@@ -43,7 +43,7 @@ def test_ssh_config_emits_only_connector_keys() -> None:
 
 def test_telnet_config_host_and_port() -> None:
     cfg = telnet_connector_config(host="bbs.example.com", port=23)
-    assert cfg == {"host": "bbs.example.com", "port": 23}
+    assert cfg == {"host": "bbs.example.com", "port": 23, "hub_overlay": False}
     # No PTY-only or SSH-only keys.
     assert "command" not in cfg and "cols" not in cfg and "rows" not in cfg
     assert "username" not in cfg and "known_hosts" not in cfg
@@ -51,7 +51,7 @@ def test_telnet_config_host_and_port() -> None:
 
 def test_telnet_config_omits_host_when_none() -> None:
     cfg = telnet_connector_config(host=None, port=9999)
-    assert cfg == {"port": 9999}
+    assert cfg == {"port": 9999, "hub_overlay": False}
     assert "host" not in cfg
 
 
