@@ -13,6 +13,8 @@ sessions uniformly.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -42,19 +44,27 @@ class TerminalPool:
         # (which keys on the kind segment) groups terminals together.
         log_path = new_log_path(defaults.RECORDINGS_DIR, instance_id, label, "terminal")
         recorder = Recorder(log_path)
-        engine = TerminalEngine(instance_id, label, kind, connector_config, recorder)
-        session = TerminalSession(
-            instance_id=instance_id,
-            kind="terminal",
-            connector_type=kind,
-            label=label,
-            profile=profile,
-            recorder=recorder,
-            log_path=log_path,
-            engine=engine,
-            protected=protected,
-        )
-        await engine.start()
+        try:
+            engine = TerminalEngine(instance_id, label, kind, connector_config, recorder)
+            session = TerminalSession(
+                instance_id=instance_id,
+                kind="terminal",
+                connector_type=kind,
+                label=label,
+                profile=profile,
+                recorder=recorder,
+                log_path=log_path,
+                engine=engine,
+                protected=protected,
+            )
+            await engine.start()
+        except BaseException:
+            # A failed launch (e.g. the SSH connector rejecting a missing
+            # known_hosts in its ctor, or connector.start() failing) must not
+            # leave the recording behind: the session is never registered, so
+            # the file would be unreachable orphaned cruft.
+            self._discard_failed_launch(recorder, log_path)
+            raise
         async with self._lock:
             self._sessions[instance_id] = session
         return {
@@ -65,6 +75,20 @@ class TerminalPool:
             "profile": profile,
             "log_path": str(log_path),
         }
+
+    @staticmethod
+    def _discard_failed_launch(recorder: Recorder, log_path: Path) -> None:
+        """Close the recorder and drop its file if nothing was recorded.
+
+        Failures surface before any action is written (the SSH connector raises
+        in its ctor; connector.start() raises before the first record), so the
+        file is empty and safe to delete. If a partial recording did land, keep
+        it — a real (if orphaned) recording beats destroying diagnostic data.
+        """
+        recorder.close()
+        with contextlib.suppress(OSError):
+            if log_path.exists() and log_path.stat().st_size == 0:
+                log_path.unlink()
 
     def get(self, instance_id: str) -> TerminalSession:
         if instance_id not in self._sessions:
