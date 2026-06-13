@@ -25,6 +25,7 @@ from provide.uterm.server.connectors import (
     registered_types,
 )
 
+from octowright._tracing import counter, record_exception, span
 from octowright.recorder import Recorder
 from octowright.terminal import redact
 from octowright.terminal.translate import MessageTranslator
@@ -34,6 +35,17 @@ log = get_logger("octowright.terminal")
 # Matches HostedSessionRuntime's backoff for connectors with no internal wait.
 _POLL_IDLE_SLEEP_S = 0.05
 _WAIT_POLL_S = 0.05
+
+# OTel counters (noop unless metrics are enabled). Labelled by connector_type
+# (pty/ssh) — an intrinsically bounded label set.
+_TERMINAL_LAUNCHED = counter(
+    "octowright_terminal_launched_total",
+    description="Terminal sessions launched",
+)
+_TERMINAL_CLOSED = counter(
+    "octowright_terminal_closed_total",
+    description="Terminal sessions closed",
+)
 
 
 def ensure_connector_registered(connector_type: str) -> None:
@@ -83,9 +95,22 @@ class TerminalEngine:
         self._stop_recorded = False
 
     async def start(self) -> None:
-        await self._connector.start()
-        self._recorder.record("terminal_start", connector_type=self._connector_type, cols=self._cols, rows=self._rows)
-        self._poll_task = asyncio.create_task(self._poll_loop())
+        with span(
+            "octowright.terminal.launch",
+            connector_type=self._connector_type,
+            instance_id=self._instance_id,
+        ) as sp:
+            try:
+                await self._connector.start()
+            except BaseException as exc:
+                record_exception(sp, exc)
+                raise
+            self._recorder.record(
+                "terminal_start", connector_type=self._connector_type, cols=self._cols, rows=self._rows
+            )
+            self._poll_task = asyncio.create_task(self._poll_loop())
+        # Count only successful launches (a raised start() skips this).
+        _TERMINAL_LAUNCHED.add(1, attributes={"connector_type": self._connector_type})
 
     async def _poll_loop(self) -> None:
         while not self._stop_evt.is_set():
@@ -107,15 +132,20 @@ class TerminalEngine:
             self._recorder.record(action, **fields)
 
     async def send_input(self, text: str, *, password: bool = False) -> None:
-        if not self._connector.is_connected():
-            # User-action path: surface (don't silently swallow) input sent to a
-            # dead terminal — the connector would otherwise drop the bytes quietly.
-            log.warning("terminal.send_input.disconnected", instance_id=self._instance_id)
-            return
-        masked = redact.should_mask(at_password_prompt=self._at_password_prompt, password_source=password)
-        self._recorder.record("terminal_input", **redact.input_fields(text, masked=masked))
-        for msg in await self._connector.handle_input(text):
-            self._ingest(msg)
+        with span(
+            "octowright.terminal.send_input",
+            connector_type=self._connector_type,
+            instance_id=self._instance_id,
+        ):
+            if not self._connector.is_connected():
+                # User-action path: surface (don't silently swallow) input sent to a
+                # dead terminal — the connector would otherwise drop the bytes quietly.
+                log.warning("terminal.send_input.disconnected", instance_id=self._instance_id)
+                return
+            masked = redact.should_mask(at_password_prompt=self._at_password_prompt, password_source=password)
+            self._recorder.record("terminal_input", **redact.input_fields(text, masked=masked))
+            for msg in await self._connector.handle_input(text):
+                self._ingest(msg)
 
     async def snapshot(self) -> dict[str, Any]:
         msg = await self._connector.get_snapshot()
@@ -150,14 +180,22 @@ class TerminalEngine:
         if not self._stop_recorded:
             self._stop_recorded = True
             self._recorder.record("terminal_stop", reason=reason)
+            # Count the terminal-ended event once, whichever path got here first
+            # (explicit stop() or the poll loop's EOF detection).
+            _TERMINAL_CLOSED.add(1, attributes={"connector_type": self._connector_type})
 
     async def stop(self) -> None:
-        self._stop_evt.set()
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._poll_task
-            self._poll_task = None
-        with contextlib.suppress(Exception):
-            await self._connector.stop()
-        self._record_stop("closed")
+        with span(
+            "octowright.terminal.close",
+            connector_type=self._connector_type,
+            instance_id=self._instance_id,
+        ):
+            self._stop_evt.set()
+            if self._poll_task is not None:
+                self._poll_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._poll_task
+                self._poll_task = None
+            with contextlib.suppress(Exception):
+                await self._connector.stop()
+            self._record_stop("closed")
