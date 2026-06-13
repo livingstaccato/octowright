@@ -1,5 +1,25 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Mock the terminal-boot module so we can assert delegation, and override only
+// getSession on the real api module (so render-function tests keep videoUrl
+// etc.). vi.hoisted lets the spies exist before the hoisted vi.mock factories.
+const { bootTerminalSessionMock } = vi.hoisted(() => ({ bootTerminalSessionMock: vi.fn() }));
+const { getSessionMock, getEventsMock } = vi.hoisted(() => ({
+  getSessionMock: vi.fn(),
+  getEventsMock: vi.fn(),
+}));
+vi.mock("./session-terminal.js", () => ({
+  bootTerminalSession: bootTerminalSessionMock,
+  buildTerminalLayout: () => ({}),
+}));
+vi.mock("./api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api.js")>()),
+  getSession: getSessionMock,
+  getEvents: getEventsMock,
+}));
+
 import {
+  bootSession,
   buildLayout,
   renderFooter,
   renderHeader,
@@ -230,5 +250,30 @@ describe("renderFooter", () => {
     const refs = buildLayout(root);
     renderFooter(refs.footer, makeDetail({ live: false }));
     expect(refs.footer.textContent).toMatch(/Closed/);
+  });
+});
+
+describe("bootSession terminal branch", () => {
+  beforeEach(() => {
+    bootTerminalSessionMock.mockReset();
+    bootTerminalSessionMock.mockResolvedValue(undefined);
+    // Empty history so the browser-path negative test completes without a
+    // real network fetch (the terminal path returns early before getEvents).
+    getEventsMock.mockResolvedValue({ events: [], cursor: 0, total_bytes: 0, complete: true });
+  });
+
+  it("delegates to bootTerminalSession when kind is terminal", async () => {
+    getSessionMock.mockResolvedValue(makeDetail({ kind: "terminal", live: false }));
+    const el = document.createElement("div");
+    await bootSession(el, "term-0");
+    expect(bootTerminalSessionMock).toHaveBeenCalledTimes(1);
+    expect(bootTerminalSessionMock.mock.calls[0]?.[1]).toBe("term-0");
+  });
+
+  it("does NOT delegate for browser sessions", async () => {
+    getSessionMock.mockResolvedValue(makeDetail({ kind: "chromium", live: false }));
+    const el = document.createElement("div");
+    await bootSession(el, "sess-1");
+    expect(bootTerminalSessionMock).not.toHaveBeenCalled();
   });
 });
