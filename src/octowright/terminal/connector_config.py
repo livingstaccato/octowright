@@ -37,10 +37,12 @@ def telnet_connector_config(*, host: str | None, port: int) -> dict[str, Any]:
 
     Only ``host`` and ``port`` are supported (``input_mode`` defaults to
     ``"open"`` inside the connector and is never surfaced to MCP callers).
+    ``hub_overlay=False`` disables the uterm hub status header and preserves
+    raw CRLF line endings so xterm.js renders the CP437 stream correctly.
     No ``cols``/``rows``/``command`` — the connector hardcodes its own terminal
     geometry (80x25) to match typical BBS server expectations.
     """
-    cfg: dict[str, Any] = {"port": port}
+    cfg: dict[str, Any] = {"port": port, "hub_overlay": False}
     if host is not None:
         cfg["host"] = host
     return cfg
