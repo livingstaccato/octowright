@@ -79,6 +79,28 @@ def test_summarise_recording_invalidates_when_signature_changes(tmp_path: Path) 
     assert s2["kind"] == "firefox"
 
 
+def test_summarise_recording_classifies_closed_terminal(tmp_path: Path) -> None:
+    """A closed terminal recording opens with terminal_start (no launch row);
+    it must be classified kind='terminal', not 'unknown'."""
+    rec = tmp_path / "recordings"
+    rec.mkdir(parents=True, exist_ok=True)
+    jsonl = rec / "20260101T000000Z-terminal-abc123def456.jsonl"
+    jsonl.write_text(
+        json.dumps({"action": "terminal_start", "connector_type": "pty", "ts": "2026-01-01T00:00:00Z"})
+        + "\n"
+        + json.dumps({"action": "terminal_output", "data": "hi"})
+        + "\n"
+        + json.dumps({"action": "terminal_stop", "reason": "eof"})
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = discovery._summarise_recording(jsonl)
+    assert summary is not None
+    assert summary["kind"] == "terminal"
+    assert summary["live"] is False
+    assert summary["id"]  # instance id parsed from the filename
+
+
 def test_invalidate_recording_summary_drops_entry(tmp_path: Path) -> None:
     rec = tmp_path / "recordings"
     jsonl = _write_recording(rec, "evictidqrstu")

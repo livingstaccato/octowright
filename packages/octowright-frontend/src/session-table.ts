@@ -18,7 +18,7 @@ export function renderSessionTable(
   if (rows.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = live ? "No live browsers." : "No closed sessions yet.";
+    empty.textContent = live ? "No live sessions." : "No closed sessions yet.";
     return empty;
   }
   const table = document.createElement("table");
