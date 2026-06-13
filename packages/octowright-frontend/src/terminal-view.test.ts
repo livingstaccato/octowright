@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mountTerminalView, type TerminalLike } from "./terminal-view.js";
 import type { RecordingEvent } from "./types.js";
 
@@ -23,13 +23,18 @@ class FakeTerminal implements TerminalLike {
 
 let container: HTMLDivElement;
 let fake: FakeTerminal;
+let fitMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   container = document.createElement("div");
   fake = new FakeTerminal();
+  fitMock = vi.fn();
 });
 
 function mount() {
-  return mountTerminalView(container, { sessionId: "t1", terminalFactory: () => fake });
+  return mountTerminalView(container, {
+    sessionId: "t1",
+    terminalFactory: () => ({ terminal: fake, fit: fitMock }),
+  });
 }
 
 describe("mountTerminalView", () => {
@@ -63,6 +68,18 @@ describe("mountTerminalView", () => {
     const view = mount();
     view.feedEvents([{ ts: "t", action: "terminal_output" }]);
     expect(fake.writes).toEqual([]);
+  });
+
+  it("fits the terminal to its container on mount", () => {
+    mount();
+    expect(fitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fit() refits on demand", () => {
+    const view = mount();
+    fitMock.mockClear();
+    view.fit();
+    expect(fitMock).toHaveBeenCalledTimes(1);
   });
 
   it("destroy() disposes the terminal and clears the container", () => {
