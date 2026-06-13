@@ -36,6 +36,7 @@ from octowright.http.exposure import guard_sensitive_http
 from octowright.http.recording_sidecars import is_recording_sidecar
 from octowright.http.routes._common import _parse_bool, _read_json_body
 from octowright.http.session_artifacts import session_artifact_cache
+from octowright.terminal.errors import ProtectedTerminalCloseError
 
 
 async def list_sessions(_request: Request) -> JSONResponse:
@@ -274,26 +275,38 @@ async def session_launch(request: Request) -> JSONResponse:
     return JSONResponse(summary, status_code=201)
 
 
-async def session_close(request: Request) -> JSONResponse:
-    """DELETE /api/sessions/{id} — close a live session.
+async def _maybe_close_terminal(sid: str, *, force: bool) -> JSONResponse | None:
+    """Close ``sid`` if it is a live terminal session, else return ``None``.
 
-    Closed sessions on disk cannot be re-closed; returns 404 in that case so
-    callers can distinguish "I closed something" from "nothing to do".
+    Returns ``None`` when terminals are unavailable (core install) or ``sid`` is
+    not a terminal, so the caller falls through to the browser-pool path. A
+    protected terminal without ``force`` maps to 409, mirroring the browser path.
     """
-    sid = request.path_params["id"]
+    terminal_pool = state.terminal_pool
+    if terminal_pool is None or terminal_pool.maybe_get(sid) is None:
+        return None
+    try:
+        await terminal_pool.close(sid, force=force)
+    except ProtectedTerminalCloseError as e:
+        return JSONResponse({"error": str(e).replace("force=True", "force=true")}, status_code=409)
+    state.log.info("octowright.http.terminal_session_closed", instance_id=sid)
+    await publish_dashboard_invalidation("sessions")
+    return JSONResponse({"closed": True, "instance_id": sid})
+
+
+async def _close_browser_session(sid: str, *, force: bool) -> JSONResponse:
+    """Close a live browser session and warm its close-time artefact cache.
+
+    404 if no live browser session holds ``sid`` (closed sessions on disk cannot
+    be re-closed); 409 for a protected session without ``force``; 400 on a
+    validation error; 500 on unexpected failure.
+    """
     pool = state.pool
     if not pool.has_session(sid):
         return JSONResponse(
             {"error": f"no live session with id {sid!r}; closed sessions cannot be re-closed"},
             status_code=404,
         )
-    raw_force = request.query_params.get("force")
-    force = False
-    if raw_force is not None:
-        parsed_force = _parse_bool(raw_force)
-        if parsed_force is None:
-            return JSONResponse({"error": f"invalid force={raw_force!r}, must be bool"}, status_code=400)
-        force = parsed_force
     try:
         result = await pool.close(sid, force=force)
     except ProtectedBrowserCloseError as e:
@@ -329,6 +342,25 @@ async def session_close(request: Request) -> JSONResponse:
     state.log.info("octowright.http.session_closed", instance_id=sid)
     await publish_dashboard_invalidation("sessions")
     return JSONResponse(body)
+
+
+async def session_close(request: Request) -> JSONResponse:
+    """DELETE /api/sessions/{id} — close a live session (browser or terminal)."""
+    sid = request.path_params["id"]
+    raw_force = request.query_params.get("force")
+    force = False
+    if raw_force is not None:
+        parsed_force = _parse_bool(raw_force)
+        if parsed_force is None:
+            return JSONResponse({"error": f"invalid force={raw_force!r}, must be bool"}, status_code=400)
+        force = parsed_force
+    # Terminal sessions live in a separate (optional) pool. Close them here too
+    # so the dashboard's close button works uniformly — without this, DELETE on a
+    # visible terminal 404s because its id isn't in the browser pool.
+    terminal_close = await _maybe_close_terminal(sid, force=force)
+    if terminal_close is not None:
+        return terminal_close
+    return await _close_browser_session(sid, force=force)
 
 
 async def session_navigate(request: Request) -> JSONResponse:
