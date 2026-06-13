@@ -27,13 +27,15 @@ async def test_engine_records_start_output_and_stop(tmp_path: Path) -> None:
     recorder = Recorder(log_path)
     engine = TerminalEngine("eng-1", "echo", "pty", {"command": "/bin/echo", "args": ["hello-engine"]}, recorder)
     await engine.start()
-    # Wait for the echo output to be captured.
-    for _ in range(60):
-        captured = "".join(a.get("data", "") for a in _read_actions(log_path) if a["action"] == "terminal_output")
-        if "hello-engine" in captured:
+    # Wait for the child to exit and the poll loop to record EOF on its own. The
+    # connector's cross-platform EOF branch flips is_connected() when a post-exit
+    # master read returns b"" (macOS) just as it does on EIO (Linux), so the loop
+    # records terminal_stop(reason="eof") without us calling stop() first.
+    for _ in range(100):
+        if any(a["action"] == "terminal_stop" for a in _read_actions(log_path)):
             break
         await asyncio.sleep(0.05)
-    await engine.stop()
+    await engine.stop()  # no-op for recording: the _stop_recorded guard already fired
     recorder.close()
 
     actions = _read_actions(log_path)
@@ -42,12 +44,11 @@ async def test_engine_records_start_output_and_stop(tmp_path: Path) -> None:
     assert "terminal_output" in names
     output = "".join(a.get("data", "") for a in actions if a["action"] == "terminal_output")
     assert "hello-engine" in output
-    # Exactly one terminal_stop (double-stop guard), recorded last. The reason is
-    # "eof" when the connector reports disconnect (Linux: PTY read raises EIO) or
-    # "closed" via explicit stop() (macOS: a post-exit PTY master read returns b"").
+    # Child exited on its own → EOF detected by the poll loop, recorded exactly
+    # once (double-stop guard) and last, with reason "eof" cross-platform.
     assert names.count("terminal_stop") == 1
     assert actions[-1]["action"] == "terminal_stop"
-    assert next(a for a in actions if a["action"] == "terminal_stop")["reason"] in {"eof", "closed"}
+    assert next(a for a in actions if a["action"] == "terminal_stop")["reason"] == "eof"
 
 
 async def test_engine_send_input_and_snapshot(tmp_path: Path) -> None:
