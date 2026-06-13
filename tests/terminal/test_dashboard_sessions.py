@@ -50,6 +50,54 @@ async def test_list_sessions_includes_terminals() -> None:
         await state.terminal_pool.close(iid, force=True)
 
 
+def _delete_request(iid: str, force: bool = False) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "DELETE",
+            "path": f"/api/sessions/{iid}",
+            "headers": [],
+            "query_string": b"force=true" if force else b"",
+            "path_params": {"id": iid},
+        }
+    )
+
+
+async def test_session_close_closes_terminal() -> None:
+    import octowright.http.state as state
+    from octowright.http.routes.sessions import session_close
+
+    launched = await state.terminal_pool.launch(kind="pty", connector_config={"command": "/bin/cat"}, label="t")
+    iid = launched["instance_id"]
+    resp = await session_close(_delete_request(iid))
+    body = json.loads(resp.body)
+    # The dashboard close button hits DELETE /api/sessions/{id}; it must close a
+    # live terminal (not 404 because the id is not in the browser pool).
+    assert resp.status_code == 200
+    assert body["closed"] is True
+    assert state.terminal_pool.maybe_get(iid) is None
+
+
+async def test_session_close_refuses_protected_terminal_without_force() -> None:
+    import octowright.http.state as state
+    from octowright.http.routes.sessions import session_close
+
+    launched = await state.terminal_pool.launch(
+        kind="pty", connector_config={"command": "/bin/cat"}, label="t", protected=True
+    )
+    iid = launched["instance_id"]
+    try:
+        resp = await session_close(_delete_request(iid))
+        assert resp.status_code == 409
+        assert state.terminal_pool.maybe_get(iid) is not None  # still alive
+        forced = await session_close(_delete_request(iid, force=True))
+        assert forced.status_code == 200
+        assert state.terminal_pool.maybe_get(iid) is None
+    finally:
+        if state.terminal_pool.maybe_get(iid) is not None:
+            await state.terminal_pool.close(iid, force=True)
+
+
 async def test_session_detail_terminal_does_not_crash() -> None:
     import octowright.http.state as state
     from octowright.http.routes.sessions import session_detail
