@@ -112,7 +112,7 @@ describe("bootTerminalSession", () => {
     getEvents.mockResolvedValue({ events, cursor: 123, total_bytes: 0, complete: true });
 
     await bootTerminalSession(root, "term-0", makeDetail({ live: false }), {
-      terminalFactory: () => fakeTerm,
+      terminalFactory: () => ({ terminal: fakeTerm, fit: () => {} }),
     });
 
     expect(getEvents).toHaveBeenCalledWith("term-0", 0);
@@ -132,7 +132,7 @@ describe("bootTerminalSession", () => {
     });
 
     await bootTerminalSession(root, "term-0", makeDetail({ live: true }), {
-      terminalFactory: () => fakeTerm,
+      terminalFactory: () => ({ terminal: fakeTerm, fit: () => {} }),
       webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
     });
 
