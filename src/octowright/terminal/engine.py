@@ -71,7 +71,15 @@ def ensure_connector_registered(connector_type: str) -> None:
     elif connector_type == "telnet":
         from provide.uterm.server.connectors.telnet import TelnetSessionConnector
 
-        register_connector("telnet", TelnetSessionConnector)
+        # Subclass to skip the uterm-server egress check (_assert_peer_allowed),
+        # which lazily imports fastapi (a uterm-server dep not in octowright's
+        # venv). The egress check guards the uterm hub against SSRF; it's not
+        # applicable here — the user explicitly specifies the BBS host.
+        class _OctowrightTelnetConnector(TelnetSessionConnector):
+            async def _assert_peer_allowed(self) -> None:
+                pass
+
+        register_connector("telnet", _OctowrightTelnetConnector)
 
 
 class TerminalEngine:
