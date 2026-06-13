@@ -156,7 +156,7 @@ The idle watchdog is **disabled by default**: the daemon stays up until an expli
 
 ### Frontend
 
-TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `src/types.ts` mirror the Python Pydantic/dataclass models.
+TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `src/types.ts` mirror the Python Pydantic/dataclass models. Terminal sessions render with **`@xterm/xterm`** (a direct dependency): `terminal-view.ts` wraps an xterm instance behind an injectable factory (unit-testable without a real renderer), and `session-terminal.ts` is the terminal-detail boot path that `session.ts` delegates to for `kind === "terminal"`.
 
 ### Terminal Sessions (optional)
 
@@ -172,7 +172,7 @@ A terminal session drives one `provide-uterm` `SessionConnector` **in-process** 
 
 **Input redaction** reuses `OCTOWRIGHT_REDACT_INPUTS` (see Env Var Configuration): the connector always receives the real bytes; only the recorded `terminal_input` value is masked.
 
-**Dashboard.** `http/state.py` re-exports `terminal_pool` through the same module-property seam as `pool`/`scenario_pool`. `list_sessions`, `session_detail`, and the `session_close` DELETE endpoint all handle terminals when the pool is present, so a terminal appears in the live list, has a terminal-shaped detail (no browser-only video/console/page fields — `_terminal_session_detail` short-circuits before the browser detail builder), and closes from the dashboard.
+**Dashboard.** `http/state.py` re-exports `terminal_pool` through the same module-property seam as `pool`/`scenario_pool`. `list_sessions`, `session_detail`, and the `session_close` DELETE endpoint all handle terminals when the pool is present, so a terminal appears in the live list, has a terminal-shaped detail (no browser-only video/console/page fields — `_terminal_session_detail` short-circuits before the browser detail builder), and closes from the dashboard. Closed terminal recordings classify the same way off-disk: `http/discovery.py` reads the opening row, so a recording that opens with `terminal_start` (no browser `launch` row) is reported as `kind: "terminal"` by the session list *and* the closed-session detail. The session-detail page renders a **read-only xterm.js terminal screen** for `kind === "terminal"`: `session.ts` branches to `bootTerminalSession` (`session-terminal.ts`), which mounts an xterm instance (`terminal-view.ts`) fed by the recorded `terminal_output` deltas — live via the `/tail` WebSocket and replayed from `GET …/events` for closed sessions. The view is output-only (it never sends keystrokes and does not echo recorded `terminal_input`; typed input stays visible in the action timeline). Each `terminal_output.data` delta is the raw output stream with ANSI escapes preserved, so it is written verbatim into xterm, which does its own emulation — no base64/pyte dependency.
 
 **Child-exit EOF.** The poll loop ends a session with `terminal_stop` reason `eof` when `connector.is_connected()` flips. The PTY connector's master fd is non-blocking, so a `b""` read is a true EOF: Linux raises EIO, macOS returns `b""`, and `PTYConnector._read_master` flips `_connected` on either, so EOF is detected cross-platform.
 
