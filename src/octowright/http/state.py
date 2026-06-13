@@ -129,6 +129,17 @@ class _StateModule(_ModuleType):
     def scenario_pool(self, value: Any) -> None:
         _server_state().scenario_pool = value
 
+    @property
+    def terminal_pool(self) -> Any:
+        # None on a core install (the optional `octowright[terminal]` extra is
+        # absent); a TerminalPool when uterm is available. Forwarded like the
+        # other pools so the HTTP layer reads it through the single seam.
+        return _server_state().terminal_pool
+
+    @terminal_pool.setter
+    def terminal_pool(self, value: Any) -> None:
+        _server_state().terminal_pool = value
+
 
 _sys.modules[__name__].__class__ = _StateModule
 
@@ -139,6 +150,7 @@ _sys.modules[__name__].__class__ = _StateModule
 if TYPE_CHECKING:
     pool: Any
     scenario_pool: Any
+    terminal_pool: Any
 
 
 __all__ = [
@@ -160,4 +172,5 @@ __all__ = [
     "scenario_pool",
     "shutil",
     "subprocess",
+    "terminal_pool",
 ]
