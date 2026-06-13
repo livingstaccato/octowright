@@ -26,6 +26,13 @@ from octowright.server import meta as _meta  # noqa: F401
 from octowright.server import personas as _personas  # noqa: F401
 from octowright.server import scenarios as _scenarios  # noqa: F401
 from octowright.server._state import log, mcp, pool, scenario_pool
+from octowright.server._state import terminal_pool as _terminal_pool
+
+# Terminal tools are optional: register them only when the uterm-backed
+# `octowright[terminal]` extra is installed (terminal_pool is then non-None).
+# Importing the module triggers @mcp.tool registration via decorator side effects.
+if _terminal_pool is not None:
+    from octowright.server import terminal as _terminal_tools  # noqa: F401
 
 # Re-export every tool function at the package level for direct test access
 # (e.g. `from octowright import server; server.browser_open_trace(...)`).
