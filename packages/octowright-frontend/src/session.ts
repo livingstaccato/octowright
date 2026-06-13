@@ -16,6 +16,7 @@ import { renderScreenshotsPanel } from "./screenshots-panel.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
 import { openTail } from "./tail.js";
+import { bootTerminalSession } from "./session-terminal.js";
 import {
   bindContext,
   getLogger,
@@ -520,7 +521,6 @@ async function refreshPanels(
 
 export async function bootSession(root: HTMLElement, sessionId: string, opts: BootOptions = {}): Promise<void> {
   log.info({ event: "session_boot_start", session_id: sessionId });
-  const refs = buildLayout(root);
   const detail = await getSession(sessionId);
   log.info({
     event: "session_detail_loaded",
@@ -530,6 +530,18 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     has_video: Boolean(detail.video_path),
     has_trace: Boolean(detail.trace_path),
   });
+
+  // Terminal sessions get a dedicated slim layout (no video/trace/tabs). Branch
+  // before the browser layout build so the browser path stays untouched.
+  if (detail.kind === "terminal") {
+    await bootTerminalSession(root, sessionId, detail, {
+      ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
+    });
+    log.info({ event: "session_boot_complete", session_id: sessionId, kind: "terminal" });
+    return;
+  }
+
+  const refs = buildLayout(root);
   renderHeader(refs.header, detail);
   const videoEl = renderVideo(refs.videoSlot, detail);
   renderTraceControls(refs.traceSlot, detail);
