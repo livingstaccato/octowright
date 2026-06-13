@@ -9,10 +9,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from provide.uterm.defaults import TerminalDefaults
+
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import mcp, terminal_pool
 from octowright.terminal.errors import ProtectedTerminalCloseError
 from octowright.terminal.pool import TerminalPool
+
+# Standard SSH port; sourced from uterm's single default rather than inlined so
+# the tool default tracks the connector's own default.
+_DEFAULT_SSH_PORT = TerminalDefaults.SSH_REMOTE_PORT
 
 
 def _pool() -> TerminalPool:
@@ -21,6 +27,40 @@ def _pool() -> TerminalPool:
     pool = terminal_pool
     assert pool is not None, "terminal tools imported without an available terminal_pool"
     return pool
+
+
+def _ssh_connector_config(
+    *,
+    host: str | None,
+    port: int,
+    user: str | None,
+    key_path: str | None,
+    password: str | None,
+    known_hosts: str | None,
+    insecure_no_host_check: bool,
+) -> dict[str, Any]:
+    """Map ``terminal_launch`` SSH args to the uterm SSH connector's config keys.
+
+    The uterm ``SshSessionConnector`` validates its config against a fixed
+    allow-list and raises ``ValueError`` on any unknown key, so this emits ONLY
+    connector-recognized keys: no PTY ``command`` and no ``cols``/``rows`` (the
+    SSH connector fixes the remote PTY size itself). Omitted args are dropped so
+    the connector falls back to its own defaults rather than seeing ``None``.
+    """
+    cfg: dict[str, Any] = {"port": port}
+    if host is not None:
+        cfg["host"] = host
+    if user is not None:
+        cfg["username"] = user
+    if key_path is not None:
+        cfg["client_key_path"] = key_path
+    if password is not None:
+        cfg["password"] = password
+    if known_hosts is not None:
+        cfg["known_hosts"] = known_hosts
+    if insecure_no_host_check:
+        cfg["insecure_no_host_check"] = True
+    return cfg
 
 
 @mcp.tool(
@@ -34,16 +74,41 @@ def _pool() -> TerminalPool:
 async def terminal_launch(
     kind: str = "pty",
     command: str | None = None,
+    host: str | None = None,
+    port: int = _DEFAULT_SSH_PORT,
+    user: str | None = None,
+    key_path: str | None = None,
+    password: str | None = None,
+    known_hosts: str | None = None,
+    insecure_no_host_check: bool = False,
     cols: int = 80,
     rows: int = 24,
     label: str | None = None,
     profile: str | None = None,
     protected: bool = False,
 ) -> dict[str, Any]:
-    if command is None:
-        command = "/bin/bash"
-    cfg: dict[str, Any] = {"cols": cols, "rows": rows, "command": command}
-    result = await _pool().launch(kind=kind, connector_config=cfg, label=label, profile=profile, protected=protected)
+    if kind == "ssh":
+        cfg = _ssh_connector_config(
+            host=host,
+            port=port,
+            user=user,
+            key_path=key_path,
+            password=password,
+            known_hosts=known_hosts,
+            insecure_no_host_check=insecure_no_host_check,
+        )
+    else:
+        if command is None:
+            command = "/bin/bash"
+        cfg = {"cols": cols, "rows": rows, "command": command}
+    try:
+        result = await _pool().launch(
+            kind=kind, connector_config=cfg, label=label, profile=profile, protected=protected
+        )
+    except ValueError as exc:
+        # The SSH connector raises ValueError synchronously (missing known_hosts,
+        # unknown config key) inside build_connector; surface it as a clean tool error.
+        return {"ok": False, "error": str(exc)}
     publish_dashboard_invalidation_nowait("sessions")
     return result
 
