@@ -643,6 +643,7 @@ class _ParticipantSpec:
     persona: str
     role: str
     startup_macros: list[str] = field(default_factory=list)
+    kind: str = "chromium"  # real Participant.kind is required; browser by default here
 
 
 @dataclass
