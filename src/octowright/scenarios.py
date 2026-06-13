@@ -468,6 +468,60 @@ def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
     }
 
 
+def _load_persona_or_none(name: str) -> Any:
+    from octowright import personas as _p
+
+    try:
+        return _p.load_persona(name)
+    except FileNotFoundError:
+        return None
+
+
+def resolve_terminal_launch(p: Participant) -> dict[str, Any]:
+    """Return kwargs for ``terminal_pool.launch(**kwargs)`` from a terminal Participant.
+
+    Note ``terminal_pool.launch``'s ``kind`` is the *connector* type (pty/ssh);
+    the session's own kind is always ``"terminal"``. SSH fields resolve
+    participant-override → persona ``app['ssh']`` default → omit. No password is
+    read from the scenario (scenarios are persisted): key-based / known_hosts auth
+    only — the pure builders live in ``octowright.terminal.connector_config`` so
+    this stays importable on a core install.
+    """
+    from octowright.terminal.connector_config import (
+        SSH_DEFAULT_PORT,
+        pty_connector_config,
+        ssh_connector_config,
+    )
+
+    connector_type = p.connector_type or "pty"
+    if connector_type == "ssh":
+        persona = _load_persona_or_none(p.persona)
+        ssh = (getattr(persona, "app", {}) or {}).get("ssh", {}) or {}
+
+        def _pick(attr: str, key: str) -> Any:
+            value = getattr(p, attr)
+            return value if value is not None else ssh.get(key)
+
+        port = p.port if p.port is not None else int(ssh.get("port", SSH_DEFAULT_PORT))
+        insecure = (
+            bool(p.insecure_no_host_check)
+            if p.insecure_no_host_check is not None
+            else bool(ssh.get("insecure_no_host_check", False))
+        )
+        cfg = ssh_connector_config(
+            host=_pick("host", "host"),
+            port=port,
+            user=_pick("user", "user"),
+            key_path=_pick("key_path", "key_path"),
+            password=None,
+            known_hosts=_pick("known_hosts", "known_hosts"),
+            insecure_no_host_check=insecure,
+        )
+    else:
+        cfg = pty_connector_config(command=p.command, cols=p.cols, rows=p.rows)
+    return {"kind": connector_type, "connector_config": cfg, "label": None, "profile": p.persona, "protected": False}
+
+
 def resolve_startup_macros(p: Participant) -> list[str]:
     """participant override → persona default_macros → []."""
     from octowright import personas as _p
