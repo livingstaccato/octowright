@@ -137,6 +137,48 @@ class TestValidateScenario:
         )
         _validate_scenario(s)  # does not raise
 
+    def test_terminal_participant_accepted(self) -> None:
+        s = Scenario(
+            name="t",
+            participants=[Participant(persona="alice", kind="terminal", role="operator", connector_type="pty")],
+        )
+        _validate_scenario(s)  # does not raise
+
+    def test_terminal_connector_type_none_treated_as_pty(self) -> None:
+        s = Scenario(
+            name="t",
+            participants=[Participant(persona="alice", kind="terminal", role="operator")],
+        )
+        _validate_scenario(s)  # connector_type None == pty default; does not raise
+
+    def test_terminal_bad_connector_type_rejected(self) -> None:
+        s = Scenario(
+            name="t",
+            participants=[Participant(persona="a", kind="terminal", role="x", connector_type="telnet")],
+        )
+        with pytest.raises(ValueError, match="connector_type"):
+            _validate_scenario(s)
+
+    def test_terminal_with_startup_macros_rejected(self) -> None:
+        s = Scenario(
+            name="t",
+            participants=[
+                Participant(persona="a", kind="terminal", role="x", connector_type="pty", startup_macros=["m"]),
+            ],
+        )
+        with pytest.raises(ValueError, match="startup_macros"):
+            _validate_scenario(s)
+
+    def test_browser_and_terminal_mixed_ok(self) -> None:
+        s = Scenario(
+            name="mixed",
+            participants=[
+                Participant(persona="dante", kind="chromium", role="player"),
+                Participant(persona="alice", kind="terminal", role="operator", connector_type="ssh"),
+            ],
+        )
+        _validate_scenario(s)  # does not raise
+
 
 # ---------------------------------------------------------------------------
 # YAML loader
@@ -211,6 +253,34 @@ class TestLoadYamlScenario:
         )
         with pytest.raises(ValueError, match="unsupported kind"):
             load_yaml_scenario(path.read_text(), path.stem)
+
+    def test_terminal_participant_yaml_round_trip(self, tmp_path: Path) -> None:
+        path = tmp_path / "term.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "name": "term",
+                    "participants": [
+                        {"persona": "ops", "kind": "terminal", "role": "operator"},
+                        {
+                            "persona": "remote",
+                            "kind": "terminal",
+                            "connector_type": "ssh",
+                            "host": "h",
+                            "port": 2222,
+                            "user": "deploy",
+                            "known_hosts": "/kh",
+                            "role": "operator",
+                        },
+                    ],
+                }
+            )
+        )
+        s = load_yaml_scenario(path.read_text(), path.stem)
+        pty, ssh = s.participants
+        assert pty.kind == "terminal" and pty.connector_type == "pty"  # defaulted
+        assert ssh.connector_type == "ssh" and ssh.host == "h" and ssh.port == 2222
+        assert ssh.user == "deploy" and ssh.known_hosts == "/kh"
 
 
 # ---------------------------------------------------------------------------
