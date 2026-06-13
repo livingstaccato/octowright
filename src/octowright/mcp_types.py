@@ -138,6 +138,7 @@ class ScenarioParticipant(TypedDict, total=False):
     persona: str
     kind: str
     role: str
+    connector_type: str  # terminal participants only (pty/ssh); absent for browsers
     launch_kwargs: dict[str, Any]
     startup_macros: list[str]
     instance_id: str
