@@ -153,48 +153,50 @@ class ScenarioPool:
             )
         return {"scenario_id": scenario_id, "applied": applied, "count": len(applied)}
 
-    async def start(self, *, name: str | None = None, browser_pool: Any, spec: Any | None = None) -> LiveScenario:
-        from octowright.scenarios import load_scenario, resolve_launch_kwargs
-
+    async def start(
+        self,
+        *,
+        name: str | None = None,
+        browser_pool: Any,
+        spec: Any | None = None,
+        terminal_pool: Any | None = None,
+    ) -> LiveScenario:
         if spec is None:
             if name is None:
                 raise ValueError("either 'name' or 'spec' must be provided to start a scenario")
+            from octowright.scenarios import load_scenario
+
             spec = load_scenario(name)
         effective_name = name or spec.name
         if not spec.participants:
             raise RuntimeError(f"scenario {effective_name!r} has no participants")
+        # Partition by kind: browsers go through the roster, terminals launch
+        # individually (TerminalPool has no roster). SUPPORTED_KINDS stays
+        # browser-only, so "terminal" is the sole non-browser kind here.
+        terminal_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind == "terminal"]
+        if terminal_specs and terminal_pool is None:
+            raise RuntimeError(
+                f"scenario {effective_name!r} has terminal participant(s) but the octowright[terminal] "
+                "extra is not installed (terminal_pool is unavailable)"
+            )
+        browser_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind != "terminal"]
         scenario_id = _uuid.uuid4().hex[:12]
-        # Wrap the whole multi-browser roster spawn + fixture + startup-macro
-        # sequence under a single span so the per-participant launches and
-        # macro runs nest cleanly underneath, and operators can attribute
-        # latency to scenario startup vs. ad-hoc browser activity. Count is
-        # used (not the full participant list) to keep cardinality bounded.
+        # Wrap the whole multi-session spawn + fixture + startup-macro sequence
+        # under a single span so per-participant launches and macro runs nest
+        # cleanly underneath. Count (not the full list) keeps cardinality bounded.
         with span(
             "octowright.scenario.start",
             scenario_id=scenario_id,
             scenario_name=effective_name,
             participants=len(spec.participants),
         ):
-            result = await browser_pool.spawn_roster([resolve_launch_kwargs(p) for p in spec.participants])
-            if result["errors"]:
-                for launched in result["launched"]:
-                    try:
-                        await browser_pool.close(launched["instance_id"], force=True)
-                    except Exception as exc:
-                        # Cleanup-after-error path: surface failures so a stuck
-                        # browser leaking after a partial-roster crash is auditable.
-                        log.warning(
-                            "scenario.rollback.close_failed",
-                            instance_id=launched["instance_id"],
-                            error=repr(exc),
-                        )
-                raise RuntimeError(
-                    f"scenario {effective_name!r}: {len(result['errors'])} participant(s) failed to launch: "
-                    f"{result['errors']}"
-                )
+            launched_by_index, browser_ids, terminal_ids = await self._launch_participants(
+                browser_pool, terminal_pool, browser_specs, terminal_specs, effective_name
+            )
+            # Reassemble in original spec order so roles/personas line up.
             participants: list[dict[str, Any]] = []
-            for participant_spec, launched in zip(spec.participants, result["launched"], strict=True):
-                entry = dict(launched)
+            for i, participant_spec in enumerate(spec.participants):
+                entry = dict(launched_by_index[i])
                 entry["persona"] = participant_spec.persona
                 entry["role"] = participant_spec.role
                 participants.append(entry)
@@ -207,27 +209,86 @@ class ScenarioPool:
             except BaseException:
                 # CancelledError is a BaseException, so catch it here too — but the
                 # rollback must *complete* before we re-raise, so run it shielded.
-                await self._rollback_start(
-                    scenario_id,
-                    browser_pool,
-                    [entry["instance_id"] for entry in result["launched"]],
-                )
+                await self._rollback_start(scenario_id, browser_pool, browser_ids, terminal_pool, terminal_ids)
                 raise
             return live
 
-    async def _rollback_start(self, scenario_id: str, browser_pool: Any, launched_ids: list[str]) -> None:
+    async def _launch_participants(
+        self,
+        browser_pool: Any,
+        terminal_pool: Any | None,
+        browser_specs: list[tuple[int, Any]],
+        terminal_specs: list[tuple[int, Any]],
+        effective_name: str,
+    ) -> tuple[dict[int, dict[str, Any]], list[str], list[str]]:
+        """Launch browser participants via the roster and terminal participants
+        individually, keyed back to their original participant index. On any
+        failure, close everything launched in either pool and raise."""
+        from octowright.scenarios import resolve_launch_kwargs, resolve_terminal_launch
+
+        launched_by_index: dict[int, dict[str, Any]] = {}
+        browser_ids: list[str] = []
+        terminal_ids: list[str] = []
+        errors: list[Any] = []
+
+        if browser_specs:
+            roster = await browser_pool.spawn_roster([resolve_launch_kwargs(p) for _, p in browser_specs])
+            browser_ids = [launched["instance_id"] for launched in roster["launched"]]
+            errors.extend(roster["errors"])
+            if not roster["errors"]:
+                for (i, _p), launched in zip(browser_specs, roster["launched"], strict=True):
+                    launched_by_index[i] = launched
+
+        for i, p in terminal_specs:
+            assert terminal_pool is not None  # start() guarantees this when terminal_specs is non-empty
+            try:
+                launched = await terminal_pool.launch(**resolve_terminal_launch(p))
+            except Exception as exc:
+                errors.append({"persona": p.persona, "error": repr(exc)})
+                continue
+            terminal_ids.append(launched["instance_id"])
+            launched_by_index[i] = launched
+
+        if errors:
+            await self._close_launched(browser_pool, browser_ids, terminal_pool, terminal_ids)
+            raise RuntimeError(f"scenario {effective_name!r}: {len(errors)} participant(s) failed to launch: {errors}")
+        return launched_by_index, browser_ids, terminal_ids
+
+    @staticmethod
+    async def _close_launched(
+        browser_pool: Any, browser_ids: list[str], terminal_pool: Any | None, terminal_ids: list[str]
+    ) -> None:
+        """Best-effort close of partially-launched sessions across both pools."""
+        for pool, ids in ((browser_pool, browser_ids), (terminal_pool, terminal_ids)):
+            if pool is None:
+                continue
+            for iid in ids:
+                try:
+                    await pool.close(iid, force=True)
+                except Exception as exc:
+                    # Cleanup-after-error path: surface so a leaked session is auditable.
+                    log.warning("scenario.rollback.close_failed", instance_id=iid, error=repr(exc))
+
+    async def _rollback_start(
+        self,
+        scenario_id: str,
+        browser_pool: Any,
+        browser_ids: list[str],
+        terminal_pool: Any | None,
+        terminal_ids: list[str],
+    ) -> None:
         """Shielded teardown for a scenario that failed or was cancelled during
         fixture application / startup macros: drop bookkeeping and close every
-        launched browser before the original exception re-propagates."""
+        launched session (browser + terminal) before the original exception
+        re-propagates."""
         with anyio.CancelScope(shield=True):
             async with self._live_lock:
                 self._live.pop(scenario_id, None)
-            await shielded_rollback_close(
-                browser_pool,
-                launched_ids,
-                logger=log,
-                event="scenario.rollback.close_failed",
-            )
+            await shielded_rollback_close(browser_pool, browser_ids, logger=log, event="scenario.rollback.close_failed")
+            if terminal_pool is not None and terminal_ids:
+                await shielded_rollback_close(
+                    terminal_pool, terminal_ids, logger=log, event="scenario.rollback.close_failed"
+                )
 
     async def stop(self, *, scenario_id: str, browser_pool: Any) -> ScenarioStopResult:
         async with self._live_lock:
@@ -369,6 +430,8 @@ async def _apply_fixtures(browser_pool: Any, live: LiveScenario, fixtures: dict[
     mock_routes = fixtures.get("mock_routes") or []
 
     async def _apply(p: dict[str, Any]) -> None:
+        if p.get("kind") == "terminal":
+            return  # dialog policy + mock routes are browser-only
         session = browser_pool.get(p["instance_id"])
         if dialog_policy:
             session.set_dialog_policy(dialog_policy)
@@ -393,6 +456,8 @@ async def _run_startup_macros(browser_pool: Any, live: LiveScenario) -> None:
     failures: list[dict[str, str]] = []
 
     async def _run_for_participant(participant_dict: dict[str, Any], participant_spec: Any) -> None:
+        if participant_dict.get("kind") == "terminal":
+            return  # Playwright startup macros don't apply to terminals (validation also forbids them)
         for macro_name in resolve_startup_macros(participant_spec):
             session = browser_pool.get(participant_dict["instance_id"])
             try:
