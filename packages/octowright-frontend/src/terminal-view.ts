@@ -129,12 +129,12 @@ export function mountTerminalView(container: HTMLElement, opts: TerminalViewOpti
       for (const ev of events) {
         if (ev.action === "terminal_output" && typeof ev.data === "string") {
           // `reset: true` means the connector's buffer was cleared and `data`
-          // is the full new buffer — clear the screen first so the stale screen
-          // doesn't linger above it. A normal delta just appends.
-          if (ev.reset === true) {
-            term.reset();
-          }
-          term.write(ev.data);
+          // is the full new buffer. Emit RIS (ESC c) IN the write stream rather
+          // than calling term.reset(): xterm's write() is async-buffered, so an
+          // out-of-band reset() runs before the queued prior delta is parsed and
+          // that delta then reappears on the freshly-reset screen. An in-stream
+          // \x1bc is parsed in order — prior delta, then full reset, then data.
+          term.write(ev.reset === true ? `\x1bc${ev.data}` : ev.data);
         }
       }
     },
