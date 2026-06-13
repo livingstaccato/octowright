@@ -18,6 +18,7 @@
     "vitest": "4.1.4"
   },
   "dependencies": {
-    "@provide-io/telemetry": "^0.4.7"
+    "@provide-io/telemetry": "^0.4.7",
+    "@xterm/xterm": "^5.5.0"
   }
 }
