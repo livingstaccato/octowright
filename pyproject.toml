@@ -53,6 +53,21 @@ dependencies = [
     "uvicorn[standard]>=0.30",
 ]
 
+[project.optional-dependencies]
+# Optional terminal sessions: hosts a provide-uterm connector in-process (local
+# PTY shell + SSH), recorded to the same JSONL format as browsers. See AGENTS.md
+# "Terminal Sessions (optional)". Core never imports uterm; without this extra the
+# terminal_* tools simply don't register. `provide-uterm-server[gateway]` brings
+# asyncssh for the SSH connector. These provide-io ecosystem packages aren't on
+# PyPI yet; until they publish, [tool.uv.sources] resolves them from a sibling
+# checkout for local dev (uv strips those overrides from the built wheel, so
+# end users installing octowright[terminal] get them from PyPI).
+terminal = [
+    "provide-uterm>=0.4.0",
+    "provide-uterm-platform>=0.4.0",
+    "provide-uterm-server[gateway]>=0.4.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/livingstaccato/octowright"
 Documentation = "https://foundry.provide.io/octowright/"
@@ -127,6 +142,18 @@ artifacts = [
     "src/octowright/server/frontend/*.svg",
 ]
 
+[tool.uv.sources]
+# Local-dev resolution for the unpublished provide-uterm ecosystem packages that
+# back the optional `terminal` extra (above). Expects the sibling repo checked
+# out at ../provide-uterm (the provide.io layout); `provide-uterm-client` is a
+# transitive dep of `provide-uterm-server`. uv strips these source overrides from
+# the published wheel, so a real `pip install octowright[terminal]` resolves the
+# same packages from PyPI once they publish. Remove this table at that point.
+provide-uterm = { path = "../provide-uterm/packages/provide-uterm", editable = true }
+provide-uterm-client = { path = "../provide-uterm/packages/provide-uterm-client", editable = true }
+provide-uterm-platform = { path = "../provide-uterm/packages/provide-uterm-platform", editable = true }
+provide-uterm-server = { path = "../provide-uterm/packages/provide-uterm-server", editable = true }
+
 [dependency-groups]
 # Mirrors provide-telemetry's dev toolchain so any contributor across the
 # provide-io ecosystem runs the same checks. Bump in lockstep with that project.
@@ -173,6 +200,7 @@ markers = [
     "live_browser: tests that require real browser engines installed",
     "engine_matrix: tests that exercise chromium/firefox/webkit matrices",
     "integration_local: tests that run against the local demo playground server",
+    "terminal: optional terminal-session tests; require the octowright[terminal] extra (provide-uterm). Auto-applied to everything under tests/terminal/. Select with -m terminal / exclude with -m 'not terminal'.",
 ]
 filterwarnings = [
     "ignore:websockets\\.legacy is deprecated;.*:DeprecationWarning:websockets\\.legacy",
