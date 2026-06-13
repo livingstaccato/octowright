@@ -128,6 +128,18 @@ PROFILES: dict[str, list[str]] = {
         "golden_save",
         "golden_verify_loop",
     ],
+    # Terminal sessions (PTY / SSH). These tools register only when the optional
+    # `octowright[terminal]` extra is installed (see server/__init__); listing them
+    # here just controls LLM visibility when it is.
+    "terminals": [
+        "terminal_launch",
+        "terminal_send_input",
+        "terminal_snapshot",
+        "terminal_read",
+        "terminal_wait_for",
+        "terminal_close",
+        "terminal_list",
+    ],
     # Persona + on-disk profile management.
     "personas": [
         "persona_create",
