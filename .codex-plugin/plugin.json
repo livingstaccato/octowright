@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Octowright",
     "shortDescription": "Browser automation tools",
-    "longDescription": "Use Octowright to run Playwright-based browser automation and testing workflows. For branding assets in skill/plugin docs, use docs/images/ and the regeneration workflow in docs/images/README.md.",
+    "longDescription": "Use Octowright to run Playwright-based browser automation and testing workflows.",
     "developerName": "Provide IO",
     "category": "Developer Tools",
     "capabilities": [
