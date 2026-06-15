@@ -10,7 +10,6 @@
 // This module + xterm + addons are loaded lazily (dynamic import from
 // session.ts) so they never bloat the browser-session bundle.
 
-import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
@@ -59,9 +58,11 @@ export interface TerminalViewHandle {
 }
 
 function defaultFactory(): TerminalInstance {
-  // 80x24 is the initial size; FitAddon immediately reflows it to the
-  // container. scrollback keeps history visible. convertEol:false because the
-  // stream already carries CRLF. allowProposedApi is required by Unicode11Addon.
+  // Fixed geometry: terminal sessions (telnet/ssh) hardcode 80 cols and the
+  // BBS content is authored for exactly that width. No FitAddon — fitting to
+  // the container would inflate cols to fill the panel, stretching 80-col
+  // ANSI art to an unreadable wide layout. The container is sized to wrap the
+  // xterm canvas instead (see .session-terminal-view CSS).
   const term = new Terminal({
     convertEol: false,
     disableStdin: true,
@@ -69,16 +70,14 @@ function defaultFactory(): TerminalInstance {
     scrollback: 5000,
     fontSize: 13,
     cols: 80,
-    rows: 24,
+    rows: 25,
     allowProposedApi: true,
   });
-  const fitAddon = new FitAddon();
-  term.loadAddon(fitAddon);
   term.loadAddon(new WebLinksAddon());
   const unicode = new Unicode11Addon();
   term.loadAddon(unicode);
   term.unicode.activeVersion = "11";
-  return { terminal: term as unknown as TerminalLike, fit: () => fitAddon.fit() };
+  return { terminal: term as unknown as TerminalLike, fit: () => {} };
 }
 
 export function mountTerminalView(container: HTMLElement, opts: TerminalViewOptions): TerminalViewHandle {
