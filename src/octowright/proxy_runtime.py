@@ -206,6 +206,7 @@ async def run_supervised_proxy(
                             ) as (remote_read, remote_write, get_sid):
                                 _connect_scope.deadline = math.inf
                                 remote_write_slot.write = remote_write
+                                remote_write_slot.ready.set()
                                 try:
                                     supervisor_obj.remote_session_id = get_sid()
                                 except Exception as exc:

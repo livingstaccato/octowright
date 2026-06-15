@@ -998,7 +998,7 @@ async def test_run_supervised_proxy_session_survives_past_connect_timeout(
     monkeypatch.setattr(runtime.bridge_state, "record_snapshot", lambda **_kwargs: None)
 
     # Stub stdio_server so the supervisor uses our in-memory streams.
-    local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    _local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
 
     @asynccontextmanager
@@ -1027,4 +1027,63 @@ async def test_run_supervised_proxy_session_survives_past_connect_timeout(
     # Quiet the unused stream warnings.
     await fake_remote_read_send.aclose()
     await fake_remote_write_recv.aclose()
-    await local_in_send.aclose()
+
+
+@pytest.mark.anyio
+async def test_forward_waits_for_remote_ready_on_startup_race() -> None:
+    """If the remote connection isn't established yet when the first message
+    arrives, forward_one_local_message must wait until it is — not immediately
+    return a bridge error. This is the startup-race fix: MCP clients (especially
+    Codex) send `initialize` very quickly after spawning the follower, before the
+    _remote_supervisor coroutine has connected to the leader."""
+    _local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    outgoing_send, outgoing_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    remote_send, remote_recv = anyio.create_memory_object_stream[SessionMessage](10)
+
+    sup = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=outgoing_send,
+        request_timeout_seconds=5.0,
+    )
+    slot = supervisor._RemoteWriteSlot()  # write=None, ready not yet set
+
+    async def _delayed_connect() -> None:
+        # Simulate the remote supervisor connecting 50ms after the message arrives.
+        await anyio.sleep(0.05)
+        slot.write = remote_send
+        slot.ready.set()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_delayed_connect)
+        # forward_one_local_message should wait for ready and then forward.
+        await sup.forward_one_local_message(_request("initialize", "init-1"), slot)
+
+    # The request must have been forwarded to the remote, not errored locally.
+    forwarded = remote_recv.receive_nowait()
+    assert supervisor.message_request_id(forwarded) == "init-1"
+    assert outgoing_recv.statistics().current_buffer_used == 0, "no bridge error should have been sent"
+
+
+@pytest.mark.anyio
+async def test_forward_errors_after_connect_timeout_if_remote_never_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the remote never connects within BRIDGE_CONNECT_TIMEOUT_SECONDS,
+    the pending request gets a bridge error (existing fallback, not a hang)."""
+    _local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    outgoing_send, outgoing_recv = anyio.create_memory_object_stream[SessionMessage](10)
+
+    sup = supervisor.BridgeSupervisor(
+        local_read=local_recv,
+        local_write=outgoing_send,
+        request_timeout_seconds=5.0,
+    )
+    slot = supervisor._RemoteWriteSlot()  # write=None, ready never set
+
+    # Patch the connect timeout down so the test runs fast.
+    monkeypatch.setattr(supervisor, "BRIDGE_CONNECT_TIMEOUT_SECONDS", 0.05)
+    await sup.forward_one_local_message(_request("initialize", "init-x"), slot)
+
+    err = outgoing_recv.receive_nowait()
+    root = err.message.root
+    assert isinstance(root, supervisor.JSONRPCError)
+    assert root.id == "init-x"
+    assert "unavailable" in root.error.message
