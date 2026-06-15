@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import itertools
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -18,7 +18,7 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._tracing import counter, histogram, span
-from octowright.defaults import BRIDGE_TOOL_TIMEOUTS
+from octowright.defaults import BRIDGE_CONNECT_TIMEOUT_SECONDS, BRIDGE_TOOL_TIMEOUTS
 
 _BRIDGE_RECONNECT = counter(
     "octowright_bridge_reconnect_total",
@@ -62,6 +62,10 @@ log = get_logger(__name__)
 @dataclass
 class _RemoteWriteSlot:
     write: Any | None = None
+    # Fired once when the first remote writer is assigned so that
+    # forward_one_local_message can wait out the startup race window
+    # instead of immediately returning a bridge error.
+    ready: anyio.Event = field(default_factory=anyio.Event)
 
 
 @dataclass
@@ -194,6 +198,15 @@ class BridgeSupervisor:
         remote_write = remote_write_slot.write
         request_id = message_request_id(message)
         method = message_method(message) or "notification"
+        if remote_write is None:
+            # Startup race: the remote supervisor may not have finished connecting
+            # yet. Wait up to BRIDGE_CONNECT_TIMEOUT_SECONDS for the first writer
+            # before falling through to the error path — this prevents `initialize`
+            # (and any other early message) from getting an immediate bridge error
+            # that MCP clients treat as a fatal disconnect.
+            with anyio.move_on_after(BRIDGE_CONNECT_TIMEOUT_SECONDS):
+                await remote_write_slot.ready.wait()
+            remote_write = remote_write_slot.write
         if remote_write is None:
             if is_request(message) and request_id is not None:
                 await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
