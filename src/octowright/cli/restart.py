@@ -84,6 +84,48 @@ def _looks_like_restart_target(command: str) -> bool:
     return "--daemon-mode" in command or "--http-host" in command or "--http-port" in command
 
 
+def _looks_like_follower(command: str) -> bool:
+    """Return True for bare MCP-follower ``serve`` processes.
+
+    Followers are the stdio transport for an MCP client session (Claude Code,
+    Codex, etc.). They are NOT killed by default — killing them severs the
+    client's connection. ``--kill-followers`` sweeps them for a full reset
+    when sessions are already dead or the user explicitly wants a clean slate.
+    """
+    if "octowright serve" not in command:
+        return False
+    return "--daemon-mode" not in command and "--http-host" not in command and "--http-port" not in command
+
+
+def _follower_pids() -> list[int]:
+    """Return PIDs of all live bare follower ``octowright serve`` processes."""
+    try:
+        out = subprocess.run(  # nosec B603 B607
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return []
+    pids: list[int] = []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            pid_text, command = line.split(None, 1)
+        except ValueError:
+            continue
+        if not _looks_like_follower(command):
+            continue
+        try:
+            pids.append(int(pid_text))
+        except ValueError:
+            continue
+    return pids
+
+
 def _leader_pids_from_pgrep() -> list[int]:
     """Find daemon/launcher ``octowright serve`` pids when the lock is stale.
 
@@ -182,34 +224,49 @@ def _wait_for_port_free(host: str, port: int, timeout: float) -> bool:
     return _port_is_free(host, port)
 
 
-def _stop_leader(timeout: float) -> tuple[int, int]:
-    """SIGTERM all known leader pids, escalate to SIGKILL on holdouts.
-
-    Returns ``(stopped_count, kill9_count)``.
-    """
+def _collect_target_pids(kill_followers: bool) -> set[int]:
+    """Return all PIDs that should be signalled."""
     pids: set[int] = set()
     locked = _leader_pid_from_lock()
     if locked:
         pids.add(locked)
     pids.update(_leader_pids_from_pgrep())
-    if not pids:
-        # Route to stderr so an agent driving restart can distinguish
-        # "nothing was running" from "stopped N processes" — the success
-        # message that follows on stdout reflects the actual end-state.
-        click.echo("no running octowright daemon found", err=True)
-        return 0, 0
+    if kill_followers:
+        extra = [p for p in _follower_pids() if p not in pids]
+        if extra:
+            click.echo(f"killing {len(extra)} follower process(es): {sorted(extra)}")
+        pids.update(extra)
+    return pids
 
-    click.echo(f"stopping {len(pids)} octowright process(es): {sorted(pids)}")
-    for pid in pids:
-        _send_signal(pid, signal.SIGTERM)
 
+def _escalate_survivors(pids: set[int], timeout: float) -> list[int]:
+    """Wait for each pid to exit; SIGKILL holdouts. Return pids still alive."""
     survivors = [pid for pid in pids if not _wait_for_pid_exit(pid, timeout)]
     if survivors:
         click.echo(f"  escalating to SIGKILL on {survivors}")
         for pid in survivors:
             _send_signal(pid, _FORCE_KILL)
             _wait_for_pid_exit(pid, 2.0)
+    return survivors
 
+
+def _stop_leader(timeout: float, *, kill_followers: bool = False) -> tuple[int, int]:
+    """SIGTERM all known leader pids, escalate to SIGKILL on holdouts.
+
+    When *kill_followers* is True, also sweeps bare MCP follower processes
+    (``octowright serve`` without daemon flags) so stale sessions from dead
+    clients don't accumulate.
+
+    Returns ``(stopped_count, kill9_count)``.
+    """
+    pids = _collect_target_pids(kill_followers)
+    if not pids:
+        click.echo("no running octowright daemon found", err=True)
+        return 0, 0
+    click.echo(f"stopping {len(pids)} octowright process(es): {sorted(pids)}")
+    for pid in pids:
+        _send_signal(pid, signal.SIGTERM)
+    survivors = _escalate_survivors(pids, timeout)
     singleton.remove_lock()
     return len(pids) - len(survivors), len(survivors)
 
@@ -292,6 +349,15 @@ def _wait_for_health(host: str, port: int, timeout: float) -> str | None:
     help="Stop the daemon (and reap browsers) without spawning a fresh one.",
 )
 @click.option(
+    "--kill-followers",
+    is_flag=True,
+    help=(
+        "Also kill bare MCP follower processes (octowright serve without daemon flags). "
+        "Use for a full reset when prior client sessions are already dead. "
+        "WARNING: severs any currently-connected MCP client transports."
+    ),
+)
+@click.option(
     "--timeout",
     type=float,
     default=10.0,
@@ -316,6 +382,7 @@ def restart(
     ctx: click.Context,
     keep_browsers: bool,
     no_start: bool,
+    kill_followers: bool,
     timeout: float,
     http_host: str,
     http_port: int,
@@ -323,9 +390,10 @@ def restart(
     """Stop the running octowright daemon, sweep orphans, start a fresh one.
 
     Useful when the daemon is wedged or needs a clean restart. The command
-    preserves bare follower transports owned by MCP clients.
+    preserves bare follower transports owned by MCP clients unless
+    --kill-followers is passed (full reset).
     """
-    stopped, killed = _stop_leader(timeout)
+    stopped, killed = _stop_leader(timeout, kill_followers=kill_followers)
     if not keep_browsers:
         _reap_browsers()
 
