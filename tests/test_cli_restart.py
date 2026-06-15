@@ -304,6 +304,74 @@ def test_resolve_octowright_entry_prefers_venv_neighbour(monkeypatch: pytest.Mon
     assert resolved == str(fake_octowright)
 
 
+def test_kill_followers_flag_is_documented_in_help(runner: CliRunner) -> None:
+    """``--kill-followers`` must appear in help output."""
+    result = runner.invoke(cli, ["restart", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--kill-followers" in result.output
+
+
+def test_looks_like_follower_identifies_bare_serve() -> None:
+    """Bare ``octowright serve`` (no daemon flags) must be classified as a follower."""
+    assert _restart_mod._looks_like_follower("/venv/bin/python /venv/bin/octowright serve")
+    assert _restart_mod._looks_like_follower("uv run octowright serve")
+    assert _restart_mod._looks_like_follower("uv run octowright serve --profile core")
+
+
+def test_looks_like_follower_rejects_daemon_processes() -> None:
+    """Processes with daemon flags must NOT be classified as followers."""
+    assert not _restart_mod._looks_like_follower("octowright serve --daemon-mode")
+    assert not _restart_mod._looks_like_follower("octowright serve --http-host 127.0.0.1")
+    assert not _restart_mod._looks_like_follower("octowright serve --http-port 8765")
+    assert not _restart_mod._looks_like_follower("octowright restart")
+    assert not _restart_mod._looks_like_follower("unrelated process")
+
+
+def test_follower_pids_returns_bare_serve_pids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_follower_pids must return PIDs for bare serve processes only."""
+
+    def fake_run(*_a: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            stdout="\n".join(
+                [
+                    "101 /venv/bin/python /venv/bin/octowright serve",
+                    "202 /venv/bin/python /venv/bin/octowright serve --daemon-mode",
+                    "303 uv run octowright serve --http-host 127.0.0.1 --http-port 8765",
+                    "404 /venv/bin/python /venv/bin/octowright serve --profile core",
+                ]
+            )
+        )
+
+    monkeypatch.setattr(_restart_mod.subprocess, "run", fake_run)
+    assert sorted(_restart_mod._follower_pids()) == [101, 404]
+
+
+@pytest.mark.usefixtures("stub_no_leader")
+def test_kill_followers_flag_sweeps_follower_pids(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--kill-followers`` must call SIGTERM on discovered follower PIDs."""
+    monkeypatch.setattr(_restart_mod, "_follower_pids", lambda: [777, 888])
+    monkeypatch.setattr(_restart_mod.singleton, "pid_is_alive", lambda _pid: False)
+    monkeypatch.setattr(
+        _restart_mod,
+        "reap_orphan_browsers",
+        lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
+    )
+
+    sent_signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(_restart_mod, "_send_signal", lambda pid, sig: sent_signals.append((pid, sig)) or True)
+
+    result = runner.invoke(cli, ["restart", "--kill-followers", "--no-start", "--timeout", "1"])
+
+    assert result.exit_code == 0, result.output
+    killed_pids = {pid for pid, sig in sent_signals if sig == signal.SIGTERM}
+    assert 777 in killed_pids
+    assert 888 in killed_pids
+    assert "follower" in result.output
+
+
 def test_port_is_free_sets_reuseaddr_so_time_wait_does_not_block(monkeypatch: pytest.MonkeyPatch) -> None:
     """The pre-flight check must set SO_REUSEADDR so a TIME_WAIT socket from the
     just-stopped daemon reads as free — matching what the new daemon (which also
