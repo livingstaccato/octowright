@@ -46,12 +46,14 @@ BRIDGE_ERROR_PREFIX = "Octowright bridge error:"
 # fully-dead leader can't send any message, so the skill + MCP server instructions
 # carry the same guidance for that case; this covers the recoverable/timeout path.
 BRIDGE_ERROR_GUIDANCE = (
-    "This is an Octowright transport error, not a browser result. Retry one call; if it "
-    "still fails, Octowright's MCP server is disconnected. Do NOT open a URL with a shell "
-    "command (open/xdg-open/start) as a substitute browser — it cannot be driven, "
-    "inspected, or recorded, and must not be reported as launched. Tell the user Octowright "
-    "is disconnected and they must reconnect/restart it in their MCP client before browser "
-    "tools will work."
+    "This is an Octowright transport error, not a browser result. Retry ONE call; if it "
+    "still fails, Octowright is disconnected — STOP and tell the user to reconnect it. "
+    "Forbidden: running 'octowright restart' or 'which octowright' via shell (binary not on "
+    "agent PATH; restarting the daemon closes the MCP connection, not fixes it); probing "
+    "/api/health; opening URLs with shell commands (open/xdg-open/start); writing Playwright "
+    "scripts as a fallback. None of these restore the MCP connection. Only the user can "
+    "reconnect the MCP client. Claude Code: /mcp -> select octowright -> Reconnect. "
+    "Other clients: ask which client, have them use its MCP reconnect control or restart it."
 )
 
 log = get_logger(__name__)
