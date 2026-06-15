@@ -1428,9 +1428,14 @@ code, .mono { font-family: var(--mono); }
   border-radius: 6px;
   padding: 6px;
   overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
 }
 .session-terminal-view__screen {
-  width: 100%;
+  /* No FitAddon: xterm renders at its fixed 80-col geometry. This div
+     shrink-wraps to the canvas so the panel doesn't force a wider layout. */
+  display: inline-block;
   min-height: 360px;
 }
 .session-page--terminal {
