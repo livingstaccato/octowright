@@ -178,6 +178,81 @@ def test_process_fallback_skips_bare_follower_transports(monkeypatch: pytest.Mon
     assert _restart_mod._leader_pids_from_pgrep() == [202, 303]
 
 
+def test_list_process_commands_windows_parses_powershell_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows path must parse PowerShell ConvertTo-Csv output correctly."""
+    monkeypatch.setattr(_restart_mod.sys, "platform", "win32")
+
+    csv_output = "\n".join(
+        [
+            '"ProcessId","CommandLine"',
+            '"101","C:\\venv\\Scripts\\octowright serve"',
+            '"202","C:\\venv\\Scripts\\octowright serve --daemon-mode"',
+            '"303","C:\\venv\\Scripts\\octowright serve --http-host 127.0.0.1 --http-port 8765"',
+            '"404","C:\\venv\\Scripts\\octowright restart"',
+            '"505",""',  # process with empty command line
+        ]
+    )
+
+    monkeypatch.setattr(
+        _restart_mod.subprocess,
+        "run",
+        lambda *_a, **_kw: SimpleNamespace(stdout=csv_output),
+    )
+
+    rows = _restart_mod._list_process_commands()
+    assert rows == [
+        (101, "C:\\venv\\Scripts\\octowright serve"),
+        (202, "C:\\venv\\Scripts\\octowright serve --daemon-mode"),
+        (303, "C:\\venv\\Scripts\\octowright serve --http-host 127.0.0.1 --http-port 8765"),
+        (404, "C:\\venv\\Scripts\\octowright restart"),
+        (505, ""),
+    ]
+
+
+def test_leader_pids_from_pgrep_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows the leader-pid fallback must use PowerShell and filter correctly."""
+    monkeypatch.setattr(_restart_mod.sys, "platform", "win32")
+
+    csv_output = "\n".join(
+        [
+            '"ProcessId","CommandLine"',
+            '"101","C:\\venv\\Scripts\\octowright serve"',
+            '"202","C:\\venv\\Scripts\\octowright serve --daemon-mode"',
+            '"303","C:\\venv\\Scripts\\octowright serve --http-port 8765"',
+        ]
+    )
+
+    monkeypatch.setattr(
+        _restart_mod.subprocess,
+        "run",
+        lambda *_a, **_kw: SimpleNamespace(stdout=csv_output),
+    )
+
+    assert sorted(_restart_mod._leader_pids_from_pgrep()) == [202, 303]
+
+
+def test_follower_pids_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows ``_follower_pids`` must identify bare serve processes."""
+    monkeypatch.setattr(_restart_mod.sys, "platform", "win32")
+
+    csv_output = "\n".join(
+        [
+            '"ProcessId","CommandLine"',
+            '"101","C:\\venv\\Scripts\\octowright serve"',
+            '"202","C:\\venv\\Scripts\\octowright serve --daemon-mode"',
+            '"303","C:\\venv\\Scripts\\octowright serve --profile core"',
+        ]
+    )
+
+    monkeypatch.setattr(
+        _restart_mod.subprocess,
+        "run",
+        lambda *_a, **_kw: SimpleNamespace(stdout=csv_output),
+    )
+
+    assert sorted(_restart_mod._follower_pids()) == [101, 303]
+
+
 @pytest.mark.usefixtures("stub_no_leader")
 def test_spawn_passes_http_host_and_port_through(
     runner: CliRunner,
