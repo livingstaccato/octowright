@@ -258,6 +258,12 @@ BRIDGE_TOOL_TIMEOUTS: dict[str, float] = {
     ),
     "macro_run": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_RUN_TIMEOUT_SECONDS", "120")),
     "macro_run_sequence": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_SEQUENCE_TIMEOUT_SECONDS", "180")),
+    # browser_evaluate runs arbitrary caller-supplied JS that may include polling
+    # loops (wait-for-navigation, wait-for-element) up to Playwright's own
+    # page.evaluate timeout (~30s default).  Give the bridge a 60s floor so
+    # a long-running expression doesn't hit the 20s flat ceiling and return a
+    # spurious transport timeout that looks like a disconnect.
+    "browser_evaluate": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_EVALUATE_TIMEOUT_SECONDS", "60")),
 }
 
 # Max times the follower re-sends an in-flight request on a fresh leader session
