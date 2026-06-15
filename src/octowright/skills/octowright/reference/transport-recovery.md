@@ -101,7 +101,25 @@ octowright restart --no-start        # stop + reap only (e.g. before reboot)
 octowright restart --keep-browsers   # skip orphan-browser sweep
 octowright restart --http-port 8766  # use a non-default port
 octowright restart --timeout 30      # extend shutdown / health-probe budget
+octowright restart --kill-followers  # also kill stale MCP follower processes (full reset)
 ```
+
+### `--kill-followers`
+
+By default `restart` only kills the leader daemon and leaves bare `octowright serve`
+follower processes alone — killing them would sever any connected MCP client's
+stdio transport. Use `--kill-followers` when you know all sessions are already dead
+(e.g. after killing stale zombies manually, or after a machine reboot) and want a
+completely clean slate:
+
+```bash
+# Full reset: kill daemon + all stale followers, then start a fresh daemon
+octowright restart --kill-followers
+```
+
+**WARNING:** this immediately terminates every follower process. Any MCP client with
+an active connection (Claude Code, Codex, etc.) will lose its transport and need to
+reconnect.
 
 ## What NOT to Do
 
