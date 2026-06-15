@@ -29,6 +29,8 @@ clients; those followers are the client's stdio transport.
 
 from __future__ import annotations
 
+import csv
+import io
 import os
 import signal
 import socket
@@ -97,8 +99,19 @@ def _looks_like_follower(command: str) -> bool:
     return "--daemon-mode" not in command and "--http-host" not in command and "--http-port" not in command
 
 
-def _follower_pids() -> list[int]:
-    """Return PIDs of all live bare follower ``octowright serve`` processes."""
+def _list_process_commands() -> list[tuple[int, str]]:
+    """Return ``[(pid, command_line), ...]`` for every live process.
+
+    Uses ``ps`` on POSIX and PowerShell ``Get-CimInstance`` on Windows
+    (same approach as ``process_reaper``). Returns an empty list on any
+    failure so callers degrade gracefully.
+    """
+    if sys.platform == "win32":
+        return _list_process_commands_windows()
+    return _list_process_commands_posix()
+
+
+def _list_process_commands_posix() -> list[tuple[int, str]]:
     try:
         out = subprocess.run(  # nosec B603 B607
             ["ps", "-axo", "pid=,command="],
@@ -108,56 +121,66 @@ def _follower_pids() -> list[int]:
         )
     except FileNotFoundError:
         return []
-    pids: list[int] = []
+    rows: list[tuple[int, str]] = []
     for line in out.stdout.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
             pid_text, command = line.split(None, 1)
+            rows.append((int(pid_text), command))
         except ValueError:
             continue
-        if not _looks_like_follower(command):
+    return rows
+
+
+def _list_process_commands_windows() -> list[tuple[int, str]]:
+    # ``wmic`` is deprecated on recent Windows; ``Get-CimInstance`` is current.
+    # Matches the pattern in ``process_reaper._list_processes_windows``.
+    script = "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"
+    try:
+        out = subprocess.run(  # nosec B603 B607
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return []
+    rows: list[tuple[int, str]] = []
+    reader = csv.reader(io.StringIO(out.stdout))
+    try:
+        header = next(reader)
+    except StopIteration:
+        return rows
+    try:
+        pid_idx = header.index("ProcessId")
+        cmd_idx = header.index("CommandLine")
+    except ValueError:
+        return rows
+    for row in reader:
+        if len(row) <= max(pid_idx, cmd_idx):
             continue
         try:
-            pids.append(int(pid_text))
+            rows.append((int(row[pid_idx]), row[cmd_idx] or ""))
         except ValueError:
             continue
-    return pids
+    return rows
+
+
+def _follower_pids() -> list[int]:
+    """Return PIDs of all live bare follower ``octowright serve`` processes."""
+    return [pid for pid, cmd in _list_process_commands() if _looks_like_follower(cmd)]
 
 
 def _leader_pids_from_pgrep() -> list[int]:
     """Find daemon/launcher ``octowright serve`` pids when the lock is stale.
 
-    Despite the historical name, this uses ``ps`` so we can inspect command
-    lines and avoid killing bare follower transports attached to MCP clients.
+    Despite the historical name, this no longer uses pgrep — it uses
+    ``_list_process_commands`` (``ps`` on POSIX, PowerShell on Windows) so we
+    can inspect command lines and avoid killing bare follower transports.
     """
-    try:
-        # Fixed `ps` argv, PATH-resolved system binary, no shell.
-        out = subprocess.run(  # nosec B603 B607
-            ["ps", "-axo", "pid=,command="],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return []
-    pids: list[int] = []
-    for line in out.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            pid_text, command = line.split(None, 1)
-        except ValueError:
-            continue
-        if not _looks_like_restart_target(command):
-            continue
-        try:
-            pids.append(int(pid_text))
-        except ValueError:
-            continue
-    return pids
+    return [pid for pid, cmd in _list_process_commands() if _looks_like_restart_target(cmd)]
 
 
 def _send_signal(pid: int, sig: int) -> bool:
