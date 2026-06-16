@@ -18,8 +18,12 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._bridge_message_helpers import (
+    BRIDGE_ERROR_CODE,  # noqa: F401 — re-exported for callers/tests
+    BRIDGE_ERROR_GUIDANCE,  # noqa: F401
+    BRIDGE_ERROR_PREFIX,  # noqa: F401
     bridge_error,
     is_request,
+    is_response,  # noqa: F401
     message_method,
     message_request_id,
     message_root,
