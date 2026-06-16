@@ -80,7 +80,9 @@ def test_unlisted_tool_uses_flat_timeout() -> None:
     """A tools/call for a tool with no per-tool override falls back to the flat
     request timeout the supervisor was constructed with."""
     sup = supervisor.BridgeSupervisor(local_read=None, local_write=None, request_timeout_seconds=20.0)
-    sup.track_local_message(_tools_call("browser_click", "bc1"))
+    # browser_screenshot has no entry in BRIDGE_TOOL_TIMEOUTS — it's a fast capture
+    # with no long Playwright timeout of its own.
+    sup.track_local_message(_tools_call("browser_screenshot", "bc1"))
     in_flight = sup._in_flight["bc1"]
     assert in_flight.deadline - in_flight.started_at == pytest.approx(20.0, rel=0.01)
 
