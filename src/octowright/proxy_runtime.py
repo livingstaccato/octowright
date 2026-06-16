@@ -255,6 +255,9 @@ async def run_supervised_proxy(
                             return
                     except Exception as exc:
                         remote_write_slot.write = None
+                        remote_write_slot.ready = (
+                            anyio.Event()
+                        )  # one-shot reset so reconnect waiters pick up the next connection
                         _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
                         await supervisor_obj.fail_or_mark_for_resume(f"remote leader session reset: {exc!r}")
                         supervisor_obj.last_error = repr(exc)
