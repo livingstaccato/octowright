@@ -258,25 +258,24 @@ BRIDGE_TOOL_TIMEOUTS: dict[str, float] = {
     ),
     "macro_run": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_RUN_TIMEOUT_SECONDS", "120")),
     "macro_run_sequence": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_SEQUENCE_TIMEOUT_SECONDS", "180")),
-    # browser_evaluate runs arbitrary caller-supplied JS that may include polling
-    # loops (wait-for-navigation, wait-for-element) up to Playwright's own
-    # page.evaluate timeout (~30s default).  Give the bridge a 60s floor so
-    # a long-running expression doesn't hit the 20s flat ceiling and return a
-    # spurious transport timeout that looks like a disconnect.
+    # evaluate runs arbitrary caller JS with up to ~30s page.evaluate timeout
     "browser_evaluate": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_EVALUATE_TIMEOUT_SECONDS", "60")),
+    # fill/type carry up to 15s Playwright action timeout — 60s leaves 45s bridge margin
+    "browser_fill": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_FILL_TIMEOUT_SECONDS", "60")),
+    "browser_type": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_TYPE_TIMEOUT_SECONDS", "60")),
+    # navigate uses page.goto() with DEFAULT_NAV_TIMEOUT_MS (30s) — 60s keeps parity
+    "browser_navigate": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_NAVIGATE_TIMEOUT_SECONDS", "60")),
+    # click can trigger a navigation, inheriting the 30s nav timeout
+    "browser_click": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_CLICK_TIMEOUT_SECONDS", "45")),
+    # wait_for is an explicit waiting primitive; 90s accommodates typical settle polls
+    "browser_wait_for": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_WAIT_FOR_TIMEOUT_SECONDS", "90")),
 }
 
-# Max times the follower re-sends an in-flight request on a fresh leader session
-# after a reconnect (idempotent resume). Past this it fails the request with the
-# usual retry-hint instead of resuming.
+# Max re-sends of an in-flight request after a reconnect (idempotent resume).
 BRIDGE_RESUME_MAX_ATTEMPTS = int(os.environ.get("OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS", "3"))
 
-# When the MCP client closes the follower's stdin, the bridge cancels itself and
-# should exit. If the remote SSE teardown wedges (it can block in the transport
-# and ignore anyio cancellation), this is the grace period after which the
-# follower hard-exits anyway, so it never outlives its client (the bridge owns
-# no state). Followers leaking past their client is what accumulated orphaned
-# `octowright serve` processes across idle-restart churn.
+# Hard-exit grace after stdin EOF: ensures the follower doesn't outlive its client
+# when remote SSE teardown wedges and ignores anyio cancellation.
 FOLLOWER_EXIT_BACKSTOP_SECONDS = float(os.environ.get("OCTOWRIGHT_FOLLOWER_EXIT_BACKSTOP_SECONDS", "5"))
 
 # Leader-side idempotency cache. The follower injects a stable
