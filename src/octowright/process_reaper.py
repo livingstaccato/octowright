@@ -41,7 +41,17 @@ import sys
 import time
 from typing import Any, Literal, TypedDict
 
+from octowright._tracing import counter
+
 Scope = Literal["descendants", "all", "orphaned"]
+
+# Orphaned browsers reaped (noop unless telemetry is on). A non-zero, climbing
+# value means drivers/leaders are dying and leaking browser processes — the
+# leak the boot/housekeeping sweeps exist to contain.
+_ORPHAN_REAPED = counter(
+    "octowright_orphan_reaped_total",
+    description="Orphaned (dead-driver) browser processes killed by the reaper",
+)
 
 # Windows has no SIGKILL; on POSIX the daemon-shutdown path uses SIGTERM →
 # grace → SIGKILL escalation. KILL_SIGNAL exists for the POSIX escalation;
@@ -273,8 +283,11 @@ def reap_orphan_browsers(
     errors.extend(_signal_pids(survivors, KILL_SIGNAL, "sigkill"))
 
     final = find_browser_pids(scope, root_pid=root_pid)
+    killed = [pid for pid in pids if pid not in final]
+    if killed:
+        _ORPHAN_REAPED.add(len(killed), attributes={"scope": scope})
     return ReapSummary(
-        killed=[pid for pid in pids if pid not in final],
+        killed=killed,
         still_alive=[pid for pid in pids if pid in final],
         errors=errors,
     )

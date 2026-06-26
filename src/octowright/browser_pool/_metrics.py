@@ -25,6 +25,12 @@ LAUNCH_FAILED = counter(
     "octowright_browser_launch_failed_total",
     description="Failed browser launches",
 )
+# Refused user-facing launches by reason (noop unless telemetry is on). A rising
+# rate means the pool is hitting its cap or the memory floor — capacity pressure.
+LAUNCH_REFUSED = counter(
+    "octowright_launch_refused_total",
+    description="User-facing launches refused (reason=cap|memory)",
+)
 LAUNCH_DURATION = histogram(
     "octowright_browser_launch_duration_seconds",
     description="Time from pool.launch() entry to registered session",

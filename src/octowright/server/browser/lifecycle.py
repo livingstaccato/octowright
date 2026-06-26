@@ -14,6 +14,7 @@ from octowright import _format as fmt
 from octowright import defaults as _defaults
 from octowright import resolve as resolve_mod
 from octowright import sysresources as _sysresources
+from octowright.browser_pool._metrics import LAUNCH_REFUSED as _LAUNCH_REFUSED
 from octowright.browser_pool.errors import (
     BrowserCapExceededError,
     MemoryPressureError,
@@ -46,6 +47,7 @@ def _enforce_browser_cap(*, adding: int) -> None:
         return
     active = pool.active_count()
     if active + adding > cap:
+        _LAUNCH_REFUSED.add(1, attributes={"reason": "cap"})
         raise BrowserCapExceededError(
             f"browser cap reached: {active} live + {adding} requested would exceed "
             f"OCTOWRIGHT_MAX_BROWSERS={cap}. Close browsers (browser_close / "
@@ -68,6 +70,7 @@ def _enforce_memory_floor(*, adding: int) -> None:
     if available is None:
         return
     if available < floor:
+        _LAUNCH_REFUSED.add(1, attributes={"reason": "memory"})
         mb = 1024 * 1024
         raise MemoryPressureError(
             f"refusing to launch {adding} browser(s): available memory "
