@@ -109,7 +109,7 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float) -> bool:
     session._crash_recoveries += 1
     iid = session.instance_id
     try:
-        await page.reload(timeout=reload_timeout_ms)
+        await _replace_crashed_page(session, page, reload_timeout_ms)
     except Exception as exc:
         _STATS["recovery_failures"] += 1
         _RECOVERY_FAILED.add(1, attributes={"kind": session.kind})
@@ -129,3 +129,36 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float) -> bool:
     except Exception as exc:
         log.debug("octowright.crash.recovery_recorder_failed", instance_id=iid, error=repr(exc))
     return True
+
+
+async def _replace_crashed_page(session: Any, dead_page: Any, timeout_ms: float) -> None:
+    """Recover by replacing the dead page, NOT reloading it.
+
+    A crashed renderer cannot be reloaded — Playwright keeps raising
+    ``Page.reload: Page crashed`` (verified against a real ``chrome-headless-shell``
+    SIGSEGV). But the browser process and its context survive, so a fresh page in
+    the same context, navigated to the dead page's URL, restores a working session
+    under the same instance_id. The new page is wired with the same listeners
+    (so a re-crash recovers too) and swapped in as the session's active page; the
+    dead page is closed best-effort."""
+    from octowright.browser_pool.listeners import _wire_listeners
+
+    try:
+        last_url = dead_page.url or session.url
+    except Exception:
+        last_url = session.url
+    new_page = await session.context.new_page()
+    _wire_listeners(session, new_page)
+    await new_page.goto(last_url, timeout=timeout_ms)
+    try:
+        idx = session.pages.index(dead_page)
+        session.pages[idx] = new_page
+    except ValueError:
+        session.pages.append(new_page)
+    if session.page is dead_page:
+        session.page = new_page
+    session.page_count = len(session.pages)
+    try:
+        await dead_page.close()
+    except Exception as exc:
+        log.debug("octowright.crash.dead_page_close_failed", instance_id=session.instance_id, error=repr(exc))
