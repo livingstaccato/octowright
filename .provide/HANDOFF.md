@@ -74,14 +74,35 @@ Full pytest PASS (exit 0). ruff ✅ mypy ✅ (166 files) vulture ✅ xenon ✅. 
   covered (`housekeeping.py`, `_leader_runtime.py`, `terminal/errors.py`). Installed missing `webkit`
   browser — 3 live-test failures were webkit-not-installed (environment), not regressions.
 
+## Stability roadmap implemented (same session, committed)
+
+Investigated "browser randomly crashes": macOS DiagnosticReports show `chrome-headless-shell`
+`SIGSEGV` in `CrRendererMain` (renderer crashes, not OOM — FD/mem were fine); zero headed-process
+crashes. Octowright detected crashes but never recovered. Roadmap P1–P5, each TDD'd + lint-green +
+new code 100% covered, committed separately:
+
+- **P2 (commit 9051777)** — browser cap defaults ON at 32 (`OCTOWRIGHT_MAX_BROWSERS`); surfaced as
+  `octowright_status().pool.browser_cap`.
+- **P4 (9051777)** — `--disable-dev-shm-usage` for Chromium on Linux (headed + headless); the old
+  headless path passed no args, so container/CI `/dev/shm` exhaustion caused renderer crashes.
+- **P1 + P5 (68340ed)** — `browser_pool/crash_recovery.py`: a renderer crash auto-`page.reload()`s
+  (bounded by `CRASH_RECOVERY_MAX=3` with a `RESET_SECONDS=60` crash-loop reset), keeping the
+  session. `octowright_status().crash` surfaces crashes/recoveries/recovery_failures.
+- **P3 core (6fdb987)** — `browser_pool/driver_health.py` + `pool._reset_driver()`: a dead shared
+  Playwright driver no longer bricks the pool — `pool.launch` detects driver-death, rebuilds the
+  driver, retries once. `status.pool.driver_restarts` surfaces it.
+
 ## Checklist for next session
 
-- [ ] **Activate**: running daemon 5661 is OLD code (0.9.1). New behavior needs a daemon restart,
-      which disconnects ALL clients — do it when Tim is ready: `uv run octowright restart`.
-- [ ] Decide a recommended `OCTOWRIGHT_MAX_BROWSERS` for Tim's multi-client setup (currently off).
-- [x] ~~Clear the pre-existing bandit B101 asserts so `make lint` is green.~~ DONE (see above).
-- [ ] Consider surfacing live browser count + cap in `octowright_status` for runaway visibility.
-- [ ] Changes uncommitted (modified + new files). Commit when Tim asks.
+- [ ] **Activate**: the running daemon is OLD code. ALL of this turn's behavior needs a daemon
+      restart (disconnects every client) — do it when Tim is ready: `uv run octowright restart`.
+- [x] ~~Decide a recommended `OCTOWRIGHT_MAX_BROWSERS`.~~ DONE — defaults to 32, configurable.
+- [x] ~~Clear the pre-existing bandit B101 asserts.~~ DONE.
+- [x] ~~Surface live browser count + cap in `octowright_status`.~~ DONE (pool.browser_cap, crash, driver_restarts).
+- [ ] **P3 follow-up (deferred, needs design sign-off):** after driver self-heal, optionally
+      auto-relaunch the sessions that were lost to their last URL+profile. Deferred because it
+      changes instance_ids / re-runs navigation across every client — a product decision.
+- [ ] Validate 32 is the right cap for Tim's peak multi-client load; raise if launches start refusing.
 
 ---
 
