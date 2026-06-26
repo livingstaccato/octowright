@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright.cli import _leader_runtime as _lr
 from octowright.cli import serve as _serve
 
 
@@ -97,53 +98,53 @@ class TestLogFirstDone:
             captured["event"] = event
             captured.update(kwargs)
 
-        monkeypatch.setattr(_serve, "_log", MagicMock(info=fake_info))
-        _serve._log_first_done("evt", _done_task(), None, [])
+        monkeypatch.setattr(_lr, "_log", MagicMock(info=fake_info))
+        _lr._log_first_done("evt", _done_task(), None, [])
         assert captured["event"] == "evt"
         assert "mcp=ok" in captured["finished"]
 
     def test_logs_cancelled_when_mcp_cancelled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Cancelled task → 'cancelled' tag, never 'error'."""
         captured: dict[str, Any] = {}
-        monkeypatch.setattr(_serve, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
-        _serve._log_first_done("evt", _done_task(cancelled=True), None, [])
+        monkeypatch.setattr(_lr, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
+        _lr._log_first_done("evt", _done_task(cancelled=True), None, [])
         assert "mcp=cancelled" in captured["finished"]
 
     def test_logs_error_when_mcp_raised(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Done with exception → 'error'."""
         captured: dict[str, Any] = {}
-        monkeypatch.setattr(_serve, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
-        _serve._log_first_done("evt", _done_task(exception=RuntimeError("boom")), None, [])
+        monkeypatch.setattr(_lr, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
+        _lr._log_first_done("evt", _done_task(exception=RuntimeError("boom")), None, [])
         assert "mcp=error" in captured["finished"]
 
     def test_pending_mcp_listed_in_pending(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Not-done mcp → goes into pending bucket, not finished."""
         captured: dict[str, Any] = {}
-        monkeypatch.setattr(_serve, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
-        _serve._log_first_done("evt", _pending_task(), None, [])
+        monkeypatch.setattr(_lr, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
+        _lr._log_first_done("evt", _pending_task(), None, [])
         assert "mcp" in captured["pending"]
         assert captured["finished"] == []
 
     def test_none_watch_task_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """watch_task=None → not included in either bucket."""
         captured: dict[str, Any] = {}
-        monkeypatch.setattr(_serve, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
-        _serve._log_first_done("evt", _done_task(), None, [])
+        monkeypatch.setattr(_lr, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
+        _lr._log_first_done("evt", _done_task(), None, [])
         assert all("watchdog" not in entry for entry in captured["finished"])
         assert "watchdog" not in captured["pending"]
 
     def test_watch_task_done_labeled_watchdog(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A done watch_task lands as 'watchdog=ok'."""
         captured: dict[str, Any] = {}
-        monkeypatch.setattr(_serve, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
-        _serve._log_first_done("evt", _pending_task(), _done_task(), [])
+        monkeypatch.setattr(_lr, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
+        _lr._log_first_done("evt", _pending_task(), _done_task(), [])
         assert "watchdog=ok" in captured["finished"]
 
     def test_sidecars_indexed_by_position(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Sidecar labels include index 'sidecar[0]', 'sidecar[1]'."""
         captured: dict[str, Any] = {}
-        monkeypatch.setattr(_serve, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
-        _serve._log_first_done(
+        monkeypatch.setattr(_lr, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
+        _lr._log_first_done(
             "evt",
             _pending_task(),
             None,
@@ -156,8 +157,8 @@ class TestLogFirstDone:
     def test_event_name_passes_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Whatever event string the caller passes is what gets logged."""
         captured: dict[str, Any] = {}
-        monkeypatch.setattr(_serve, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
-        _serve._log_first_done("octowright.leader.first_phase_ended", _done_task(), None, [])
+        monkeypatch.setattr(_lr, "_log", MagicMock(info=lambda event, **kw: captured.update({"e": event, **kw})))
+        _lr._log_first_done("octowright.leader.first_phase_ended", _done_task(), None, [])
         assert captured["e"] == "octowright.leader.first_phase_ended"
 
 
@@ -409,6 +410,21 @@ class TestCancelAndCollectTasks:
         await _serve._cancel_and_collect_tasks([], None, task)
 
     @pytest.mark.anyio
+    async def test_swallows_already_failed_task_exception(self) -> None:
+        """A task that already finished with a non-cancel exception is awaited
+        and its exception swallowed (the generic except branch, distinct from
+        the CancelledError path a not-yet-started task takes)."""
+
+        async def boom() -> None:
+            raise RuntimeError("explode")
+
+        task = asyncio.create_task(boom())
+        await asyncio.sleep(0.01)  # let it run to completion with the exception stored
+        assert task.done() and task.exception() is not None
+        # done → not cancelled; await re-raises RuntimeError → swallowed + logged.
+        await _serve._cancel_and_collect_tasks([], None, task)
+
+    @pytest.mark.anyio
     async def test_skips_none_watch_task(self) -> None:
         """watch_task=None doesn't crash — None entries are skipped."""
 
@@ -457,8 +473,8 @@ class TestRunLeaderPhases:
         await asyncio.sleep(0)
 
         events_logged: list[str] = []
-        monkeypatch.setattr(_serve, "_log_first_done", lambda evt, *a, **kw: events_logged.append(evt))
-        await _serve._run_leader_phases({mcp}, mcp, None, [], discoverable=False)
+        monkeypatch.setattr(_lr, "_log_first_done", lambda evt, *a, **kw: events_logged.append(evt))
+        await _lr._run_leader_phases({mcp}, mcp, None, [], discoverable=False)
         # Only the first-phase log line should fire.
         assert events_logged == ["octowright.leader.first_phase_ended"]
 
@@ -482,9 +498,9 @@ class TestRunLeaderPhases:
         watch = asyncio.create_task(slow_watch())
 
         events_logged: list[str] = []
-        monkeypatch.setattr(_serve, "_log_first_done", lambda evt, *a, **kw: events_logged.append(evt))
+        monkeypatch.setattr(_lr, "_log_first_done", lambda evt, *a, **kw: events_logged.append(evt))
 
-        await _serve._run_leader_phases({mcp, watch}, mcp, watch, [], discoverable=True)
+        await _lr._run_leader_phases({mcp, watch}, mcp, watch, [], discoverable=True)
         assert events_logged == [
             "octowright.leader.first_phase_ended",
             "octowright.leader.second_phase_ended",
@@ -505,8 +521,8 @@ class TestRunLeaderPhases:
 
         watch = asyncio.create_task(slow_watch())
         events_logged: list[str] = []
-        monkeypatch.setattr(_serve, "_log_first_done", lambda evt, *a, **kw: events_logged.append(evt))
-        await _serve._run_leader_phases({mcp, watch}, mcp, watch, [], discoverable=False)
+        monkeypatch.setattr(_lr, "_log_first_done", lambda evt, *a, **kw: events_logged.append(evt))
+        await _lr._run_leader_phases({mcp, watch}, mcp, watch, [], discoverable=False)
         assert events_logged == ["octowright.leader.first_phase_ended"]
         # Cleanup the slow task.
         watch.cancel()
@@ -524,8 +540,8 @@ class TestRunLeaderPhases:
         await watch
 
         events_logged: list[str] = []
-        monkeypatch.setattr(_serve, "_log_first_done", lambda evt, *a, **kw: events_logged.append(evt))
-        await _serve._run_leader_phases({mcp, watch}, mcp, watch, [], discoverable=True)
+        monkeypatch.setattr(_lr, "_log_first_done", lambda evt, *a, **kw: events_logged.append(evt))
+        await _lr._run_leader_phases({mcp, watch}, mcp, watch, [], discoverable=True)
         assert events_logged == ["octowright.leader.first_phase_ended"]
 
 

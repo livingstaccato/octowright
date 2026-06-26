@@ -50,3 +50,15 @@ def test_terminals_profile_registered() -> None:
 
     assert "terminal_launch" in PROFILES["terminals"]
     assert "terminal_close" in PROFILES["terminals"]
+
+
+def test_pool_raises_clean_error_when_terminal_pool_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Defensive guard: if the helper is ever reached with no terminal_pool wired
+    # (a registration/state bug), it must fail loudly with a typed error — not a
+    # bare AssertionError that `python -O` would strip into a NoneType crash.
+    from octowright.server.terminal import lifecycle
+    from octowright.terminal.errors import TerminalPoolUnavailableError
+
+    monkeypatch.setattr(lifecycle, "terminal_pool", None)
+    with pytest.raises(TerminalPoolUnavailableError):
+        lifecycle._pool()

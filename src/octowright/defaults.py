@@ -358,6 +358,40 @@ def _parse_idle_grace(raw: str | None) -> float | None:
 IDLE_GRACE_SECONDS: float | None = _parse_idle_grace(os.environ.get("OCTOWRIGHT_IDLE_GRACE"))
 IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
 
+
+# Pool-wide cap on concurrently-open browsers. The pool is shared by EVERY MCP
+# client connected to one leader, so this bounds the *total* live browsers
+# across all of them — the lever against a single looping client filling the
+# screen with windows. Off by default (None): a positive OCTOWRIGHT_MAX_BROWSERS
+# makes the user-facing launch tools (browser_launch / browser_quick_launch /
+# browser_spawn_roster) refuse once the live count would exceed it. Internal
+# relaunch / handoff / scenario launches are NOT capped. ``0`` / ``off`` /
+# ``never`` / ``none`` / ``disabled`` (case-insensitive) or an unparsable value
+# keep it disabled.
+def _parse_max_browsers(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    text = raw.strip().lower()
+    if text in ("", "0", "off", "never", "none", "disabled"):
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+MAX_BROWSERS: int | None = _parse_max_browsers(os.environ.get("OCTOWRIGHT_MAX_BROWSERS"))
+
+# Leader housekeeping cadence. A periodic in-leader task (see
+# octowright.housekeeping) that (1) reaps browser processes orphaned when their
+# Playwright driver died — they reparent to init and the pool can no longer
+# close them, so they pile up in the Dock/tray — and (2) bounds the detached
+# daemon's stderr log mid-run (it is otherwise only rotated at spawn time).
+# Default 60s; ``0`` / ``off`` / ``never`` / ``none`` / ``disabled`` turns the
+# loop off (orphans are then only swept at leader boot / ``octowright restart``).
+HOUSEKEEPING_INTERVAL_SECONDS: float | None = _parse_idle_grace(os.environ.get("OCTOWRIGHT_HOUSEKEEPING_SECONDS", "60"))
+
 # Per-cache LRU bound on `octowright.http.session_artifacts.SessionArtifactCache`.
 # Each cache (artifacts, report, console index, downloads index, path-exists)
 # is independently capped at this many entries so the global singleton can't

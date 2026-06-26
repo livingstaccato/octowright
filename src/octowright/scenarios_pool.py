@@ -265,12 +265,19 @@ class ScenarioPool:
         Stops early if ``errors`` is already non-empty (the browser roster failed),
         so a failed browser launch never opens further (esp. remote SSH) sessions."""
         from octowright.scenarios import resolve_terminal_launch
+        from octowright.terminal.errors import TerminalPoolUnavailableError
 
         terminal_ids: list[str] = []
         for i, p in terminal_specs:
             if errors:
                 break
-            assert terminal_pool is not None  # start() guarantees this when terminal_specs is non-empty
+            # start() guarantees a terminal_pool whenever terminal_specs is non-empty.
+            # Explicit raise (not assert) so a broken invariant fails loudly even
+            # under `python -O`, rather than crashing on `None.launch`.
+            if terminal_pool is None:
+                raise TerminalPoolUnavailableError(
+                    "terminal participants present but terminal_pool is None — start() invariant violated"
+                )
             try:
                 launched = await terminal_pool.launch(**resolve_terminal_launch(p))
             except Exception as exc:

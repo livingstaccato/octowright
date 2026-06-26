@@ -22,15 +22,18 @@ from octowright.terminal.connector_config import (
 from octowright.terminal.connector_config import (
     telnet_connector_config as _telnet_connector_config,
 )
-from octowright.terminal.errors import ProtectedTerminalCloseError
+from octowright.terminal.errors import ProtectedTerminalCloseError, TerminalPoolUnavailableError
 from octowright.terminal.pool import TerminalPool
 
 
 def _pool() -> TerminalPool:
     # This module is imported only when _state.terminal_pool is not None
-    # (server/__init__ gates it on terminal availability), so this never raises.
+    # (server/__init__ gates it on terminal availability), so this never fires in
+    # practice. It's an explicit raise (not assert) so the guard survives
+    # `python -O` instead of letting a None pool reach `.launch`.
     pool = terminal_pool
-    assert pool is not None, "terminal tools imported without an available terminal_pool"
+    if pool is None:
+        raise TerminalPoolUnavailableError("terminal tools reached without an available terminal_pool")
     return pool
 
 
