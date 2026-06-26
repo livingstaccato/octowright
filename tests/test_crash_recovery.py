@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
-from octowright.browser_pool import crash_recovery
+from octowright.browser_pool import crash_recovery, incidents
 
 
 def _session(*, recoveries: int = 0, last_crash: float = 0.0) -> SimpleNamespace:
@@ -52,6 +52,7 @@ def _session(*, recoveries: int = 0, last_crash: float = 0.0) -> SimpleNamespace
 @pytest.fixture(autouse=True)
 def _reset_stats() -> None:
     crash_recovery.reset_stats()
+    incidents.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -84,11 +85,21 @@ def test_eligible_false_when_cap_hit_within_window() -> None:
     assert s._crash_recoveries == 3
 
 
-async def test_recover_replaces_dead_page_and_clears_crashed() -> None:
+def test_safe_url_prefers_page_url_then_session() -> None:
+    s = _session()
+    good = MagicMock()
+    good.url = "https://live.example/page"
+    assert crash_recovery._safe_url(good, s) == "https://live.example/page"
+    crashed = MagicMock()
+    type(crashed).url = PropertyMock(side_effect=RuntimeError("url on crashed page"))
+    assert crash_recovery._safe_url(crashed, s) == "https://example.com"  # falls back to session.url
+
+
+async def test_recover_replaces_dead_page_and_records_incident() -> None:
     s = _session()
     dead = s.page
     fresh = s.context.new_page.return_value
-    ok = await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0)
+    ok = await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0, url="https://example.com")
     assert ok is True
     assert s._crashed is False
     assert s._crash_recoveries == 1
@@ -101,12 +112,18 @@ async def test_recover_replaces_dead_page_and_clears_crashed() -> None:
     assert s.pages == [fresh]
     dead.close.assert_awaited_once()
     s.recorder.record.assert_called_once()
+    # An incident record with outcome="recovered" is now visible in status.
+    inc = incidents.recent(category="renderer_crash")
+    assert len(inc) == 1
+    assert inc[0]["outcome"] == "recovered"
+    assert inc[0]["instance_id"] == "abc123"
+    assert inc[0]["url"] == "https://example.com"
 
 
 async def test_recover_succeeds_even_if_recorder_marker_fails() -> None:
     s = _session()
     s.recorder.record.side_effect = RuntimeError("recorder closed")
-    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0)
+    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
     # Recovery succeeded; the best-effort recorder marker failure is swallowed.
     assert ok is True
     assert s._crashed is False
@@ -116,34 +133,36 @@ async def test_recover_succeeds_even_if_recorder_marker_fails() -> None:
 async def test_recover_succeeds_even_if_dead_page_close_fails() -> None:
     s = _session()
     s.page.close = AsyncMock(side_effect=RuntimeError("page already gone"))
-    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0)
+    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
     # The crashed page often can't be closed; that's swallowed, recovery still wins.
     assert ok is True
     assert s._crashed is False
 
 
-async def test_recover_handles_unreadable_url_and_foreign_page() -> None:
-    # Defensive branches: the crashed page's .url raises (fall back to session.url),
-    # and the dead page is neither in session.pages nor the active page (append, no swap).
+async def test_recover_foreign_page_appends_without_swap() -> None:
+    # Defensive branches: the dead page is neither in session.pages nor the active
+    # page (append, no swap).
     s = _session()
     foreign = MagicMock(name="foreign_dead_page")
-    type(foreign).url = PropertyMock(side_effect=RuntimeError("url on crashed page"))
+    foreign.url = "https://example.com"
     foreign.close = AsyncMock()
-    ok = await crash_recovery._recover(s, foreign, reload_timeout_ms=15000.0)
+    ok = await crash_recovery._recover(s, foreign, reload_timeout_ms=15000.0, url="https://example.com")
     assert ok is True
     fresh = s.context.new_page.return_value
-    fresh.goto.assert_awaited_once_with("https://example.com", timeout=15000.0)  # fell back to session.url
+    fresh.goto.assert_awaited_once_with("https://example.com", timeout=15000.0)
     assert fresh in s.pages  # foreign page wasn't in pages → appended
     assert s.page is not fresh  # foreign page wasn't the active page → no swap
 
 
-async def test_recover_failure_when_new_page_navigation_fails() -> None:
+async def test_recover_failure_records_failed_incident() -> None:
     s = _session()
     s.context.new_page.return_value.goto = AsyncMock(side_effect=RuntimeError("Target closed"))
-    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0)
+    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
     assert ok is False
     assert s._crashed is True  # left crashed → LLM sees "relaunch"
     assert crash_recovery.recovery_stats()["recovery_failures"] == 1
+    inc = incidents.recent(category="renderer_crash")
+    assert len(inc) == 1 and inc[0]["outcome"] == "failed"
 
 
 def test_schedule_recovery_disabled_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
