@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 import uuid
 from collections.abc import Iterable
@@ -408,21 +409,36 @@ class BrowserPool:
         headless anyway). Firefox/WebKit have no equivalent CLI hook; their new
         tabs are handled by the page-event redirector in launch_pipeline.py.
         """
-        from octowright.browser_pool.newtab_extension import ensure_newtab_extension
-        from octowright.defaults import get_default_url
-
         out: dict[str, Any] = {}
-        if kind != "chromium" or headless:
+        if kind != "chromium":
             return out
-        ext_dir = ensure_newtab_extension(get_default_url())
-        args = [f"--disable-extensions-except={ext_dir}", f"--load-extension={ext_dir}"]
-        if tile:
+        args: list[str] = []
+        # Linux/CI: the default /dev/shm (often 64MB in containers) is too small
+        # for Chromium's shared-memory transport; exhaustion surfaces as random
+        # renderer crashes. Route shared memory to a regular tmpfile instead.
+        # Needed on Linux only (no-op risk on macOS/Windows), and it applies to
+        # headless too — the early "headless returns nothing" path used to skip it.
+        if sys.platform.startswith("linux"):
+            args.append("--disable-dev-shm-usage")
+        if not headless:
+            args.extend(self._headed_chromium_args())
+        if tile and not headless:
             async with self._tile_lock:
                 tile_index = self._tile_counter
                 self._tile_counter += 1
             args.extend(_tile_args_for_chromium(tile_index))
-        out["args"] = args
+        if args:
+            out["args"] = args
         return out
+
+    def _headed_chromium_args(self) -> list[str]:
+        """New-tab-override extension args for headed Chromium (tile args are
+        added by the caller under ``_tile_lock``)."""
+        from octowright.browser_pool.newtab_extension import ensure_newtab_extension
+        from octowright.defaults import get_default_url
+
+        ext_dir = ensure_newtab_extension(get_default_url())
+        return [f"--disable-extensions-except={ext_dir}", f"--load-extension={ext_dir}"]
 
     async def _resolve_session_dir(
         self,
