@@ -1,3 +1,65 @@
+# HANDOFF — Deferred hardening completed: H4a / H4b / H5b (2026-06-26)
+
+## Problem / request
+
+"Take care of the rest of the hardening/minor." The prior round shipped H1/H2/H3/H5a and
+deferred three items (each with a real gotcha): H4a auto-relaunch lost sessions, H4b
+memory-pressure governor, H5b macOS `.ips` crash-report correlation. This round implements
+all three, TDD, lint-green, new code 100% covered.
+
+## Changes completed (all committed, TDD)
+
+| Item | New/changed | What |
+|------|-------------|------|
+| **H5b** `.ips` correlation | `browser_pool/crash_reports.py` (NEW) + `server/meta.py` | At **status-read time** (the OS writes the `.ips` ~1-2s after the crash; the incident records ~60ms in), correlate each recent `renderer_crash` incident with a macOS DiagnosticReports `*.ips` by mtime window + browser-process name, parse the `SIGSEGV`/`EXC_BAD_ACCESS` signature, and attach `crash_report` to `octowright_status().crash.recent[*]`. macOS-gated, best-effort, never raises into status. |
+| **H4b** memory governor | `sysresources.py` (NEW), `browser_pool/errors.py`, `server/browser/lifecycle.py`, `server/meta.py` | `available_memory_bytes()` reads **available** memory per-platform (Linux `/proc/meminfo` MemAvailable; macOS `vm_stat` free+inactive+speculative+purgeable — NOT the misleading sysconf "free"). `OCTOWRIGHT_MIN_FREE_MEMORY_MB` (OFF by default → no read, no false refusals) gates `browser_launch`/`quick_launch`/`spawn_roster` via `_enforce_memory_floor` → `MemoryPressureError`. Unreadable value never refuses. Surfaced at `status.pool.min_free_memory_mb`/`available_memory_mb`. |
+| **H4a** lost-session relaunch | `browser_pool/driver_relaunch.py` (NEW), `browser_pool/incidents.py` (CATEGORY_DRIVER_LOST), `browser_pool/pool.py` (1-line hook), `server/meta.py` | On `pool._reset_driver`, `on_driver_reset` records the restart, captures+evicts the sessions lost with the dead driver, and surfaces them at `status.pool.lost_sessions`. **Configurable** `OCTOWRIGHT_DRIVER_RELAUNCH`: `off` (DEFAULT, surface only) / `new-id` (reopen, fresh id, lost record maps old→new) / `keep-id` (reopen + rebind original id so client handles keep resolving). Loop-guarded via `_auto_relaunched` tag. |
+
+## Reasoning / decisions
+
+- **H4a configurability** — Tim's answer to the design question was "it should be configurable",
+  so relaunch is an env-gated mode, default `off` (surface-only, no instance_id churn / surprise
+  navigation — matches the "user controls the browser" preference). `new-id` and `keep-id` are
+  opt-ins. keep-id re-keys the fresh session's dict back to the original id (best-effort; the
+  recording file stays under the fresh id — a documented wart).
+- **defaults.py LOC ceiling** — defaults.py was at 549/550. The two new env knobs' values+parsers
+  live in their **domain modules** (`sysresources.MIN_FREE_MEMORY_BYTES`,
+  `driver_relaunch.DRIVER_RELAUNCH_MODE`), mirroring how `incidents._RING_SIZE` / `health.CRITICAL_*`
+  already keep their own `OCTOWRIGHT_*` knobs locally. defaults.py carries a one-line pointer. This
+  also dodges a defaults→driver_relaunch→browser_pool/__init__→pool→defaults import cycle.
+- **pool.py kept minimal** — `_reset_driver` swaps its inline `incidents.record(...)` for a single
+  `driver_relaunch.on_driver_reset(self, reason=reason)` call (net pool.py LOC neutral). All H4a
+  logic lives in the new module; the verified P3 self-heal path is unchanged except dead sessions
+  are now evicted + surfaced.
+
+## Verification
+
+`make lint` EXIT=0 (ruff/format/mypy/ty/bandit/codespell/SPDX/LOC≤550/agent-docs-sync/vulture/xenon/secrets).
+`make test` EXIT=0, total coverage **90.91%** (gate 83%). New modules **100%** covered:
+`crash_reports.py`, `sysresources.py`, `driver_relaunch.py`, plus `errors.py`. AGENTS.md/CLAUDE.md
+env-var docs added for `OCTOWRIGHT_MIN_FREE_MEMORY_MB` + `OCTOWRIGHT_DRIVER_RELAUNCH` (mirrors in sync).
+
+NOTE: behavior changes need a daemon restart to activate (the running daemon is older code).
+H4b/H4a default OFF, so default behavior is unchanged except: status now exposes
+`pool.lost_sessions` / `pool.driver_relaunch_mode` / `pool.min_free_memory_mb` /
+`pool.available_memory_mb`, and `crash.recent[*]` gains `crash_report` on macOS.
+
+## Checklist for next session
+
+- [ ] **Activate**: `uv run octowright restart` (disconnects every client) when Tim is ready —
+      the deferred-hardening behavior is in committed code but not yet in the running daemon.
+- [ ] (Optional) To exercise H4b live: `OCTOWRIGHT_MIN_FREE_MEMORY_MB=<mb>` and confirm launches
+      refuse with `MemoryPressureError` under that floor; verify the macOS available-memory read is
+      sane on Tim's Mac (it should report several GB, not "almost none").
+- [ ] (Optional) To exercise H4a live: `OCTOWRIGHT_DRIVER_RELAUNCH=new-id`, kill the driver
+      (`await pool._pw.stop()` / the chaos test), confirm lost sessions reopen + `status.pool.lost_sessions`
+      maps old→new. keep-id: confirm the original id still resolves after self-heal.
+- [ ] Minor (pre-existing, not from this round): stale manifest entries in status (`uwarp-*`, old demos)
+      clear with `octowright cleanup`; validate `OCTOWRIGHT_MAX_BROWSERS=32` against peak load.
+- All P0–P5 + H1/H2/H3/H5a + H4a/H4b/H5b are now done. No deferred hardening items remain.
+
+---
+
 # HANDOFF — Stability: browser orphan leaks + daemon "goes away" (2026-06-26)
 
 ## Problem / request
