@@ -177,6 +177,9 @@ def test_status_pool_counts_are_ints() -> None:
     assert isinstance(snap["pool"]["live_scenarios"], int)
     assert isinstance(snap["pool"]["stale_manifest_count"], int)
     assert isinstance(snap["pool"]["stale_manifest_sessions"], list)
+    # browser_cap surfaces the pool-wide concurrent-browser cap (int) or None when off.
+    assert "browser_cap" in snap["pool"]
+    assert snap["pool"]["browser_cap"] is None or isinstance(snap["pool"]["browser_cap"], int)
 
 
 def test_status_personas_returns_name_list() -> None:

@@ -22,6 +22,7 @@ Pins:
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -359,13 +360,41 @@ class TestBuildLaunchKwargs:
         assert out == {}
 
     @pytest.mark.anyio
-    async def test_no_args_when_headless(self) -> None:
-        """Headless chromium can't load extensions → empty dict; counter stays 0."""
+    async def test_no_args_when_headless_non_linux(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Headless chromium on macOS/Windows: no extension args, no dev-shm flag."""
+        monkeypatch.setattr(sys, "platform", "darwin")
         pool = BrowserPool()
         out = await pool._build_launch_kwargs(tile=True, kind="chromium", headless=True)
         assert out == {}
         # Tiling is meaningless headless — tile counter must not advance
         assert pool._tile_counter == 0
+
+    @pytest.mark.anyio
+    async def test_headless_linux_gets_dev_shm(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Headless chromium on Linux gets --disable-dev-shm-usage (renderer-crash
+        guard for small /dev/shm), but no extension/tile flags."""
+        monkeypatch.setattr(sys, "platform", "linux")
+        pool = BrowserPool()
+        out = await pool._build_launch_kwargs(tile=True, kind="chromium", headless=True)
+        assert out["args"] == ["--disable-dev-shm-usage"]
+        assert not any("--load-extension" in a for a in out["args"])
+        assert pool._tile_counter == 0  # tiling is meaningless headless
+
+    @pytest.mark.anyio
+    async def test_headed_linux_has_dev_shm_and_extension(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Headed chromium on Linux gets BOTH the dev-shm flag and the new-tab extension."""
+        monkeypatch.setattr(sys, "platform", "linux")
+        pool = BrowserPool()
+        out = await pool._build_launch_kwargs(tile=False, kind="chromium", headless=False)
+        assert "--disable-dev-shm-usage" in out["args"]
+        assert any("--load-extension" in a for a in out["args"])
+
+    @pytest.mark.anyio
+    async def test_non_chromium_never_gets_dev_shm(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The dev-shm flag is chromium-only even on Linux."""
+        monkeypatch.setattr(sys, "platform", "linux")
+        pool = BrowserPool()
+        assert await pool._build_launch_kwargs(tile=False, kind="firefox", headless=True) == {}
 
 
 # ─── _resolve_session_dir ────────────────────────────────────────────────────

@@ -28,6 +28,9 @@ from octowright.server.browser import lifecycle as _lifecycle
 def _patch_pool(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace the module-level `pool` with a mock for every test."""
     fake_pool = MagicMock()
+    # The browser cap (ON by default) reads pool.active_count() on user-facing
+    # launches; a real int keeps the cap check from tripping on the mock.
+    fake_pool.active_count.return_value = 0
     monkeypatch.setattr(_lifecycle, "pool", fake_pool)
     return fake_pool
 
