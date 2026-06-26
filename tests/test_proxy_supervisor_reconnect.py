@@ -213,8 +213,12 @@ async def test_forward_one_local_message_drops_stale_remote_writer_and_fails_req
 
 
 @pytest.mark.anyio
-async def test_health_monitor_cancels_remote_scope_after_consecutive_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_health_monitor_unsticks_after_consecutive_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After max_failures consecutive health misses the monitor calls on_unhealthy
+    (which unsticks the stuck connection) and KEEPS running — it never tears the
+    follower down itself."""
     calls = 0
+    unstuck: list[bool] = []
 
     class FakeResponse:
         status_code = 503
@@ -237,17 +241,12 @@ async def test_health_monitor_cancels_remote_scope_after_consecutive_failures(mo
     monkeypatch.setattr(runtime.httpx, "AsyncClient", FakeClient)
 
     async with anyio.create_task_group() as tg:
-        tg.start_soon(
-            runtime.monitor_leader_health,
-            tg.cancel_scope,
-            "http://leader/api/health",
-            0.01,
-            2,
-        )
-        with anyio.move_on_after(1.0):
-            await anyio.sleep_forever()
+        tg.start_soon(runtime.monitor_leader_health, "http://leader/api/health", 0.01, 2, lambda: unstuck.append(True))
+        await anyio.sleep(0.3)
+        tg.cancel_scope.cancel()  # monitor loops forever; we stop it
 
     assert calls >= 2
+    assert unstuck  # on_unhealthy fired (and would fire again — the monitor kept watching)
 
 
 def test_backoff_sequence_caps_at_max() -> None:
@@ -270,12 +269,3 @@ def test_within_recovery_window() -> None:
     assert runtime._within_recovery_window(100.0, 116.0, 15.0) is False
     # Window 0 = no grace = legacy immediate-exit behavior.
     assert runtime._within_recovery_window(100.0, 100.0, 0.0) is False
-
-
-def test_monitor_max_failures_for_window() -> None:
-    # 15s window at a 2s probe interval needs ceil(7.5)=8 consecutive misses.
-    assert runtime._monitor_max_failures_for_window(2, 2.0, 15.0) == 8
-    # Never drops below the caller's base threshold.
-    assert runtime._monitor_max_failures_for_window(5, 2.0, 4.0) == 5
-    # Guard: a non-positive interval falls back to base (no div-by-zero).
-    assert runtime._monitor_max_failures_for_window(3, 0.0, 15.0) == 3

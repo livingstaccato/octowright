@@ -74,17 +74,6 @@ def _within_recovery_window(leader_down_since: float | None, now: float, window:
     return (now - leader_down_since) < window
 
 
-def _monitor_max_failures_for_window(base: int, interval: float, window: float) -> int:
-    """Consecutive-failure count the background health monitor must reach before
-    tearing the follower down, raised so its tolerance covers the inline reconnect
-    recovery window. Without this the monitor (a few failures at its interval) would
-    kill a follower the inline loop is still legitimately reconnecting through a
-    leader restart. ``interval<=0`` is a guard — fall back to ``base``."""
-    if interval <= 0:
-        return base
-    return max(base, math.ceil(window / interval))
-
-
 def resolve_leader_url(fallback_url: str) -> str:
     info = singleton.read_lock()
     if info is not None and not singleton.is_stale(info):
@@ -151,12 +140,19 @@ def _arm_follower_exit_backstop(
 
 
 async def monitor_leader_health(
-    cancel_scope: anyio.CancelScope,
     health_url: str,
     interval: float,
     max_failures: int,
-    on_failure: Callable[[], None] | None = None,
+    on_unhealthy: Callable[[], None],
 ) -> None:
+    """Probe the leader's HTTP health; after ``max_failures`` consecutive misses,
+    call ``on_unhealthy`` — which UNSTICKS the current remote connection so the
+    inline reconnect loop can act. It does NOT tear the follower down: a SIGKILL'd
+    leader's SSE read can hang silently (no close, no error), leaving the inline
+    loop stuck; this is the only thing that breaks it out so the loop can reconnect
+    to a respawned leader (instead of wedging until the recovery window expires).
+    The inline windowed retry remains the sole authority on giving up. Keeps
+    watching (re-fires) so a still-silent connection is unstuck again."""
     failures = 0
     async with httpx.AsyncClient(timeout=5.0) as client:
         while True:
@@ -171,10 +167,8 @@ async def monitor_leader_health(
                 continue
             failures += 1
             if failures >= max_failures:
-                if on_failure is not None:
-                    on_failure()
-                cancel_scope.cancel()
-                return
+                on_unhealthy()
+                failures = 0
 
 
 async def leader_health_alive(health_url: str) -> bool:
@@ -203,6 +197,12 @@ async def run_supervised_proxy(
             remote_write_slot = _RemoteWriteSlot()
             remote_reset_slot = _RemoteResetSlot()
             leader_health_failed = False
+            # When the leader was first seen unreachable in the current gap (None =
+            # reachable). A 1-element list so BOTH the inline reconnect loop AND the
+            # background health monitor's unstick can stamp it — a hard-killed
+            # leader's outage is observed by the monitor (silent SSE), and stamping
+            # here lets the eventual reconnect still be metered as a recovery.
+            leader_down: list[float | None] = [None]
 
             def _mark_leader_health_failed() -> None:
                 nonlocal leader_health_failed
@@ -219,10 +219,6 @@ async def run_supervised_proxy(
 
             async def _remote_supervisor() -> None:
                 attempt = 0
-                # When the leader was first seen unreachable in the current gap
-                # (None = reachable). Drives the bounded recovery window so a
-                # restart/respawn is retried through instead of killing the follower.
-                leader_down_since: float | None = None
                 # Build the tracing httpx factory once; it's a closure with no
                 # per-connection state, so reusing it across reconnects avoids
                 # an allocation per attempt.
@@ -233,25 +229,26 @@ async def run_supervised_proxy(
                     follower exits and serve.py respawns. A leader unreachable
                     longer than BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS is gone for
                     good; a briefly-down one (restart) is retried so the client's
-                    session survives. health_url=None disables the watchdog."""
-                    nonlocal leader_down_since
+                    session survives. health_url=None disables the watchdog. Does
+                    NOT clear ``leader_down`` on a healthy probe — only a successful
+                    reconnect does, so an outage seen here OR by the monitor is still
+                    metered as a recovery when the reconnect lands."""
                     if health_url is None:
                         return True
                     if await leader_health_alive(health_url):
-                        leader_down_since = None
                         return True
                     now = anyio.current_time()
-                    if leader_down_since is None:
-                        leader_down_since = now
+                    down_at = leader_down[0]
+                    if down_at is None:
+                        down_at = now
+                        leader_down[0] = now
                         log.warning(
                             "octowright.bridge.leader_unreachable_retrying",
                             recovery_window_s=BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS,
                         )
-                    if _within_recovery_window(leader_down_since, now, BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS):
+                    if _within_recovery_window(down_at, now, BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS):
                         return True
-                    log.warning(
-                        "octowright.bridge.leader_recovery_window_exhausted", waited_s=round(now - leader_down_since, 1)
-                    )
+                    log.warning("octowright.bridge.leader_recovery_window_exhausted", waited_s=round(now - down_at, 1))
                     _LEADER_RECOVERY.add(1, attributes={"outcome": "exhausted"})
                     return False
 
@@ -304,12 +301,13 @@ async def run_supervised_proxy(
                                 # reconnect (idempotent resume) on this fresh session.
                                 await supervisor_obj.resume_in_flight(remote_write)
                                 attempt = 0
-                                # Connected → the leader is back. If we were in a
-                                # down-gap, this reconnect just survived it (e.g. an
-                                # `octowright restart`) — meter the recovery.
-                                if leader_down_since is not None:
+                                # Connected → the leader is back. If an outage was
+                                # observed (inline OR by the monitor's unstick), this
+                                # reconnect survived it — meter the recovery, then
+                                # clear the clock (only a real reconnect clears it).
+                                if leader_down[0] is not None:
                                     _LEADER_RECOVERY.add(1, attributes={"outcome": "recovered"})
-                                leader_down_since = None
+                                leader_down[0] = None
                                 async with anyio.create_task_group() as remote_tg:
                                     remote_reset_slot.cancel_scope = remote_tg.cancel_scope
 
@@ -361,19 +359,29 @@ async def run_supervised_proxy(
             local_tg.start_soon(_remote_supervisor)
             local_tg.start_soon(supervisor_obj.watch_deadlines, 0.1, remote_reset_slot)
             if health_url is not None:
-                # Raise the background watchdog's tolerance to cover the inline
-                # reconnect recovery window, so it never tears down a follower the
-                # inline loop is still reconnecting through a leader restart.
-                monitor_max_failures = _monitor_max_failures_for_window(
-                    heartbeat_max_failures, heartbeat_interval, BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS
-                )
+                # The background monitor catches a leader whose SSE read goes
+                # SILENT (a hard crash: no close, no error). It cancels the stuck
+                # remote connection so the inline reconnect loop can act — it does
+                # NOT tear the follower down (the inline windowed retry owns
+                # give-up). So it fires on its own small threshold and is harmless
+                # if it fires during a restart the inline loop is reconnecting
+                # through: it just nudges the same reconnect along.
+                def _unstick_current_remote() -> None:
+                    # The leader's HTTP is unreachable — record the outage start so
+                    # the reconnect this triggers is metered as a recovery, then
+                    # cancel the stuck connection so the inline loop reconnects.
+                    if leader_down[0] is None:
+                        leader_down[0] = anyio.current_time()
+                    scope = remote_reset_slot.cancel_scope
+                    if scope is not None:
+                        scope.cancel()
+
                 local_tg.start_soon(
                     monitor_leader_health,
-                    local_tg.cancel_scope,
                     health_url,
                     heartbeat_interval,
-                    monitor_max_failures,
-                    _mark_leader_health_failed,
+                    heartbeat_max_failures,
+                    _unstick_current_remote,
                 )
         if leader_health_failed:
             raise RuntimeError("leader health check failed")
