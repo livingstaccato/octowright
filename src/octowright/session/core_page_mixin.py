@@ -51,6 +51,23 @@ def _current_redaction_mode() -> str:
     return raw
 
 
+def _redact_sink_value(value: str | None) -> str | None:
+    """Redact a recorded value that has no inspectable field to classify it.
+
+    ``fill``/``type`` consult the target element to tell a credential from a
+    benign value; ``press_key`` (key), ``evaluate`` (expression), and
+    ``select_option`` (value/label) carry no such element. The only coherent
+    rule for those sinks is: scrub under the blanket ``all`` mode, leave raw
+    under ``off``/``passwords`` (which key off element type and so can't reason
+    about a selector-less value). ``None`` passes through unchanged (an absent
+    optional arg). The page action always receives the real value — only the
+    JSONL record sees this result.
+    """
+    if value is None:
+        return None
+    return REDACTED_INPUT_PLACEHOLDER if _current_redaction_mode() == "all" else value
+
+
 _NAVIGATE_DURATION = histogram(
     "octowright_session_navigate_duration_seconds",
     description="Duration of session.navigate() including page.goto",
@@ -315,7 +332,7 @@ class SessionPageMixin(SessionLike):
 
     async def press_key(self, key: str) -> None:
         await self.page.keyboard.press(key)
-        self.recorder.record("press_key", key=key)
+        self.recorder.record("press_key", key=_redact_sink_value(key))
 
     async def screenshot(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,7 +370,7 @@ class SessionPageMixin(SessionLike):
 
     async def evaluate(self, expression: str) -> Any:
         result = await self._target().evaluate(expression)
-        self.recorder.record("evaluate", expression=expression)
+        self.recorder.record("evaluate", expression=_redact_sink_value(expression))
         return result
 
     async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None:
