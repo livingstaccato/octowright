@@ -147,6 +147,25 @@ def test_meters_driver_lost_relaunched(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sorted(lost.attrs_for("outcome")) == ["relaunched", "surfaced"]
 
 
+def test_on_driver_reset_publishes_driver_died(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.browser_pool import session_event_bus as _bus
+
+    _set_mode(monkeypatch, "off")
+    events: list = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    pool = _FakePool([_session("a"), _session("b")])
+
+    async def _run() -> None:
+        driver_relaunch.on_driver_reset(pool, reason="pipe closed")
+
+    asyncio.run(_run())
+    died = [e for e in events if type(e).__name__ == "DriverDiedEvent"]
+    assert len(died) == 1
+    assert died[0].lost_count == 2
+    assert set(died[0].lost_instance_ids) == {"a", "b"}
+    assert died[0].relaunch_mode == "off"
+
+
 def test_recent_lost_is_bounded_and_limitable(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_mode(monkeypatch, "off")
     pool = _FakePool([_session(f"s{i}") for i in range(3)])
