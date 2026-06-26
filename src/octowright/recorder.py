@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +17,23 @@ from typing import Any
 # caller-supplied label can never inject path separators, NUL bytes, or
 # other characters that would escape base_dir on disk.
 _LABEL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+# Falsey tokens that opt OUT of owner-only recording permissions.
+_PRIVATE_OFF = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
+
+
+def _recordings_private() -> bool:
+    """Whether to lock recordings to the owner (0600 file / 0700 parent).
+
+    Default ON. The JSONL can hold typed input, navigated URLs, console output,
+    and — in legacy ``OCTOWRIGHT_REDACT_INPUTS=off`` deployments — cleartext
+    credentials. A world-readable (0644) file would let any *local* user read all
+    of that, bypassing the loopback HTTP boundary the dashboard enforces. Opt out
+    with ``OCTOWRIGHT_RECORDINGS_PRIVATE`` set to a falsey token for setups that
+    intentionally share recordings with other local users.
+    """
+    return os.environ.get("OCTOWRIGHT_RECORDINGS_PRIVATE", "on").strip().lower() not in _PRIVATE_OFF
+
 
 # Mirrors octowright.http.artifacts.EVENT_ONLY_ACTIONS — kept here to avoid
 # importing the http layer from the core recorder.
@@ -38,8 +57,19 @@ class Recorder:
 
     def __init__(self, log_path: Path) -> None:
         self.log_path = log_path
+        private = _recordings_private()
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        # Lock the parent before opening so a fresh file inherits a private dir;
+        # then force 0600 on the file itself (covers both a fresh create and an
+        # older 0644 recording reopened in append mode). Best-effort: a chmod
+        # that fails (exotic FS, read-only mount) must not break recording.
+        if private:
+            with contextlib.suppress(OSError):
+                os.chmod(self.log_path.parent, 0o700)
         self._fh = self.log_path.open("a", encoding="utf-8")
+        if private:
+            with contextlib.suppress(OSError):
+                os.chmod(self.log_path, 0o600)
         self._event_count = 0
         self._action_count = 0
 
