@@ -1,3 +1,90 @@
+# HANDOFF — Stability: browser orphan leaks + daemon "goes away" (2026-06-26)
+
+## Problem / request
+
+Tim reported two recurring failures:
+1. "Another LLM will just keep opening browsers and they'll never close" — dock fills with
+   Chromium windows that never get cleaned up.
+2. "Sometimes it just goes away" — the Octowright MCP connection drops for a session.
+
+## Diagnosis (evidence-backed)
+
+Live system: **one** leader daemon (PID 5661, `--daemon-mode`, up 3.5 days, healthy, owns
+:6286) with **13 live followers** sharing it (5 Codex, 2 grok, 6 claude). Singleton working —
+but it concentrates risk. Three root causes:
+
+1. **Orphan leak.** When a Playwright driver (or its leader) dies, its browser windows reparent
+   to init (`ppid==1`) and survive forever — the pool can't close them. Confirmed live: browser
+   34591 / dead driver 34589. Log: `Browser.close: I/O operation on closed file` (dead stdio pipe
+   → close fails → OS process leaks). Only `octowright restart` reaped them.
+2. **No reap on auto-respawn.** `serve._ensure_leader_or_inline` / `_respawn_if_leader_gone`
+   spawned a fresh daemon WITHOUT reaping. A 3.5-day leader never respawns → mid-session orphans
+   pile up indefinitely.
+3. **No browser cap + shared fate.** No max-concurrent limit (looping client = unbounded
+   browsers). 13 clients on one leader → any leader death OR one LLM running `octowright restart`
+   (it's on Tim's PATH) drops all 13 at once = "goes away", orphaning that generation.
+
+Both symptoms are one event: driver/leader dies → calls throw `I/O operation on closed file` →
+client panics → `restart` → all sessions drop + browsers orphan.
+
+## Changes completed
+
+| Fix | Where | What |
+|-----|-------|------|
+| ① orphan reap core | `process_reaper.py` | `scope="orphaned"` + `_is_orphaned_browser()`/`_orphaned_browser_pids()`. `ppid<=1` (POSIX) or parent-not-in-live-pids (Windows). Never touches a live leader's browsers. |
+| ① mid-session backstop | `housekeeping.py` (NEW) | `daemon_housekeeping()` periodic leader task (default 60s, `OCTOWRIGHT_HOUSEKEEPING_SECONDS`): reap orphans + bound daemon log. |
+| ② reap on spawn | `cli/serve.py` | `_reap_orphan_browsers_at_boot()` in every `_run_leader` (first spawn / restart / auto-respawn). |
+| ③ browser cap | `defaults.py`, `server/browser/lifecycle.py`, `errors.py` | `OCTOWRIGHT_MAX_BROWSERS` (off by default, pool-wide). `_enforce_browser_cap()` gates the 3 user-facing launch tools w/ `BrowserCapExceededError`. Internal relaunch/handoff/scenario NOT capped. |
+| ④ log hygiene | `housekeeping.py` + cleanup | Mid-run daemon-log truncation (spawn-time rotation never fires on a long leader). Deleted stale junk logs `~/.config/undef/...` + `~/.config/octowright/octowright-daemon.log`. SSE-chunk dumps + `undef` path were OLD builds — NOT in current source. |
+
+New tests: `test_browser_cap.py`, `test_housekeeping.py`, orphan cases in `test_process_reaper.py`.
+
+## Reasoning
+
+- `ppid==1` orphan signal beats per-session PID capture: Playwright Python exposes no PID for
+  persistent contexts (the failing case); reparenting is unambiguous + multi-leader-safe.
+- Cap default OFF: pool-wide across 13 clients, a low default would block legit heavy use. Opt-in
+  knob, actionable error.
+- Did NOT fabricate fixes for SSE-chunk/`undef` — not in current source. Deleted stale artifacts,
+  added real log bounding instead.
+
+## Verification
+
+Full pytest PASS (exit 0). ruff ✅ mypy ✅ (166 files) vulture ✅ xenon ✅. `make lint` is RED on a
+**pre-existing, unrelated** bandit B101 in `scenarios_pool.py:273` + `server/terminal/lifecycle.py:33`
+(both in HEAD before this session; make lint aborts at bandit before mypy).
+
+## Follow-up completed (same session)
+
+- **Bandit B101 asserts fixed (TDD).** Added `TerminalPoolUnavailableError(RuntimeError)` to
+  `terminal/errors.py`; replaced the two `assert`s (`scenarios_pool.py` `_launch_terminals`,
+  `server/terminal/lifecycle.py` `_pool`) with explicit raises that survive `python -O`. Proved
+  under `-O` that the old assert was stripped (None slipped through) and the new raise fires.
+- **serve.py LOC gate.** The housekeeping/boot-reap wiring pushed `cli/serve.py` from 549→597 (limit
+  550). Moved boot-reap + task-creation into `housekeeping.py` (`reap_orphan_browsers_at_boot`,
+  `start_housekeeping_task`) and extracted `_log_first_done` + `_run_leader_phases` into new
+  `cli/_leader_runtime.py` (re-exported). serve.py now 500. Updated `test_cli_serve_branches.py`
+  patch targets accordingly.
+- **Per-client MCP reconnect guidance** (Tim's request). Researched reconnect for 12 clients; encoded
+  the matrix into the MCP `instructions` string (`server/_state.py`) and the Transport-recovery
+  section of AGENTS.md/CLAUDE.md (kept in sync). Key: Claude Code/Cursor/Cline/Copilot-VSCode/
+  Windsurf/Gemini-CLI/Copilot-CLI reconnect in-session; **Codex CLI, OpenCode, Amp have NO
+  in-session reconnect** — restart the client (loses the conversation).
+- **Verification:** `make lint` EXIT=0, `make test` EXIT=0, 0 failed, coverage 90.56%. New code 100%
+  covered (`housekeeping.py`, `_leader_runtime.py`, `terminal/errors.py`). Installed missing `webkit`
+  browser — 3 live-test failures were webkit-not-installed (environment), not regressions.
+
+## Checklist for next session
+
+- [ ] **Activate**: running daemon 5661 is OLD code (0.9.1). New behavior needs a daemon restart,
+      which disconnects ALL clients — do it when Tim is ready: `uv run octowright restart`.
+- [ ] Decide a recommended `OCTOWRIGHT_MAX_BROWSERS` for Tim's multi-client setup (currently off).
+- [x] ~~Clear the pre-existing bandit B101 asserts so `make lint` is green.~~ DONE (see above).
+- [ ] Consider surfacing live browser count + cap in `octowright_status` for runaway visibility.
+- [ ] Changes uncommitted (modified + new files). Commit when Tim asks.
+
+---
+
 # HANDOFF — Crash/disconnect detection & bridge observability
 
 ## Problem / request
