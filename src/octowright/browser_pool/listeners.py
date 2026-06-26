@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter
+from octowright.browser_pool import crash_recovery
 from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReason, SessionCrashedEvent
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session import BrowserSession
@@ -168,9 +169,11 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         if not still_open:
             _evict()
 
-    def _on_page_crash(*_: Any) -> None:
-        # Playwright fired Page 'crash' (renderer process died — "Aw, Snap" /
-        # Target.crashed). The browser process itself is usually still alive, so
+    def _on_page_crash(crashed_page: Any = None, *_: Any) -> None:
+        # Playwright fires Page 'crash' with the crashing Page as the argument
+        # (renderer process died — "Aw, Snap" / Target.crashed). Fall back to the
+        # session's primary page if the arg is ever absent. The browser process
+        # itself is usually still alive, so
         # we do NOT evict here; we mark the session so that IF it is then evicted
         # (a crash that brings the process down → disconnected), ``_evict``
         # reports a definite ``crashed`` instead of an ambiguous ``user_close``.
@@ -178,6 +181,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         # page is dead immediately, not only on its next failing tool call.
         session._crashed = True
         _CRASHED.add(1, attributes={"kind": session.kind})
+        crash_recovery.note_crash()
         log.warning(
             "octowright.browser.page_crashed",
             instance_id=instance_id,
@@ -200,6 +204,9 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             session.recorder.record("page_crash")
         except Exception as exc:
             log.debug("octowright.crash.recorder_failed", instance_id=instance_id, error=repr(exc))
+        # Auto-recover the dead renderer: the browser process is usually still
+        # alive, so a bounded page.reload() heals the session without losing it.
+        crash_recovery.schedule_recovery(session, crashed_page or session.page)
 
     # Expose the per-page close + crash handlers so ``_wire_listeners`` can
     # attach them to the initial page AND any popup page registered later via
