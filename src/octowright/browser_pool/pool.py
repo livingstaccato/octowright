@@ -17,7 +17,7 @@ from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
 from octowright._tracing import set_attrs, span
-from octowright.browser_pool import driver_health
+from octowright.browser_pool import driver_health, incidents
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
@@ -86,16 +86,22 @@ class BrowserPool:
                 self._pw = await async_playwright().start()
         return self._pw
 
-    async def _reset_driver(self) -> None:
+    async def _reset_driver(self, *, reason: str | None = None) -> None:
         """Discard the shared Playwright driver so the next launch rebuilds it.
 
         Called when a driver-death error is seen (see ``driver_health``). Best-
         effort ``stop()`` of the dead handle, then clear it under the lock so a
-        concurrent ``_ensure_pw`` starts a fresh driver."""
+        concurrent ``_ensure_pw`` starts a fresh driver. Records an incident so
+        the restart (and its trigger) is visible in status, not just counted."""
         async with self._pw_lock:
             old = self._pw
             self._pw = None
         self._driver_restarts += 1
+        incidents.record(
+            incidents.CATEGORY_DRIVER_RESTART,
+            restart_count=self._driver_restarts,
+            reason=reason,
+        )
         if old is not None:
             try:
                 await old.stop()
@@ -118,7 +124,7 @@ class BrowserPool:
                 if not driver_health.is_driver_dead_error(exc):
                     raise
                 log.warning("octowright.pool.driver_died_relaunching", error=repr(exc))
-                await self._reset_driver()
+                await self._reset_driver(reason=repr(exc))
                 return await self._launch_impl(options, sp)
 
     async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:

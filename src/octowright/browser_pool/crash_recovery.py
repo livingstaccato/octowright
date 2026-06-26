@@ -3,12 +3,15 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Auto-recover renderer crashes by reloading the page; bounded and observable.
+"""Auto-recover renderer crashes by replacing the dead page; bounded + observable.
 
 A Playwright ``page.on("crash")`` means the renderer process died ("Aw, Snap")
-but the browser process is usually still alive, so ``page.reload()`` brings the
-page back without losing the session (same instance_id, profile, context). This
-module turns that into automatic, bounded recovery wired off the crash listener.
+but the browser process and its context are usually still alive. The crashed page
+object itself can NOT be reloaded — ``page.reload()`` / ``page.goto()`` keep
+raising ``Page crashed`` (verified live against a ``chrome-headless-shell``
+SIGSEGV) — so recovery opens a FRESH page in the surviving context, navigates it
+to the dead page's URL, and swaps it in. The session keeps its instance_id,
+profile, and context. This module wires that off the crash listener.
 
 Bounding (so a page that crashes on every reload doesn't loop forever): a
 per-session attempt counter capped at ``CRASH_RECOVERY_MAX``, with a crash-loop
@@ -29,8 +32,18 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter
+from octowright.browser_pool import incidents
 
 log = get_logger(__name__)
+
+
+def _safe_url(page: Any, session: Any) -> str:
+    """Best-effort URL of a (possibly crashed) page for incident context."""
+    try:
+        return page.url or session.url
+    except Exception:
+        return session.url
+
 
 _RECOVERED = counter(
     "octowright_browser_crash_recovered_total",
@@ -38,7 +51,7 @@ _RECOVERED = counter(
 )
 _RECOVERY_FAILED = counter(
     "octowright_browser_crash_recovery_failed_total",
-    description="Renderer-crash auto-recovery attempts whose page.reload() failed",
+    description="Renderer-crash auto-recovery attempts whose page replacement failed",
 )
 
 # Process-lifetime readable tallies for octowright_status (OTel counters can't be
@@ -71,7 +84,7 @@ def _eligible(session: Any, *, max_recoveries: int, reset_seconds: float, now: f
 
 
 def schedule_recovery(session: Any, page: Any) -> Any | None:
-    """Schedule an async ``page.reload()`` to recover a crashed renderer, or
+    """Schedule async recovery (page replacement) for a crashed renderer, or
     return ``None`` when recovery is disabled, exhausted, or there is no running
     loop. The task is tracked on ``session._bg_tasks`` and self-removes on done."""
     from octowright.defaults import (
@@ -83,6 +96,7 @@ def schedule_recovery(session: Any, page: Any) -> Any | None:
 
     if not CRASH_RECOVERY_ENABLED:
         return None
+    url = _safe_url(page, session)
     if not _eligible(
         session, max_recoveries=CRASH_RECOVERY_MAX, reset_seconds=CRASH_RECOVERY_RESET_SECONDS, now=time.monotonic()
     ):
@@ -92,24 +106,33 @@ def schedule_recovery(session: Any, page: Any) -> Any | None:
             attempts=session._crash_recoveries,
             max=CRASH_RECOVERY_MAX,
         )
+        incidents.record(
+            incidents.CATEGORY_RENDERER_CRASH,
+            instance_id=session.instance_id,
+            kind=session.kind,
+            url=url,
+            outcome="exhausted",
+            attempts=session._crash_recoveries,
+        )
         return None
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return None
-    task = loop.create_task(_recover(session, page, CRASH_RECOVERY_RELOAD_TIMEOUT_MS))
+    task = loop.create_task(_recover(session, page, CRASH_RECOVERY_RELOAD_TIMEOUT_MS, url))
     session._bg_tasks.add(task)
     task.add_done_callback(session._bg_tasks.discard)
     return task
 
 
-async def _recover(session: Any, page: Any, reload_timeout_ms: float) -> bool:
-    """Reload the crashed page. On success clear ``_crashed`` and count it; on
-    failure leave ``_crashed`` set so the session still reports as crashed."""
+async def _recover(session: Any, page: Any, reload_timeout_ms: float, url: str) -> bool:
+    """Replace the crashed page. On success clear ``_crashed`` and count it; on
+    failure leave ``_crashed`` set so the session still reports as crashed. Either
+    way an incident record is appended so the outcome is visible in status."""
     session._crash_recoveries += 1
     iid = session.instance_id
     try:
-        await _replace_crashed_page(session, page, reload_timeout_ms)
+        await _replace_crashed_page(session, page, reload_timeout_ms, url)
     except Exception as exc:
         _STATS["recovery_failures"] += 1
         _RECOVERY_FAILED.add(1, attributes={"kind": session.kind})
@@ -119,11 +142,13 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float) -> bool:
             attempt=session._crash_recoveries,
             error=repr(exc),
         )
+        _record_incident(session, url, "failed")
         return False
     session._crashed = False
     _STATS["recoveries"] += 1
     _RECOVERED.add(1, attributes={"kind": session.kind})
     log.info("octowright.crash.recovered", instance_id=iid, attempt=session._crash_recoveries)
+    _record_incident(session, url, "recovered")
     try:
         session.recorder.record("page_recovered", attempt=session._crash_recoveries)
     except Exception as exc:
@@ -131,7 +156,18 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float) -> bool:
     return True
 
 
-async def _replace_crashed_page(session: Any, dead_page: Any, timeout_ms: float) -> None:
+def _record_incident(session: Any, url: str, outcome: str) -> None:
+    incidents.record(
+        incidents.CATEGORY_RENDERER_CRASH,
+        instance_id=session.instance_id,
+        kind=session.kind,
+        url=url,
+        outcome=outcome,
+        attempts=session._crash_recoveries,
+    )
+
+
+async def _replace_crashed_page(session: Any, dead_page: Any, timeout_ms: float, last_url: str) -> None:
     """Recover by replacing the dead page, NOT reloading it.
 
     A crashed renderer cannot be reloaded — Playwright keeps raising
@@ -143,10 +179,6 @@ async def _replace_crashed_page(session: Any, dead_page: Any, timeout_ms: float)
     dead page is closed best-effort."""
     from octowright.browser_pool.listeners import _wire_listeners
 
-    try:
-        last_url = dead_page.url or session.url
-    except Exception:
-        last_url = session.url
     new_page = await session.context.new_page()
     _wire_listeners(session, new_page)
     await new_page.goto(last_url, timeout=timeout_ms)

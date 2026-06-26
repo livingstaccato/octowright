@@ -14,13 +14,32 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from provide.telemetry import get_logger
+
 from octowright import advisor as _advisor
 from octowright import takeover as _takeover
 from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool, upgrade_notice_snapshot
 from octowright.server.registry import registered_tool_names
 
+log = get_logger(__name__)
+
 _STATUS_STALE_LIMIT = 20
+
+
+def _compute_health(health_mod: Any, incidents_mod: Any, crash_recovery_mod: Any) -> dict[str, Any]:
+    """Roll the stability signals into one verdict and log loudly when degraded,
+    so the operator doesn't have to be watching status to notice instability.
+    Extracted from octowright_status to keep its complexity under the gate."""
+    counts = incidents_mod.counts(category=incidents_mod.CATEGORY_RENDERER_CRASH)
+    verdict: dict[str, Any] = health_mod.assess(
+        driver_restarts=pool.driver_restart_count(),
+        recovery_failures=crash_recovery_mod.recovery_stats()["recovery_failures"],
+        recovery_exhausted=counts.get("exhausted", 0),
+    )
+    if verdict["status"] != "ok":
+        log.warning("octowright.health.degraded", status=verdict["status"], reasons=verdict["reasons"])
+    return verdict
 
 
 @mcp.tool(
@@ -200,6 +219,8 @@ def octowright_status() -> dict[str, Any]:
     from octowright import session_manifest as _session_manifest
     from octowright import singleton as _singleton
     from octowright.browser_pool import crash_recovery as _crash_recovery
+    from octowright.browser_pool import health as _health
+    from octowright.browser_pool import incidents as _incidents
     from octowright.macros import execution as _macro_execution
     from octowright.server.profiles import PROFILES, active_filter
 
@@ -249,7 +270,13 @@ def octowright_status() -> dict[str, Any]:
     bridge_snapshot = bridge_state.read_state(defaults.BRIDGE_STATE_PATH)
     leader = leader_mode_snapshot()
 
+    health_verdict = _compute_health(_health, _incidents, _crash_recovery)
+
     return {
+        # Rolled-up stability verdict: "ok" | "degraded" | "critical" + reasons.
+        # Surface this to the user when it isn't "ok" — it means browsers/driver
+        # are unstable right now.
+        "health": health_verdict,
         "daemon": {
             "pid": daemon_pid,
             "this_pid": os.getpid(),
@@ -283,6 +310,8 @@ def octowright_status() -> dict[str, Any]:
             # non-zero, climbing value means the driver (and thus every browser at
             # once) is unstable — the deepest mass-failure signal.
             "driver_restarts": pool.driver_restart_count(),
+            # Recent driver-restart records (ts, reason, restart_count) for postmortem.
+            "driver_restart_recent": _incidents.recent(category=_incidents.CATEGORY_DRIVER_RESTART, limit=5),
             "live_scenarios": len(scenario_pool.list_live()),
             "stale_manifest_sessions": stale_preview,
             "stale_manifest_count": stale_count,
@@ -296,6 +325,9 @@ def octowright_status() -> dict[str, Any]:
             "recovery_enabled": defaults.CRASH_RECOVERY_ENABLED,
             "recovery_max": defaults.CRASH_RECOVERY_MAX,
             **_crash_recovery.recovery_stats(),
+            # Recent per-crash records (instance_id, url, ts, outcome, attempts) so
+            # "what happened" is answerable from this call, not a log grep.
+            "recent": _incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH, limit=10),
         },
         "personas": {
             "count": len(persona_names),
