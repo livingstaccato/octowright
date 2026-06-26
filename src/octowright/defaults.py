@@ -386,6 +386,7 @@ def _parse_max_browsers(raw: str | None) -> int | None:
 
 
 MAX_BROWSERS: int | None = _parse_max_browsers(os.environ.get("OCTOWRIGHT_MAX_BROWSERS", MAX_BROWSERS_DEFAULT))
+# Two more env knobs live in their domain modules (this file is at its LOC ceiling): OCTOWRIGHT_MIN_FREE_MEMORY_MB -> sysresources.MIN_FREE_MEMORY_BYTES (H4b); OCTOWRIGHT_DRIVER_RELAUNCH -> browser_pool.driver_relaunch.DRIVER_RELAUNCH_MODE (H4a).
 
 # Leader housekeeping cadence. A periodic in-leader task (see
 # octowright.housekeeping) that (1) reaps browser processes orphaned when their
