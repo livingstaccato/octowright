@@ -269,6 +269,19 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 | `octowright_macro_run_total` | counter | `macro`, `status` | Macro runs (`status` is `ok`/`failed`). |
 | `octowright_bridge_reconnect_total` | counter | `reason` | Times the follower bridge reconnected to the leader. |
 | `octowright_bridge_rpc_total` | counter | `method` | JSON-RPC messages forwarded local→remote. |
+| `octowright_bridge_resume_total` | counter | — | In-flight requests re-sent to the leader after a reconnect (idempotent resume). |
+| `octowright_browser_crashed_total` | counter | `kind` | Renderer crashes observed (`page.on("crash")`). |
+| `octowright_browser_crash_recovered_total` | counter | `kind` | Renderer crashes auto-recovered by replacing the dead page. |
+| `octowright_browser_crash_recovery_failed_total` | counter | `kind` | Auto-recovery attempts whose page replacement failed. |
+| `octowright_driver_restart_total` | counter | — | Shared Playwright driver deaths rebuilt mid-run (the SPOF signal). |
+| `octowright_driver_lost_total` | counter | `outcome`, `kind` | Sessions lost when the shared driver died (`outcome` = `surfaced`/`relaunched`). |
+| `octowright_launch_refused_total` | counter | `reason` | User-facing launches refused (`reason` = `cap`/`memory`). |
+| `octowright_orphan_reaped_total` | counter | `scope` | Orphaned (dead-driver) browser processes killed by the reaper. |
+| `octowright_bridge_leader_recovery_total` | counter | `outcome` | Leader-down gaps (`outcome` = `recovered`/`exhausted`) — how often a leader restart is survived vs. drops the client. |
+| `octowright_artifact_verify_total` | counter | — | Macro-artifact verification runs. |
+| `octowright_artifact_verify_check_total` | counter | — | Per-check results within a macro-artifact verification. |
+| `octowright_macro_artifact_run_total` | counter | — | Macro-artifact replay runs. |
+| `octowright_process_rss_bytes` | histogram (By) | `scope` | Resident memory of the leader + its browsers, sampled each housekeeping cycle (`scope` = `leader`/`browsers`/`total`) — the continuous multi-day leak signal. |
 | `octowright_browser_launch_duration_seconds` | histogram (s) | `kind` | Time from `pool.launch()` entry to registered session. |
 | `octowright_macro_run_duration_seconds` | histogram (s) | `macro` | `run_macro` elapsed time including nested actions. |
 | `octowright_session_navigate_duration_seconds` | histogram (s) | `kind` | Duration of `session.navigate()` including `page.goto`. |
@@ -277,6 +290,19 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 The `macro` label is capped at `OCTOWRIGHT_METRICS_MACRO_LABEL_CAP` distinct values (default 256); beyond the cap, names land in an `(overflow)` bucket so long-lived deployments don't unbound their time-series count. The `error` and `method` labels are intrinsically bounded by code paths; `kind` is bounded to the three browser engines plus `unknown`; `connector_type` is bounded to `pty`/`ssh`/`telnet`. `octowright_status()["metrics"]` surfaces `macro_labels_seen` and `macro_label_overflow_count` so an operator can see when dynamic macro names (e.g. `migrate-table-{uuid}`) have saturated the cap. The recovery escape hatch is `octowright.macros.execution.reset_macro_label_seen()` — in-process only (not exposed as an MCP tool, by design) for tests or operator process access.
 
 There is intentionally no counter for the ws-cache batched flush — the flush is purely a transport optimization and its frequency is not a useful operational signal.
+
+### MCP notifications (proactive, LLM-facing)
+
+Octowright pushes JSON-RPC notifications to the connected MCP client the moment an exceptional situation happens, so the agent reacts to a `hint` instead of polling `octowright_status`. Built by `server/mcp_notifications._build_notification` from `browser_pool` session-event-bus events; they ride the follower bridge transparently.
+
+| Method | Fires when | Key params |
+|--------|-----------|------------|
+| `notifications/octowright/browser_crashed` | a renderer crash is observed (`page.on("crash")`) | `recovering` (auto-recovery scheduled → WAIT for `browser_recovered`, don't relaunch), `scope`, `hint` |
+| `notifications/octowright/browser_recovered` | a renderer-crash recovery resolved | `outcome` (`recovered` = usable again, continue / `failed` / `exhausted` = relaunch), `attempts`, `hint` |
+| `notifications/octowright/driver_died` | the shared driver died and sessions were lost | `lost_instance_ids`, `relaunch_mode`, `restart_count`, `hint` (points at `octowright_status().pool.lost_sessions`) |
+| `notifications/octowright/session_closed` | a session left the pool | `reason` (`agent_close`/`user_close`/`external_disconnect`/`crashed`/`shutdown`) |
+
+The MCP server `instructions` string (`server/_state.py`) summarizes this taxonomy so the LLM knows the signals exist; refused launches surface in-band as actionable tool errors (cap / memory floor), not notifications.
 
 ### Session log context
 
