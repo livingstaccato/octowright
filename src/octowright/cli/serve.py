@@ -15,7 +15,6 @@ bridge stdin/stdout to its HTTP-MCP endpoint instead of spawning a pool. Pass
 
 from __future__ import annotations
 
-import asyncio as _asyncio_mod
 from collections.abc import Callable
 from types import FrameType
 from typing import Any
@@ -23,6 +22,7 @@ from typing import Any
 import click
 from provide.telemetry import get_logger, setup_telemetry, shutdown_telemetry
 
+from octowright.cli._leader_runtime import _run_leader_phases
 from octowright.cli._root import cli
 
 _log = get_logger(__name__)
@@ -40,35 +40,6 @@ _INLINE_FALLBACK_WARNING = (
     "failure (check the HTTP port and daemon logs) or start a standalone "
     "`octowright serve` leader, then reconnect."
 )
-
-
-def _log_first_done(
-    event: str,
-    mcp_task: _asyncio_mod.Task[Any],
-    watch_task: _asyncio_mod.Task[Any] | None,
-    sidecars: list[_asyncio_mod.Task[Any]],
-) -> None:
-    """Log which task ended first so a daemon shutdown is attributable.
-
-    Logged at INFO so it shows up in the default daemon log without needing
-    --log-level=DEBUG. Includes the task that ended first plus a snapshot of
-    the others' done/cancelled state so the user can tell whether shutdown
-    came from the idle watchdog, a crashed sidecar, or stdio EOF.
-    """
-    finished: list[str] = []
-    pending: list[str] = []
-    for label, task in [("mcp", mcp_task), ("watchdog", watch_task)] + [
-        (f"sidecar[{i}]", t) for i, t in enumerate(sidecars)
-    ]:
-        if task is None:
-            continue
-        if task.done():
-            exc = task.exception() if not task.cancelled() else None
-            tag = "cancelled" if task.cancelled() else ("error" if exc else "ok")
-            finished.append(f"{label}={tag}")
-        else:
-            pending.append(label)
-    _log.info(event, finished=finished, pending=pending)
 
 
 @cli.command()
@@ -359,6 +330,7 @@ async def _run_leader(
     from octowright import http as _http
     from octowright import singleton as _sn
     from octowright.defaults import HTTP_HOST, HTTP_PORT, HTTP_PORT_RETRIES, IDLE_GRACE_SECONDS, IDLE_POLL_SECONDS
+    from octowright.housekeeping import reap_orphan_browsers_at_boot, start_housekeeping_task
     from octowright.idle_watchdog import _resolve_watchdog_grace, idle_watchdog
     from octowright.server import mcp
     from octowright.server._state import pool, scenario_pool
@@ -369,6 +341,9 @@ async def _run_leader(
     bound_port = http_port if http_port is not None else HTTP_PORT
 
     _reap_orphan_session_dirs(no_singleton)
+    # Sweep browsers orphaned by a previous (dead) leader generation before this
+    # leader brings its own pool up.
+    reap_orphan_browsers_at_boot(log=_log)
 
     # First run after an update: announce "what's new" (octowright.upgrade) — records
     # the notice for octowright_status and echoes a banner (human terminal inline, log otherwise).
@@ -418,6 +393,10 @@ async def _run_leader(
             name="octowright.idle_watchdog",
         )
 
+    # Periodic leader housekeeping: reap driver-orphaned browsers + bound the
+    # daemon log. None when OCTOWRIGHT_HOUSEKEEPING_SECONDS is off.
+    housekeeping_task = start_housekeeping_task(_log)
+
     # Discoverable leader: HTTP-MCP at /mcp/ is up AND we wrote the lockfile.
     # Followers can find and connect to us, so a stdio EOF (e.g. MCP client
     # closes) doesn't mean we're useless — keep serving until the watchdog
@@ -436,7 +415,7 @@ async def _run_leader(
         await _run_leader_phases(wait_for, mcp_task, watch_task, sidecars, discoverable)
     finally:
         _uninstall_leader_signal_handlers(loop, installed_signals, installed_signal_handlers)
-        await _cancel_and_collect_tasks(sidecars, watch_task, mcp_task)
+        await _cancel_and_collect_tasks(sidecars, watch_task, mcp_task, housekeeping_task)
         from octowright.process_reaper import reap_descendant_browsers_on_shutdown
 
         await reap_descendant_browsers_on_shutdown(pool, log=_log)
@@ -502,13 +481,14 @@ async def _cancel_and_collect_tasks(
     sidecars: list[Any],
     watch_task: Any,
     mcp_task: Any,
+    *extra_tasks: Any,
 ) -> None:
     import asyncio as _asyncio
 
-    for t in (*sidecars, watch_task, mcp_task):
+    for t in (*sidecars, watch_task, mcp_task, *extra_tasks):
         if t is not None and not t.done():
             t.cancel()
-    for t in (*sidecars, watch_task, mcp_task):
+    for t in (*sidecars, watch_task, mcp_task, *extra_tasks):
         if t is None:
             continue
         try:
@@ -517,33 +497,3 @@ async def _cancel_and_collect_tasks(
             pass
         except Exception as exc:
             _log.debug("serve.task_cancel.exception", error=repr(exc))
-
-
-async def _run_leader_phases(
-    wait_for: set[Any],
-    mcp_task: Any,
-    watch_task: Any,
-    sidecars: list[Any],
-    discoverable: bool,
-) -> None:
-    """Two-phase leader life: wait for stdio-or-watchdog, then if only the
-    stdio task ended on a discoverable leader, keep serving via HTTP-MCP
-    until the watchdog or a sidecar fires."""
-    import asyncio as _asyncio
-
-    await _asyncio.wait(wait_for, return_when=_asyncio.FIRST_COMPLETED)
-    _log_first_done("octowright.leader.first_phase_ended", mcp_task, watch_task, sidecars)
-
-    # If only the stdio MCP task ended (the typical "client disconnected"
-    # case) and we're discoverable, keep serving via HTTP-MCP — waiting on the
-    # HTTP sidecar (and the watchdog, when one is armed). This must NOT require a
-    # watchdog: with auto-quit disabled (the default) the detached daemon would
-    # otherwise exit the instant its /dev/null stdin EOFs, right after spawn.
-    if mcp_task.done() and discoverable and (watch_task is None or not watch_task.done()):
-        click.echo(
-            "octowright: stdio client disconnected; leader staying alive for HTTP-MCP "
-            "(reconnect by reopening your MCP client; auto-quit governed by --idle-grace)",
-            err=True,
-        )
-        await _asyncio.wait(set(filter(None, (watch_task, *sidecars))), return_when=_asyncio.FIRST_COMPLETED)
-        _log_first_done("octowright.leader.second_phase_ended", mcp_task, watch_task, sidecars)

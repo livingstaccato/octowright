@@ -11,8 +11,9 @@ import asyncio
 from typing import Any
 
 from octowright import _format as fmt
+from octowright import defaults as _defaults
 from octowright import resolve as resolve_mod
-from octowright.browser_pool.errors import ProtectedBrowserCloseError
+from octowright.browser_pool.errors import BrowserCapExceededError, ProtectedBrowserCloseError
 from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import (
@@ -26,7 +27,30 @@ from octowright.server._state import mcp, pool
 from octowright.server.browser.inspect import browser_brief
 
 
+def _enforce_browser_cap(*, adding: int) -> None:
+    """Refuse a user-facing launch that would exceed OCTOWRIGHT_MAX_BROWSERS.
+
+    Read through the ``defaults`` module (not a bound import) so the cap is
+    honoured if reconfigured at runtime / monkeypatched in tests. Off (None) →
+    no-op. Gates only the ad-hoc launch tools; internal relaunch/handoff and
+    pre-declared scenario launches go through the pool directly and are not
+    capped here.
+    """
+    cap = _defaults.MAX_BROWSERS
+    if cap is None:
+        return
+    active = pool.active_count()
+    if active + adding > cap:
+        raise BrowserCapExceededError(
+            f"browser cap reached: {active} live + {adding} requested would exceed "
+            f"OCTOWRIGHT_MAX_BROWSERS={cap}. Close browsers (browser_close / "
+            f"browser_close_all) or raise OCTOWRIGHT_MAX_BROWSERS. This cap is shared "
+            f"across every MCP client connected to this daemon."
+        )
+
+
 async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
+    _enforce_browser_cap(adding=1)
     timeout = BROWSER_LAUNCH_TIMEOUT_SECONDS
     try:
         return await asyncio.wait_for(pool.launch(**kwargs), timeout=timeout)
@@ -487,4 +511,5 @@ async def browser_open_url(
     ),
 )
 async def browser_spawn_roster(specs: list[dict[str, Any]]) -> dict[str, Any]:
+    _enforce_browser_cap(adding=len(specs))
     return await pool.spawn_roster(specs)

@@ -441,3 +441,16 @@ def test_remap_terminal_participant_uses_terminal_pool() -> None:
         terminal_pool=tp,
     )
     assert out["new_instance_id"] == "t2" and out["role"] == "operator"
+
+
+@pytest.mark.anyio
+async def test_launch_terminals_raises_when_pool_missing_but_specs_present() -> None:
+    # Internal invariant: start() guarantees terminal_pool is wired whenever there
+    # are terminal specs. If that contract is ever broken, the helper must fail
+    # loudly with a typed error, not a `python -O`-stripped assert that would let
+    # a None pool reach `.launch` and crash with AttributeError.
+    from octowright.terminal.errors import TerminalPoolUnavailableError
+
+    specs = [(0, SimpleNamespace(persona="ops"))]
+    with pytest.raises(TerminalPoolUnavailableError):
+        await ScenarioPool._launch_terminals(None, specs, {}, [])
