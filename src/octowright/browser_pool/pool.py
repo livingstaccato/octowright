@@ -17,6 +17,7 @@ from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
 from octowright._tracing import set_attrs, span
+from octowright.browser_pool import driver_health
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
@@ -58,6 +59,8 @@ class BrowserPool:
     def __init__(self) -> None:
         self._pw: Playwright | None = None
         self._pw_lock = asyncio.Lock()
+        # Count of shared-driver rebuilds after a death (surfaced in status).
+        self._driver_restarts: int = 0
         self._sessions: dict[str, BrowserSession] = {}
         self._sessions_lock = asyncio.Lock()
         # Instance ids dropped via the external close/crash path
@@ -83,9 +86,40 @@ class BrowserPool:
                 self._pw = await async_playwright().start()
         return self._pw
 
+    async def _reset_driver(self) -> None:
+        """Discard the shared Playwright driver so the next launch rebuilds it.
+
+        Called when a driver-death error is seen (see ``driver_health``). Best-
+        effort ``stop()`` of the dead handle, then clear it under the lock so a
+        concurrent ``_ensure_pw`` starts a fresh driver."""
+        async with self._pw_lock:
+            old = self._pw
+            self._pw = None
+        self._driver_restarts += 1
+        if old is not None:
+            try:
+                await old.stop()
+            except Exception as exc:
+                log.debug("octowright.pool.driver_stop_failed", error=repr(exc))
+
+    def driver_restart_count(self) -> int:
+        """How many times the shared driver has been rebuilt after a death."""
+        return self._driver_restarts
+
     async def launch(self, **options: Any) -> dict[str, Any]:
         async with launch_span(options.get("kind") or "chromium") as sp:
-            return await self._launch_impl(options, sp)
+            try:
+                return await self._launch_impl(options, sp)
+            except Exception as exc:
+                # A dead shared driver (its pipe closed) fails every launch until
+                # rebuilt. Reset it and retry ONCE — a second failure propagates,
+                # so there is no retry loop. Ordinary launch errors are re-raised
+                # untouched.
+                if not driver_health.is_driver_dead_error(exc):
+                    raise
+                log.warning("octowright.pool.driver_died_relaunching", error=repr(exc))
+                await self._reset_driver()
+                return await self._launch_impl(options, sp)
 
     async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:
         launch_options = LaunchOptions.from_mapping(options)

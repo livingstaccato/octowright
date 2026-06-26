@@ -180,6 +180,8 @@ def test_status_pool_counts_are_ints() -> None:
     # browser_cap surfaces the pool-wide concurrent-browser cap (int) or None when off.
     assert "browser_cap" in snap["pool"]
     assert snap["pool"]["browser_cap"] is None or isinstance(snap["pool"]["browser_cap"], int)
+    # driver_restarts: shared-driver rebuilds after a death (deepest failure signal).
+    assert isinstance(snap["pool"]["driver_restarts"], int)
     # crash block surfaces renderer-crash + auto-recovery tallies.
     crash = snap["crash"]
     assert isinstance(crash["recovery_enabled"], bool)
