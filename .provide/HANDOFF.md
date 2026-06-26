@@ -114,6 +114,37 @@ Restarted the daemon to activate the changes, then `/verify`'d against the real 
 - Caveat seen during the run: the follower MCP bridge timed out twice while the leader executed the
   call anyway (a transient bridge hiccup, not a recovery failure) — verified server-side instead.
 
+## Hardening round (after live verification caught the reload bug)
+
+The meta-lesson: the broken recovery shipped green (100% unit coverage) because the
+tests mocked `page.reload()`. Hardening to prevent / catch / articulate, all TDD'd + committed:
+
+- **H1 live chaos regression tests (commit 35a8508)** — `test_stability_chaos_live.py`:
+  CDP `Page.crash` a real renderer → assert recovery + usable (FAILS on the old reload
+  recovery); `Playwright.stop()` the driver → assert self-heal. The guards that would have
+  caught e2e9b26. Marked `live_browser`.
+- **H2 incident records + H3 health verdict (3360045)** — `browser_pool/incidents.py` (bounded
+  ring of crash/driver incidents with url+outcome+ts) and `browser_pool/health.py`
+  (`assess() → {ok|degraded|critical, reasons}`). `octowright_status` grew `health`,
+  `crash.recent`, `pool.driver_restart_recent`; logs WARN when degraded.
+- **H5a recovery artifact (this commit)** — on successful recovery, best-effort screenshot of
+  the recovered page next to the recording; path lands in the incident record.
+
+### Deferred H4/H5 (designed, real gotchas found — warrant a focused pass)
+
+- **H4a — auto-relaunch sessions lost to driver death.** Driver self-heal (P3) restores the
+  pool but the lost sessions aren't recreated. Gotcha: relaunch changes instance_ids and
+  re-runs navigation across every client → needs design sign-off.
+- **H4b — memory-pressure launch governor.** Refuse launches under low memory to prevent the
+  OOM→renderer-crash cascade. Gotcha: macOS "free" memory (SC_AVPHYS_PAGES) is misleading
+  (most RAM is cache/purgeable) → a naive threshold causes FALSE refusals on Tim's platform.
+  Needs proper per-platform available-memory reading (Linux `/proc/meminfo` MemAvailable;
+  macOS `vm_stat` free+inactive+purgeable+speculative), not a sysconf one-liner.
+- **H5b — macOS `.ips` crash-report correlation.** Attach the real `chrome-headless-shell`
+  `SIGSEGV` signature to the crash incident. Gotcha: the OS writes the `.ips` a second or two
+  AFTER the crash, but the incident is recorded ~60ms in — so correlation must happen at
+  status-read time (with a window), not at crash time.
+
 ## Checklist for next session
 
 - [ ] **Activate**: the running daemon is OLD code. ALL of this turn's behavior needs a daemon
