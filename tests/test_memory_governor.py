@@ -69,6 +69,19 @@ def test_floor_above_available_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         _lifecycle._enforce_memory_floor(adding=1)
 
 
+def test_memory_refusal_is_metered(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests._metric_recorders import RecordingCounter
+
+    refused = RecordingCounter()
+    monkeypatch.setattr(_lifecycle, "_LAUNCH_REFUSED", refused)
+    _set_floor(monkeypatch, 1024)
+    _set_available(monkeypatch, 256)
+    with pytest.raises(MemoryPressureError):
+        _lifecycle._enforce_memory_floor(adding=1)
+    assert refused.total() == 1
+    assert refused.attrs_for("reason") == ["memory"]
+
+
 def test_floor_below_available_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_floor(monkeypatch, 256)
     _set_available(monkeypatch, 4096)

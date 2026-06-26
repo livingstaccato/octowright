@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from octowright.browser_pool import driver_relaunch, incidents
+from tests._metric_recorders import RecordingCounter
 
 
 @pytest.fixture(autouse=True)
@@ -113,6 +114,37 @@ def test_on_driver_reset_records_restart_and_captures_lost(monkeypatch: pytest.M
     assert pool._sessions == {}
     # Off mode → nothing relaunched.
     assert pool.launched == []
+
+
+def test_meters_driver_restart_and_lost_surfaced(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_mode(monkeypatch, "off")
+    restart = RecordingCounter()
+    lost = RecordingCounter()
+    monkeypatch.setattr(driver_relaunch, "_DRIVER_RESTART", restart)
+    monkeypatch.setattr(driver_relaunch, "_DRIVER_LOST", lost)
+    pool = _FakePool([_session("a"), _session("b")])
+
+    async def _run() -> None:
+        driver_relaunch.on_driver_reset(pool, reason="pipe closed")
+
+    asyncio.run(_run())
+    assert restart.total() == 1  # one driver restart metered
+    assert lost.total() == 2  # both lost sessions metered
+    assert lost.attrs_for("outcome") == ["surfaced", "surfaced"]
+
+
+def test_meters_driver_lost_relaunched(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_mode(monkeypatch, "new-id")
+    lost = RecordingCounter()
+    monkeypatch.setattr(driver_relaunch, "_DRIVER_LOST", lost)
+    pool = _FakePool([_session("a")])
+
+    async def _run() -> None:
+        await driver_relaunch.on_driver_reset(pool, reason="x")
+
+    asyncio.run(_run())
+    # One surfaced (capture) + one relaunched (reopen) outcome metered.
+    assert sorted(lost.attrs_for("outcome")) == ["relaunched", "surfaced"]
 
 
 def test_recent_lost_is_bounded_and_limitable(monkeypatch: pytest.MonkeyPatch) -> None:
