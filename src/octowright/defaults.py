@@ -362,12 +362,16 @@ IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
 # Pool-wide cap on concurrently-open browsers. The pool is shared by EVERY MCP
 # client connected to one leader, so this bounds the *total* live browsers
 # across all of them — the lever against a single looping client filling the
-# screen with windows. Off by default (None): a positive OCTOWRIGHT_MAX_BROWSERS
-# makes the user-facing launch tools (browser_launch / browser_quick_launch /
+# screen with windows AND against peak memory pressure that drives renderer
+# crashes. Defaults ON at MAX_BROWSERS_DEFAULT: a positive value makes the
+# user-facing launch tools (browser_launch / browser_quick_launch /
 # browser_spawn_roster) refuse once the live count would exceed it. Internal
 # relaunch / handoff / scenario launches are NOT capped. ``0`` / ``off`` /
 # ``never`` / ``none`` / ``disabled`` (case-insensitive) or an unparsable value
-# keep it disabled.
+# disable it. Raise OCTOWRIGHT_MAX_BROWSERS for heavier multi-client fleets.
+MAX_BROWSERS_DEFAULT = "32"
+
+
 def _parse_max_browsers(raw: str | None) -> int | None:
     if raw is None:
         return None
@@ -381,7 +385,7 @@ def _parse_max_browsers(raw: str | None) -> int | None:
     return value if value > 0 else None
 
 
-MAX_BROWSERS: int | None = _parse_max_browsers(os.environ.get("OCTOWRIGHT_MAX_BROWSERS"))
+MAX_BROWSERS: int | None = _parse_max_browsers(os.environ.get("OCTOWRIGHT_MAX_BROWSERS", MAX_BROWSERS_DEFAULT))
 
 # Leader housekeeping cadence. A periodic in-leader task (see
 # octowright.housekeeping) that (1) reaps browser processes orphaned when their

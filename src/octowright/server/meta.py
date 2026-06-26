@@ -274,6 +274,10 @@ def octowright_status() -> dict[str, Any]:
         "pool": {
             "live_browsers": pool.active_count(),
             "protected_browsers": pool.protected_count(),
+            # Pool-wide concurrent-browser cap (shared across all MCP clients).
+            # null when disabled (OCTOWRIGHT_MAX_BROWSERS=off). When live_browsers
+            # nears browser_cap, user-facing launches will start refusing.
+            "browser_cap": defaults.MAX_BROWSERS,
             "live_scenarios": len(scenario_pool.list_live()),
             "stale_manifest_sessions": stale_preview,
             "stale_manifest_count": stale_count,

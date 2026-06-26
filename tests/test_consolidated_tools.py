@@ -22,6 +22,9 @@ from octowright.server.browser import lifecycle as _lifecycle
 def _patch_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
     """Replace the module-level `pool` and `resolve_mod` with mocks."""
     fake_pool = MagicMock()
+    # The browser cap (now ON by default) calls pool.active_count() before each
+    # user-facing launch; give it a real int so the cap check passes.
+    fake_pool.active_count.return_value = 0
     fake_resolve = MagicMock()
 
     monkeypatch.setattr(_lifecycle, "pool", fake_pool)
