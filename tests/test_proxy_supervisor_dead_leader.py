@@ -103,21 +103,20 @@ async def test_health_monitor_calls_failure_hook(monkeypatch: pytest.MonkeyPatch
             return FakeResponse()
 
     monkeypatch.setattr(supervisor.httpx, "AsyncClient", FakeClient)
-    failed: list[bool] = []
+    unhealthy: list[bool] = []
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(
             supervisor.monitor_leader_health,
-            tg.cancel_scope,
             "http://leader.invalid/api/health",
             0.01,
             2,
-            lambda: failed.append(True),
+            lambda: unhealthy.append(True),
         )
-        with anyio.move_on_after(1.0):
-            await anyio.sleep_forever()
+        await anyio.sleep(0.3)
+        tg.cancel_scope.cancel()  # monitor loops forever now; stop it explicitly
 
-    assert failed == [True]
+    assert unhealthy  # on_unhealthy fired after the consecutive failures
 
 
 @pytest.mark.anyio
@@ -313,6 +312,81 @@ async def test_survives_leader_bounce_within_recovery_window(monkeypatch: pytest
         await local_in_send.send(_request("tools/call", "after-bounce"))
         await remote_write_recvs[0].receive()
         assert recovery.attrs_for("outcome") == ["recovered"]  # the survival was metered
+        tg.cancel_scope.cancel()
+
+    await local_in_send.aclose()
+
+
+@pytest.mark.anyio
+async def test_silent_sse_is_unstuck_so_follower_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REGRESSION: a leader whose SSE read goes SILENT (a hard crash — no close,
+    no error) must NOT wedge the follower. The health monitor cancels the stuck
+    connection so the inline loop reconnects, instead of hanging on a dead socket
+    until the recovery window expires (and then giving up)."""
+    monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.01)
+    monkeypatch.setattr(supervisor, "BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 5.0)
+
+    class _Resp:
+        status_code = 503  # leader HTTP is unreachable → monitor fires the unstick
+
+    class _HClient:
+        def __init__(self, **_k: Any) -> None: ...
+
+        async def __aenter__(self) -> _HClient:
+            return self
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+        async def get(self, _u: str) -> _Resp:
+            return _Resp()
+
+    monkeypatch.setattr(supervisor.httpx, "AsyncClient", _HClient)
+
+    connects = {"n": 0}
+
+    @asynccontextmanager
+    async def silent_client(_url: str, **_k: Any):  # type: ignore[no-untyped-def]
+        # The SSE reader never gets a message and never sees the stream close —
+        # it hangs until the monitor cancels the connection's scope.
+        connects["n"] += 1
+        remote_read_send, remote_read_recv = anyio.create_memory_object_stream[Any](10)
+        remote_write_send, _ = anyio.create_memory_object_stream[SessionMessage](10)
+        try:
+            yield (remote_read_recv, remote_write_send, lambda: f"sess-{connects['n']}")
+        finally:
+            await remote_read_send.aclose()
+
+    monkeypatch.setattr(supervisor, "streamablehttp_client", silent_client)
+
+    local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
+
+    @asynccontextmanager
+    async def fake_stdio():  # type: ignore[no-untyped-def]
+        yield (local_in_recv, local_out_send)
+
+    monkeypatch.setattr(supervisor, "stdio_server", fake_stdio)
+
+    async def run_proxy() -> None:
+        await supervisor.run_supervised_proxy(
+            leader_mcp_url="http://leader.invalid/mcp/",
+            health_url="http://leader.invalid/api/health",
+            heartbeat_interval=0.02,
+            heartbeat_max_failures=2,
+        )
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(run_proxy)
+        # First connection is silent; the monitor must unstick it so a SECOND
+        # connect happens (proves reconnect, not wedge). On the old code the
+        # monitor would tear the follower down at the window instead.
+        with anyio.fail_after(3.0):
+            while connects["n"] < 2:
+                await anyio.sleep(0.02)
+        assert connects["n"] >= 2
         tg.cancel_scope.cancel()
 
     await local_in_send.aclose()
