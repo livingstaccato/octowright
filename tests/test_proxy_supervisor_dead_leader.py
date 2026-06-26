@@ -255,6 +255,10 @@ async def test_survives_leader_bounce_within_recovery_window(monkeypatch: pytest
     monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.01)
     monkeypatch.setattr(supervisor, "BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 5.0)
+    from tests._metric_recorders import RecordingCounter
+
+    recovery = RecordingCounter()
+    monkeypatch.setattr(supervisor, "_LEADER_RECOVERY", recovery)
 
     # Health is dead for the first two probes (the restart gap), then alive.
     health_calls = {"n": 0}
@@ -308,6 +312,7 @@ async def test_survives_leader_bounce_within_recovery_window(monkeypatch: pytest
         # And a request now round-trips to the reconnected leader.
         await local_in_send.send(_request("tools/call", "after-bounce"))
         await remote_write_recvs[0].receive()
+        assert recovery.attrs_for("outcome") == ["recovered"]  # the survival was metered
         tg.cancel_scope.cancel()
 
     await local_in_send.aclose()
@@ -389,6 +394,10 @@ async def test_exits_after_recovery_window_with_permanently_dead_leader(monkeypa
     monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.02)
     monkeypatch.setattr(supervisor, "BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 0.1)
+    from tests._metric_recorders import RecordingCounter
+
+    recovery = RecordingCounter()
+    monkeypatch.setattr(supervisor, "_LEADER_RECOVERY", recovery)
 
     async def health_is_dead(_url: str) -> bool:
         return False
@@ -410,6 +419,7 @@ async def test_exits_after_recovery_window_with_permanently_dead_leader(monkeypa
             health_url="http://leader.invalid/api/health",
         )
     assert connect_attempts["n"] >= 2  # retried through the window before giving up
+    assert recovery.attrs_for("outcome") == ["exhausted"]  # giving up was metered
 
     await local_in_send.aclose()
 

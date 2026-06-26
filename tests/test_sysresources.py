@@ -119,3 +119,39 @@ def test_available_memory_on_host_is_none_or_positive() -> None:
     # Exercises the real per-host reader; never raises, returns None or > 0.
     result = sysresources.available_memory_bytes()
     assert result is None or result > 0
+
+
+def test_parse_ps_rss_kb_sums_numeric_lines() -> None:
+    # ps -o rss= prints one KB value per pid; non-numeric lines are ignored.
+    assert sysresources._parse_ps_rss_kb("  1024\n  2048\n\n header \n") == 3072
+
+
+def test_process_rss_bytes_empty_is_zero() -> None:
+    assert sysresources.process_rss_bytes([]) == 0
+
+
+def test_process_rss_bytes_sums_and_converts_to_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sysresources.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="100\n200\n")
+    )
+    assert sysresources.process_rss_bytes([1, 2]) == 300 * 1024
+
+
+def test_process_rss_bytes_nonzero_return_is_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sysresources.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=""))
+    assert sysresources.process_rss_bytes([1]) == 0
+
+
+def test_process_rss_bytes_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*_a: object, **_k: object) -> object:
+        raise OSError("ps unavailable")
+
+    monkeypatch.setattr(sysresources.subprocess, "run", _boom)
+    assert sysresources.process_rss_bytes([1]) == 0
+
+
+def test_process_rss_bytes_on_host_for_self_is_positive() -> None:
+    import os
+
+    # Real ps read for our own pid — exercises the live path, returns > 0.
+    assert sysresources.process_rss_bytes([os.getpid()]) > 0

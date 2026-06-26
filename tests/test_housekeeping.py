@@ -213,3 +213,21 @@ def test_daemon_housekeeping_loop_runs_jobs_and_survives_failures(monkeypatch: p
     logged = {c.args[0] for c in log.warning.call_args_list}
     assert "octowright.housekeeping.reap_failed" in logged
     assert "octowright.housekeeping.log_guard_failed" in logged
+
+
+def test_sample_process_rss_records_leader_browsers_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import housekeeping as _hk
+    from octowright import process_reaper, sysresources
+    from tests._metric_recorders import RecordingHistogram
+
+    rec = RecordingHistogram()
+    monkeypatch.setattr(_hk, "_PROCESS_RSS", rec)
+    monkeypatch.setattr(process_reaper, "find_browser_pids", lambda _scope, *, root_pid=None: [99, 100])
+    # 1000 bytes for the leader ([self pid]), 500 for the browser pids.
+    monkeypatch.setattr(sysresources, "process_rss_bytes", lambda pids: 1000 if pids == [os.getpid()] else 500)
+
+    _hk._sample_process_rss()
+
+    assert rec.values_for("scope", "leader") == [1000]
+    assert rec.values_for("scope", "browsers") == [500]
+    assert rec.values_for("scope", "total") == [1500]

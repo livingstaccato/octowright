@@ -101,6 +101,37 @@ def _run_vm_stat() -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _parse_ps_rss_kb(ps_output: str) -> int:
+    """Sum the per-PID RSS (KB) values printed by ``ps -o rss=``."""
+    total = 0
+    for line in ps_output.splitlines():
+        value = line.strip()
+        if value.isdigit():
+            total += int(value)
+    return total
+
+
+def process_rss_bytes(pids: list[int]) -> int:
+    """Summed resident-set size (bytes) of ``pids`` via ``ps`` (no psutil dep), or
+    0 when the list is empty or ``ps`` can't be read. Never raises — a sampling
+    failure must not crash the housekeeping loop that calls it."""
+    if not pids:
+        return 0
+    try:
+        result = subprocess.run(  # nosec B603 B607 - absolute path, fixed flags, pid list only
+            ["/bin/ps", "-o", "rss=", "-p", ",".join(str(p) for p in pids)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if result.returncode != 0:
+            return 0
+        return _parse_ps_rss_kb(result.stdout) * 1024
+    except Exception:
+        return 0
+
+
 def available_memory_bytes() -> int | None:
     """Best-effort available physical memory in bytes, or ``None`` when it can't
     be determined (unsupported platform, read error). Never raises."""

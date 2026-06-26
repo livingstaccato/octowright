@@ -34,9 +34,22 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright._tracing import counter
 from octowright.browser_pool import incidents
 
 log = get_logger(__name__)
+
+# Stability metrics (noop unless telemetry is enabled). A climbing driver-restart
+# rate means the shared driver (SPOF) is unstable; driver_lost{outcome} shows how
+# many sessions died with it and whether auto-relaunch reopened them.
+_DRIVER_RESTART = counter(
+    "octowright_driver_restart_total",
+    description="Shared Playwright driver deaths that were rebuilt mid-run",
+)
+_DRIVER_LOST = counter(
+    "octowright_driver_lost_total",
+    description="Sessions lost when the shared driver died (outcome=surfaced|relaunched)",
+)
 
 # Bounded recent-lost-session ring surfaced in status. Sized like the incident
 # ring; a long-lived daemon can't grow it without bound.
@@ -112,6 +125,7 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
         )
         record = {"ts": inc["ts"], "reason": reason, **desc, "relaunched_to": None}
         _LOST.append(record)
+        _DRIVER_LOST.add(1, attributes={"outcome": "surfaced", "kind": desc["kind"]})
         descriptors.append({**desc, "lost_record": record})
     for desc in descriptors:
         pool._evict_session_nowait(desc["instance_id"])
@@ -130,6 +144,7 @@ def on_driver_reset(pool: Any, *, reason: str | None) -> asyncio.Task[None] | No
         restart_count=pool._driver_restarts,
         reason=reason,
     )
+    _DRIVER_RESTART.add(1)
     descriptors = _snapshot_and_evict(pool, reason)
     mode = _mode()
     if not descriptors or mode == "off":
@@ -182,6 +197,7 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     if fresh is not None:
         fresh._auto_relaunched = True
     desc["lost_record"]["relaunched_to"] = final_id
+    _DRIVER_LOST.add(1, attributes={"outcome": "relaunched", "kind": desc["kind"]})
     incidents.record(
         incidents.CATEGORY_DRIVER_LOST,
         instance_id=old_id,

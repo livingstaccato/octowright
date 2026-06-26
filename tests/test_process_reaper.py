@@ -339,3 +339,37 @@ def test_list_processes_windows_skips_non_numeric_pid(monkeypatch: pytest.Monkey
     _powershell_csv(monkeypatch, csv_stdout)
     pids = {pid for pid, _ppid, _cmd in process_reaper._list_processes()}
     assert pids == {2000}
+
+
+def test_reap_meters_killed_orphans(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests._metric_recorders import RecordingCounter
+
+    rec = RecordingCounter()
+    monkeypatch.setattr(process_reaper, "_ORPHAN_REAPED", rec)
+    # find_browser_pids: [123] while present (initial + survivor checks), then []
+    # once "killed" — so killed == [123].
+    calls = {"n": 0}
+
+    def fake_find(_scope: str, *, root_pid: int | None = None) -> list[int]:
+        calls["n"] += 1
+        return [123] if calls["n"] <= 2 else []
+
+    monkeypatch.setattr(process_reaper, "find_browser_pids", fake_find)
+    monkeypatch.setattr(process_reaper, "_signal_pids", lambda _pids, _signum, _stage: [])
+    monkeypatch.setattr(process_reaper.time, "sleep", lambda _s: None)
+
+    summary = process_reaper.reap_orphan_browsers(scope="orphaned")
+    assert summary["killed"] == [123]
+    assert rec.total() == 1
+    assert rec.attrs_for("scope") == ["orphaned"]
+
+
+def test_reap_does_not_meter_when_nothing_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests._metric_recorders import RecordingCounter
+
+    rec = RecordingCounter()
+    monkeypatch.setattr(process_reaper, "_ORPHAN_REAPED", rec)
+    monkeypatch.setattr(process_reaper, "find_browser_pids", lambda _scope, *, root_pid=None: [])
+    summary = process_reaper.reap_orphan_browsers(scope="orphaned")
+    assert summary["killed"] == []
+    assert rec.total() == 0
