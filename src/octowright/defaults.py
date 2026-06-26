@@ -460,6 +460,18 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
+# Renderer-crash auto-recovery. A Playwright page.on("crash") leaves the browser
+# alive with a dead renderer; reloading the page heals it without losing the
+# session. ENABLED by default (set OCTOWRIGHT_CRASH_RECOVERY=off to disable).
+# MAX bounds consecutive auto-recoveries before giving up (so a page that crashes
+# on every reload doesn't loop); the counter resets after RESET_SECONDS of quiet,
+# so occasional crashes over a long session keep recovering.
+CRASH_RECOVERY_ENABLED: bool = _parse_bool_env("OCTOWRIGHT_CRASH_RECOVERY", True)
+CRASH_RECOVERY_MAX = int(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_MAX", "3"))
+CRASH_RECOVERY_RESET_SECONDS = float(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_RESET_SECONDS", "60"))
+CRASH_RECOVERY_RELOAD_TIMEOUT_MS = float(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_RELOAD_TIMEOUT_MS", "15000"))
+
+
 # HTTP RED metrics, recorded through provide.telemetry's TelemetryMiddleware
 # (http.requests/errors/duration → OTLP). On by default; flip to 0/false/no/off
 # to disable metric recording (auto_slo). Context propagation / log correlation
