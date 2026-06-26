@@ -43,6 +43,36 @@ from octowright.proxy_supervisor import (
 
 log = get_logger(__name__)
 
+# How long the follower keeps retrying a leader that's stopped answering before it
+# gives up and exits (so serve.py can respawn). A leader restart / respawn brings a
+# new leader up in ~1-2s; tolerating a window means `octowright restart` no longer
+# kills connected sessions — the bridge reconnects to the new leader (replaying
+# initialize) and the client's MCP session survives transparently. A leader gone
+# longer than this is treated as gone for good. Lives here (not defaults.py, at its
+# LOC ceiling), mirroring incidents/health. 0 = no grace (immediate exit, legacy).
+BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", "15"))
+
+
+def _within_recovery_window(leader_down_since: float | None, now: float, window: float) -> bool:
+    """True while a still-unreachable leader is inside its recovery window (keep
+    retrying the reconnect); False once it has elapsed (give up so the follower
+    exits). ``leader_down_since`` is when the leader was first seen unreachable in
+    the current gap; ``None`` means it has not been stamped yet (treat as inside)."""
+    if leader_down_since is None:
+        return True
+    return (now - leader_down_since) < window
+
+
+def _monitor_max_failures_for_window(base: int, interval: float, window: float) -> int:
+    """Consecutive-failure count the background health monitor must reach before
+    tearing the follower down, raised so its tolerance covers the inline reconnect
+    recovery window. Without this the monitor (a few failures at its interval) would
+    kill a follower the inline loop is still legitimately reconnecting through a
+    leader restart. ``interval<=0`` is a guard — fall back to ``base``."""
+    if interval <= 0:
+        return base
+    return max(base, math.ceil(window / interval))
+
 
 def resolve_leader_url(fallback_url: str) -> str:
     info = singleton.read_lock()
@@ -178,10 +208,41 @@ async def run_supervised_proxy(
 
             async def _remote_supervisor() -> None:
                 attempt = 0
+                # When the leader was first seen unreachable in the current gap
+                # (None = reachable). Drives the bounded recovery window so a
+                # restart/respawn is retried through instead of killing the follower.
+                leader_down_since: float | None = None
                 # Build the tracing httpx factory once; it's a closure with no
                 # per-connection state, so reusing it across reconnects avoids
                 # an allocation per attempt.
                 httpx_factory = tracing_httpx_client_factory()
+
+                async def _leader_recoverable() -> bool:
+                    """True → keep retrying the leader; False → give up so the
+                    follower exits and serve.py respawns. A leader unreachable
+                    longer than BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS is gone for
+                    good; a briefly-down one (restart) is retried so the client's
+                    session survives. health_url=None disables the watchdog."""
+                    nonlocal leader_down_since
+                    if health_url is None:
+                        return True
+                    if await leader_health_alive(health_url):
+                        leader_down_since = None
+                        return True
+                    now = anyio.current_time()
+                    if leader_down_since is None:
+                        leader_down_since = now
+                        log.warning(
+                            "octowright.bridge.leader_unreachable_retrying",
+                            recovery_window_s=BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS,
+                        )
+                    if _within_recovery_window(leader_down_since, now, BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS):
+                        return True
+                    log.warning(
+                        "octowright.bridge.leader_recovery_window_exhausted", waited_s=round(now - leader_down_since, 1)
+                    )
+                    return False
+
                 while True:
                     remote_url = resolve_leader_url(leader_mcp_url)
                     # Use async with (not manual __aenter__/__aexit__) so the
@@ -231,6 +292,8 @@ async def run_supervised_proxy(
                                 # reconnect (idempotent resume) on this fresh session.
                                 await supervisor_obj.resume_in_flight(remote_write)
                                 attempt = 0
+                                # Connected → the leader is back; clear the recovery clock.
+                                leader_down_since = None
                                 async with anyio.create_task_group() as remote_tg:
                                     remote_reset_slot.cancel_scope = remote_tg.cancel_scope
 
@@ -249,7 +312,7 @@ async def run_supervised_proxy(
                             raise TimeoutError(
                                 f"connection to {remote_url!r} timed out after {BRIDGE_CONNECT_TIMEOUT_SECONDS}s"
                             )
-                        if health_url is not None and not await leader_health_alive(health_url):
+                        if not await _leader_recoverable():
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
                             return
@@ -271,7 +334,7 @@ async def run_supervised_proxy(
                             reconnect_attempts=attempt,
                             request_timeouts=supervisor_obj.request_timeouts,
                         )
-                        if health_url is not None and not await leader_health_alive(health_url):
+                        if not await _leader_recoverable():
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
                             return
@@ -282,12 +345,18 @@ async def run_supervised_proxy(
             local_tg.start_soon(_remote_supervisor)
             local_tg.start_soon(supervisor_obj.watch_deadlines, 0.1, remote_reset_slot)
             if health_url is not None:
+                # Raise the background watchdog's tolerance to cover the inline
+                # reconnect recovery window, so it never tears down a follower the
+                # inline loop is still reconnecting through a leader restart.
+                monitor_max_failures = _monitor_max_failures_for_window(
+                    heartbeat_max_failures, heartbeat_interval, BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS
+                )
                 local_tg.start_soon(
                     monitor_leader_health,
                     local_tg.cancel_scope,
                     health_url,
                     heartbeat_interval,
-                    heartbeat_max_failures,
+                    monitor_max_failures,
                     _mark_leader_health_failed,
                 )
         if leader_health_failed:
