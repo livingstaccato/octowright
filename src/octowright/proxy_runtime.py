@@ -27,6 +27,7 @@ from provide.telemetry import get_logger
 
 from octowright import bridge_state, singleton
 from octowright._trace_propagation import tracing_httpx_client_factory
+from octowright._tracing import counter
 from octowright.defaults import (
     BRIDGE_CONNECT_TIMEOUT_SECONDS,
     BRIDGE_RECONNECT_MAX_SECONDS,
@@ -42,6 +43,16 @@ from octowright.proxy_supervisor import (
 )
 
 log = get_logger(__name__)
+
+# Outcome of a leader-down gap (noop unless telemetry is on): `recovered` = the
+# follower reconnected to a (restarted) leader within the window and kept the
+# session; `exhausted` = the leader stayed gone past the window so the follower
+# exited. A field-wide recovered:exhausted ratio shows how often `octowright
+# restart` is survived transparently vs. drops the client.
+_LEADER_RECOVERY = counter(
+    "octowright_bridge_leader_recovery_total",
+    description="Leader-down gaps by outcome (recovered|exhausted)",
+)
 
 # How long the follower keeps retrying a leader that's stopped answering before it
 # gives up and exits (so serve.py can respawn). A leader restart / respawn brings a
@@ -241,6 +252,7 @@ async def run_supervised_proxy(
                     log.warning(
                         "octowright.bridge.leader_recovery_window_exhausted", waited_s=round(now - leader_down_since, 1)
                     )
+                    _LEADER_RECOVERY.add(1, attributes={"outcome": "exhausted"})
                     return False
 
                 while True:
@@ -292,7 +304,11 @@ async def run_supervised_proxy(
                                 # reconnect (idempotent resume) on this fresh session.
                                 await supervisor_obj.resume_in_flight(remote_write)
                                 attempt = 0
-                                # Connected → the leader is back; clear the recovery clock.
+                                # Connected → the leader is back. If we were in a
+                                # down-gap, this reconnect just survived it (e.g. an
+                                # `octowright restart`) — meter the recovery.
+                                if leader_down_since is not None:
+                                    _LEADER_RECOVERY.add(1, attributes={"outcome": "recovered"})
                                 leader_down_since = None
                                 async with anyio.create_task_group() as remote_tg:
                                     remote_reset_slot.cancel_scope = remote_tg.cancel_scope

@@ -34,6 +34,18 @@ import os
 import stat as _stat
 from typing import Any
 
+from octowright._tracing import histogram
+
+# Leader + managed-browser resident memory, sampled each housekeeping cycle (noop
+# unless telemetry is on). This is the continuous, multi-day RSS signal that the
+# synthetic leak harness can only approximate — graph max(scope=total) over days
+# to catch a real leak that no CI run is long enough to see. scope=leader|browsers|total.
+_PROCESS_RSS = histogram(
+    "octowright_process_rss_bytes",
+    description="Resident memory of the leader + its browser processes (scope=leader|browsers|total)",
+    unit="By",
+)
+
 
 def reap_orphan_browsers_at_boot(*, log: Any) -> None:
     """Kill browsers orphaned by a previous (dead) leader generation.
@@ -93,6 +105,10 @@ async def daemon_housekeeping(*, interval_seconds: float, log: Any) -> None:
             _guard_daemon_log_size(log=log)
         except Exception as exc:
             log.warning("octowright.housekeeping.log_guard_failed", error=repr(exc))
+        try:
+            _sample_process_rss()
+        except Exception as exc:
+            log.warning("octowright.housekeeping.rss_sample_failed", error=repr(exc))
 
 
 def _reap_orphans_once(*, log: Any) -> None:
@@ -107,6 +123,23 @@ def _reap_orphans_once(*, log: Any) -> None:
             pids=killed,
             still_alive=summary["still_alive"] or None,
         )
+
+
+def _sample_process_rss() -> None:
+    """Record the leader's and its browsers' RSS as a histogram sample.
+
+    Browsers are the leader's descendants (this PID is the leader when the
+    housekeeping loop runs), so a concurrent daemon's browsers aren't counted.
+    The reads are best-effort (``ps``); a failure is swallowed by the caller."""
+    from octowright import sysresources
+    from octowright.process_reaper import find_browser_pids
+
+    leader = sysresources.process_rss_bytes([os.getpid()])
+    browser_pids = find_browser_pids("descendants", root_pid=os.getpid())
+    browsers = sysresources.process_rss_bytes(browser_pids)
+    _PROCESS_RSS.record(leader, attributes={"scope": "leader"})
+    _PROCESS_RSS.record(browsers, attributes={"scope": "browsers"})
+    _PROCESS_RSS.record(leader + browsers, attributes={"scope": "total"})
 
 
 def _guard_daemon_log_size(*, log: Any) -> None:

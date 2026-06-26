@@ -64,6 +64,19 @@ def test_enforce_cap_over_limit_raises(monkeypatch: pytest.MonkeyPatch, fake_poo
         _lifecycle._enforce_browser_cap(adding=1)
 
 
+def test_cap_refusal_is_metered(monkeypatch: pytest.MonkeyPatch, fake_pool: MagicMock) -> None:
+    from tests._metric_recorders import RecordingCounter
+
+    refused = RecordingCounter()
+    monkeypatch.setattr(_lifecycle, "_LAUNCH_REFUSED", refused)
+    _set_cap(monkeypatch, 2)
+    fake_pool.active_count.return_value = 2
+    with pytest.raises(BrowserCapExceededError):
+        _lifecycle._enforce_browser_cap(adding=1)
+    assert refused.total() == 1
+    assert refused.attrs_for("reason") == ["cap"]
+
+
 @pytest.mark.anyio
 async def test_browser_launch_refuses_at_cap(monkeypatch: pytest.MonkeyPatch, fake_pool: MagicMock) -> None:
     _set_cap(monkeypatch, 2)
