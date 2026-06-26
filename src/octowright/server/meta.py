@@ -279,6 +279,10 @@ def octowright_status() -> dict[str, Any]:
             # null when disabled (OCTOWRIGHT_MAX_BROWSERS=off). When live_browsers
             # nears browser_cap, user-facing launches will start refusing.
             "browser_cap": defaults.MAX_BROWSERS,
+            # Times the shared Playwright driver died and was rebuilt mid-run. A
+            # non-zero, climbing value means the driver (and thus every browser at
+            # once) is unstable — the deepest mass-failure signal.
+            "driver_restarts": pool.driver_restart_count(),
             "live_scenarios": len(scenario_pool.list_live()),
             "stale_manifest_sessions": stale_preview,
             "stale_manifest_count": stale_count,
