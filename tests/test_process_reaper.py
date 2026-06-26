@@ -89,6 +89,64 @@ def test_find_browser_pids_descendants_requires_root_pid() -> None:
         process_reaper.find_browser_pids("descendants")
 
 
+def test_is_orphaned_browser_logic() -> None:
+    live = frozenset({1, 100, 200})
+    # init / kernel reparent targets and a vanished parent are all orphans.
+    assert process_reaper._is_orphaned_browser(1, live) is True
+    assert process_reaper._is_orphaned_browser(0, live) is True
+    assert process_reaper._is_orphaned_browser(999, live) is True
+    # A browser whose driver (100) is still alive is NOT an orphan.
+    assert process_reaper._is_orphaned_browser(100, live) is False
+
+
+def test_find_browser_pids_orphaned_flags_only_dead_driver_browsers(fake_ps: list[str]) -> None:
+    # 4000 live daemon -> 4001 live driver -> 4002 healthy browser (NOT orphan).
+    # 2000 reparented to init (ppid 1) and 2001 whose parent 9999 is gone ARE orphans.
+    fake_ps.append(
+        "4000 1 python octowright serve\n"
+        "4001 4000 node playwright driver\n"
+        "4002 4001 ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome\n"
+        "2000 1 ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome\n"
+        "2001 9999 ms-playwright/firefox-1234/firefox\n"
+    )
+    pids = process_reaper.find_browser_pids("orphaned")
+    assert set(pids) == {2000, 2001}
+
+
+def test_find_browser_pids_orphaned_empty_when_driver_alive(fake_ps: list[str]) -> None:
+    fake_ps.append(
+        "4000 1 python octowright serve\n"
+        "4001 4000 node playwright driver\n"
+        "4002 4001 ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome\n"
+    )
+    assert process_reaper.find_browser_pids("orphaned") == []
+
+
+def test_reap_orphan_browsers_orphaned_scope_reaps_reparented(
+    fake_ps: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A live daemon's browser (4002) sits beside an orphan (2000, ppid 1).
+    healthy_tree = (
+        "4000 1 python octowright serve\n"
+        "4001 4000 node playwright driver\n"
+        "4002 4001 ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome\n"
+    )
+    orphan = "2000 1 ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome\n"
+    fake_ps.append(healthy_tree + orphan)  # initial scan
+    fake_ps.append(healthy_tree)  # after SIGTERM grace: orphan gone
+    fake_ps.append(healthy_tree)  # final scan
+
+    sent: list[int] = []
+    monkeypatch.setattr(process_reaper.os, "kill", lambda pid, _signum: sent.append(pid))
+    monkeypatch.setattr(process_reaper.time, "sleep", lambda _s: None)
+
+    out = process_reaper.reap_orphan_browsers("orphaned", grace_seconds=0.0)
+    # Only the orphan was signalled; the live daemon's browser was left alone.
+    assert set(sent) == {2000}
+    assert out["killed"] == [2000]
+
+
 def test_reap_orphan_browsers_dry_run_does_not_kill(
     fake_ps: list[str],
     monkeypatch: pytest.MonkeyPatch,
