@@ -14,6 +14,7 @@ stats surfaced in octowright_status.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
@@ -28,6 +29,7 @@ def _session(*, recoveries: int = 0, last_crash: float = 0.0) -> SimpleNamespace
     dead_page.close = AsyncMock()
     fresh_page = MagicMock(name="fresh_page")
     fresh_page.goto = AsyncMock()
+    fresh_page.screenshot = AsyncMock()
     context = MagicMock()
     context.new_page = AsyncMock(return_value=fresh_page)
     return SimpleNamespace(
@@ -35,7 +37,7 @@ def _session(*, recoveries: int = 0, last_crash: float = 0.0) -> SimpleNamespace
         kind="chromium",
         label=None,
         profile=None,
-        log_path="/tmp/x.jsonl",
+        log_path=Path("/tmp/x.jsonl"),
         url="https://example.com",
         _crashed=True,
         _crash_recoveries=recoveries,
@@ -112,12 +114,23 @@ async def test_recover_replaces_dead_page_and_records_incident() -> None:
     assert s.pages == [fresh]
     dead.close.assert_awaited_once()
     s.recorder.record.assert_called_once()
-    # An incident record with outcome="recovered" is now visible in status.
+    # An incident record with outcome="recovered" is now visible in status,
+    # including a postmortem screenshot path (H5a).
     inc = incidents.recent(category="renderer_crash")
     assert len(inc) == 1
     assert inc[0]["outcome"] == "recovered"
     assert inc[0]["instance_id"] == "abc123"
     assert inc[0]["url"] == "https://example.com"
+    fresh.screenshot.assert_awaited_once()
+    assert inc[0]["screenshot"] == "/tmp/x.recovery-1.png"
+
+
+async def test_recovery_screenshot_failure_does_not_break_recovery() -> None:
+    s = _session()
+    s.context.new_page.return_value.screenshot = AsyncMock(side_effect=RuntimeError("screenshot dead"))
+    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    assert ok is True  # screenshot is best-effort; recovery still succeeds
+    assert incidents.recent(category="renderer_crash")[0]["screenshot"] is None
 
 
 async def test_recover_succeeds_even_if_recorder_marker_fails() -> None:

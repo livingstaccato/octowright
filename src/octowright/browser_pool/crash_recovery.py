@@ -148,7 +148,9 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float, url: str) 
     _STATS["recoveries"] += 1
     _RECOVERED.add(1, attributes={"kind": session.kind})
     log.info("octowright.crash.recovered", instance_id=iid, attempt=session._crash_recoveries)
-    _record_incident(session, url, "recovered")
+    # H5a: snapshot the recovered page so a postmortem has a frame, not just a marker.
+    screenshot = await _capture_recovery_screenshot(session)
+    _record_incident(session, url, "recovered", screenshot=screenshot)
     try:
         session.recorder.record("page_recovered", attempt=session._crash_recoveries)
     except Exception as exc:
@@ -156,7 +158,20 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float, url: str) 
     return True
 
 
-def _record_incident(session: Any, url: str, outcome: str) -> None:
+async def _capture_recovery_screenshot(session: Any) -> str | None:
+    """Best-effort screenshot of the recovered page for postmortem. Writes next to
+    the session recording (already under RECORDINGS_DIR, so disk-write containment
+    holds). Returns the path or None; never raises."""
+    try:
+        path = session.log_path.with_suffix(f".recovery-{session._crash_recoveries}.png")
+        await session.page.screenshot(path=str(path))
+        return str(path)
+    except Exception as exc:
+        log.debug("octowright.crash.recovery_screenshot_failed", instance_id=session.instance_id, error=repr(exc))
+        return None
+
+
+def _record_incident(session: Any, url: str, outcome: str, *, screenshot: str | None = None) -> None:
     incidents.record(
         incidents.CATEGORY_RENDERER_CRASH,
         instance_id=session.instance_id,
@@ -164,6 +179,7 @@ def _record_incident(session: Any, url: str, outcome: str) -> None:
         url=url,
         outcome=outcome,
         attempts=session._crash_recoveries,
+        screenshot=screenshot,
     )
 
 
