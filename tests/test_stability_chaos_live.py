@@ -22,6 +22,8 @@ import contextlib
 
 import pytest
 
+from tests._pool_invariants import assert_pool_consistent
+
 pytestmark = pytest.mark.live_browser
 
 _NO_ENGINE = (
@@ -90,6 +92,10 @@ async def test_real_renderer_crash_recovers_and_stays_usable(monkeypatch: pytest
         # And an incident record articulates what happened.
         inc = _incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH)
         assert inc and inc[-1]["outcome"] == "recovered"
+        # The pool is internally consistent after recovery: the replaced page is
+        # the session's active page and a member of its page list, counts agree,
+        # the eviction/incident rings are bounded.
+        assert_pool_consistent(pool)
     finally:
         with contextlib.suppress(Exception):
             await pool.shutdown()
@@ -121,6 +127,11 @@ async def test_dead_driver_self_heals_on_next_launch(monkeypatch: pytest.MonkeyP
         second = await _launch(pool, url="about:blank", label="chaos-driver-2")
         assert second["instance_id"]
         assert pool.driver_restart_count() == 1, "driver should have been rebuilt exactly once"
+        # After the driver self-heals: the session lost with the dead driver was
+        # evicted (not a zombie in the registry) and only the fresh one is live,
+        # with the pool's consistency invariants intact.
+        assert_pool_consistent(pool)
+        assert pool.active_count() == 1
     finally:
         with contextlib.suppress(Exception):
             await pool.shutdown()
