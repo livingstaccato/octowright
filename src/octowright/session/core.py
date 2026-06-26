@@ -110,8 +110,14 @@ class BrowserSession(
     _on_page_crash: Callable[..., None] | None = field(default=None, repr=False)
     _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
     # Set True by the page.on("crash") listener; lets eviction report a definite
-    # crash (reason="crashed") instead of an ambiguous external close.
+    # crash (reason="crashed") instead of an ambiguous external close. Cleared
+    # again when crash_recovery successfully reloads the page.
     _crashed: bool = field(default=False, repr=False)
+    # Auto-recovery bookkeeping (browser_pool.crash_recovery): count of reload
+    # attempts and the monotonic time of the last crash, used to bound recovery
+    # and detect crash loops vs occasional crashes.
+    _crash_recoveries: int = field(default=0, repr=False)
+    _last_crash_monotonic: float = field(default=0.0, repr=False)
     console_count: int = 0
     download_count: int = 0
     page_count: int = 1

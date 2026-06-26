@@ -199,6 +199,7 @@ def octowright_status() -> dict[str, Any]:
     from octowright import personas as _personas
     from octowright import session_manifest as _session_manifest
     from octowright import singleton as _singleton
+    from octowright.browser_pool import crash_recovery as _crash_recovery
     from octowright.macros import execution as _macro_execution
     from octowright.server.profiles import PROFILES, active_filter
 
@@ -282,6 +283,15 @@ def octowright_status() -> dict[str, Any]:
             "stale_manifest_sessions": stale_preview,
             "stale_manifest_count": stale_count,
             "stale_manifest_list_truncated": stale_count > len(stale_preview),
+        },
+        # Renderer-crash + auto-recovery tallies (process-lifetime). Lets the
+        # operator/LLM see that "random crashes" are happening and whether they
+        # self-healed, instead of guessing. recovery_failures climbing means the
+        # reload isn't sticking (likely the browser process itself died).
+        "crash": {
+            "recovery_enabled": defaults.CRASH_RECOVERY_ENABLED,
+            "recovery_max": defaults.CRASH_RECOVERY_MAX,
+            **_crash_recovery.recovery_stats(),
         },
         "personas": {
             "count": len(persona_names),
