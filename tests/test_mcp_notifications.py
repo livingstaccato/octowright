@@ -103,8 +103,63 @@ def test_build_notification_for_crash_event() -> None:
     params = root.params or {}
     assert params["instance_id"] == "c1"
     assert params["scope"] == "renderer"
-    assert "hint" in params  # actionable: reload / relaunch
+    assert "hint" in params  # actionable
     assert "reason" not in params  # crash event is not a close event
+
+
+def test_crash_notification_hint_reflects_auto_recovery() -> None:
+    """The hint must tell the LLM auto-recovery is in progress (not the stale
+    'relaunch now'), with recovering surfaced so it can wait for the outcome."""
+    from octowright.browser_pool.events import SessionCrashedEvent
+
+    recovering = _build_notification(
+        SessionCrashedEvent("c1", "chromium", "p", None, "renderer", "/tmp/c1.jsonl", recovering=True)
+    ).message.root.params
+    assert recovering["recovering"] is True
+    assert "recover" in recovering["hint"].lower() and "no action" in recovering["hint"].lower()
+
+    off = _build_notification(
+        SessionCrashedEvent("c2", "chromium", "p", None, "renderer", "/tmp/c2.jsonl", recovering=False)
+    ).message.root.params
+    assert off["recovering"] is False
+    assert "relaunch" in off["hint"].lower()  # recovery off → relaunch IS needed
+
+
+def test_recovered_notification_per_outcome() -> None:
+    """A SessionRecoveredEvent becomes a browser_recovered notification whose hint
+    is accurate per outcome (usable / relaunch)."""
+    from octowright.browser_pool.events import SessionRecoveredEvent
+
+    def notif(outcome: str) -> dict:
+        ev = SessionRecoveredEvent("r1", "chromium", "p", None, outcome, 1, "/tmp/r1.jsonl")  # type: ignore[arg-type]
+        root = _build_notification(ev).message.root
+        assert root.method == "notifications/octowright/browser_recovered"
+        return root.params
+
+    recovered = notif("recovered")
+    assert recovered["outcome"] == "recovered" and "usable" in recovered["hint"].lower()
+    assert "no relaunch" in recovered["hint"].lower() or "no action" in recovered["hint"].lower()
+    assert "relaunch" in notif("failed")["hint"].lower()
+    assert "relaunch" in notif("exhausted")["hint"].lower()
+
+
+def test_driver_died_notification_per_mode() -> None:
+    """A DriverDiedEvent becomes a driver_died notification; the hint differs by
+    whether auto-reopen is on."""
+    from octowright.browser_pool.events import DriverDiedEvent
+
+    off = _build_notification(
+        DriverDiedEvent(restart_count=1, relaunch_mode="off", lost_count=2, lost_instance_ids=("a", "b"))
+    ).message.root
+    assert off.method == "notifications/octowright/driver_died"
+    assert off.params["lost_count"] == 2
+    assert off.params["lost_instance_ids"] == ["a", "b"]
+    assert "relaunch" in off.params["hint"].lower()  # off → you must relaunch
+
+    on = _build_notification(
+        DriverDiedEvent(restart_count=2, relaunch_mode="new-id", lost_count=1, lost_instance_ids=("a",))
+    ).message.root
+    assert "reopen" in on.params["hint"].lower()  # auto-reopen in progress
 
 
 # ─── run_with_notifications integration ──────────────────────────────────────

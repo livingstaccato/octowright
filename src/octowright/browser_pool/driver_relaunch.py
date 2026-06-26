@@ -28,6 +28,7 @@ unbounded relaunch storm.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections import deque
 from typing import Any
@@ -147,9 +148,27 @@ def on_driver_reset(pool: Any, *, reason: str | None) -> asyncio.Task[None] | No
     _DRIVER_RESTART.add(1)
     descriptors = _snapshot_and_evict(pool, reason)
     mode = _mode()
+    if descriptors:
+        _publish_driver_died(pool, descriptors, mode)
     if not descriptors or mode == "off":
         return None
     return _schedule_relaunch(pool, descriptors, mode)
+
+
+def _publish_driver_died(pool: Any, descriptors: list[dict[str, Any]], mode: str) -> None:
+    """Proactively tell the MCP client the shared driver died and which sessions
+    were lost (and whether they're being auto-reopened). Best-effort; never raises."""
+    from octowright.browser_pool.session_event_bus import DriverDiedEvent, session_event_bus
+
+    with contextlib.suppress(Exception):
+        session_event_bus.publish_nowait(
+            DriverDiedEvent(
+                restart_count=pool._driver_restarts,
+                relaunch_mode=mode,
+                lost_count=len(descriptors),
+                lost_instance_ids=tuple(d["instance_id"] for d in descriptors),
+            )
+        )
 
 
 def _schedule_relaunch(pool: Any, descriptors: list[dict[str, Any]], mode: str) -> asyncio.Task[None] | None:

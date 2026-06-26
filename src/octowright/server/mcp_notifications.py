@@ -13,8 +13,14 @@ Notification methods:
   * ``notifications/octowright/session_closed`` — a session left the pool.
   * ``notifications/octowright/browser_crashed`` — a crash was observed
     (``page.on("crash")``); the session may still be alive. Params carry
-    ``scope`` ("renderer"/"process") and an actionable ``hint`` instead of a
-    close ``reason``.
+    ``scope`` ("renderer"/"process"), ``recovering`` (whether auto-recovery was
+    scheduled), and an actionable ``hint`` instead of a close ``reason``.
+  * ``notifications/octowright/browser_recovered`` — a renderer-crash recovery
+    resolved; ``outcome`` is recovered|failed|exhausted (the accurate follow-up
+    to a ``browser_crashed`` with ``recovering=true``).
+  * ``notifications/octowright/driver_died`` — the shared driver died and these
+    sessions were lost (``lost_instance_ids``); ``relaunch_mode`` says whether
+    they're being auto-reopened.
 
 session_closed params shape::
 
@@ -54,10 +60,20 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification
 from provide.telemetry import get_logger
 
 from octowright.browser_pool.session_event_bus import (
+    DriverDiedEvent,
     SessionCrashedEvent,
     SessionEvent,
+    SessionRecoveredEvent,
     session_event_bus,
 )
+
+# Per-outcome guidance for a browser_recovered notification, so the LLM knows
+# whether the crash self-healed (keep going) or it must relaunch.
+_RECOVERY_HINTS = {
+    "recovered": "the crashed page was auto-recovered (a fresh page in the same browser) — it's usable again, no relaunch needed",
+    "failed": "auto-recovery failed (the browser process likely died) — relaunch it with browser_launch",
+    "exhausted": "the page keeps crashing past the recovery cap — relaunch with browser_launch; the page/site may be unstable",
+}
 
 log = get_logger(__name__)
 
@@ -74,7 +90,57 @@ def _build_notification(event: SessionEvent) -> SessionMessage:
     ``session_closed``; a ``SessionCrashedEvent`` (a crash was observed, session
     may still be alive) becomes ``browser_crashed`` with an actionable hint.
     """
+    if isinstance(event, DriverDiedEvent):
+        if event.relaunch_mode == "off":
+            driver_hint = (
+                f"the shared browser driver died — {event.lost_count} session(s) were lost. Auto-reopen is "
+                "off; relaunch the browsers you need with browser_launch (see octowright_status().pool.lost_sessions)"
+            )
+        else:
+            driver_hint = (
+                f"the shared browser driver died — {event.lost_count} session(s) were lost and Octowright is "
+                f"auto-reopening them ({event.relaunch_mode}); see octowright_status().pool.lost_sessions for the "
+                "old→new instance_id mapping"
+            )
+        died = JSONRPCNotification(
+            jsonrpc="2.0",
+            method="notifications/octowright/driver_died",
+            params={
+                "restart_count": event.restart_count,
+                "relaunch_mode": event.relaunch_mode,
+                "lost_count": event.lost_count,
+                "lost_instance_ids": list(event.lost_instance_ids),
+                "hint": driver_hint,
+            },
+        )
+        return SessionMessage(JSONRPCMessage(root=died))
+    if isinstance(event, SessionRecoveredEvent):
+        recovered = JSONRPCNotification(
+            jsonrpc="2.0",
+            method="notifications/octowright/browser_recovered",
+            params={
+                "instance_id": event.instance_id,
+                "kind": event.kind,
+                "label": event.label,
+                "profile": event.profile,
+                "outcome": event.outcome,
+                "attempts": event.attempts,
+                "log_path": event.log_path,
+                "hint": _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved"),
+            },
+        )
+        return SessionMessage(JSONRPCMessage(root=recovered))
     if isinstance(event, SessionCrashedEvent):
+        # Accurate to the auto-recovery behavior: when recovery is scheduled the
+        # client should WAIT for the browser_recovered outcome, not relaunch a
+        # browser that's already healing itself.
+        hint = (
+            "the page crashed — Octowright is auto-recovering it (replacing the page); "
+            "no action needed, wait for a browser_recovered notification (outcome=recovered "
+            "means usable again; failed/exhausted means relaunch)"
+            if event.recovering
+            else "the page crashed and auto-recovery is off/exhausted — relaunch the browser with browser_launch"
+        )
         crash = JSONRPCNotification(
             jsonrpc="2.0",
             method="notifications/octowright/browser_crashed",
@@ -84,8 +150,9 @@ def _build_notification(event: SessionEvent) -> SessionMessage:
                 "label": event.label,
                 "profile": event.profile,
                 "scope": event.scope,
+                "recovering": event.recovering,
                 "log_path": event.log_path,
-                "hint": "the browser page crashed — reload it, or relaunch the browser with browser_launch",
+                "hint": hint,
             },
         )
         return SessionMessage(JSONRPCMessage(root=crash))
@@ -104,10 +171,23 @@ def _build_notification(event: SessionEvent) -> SessionMessage:
     return SessionMessage(JSONRPCMessage(root=notification))
 
 
+def _event_id(event: SessionEvent) -> str:
+    """An identifier for debug logs across all event types (DriverDiedEvent has no
+    single instance_id — it carries the set of lost ids)."""
+    if isinstance(event, DriverDiedEvent):
+        return f"driver(lost={event.lost_count})"
+    return event.instance_id
+
+
 def _event_detail(event: SessionEvent) -> str:
-    """Short type-agnostic descriptor for debug logs (closed reason / crash scope)."""
+    """Short type-agnostic descriptor for debug logs (closed reason / crash scope /
+    recovery outcome / driver death)."""
     if isinstance(event, SessionCrashedEvent):
         return f"crashed:{event.scope}"
+    if isinstance(event, SessionRecoveredEvent):
+        return f"recovered:{event.outcome}"
+    if isinstance(event, DriverDiedEvent):
+        return f"driver_died:restart={event.restart_count}"
     return event.reason
 
 
@@ -128,7 +208,7 @@ async def _emit_loop() -> None:
                 # connect.
                 log.debug(
                     "octowright.mcp_notifications.no_session",
-                    instance_id=event.instance_id,
+                    instance_id=_event_id(event),
                     detail=_event_detail(event),
                 )
                 continue
@@ -136,7 +216,7 @@ async def _emit_loop() -> None:
                 await write.send(_build_notification(event))
                 log.debug(
                     "octowright.mcp_notifications.sent",
-                    instance_id=event.instance_id,
+                    instance_id=_event_id(event),
                     detail=_event_detail(event),
                 )
             except Exception as exc:
@@ -145,7 +225,7 @@ async def _emit_loop() -> None:
                 # debug so a closed client doesn't spam the daemon log.
                 log.debug(
                     "octowright.mcp_notifications.send_failed",
-                    instance_id=event.instance_id,
+                    instance_id=_event_id(event),
                     detail=_event_detail(event),
                     error=repr(exc),
                 )
