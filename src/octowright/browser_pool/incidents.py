@@ -24,6 +24,9 @@ from typing import Any
 # different modules don't need a shared import beyond this one.
 CATEGORY_RENDERER_CRASH = "renderer_crash"
 CATEGORY_DRIVER_RESTART = "driver_restart"
+# A browser session lost when the shared driver died (H4a). Recorded with
+# outcome="relaunched" + new_instance_id when auto-relaunch reopens it.
+CATEGORY_DRIVER_LOST = "driver_lost"
 
 _RING_SIZE = int(os.environ.get("OCTOWRIGHT_INCIDENT_RING_SIZE", "25"))
 _RING: deque[dict[str, Any]] = deque(maxlen=_RING_SIZE)

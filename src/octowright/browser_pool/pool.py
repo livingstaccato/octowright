@@ -17,7 +17,7 @@ from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
 from octowright._tracing import set_attrs, span
-from octowright.browser_pool import driver_health, incidents
+from octowright.browser_pool import driver_health, driver_relaunch
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
@@ -91,17 +91,15 @@ class BrowserPool:
 
         Called when a driver-death error is seen (see ``driver_health``). Best-
         effort ``stop()`` of the dead handle, then clear it under the lock so a
-        concurrent ``_ensure_pw`` starts a fresh driver. Records an incident so
-        the restart (and its trigger) is visible in status, not just counted."""
+        concurrent ``_ensure_pw`` starts a fresh driver. Hands off to
+        ``driver_relaunch.on_driver_reset`` which records the restart incident,
+        captures/evicts the sessions lost with the dead driver (surfaced in
+        status), and — when OCTOWRIGHT_DRIVER_RELAUNCH is set — reopens them."""
         async with self._pw_lock:
             old = self._pw
             self._pw = None
         self._driver_restarts += 1
-        incidents.record(
-            incidents.CATEGORY_DRIVER_RESTART,
-            restart_count=self._driver_restarts,
-            reason=reason,
-        )
+        driver_relaunch.on_driver_reset(self, reason=reason)
         if old is not None:
             try:
                 await old.stop()

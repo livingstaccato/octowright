@@ -13,7 +13,12 @@ from typing import Any
 from octowright import _format as fmt
 from octowright import defaults as _defaults
 from octowright import resolve as resolve_mod
-from octowright.browser_pool.errors import BrowserCapExceededError, ProtectedBrowserCloseError
+from octowright import sysresources as _sysresources
+from octowright.browser_pool.errors import (
+    BrowserCapExceededError,
+    MemoryPressureError,
+    ProtectedBrowserCloseError,
+)
 from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import (
@@ -49,8 +54,32 @@ def _enforce_browser_cap(*, adding: int) -> None:
         )
 
 
+def _enforce_memory_floor(*, adding: int) -> None:
+    """Refuse a user-facing launch while available memory is below
+    OCTOWRIGHT_MIN_FREE_MEMORY_MB. Off (None floor) → no-op, and no memory read
+    at all (the read is only paid when the guard is configured). An unreadable
+    available value (None) never refuses — "unknown" must not wedge launches.
+    Same gating surface as the browser cap: ad-hoc launch tools only.
+    """
+    floor = _sysresources.MIN_FREE_MEMORY_BYTES
+    if floor is None:
+        return
+    available = _sysresources.available_memory_bytes()
+    if available is None:
+        return
+    if available < floor:
+        mb = 1024 * 1024
+        raise MemoryPressureError(
+            f"refusing to launch {adding} browser(s): available memory "
+            f"{available // mb}MB is below the OCTOWRIGHT_MIN_FREE_MEMORY_MB floor "
+            f"({floor // mb}MB). Close browsers (browser_close / browser_close_all) or "
+            f"free memory; set OCTOWRIGHT_MIN_FREE_MEMORY_MB=off to disable this guard."
+        )
+
+
 async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
     _enforce_browser_cap(adding=1)
+    _enforce_memory_floor(adding=1)
     timeout = BROWSER_LAUNCH_TIMEOUT_SECONDS
     try:
         return await asyncio.wait_for(pool.launch(**kwargs), timeout=timeout)
@@ -512,4 +541,5 @@ async def browser_open_url(
 )
 async def browser_spawn_roster(specs: list[dict[str, Any]]) -> dict[str, Any]:
     _enforce_browser_cap(adding=len(specs))
+    _enforce_memory_floor(adding=len(specs))
     return await pool.spawn_roster(specs)
