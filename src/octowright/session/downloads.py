@@ -6,28 +6,53 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
+
+# Restrict an on-disk download name to a single safe basename component.
+_UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _safe_download_name(suggested: str | None) -> str:
+    """Reduce a remote-controlled ``suggested_filename`` to one safe basename.
+
+    The value comes from the visited page's Content-Disposition, so it is fully
+    attacker-controlled. ``Path(...).name`` drops any directory components
+    (including ``../``), then the charset filter strips anything that could
+    re-introduce a separator or NUL. Falls back to ``download`` when nothing
+    usable remains (e.g. a bare ``..``). This is what keeps Playwright's
+    ``save_as`` — which ``os.makedirs`` the target's parent and would otherwise
+    materialise a ``NNN-..`` traversal — from writing outside the session dir.
+    """
+    base = Path(suggested or "").name
+    safe = _UNSAFE_NAME_RE.sub("-", base).strip("-.")
+    return safe or "download"
+
+
 async def save_download(session: BrowserSession, download: Any) -> dict[str, Any]:
     """Save a Playwright Download to disk under RECORDINGS_DIR/downloads/<instance_id>/.
     Appends the record to session.downloads and signals any pending waiters.
     Records download_save_error on failure."""
+    from octowright._paths import reject_unsafe_path
     from octowright.defaults import RECORDINGS_DIR
 
     target_dir = RECORDINGS_DIR / "downloads" / session.instance_id
     target_dir.mkdir(parents=True, exist_ok=True)
     suggested = download.suggested_filename
-    target = target_dir / f"{len(session.downloads):03d}-{suggested}"
+    target = target_dir / f"{len(session.downloads):03d}-{_safe_download_name(suggested)}"
     try:
+        # Belt-and-suspenders: the sanitized basename has no separators, but run
+        # the containment helper so the write provably stays under RECORDINGS_DIR.
+        reject_unsafe_path(target, RECORDINGS_DIR, label="download path")
         await download.save_as(str(target))
         record = {
             "url": download.url,
