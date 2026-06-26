@@ -26,6 +26,7 @@ that ``octowright_status`` surfaces, since OTel counters aren't readable back.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import Any
 
@@ -33,8 +34,28 @@ from provide.telemetry import get_logger
 
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
+from octowright.browser_pool.events import RecoveryOutcome
 
 log = get_logger(__name__)
+
+
+def _publish_recovered(session: Any, outcome: RecoveryOutcome) -> None:
+    """Publish the accurate recovery outcome so the MCP client learns whether the
+    crash self-healed (keep going) or it must relaunch. Best-effort; never raises."""
+    from octowright.browser_pool.session_event_bus import SessionRecoveredEvent, session_event_bus
+
+    with contextlib.suppress(Exception):
+        session_event_bus.publish_nowait(
+            SessionRecoveredEvent(
+                instance_id=session.instance_id,
+                kind=session.kind,
+                label=session.label,
+                profile=session.profile,
+                outcome=outcome,
+                attempts=session._crash_recoveries,
+                log_path=str(session.log_path),
+            )
+        )
 
 
 def _safe_url(page: Any, session: Any) -> str:
@@ -114,6 +135,7 @@ def schedule_recovery(session: Any, page: Any) -> Any | None:
             outcome="exhausted",
             attempts=session._crash_recoveries,
         )
+        _publish_recovered(session, "exhausted")
         return None
     try:
         loop = asyncio.get_running_loop()
@@ -143,10 +165,12 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float, url: str) 
             error=repr(exc),
         )
         _record_incident(session, url, "failed")
+        _publish_recovered(session, "failed")
         return False
     session._crashed = False
     _STATS["recoveries"] += 1
     _RECOVERED.add(1, attributes={"kind": session.kind})
+    _publish_recovered(session, "recovered")
     log.info("octowright.crash.recovered", instance_id=iid, attempt=session._crash_recoveries)
     # H5a: snapshot the recovered page so a postmortem has a frame, not just a marker.
     screenshot = await _capture_recovery_screenshot(session)

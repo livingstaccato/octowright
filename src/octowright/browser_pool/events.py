@@ -74,9 +74,61 @@ class SessionCrashedEvent:
     profile: str | None
     scope: CrashScope
     log_path: str
+    # True when Octowright scheduled auto-recovery for this crash (it will replace
+    # the dead page). Lets the client say "auto-recovering, hold" instead of the
+    # stale "relaunch it now" — the authoritative outcome arrives as a
+    # SessionRecoveredEvent. False when recovery is off/exhausted (relaunch IS needed).
+    recovering: bool = False
+
+
+# How a renderer-crash auto-recovery resolved.
+RecoveryOutcome = Literal["recovered", "failed", "exhausted"]
+
+
+@dataclass(slots=True, frozen=True)
+class SessionRecoveredEvent:
+    """Published when a renderer-crash auto-recovery resolves — the accurate
+    follow-up to a ``SessionCrashedEvent(recovering=True)``.
+
+    ``outcome``: ``recovered`` (a fresh page replaced the dead one in the same
+    browser — usable again, no relaunch needed), ``failed`` (replacement failed,
+    the browser process likely died — relaunch), or ``exhausted`` (the page keeps
+    crashing past the recovery cap — relaunch / the page is unstable)."""
+
+    instance_id: str
+    kind: str
+    label: str | None
+    profile: str | None
+    outcome: RecoveryOutcome
+    attempts: int
+    log_path: str
+
+
+@dataclass(slots=True, frozen=True)
+class DriverDiedEvent:
+    """Published when the shared Playwright driver dies and self-heals — every
+    browser that rode it is gone at once. A proactive signal so the MCP client
+    learns its sessions were lost immediately (and whether they're being
+    auto-reopened), rather than only when its next tool call fails or it polls
+    ``octowright_status``. The old→new id mapping lives in
+    ``octowright_status().pool.lost_sessions``."""
+
+    restart_count: int
+    relaunch_mode: str  # off | new-id | keep-id
+    lost_count: int
+    lost_instance_ids: tuple[str, ...]
 
 
 # Anything the session event bus may carry.
-SessionEvent = SessionClosedEvent | SessionCrashedEvent
+SessionEvent = SessionClosedEvent | SessionCrashedEvent | SessionRecoveredEvent | DriverDiedEvent
 
-__all__ = ["CrashScope", "SessionCloseReason", "SessionClosedEvent", "SessionCrashedEvent", "SessionEvent"]
+__all__ = [
+    "CrashScope",
+    "DriverDiedEvent",
+    "RecoveryOutcome",
+    "SessionCloseReason",
+    "SessionClosedEvent",
+    "SessionCrashedEvent",
+    "SessionEvent",
+    "SessionRecoveredEvent",
+]

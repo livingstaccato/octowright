@@ -97,6 +97,29 @@ def test_safe_url_prefers_page_url_then_session() -> None:
     assert crash_recovery._safe_url(crashed, s) == "https://example.com"  # falls back to session.url
 
 
+async def test_recover_publishes_recovered_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    s = _session()
+    await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    assert len(events) == 1
+    assert events[0].outcome == "recovered"
+    assert events[0].instance_id == "abc123"
+
+
+async def test_recover_failure_publishes_failed_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    s = _session()
+    s.context.new_page.return_value.goto = AsyncMock(side_effect=RuntimeError("Target closed"))
+    await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    assert len(events) == 1 and events[0].outcome == "failed"
+
+
 async def test_recover_replaces_dead_page_and_records_incident() -> None:
     s = _session()
     dead = s.page
