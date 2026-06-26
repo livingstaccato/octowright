@@ -73,17 +73,52 @@ def _leader_pid_from_lock() -> int | None:
     return info.pid if singleton.pid_is_alive(info.pid) else None
 
 
-def _looks_like_restart_target(command: str) -> bool:
-    """Return True for daemon/launcher ``serve`` processes restart may kill.
+def _command_port(command: str) -> int | None:
+    """The ``--http-port`` value in a serve command, or None if absent/unparsable."""
+    tokens = command.split()
+    for i, tok in enumerate(tokens):
+        if tok == "--http-port" and i + 1 < len(tokens):
+            try:
+                return int(tokens[i + 1])
+            except ValueError:
+                return None
+        if tok.startswith("--http-port="):
+            try:
+                return int(tok.split("=", 1)[1])
+            except ValueError:
+                return None
+    return None
 
-    Bare ``octowright serve`` processes are usually MCP stdio followers. Killing
-    them severs the connected client's transport, which is the failure mode
-    ``restart`` is supposed to recover from. Detached daemon launchers always
-    carry an explicit host/port, and daemon children carry ``--daemon-mode``.
+
+def _restart_target_port() -> int:
+    """The HTTP port this restart manages — the live lock's port, else the
+    configured default. The process sweep is scoped to it so restart NEVER stops
+    a daemon on a different port (an isolated/test daemon, or another project's)."""
+    info = singleton.read_lock()
+    if info is not None and singleton.pid_is_alive(info.pid):
+        return info.http_port
+    from octowright.defaults import HTTP_PORT
+
+    return HTTP_PORT
+
+
+def _looks_like_restart_target(command: str, target_port: int) -> bool:
+    """Return True for a daemon/launcher ``serve`` process ON ``target_port`` that
+    restart should stop.
+
+    Bare ``octowright serve`` processes are MCP stdio followers — killing them
+    severs the client's transport, the very failure restart recovers from, so
+    they're excluded. Detached daemons always carry an explicit ``--http-port``,
+    so matching that port is reliable AND keeps restart from cross-killing a
+    daemon on another port (the isolation bug an isolated-lock restart used to
+    hit). A daemon with no explicit port is left alone — the lockfile PID path
+    still covers the one daemon restart is actually replacing.
     """
     if "octowright serve" not in command:
         return False
-    return "--daemon-mode" in command or "--http-host" in command or "--http-port" in command
+    if "--daemon-mode" not in command and "--http-host" not in command and "--http-port" not in command:
+        return False
+    return _command_port(command) == target_port
 
 
 def _looks_like_follower(command: str) -> bool:
@@ -173,14 +208,12 @@ def _follower_pids() -> list[int]:
     return [pid for pid, cmd in _list_process_commands() if _looks_like_follower(cmd)]
 
 
-def _leader_pids_from_pgrep() -> list[int]:
-    """Find daemon/launcher ``octowright serve`` pids when the lock is stale.
-
-    Despite the historical name, this no longer uses pgrep — it uses
-    ``_list_process_commands`` (``ps`` on POSIX, PowerShell on Windows) so we
-    can inspect command lines and avoid killing bare follower transports.
-    """
-    return [pid for pid, cmd in _list_process_commands() if _looks_like_restart_target(cmd)]
+def _leader_pids_from_pgrep(target_port: int) -> list[int]:
+    """Daemon/launcher ``octowright serve`` pids ON ``target_port`` (the port this
+    restart manages). Despite the historical name this uses ``_list_process_commands``
+    (``ps`` / PowerShell), so it can read command lines, skip bare followers, and —
+    crucially — stay scoped to the target port instead of sweeping every daemon."""
+    return [pid for pid, cmd in _list_process_commands() if _looks_like_restart_target(cmd, target_port)]
 
 
 def _send_signal(pid: int, sig: int) -> bool:
@@ -250,10 +283,11 @@ def _wait_for_port_free(host: str, port: int, timeout: float) -> bool:
 def _collect_target_pids(kill_followers: bool) -> set[int]:
     """Return all PIDs that should be signalled."""
     pids: set[int] = set()
+    target_port = _restart_target_port()
     locked = _leader_pid_from_lock()
     if locked:
         pids.add(locked)
-    pids.update(_leader_pids_from_pgrep())
+    pids.update(_leader_pids_from_pgrep(target_port))
     if kill_followers:
         extra = [p for p in _follower_pids() if p not in pids]
         if extra:

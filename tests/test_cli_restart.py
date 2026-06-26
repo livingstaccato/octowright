@@ -42,7 +42,7 @@ def _no_real_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
 def stub_no_leader(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pretend nothing is running."""
     monkeypatch.setattr(_restart_mod.singleton, "read_lock", lambda *_a, **_kw: None)
-    monkeypatch.setattr(_restart_mod, "_leader_pids_from_pgrep", lambda: [])
+    monkeypatch.setattr(_restart_mod, "_leader_pids_from_pgrep", lambda _port: [])
     monkeypatch.setattr(_restart_mod.singleton, "remove_lock", lambda *_a, **_kw: None)
 
 
@@ -111,7 +111,7 @@ def test_stop_escalates_to_sigkill_on_holdouts(
 ) -> None:
     """If a leader doesn't exit after SIGTERM within timeout, SIGKILL is sent."""
     monkeypatch.setattr(_restart_mod.singleton, "read_lock", lambda *_a, **_kw: None)
-    monkeypatch.setattr(_restart_mod, "_leader_pids_from_pgrep", lambda: [12345])
+    monkeypatch.setattr(_restart_mod, "_leader_pids_from_pgrep", lambda _port: [12345])
     monkeypatch.setattr(_restart_mod.singleton, "remove_lock", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         _restart_mod,
@@ -157,25 +157,46 @@ def test_stop_escalates_to_sigkill_on_holdouts(
     assert "escalating to SIGKILL" in result.output
 
 
-def test_process_fallback_skips_bare_follower_transports(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Restart must not kill bare ``serve`` followers owned by MCP clients."""
+def test_process_fallback_skips_followers_and_is_port_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restart must not kill bare followers, AND must only target daemons on the
+    port it manages — never cross-kill a daemon on another port (the isolation bug)."""
 
     def fake_run(*_a: Any, **_kw: Any) -> SimpleNamespace:
         return SimpleNamespace(
             stdout="\n".join(
                 [
-                    "101 /Users/tim/.venv/bin/python /bin/octowright serve",
-                    "202 /Users/tim/.venv/bin/python /bin/octowright serve --daemon-mode",
-                    "303 uv run octowright serve --http-host 127.0.0.1 --http-port 8765",
-                    "404 /Users/tim/.venv/bin/python /bin/octowright restart",
-                    "505 /Users/tim/.venv/bin/python /bin/octowright serve --profile core",
+                    "101 /Users/tim/.venv/bin/python /bin/octowright serve",  # bare follower
+                    "202 /bin/octowright serve --daemon-mode",  # no explicit port → left alone
+                    "303 uv run octowright serve --http-host 127.0.0.1 --http-port 8765",  # daemon on :8765
+                    "404 /bin/octowright restart",
+                    "505 /bin/octowright serve --daemon-mode --http-host 127.0.0.1 --http-port 6286",  # daemon on :6286
                 ]
             )
         )
 
     monkeypatch.setattr(_restart_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(_restart_mod.sys, "platform", "darwin")
 
-    assert _restart_mod._leader_pids_from_pgrep() == [202, 303]
+    # Restarting :8765 targets ONLY the :8765 daemon — the :6286 daemon is untouched.
+    assert _restart_mod._leader_pids_from_pgrep(8765) == [303]
+    # Restarting :6286 targets ONLY the :6286 daemon — the :8765 daemon is untouched.
+    assert _restart_mod._leader_pids_from_pgrep(6286) == [505]
+    # Bare follower (101), restart (404), and the port-less daemon (202) are never swept.
+
+
+def test_restart_target_port_uses_lock_then_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace as _NS
+
+    # Live lock → its port.
+    monkeypatch.setattr(_restart_mod.singleton, "read_lock", lambda *_a, **_k: _NS(pid=999, http_port=7799))
+    monkeypatch.setattr(_restart_mod.singleton, "pid_is_alive", lambda _p: True)
+    assert _restart_mod._restart_target_port() == 7799
+
+    # Stale/absent lock → the configured default (honours OCTOWRIGHT_HTTP_PORT).
+    monkeypatch.setattr(_restart_mod.singleton, "read_lock", lambda *_a, **_k: None)
+    from octowright.defaults import HTTP_PORT
+
+    assert _restart_mod._restart_target_port() == HTTP_PORT
 
 
 def test_list_process_commands_windows_parses_powershell_csv(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -228,7 +249,9 @@ def test_leader_pids_from_pgrep_windows(monkeypatch: pytest.MonkeyPatch) -> None
         lambda *_a, **_kw: SimpleNamespace(stdout=csv_output),
     )
 
-    assert sorted(_restart_mod._leader_pids_from_pgrep()) == [202, 303]
+    # Port-scoped on Windows too: :8765 → only 303; the port-less 202 is left alone.
+    assert _restart_mod._leader_pids_from_pgrep(8765) == [303]
+    assert _restart_mod._leader_pids_from_pgrep(6286) == []
 
 
 def test_follower_pids_windows(monkeypatch: pytest.MonkeyPatch) -> None:
