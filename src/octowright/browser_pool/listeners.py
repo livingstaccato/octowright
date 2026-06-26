@@ -189,6 +189,12 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             profile=session.profile,
             log_path=str(session.log_path),
         )
+        # Schedule auto-recovery FIRST (the browser process is usually still
+        # alive, so a fresh page in the same context heals the session), then
+        # publish the crash event carrying whether recovery is actually running —
+        # so the notification can say "auto-recovering, wait" instead of the stale
+        # "relaunch now". A SessionRecoveredEvent later reports the real outcome.
+        recovery_task = crash_recovery.schedule_recovery(session, crashed_page or session.page)
         session_event_bus.publish_nowait(
             SessionCrashedEvent(
                 instance_id=instance_id,
@@ -197,6 +203,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
                 profile=session.profile,
                 scope="renderer",
                 log_path=str(session.log_path),
+                recovering=recovery_task is not None,
             )
         )
         # Best-effort recorder marker for post-mortem inspection.
@@ -204,9 +211,6 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             session.recorder.record("page_crash")
         except Exception as exc:
             log.debug("octowright.crash.recorder_failed", instance_id=instance_id, error=repr(exc))
-        # Auto-recover the dead renderer: the browser process is usually still
-        # alive, so a bounded page.reload() heals the session without losing it.
-        crash_recovery.schedule_recovery(session, crashed_page or session.page)
 
     # Expose the per-page close + crash handlers so ``_wire_listeners`` can
     # attach them to the initial page AND any popup page registered later via

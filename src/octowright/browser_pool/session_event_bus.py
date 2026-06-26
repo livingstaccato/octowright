@@ -25,7 +25,13 @@ import asyncio
 from contextlib import suppress
 from types import TracebackType
 
-from octowright.browser_pool.events import SessionClosedEvent, SessionCrashedEvent, SessionEvent
+from octowright.browser_pool.events import (
+    DriverDiedEvent,
+    SessionClosedEvent,
+    SessionCrashedEvent,
+    SessionEvent,
+    SessionRecoveredEvent,
+)
 
 _QUEUE_SIZE = 64
 
@@ -130,10 +136,12 @@ class SessionEventBus:
 session_event_bus = SessionEventBus()
 
 __all__ = [
+    "DriverDiedEvent",
     "SessionClosedEvent",
     "SessionCrashedEvent",
     "SessionEvent",
     "SessionEventBus",
     "SessionEventSubscription",
+    "SessionRecoveredEvent",
     "session_event_bus",
 ]
