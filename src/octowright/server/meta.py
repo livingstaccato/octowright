@@ -27,6 +27,20 @@ log = get_logger(__name__)
 _STATUS_STALE_LIMIT = 20
 
 
+def _memory_status(sysresources_mod: Any) -> dict[str, Any]:
+    """Memory-governor view for status. The available-memory read is only paid
+    when a floor is configured (the default OFF case stays a cheap two-None)."""
+    floor = sysresources_mod.MIN_FREE_MEMORY_BYTES
+    mb = 1024 * 1024
+    if floor is None:
+        return {"min_free_memory_mb": None, "available_memory_mb": None}
+    available = sysresources_mod.available_memory_bytes()
+    return {
+        "min_free_memory_mb": floor // mb,
+        "available_memory_mb": (available // mb) if available is not None else None,
+    }
+
+
 def _compute_health(health_mod: Any, incidents_mod: Any, crash_recovery_mod: Any) -> dict[str, Any]:
     """Roll the stability signals into one verdict and log loudly when degraded,
     so the operator doesn't have to be watching status to notice instability.
@@ -218,7 +232,10 @@ def octowright_status() -> dict[str, Any]:
     from octowright import personas as _personas
     from octowright import session_manifest as _session_manifest
     from octowright import singleton as _singleton
+    from octowright import sysresources as _sysresources
     from octowright.browser_pool import crash_recovery as _crash_recovery
+    from octowright.browser_pool import crash_reports as _crash_reports
+    from octowright.browser_pool import driver_relaunch as _driver_relaunch
     from octowright.browser_pool import health as _health
     from octowright.browser_pool import incidents as _incidents
     from octowright.macros import execution as _macro_execution
@@ -312,6 +329,16 @@ def octowright_status() -> dict[str, Any]:
             "driver_restarts": pool.driver_restart_count(),
             # Recent driver-restart records (ts, reason, restart_count) for postmortem.
             "driver_restart_recent": _incidents.recent(category=_incidents.CATEGORY_DRIVER_RESTART, limit=5),
+            # Sessions lost when the shared driver died (H4a): each {instance_id,
+            # kind, url, profile, reason, relaunched_to}. relaunched_to is null
+            # unless OCTOWRIGHT_DRIVER_RELAUNCH reopened it. Empty in the common
+            # (no driver death) case.
+            "driver_relaunch_mode": _driver_relaunch.DRIVER_RELAUNCH_MODE,
+            "lost_sessions": _driver_relaunch.recent_lost(limit=10),
+            # Memory-pressure governor (OCTOWRIGHT_MIN_FREE_MEMORY_MB). Both null
+            # when the guard is off (the default); when set, available_memory_mb
+            # nearing min_free_memory_mb means launches will start refusing.
+            **_memory_status(_sysresources),
             "live_scenarios": len(scenario_pool.list_live()),
             "stale_manifest_sessions": stale_preview,
             "stale_manifest_count": stale_count,
@@ -326,8 +353,11 @@ def octowright_status() -> dict[str, Any]:
             "recovery_max": defaults.CRASH_RECOVERY_MAX,
             **_crash_recovery.recovery_stats(),
             # Recent per-crash records (instance_id, url, ts, outcome, attempts) so
-            # "what happened" is answerable from this call, not a log grep.
-            "recent": _incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH, limit=10),
+            # "what happened" is answerable from this call, not a log grep. On
+            # macOS each record is enriched at read time with the correlated
+            # `.ips` SIGSEGV signature (the OS writes it a beat after the crash,
+            # so it can't be attached when the incident is first recorded).
+            "recent": _crash_reports.enrich(_incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH, limit=10)),
         },
         "personas": {
             "count": len(persona_names),
