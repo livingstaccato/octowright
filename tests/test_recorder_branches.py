@@ -28,6 +28,45 @@ import pytest
 
 from octowright.recorder import _EVENT_ONLY_ACTIONS, Recorder, new_log_path, tail_log
 
+# ─── recording-file privacy (OCTOWRIGHT_RECORDINGS_PRIVATE) ─────────────────
+
+
+class TestRecordingPrivacy:
+    """The JSONL holds typed input, navigated URLs, console output — and, in
+    legacy ``OCTOWRIGHT_REDACT_INPUTS=off`` deployments, cleartext credentials.
+    A world-readable (0644) file lets any LOCAL user read all of that, bypassing
+    the loopback HTTP boundary entirely. Default-on private mode forces 0600 on
+    the file and 0700 on its parent. Opt out with the env var for shared-read
+    setups."""
+
+    def test_recording_file_is_0600_by_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OCTOWRIGHT_RECORDINGS_PRIVATE", raising=False)
+        rec = Recorder(tmp_path / "sub" / "s.jsonl")
+        rec.record("navigate", url="https://x")
+        rec.close()
+        assert (Path(rec.log_path).stat().st_mode & 0o777) == 0o600
+        # parent dir locked to owner-only.
+        assert (Path(rec.log_path).parent.stat().st_mode & 0o777) == 0o700
+
+    def test_existing_world_readable_file_is_tightened(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A recording left 0644 by an older daemon must be chmod-ed on reopen.
+        monkeypatch.delenv("OCTOWRIGHT_RECORDINGS_PRIVATE", raising=False)
+        p = tmp_path / "old.jsonl"
+        p.write_text("")
+        p.chmod(0o644)
+        Recorder(p).close()
+        assert (p.stat().st_mode & 0o777) == 0o600
+
+    def test_opt_out_leaves_default_umask(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # off → Recorder does not force 0600 (operator opted into shared read).
+        monkeypatch.setenv("OCTOWRIGHT_RECORDINGS_PRIVATE", "off")
+        p = tmp_path / "shared.jsonl"
+        p.write_text("")
+        p.chmod(0o644)
+        Recorder(p).close()
+        assert (p.stat().st_mode & 0o777) == 0o644  # untouched
+
+
 # ─── _EVENT_ONLY_ACTIONS membership ─────────────────────────────────────────
 
 
