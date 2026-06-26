@@ -16,6 +16,19 @@ from octowright.browser_pool.errors import BrowserCapExceededError
 from octowright.server.browser import lifecycle as _lifecycle
 
 
+def test_cap_defaults_on_at_32() -> None:
+    # The cap now defaults ON so peak memory pressure can't drive cascading
+    # renderer crashes; unset env resolves to MAX_BROWSERS_DEFAULT.
+    assert _defaults.MAX_BROWSERS_DEFAULT == "32"
+    assert _defaults._parse_max_browsers(None) is None  # truly-None arg = no env passed
+    assert _defaults._parse_max_browsers(_defaults.MAX_BROWSERS_DEFAULT) == 32
+
+
+def test_cap_env_off_disables() -> None:
+    for off in ("off", "0", "never", "none", "disabled", ""):
+        assert _defaults._parse_max_browsers(off) is None
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
