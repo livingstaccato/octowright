@@ -85,12 +85,34 @@ new code 100% covered, committed separately:
   `octowright_status().pool.browser_cap`.
 - **P4 (9051777)** — `--disable-dev-shm-usage` for Chromium on Linux (headed + headless); the old
   headless path passed no args, so container/CI `/dev/shm` exhaustion caused renderer crashes.
-- **P1 + P5 (68340ed)** — `browser_pool/crash_recovery.py`: a renderer crash auto-`page.reload()`s
-  (bounded by `CRASH_RECOVERY_MAX=3` with a `RESET_SECONDS=60` crash-loop reset), keeping the
-  session. `octowright_status().crash` surfaces crashes/recoveries/recovery_failures.
+- **P1 + P5 (68340ed, then fixed in e2e9b26)** — `browser_pool/crash_recovery.py`: a renderer crash
+  auto-recovers, bounded by `CRASH_RECOVERY_MAX=3` with a `RESET_SECONDS=60` crash-loop reset,
+  keeping the session. `octowright_status().crash` surfaces crashes/recoveries/recovery_failures.
+  **NOTE:** the original commit recovered via `page.reload()`, which **live verification proved does
+  NOT work** for a `chrome-headless-shell` renderer crash — `reload`/`goto` on the dead page fail
+  forever with "Page crashed". `e2e9b26` fixes it: recover by **replacing** the dead page with a
+  fresh one in the surviving context (`_replace_crashed_page`), since the browser/context survive a
+  renderer crash and only the page object dies.
 - **P3 core (6fdb987)** — `browser_pool/driver_health.py` + `pool._reset_driver()`: a dead shared
   Playwright driver no longer bricks the pool — `pool.launch` detects driver-death, rebuilds the
   driver, retries once. `status.pool.driver_restarts` surfaces it.
+
+## Live verification (restarted daemon, drove the real MCP surface)
+
+Restarted the daemon to activate the changes, then `/verify`'d against the real crash:
+
+- **Orphan reap — PASS (live):** `octowright restart` reaped 4 orphans; the new boot-reaper
+  (`housekeeping.reap_orphan_browsers_at_boot`) caught 2 more (log: `octowright.boot.reaped_orphan_browsers`).
+- **P2/P3/P5 surfacing — PASS:** `octowright_status` shows `pool.browser_cap=32`,
+  `pool.driver_restarts=0`, and the `crash` block.
+- **P1 recovery — caught a real bug, then PASS after the fix.** Killed a browser's renderer with
+  `SIGSEGV` (the exact `.ips` signature). Pre-fix: `recovery_failed: 'Page.reload: Page crashed'`,
+  page permanently dead. Fixed (`e2e9b26`), restarted, re-ran the SIGSEGV → log shows
+  `page_crashed` → `crash.recovered attempt=1` (59ms); process tree shows the old renderer dead and
+  a fresh one under the same browser root; the recording shows `page_recovered` + a successful
+  `user_navigation`. The session self-healed and stayed usable under the same instance_id.
+- Caveat seen during the run: the follower MCP bridge timed out twice while the leader executed the
+  call anyway (a transient bridge hiccup, not a recovery failure) — verified server-side instead.
 
 ## Checklist for next session
 
