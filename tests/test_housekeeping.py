@@ -231,3 +231,26 @@ def test_sample_process_rss_records_leader_browsers_total(monkeypatch: pytest.Mo
     assert rec.values_for("scope", "leader") == [1000]
     assert rec.values_for("scope", "browsers") == [500]
     assert rec.values_for("scope", "total") == [1500]
+
+
+def test_sample_process_rss_real_host_reports_leader() -> None:
+    """Real RSS read for this process (no mocks): leader scope is positive and
+    total == leader + browsers — exercises the ps-based reader end to end."""
+    from octowright import housekeeping as _hk
+    from tests._metric_recorders import RecordingHistogram
+
+    rec = RecordingHistogram()
+    import pytest as _pytest
+
+    mp = _pytest.MonkeyPatch()
+    mp.setattr(_hk, "_PROCESS_RSS", rec)
+    try:
+        _hk._sample_process_rss()
+    finally:
+        mp.undo()
+
+    leader = rec.values_for("scope", "leader")
+    browsers = rec.values_for("scope", "browsers")
+    total = rec.values_for("scope", "total")
+    assert leader and leader[0] > 0  # our own process has real RSS
+    assert total[0] == leader[0] + browsers[0]
