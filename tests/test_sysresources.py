@@ -131,6 +131,10 @@ def test_process_rss_bytes_empty_is_zero() -> None:
 
 
 def test_process_rss_bytes_sums_and_converts_to_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Force the POSIX ps path so the mock applies on any host (on Windows the
+    # default branch uses the Win32 API; that path is covered by the real-host
+    # test below).
+    monkeypatch.setattr(sysresources.sys, "platform", "linux")
     monkeypatch.setattr(
         sysresources.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="100\n200\n")
     )
@@ -138,11 +142,14 @@ def test_process_rss_bytes_sums_and_converts_to_bytes(monkeypatch: pytest.Monkey
 
 
 def test_process_rss_bytes_nonzero_return_is_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sysresources.sys, "platform", "linux")
     monkeypatch.setattr(sysresources.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=""))
     assert sysresources.process_rss_bytes([1]) == 0
 
 
 def test_process_rss_bytes_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sysresources.sys, "platform", "linux")
+
     def _boom(*_a: object, **_k: object) -> object:
         raise OSError("ps unavailable")
 
