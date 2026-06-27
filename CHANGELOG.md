@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-06-26
+
+A feature + hardening release: optional terminal sessions, self-healing
+browsers, a default-on security baseline (all configurable), and real Windows
+support.
+
+### Added
+- **Terminal sessions (optional `octowright[terminal]` extra).** Drive an
+  in-process `provide-uterm` connector — local PTY, SSH, or telnet (CP437 + RFC
+  854 for BBS art) — recorded to the same JSONL format as browsers. New
+  `terminal_*` MCP tools, a `terminals` capability profile, scenario terminal
+  participants, and a read-only **xterm.js** session view in the dashboard
+  (lazy-loaded). Core never imports uterm; without the extra the tools simply
+  don't register.
+- **Self-healing + observability for the browser pool.** Renderer crashes
+  auto-recover, a dead shared Playwright driver rebuilds itself, and lost
+  sessions are captured (`OCTOWRIGHT_DRIVER_RELAUNCH`). Incidents + a computed
+  health verdict surface in `octowright_status()`, and the server proactively
+  pushes `browser_crashed` / `browser_recovered` / `driver_died` /
+  `session_closed` MCP notifications.
+- **Resource governors.** A browser cap (default 32) and an opt-in available-
+  memory floor (`OCTOWRIGHT_MIN_FREE_MEMORY_MB`), enforced in the pool layer so
+  `scenario_start` can't bypass them.
+- **Security knobs** (secure defaults, opt-out where noted): `/mcp` capability
+  token (`OCTOWRIGHT_BRIDGE_REQUIRE_TOKEN`, on), owner-only recordings
+  (`OCTOWRIGHT_RECORDINGS_PRIVATE`, on), SSRF policy (`OCTOWRIGHT_SSRF_POLICY` /
+  `OCTOWRIGHT_SSRF_ALLOW`, off), and a per-recording JSONL size ceiling
+  (`OCTOWRIGHT_RECORDING_MAX_BYTES`, off).
+- **Stability telemetry.** RSS histogram, driver-restart / launch-refused /
+  driver-lost / leader-recovery counters, and trace-context propagation across
+  the follower→leader bridge.
+- **Windows support.** A real Win32 `GetProcessMemoryInfo` RSS reader so the
+  memory governor and RSS telemetry work on Windows (no psutil dependency).
+
+### Changed
+- **The follower bridge survives a leader restart / hard kill** instead of
+  dropping the client: supervised reconnect with idempotent in-flight resume,
+  and bridge health in `octowright_status()["bridge"]`.
+- **Recordings are written `0600` (parent `0700`) by default**, and credential
+  redaction now also covers the selector-less sinks (`press_key` / `evaluate` /
+  `select_option`) under `OCTOWRIGHT_REDACT_INPUTS=all`.
+- **The idle watchdog stays off by default** and `--keep-alive` propagates to
+  the detached daemon (carried over and reaffirmed from 0.9.1).
+
+### Fixed
+- **A crashed renderer is recovered by replacing the page**, not a `reload()`
+  that silently failed on a dead renderer.
+- **Disk-write containment**: browser downloads reduce the remote
+  Content-Disposition filename to a safe basename; golden + capture files are
+  written atomically (temp-sibling + rename) to defeat a symlink TOCTOU.
+- **The navigate telemetry span strips `user:pass@` userinfo and the query
+  string** so credentials/tokens don't reach traces.
+- **`octowright restart` verifies the lockfile pid is an `octowright serve`
+  process** before signalling it, so a stale/recycled pid isn't friendly-fired;
+  the daemon sweep is scoped to the managed port.
+- **Cross-platform fixes** for Windows (path separators, process discovery, and
+  POSIX-only test assumptions).
+
+### Security
+- Closes the unauthenticated loopback `/mcp` RCE for processes that can't read
+  the `0600` lockfile (cross-user / sandbox), adds opt-in SSRF blocking
+  (literal private / loopback / cloud-metadata hosts, incl. macro replay), and
+  keeps recorded credentials owner-only — see the "Disk-write containment",
+  "Recording-file privacy", and "Bridge capability token" sections in AGENTS.md.
+- **Dependency CVE remediation**: cryptography → 49.0.0 (win-arm64 stays on the
+  newest installable 46.0.3), starlette → 1.3.1, python-multipart → 0.0.32,
+  msgpack → 1.2.1, pydantic-settings → 2.14.2.
+
 ## [0.9.1] - 2026-06-12
 
 Reliability fixes for the follower/daemon bridge: the daemon no longer
