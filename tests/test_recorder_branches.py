@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,11 @@ from octowright.recorder import _EVENT_ONLY_ACTIONS, Recorder, new_log_path, tai
 # ─── recording-file privacy (OCTOWRIGHT_RECORDINGS_PRIVATE) ─────────────────
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file-mode bits: the recorder's 0600/0700 chmod is best-effort and "
+    "a no-op on Windows (NTFS ACLs, not mode bits), so these assertions don't apply.",
+)
 class TestRecordingPrivacy:
     """The JSONL holds typed input, navigated URLs, console output — and, in
     legacy ``OCTOWRIGHT_REDACT_INPUTS=off`` deployments, cleartext credentials.

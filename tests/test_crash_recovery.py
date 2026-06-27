@@ -145,7 +145,9 @@ async def test_recover_replaces_dead_page_and_records_incident() -> None:
     assert inc[0]["instance_id"] == "abc123"
     assert inc[0]["url"] == "https://example.com"
     fresh.screenshot.assert_awaited_once()
-    assert inc[0]["screenshot"] == "/tmp/x.recovery-1.png"
+    # Compare as Path so the assertion is separator-agnostic (Windows renders the
+    # same path with backslashes); the product builds it from log_path via pathlib.
+    assert Path(inc[0]["screenshot"]) == Path("/tmp/x.recovery-1.png")
 
 
 async def test_recovery_screenshot_failure_does_not_break_recovery() -> None:

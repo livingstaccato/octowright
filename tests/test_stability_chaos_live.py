@@ -89,8 +89,15 @@ async def test_real_renderer_crash_recovers_and_stays_usable(monkeypatch: pytest
         # The session is usable again: a navigation on the replaced page succeeds.
         nav = await session.navigate("data:text/html,<h1>after</h1>")
         assert nav.get("url", "").startswith("data:text/html")
-        # And an incident record articulates what happened.
-        inc = _incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH)
+        # And an incident record articulates what happened. The incident is
+        # appended just after recoveries increments, so poll briefly rather than
+        # racing it (this is what flaked on a loaded CI runner).
+        inc: list = []
+        for _ in range(50):
+            inc = _incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH)
+            if inc:
+                break
+            await asyncio.sleep(0.1)
         assert inc and inc[-1]["outcome"] == "recovered"
         # The pool is internally consistent after recovery: the replaced page is
         # the session's active page and a member of its page list, counts agree,
