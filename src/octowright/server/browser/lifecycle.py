@@ -11,15 +11,9 @@ import asyncio
 from typing import Any
 
 from octowright import _format as fmt
-from octowright import defaults as _defaults
 from octowright import resolve as resolve_mod
-from octowright import sysresources as _sysresources
-from octowright.browser_pool._metrics import LAUNCH_REFUSED as _LAUNCH_REFUSED
-from octowright.browser_pool.errors import (
-    BrowserCapExceededError,
-    MemoryPressureError,
-    ProtectedBrowserCloseError,
-)
+from octowright.browser_pool import limits as _limits
+from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import (
@@ -34,50 +28,18 @@ from octowright.server.browser.inspect import browser_brief
 
 
 def _enforce_browser_cap(*, adding: int) -> None:
-    """Refuse a user-facing launch that would exceed OCTOWRIGHT_MAX_BROWSERS.
+    """Single-launch shim over the pool-layer cap (`browser_pool.limits`).
 
-    Read through the ``defaults`` module (not a bound import) so the cap is
-    honoured if reconfigured at runtime / monkeypatched in tests. Off (None) →
-    no-op. Gates only the ad-hoc launch tools; internal relaunch/handoff and
-    pre-declared scenario launches go through the pool directly and are not
-    capped here.
+    The real gate lives in `roster.spawn_roster` so the scenario path can't
+    bypass it; this shim covers the single ad-hoc launch tools, which go through
+    `pool.launch` (not the roster). Reads the live module ``pool``.
     """
-    cap = _defaults.MAX_BROWSERS
-    if cap is None:
-        return
-    active = pool.active_count()
-    if active + adding > cap:
-        _LAUNCH_REFUSED.add(1, attributes={"reason": "cap"})
-        raise BrowserCapExceededError(
-            f"browser cap reached: {active} live + {adding} requested would exceed "
-            f"OCTOWRIGHT_MAX_BROWSERS={cap}. Close browsers (browser_close / "
-            f"browser_close_all) or raise OCTOWRIGHT_MAX_BROWSERS. This cap is shared "
-            f"across every MCP client connected to this daemon."
-        )
+    _limits.enforce_cap(pool, adding=adding)
 
 
 def _enforce_memory_floor(*, adding: int) -> None:
-    """Refuse a user-facing launch while available memory is below
-    OCTOWRIGHT_MIN_FREE_MEMORY_MB. Off (None floor) → no-op, and no memory read
-    at all (the read is only paid when the guard is configured). An unreadable
-    available value (None) never refuses — "unknown" must not wedge launches.
-    Same gating surface as the browser cap: ad-hoc launch tools only.
-    """
-    floor = _sysresources.MIN_FREE_MEMORY_BYTES
-    if floor is None:
-        return
-    available = _sysresources.available_memory_bytes()
-    if available is None:
-        return
-    if available < floor:
-        _LAUNCH_REFUSED.add(1, attributes={"reason": "memory"})
-        mb = 1024 * 1024
-        raise MemoryPressureError(
-            f"refusing to launch {adding} browser(s): available memory "
-            f"{available // mb}MB is below the OCTOWRIGHT_MIN_FREE_MEMORY_MB floor "
-            f"({floor // mb}MB). Close browsers (browser_close / browser_close_all) or "
-            f"free memory; set OCTOWRIGHT_MIN_FREE_MEMORY_MB=off to disable this guard."
-        )
+    """Single-launch shim over the pool-layer memory floor (`browser_pool.limits`)."""
+    _limits.enforce_memory(adding=adding)
 
 
 async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
