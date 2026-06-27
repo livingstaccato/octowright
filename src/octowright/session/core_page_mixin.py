@@ -89,18 +89,27 @@ _NAV_DENIED_SCHEMES = frozenset({"file", "javascript", "chrome", "chrome-extensi
 
 
 def _sanitize_url_for_span(url: str) -> str:
-    """Strip the query string from ``url`` before stamping it as a span attribute.
+    """Strip credentials + query string from ``url`` before stamping it as a span attribute.
 
     Query strings on navigation targets routinely carry session tokens, signed
     URLs, account IDs, and other PII that we do not want to land in traces /
-    exporter backends. The full URL still goes to ``self.url`` and the
-    recorder's ``navigate`` event — only the span attribute is sanitized.
+    exporter backends. ``user:pass@`` basic-auth userinfo is even more
+    sensitive — a cleartext credential — so it is dropped too. The full URL
+    still goes to ``self.url`` and the recorder's ``navigate`` event — only the
+    span attribute is sanitized.
+
+    Userinfo is removed by dropping everything up to the last ``@`` in the
+    netloc (the RFC-3986 userinfo delimiter), which preserves ``host:port``
+    verbatim — including original case and IPv6 brackets — unlike rebuilding
+    from ``.hostname``/``.port``.
 
     Falls back to the original value if parsing fails for any reason; the
     sanitization is best-effort and must never block a navigation.
     """
     try:
-        return urlsplit(url)._replace(query="").geturl()
+        parts = urlsplit(url)
+        netloc = parts.netloc.rsplit("@", 1)[-1]
+        return parts._replace(query="", netloc=netloc).geturl()
     except Exception:
         return url
 
