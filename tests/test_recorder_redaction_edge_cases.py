@@ -284,6 +284,95 @@ class TestTypeTextHonorsPolicy:
         assert call.kwargs["text"] != "hunter2"
 
 
+# ─── selector-less sink redaction (press_key / evaluate / select_option) ───
+
+
+class TestSinkRedaction:
+    """``fill``/``type`` can inspect the target element to decide if a value is
+    a credential. ``press_key``, ``evaluate``, and ``select_option`` carry no
+    inspectable field, so the *only* coherent policy is: redact under the
+    blanket ``all`` mode, leave raw under ``off``/``passwords``. The page must
+    always receive the real value. These three sinks previously recorded raw in
+    every mode — a char-by-char password (`press_key`), a credential baked into
+    a JS string (`evaluate`), or a secret dropdown value (`select_option`)
+    landed cleartext in the JSONL even under ``all``."""
+
+    @pytest.mark.anyio
+    async def test_press_key_redacted_under_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(REDACT_INPUTS_ENV, "all")
+        subj = _make_redaction_subject({"type": "text", "ac": ""})
+        subj.page.keyboard.press = AsyncMock()
+        await subj.press_key("a")
+        # Page still receives the real key.
+        subj.page.keyboard.press.assert_awaited_once_with("a")
+        call = subj.recorder.record.call_args
+        assert call.args == ("press_key",)
+        assert call.kwargs["key"] == REDACTED_INPUT_PLACEHOLDER
+
+    @pytest.mark.anyio
+    async def test_press_key_raw_under_passwords_and_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for mode in ("passwords", "off"):
+            monkeypatch.setenv(REDACT_INPUTS_ENV, mode)
+            subj = _make_redaction_subject({"type": "text", "ac": ""})
+            subj.page.keyboard.press = AsyncMock()
+            await subj.press_key("Enter")
+            assert subj.recorder.record.call_args.kwargs["key"] == "Enter", mode
+
+    @pytest.mark.anyio
+    async def test_evaluate_expression_redacted_under_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(REDACT_INPUTS_ENV, "all")
+        subj = _make_redaction_subject({"type": "text", "ac": ""})
+        subj._target().evaluate = AsyncMock(return_value=None)
+        await subj.evaluate("document.querySelector('#pw').value='S3cret!'")
+        # Page still runs the real script.
+        subj._target().evaluate.assert_awaited_once_with("document.querySelector('#pw').value='S3cret!'")
+        call = subj.recorder.record.call_args
+        assert call.args == ("evaluate",)
+        assert call.kwargs["expression"] == REDACTED_INPUT_PLACEHOLDER
+
+    @pytest.mark.anyio
+    async def test_evaluate_expression_raw_under_passwords(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(REDACT_INPUTS_ENV, "passwords")
+        subj = _make_redaction_subject({"type": "text", "ac": ""})
+        subj._target().evaluate = AsyncMock(return_value=42)
+        await subj.evaluate("1+41")
+        assert subj.recorder.record.call_args.kwargs["expression"] == "1+41"
+
+    @pytest.mark.anyio
+    async def test_select_option_value_label_redacted_under_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from octowright.session.core_ops_mixin import SessionOpsMixin
+
+        monkeypatch.setenv(REDACT_INPUTS_ENV, "all")
+        subj = SessionOpsMixin.__new__(SessionOpsMixin)
+        subj.recorder = MagicMock()
+        subj.recorder.record = MagicMock()
+        target = MagicMock()
+        target.select_option = AsyncMock(return_value=["secret-val"])
+        subj._target = lambda: target  # type: ignore[attr-defined]
+        await subj.select_option("#sel", value="secret-val", label="Secret Label", index=2)
+        # Page still receives the real value.
+        assert target.select_option.await_args.kwargs["value"] == "secret-val"
+        call = subj.recorder.record.call_args
+        assert call.args == ("select_option",)
+        assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
+        assert call.kwargs["label"] == REDACTED_INPUT_PLACEHOLDER
+        assert call.kwargs["index"] == 2  # positional int, not a secret — untouched
+
+    @pytest.mark.anyio
+    async def test_select_option_raw_under_passwords(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from octowright.session.core_ops_mixin import SessionOpsMixin
+
+        monkeypatch.setenv(REDACT_INPUTS_ENV, "passwords")
+        subj = SessionOpsMixin.__new__(SessionOpsMixin)
+        subj.recorder = MagicMock()
+        subj.recorder.record = MagicMock()
+        target = MagicMock()
+        target.select_option = AsyncMock(return_value=["us"])
+        subj._target = lambda: target  # type: ignore[attr-defined]
+        await subj.select_option("#country", value="us")
+        assert subj.recorder.record.call_args.kwargs["value"] == "us"
+
+
 # ─── per-selector evaluation independence ──────────────────────────────────
 
 

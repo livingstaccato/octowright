@@ -81,7 +81,7 @@ _HTML_TMPL = """\
     }}
     .card {{ text-align: center; }}
     .otto {{
-      width: 96px; height: 96px;
+      width: 192px; height: 192px;
       margin: 0 auto 1.25rem;
       display: block;
     }}
@@ -114,7 +114,7 @@ _HTML_TMPL = """\
 </head>
 <body>
   <div class="card">
-    <img src="/otto.svg" alt="Otto" class="otto" width="96" height="96">
+    <img src="/otto.svg" alt="Otto" class="otto" width="192" height="192">
     <div class="wordmark">octo<strong>wright</strong></div>
     <div class="meta">
       <div>

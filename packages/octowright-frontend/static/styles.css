@@ -881,6 +881,7 @@ code, .mono { font-family: var(--mono); }
 .kind-icon--chromium { color: #5b9cf8; }
 .kind-icon--firefox  { color: #ff8c42; }
 .kind-icon--webkit   { color: var(--fg-2); }
+.kind-icon--terminal { color: #4ade80; }
 
 .session-header__meta {
   display: flex;
@@ -1414,4 +1415,29 @@ code, .mono { font-family: var(--mono); }
   font-style: italic;
   text-align: center;
   font-size: 13px;
+}
+
+/* Terminal session detail — frames the xterm screen. xterm.css (imported by
+   terminal-view.ts) styles the rows/cursor themselves. */
+.session-terminal {
+  margin: 0.5rem 0;
+}
+.session-terminal-view {
+  background: #0b0b0e;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 6px;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+.session-terminal-view__screen {
+  /* No FitAddon: xterm renders at its fixed 80-col geometry. This div
+     shrink-wraps to the canvas so the panel doesn't force a wider layout. */
+  display: inline-block;
+  min-height: 360px;
+}
+.session-page--terminal {
+  display: block;
 }

@@ -16,6 +16,11 @@ package is enough to make every tool callable.
 
 from __future__ import annotations
 
+# Optional tool groups (e.g. terminal, gated on the `octowright[terminal]` extra)
+# register via this module. The availability conditional lives there, not here,
+# so this __init__ stays an import-only export surface (convention-test enforced).
+from octowright.server import _optional_tools as _optional_tools
+
 # Submodule imports trigger @mcp.tool registration via decorator side effects.
 # Order does not matter; F401 ignored intentionally.
 from octowright.server import browser as _browser  # noqa: F401

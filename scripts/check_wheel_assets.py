@@ -20,7 +20,10 @@ REQUIRED_PACKAGE_FILES = {
     "octowright/server/frontend/index.js",
     "octowright/server/frontend/session.html",
     "octowright/server/frontend/session.js",
-    "octowright/server/frontend/format.css",
+    # Main dashboard stylesheet (renamed from the old format.css during the
+    # frontend rework); session-terminal.css ships the xterm view styling.
+    "octowright/server/frontend/styles.css",
+    "octowright/server/frontend/session-terminal.css",
 }
 
 

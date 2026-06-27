@@ -18,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from provide.telemetry import get_logger
 
 from octowright import scenarios_pool as _scenario_pool_mod
+from octowright import terminal as _terminal
 from octowright.browser_pool import BrowserPool
 from octowright.server._idempotency import _idempotent_dispatch
 from octowright.server.profiles import active_filter
@@ -25,10 +26,23 @@ from octowright.server.profiles import active_filter
 if TYPE_CHECKING:
     from mcp.types import Icon, ToolAnnotations
 
+    from octowright.terminal.pool import TerminalPool
+
 log = get_logger("octowright.server")
 
 pool = BrowserPool()
 scenario_pool = _scenario_pool_mod.ScenarioPool()
+
+# Terminal sessions are an optional feature (the `octowright[terminal]` extra —
+# see the terminal-sessions design spec §3.2). `terminal_pool` is None on a core
+# install; it is instantiated only when the uterm-backed extra is importable.
+# Phase 2's terminal MCP tools register only when this is non-None, so on a core
+# install they simply do not appear.
+terminal_pool: TerminalPool | None = None
+if _terminal.is_available():
+    from octowright.terminal.pool import TerminalPool as _TerminalPool
+
+    terminal_pool = _TerminalPool()
 
 # Records how this process's leader was started, so octowright_status can flag
 # the fragile inline-fallback mode — a client that became the in-process leader
@@ -170,14 +184,43 @@ mcp = _ProfiledFastMCP(
         "The visible tool surface may be slimmed by OCTOWRIGHT_PROFILE / `octowright serve --profile=...`; "
         "if a tool you expect is missing, the operator picked a narrower capability profile — call "
         "`octowright_status` to see the active profile. "
-        "If your Octowright tools stop responding (Transport closed / timeout) or disappear from your "
-        "tool list, the server is disconnected — NEVER substitute a shell-opened browser "
-        "(open/xdg-open/start) and report it as launched; that browser cannot be driven, inspected, or "
-        "recorded. Tell the user Octowright is disconnected and give them reconnect steps for the client "
-        "they're using. State confidently only Claude Code: `/mcp` -> select the server -> Reconnect. For "
-        "any other client, ask the user which MCP client they're in and have them use its MCP "
-        "reconnect/refresh control or restart the client — reconnect UIs vary by client and version, so "
-        "don't guess a command you're unsure of. Browser tools won't work until it reconnects."
+        "Octowright PROACTIVELY pushes MCP notifications for exceptional situations — react to the "
+        "notification's `hint` instead of polling: "
+        "notifications/octowright/browser_crashed (a page crashed; if recovering=true Octowright is "
+        "auto-replacing the page — WAIT for browser_recovered, do NOT relaunch yet); "
+        "notifications/octowright/browser_recovered (outcome=recovered → the page is usable again, just "
+        "continue; outcome=failed|exhausted → relaunch with browser_launch); "
+        "notifications/octowright/driver_died (the shared driver died and these sessions were lost — if "
+        "auto-reopen is on, octowright_status().pool.lost_sessions has the old→new instance_id mapping; "
+        "otherwise relaunch the browsers you need); "
+        "notifications/octowright/session_closed (a session left the pool). "
+        "Refused launches surface in-band as tool errors (browser cap reached / available memory below the "
+        "floor) with actionable text — don't retry blindly; close browsers or tell the user. "
+        "octowright_status() is the pull snapshot for the same signals: health, crash.recent, pool.lost_sessions. "
+        "If Octowright tools stop responding or return 'Transport closed' and ONE retry still fails: "
+        "STOP immediately. Do NOT run shell commands to restart the daemon (octowright restart, "
+        "uv run octowright restart, etc.) — the binary is not on your shell PATH in most agent "
+        "environments, and restarting the daemon closes the MCP stdio connection rather than fixing it. "
+        "Do NOT run 'which octowright', search the filesystem, or probe /api/health — these waste tokens "
+        "and cannot reconnect the MCP client. Do NOT write Playwright scripts or open URLs with shell "
+        "commands as substitutes — they are not Octowright sessions. "
+        "Instead: tell the user Octowright is disconnected and give them the reconnect step for THEIR "
+        "MCP client, then wait for them to confirm before resuming. Reconnect by client (these keep the "
+        "conversation unless noted): "
+        "Claude Code — /mcp -> select octowright -> Reconnect (if the first try silently fails, choose "
+        "Reconnect a second time; the first attempt is a known no-op). "
+        "Cursor — Settings -> Tools & MCP -> toggle octowright off then back on. "
+        "Cline (VS Code) — MCP Servers panel -> octowright -> Restart Server. "
+        "Copilot in VS Code — Command Palette -> 'MCP: List Servers' -> octowright -> Restart. "
+        "Windsurf — Cascade plugins (MCP) panel -> Refresh. "
+        "Gemini CLI — /mcp disable octowright then /mcp enable octowright (or /mcp refresh). "
+        "GitHub Copilot CLI — /mcp reload octowright. "
+        "Continue or Zed — re-save the MCP config file (it hot-reloads the server). "
+        "Codex CLI, OpenCode, and Amp have NO in-session reconnect: the user must restart the client, "
+        "which loses the current conversation. "
+        "Universal fallback for any other/unknown client: fully restart the client (recovers the server "
+        "but loses the session). If you don't know the client, ask which one they're using. "
+        "Wait for the user to confirm reconnection before resuming."
     ),
 )
 if _allowed_tools is not None:

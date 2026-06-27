@@ -121,7 +121,9 @@ const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
   {
     scope: "sessions",
     testid: "live-browsers",
-    title: "Live browsers",
+    // "Live sessions" (not "browsers"): the live pool now also holds terminal
+    // sessions (octowright[terminal] extra). testid stays for existing tests.
+    title: "Live sessions",
     buildBody: (s) =>
       renderSessionTable(s.sessions.live, true, {
         onRelaunch: (id) => void relaunchClosedSession(id),
