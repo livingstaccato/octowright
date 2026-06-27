@@ -86,6 +86,7 @@ async def serve_app(
     port: int = HTTP_PORT,
     retries: int = HTTP_PORT_RETRIES,
     mcp_leader: bool = False,
+    mcp_token: str = "",
     on_bound: Callable[[str, int], None] | None = None,
 ) -> None:
     """Run uvicorn in the current event loop until cancelled.
@@ -105,7 +106,7 @@ async def serve_app(
 
     import uvicorn
 
-    app = build_app(mcp_leader=mcp_leader, host=host)
+    app = build_app(mcp_leader=mcp_leader, host=host, mcp_token=mcp_token)
 
     # Pre-bind with SO_REUSEADDR + SO_REUSEPORT so a restarted daemon claims
     # the port immediately, and no other process can steal it between the

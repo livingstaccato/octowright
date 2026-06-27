@@ -129,3 +129,30 @@ def test_storage_report_counts_known_roots(tmp_path: Path) -> None:
     assert report["recordings"]["files"] == 1
     assert report["profiles"]["files"] == 1
     assert report["captures"]["files"] == 1
+
+
+def test_save_capture_does_not_follow_symlink_at_target(monkeypatch, tmp_path: Path) -> None:
+    """A symlink at the capture destination must be replaced atomically, not followed."""
+    import json as _json
+
+    root = tmp_path / "captures"
+    root.mkdir()
+    sentinel = tmp_path / "outside.json"
+    sentinel.write_text("KEEP", encoding="utf-8")
+    target = root / "cap.json"
+    target.symlink_to(sentinel)
+    monkeypatch.setattr(captures, "_capture_path", lambda *a, **k: target)
+
+    captures.save_capture(
+        kind="text",
+        content="hello",
+        url="https://x.test",
+        root=root,
+        max_total_bytes=10_000,
+        ttl_seconds=3600,
+        preview_chars=10,
+    )
+
+    assert sentinel.read_text(encoding="utf-8") == "KEEP"  # outside file untouched
+    assert not target.is_symlink()  # symlink replaced by a real file
+    assert _json.loads(target.read_text(encoding="utf-8"))["content"] == "hello"
