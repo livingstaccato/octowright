@@ -18,34 +18,14 @@ from octowright.defaults import SSH_DEFAULT_PORT
 
 TELNET_DEFAULT_PORT = 23
 
-__all__ = [
+# canonical order: network ssh, telnet then local pty (octowright: no ws connector)
+__all__ = [  # noqa: RUF022
     "SSH_DEFAULT_PORT",
     "TELNET_DEFAULT_PORT",
-    "pty_connector_config",
     "ssh_connector_config",
     "telnet_connector_config",
+    "pty_connector_config",
 ]
-
-
-def pty_connector_config(*, command: str | None, cols: int | None, rows: int | None) -> dict[str, Any]:
-    """Build the PTY connector_config, applying the same defaults as terminal_launch."""
-    return {"command": command or "/bin/bash", "cols": cols or 80, "rows": rows or 24}
-
-
-def telnet_connector_config(*, host: str | None, port: int) -> dict[str, Any]:
-    """Build the telnet connector_config for TelnetSessionConnector.
-
-    Only ``host`` and ``port`` are supported (``input_mode`` defaults to
-    ``"open"`` inside the connector and is never surfaced to MCP callers).
-    ``hub_overlay=False`` disables the uterm hub status header and preserves
-    raw CRLF line endings so xterm.js renders the CP437 stream correctly.
-    No ``cols``/``rows``/``command`` — the connector hardcodes its own terminal
-    geometry (80x25) to match typical BBS server expectations.
-    """
-    cfg: dict[str, Any] = {"port": port, "hub_overlay": False}
-    if host is not None:
-        cfg["host"] = host
-    return cfg
 
 
 def ssh_connector_config(
@@ -78,3 +58,24 @@ def ssh_connector_config(
     if insecure_no_host_check:
         cfg["insecure_no_host_check"] = True
     return cfg
+
+
+def telnet_connector_config(*, host: str | None, port: int) -> dict[str, Any]:
+    """Build the telnet connector_config for TelnetSessionConnector.
+
+    Only ``host`` and ``port`` are supported (``input_mode`` defaults to
+    ``"open"`` inside the connector and is never surfaced to MCP callers).
+    ``hub_overlay=False`` disables the uterm hub status header and preserves
+    raw CRLF line endings so xterm.js renders the CP437 stream correctly.
+    No ``cols``/``rows``/``command`` — the connector hardcodes its own terminal
+    geometry (80x25) to match typical BBS server expectations.
+    """
+    cfg: dict[str, Any] = {"port": port, "hub_overlay": False}
+    if host is not None:
+        cfg["host"] = host
+    return cfg
+
+
+def pty_connector_config(*, command: str | None, cols: int | None, rows: int | None) -> dict[str, Any]:
+    """Build the PTY connector_config, applying the same defaults as terminal_launch."""
+    return {"command": command or "/bin/bash", "cols": cols or 80, "rows": rows or 24}
