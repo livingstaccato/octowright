@@ -199,6 +199,45 @@ def test_restart_target_port_uses_lock_then_default(monkeypatch: pytest.MonkeyPa
     assert _restart_mod._restart_target_port() == HTTP_PORT
 
 
+def test_collect_target_pids_skips_recycled_lockfile_pid(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A lockfile leader pid recycled by the OS to an unrelated process must NOT
+    be killed — the lockfile is same-user-writable and a dead daemon's pid can be
+    reused. Without an identity check restart would SIGKILL a foreign process."""
+    from types import SimpleNamespace as _NS
+
+    monkeypatch.setattr(_restart_mod.singleton, "read_lock", lambda *_a, **_k: _NS(pid=4242, http_port=6286))
+    monkeypatch.setattr(_restart_mod.singleton, "pid_is_alive", lambda _p: True)
+    monkeypatch.setattr(_restart_mod, "_restart_target_port", lambda: 6286)
+    # pid 4242 is alive but its command line is an unrelated editor, not a daemon.
+    monkeypatch.setattr(_restart_mod, "_list_process_commands", lambda: [(4242, "/usr/bin/vim notes.txt")])
+
+    pids = _restart_mod._collect_target_pids(kill_followers=False)
+
+    assert 4242 not in pids
+    assert "4242" in capsys.readouterr().err  # warned about the skipped pid
+
+
+def test_collect_target_pids_keeps_real_octowright_lockfile_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lockfile pid whose command really is an octowright daemon is still killed,
+    even when it carries no explicit port flag (so the port-scoped pgrep path skips it)."""
+    from types import SimpleNamespace as _NS
+
+    monkeypatch.setattr(_restart_mod.singleton, "read_lock", lambda *_a, **_k: _NS(pid=4242, http_port=6286))
+    monkeypatch.setattr(_restart_mod.singleton, "pid_is_alive", lambda _p: True)
+    monkeypatch.setattr(_restart_mod, "_restart_target_port", lambda: 6286)
+    monkeypatch.setattr(
+        _restart_mod,
+        "_list_process_commands",
+        lambda: [(4242, "/x/.venv/bin/python3 /x/.venv/bin/octowright serve")],
+    )
+
+    pids = _restart_mod._collect_target_pids(kill_followers=False)
+
+    assert 4242 in pids
+
+
 def test_list_process_commands_windows_parses_powershell_csv(monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows path must parse PowerShell ConvertTo-Csv output correctly."""
     monkeypatch.setattr(_restart_mod.sys, "platform", "win32")
