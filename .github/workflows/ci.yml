@@ -33,6 +33,11 @@ permissions:
 env:
   FORCE_COLOR: "1"
   UV_PYTHON_DOWNLOADS: never
+  # Use the committed uv.lock as-is for every uv invocation (sync AND run).
+  # Without this, each `uv run` re-runs resolution before executing, which stats
+  # the editable ../provide-uterm sibling (the optional `terminal` extra) that
+  # only exists in the provide.io dev layout — absent in CI, it fails every step.
+  UV_FROZEN: "1"
   # Keep scenarios/profiles quiet during CI — never touch $HOME defaults.
   OCTOWRIGHT_RECORDINGS: ${{ github.workspace }}/.ci/recordings
   OCTOWRIGHT_PROFILES_DIR: ${{ github.workspace }}/.ci/profiles
