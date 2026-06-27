@@ -1,0 +1,22 @@
+name: browser-plus-terminal
+description: |
+  A browser "player" driving a web form alongside a local terminal "operator"
+  running a shell — both launched, recorded, and torn down by one scenario.
+
+  The terminal participant requires the octowright[terminal] extra; on a core
+  install, scenario_start raises a clear "extra not installed" error rather than
+  failing obscurely. Terminal participants are skipped by browser-only steps
+  (fixtures, verify/startup macros, wait_for_sync); they cannot declare
+  startup_macros. For kind: terminal, connector_type is pty (default) or ssh;
+  an ssh participant resolves host/user/key_path/known_hosts from the persona's
+  app.ssh block, with explicit fields here winning.
+participants:
+  - persona: web-player
+    kind: chromium
+    role: player
+    url: "http://127.0.0.1:7900/form-flow.html"
+  - persona: shell-operator
+    kind: terminal
+    connector_type: pty
+    command: /bin/bash
+    role: operator

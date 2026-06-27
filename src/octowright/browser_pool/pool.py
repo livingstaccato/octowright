@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 import uuid
 from collections.abc import Iterable
@@ -16,6 +17,7 @@ from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
 from octowright._tracing import set_attrs, span
+from octowright.browser_pool import driver_health, driver_relaunch
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
@@ -57,6 +59,8 @@ class BrowserPool:
     def __init__(self) -> None:
         self._pw: Playwright | None = None
         self._pw_lock = asyncio.Lock()
+        # Count of shared-driver rebuilds after a death (surfaced in status).
+        self._driver_restarts: int = 0
         self._sessions: dict[str, BrowserSession] = {}
         self._sessions_lock = asyncio.Lock()
         # Instance ids dropped via the external close/crash path
@@ -82,9 +86,44 @@ class BrowserPool:
                 self._pw = await async_playwright().start()
         return self._pw
 
+    async def _reset_driver(self, *, reason: str | None = None) -> None:
+        """Discard the shared Playwright driver so the next launch rebuilds it.
+
+        Called when a driver-death error is seen (see ``driver_health``). Best-
+        effort ``stop()`` of the dead handle, then clear it under the lock so a
+        concurrent ``_ensure_pw`` starts a fresh driver. Hands off to
+        ``driver_relaunch.on_driver_reset`` which records the restart incident,
+        captures/evicts the sessions lost with the dead driver (surfaced in
+        status), and — when OCTOWRIGHT_DRIVER_RELAUNCH is set — reopens them."""
+        async with self._pw_lock:
+            old = self._pw
+            self._pw = None
+        self._driver_restarts += 1
+        driver_relaunch.on_driver_reset(self, reason=reason)
+        if old is not None:
+            try:
+                await old.stop()
+            except Exception as exc:
+                log.debug("octowright.pool.driver_stop_failed", error=repr(exc))
+
+    def driver_restart_count(self) -> int:
+        """How many times the shared driver has been rebuilt after a death."""
+        return self._driver_restarts
+
     async def launch(self, **options: Any) -> dict[str, Any]:
         async with launch_span(options.get("kind") or "chromium") as sp:
-            return await self._launch_impl(options, sp)
+            try:
+                return await self._launch_impl(options, sp)
+            except Exception as exc:
+                # A dead shared driver (its pipe closed) fails every launch until
+                # rebuilt. Reset it and retry ONCE — a second failure propagates,
+                # so there is no retry loop. Ordinary launch errors are re-raised
+                # untouched.
+                if not driver_health.is_driver_dead_error(exc):
+                    raise
+                log.warning("octowright.pool.driver_died_relaunching", error=repr(exc))
+                await self._reset_driver(reason=repr(exc))
+                return await self._launch_impl(options, sp)
 
     async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:
         launch_options = LaunchOptions.from_mapping(options)
@@ -408,21 +447,36 @@ class BrowserPool:
         headless anyway). Firefox/WebKit have no equivalent CLI hook; their new
         tabs are handled by the page-event redirector in launch_pipeline.py.
         """
-        from octowright.browser_pool.newtab_extension import ensure_newtab_extension
-        from octowright.defaults import get_default_url
-
         out: dict[str, Any] = {}
-        if kind != "chromium" or headless:
+        if kind != "chromium":
             return out
-        ext_dir = ensure_newtab_extension(get_default_url())
-        args = [f"--disable-extensions-except={ext_dir}", f"--load-extension={ext_dir}"]
-        if tile:
+        args: list[str] = []
+        # Linux/CI: the default /dev/shm (often 64MB in containers) is too small
+        # for Chromium's shared-memory transport; exhaustion surfaces as random
+        # renderer crashes. Route shared memory to a regular tmpfile instead.
+        # Needed on Linux only (no-op risk on macOS/Windows), and it applies to
+        # headless too — the early "headless returns nothing" path used to skip it.
+        if sys.platform.startswith("linux"):
+            args.append("--disable-dev-shm-usage")
+        if not headless:
+            args.extend(self._headed_chromium_args())
+        if tile and not headless:
             async with self._tile_lock:
                 tile_index = self._tile_counter
                 self._tile_counter += 1
             args.extend(_tile_args_for_chromium(tile_index))
-        out["args"] = args
+        if args:
+            out["args"] = args
         return out
+
+    def _headed_chromium_args(self) -> list[str]:
+        """New-tab-override extension args for headed Chromium (tile args are
+        added by the caller under ``_tile_lock``)."""
+        from octowright.browser_pool.newtab_extension import ensure_newtab_extension
+        from octowright.defaults import get_default_url
+
+        ext_dir = ensure_newtab_extension(get_default_url())
+        return [f"--disable-extensions-except={ext_dir}", f"--load-extension={ext_dir}"]
 
     async def _resolve_session_dir(
         self,

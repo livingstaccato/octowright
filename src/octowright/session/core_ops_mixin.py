@@ -203,7 +203,19 @@ class SessionOpsMixin(SessionLike):
         if index is not None:
             kwargs["index"] = index
         selected = await self._target().select_option(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS, **kwargs)
-        self.recorder.record("select_option", selector=selector, value=value, label=label, index=index)
+        # value/label can carry a secret dropdown option; they have no inspectable
+        # field, so they follow the same selector-less sink policy as press_key /
+        # evaluate (scrub only under blanket ``all`` mode). index is a positional
+        # int and never a secret. The page still received the real value above.
+        from octowright.session.core_page_mixin import _redact_sink_value
+
+        self.recorder.record(
+            "select_option",
+            selector=selector,
+            value=_redact_sink_value(value),
+            label=_redact_sink_value(label),
+            index=index,
+        )
         return {"ok": True, "selected": selected}
 
     async def drag(self, source_selector: str, target_selector: str) -> None:

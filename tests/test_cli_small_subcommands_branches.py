@@ -189,12 +189,16 @@ class TestInitCommand:
 class TestSelftestCommand:
     def test_lists_tools(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         """Default: prints recordings dir + tool count + each tool name."""
-        import octowright.cli.selftest as _selftest_mod
+        # selftest lazy-imports these from octowright.server inside the command (so
+        # importing the CLI stays lean — see test_follower_import_weight), so patch
+        # them at the source module, not on cli.selftest.
+        import octowright.server as _server_mod
+        import octowright.server.profiles as _profiles_mod
 
-        monkeypatch.setattr(_selftest_mod, "registered_tool_names", lambda: ["alpha", "beta"])
+        monkeypatch.setattr(_server_mod, "registered_tool_names", lambda: ["alpha", "beta"])
         recs = Path("/tmp/recs")
-        monkeypatch.setattr(_selftest_mod, "recordings_dir", lambda: recs)
-        monkeypatch.setattr(_selftest_mod, "active_filter", lambda: None)
+        monkeypatch.setattr(_server_mod, "recordings_dir", lambda: recs)
+        monkeypatch.setattr(_profiles_mod, "active_filter", lambda: None)
         monkeypatch.delenv("OCTOWRIGHT_PROFILE", raising=False)
         result = runner.invoke(_root.cli, ["selftest"])
         assert result.exit_code == 0
@@ -206,22 +210,24 @@ class TestSelftestCommand:
 
     def test_explicit_profile_shown_when_no_filter(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         """OCTOWRIGHT_PROFILE=all + no filter → echoed value, not the literal 'all'."""
-        import octowright.cli.selftest as _selftest_mod
+        import octowright.server as _server_mod
+        import octowright.server.profiles as _profiles_mod
 
-        monkeypatch.setattr(_selftest_mod, "registered_tool_names", list)
-        monkeypatch.setattr(_selftest_mod, "recordings_dir", lambda: Path("/tmp/r"))
-        monkeypatch.setattr(_selftest_mod, "active_filter", lambda: None)
+        monkeypatch.setattr(_server_mod, "registered_tool_names", list)
+        monkeypatch.setattr(_server_mod, "recordings_dir", lambda: Path("/tmp/r"))
+        monkeypatch.setattr(_profiles_mod, "active_filter", lambda: None)
         monkeypatch.setenv("OCTOWRIGHT_PROFILE", "all")
         result = runner.invoke(_root.cli, ["selftest"])
         assert "active profile: all" in result.output
 
     def test_active_filter_path(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         """When active_filter() returns a set, '(filter active)' shows."""
-        import octowright.cli.selftest as _selftest_mod
+        import octowright.server as _server_mod
+        import octowright.server.profiles as _profiles_mod
 
-        monkeypatch.setattr(_selftest_mod, "registered_tool_names", lambda: ["browser_click"])
-        monkeypatch.setattr(_selftest_mod, "recordings_dir", lambda: Path("/tmp/r"))
-        monkeypatch.setattr(_selftest_mod, "active_filter", lambda: {"browser_click"})
+        monkeypatch.setattr(_server_mod, "registered_tool_names", lambda: ["browser_click"])
+        monkeypatch.setattr(_server_mod, "recordings_dir", lambda: Path("/tmp/r"))
+        monkeypatch.setattr(_profiles_mod, "active_filter", lambda: {"browser_click"})
         monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core")
         result = runner.invoke(_root.cli, ["selftest"])
         assert "active profile: core (filter active)" in result.output
@@ -229,11 +235,12 @@ class TestSelftestCommand:
 
     def test_zero_tools_renders(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         """Empty tool list still prints '0 tools registered:'."""
-        import octowright.cli.selftest as _selftest_mod
+        import octowright.server as _server_mod
+        import octowright.server.profiles as _profiles_mod
 
-        monkeypatch.setattr(_selftest_mod, "registered_tool_names", list)
-        monkeypatch.setattr(_selftest_mod, "recordings_dir", lambda: Path("/tmp/r"))
-        monkeypatch.setattr(_selftest_mod, "active_filter", lambda: None)
+        monkeypatch.setattr(_server_mod, "registered_tool_names", list)
+        monkeypatch.setattr(_server_mod, "recordings_dir", lambda: Path("/tmp/r"))
+        monkeypatch.setattr(_profiles_mod, "active_filter", lambda: None)
         monkeypatch.delenv("OCTOWRIGHT_PROFILE", raising=False)
         result = runner.invoke(_root.cli, ["selftest"])
         assert "0 tools registered:" in result.output

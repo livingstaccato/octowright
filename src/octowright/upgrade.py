@@ -40,6 +40,22 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.10.0": [
+        "Terminals, alongside browsers: the optional octowright[terminal] extra adds in-process "
+        "PTY / SSH / telnet sessions that record to the same JSONL and show up in the dashboard "
+        "with a live, read-only xterm.js screen — new terminal_* tools and scenario participants.",
+        "Browsers self-heal: a crashed renderer is replaced in place (not a broken reload) and a "
+        "dead shared Playwright driver rebuilds itself instead of bricking the pool. Crashes, driver "
+        "deaths, and lost sessions now surface as MCP notifications + incident records, with a health "
+        "verdict in octowright_status.",
+        "Hardened by default, configurable where it changes behavior: the loopback /mcp transport "
+        "requires a capability token, recordings are written 0600, navigation can block SSRF to "
+        "internal/cloud-metadata hosts, downloads are contained, and credentials are scrubbed from "
+        "traces and selector-less sinks. See the OCTOWRIGHT_* knobs in the docs.",
+        "Runs on Windows now: a real Win32 RSS reader for the memory governor + telemetry, "
+        "cross-platform paths, and security bumps for cryptography / starlette / python-multipart / "
+        "msgpack / pydantic-settings.",
+    ],
     "0.9.1": [
         "No more mid-session disconnects: the idle watchdog is now OFF by default, so "
         "the daemon stays up across client blips instead of auto-exiting and tearing down "

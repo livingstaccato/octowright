@@ -7,16 +7,28 @@ from __future__ import annotations
 
 import itertools
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
 import anyio
 from mcp.shared.message import SessionMessage
-from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
+from mcp.types import JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
 from provide.telemetry import get_logger
 
 from octowright import defaults
+from octowright._bridge_message_helpers import (
+    BRIDGE_ERROR_CODE,  # noqa: F401 — re-exported for callers/tests
+    BRIDGE_ERROR_GUIDANCE,  # noqa: F401
+    BRIDGE_ERROR_PREFIX,  # noqa: F401
+    bridge_error,
+    is_request,
+    is_response,  # noqa: F401
+    message_method,
+    message_request_id,
+    message_root,
+    message_tool_name,
+)
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import BRIDGE_TOOL_TIMEOUTS
 
@@ -38,90 +50,21 @@ _BRIDGE_RESUME = counter(
     description="In-flight requests re-sent to the leader after a reconnect (idempotent resume)",
 )
 
-BRIDGE_ERROR_CODE = -32000
-BRIDGE_ERROR_PREFIX = "Octowright bridge error:"
-# Appended to every bridge error so the agent that receives it on a failed in-flight
-# call is steered away from the observed failure mode: silently substituting a
-# shell-opened browser (`open`/`xdg-open`/`start`) and reporting it as launched. A
-# fully-dead leader can't send any message, so the skill + MCP server instructions
-# carry the same guidance for that case; this covers the recoverable/timeout path.
-BRIDGE_ERROR_GUIDANCE = (
-    "This is an Octowright transport error, not a browser result. Retry one call; if it "
-    "still fails, Octowright's MCP server is disconnected. Do NOT open a URL with a shell "
-    "command (open/xdg-open/start) as a substitute browser — it cannot be driven, "
-    "inspected, or recorded, and must not be reported as launched. Tell the user Octowright "
-    "is disconnected and they must reconnect/restart it in their MCP client before browser "
-    "tools will work."
-)
-
 log = get_logger(__name__)
 
 
 @dataclass
 class _RemoteWriteSlot:
     write: Any | None = None
+    # Fired when the first remote writer is assigned; reset to a new Event on
+    # each disconnect so the polling loop in forward_one_local_message always
+    # waits on the *current* event, not a stale already-set one.
+    ready: anyio.Event = field(default_factory=anyio.Event)
 
 
 @dataclass
 class _RemoteResetSlot:
     cancel_scope: Any | None = None
-
-
-def message_root(message: SessionMessage) -> Any:
-    return message.message.root
-
-
-def message_request_id(message: SessionMessage) -> str | int | None:
-    root = message_root(message)
-    if isinstance(root, (JSONRPCRequest, JSONRPCResponse, JSONRPCError)):
-        return root.id
-    return None
-
-
-def message_method(message: SessionMessage) -> str | None:
-    root = message_root(message)
-    if isinstance(root, (JSONRPCRequest, JSONRPCNotification)):
-        return root.method
-    return None
-
-
-def message_tool_name(message: SessionMessage) -> str | None:
-    """Return the tool name of a ``tools/call`` request (its ``params.name``), else None.
-
-    Lets the bridge apply a per-tool in-flight deadline: the JSON-RPC ``method`` is
-    always ``tools/call``, so the discriminating identity is the tool name in params.
-    """
-    root = message_root(message)
-    if isinstance(root, JSONRPCRequest) and root.method == "tools/call":
-        params = root.params
-        if isinstance(params, dict):
-            name = params.get("name")
-            if isinstance(name, str):
-                return name
-    return None
-
-
-def is_request(message: SessionMessage) -> bool:
-    return isinstance(message_root(message), JSONRPCRequest)
-
-
-def is_response(message: SessionMessage) -> bool:
-    return isinstance(message_root(message), (JSONRPCResponse, JSONRPCError))
-
-
-def bridge_error(request_id: str | int, reason: str) -> SessionMessage:
-    return SessionMessage(
-        JSONRPCMessage(
-            root=JSONRPCError(
-                jsonrpc="2.0",
-                id=request_id,
-                error=ErrorData(
-                    code=BRIDGE_ERROR_CODE,
-                    message=f"{BRIDGE_ERROR_PREFIX} {reason} {BRIDGE_ERROR_GUIDANCE}",
-                ),
-            )
-        )
-    )
 
 
 @dataclass
@@ -193,6 +136,20 @@ class BridgeSupervisor:
         request_id = message_request_id(message)
         method = message_method(message) or "notification"
         if remote_write is None:
+            # Startup / reconnect race: poll until a live writer appears or the
+            # connect timeout expires. We re-read `ready` from the slot on each
+            # iteration because it's replaced with a fresh Event on each disconnect
+            # (anyio.Event is one-shot; a stale set event would return immediately
+            # even though write is still None, causing a spurious bridge error).
+            deadline = anyio.current_time() + defaults.BRIDGE_CONNECT_TIMEOUT_SECONDS
+            while remote_write_slot.write is None:
+                remaining = deadline - anyio.current_time()
+                if remaining <= 0:
+                    break
+                with anyio.move_on_after(min(remaining, 0.5)):
+                    await remote_write_slot.ready.wait()
+            remote_write = remote_write_slot.write
+        if remote_write is None:
             if is_request(message) and request_id is not None:
                 await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
             return
@@ -245,6 +202,7 @@ class BridgeSupervisor:
         # writer during the await, and an unconditional clear would nuke it.
         if remote_write_slot.write is remote_write:
             remote_write_slot.write = None
+            remote_write_slot.ready = anyio.Event()  # reset so reconnect waiters pick up the next connection
         # Keep resumable keyed requests in-flight (the reconnect re-sends them); fail
         # only the non-resumable ones, so one send failure doesn't nuke unrelated work.
         await self.fail_or_mark_for_resume("leader session unavailable; retry")

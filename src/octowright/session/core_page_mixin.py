@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf
 from octowright._tracing import histogram, span
 from octowright.defaults import (
     DEFAULT_ACTION_TIMEOUT_MS,
@@ -51,6 +52,23 @@ def _current_redaction_mode() -> str:
     return raw
 
 
+def _redact_sink_value(value: str | None) -> str | None:
+    """Redact a recorded value that has no inspectable field to classify it.
+
+    ``fill``/``type`` consult the target element to tell a credential from a
+    benign value; ``press_key`` (key), ``evaluate`` (expression), and
+    ``select_option`` (value/label) carry no such element. The only coherent
+    rule for those sinks is: scrub under the blanket ``all`` mode, leave raw
+    under ``off``/``passwords`` (which key off element type and so can't reason
+    about a selector-less value). ``None`` passes through unchanged (an absent
+    optional arg). The page action always receives the real value — only the
+    JSONL record sees this result.
+    """
+    if value is None:
+        return None
+    return REDACTED_INPUT_PLACEHOLDER if _current_redaction_mode() == "all" else value
+
+
 _NAVIGATE_DURATION = histogram(
     "octowright_session_navigate_duration_seconds",
     description="Duration of session.navigate() including page.goto",
@@ -71,24 +89,36 @@ _NAV_DENIED_SCHEMES = frozenset({"file", "javascript", "chrome", "chrome-extensi
 
 
 def _sanitize_url_for_span(url: str) -> str:
-    """Strip the query string from ``url`` before stamping it as a span attribute.
+    """Strip credentials + query string from ``url`` before stamping it as a span attribute.
 
     Query strings on navigation targets routinely carry session tokens, signed
     URLs, account IDs, and other PII that we do not want to land in traces /
-    exporter backends. The full URL still goes to ``self.url`` and the
-    recorder's ``navigate`` event — only the span attribute is sanitized.
+    exporter backends. ``user:pass@`` basic-auth userinfo is even more
+    sensitive — a cleartext credential — so it is dropped too. The full URL
+    still goes to ``self.url`` and the recorder's ``navigate`` event — only the
+    span attribute is sanitized.
+
+    Userinfo is removed by dropping everything up to the last ``@`` in the
+    netloc (the RFC-3986 userinfo delimiter), which preserves ``host:port``
+    verbatim — including original case and IPv6 brackets — unlike rebuilding
+    from ``.hostname``/``.port``.
 
     Falls back to the original value if parsing fails for any reason; the
     sanitization is best-effort and must never block a navigation.
     """
     try:
-        return urlsplit(url)._replace(query="").geturl()
+        parts = urlsplit(url)
+        netloc = parts.netloc.rsplit("@", 1)[-1]
+        return parts._replace(query="", netloc=netloc).geturl()
     except Exception:
         return url
 
 
 def _reject_unsafe_url(url: str) -> None:
-    """Raise ValueError if ``url`` is on the deny-list of unsafe schemes."""
+    """Raise ValueError if ``url`` is on the deny-list of unsafe schemes, or the
+    active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every navigation entry
+    point (navigate / open_url / launch) and macro replay routes through here, so
+    one call covers them all."""
     if not isinstance(url, str) or not url:
         raise ValueError("navigate url must be a non-empty string")
     stripped = url.strip()
@@ -97,6 +127,7 @@ def _reject_unsafe_url(url: str) -> None:
         raise ValueError(f"navigate url missing scheme: {url!r}")
     if scheme.lower() in _NAV_DENIED_SCHEMES:
         raise ValueError(f"navigate url scheme {scheme!r} is not allowed (blocked: {sorted(_NAV_DENIED_SCHEMES)})")
+    ssrf.check_navigation_url(stripped)
 
 
 _WAIT_FOR_POLL_SECONDS = 0.05
@@ -315,7 +346,7 @@ class SessionPageMixin(SessionLike):
 
     async def press_key(self, key: str) -> None:
         await self.page.keyboard.press(key)
-        self.recorder.record("press_key", key=key)
+        self.recorder.record("press_key", key=_redact_sink_value(key))
 
     async def screenshot(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,7 +384,7 @@ class SessionPageMixin(SessionLike):
 
     async def evaluate(self, expression: str) -> Any:
         result = await self._target().evaluate(expression)
-        self.recorder.record("evaluate", expression=expression)
+        self.recorder.record("evaluate", expression=_redact_sink_value(expression))
         return result
 
     async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None:

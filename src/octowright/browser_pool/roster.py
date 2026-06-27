@@ -14,6 +14,7 @@ from provide.telemetry import get_logger
 from octowright._tracing import set_attrs, span
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
+from octowright.browser_pool.limits import enforce_launch_limits
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
 if TYPE_CHECKING:
@@ -88,6 +89,12 @@ async def close_all(
 
 
 async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[str, Any]:
+    # The single chokepoint both the browser_spawn_roster tool AND scenario_start
+    # (pool.spawn_roster) route through. Enforce the cap + memory floor here so the
+    # scenario path can't bypass a tool-only check and OOM the shared host.
+    # All-or-nothing: refuse the whole batch before launching any browser.
+    enforce_launch_limits(pool, adding=len(specs))
+
     async def _launch_one(spec: dict[str, Any]) -> dict[str, Any]:
         return await pool.launch(
             kind=spec.get("kind", "chromium"),

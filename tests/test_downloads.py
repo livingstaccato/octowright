@@ -29,8 +29,13 @@ class FakeDownload:
 
     async def _do_save(self, path: str) -> None:
         self._saved_to = path
-        # Write a minimal file so the path exists
-        Path(path).write_bytes(b"data")
+        # Mirror Playwright's save_as, which os.makedirs(dirname) before writing.
+        # That dir creation is precisely what turns a "NNN-.." prefix component
+        # into a real, traversable directory — so the fake must do it too or it
+        # would mask the very escape this guards against.
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"data")
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +132,54 @@ async def test_handle_download_increments_prefix(tmp_path: Path, monkeypatch: py
     assert len(s.downloads) == 2
     assert Path(s.downloads[0]["path"]).name.startswith("000-")
     assert Path(s.downloads[1]["path"]).name.startswith("001-")
+
+
+# ---------------------------------------------------------------------------
+# path containment — remote-controlled suggested_filename
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_malicious_suggested_filename_cannot_escape_downloads_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The suggested_filename comes from the remote page's Content-Disposition.
+    A ``../``-laden value must not redirect the write outside the per-session
+    downloads dir — the ``NNN-`` prefix only neutralizes the first segment."""
+    import octowright.defaults as defs
+
+    monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
+    s = _make_session(tmp_path)
+    dl = FakeDownload(url="https://evil/x", filename="../../../../pwned.txt")
+
+    s._handle_download(dl)
+    await asyncio.sleep(0)
+
+    assert len(s.downloads) == 1, "download was dropped instead of contained"
+    saved = Path(s.downloads[0]["path"]).resolve()
+    contain = (tmp_path / "downloads" / s.instance_id).resolve()
+    assert saved.is_relative_to(contain), f"escaped containment: {saved}"
+    assert ".." not in saved.parts
+    # The sanitized on-disk name keeps the basename; the record preserves the
+    # original suggested value for fidelity.
+    assert saved.name.endswith("pwned.txt")
+    assert s.downloads[0]["suggested_filename"] == "../../../../pwned.txt"
+    # And nothing was written outside the recordings root.
+    assert not (tmp_path / "pwned.txt").exists()
+
+
+@pytest.mark.anyio
+async def test_dotdot_only_filename_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A filename that sanitizes to nothing (``..``) still produces a safe name."""
+    import octowright.defaults as defs
+
+    monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
+    s = _make_session(tmp_path)
+    s._handle_download(FakeDownload(filename=".."))
+    await asyncio.sleep(0)
+    assert len(s.downloads) == 1
+    saved = Path(s.downloads[0]["path"]).resolve()
+    assert saved.is_relative_to((tmp_path / "downloads" / s.instance_id).resolve())
 
 
 # ---------------------------------------------------------------------------

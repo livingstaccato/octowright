@@ -213,6 +213,12 @@ BADGE_OPACITY: float = float(os.environ.get("OCTOWRIGHT_BADGE_OPACITY", "0.35"))
 
 SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
+# Default SSH port for terminal SSH connectors (scenario participants / terminal_launch).
+SSH_DEFAULT_PORT: int = int(os.environ.get("OCTOWRIGHT_SSH_PORT", "22"))
+
+# Connector types for a terminal scenario participant (its kind is "terminal").
+SUPPORTED_TERMINAL_KINDS = ("pty", "ssh")
+
 DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))
 DEFAULT_ACTION_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_ACTION_TIMEOUT_MS", "15000"))
 # Wall-clock budget for one aria-tree snapshot. A heavy DOM can make
@@ -252,19 +258,24 @@ BRIDGE_TOOL_TIMEOUTS: dict[str, float] = {
     ),
     "macro_run": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_RUN_TIMEOUT_SECONDS", "120")),
     "macro_run_sequence": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_SEQUENCE_TIMEOUT_SECONDS", "180")),
+    # evaluate runs arbitrary caller JS with up to ~30s page.evaluate timeout
+    "browser_evaluate": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_EVALUATE_TIMEOUT_SECONDS", "60")),
+    # fill/type carry up to 15s Playwright action timeout — 60s leaves 45s bridge margin
+    "browser_fill": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_FILL_TIMEOUT_SECONDS", "60")),
+    "browser_type": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_TYPE_TIMEOUT_SECONDS", "60")),
+    # navigate uses page.goto() with DEFAULT_NAV_TIMEOUT_MS (30s) — 60s keeps parity
+    "browser_navigate": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_NAVIGATE_TIMEOUT_SECONDS", "60")),
+    # click can trigger a navigation, inheriting the 30s nav timeout
+    "browser_click": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_CLICK_TIMEOUT_SECONDS", "45")),
+    # wait_for is an explicit waiting primitive; 90s accommodates typical settle polls
+    "browser_wait_for": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_WAIT_FOR_TIMEOUT_SECONDS", "90")),
 }
 
-# Max times the follower re-sends an in-flight request on a fresh leader session
-# after a reconnect (idempotent resume). Past this it fails the request with the
-# usual retry-hint instead of resuming.
+# Max re-sends of an in-flight request after a reconnect (idempotent resume).
 BRIDGE_RESUME_MAX_ATTEMPTS = int(os.environ.get("OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS", "3"))
 
-# When the MCP client closes the follower's stdin, the bridge cancels itself and
-# should exit. If the remote SSE teardown wedges (it can block in the transport
-# and ignore anyio cancellation), this is the grace period after which the
-# follower hard-exits anyway, so it never outlives its client (the bridge owns
-# no state). Followers leaking past their client is what accumulated orphaned
-# `octowright serve` processes across idle-restart churn.
+# Hard-exit grace after stdin EOF: ensures the follower doesn't outlive its client
+# when remote SSE teardown wedges and ignores anyio cancellation.
 FOLLOWER_EXIT_BACKSTOP_SECONDS = float(os.environ.get("OCTOWRIGHT_FOLLOWER_EXIT_BACKSTOP_SECONDS", "5"))
 
 # Leader-side idempotency cache. The follower injects a stable
@@ -347,6 +358,45 @@ def _parse_idle_grace(raw: str | None) -> float | None:
 IDLE_GRACE_SECONDS: float | None = _parse_idle_grace(os.environ.get("OCTOWRIGHT_IDLE_GRACE"))
 IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
 
+
+# Pool-wide cap on concurrently-open browsers. The pool is shared by EVERY MCP
+# client connected to one leader, so this bounds the *total* live browsers
+# across all of them — the lever against a single looping client filling the
+# screen with windows AND against peak memory pressure that drives renderer
+# crashes. Defaults ON at MAX_BROWSERS_DEFAULT. The gate lives in the pool layer
+# (browser_pool.limits, at the roster.spawn_roster chokepoint + single-launch
+# shims), so browser_launch / browser_quick_launch / browser_spawn_roster AND
+# scenario_start (pool.spawn_roster directly) are all capped; internal relaunch /
+# handoff / crash-recovery use pool.launch and are NOT capped (they recover an
+# existing session). ``0``/``off``/``never``/``none``/``disabled`` disable it.
+MAX_BROWSERS_DEFAULT = "32"
+
+
+def _parse_max_browsers(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    text = raw.strip().lower()
+    if text in ("", "0", "off", "never", "none", "disabled"):
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+MAX_BROWSERS: int | None = _parse_max_browsers(os.environ.get("OCTOWRIGHT_MAX_BROWSERS", MAX_BROWSERS_DEFAULT))
+# Two more env knobs live in their domain modules (this file is at its LOC ceiling): OCTOWRIGHT_MIN_FREE_MEMORY_MB -> sysresources.MIN_FREE_MEMORY_BYTES (H4b); OCTOWRIGHT_DRIVER_RELAUNCH -> browser_pool.driver_relaunch.DRIVER_RELAUNCH_MODE (H4a).
+
+# Leader housekeeping cadence. A periodic in-leader task (see
+# octowright.housekeeping) that (1) reaps browser processes orphaned when their
+# Playwright driver died — they reparent to init and the pool can no longer
+# close them, so they pile up in the Dock/tray — and (2) bounds the detached
+# daemon's stderr log mid-run (it is otherwise only rotated at spawn time).
+# Default 60s; ``0`` / ``off`` / ``never`` / ``none`` / ``disabled`` turns the
+# loop off (orphans are then only swept at leader boot / ``octowright restart``).
+HOUSEKEEPING_INTERVAL_SECONDS: float | None = _parse_idle_grace(os.environ.get("OCTOWRIGHT_HOUSEKEEPING_SECONDS", "60"))
+
 # Per-cache LRU bound on `octowright.http.session_artifacts.SessionArtifactCache`.
 # Each cache (artifacts, report, console index, downloads index, path-exists)
 # is independently capped at this many entries so the global singleton can't
@@ -409,6 +459,18 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+# Renderer-crash auto-recovery. A Playwright page.on("crash") leaves the browser
+# alive with a dead renderer; reloading the page heals it without losing the
+# session. ENABLED by default (set OCTOWRIGHT_CRASH_RECOVERY=off to disable).
+# MAX bounds consecutive auto-recoveries before giving up (so a page that crashes
+# on every reload doesn't loop); the counter resets after RESET_SECONDS of quiet,
+# so occasional crashes over a long session keep recovering.
+CRASH_RECOVERY_ENABLED: bool = _parse_bool_env("OCTOWRIGHT_CRASH_RECOVERY", True)
+CRASH_RECOVERY_MAX = int(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_MAX", "3"))
+CRASH_RECOVERY_RESET_SECONDS = float(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_RESET_SECONDS", "60"))
+CRASH_RECOVERY_RELOAD_TIMEOUT_MS = float(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_RELOAD_TIMEOUT_MS", "15000"))
 
 
 # HTTP RED metrics, recorded through provide.telemetry's TelemetryMiddleware

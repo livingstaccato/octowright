@@ -177,6 +177,22 @@ def test_status_pool_counts_are_ints() -> None:
     assert isinstance(snap["pool"]["live_scenarios"], int)
     assert isinstance(snap["pool"]["stale_manifest_count"], int)
     assert isinstance(snap["pool"]["stale_manifest_sessions"], list)
+    # browser_cap surfaces the pool-wide concurrent-browser cap (int) or None when off.
+    assert "browser_cap" in snap["pool"]
+    assert snap["pool"]["browser_cap"] is None or isinstance(snap["pool"]["browser_cap"], int)
+    # driver_restarts: shared-driver rebuilds after a death (deepest failure signal).
+    assert isinstance(snap["pool"]["driver_restarts"], int)
+    # crash block surfaces renderer-crash + auto-recovery tallies + recent records.
+    crash = snap["crash"]
+    assert isinstance(crash["recovery_enabled"], bool)
+    assert isinstance(crash["recovery_max"], int)
+    for key in ("crashes", "recoveries", "recovery_failures"):
+        assert isinstance(crash[key], int)
+    assert isinstance(crash["recent"], list)
+    assert isinstance(snap["pool"]["driver_restart_recent"], list)
+    # health verdict rolls the signals into ok|degraded|critical + reasons.
+    assert snap["health"]["status"] in ("ok", "degraded", "critical")
+    assert isinstance(snap["health"]["reasons"], list)
 
 
 def test_status_personas_returns_name_list() -> None:

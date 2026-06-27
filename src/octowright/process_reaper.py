@@ -16,10 +16,13 @@ eating RAM and (more visibly) cluttering the macOS Dock or Windows tray.
 Two entry points:
 
 * ``find_browser_pids(scope)`` returns the live PIDs to act on. ``scope`` is
-  either ``"descendants"`` (only processes whose ancestor chain contains a
+  one of ``"descendants"`` (only processes whose ancestor chain contains a
   given root PID — used at daemon shutdown so a concurrent daemon's browsers
-  aren't touched) or ``"all"`` (every ms-playwright/{chromium,firefox,webkit}
-  on the box — used by the explicit cleanup CLI).
+  aren't touched), ``"orphaned"`` (only browsers whose owning driver has died
+  and reparented them to init — the safe sweep run periodically and at leader
+  boot, which never touches a live daemon's browsers), or ``"all"`` (every
+  ms-playwright/{chromium,firefox,webkit} on the box — used by the explicit
+  cleanup CLI and ``octowright restart``).
 * ``reap_orphan_browsers(scope, dry_run=False, root_pid=None)`` does the
   kill, returns a summary suitable for both the CLI and the daemon log.
 
@@ -38,7 +41,17 @@ import sys
 import time
 from typing import Any, Literal, TypedDict
 
-Scope = Literal["descendants", "all"]
+from octowright._tracing import counter
+
+Scope = Literal["descendants", "all", "orphaned"]
+
+# Orphaned browsers reaped (noop unless telemetry is on). A non-zero, climbing
+# value means drivers/leaders are dying and leaking browser processes — the
+# leak the boot/housekeeping sweeps exist to contain.
+_ORPHAN_REAPED = counter(
+    "octowright_orphan_reaped_total",
+    description="Orphaned (dead-driver) browser processes killed by the reaper",
+)
 
 # Windows has no SIGKILL; on POSIX the daemon-shutdown path uses SIGTERM →
 # grace → SIGKILL escalation. KILL_SIGNAL exists for the POSIX escalation;
@@ -158,15 +171,48 @@ def _descendants_of(root_pid: int, table: list[tuple[int, int, str]]) -> set[int
     return seen
 
 
+def _is_orphaned_browser(ppid: int, live_pids: frozenset[int]) -> bool:
+    """Decide whether a Playwright browser whose parent is ``ppid`` is orphaned.
+
+    A healthy browser is a direct child of a live Playwright driver process
+    (itself a child of the daemon), so its ``ppid`` is always a live, non-init
+    pid. When the driver (or the whole daemon generation) dies, the kernel
+    reparents the browser to init — ``ppid`` becomes ``1`` on POSIX — or, on
+    Windows, leaves a stale ``ParentProcessId`` that no longer maps to any live
+    process. Either way the pool can no longer drive or close it: it is an
+    orphan that lingers in the Dock/tray. ``ppid <= 1`` catches the POSIX
+    reparent (1 = init, 0 = the unreachable kernel/idle pid); ``ppid not in
+    live_pids`` catches the stale-parent case. A browser whose driver is still
+    alive never matches, so this is safe to run even when another daemon is
+    live on the same host — its browsers are left untouched.
+    """
+    return ppid <= 1 or ppid not in live_pids
+
+
+def _orphaned_browser_pids(table: list[tuple[int, int, str]], candidate_pids: list[int]) -> list[int]:
+    """Subset of ``candidate_pids`` whose owning driver has died (see
+    ``_is_orphaned_browser``)."""
+    live_pids = frozenset(pid for pid, _ppid, _cmd in table)
+    ppid_by_pid = {pid: ppid for pid, ppid, _cmd in table}
+    return [pid for pid in candidate_pids if _is_orphaned_browser(ppid_by_pid[pid], live_pids)]
+
+
 def find_browser_pids(scope: Scope, *, root_pid: int | None = None) -> list[int]:
     """Return live Playwright-managed browser PIDs matching ``scope``.
 
-    ``descendants`` requires ``root_pid``; ``all`` ignores it.
+    * ``all`` — every ms-playwright/{chromium,firefox,webkit} process on the box.
+    * ``orphaned`` — only those whose owning driver has died (reparented to
+      init / stale parent); see ``_is_orphaned_browser``. Safe with concurrent
+      daemons. Ignores ``root_pid``.
+    * ``descendants`` — only processes under ``root_pid`` (required for this
+      scope).
     """
     table = _list_processes()
     candidate_pids = [pid for pid, _ppid, cmd in table if _is_browser_command(cmd)]
     if scope == "all":
         return candidate_pids
+    if scope == "orphaned":
+        return _orphaned_browser_pids(table, candidate_pids)
     if root_pid is None:
         raise ValueError("scope='descendants' requires root_pid")
     descendants = _descendants_of(root_pid, table)
@@ -237,8 +283,11 @@ def reap_orphan_browsers(
     errors.extend(_signal_pids(survivors, KILL_SIGNAL, "sigkill"))
 
     final = find_browser_pids(scope, root_pid=root_pid)
+    killed = [pid for pid in pids if pid not in final]
+    if killed:
+        _ORPHAN_REAPED.add(len(killed), attributes={"scope": scope})
     return ReapSummary(
-        killed=[pid for pid in pids if pid not in final],
+        killed=killed,
         still_alive=[pid for pid in pids if pid in final],
         errors=errors,
     )

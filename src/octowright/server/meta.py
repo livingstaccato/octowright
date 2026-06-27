@@ -14,13 +14,46 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from provide.telemetry import get_logger
+
 from octowright import advisor as _advisor
 from octowright import takeover as _takeover
 from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool, upgrade_notice_snapshot
 from octowright.server.registry import registered_tool_names
 
+log = get_logger(__name__)
+
 _STATUS_STALE_LIMIT = 20
+
+
+def _memory_status(sysresources_mod: Any) -> dict[str, Any]:
+    """Memory-governor view for status. The available-memory read is only paid
+    when a floor is configured (the default OFF case stays a cheap two-None)."""
+    floor = sysresources_mod.MIN_FREE_MEMORY_BYTES
+    mb = 1024 * 1024
+    if floor is None:
+        return {"min_free_memory_mb": None, "available_memory_mb": None}
+    available = sysresources_mod.available_memory_bytes()
+    return {
+        "min_free_memory_mb": floor // mb,
+        "available_memory_mb": (available // mb) if available is not None else None,
+    }
+
+
+def _compute_health(health_mod: Any, incidents_mod: Any, crash_recovery_mod: Any) -> dict[str, Any]:
+    """Roll the stability signals into one verdict and log loudly when degraded,
+    so the operator doesn't have to be watching status to notice instability.
+    Extracted from octowright_status to keep its complexity under the gate."""
+    counts = incidents_mod.counts(category=incidents_mod.CATEGORY_RENDERER_CRASH)
+    verdict: dict[str, Any] = health_mod.assess(
+        driver_restarts=pool.driver_restart_count(),
+        recovery_failures=crash_recovery_mod.recovery_stats()["recovery_failures"],
+        recovery_exhausted=counts.get("exhausted", 0),
+    )
+    if verdict["status"] != "ok":
+        log.warning("octowright.health.degraded", status=verdict["status"], reasons=verdict["reasons"])
+    return verdict
 
 
 @mcp.tool(
@@ -199,6 +232,12 @@ def octowright_status() -> dict[str, Any]:
     from octowright import personas as _personas
     from octowright import session_manifest as _session_manifest
     from octowright import singleton as _singleton
+    from octowright import sysresources as _sysresources
+    from octowright.browser_pool import crash_recovery as _crash_recovery
+    from octowright.browser_pool import crash_reports as _crash_reports
+    from octowright.browser_pool import driver_relaunch as _driver_relaunch
+    from octowright.browser_pool import health as _health
+    from octowright.browser_pool import incidents as _incidents
     from octowright.macros import execution as _macro_execution
     from octowright.server.profiles import PROFILES, active_filter
 
@@ -248,7 +287,13 @@ def octowright_status() -> dict[str, Any]:
     bridge_snapshot = bridge_state.read_state(defaults.BRIDGE_STATE_PATH)
     leader = leader_mode_snapshot()
 
+    health_verdict = _compute_health(_health, _incidents, _crash_recovery)
+
     return {
+        # Rolled-up stability verdict: "ok" | "degraded" | "critical" + reasons.
+        # Surface this to the user when it isn't "ok" — it means browsers/driver
+        # are unstable right now.
+        "health": health_verdict,
         "daemon": {
             "pid": daemon_pid,
             "this_pid": os.getpid(),
@@ -274,10 +319,45 @@ def octowright_status() -> dict[str, Any]:
         "pool": {
             "live_browsers": pool.active_count(),
             "protected_browsers": pool.protected_count(),
+            # Pool-wide concurrent-browser cap (shared across all MCP clients).
+            # null when disabled (OCTOWRIGHT_MAX_BROWSERS=off). When live_browsers
+            # nears browser_cap, user-facing launches will start refusing.
+            "browser_cap": defaults.MAX_BROWSERS,
+            # Times the shared Playwright driver died and was rebuilt mid-run. A
+            # non-zero, climbing value means the driver (and thus every browser at
+            # once) is unstable — the deepest mass-failure signal.
+            "driver_restarts": pool.driver_restart_count(),
+            # Recent driver-restart records (ts, reason, restart_count) for postmortem.
+            "driver_restart_recent": _incidents.recent(category=_incidents.CATEGORY_DRIVER_RESTART, limit=5),
+            # Sessions lost when the shared driver died (H4a): each {instance_id,
+            # kind, url, profile, reason, relaunched_to}. relaunched_to is null
+            # unless OCTOWRIGHT_DRIVER_RELAUNCH reopened it. Empty in the common
+            # (no driver death) case.
+            "driver_relaunch_mode": _driver_relaunch.DRIVER_RELAUNCH_MODE,
+            "lost_sessions": _driver_relaunch.recent_lost(limit=10),
+            # Memory-pressure governor (OCTOWRIGHT_MIN_FREE_MEMORY_MB). Both null
+            # when the guard is off (the default); when set, available_memory_mb
+            # nearing min_free_memory_mb means launches will start refusing.
+            **_memory_status(_sysresources),
             "live_scenarios": len(scenario_pool.list_live()),
             "stale_manifest_sessions": stale_preview,
             "stale_manifest_count": stale_count,
             "stale_manifest_list_truncated": stale_count > len(stale_preview),
+        },
+        # Renderer-crash + auto-recovery tallies (process-lifetime). Lets the
+        # operator/LLM see that "random crashes" are happening and whether they
+        # self-healed, instead of guessing. recovery_failures climbing means the
+        # reload isn't sticking (likely the browser process itself died).
+        "crash": {
+            "recovery_enabled": defaults.CRASH_RECOVERY_ENABLED,
+            "recovery_max": defaults.CRASH_RECOVERY_MAX,
+            **_crash_recovery.recovery_stats(),
+            # Recent per-crash records (instance_id, url, ts, outcome, attempts) so
+            # "what happened" is answerable from this call, not a log grep. On
+            # macOS each record is enriched at read time with the correlated
+            # `.ips` SIGSEGV signature (the OS writes it a beat after the crash,
+            # so it can't be attached when the incident is first recorded).
+            "recent": _crash_reports.enrich(_incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH, limit=10)),
         },
         "personas": {
             "count": len(persona_names),

@@ -16,7 +16,7 @@ const row: SessionSummary = {
 describe("renderSessionTable", () => {
   it("renders live and closed empty states", () => {
     const actions = { onRelaunch: vi.fn(), onDelete: vi.fn() };
-    expect(renderSessionTable([], true, actions).textContent).toBe("No live browsers.");
+    expect(renderSessionTable([], true, actions).textContent).toBe("No live sessions.");
     expect(renderSessionTable([], false, actions).textContent).toBe("No closed sessions yet.");
   });
 

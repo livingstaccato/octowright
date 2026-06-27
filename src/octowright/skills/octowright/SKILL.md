@@ -71,11 +71,25 @@ Check `macro_list` before manually implementing a common flow. Update macros via
 
 **Full details:** `reference/macros-and-advisor.md`
 
-### 5. When Octowright Is Unavailable
+### 5. When Octowright Is Unavailable — STOP IMMEDIATELY
 
-If Octowright tools vanish from your tool list, or a browser tool returns `Transport closed` / times out and **one retry still fails**, the server is **disconnected**. NEVER open a URL with a shell command (`open`/`xdg-open`/`start`/`osascript`) and report it as a browser — it's unmanaged, undriveable, and not an Octowright session. Don't claim a browser is open without a live `instance_id`. Stop, tell the user Octowright is disconnected, and give them reconnect steps **for the client they're using**. The only one to state confidently is Claude Code: `/mcp` → select **octowright** → **Reconnect**. For any other client, **ask the user which MCP client they're in** and have them use its own MCP reconnect/refresh control (or restart the client) — reconnect UIs vary by client and version, so don't guess an exact command you're unsure of.
+If Octowright tools vanish from your tool list, or **any** Octowright tool returns `Transport closed` / times out and **one retry still fails**: the server is **disconnected**. There is nothing you can do to fix this yourself. **Stop all browser work and tell the user.**
 
-**Full details + the ask-don't-guess flow:** `reference/transport-recovery.md`
+**The required response — exactly this, nothing more:**
+1. Tell the user: "Octowright is disconnected — I can't drive a browser until it's reconnected."
+2. If in Claude Code: `/mcp` → select **octowright** → **Reconnect**.
+3. For any other client, ask which client they're using and have them use its MCP reconnect control.
+4. Wait for them to confirm it's back. Then resume.
+
+**Hard stops — you are forbidden from doing any of these:**
+- Running shell commands to restart the daemon: `octowright restart`, `uv run octowright restart`, or any variant. The `octowright` binary is NOT on your shell PATH in most agent environments. Even when it is, restarting the daemon kills the current MCP stdio connection — it does NOT fix the client's handle. This has never worked and will never work. Do not try it.
+- Searching for the binary: `which octowright`, `find . -name octowright`, exploring `.codex/`, scanning `PATH`. This wastes tokens and can't fix a disconnected MCP client.
+- Probing daemon health: `curl http://127.0.0.1:6286/api/health` as a diagnostic step. Even if it answers, knowing the daemon is alive still doesn't reconnect the MCP client — only the user can do that.
+- Writing Playwright test scripts or any raw Playwright code as a substitute or "fallback." The user asked for a driven, recorded, Octowright-managed browser session. Playwright scripts are a different product and do not fulfill that request.
+- Substituting any other browser automation: shell `open`/`xdg-open`/`start`/`osascript`, Selenium, Puppeteer, or any non-Octowright tool.
+- Continuing to work on the browser task by any other means. The task requires Octowright. Without it, stop.
+
+**Full details:** `reference/transport-recovery.md`
 
 ## Common Mistakes
 
@@ -89,6 +103,8 @@ If Octowright tools vanish from your tool list, or a browser tool returns `Trans
 | Overlooking iframes | Tools fail to find visible elements | `browser_list_frames` → `browser_switch_frame` → re-run `browser_snapshot` (it descends into the active frame) |
 | Driving 3+ steps without recording an Advisor observation | Macro candidate never surfaces | Record on first occurrence; threshold is two matching signatures |
 | Faking a browser with shell `open` when Octowright is down | User gets an undriveable tab you wrongly report as "opened" | Never substitute `open`/`xdg-open`/`start`; tell the user to reconnect Octowright in their MCP client |
+| Running `octowright restart` or `which octowright` when disconnected | Wastes tokens; never fixes the MCP connection; binary isn't on agent PATH | Stop immediately; tell user to reconnect via their MCP client |
+| Writing Playwright scripts as a "fallback" when Octowright is down | Produces the wrong deliverable; user wanted a driven session, not a script | Stop immediately; tell user to reconnect |
 
 ## Rationalization Table
 
@@ -99,7 +115,10 @@ If Octowright tools vanish from your tool list, or a browser tool returns `Trans
 | "I'll close the browser at the end of the session." | If the agent crashes or hits its turn limit, the browser becomes a zombie. Close internal-use browsers after each task. |
 | "I'll set viewport_w/h so the screenshot is reproducible." | Locks the user's window so they can't resize. Only set a viewport for agent-internal screenshot work. |
 | "I know the selector by heart." | Sites change. `browser_snapshot` gives the aria-tree, which is more durable. |
-| "Octowright dropped, but I'll just `open` the URL so the user isn't blocked." | A shell-opened browser can't be driven, snapshotted, or recorded — it is NOT Octowright. Reporting it as "opened" misleads the user, who expects the driven/recorded browser. Tell them to reconnect Octowright in their MCP client. |
+| "Octowright dropped, but I'll just `open` the URL so the user isn't blocked." | A shell-opened browser can't be driven, snapshotted, or recorded — it is NOT Octowright. Reporting it as "opened" misleads the user. Tell them to reconnect. |
+| "I'll run `octowright restart` since I have shell access." | The binary isn't on the agent's PATH. Even if it were, restarting the daemon closes the stdio connection — it doesn't reconnect the MCP client. Only the user can do that. Stop and tell them. |
+| "I'll write Playwright tests so the user isn't blocked while Octowright is down." | The user asked for driven, recorded, Octowright-managed work. Raw Playwright scripts are a different product. Stop and wait for reconnect. |
+| "I'll probe `/api/health` to understand the situation." | Even knowing the daemon is alive doesn't fix the MCP client handle. You don't have the right shell environment reliably, and this burns tokens with no fix. Stop and tell the user to reconnect. |
 
 ## Quick Reference
 

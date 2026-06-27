@@ -49,7 +49,7 @@ def get_mcp_active_session_count() -> int:
     return _session_tracker.active_count()
 
 
-def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette:
+def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: str = "") -> Starlette:
     """Build the Starlette ASGI app. Stateless — safe to call from tests.
 
     When ``mcp_leader`` is True, mount FastMCP's streamable-HTTP transport at
@@ -82,12 +82,14 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1") -> Starlette
         from octowright._trace_propagation import TraceContextExtractionMiddleware
 
         traced_app = TraceContextExtractionMiddleware(tracked_app)
-        routes.append(
-            Mount(
-                "/mcp",
-                app=guard_sensitive_asgi_app(traced_app, host=host, side_effect_get=True),
-            )
-        )
+        # Capability-token auth INSIDE the host/origin guard: host/origin checked
+        # first (reject non-loopback before even reading the token), then the
+        # token gates the otherwise-unauthenticated /mcp transport. No-op when
+        # mcp_token is "" (no token) or the env knob disables it.
+        from octowright.http.bridge_auth import BridgeTokenGuard
+
+        gated_app = guard_sensitive_asgi_app(BridgeTokenGuard(traced_app, mcp_token), host=host, side_effect_get=True)
+        routes.append(Mount("/mcp", app=gated_app))
         # Delegate lifespan so the session manager starts with uvicorn.
         lifespan = mcp_app.router.lifespan_context
 

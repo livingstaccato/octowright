@@ -43,14 +43,39 @@ dependencies = [
     "anyio>=4.4.0",
     "provide-telemetry[otel]>=0.4.8",
     "click>=8.1",
-    # cryptography stopped shipping win_arm64 wheels after 46.0.3. Pinning
-    # to the 46.0.3.x range keeps Windows ARM64 installable (the alternative
-    # is a build from source via Rust + openssl, which the runner can't do).
-    # Revisit when cryptography resumes win_arm64 wheel coverage upstream.
+    # Security floor: cryptography >=48.0.1 fixes GHSA-537c-gmf6-5ccf everywhere
+    # a wheel exists (Linux, macOS, win-amd64).
+    "cryptography>=48.0.1; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
+    # Windows ARM64 has no cryptography wheel after 46.0.3 and the runner can't
+    # build from source, so it stays on the newest installable release. The
+    # pip-audit gate runs on Linux (patched 49.x), so this exception doesn't
+    # weaken it; revisit when upstream resumes win_arm64 wheel coverage.
     "cryptography>=46.0.3,<46.0.4; sys_platform == 'win32' and (platform_machine == 'ARM64' or platform_machine == 'arm64' or platform_machine == 'aarch64')",
     "pyyaml>=6",
-    "starlette>=0.40",
+    # starlette >=1.3.1 fixes CVE-2026-54282 / CVE-2026-54283.
+    "starlette>=1.3.1",
     "uvicorn[standard]>=0.30",
+    # Security floors — patched versions of otherwise-transitive deps flagged by
+    # pip-audit (CVE remediation): python-multipart CVE-2026-53538/39/40,
+    # msgpack GHSA-6v7p-g79w-8964, pydantic-settings GHSA-4xgf-cpjx-pc3j.
+    "python-multipart>=0.0.31",
+    "msgpack>=1.2.1",
+    "pydantic-settings>=2.14.2",
+]
+
+[project.optional-dependencies]
+# Optional terminal sessions: hosts a provide-uterm connector in-process (local
+# PTY shell + SSH), recorded to the same JSONL format as browsers. See AGENTS.md
+# "Terminal Sessions (optional)". Core never imports uterm; without this extra the
+# terminal_* tools simply don't register. `provide-uterm-server[gateway]` brings
+# asyncssh for the SSH connector. These provide-io ecosystem packages aren't on
+# PyPI yet; until they publish, [tool.uv.sources] resolves them from a sibling
+# checkout for local dev (uv strips those overrides from the built wheel, so
+# end users installing octowright[terminal] get them from PyPI).
+terminal = [
+    "provide-uterm>=0.4.0",
+    "provide-uterm-platform>=0.4.0",
+    "provide-uterm-server[gateway]>=0.4.0",
 ]
 
 [project.urls]
@@ -127,6 +152,18 @@ artifacts = [
     "src/octowright/server/frontend/*.svg",
 ]
 
+[tool.uv.sources]
+# Local-dev resolution for the unpublished provide-uterm ecosystem packages that
+# back the optional `terminal` extra (above). Expects the sibling repo checked
+# out at ../provide-uterm (the provide.io layout); `provide-uterm-client` is a
+# transitive dep of `provide-uterm-server`. uv strips these source overrides from
+# the published wheel, so a real `pip install octowright[terminal]` resolves the
+# same packages from PyPI once they publish. Remove this table at that point.
+provide-uterm = { path = "../provide-uterm/packages/provide-uterm", editable = true }
+provide-uterm-client = { path = "../provide-uterm/packages/provide-uterm-client", editable = true }
+provide-uterm-platform = { path = "../provide-uterm/packages/provide-uterm-platform", editable = true }
+provide-uterm-server = { path = "../provide-uterm/packages/provide-uterm-server", editable = true }
+
 [dependency-groups]
 # Mirrors provide-telemetry's dev toolchain so any contributor across the
 # provide-io ecosystem runs the same checks. Bump in lockstep with that project.
@@ -173,6 +210,7 @@ markers = [
     "live_browser: tests that require real browser engines installed",
     "engine_matrix: tests that exercise chromium/firefox/webkit matrices",
     "integration_local: tests that run against the local demo playground server",
+    "terminal: optional terminal-session tests; require the octowright[terminal] extra (provide-uterm). Auto-applied to everything under tests/terminal/. Select with -m terminal / exclude with -m 'not terminal'.",
 ]
 filterwarnings = [
     "ignore:websockets\\.legacy is deprecated;.*:DeprecationWarning:websockets\\.legacy",
@@ -217,8 +255,22 @@ explicit_package_bases = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["mcp.*", "provide.telemetry.*", "yaml"]
+# provide.uterm.* backs the optional `terminal` extra; it ships py.typed so it
+# types cleanly where installed (local dev), but on a core install / in CI the
+# extra is absent and its imports under src/octowright/terminal/ are unresolved.
+# ignore_missing_imports keeps mypy green in both setups.
+module = ["mcp.*", "provide.telemetry.*", "provide.uterm.*", "yaml"]
 ignore_missing_imports = true
+
+# ty equivalent of the mypy override above: scope the unresolved-import rule OFF
+# for the optional terminal package only, so a core install / CI (no provide.uterm)
+# stays green. Scoped to src/octowright/terminal/** so unresolved imports anywhere
+# else are still caught.
+[[tool.ty.overrides]]
+include = ["src/octowright/terminal/**"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
 
 [tool.codespell]
 skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,packages/*/coverage,packages/*/dist,package-lock.json"

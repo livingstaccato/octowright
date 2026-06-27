@@ -153,8 +153,12 @@ def _launch_result(root: Any) -> dict[str, Any]:
     return json.loads(root.result["content"][0]["text"])
 
 
-async def _run_dedup_check(mcp_url: str) -> None:
-    async with streamablehttp_client(mcp_url) as (read, write, _get_sid):
+async def _run_dedup_check(mcp_url: str, token: str) -> None:
+    # The leader's /mcp now requires the lockfile capability token; this direct
+    # client reads it from the (owner-only) lockfile and presents it, exactly as
+    # the follower bridge does.
+    headers = {"X-Octowright-Token": token} if token else None
+    async with streamablehttp_client(mcp_url, headers=headers) as (read, write, _get_sid):
         await _send_request(
             write,
             read,
@@ -243,7 +247,11 @@ def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> No
     try:
         mcp_url = _await_leader(lock_path, port, timeout=45.0)
         leader_pid = _leader_pid(lock_path)
-        anyio.run(_run_dedup_check, mcp_url)
+        from octowright import singleton as _sn
+
+        lock_info = _sn.read_lock(lock_path)
+        token = lock_info.token if lock_info is not None else ""
+        anyio.run(_run_dedup_check, mcp_url, token)
     finally:
         if follower.stdin:
             with contextlib.suppress(OSError):

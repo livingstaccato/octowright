@@ -167,6 +167,7 @@ class SessionIOMixin(SessionLike):
             force: Set to ``True`` to force a refresh even when the URL/key
                    matches the last cached capture.
         """
+        import asyncio
         import contextlib
 
         path = self._markdown_cache_path()
@@ -191,7 +192,10 @@ class SessionIOMixin(SessionLike):
             return path
 
         try:
-            html = await target.content()
+            # Cap at 10s: pages with busy JS (SPAs retrying auth, WebSocket floods)
+            # can hold the CDP evaluation lock for 60+ seconds, which stalls the
+            # asyncio event loop and delays every other MCP response in the process.
+            html = await asyncio.wait_for(target.content(), timeout=10.0)
             markdown = await self._extract_markdown(html)
             temp_path.write_text(markdown, encoding="utf-8")
             temp_path.replace(path)

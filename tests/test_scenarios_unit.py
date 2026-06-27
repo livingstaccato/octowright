@@ -31,6 +31,7 @@ from octowright.scenarios import (
     load_yaml_scenario,
     resolve_launch_kwargs,
     resolve_startup_macros,
+    resolve_terminal_launch,
 )
 from octowright.scenarios_pool import ScenarioPool
 
@@ -137,6 +138,48 @@ class TestValidateScenario:
         )
         _validate_scenario(s)  # does not raise
 
+    def test_terminal_participant_accepted(self) -> None:
+        s = Scenario(
+            name="t",
+            participants=[Participant(persona="alice", kind="terminal", role="operator", connector_type="pty")],
+        )
+        _validate_scenario(s)  # does not raise
+
+    def test_terminal_connector_type_none_treated_as_pty(self) -> None:
+        s = Scenario(
+            name="t",
+            participants=[Participant(persona="alice", kind="terminal", role="operator")],
+        )
+        _validate_scenario(s)  # connector_type None == pty default; does not raise
+
+    def test_terminal_bad_connector_type_rejected(self) -> None:
+        s = Scenario(
+            name="t",
+            participants=[Participant(persona="a", kind="terminal", role="x", connector_type="telnet")],
+        )
+        with pytest.raises(ValueError, match="connector_type"):
+            _validate_scenario(s)
+
+    def test_terminal_with_startup_macros_rejected(self) -> None:
+        s = Scenario(
+            name="t",
+            participants=[
+                Participant(persona="a", kind="terminal", role="x", connector_type="pty", startup_macros=["m"]),
+            ],
+        )
+        with pytest.raises(ValueError, match="startup_macros"):
+            _validate_scenario(s)
+
+    def test_browser_and_terminal_mixed_ok(self) -> None:
+        s = Scenario(
+            name="mixed",
+            participants=[
+                Participant(persona="dante", kind="chromium", role="player"),
+                Participant(persona="alice", kind="terminal", role="operator", connector_type="ssh"),
+            ],
+        )
+        _validate_scenario(s)  # does not raise
+
 
 # ---------------------------------------------------------------------------
 # YAML loader
@@ -211,6 +254,34 @@ class TestLoadYamlScenario:
         )
         with pytest.raises(ValueError, match="unsupported kind"):
             load_yaml_scenario(path.read_text(), path.stem)
+
+    def test_terminal_participant_yaml_round_trip(self, tmp_path: Path) -> None:
+        path = tmp_path / "term.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "name": "term",
+                    "participants": [
+                        {"persona": "ops", "kind": "terminal", "role": "operator"},
+                        {
+                            "persona": "remote",
+                            "kind": "terminal",
+                            "connector_type": "ssh",
+                            "host": "h",
+                            "port": 2222,
+                            "user": "deploy",
+                            "known_hosts": "/kh",
+                            "role": "operator",
+                        },
+                    ],
+                }
+            )
+        )
+        s = load_yaml_scenario(path.read_text(), path.stem)
+        pty, ssh = s.participants
+        assert pty.kind == "terminal" and pty.connector_type == "pty"  # defaulted
+        assert ssh.connector_type == "ssh" and ssh.host == "h" and ssh.port == 2222
+        assert ssh.user == "deploy" and ssh.known_hosts == "/kh"
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +478,45 @@ class TestResolveStartupMacros:
         assert resolve_startup_macros(p) == []
 
 
+class TestResolveTerminalLaunch:
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_pty(self) -> None:
+        kw = resolve_terminal_launch(
+            Participant(persona="a", kind="terminal", role="op", connector_type="pty", command="/bin/sh")
+        )
+        assert kw["kind"] == "pty"
+        assert kw["connector_config"] == {"command": "/bin/sh", "cols": 80, "rows": 24}
+        assert kw["profile"] == "a" and kw["protected"] is False and kw["label"] is None
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_pty_is_the_default_connector(self) -> None:
+        kw = resolve_terminal_launch(Participant(persona="a", kind="terminal", role="op"))
+        assert kw["kind"] == "pty"
+        assert kw["connector_config"]["command"] == "/bin/bash"
+
+    def test_ssh_explicit_args_win_over_persona_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _P:
+            app = {"ssh": {"host": "default-host", "user": "deploy", "key_path": "/k", "known_hosts": "/kh"}}
+
+        monkeypatch.setattr(_scenarios, "_load_persona_or_none", lambda name: _P())
+        kw = resolve_terminal_launch(
+            Participant(persona="a", kind="terminal", role="op", connector_type="ssh", host="explicit-host")
+        )
+        cfg = kw["connector_config"]
+        assert kw["kind"] == "ssh"
+        assert cfg["host"] == "explicit-host"  # participant wins
+        assert cfg["username"] == "deploy"  # persona default
+        assert cfg["client_key_path"] == "/k" and cfg["known_hosts"] == "/kh"
+        assert "command" not in cfg and "cols" not in cfg
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    def test_ssh_without_persona_or_args_omits_optionals(self) -> None:
+        kw = resolve_terminal_launch(Participant(persona="ghost", kind="terminal", role="op", connector_type="ssh"))
+        cfg = kw["connector_config"]
+        # No host/user/key/known_hosts anywhere → only the default port survives.
+        assert cfg == {"port": 22}
+
+
 # ---------------------------------------------------------------------------
 # ScenarioPool.get / start / stop / run_macro — error paths via stub pool
 # ---------------------------------------------------------------------------
@@ -482,6 +592,61 @@ class _StubPool:
         return {"closed": True}
 
 
+class _StubTerminalSession:
+    """Minimal terminal session — has instance_id + kind; no browser methods."""
+
+    def __init__(self, instance_id: str) -> None:
+        self.instance_id = instance_id
+        self.kind = "terminal"
+
+
+class _StubTerminalPool:
+    """launch / get / maybe_get / close, mirroring TerminalPool's surface."""
+
+    def __init__(self, *, launch_fails: int = 0) -> None:
+        self.launched: list[dict[str, Any]] = []
+        self.closed: list[str] = []
+        self.sessions: dict[str, _StubTerminalSession] = {}
+        self._launch_fails = launch_fails
+
+    async def launch(
+        self,
+        *,
+        kind: str,
+        connector_config: dict[str, Any],
+        label: str | None = None,
+        profile: str | None = None,
+        protected: bool = False,
+    ) -> dict[str, Any]:
+        if self._launch_fails > 0:
+            self._launch_fails -= 1
+            raise RuntimeError("forced terminal launch failure")
+        iid = f"term-{len(self.launched)}"
+        self.launched.append({"instance_id": iid, "kind": kind, "connector_config": connector_config})
+        self.sessions[iid] = _StubTerminalSession(iid)
+        return {
+            "instance_id": iid,
+            "kind": "terminal",
+            "connector_type": kind,
+            "label": label,
+            "profile": profile,
+            "log_path": f"/tmp/{iid}.jsonl",
+        }
+
+    def get(self, instance_id: str) -> _StubTerminalSession:
+        if instance_id not in self.sessions:
+            raise KeyError(instance_id)
+        return self.sessions[instance_id]
+
+    def maybe_get(self, instance_id: str) -> _StubTerminalSession | None:
+        return self.sessions.get(instance_id)
+
+    async def close(self, instance_id: str, *, force: bool = False) -> dict[str, Any]:
+        self.closed.append(instance_id)
+        self.sessions.pop(instance_id, None)
+        return {"closed": True}
+
+
 def _write_trivial_scenario(scenarios_dir: Path, name: str, participants: list[dict[str, Any]], **extra: Any) -> None:
     doc = {"name": name, "participants": participants, **extra}
     (scenarios_dir / f"{name}.yaml").write_text(yaml.safe_dump(doc))
@@ -512,6 +677,83 @@ class TestScenarioPoolStart:
         spool = ScenarioPool()
         with pytest.raises(RuntimeError, match="no participants"):
             await spool.start(name="empty", browser_pool=_StubPool())
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_mixed_browser_and_terminal_launch(self) -> None:
+        spec = Scenario(
+            name="mix",
+            participants=[
+                Participant(persona="dante", kind="chromium", role="player"),
+                Participant(persona="ops", kind="terminal", role="operator", connector_type="pty"),
+            ],
+        )
+        bp, tp = _StubPool(), _StubTerminalPool()
+        spool = ScenarioPool()
+        live = await spool.start(spec=spec, browser_pool=bp, terminal_pool=tp)
+        # Participants preserve original spec order across the partitioned launch.
+        assert [p["kind"] for p in live.participants] == ["chromium", "terminal"]
+        assert live.participants[1]["connector_type"] == "pty"
+        assert live.participants[1]["role"] == "operator"
+        assert len(tp.launched) == 1 and tp.launched[0]["kind"] == "pty"
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_terminal_participant_without_terminal_pool_raises(self) -> None:
+        spec = Scenario(
+            name="t",
+            participants=[Participant(persona="ops", kind="terminal", role="operator")],
+        )
+        spool = ScenarioPool()
+        with pytest.raises(RuntimeError, match="terminal"):
+            await spool.start(spec=spec, browser_pool=_StubPool(), terminal_pool=None)
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_browser_roster_error_skips_terminal_launch(self) -> None:
+        spec = Scenario(
+            name="mix",
+            participants=[
+                Participant(persona="dante", kind="chromium", role="player"),
+                Participant(persona="ops", kind="terminal", role="operator"),
+            ],
+        )
+        bp = _StubPool(
+            spawn_launched=[
+                {
+                    "instance_id": "iid-0",
+                    "kind": "chromium",
+                    "label": None,
+                    "profile": "dante",
+                    "url": None,
+                    "log_path": "/tmp/0.jsonl",
+                }
+            ],
+            spawn_errors=[{"spec": {"kind": "firefox"}, "error": "boom"}],
+        )
+        tp = _StubTerminalPool()
+        spool = ScenarioPool()
+        with pytest.raises(RuntimeError, match="failed to launch"):
+            await spool.start(spec=spec, browser_pool=bp, terminal_pool=tp)
+        assert tp.launched == []  # terminal not opened once the browser roster already errored
+        assert bp.closed == ["iid-0"]
+
+    @pytest.mark.usefixtures("empty_personas_dir")
+    @pytest.mark.asyncio
+    async def test_terminal_launch_failure_closes_browsers_and_raises(self) -> None:
+        spec = Scenario(
+            name="mix",
+            participants=[
+                Participant(persona="dante", kind="chromium", role="player"),
+                Participant(persona="ops", kind="terminal", role="operator"),
+            ],
+        )
+        bp, tp = _StubPool(), _StubTerminalPool(launch_fails=1)
+        spool = ScenarioPool()
+        with pytest.raises(RuntimeError, match="failed to launch"):
+            await spool.start(spec=spec, browser_pool=bp, terminal_pool=tp)
+        # The successfully-launched browser must be rolled back.
+        assert bp.closed == ["iid-0"]
 
     @pytest.mark.usefixtures("empty_personas_dir")
     @pytest.mark.asyncio
