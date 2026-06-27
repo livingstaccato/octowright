@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from octowright import defaults
-from octowright._paths import reject_unsafe_path
+from octowright._paths import atomic_write_text, reject_unsafe_path
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -67,7 +67,10 @@ def save_golden(
         "updated_at": _now(),
         "tree": tree,
     }
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Atomic temp-sibling + os.replace: a same-user attacker who swaps the
+    # destination for a symlink in the resolve()->write() window gets the
+    # symlink replaced, not followed (see atomic_write_text).
+    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False))
     return path
 
 
