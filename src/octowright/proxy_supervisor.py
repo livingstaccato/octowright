@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import itertools
+import os
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -49,6 +51,17 @@ _BRIDGE_RESUME = counter(
     "octowright_bridge_resume_total",
     description="In-flight requests re-sent to the leader after a reconnect (idempotent resume)",
 )
+_BRIDGE_SUSPENSION = counter(
+    "octowright_bridge_suspension_total",
+    description="Follower-process suspensions detected by the deadline watchdog (a client froze us, e.g. compaction)",
+)
+
+# A watch_deadlines iteration whose wall-clock gap exceeds its sleep interval by
+# more than this is a process *suspension* (the MCP client SIGSTOPped the
+# follower — e.g. Codex compaction freezing it), not normal scheduling jitter.
+# The frozen time would otherwise blow monotonic-based in-flight deadlines and
+# strand the now-stale leader session. (defaults.py is at its LOC ceiling.)
+SUSPEND_THRESHOLD_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_SUSPEND_THRESHOLD_SECONDS", "5.0"))
 
 log = get_logger(__name__)
 
@@ -109,6 +122,10 @@ class BridgeSupervisor:
         self.request_timeout_seconds = request_timeout_seconds
         self._in_flight: dict[str | int, InFlightRequest] = {}
         self._initialize_message: SessionMessage | None = None
+        # The notifications/initialized that follows the client's initialize. Cached
+        # so a reconnect replays the FULL handshake — without it the fresh leader
+        # session stays half-initialized and rejects calls with 400.
+        self._initialized_message: SessionMessage | None = None
         # Replays of the cached initialize use a fresh id per reconnect so the
         # leader doesn't see duplicate ids within a long-lived follower lifetime;
         # the matching response is swallowed here rather than forwarded, because
@@ -123,6 +140,7 @@ class BridgeSupervisor:
         self._synthetic_progress_tokens: set[Any] = set()
         self._progress_token_counter = itertools.count(1)
         self.request_timeouts = 0
+        self.suspensions = 0
         self.last_error: str | None = None
         self.remote_session_id: str | None = None
         self.reconnect_attempts = 0
@@ -287,6 +305,8 @@ class BridgeSupervisor:
         request_id = message_request_id(message)
         if is_request(message) and message_method(message) == "initialize":
             self._initialize_message = message
+        if message_method(message) == "notifications/initialized":
+            self._initialized_message = message
         if is_request(message) and request_id is not None:
             now = time.monotonic()
             timeout = self._timeout_for(message)
@@ -321,6 +341,11 @@ class BridgeSupervisor:
         replay_request = cached_root.model_copy(update={"id": replay_id})
         replay_message = SessionMessage(JSONRPCMessage(root=replay_request))
         await remote_write.send(replay_message)
+        # Complete the handshake on the fresh session: replay the cached
+        # notifications/initialized too, or the leader leaves the session
+        # half-initialized and 400s the next tool call.
+        if self._initialized_message is not None:
+            await remote_write.send(self._initialized_message)
 
     async def forward_remote_message(self, message: SessionMessage) -> None:
         progress_token = self._progress_token_of(message)
@@ -359,28 +384,67 @@ class BridgeSupervisor:
                 )
         await self.local_write.send(message)
 
-    async def watch_deadlines(self, interval: float = 0.1, reset_slot: _RemoteResetSlot | None = None) -> None:
+    def _handle_suspension(self, gap: float) -> None:
+        """The follower process was suspended ~``gap`` seconds (a client froze us,
+        e.g. Codex compaction SIGSTOPping the follower). In-flight deadlines are
+        ``time.monotonic``-based, so the frozen time consumed them unfairly —
+        shift each forward by ``gap`` so a request the freeze stranded isn't
+        instantly failed when we resume.
+
+        Deliberately does NOT force a reconnect: if the leader connection died
+        during the freeze, the reactive path (a read/send error or the httpx
+        timeout → reset → resume on a freshly-handshaken session) reconnects on
+        its own; if the connection survived, requests keep flowing. Forcing a
+        reconnect here instead races the in-flight forward and strands the very
+        call we're trying to protect."""
+        self.suspensions += 1
+        _BRIDGE_SUSPENSION.add(1)
+        self.last_error = f"follower suspended ~{gap:.0f}s (client freeze); shifted in-flight deadlines"
+        log.warning("octowright.bridge.follower_suspended", gap_seconds=round(gap, 1), in_flight=len(self._in_flight))
+        for item in self._in_flight.values():
+            item.deadline += gap
+
+    async def watch_deadlines(
+        self,
+        interval: float = 0.1,
+        reset_slot: _RemoteResetSlot | None = None,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
+    ) -> None:
+        last = monotonic()
         while True:
-            await anyio.sleep(interval)
-            now = time.monotonic()
-            expired = [item for item in self._in_flight.values() if item.deadline <= now]
-            for item in expired:
-                current = self._in_flight.pop(item.request_id, None)
-                if current is None or current.responded:
-                    continue
-                current.responded = True
-                self._discard_progress_token(current)
-                self.request_timeouts += 1
-                self.last_error = f"request {current.request_id!r} timed out while waiting for leader response"
-                # Record the full timeout duration so dashboards see the
-                # tail latency, not just the success path.
-                _BRIDGE_RPC_DURATION.record(
-                    now - current.started_at,
-                    attributes={"method": current.method or "unknown", "outcome": "timeout"},
-                )
-                await self.local_write.send(bridge_error(current.request_id, self.last_error))
-                if reset_slot is not None and reset_slot.cancel_scope is not None:
-                    reset_slot.cancel_scope.cancel()
+            await sleep(interval)
+            now = monotonic()
+            gap = now - last
+            last = now
+            # A gap far exceeding our sleep interval means the process was
+            # frozen (the MCP client suspended the follower). Don't fail the
+            # in-flight requests the freeze stranded — shift their deadlines
+            # instead (see _handle_suspension), and skip expiry this tick.
+            if gap > interval + SUSPEND_THRESHOLD_SECONDS:
+                self._handle_suspension(gap)
+                continue
+            await self._expire_overdue(now, reset_slot)
+
+    async def _expire_overdue(self, now: float, reset_slot: _RemoteResetSlot | None) -> None:
+        for item in [it for it in self._in_flight.values() if it.deadline <= now]:
+            current = self._in_flight.pop(item.request_id, None)
+            if current is None or current.responded:
+                continue
+            current.responded = True
+            self._discard_progress_token(current)
+            self.request_timeouts += 1
+            self.last_error = f"request {current.request_id!r} timed out while waiting for leader response"
+            # Record the full timeout duration so dashboards see the tail
+            # latency, not just the success path.
+            _BRIDGE_RPC_DURATION.record(
+                now - current.started_at,
+                attributes={"method": current.method or "unknown", "outcome": "timeout"},
+            )
+            await self.local_write.send(bridge_error(current.request_id, self.last_error))
+            if reset_slot is not None and reset_slot.cancel_scope is not None:
+                reset_slot.cancel_scope.cancel()
 
     async def fail_all_in_flight(self, reason: str) -> None:
         pending = list(self._in_flight.values())
