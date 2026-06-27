@@ -22,6 +22,28 @@ _LABEL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _PRIVATE_OFF = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
 
 
+def _recording_max_bytes() -> int:
+    """Per-recording byte ceiling, or 0 (unbounded) when disabled.
+
+    A long-lived session — or a hostile page spewing console output — can grow
+    its JSONL recording without bound and fill the disk. ``OCTOWRIGHT_RECORDING_MAX_BYTES``
+    caps it: once the file would exceed the ceiling the recorder writes a single
+    ``recording_truncated`` marker and stops appending. **OFF by default**
+    (unbounded, back-compat), mirroring ``OCTOWRIGHT_MIN_FREE_MEMORY_MB`` /
+    ``OCTOWRIGHT_IDLE_GRACE``: silently dropping recorded actions is a behavior
+    change an operator must opt into. A non-positive / falsey / unparsable
+    value keeps it off.
+    """
+    raw = os.environ.get("OCTOWRIGHT_RECORDING_MAX_BYTES", "").strip().lower()
+    if not raw or raw in _PRIVATE_OFF:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return value if value > 0 else 0
+
+
 def _recordings_private() -> bool:
     """Whether to lock recordings to the owner (0600 file / 0700 parent).
 
@@ -72,14 +94,42 @@ class Recorder:
                 os.chmod(self.log_path, 0o600)
         self._event_count = 0
         self._action_count = 0
+        # Disk-fill guard. _bytes_written counts bytes already on disk (so a
+        # reopened recording respects its current size); 0 ceiling = unbounded.
+        self._max_bytes = _recording_max_bytes()
+        self._bytes_written = self.log_path.stat().st_size if self._max_bytes else 0
+        self._truncated = False
 
     def record(self, action: str, **fields: Any) -> None:
+        if self._truncated:  # ceiling already hit — drop silently (marker already written)
+            return
         entry = {"ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "action": action, **fields}
-        self._fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        if self._max_bytes:
+            encoded = len(line.encode("utf-8"))
+            if self._bytes_written + encoded > self._max_bytes:
+                self._write_truncation_marker()
+                self._truncated = True
+                return
+            self._bytes_written += encoded
+        self._fh.write(line)
         self._fh.flush()
         self._event_count += 1
         if action not in _EVENT_ONLY_ACTIONS:
             self._action_count += 1
+
+    def _write_truncation_marker(self) -> None:
+        """Append a single bounded marker recording the cut. Bypasses the
+        ceiling itself so the cut is always visible to replay/export/discovery."""
+        marker = {
+            "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "action": "recording_truncated",
+            "limit_bytes": self._max_bytes,
+            "bytes_written": self._bytes_written,
+        }
+        with contextlib.suppress(OSError, ValueError):
+            self._fh.write(json.dumps(marker, ensure_ascii=False) + "\n")
+            self._fh.flush()
 
     @property
     def event_count(self) -> int:
