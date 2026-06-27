@@ -477,6 +477,28 @@ class TestNavigateUrlSanitization:
 
         assert _sanitize_url_for_span("https://octowright.com/a") == "https://octowright.com/a"
 
+    def test_sanitize_strips_userinfo(self) -> None:
+        """user:pass@ basic-auth credentials must not land in a span attribute."""
+        from octowright.session.core_page_mixin import _sanitize_url_for_span
+
+        out = _sanitize_url_for_span("https://alice:s3cret@octowright.com/a?token=x")
+        assert out == "https://octowright.com/a"
+        assert "alice" not in out
+        assert "s3cret" not in out
+
+    def test_sanitize_strips_userinfo_keeps_host_and_port(self) -> None:
+        """Stripping userinfo preserves host:port exactly (no IPv6/case mangling)."""
+        from octowright.session.core_page_mixin import _sanitize_url_for_span
+
+        out = _sanitize_url_for_span("https://user:pw@Example.COM:8443/p")
+        assert out == "https://Example.COM:8443/p"
+
+    def test_sanitize_strips_username_only_userinfo(self) -> None:
+        """A bare username (no password) is still userinfo and is dropped."""
+        from octowright.session.core_page_mixin import _sanitize_url_for_span
+
+        assert _sanitize_url_for_span("https://token@octowright.com/a") == "https://octowright.com/a"
+
     def test_sanitize_falls_back_on_parse_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If urlsplit raises, the helper returns the original URL untouched."""
         from octowright.session import core_page_mixin as _mixin
