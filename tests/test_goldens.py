@@ -343,3 +343,33 @@ def test_delete_golden_rejects_path_traversal_slug(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(g, "_slug", lambda name: "../etc/passwd")
     with pytest.raises(ValueError, match="resolves outside"):
         g.delete_golden("anything")
+
+
+def test_save_golden_defeats_post_resolve_symlink_swap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A symlink swapped in at the destination AFTER the containment check must be
+    replaced atomically, not followed — a file outside the goldens root stays untouched.
+
+    Reproduces the resolve()->write() TOCTOU window: reject_unsafe_path resolves a
+    clean path, then a same-user attacker plants a symlink at that path before the
+    write. A plain write_text follows it; an atomic temp-sibling + os.replace does not.
+    """
+    g = _import_goldens(monkeypatch, tmp_path)
+    sentinel = tmp_path / "outside.json"
+    sentinel.write_text('{"sentinel": true}', encoding="utf-8")
+
+    real_reject = g.reject_unsafe_path
+
+    def racing_reject(candidate: Path, root: Path, *, label: str) -> Path:
+        resolved = real_reject(candidate, root, label=label)
+        if not resolved.exists():  # attacker wins the race
+            resolved.symlink_to(sentinel)
+        return resolved
+
+    monkeypatch.setattr(g, "reject_unsafe_path", racing_reject)
+
+    g.save_golden(name="mygolden", tree={"role": "root"})
+
+    assert sentinel.read_text(encoding="utf-8") == '{"sentinel": true}'  # outside file untouched
+    target = g.GOLDENS_DIR / "mygolden.json"
+    assert not target.is_symlink()  # symlink replaced by a real file
+    assert json.loads(target.read_text(encoding="utf-8"))["tree"] == {"role": "root"}
