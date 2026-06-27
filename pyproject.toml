@@ -43,14 +43,20 @@ dependencies = [
     "anyio>=4.4.0",
     "provide-telemetry[otel]>=0.4.8",
     "click>=8.1",
-    # cryptography stopped shipping win_arm64 wheels after 46.0.3. Pinning
-    # to the 46.0.3.x range keeps Windows ARM64 installable (the alternative
-    # is a build from source via Rust + openssl, which the runner can't do).
-    # Revisit when cryptography resumes win_arm64 wheel coverage upstream.
-    "cryptography>=46.0.3,<46.0.4; sys_platform == 'win32' and (platform_machine == 'ARM64' or platform_machine == 'arm64' or platform_machine == 'aarch64')",
+    # Security floor: cryptography >=48.0.1 fixes GHSA-537c-gmf6-5ccf. Bumped
+    # globally (the old win_arm64 <46.0.4 pin is gone) — win-arm64 now resolves
+    # 48.0.1 and installs a wheel if one exists, else builds from source.
+    "cryptography>=48.0.1",
     "pyyaml>=6",
-    "starlette>=0.40",
+    # starlette >=1.3.1 fixes CVE-2026-54282 / CVE-2026-54283.
+    "starlette>=1.3.1",
     "uvicorn[standard]>=0.30",
+    # Security floors — patched versions of otherwise-transitive deps flagged by
+    # pip-audit (CVE remediation): python-multipart CVE-2026-53538/39/40,
+    # msgpack GHSA-6v7p-g79w-8964, pydantic-settings GHSA-4xgf-cpjx-pc3j.
+    "python-multipart>=0.0.31",
+    "msgpack>=1.2.1",
+    "pydantic-settings>=2.14.2",
 ]
 
 [project.optional-dependencies]
