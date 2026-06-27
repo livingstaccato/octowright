@@ -363,12 +363,12 @@ IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
 # client connected to one leader, so this bounds the *total* live browsers
 # across all of them — the lever against a single looping client filling the
 # screen with windows AND against peak memory pressure that drives renderer
-# crashes. Defaults ON at MAX_BROWSERS_DEFAULT: a positive value makes the
-# user-facing launch tools (browser_launch / browser_quick_launch /
-# browser_spawn_roster) refuse once the live count would exceed it. Internal
-# relaunch / handoff / scenario launches are NOT capped. ``0`` / ``off`` /
-# ``never`` / ``none`` / ``disabled`` (case-insensitive) or an unparsable value
-# disable it. Raise OCTOWRIGHT_MAX_BROWSERS for heavier multi-client fleets.
+# crashes. Defaults ON at MAX_BROWSERS_DEFAULT. The gate lives in the pool layer
+# (browser_pool.limits, at the roster.spawn_roster chokepoint + single-launch
+# shims), so browser_launch / browser_quick_launch / browser_spawn_roster AND
+# scenario_start (pool.spawn_roster directly) are all capped; internal relaunch /
+# handoff / crash-recovery use pool.launch and are NOT capped (they recover an
+# existing session). ``0``/``off``/``never``/``none``/``disabled`` disable it.
 MAX_BROWSERS_DEFAULT = "32"
 
 

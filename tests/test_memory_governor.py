@@ -70,10 +70,12 @@ def test_floor_above_available_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_memory_refusal_is_metered(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.browser_pool import limits as _limits
     from tests._metric_recorders import RecordingCounter
 
     refused = RecordingCounter()
-    monkeypatch.setattr(_lifecycle, "_LAUNCH_REFUSED", refused)
+    # The counter moved to the pool-layer limits module with the gate.
+    monkeypatch.setattr(_limits, "LAUNCH_REFUSED", refused)
     _set_floor(monkeypatch, 1024)
     _set_available(monkeypatch, 256)
     with pytest.raises(MemoryPressureError):

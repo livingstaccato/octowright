@@ -65,10 +65,13 @@ def test_enforce_cap_over_limit_raises(monkeypatch: pytest.MonkeyPatch, fake_poo
 
 
 def test_cap_refusal_is_metered(monkeypatch: pytest.MonkeyPatch, fake_pool: MagicMock) -> None:
+    from octowright.browser_pool import limits as _limits
     from tests._metric_recorders import RecordingCounter
 
     refused = RecordingCounter()
-    monkeypatch.setattr(_lifecycle, "_LAUNCH_REFUSED", refused)
+    # The counter now lives in the pool-layer limits module (the gate moved off
+    # the tool wrapper so the scenario path can't bypass it).
+    monkeypatch.setattr(_limits, "LAUNCH_REFUSED", refused)
     _set_cap(monkeypatch, 2)
     fake_pool.active_count.return_value = 2
     with pytest.raises(BrowserCapExceededError):
@@ -106,3 +109,34 @@ async def test_spawn_roster_allows_when_batch_fits(monkeypatch: pytest.MonkeyPat
     out = await _lifecycle.browser_spawn_roster([{"kind": "chromium"}, {"kind": "firefox"}])
     assert out == {"launched": [], "errors": []}
     fake_pool.spawn_roster.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_roster_chokepoint_enforces_for_scenario_bypass(
+    monkeypatch: pytest.MonkeyPatch, fake_pool: MagicMock
+) -> None:
+    """scenario_start calls ``pool.spawn_roster`` directly (bypassing the tool
+    wrapper's pre-check), so the cap must also live at the roster chokepoint —
+    otherwise a big scenario OOMs the shared host. Driving roster.spawn_roster
+    directly proves the gate is at the layer scenario_start actually hits."""
+    from octowright.browser_pool import roster
+
+    _set_cap(monkeypatch, 4)
+    fake_pool.active_count.return_value = 3
+    fake_pool.launch = AsyncMock()
+    with pytest.raises(BrowserCapExceededError):
+        await roster.spawn_roster(fake_pool, [{"kind": "chromium"}, {"kind": "firefox"}])
+    # All-or-nothing: not a single browser was launched.
+    fake_pool.launch.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_roster_chokepoint_allows_within_cap(monkeypatch: pytest.MonkeyPatch, fake_pool: MagicMock) -> None:
+    from octowright.browser_pool import roster
+
+    _set_cap(monkeypatch, 8)
+    fake_pool.active_count.return_value = 1
+    fake_pool.launch = AsyncMock(return_value={"instance_id": "x"})
+    out = await roster.spawn_roster(fake_pool, [{"kind": "chromium"}, {"kind": "firefox"}])
+    assert len(out["launched"]) == 2
+    assert fake_pool.launch.await_count == 2
