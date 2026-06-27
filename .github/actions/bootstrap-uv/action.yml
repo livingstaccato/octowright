@@ -8,7 +8,13 @@ inputs:
   sync-args:
     description: "Arguments passed to `uv sync`"
     required: false
-    default: "--all-groups --python \"${UV_PYTHON:-python}\""
+    # --frozen: install straight from the committed uv.lock without the resolution
+    # pass. That pass stats every [tool.uv.sources] path, including the editable
+    # ../provide-uterm sibling that backs the optional `terminal` extra and only
+    # exists in the provide.io dev layout — absent in CI, it would fail bootstrap.
+    # The extra is not in the core sync set, so --frozen installs core+dev and the
+    # terminal suite self-ignores (tests/terminal/conftest.py) when uterm is absent.
+    default: "--frozen --all-groups --python \"${UV_PYTHON:-python}\""
 runs:
   using: "composite"
   steps:
