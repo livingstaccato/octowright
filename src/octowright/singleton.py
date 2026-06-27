@@ -52,6 +52,10 @@ class LeaderInfo:
     http_port: int
     mcp_url: str
     started_at: float
+    # Capability token gating the /mcp transport. Held only in this 0600 lockfile;
+    # the follower presents it, the leader verifies it. Default "" keeps a
+    # pre-upgrade lockfile (no token key) parseable and disables the gate.
+    token: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -263,8 +267,12 @@ async def async_election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) 
         fh.close()
 
 
-def make_leader_info(http_host: str, http_port: int) -> LeaderInfo:
+def make_leader_info(http_host: str, http_port: int, *, token: str = "") -> LeaderInfo:
     """Build the lockfile record for ``this`` process becoming leader.
+
+    ``token`` is the bridge capability token, generated once by the caller
+    (``cli/serve``) so the exact same value is both written to the 0600 lockfile
+    here and handed to the /mcp guard at app-build time.
 
     Also stashes a monotonic-clock timestamp in process-local state so that
     callers in this same process can compute uptime without wall-clock skew
@@ -283,6 +291,7 @@ def make_leader_info(http_host: str, http_port: int) -> LeaderInfo:
         # client must POST to ``/mcp/`` (a bare ``/mcp`` returns 405).
         mcp_url=f"http://{http_host}:{http_port}/mcp/",
         started_at=time.time(),
+        token=token,
     )
 
 
