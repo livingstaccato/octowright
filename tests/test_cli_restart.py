@@ -480,6 +480,9 @@ def test_follower_pids_returns_bare_serve_pids(monkeypatch: pytest.MonkeyPatch) 
         )
 
     monkeypatch.setattr(_restart_mod.subprocess, "run", fake_run)
+    # Force the POSIX ps path so this exercises ps-output parsing on any host;
+    # the PowerShell path is covered separately by test_follower_pids_windows.
+    monkeypatch.setattr(_restart_mod.sys, "platform", "darwin")
     assert sorted(_restart_mod._follower_pids()) == [101, 404]
 
 
