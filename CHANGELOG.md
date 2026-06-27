@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-06-27
+
+A bridge-resilience patch plus a terminal-connector tidy.
+
+### Fixed
+- **The follower bridge survives an MCP-client compaction freeze.** When a client
+  (Codex/Claude compaction) SIGSTOPs the follower process, `time.monotonic()`
+  keeps advancing while every task is frozen — so on resume the deadline watchdog
+  saw in-flight requests already past due and failed them, and the reconnect that
+  followed returned `400` because the bridge replayed the cached `initialize` but
+  not the `notifications/initialized` after it (leaving the fresh leader session
+  half-initialized). The watchdog now detects the suspension (a wall-clock gap far
+  exceeding its sleep interval) and shifts in-flight deadlines forward by the
+  frozen span instead of failing them, and reconnect replays the **full**
+  handshake. New `OCTOWRIGHT_BRIDGE_SUSPEND_THRESHOLD_SECONDS` knob (default 5s)
+  and `octowright_bridge_suspension_total` counter.
+
+### Changed
+- **Terminal connector vocabulary: canonical `ssh, telnet, pty` ordering** in
+  `terminal/connector_config.py` (network connectors before local), matching the
+  transport-vocabulary convention. The external contract is unchanged — the
+  `terminal_launch` MCP `kind` arg and dispatch are preserved.
+
 ## [0.10.0] - 2026-06-26
 
 A feature + hardening release: optional terminal sessions, self-healing
