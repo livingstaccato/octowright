@@ -87,6 +87,21 @@ def resolve_leader_url(fallback_url: str) -> str:
     return fallback_url
 
 
+def resolve_leader_token() -> str:
+    """The bridge capability token from the 0600 lockfile, for the
+    ``X-Octowright-Token`` header the follower presents to the leader's /mcp.
+
+    Returned only when the lock's URL passes the same loopback gate as
+    ``resolve_leader_url`` — never hand the token to a rejected/remote URL, so a
+    poisoned lock that redirects the follower can't also harvest the token. ``""``
+    when there is no live lock or the lock predates the token (back-compat).
+    """
+    info = singleton.read_lock()
+    if info is not None and not singleton.is_stale(info) and _leader_url_is_safe(info.mcp_url):
+        return info.token
+    return ""
+
+
 def _leader_url_is_safe(mcp_url: str) -> bool:
     """Refuse to bridge to a leader URL whose host isn't loopback.
 
@@ -254,6 +269,11 @@ async def run_supervised_proxy(
 
                 while True:
                     remote_url = resolve_leader_url(leader_mcp_url)
+                    # Present the capability token from the 0600 lockfile so the
+                    # leader's /mcp guard admits us. Re-read each connect so a
+                    # restarted leader's fresh token is picked up.
+                    remote_token = resolve_leader_token()
+                    remote_headers = {"X-Octowright-Token": remote_token} if remote_token else None
                     # Use async with (not manual __aenter__/__aexit__) so the
                     # context manager's async generator is entered and exited
                     # in the same coroutine. Python 3.13 finalizes abandoned
@@ -272,6 +292,7 @@ async def run_supervised_proxy(
                         with _connect_scope:
                             async with streamablehttp_client(
                                 remote_url,
+                                headers=remote_headers,
                                 httpx_client_factory=httpx_factory,
                             ) as (remote_read, remote_write, get_sid):
                                 _connect_scope.deadline = math.inf
