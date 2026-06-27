@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf
 from octowright._tracing import histogram, span
 from octowright.defaults import (
     DEFAULT_ACTION_TIMEOUT_MS,
@@ -105,7 +106,10 @@ def _sanitize_url_for_span(url: str) -> str:
 
 
 def _reject_unsafe_url(url: str) -> None:
-    """Raise ValueError if ``url`` is on the deny-list of unsafe schemes."""
+    """Raise ValueError if ``url`` is on the deny-list of unsafe schemes, or the
+    active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every navigation entry
+    point (navigate / open_url / launch) and macro replay routes through here, so
+    one call covers them all."""
     if not isinstance(url, str) or not url:
         raise ValueError("navigate url must be a non-empty string")
     stripped = url.strip()
@@ -114,6 +118,7 @@ def _reject_unsafe_url(url: str) -> None:
         raise ValueError(f"navigate url missing scheme: {url!r}")
     if scheme.lower() in _NAV_DENIED_SCHEMES:
         raise ValueError(f"navigate url scheme {scheme!r} is not allowed (blocked: {sorted(_NAV_DENIED_SCHEMES)})")
+    ssrf.check_navigation_url(stripped)
 
 
 _WAIT_FOR_POLL_SECONDS = 0.05
