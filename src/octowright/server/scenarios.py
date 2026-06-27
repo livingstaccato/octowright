@@ -34,7 +34,7 @@ from octowright.mcp_types import (
     ScenarioWaitForSyncResult,
     TestSuiteCaseResult,
 )
-from octowright.server._state import mcp, pool, scenario_pool
+from octowright.server._state import mcp, pool, scenario_pool, terminal_pool
 
 
 @mcp.tool(structured_output=False, description="List scenario specs on disk (YAML or Python).")
@@ -55,12 +55,18 @@ def scenario_plan(name: str) -> ScenarioPlanResult:
     spec = scenario_mod.load_scenario(name)
     participants: list[dict[str, Any]] = []
     for p in spec.participants:
+        # Terminals launch via terminal_pool with a connector_config, not the
+        # browser launch kwargs — show the real shape so the dry-run is accurate.
+        if p.kind == "terminal":
+            launch_kwargs = scenario_mod.resolve_terminal_launch(p)
+        else:
+            launch_kwargs = scenario_mod.resolve_launch_kwargs(p)
         participants.append(
             {
                 "persona": p.persona,
                 "kind": p.kind,
                 "role": p.role,
-                "launch_kwargs": scenario_mod.resolve_launch_kwargs(p),
+                "launch_kwargs": launch_kwargs,
                 "startup_macros": scenario_mod.resolve_startup_macros(p),
             }
         )
@@ -84,7 +90,7 @@ def scenario_plan(name: str) -> ScenarioPlanResult:
     ),
 )
 async def scenario_start(name: str) -> ScenarioStartResult:
-    live = await scenario_pool.start(name=name, browser_pool=pool)
+    live = await scenario_pool.start(name=name, browser_pool=pool, terminal_pool=terminal_pool)
     publish_dashboard_invalidation_nowait("scenarios")
     publish_dashboard_invalidation_nowait("sessions")
     return {
@@ -103,7 +109,7 @@ async def scenario_start(name: str) -> ScenarioStartResult:
 )
 async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None) -> ScenarioStartResult:
     spec = scenario_mod.load_scenario_template(name, args or {})
-    live = await scenario_pool.start(spec=spec, browser_pool=pool)
+    live = await scenario_pool.start(spec=spec, browser_pool=pool, terminal_pool=terminal_pool)
     publish_dashboard_invalidation_nowait("scenarios")
     publish_dashboard_invalidation_nowait("sessions")
     return {
@@ -138,7 +144,7 @@ def scenario_status() -> ScenarioStatusResult:
     ),
 )
 async def scenario_stop(scenario_id: str) -> ScenarioStopResult:
-    result = await scenario_pool.stop(scenario_id=scenario_id, browser_pool=pool)
+    result = await scenario_pool.stop(scenario_id=scenario_id, browser_pool=pool, terminal_pool=terminal_pool)
     publish_dashboard_invalidation_nowait("scenarios")
     publish_dashboard_invalidation_nowait("sessions")
     return result
@@ -219,7 +225,9 @@ def scenario_participants(scenario_id: str, role: str | None = None) -> Scenario
     ),
 )
 def scenario_remap_participants(scenario_id: str, remaps: list[dict[str, Any]]) -> ScenarioRemapResult:
-    return scenario_pool.remap_participants(scenario_id=scenario_id, remaps=remaps, browser_pool=pool)
+    return scenario_pool.remap_participants(
+        scenario_id=scenario_id, remaps=remaps, browser_pool=pool, terminal_pool=terminal_pool
+    )
 
 
 @mcp.tool(
@@ -241,6 +249,8 @@ async def scenario_run_as_test(
     results: list[TestSuiteCaseResult] = []
 
     async def _run(p: dict[str, Any]) -> None:
+        if p.get("kind") == "terminal":
+            return  # verify macros are Playwright assertions; terminal participants are not test targets
         macro = live.spec.verify.get(p["role"])
         if not macro:
             results.append(

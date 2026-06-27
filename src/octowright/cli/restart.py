@@ -29,6 +29,8 @@ clients; those followers are the client's stdio transport.
 
 from __future__ import annotations
 
+import csv
+import io
 import os
 import signal
 import socket
@@ -71,27 +73,81 @@ def _leader_pid_from_lock() -> int | None:
     return info.pid if singleton.pid_is_alive(info.pid) else None
 
 
-def _looks_like_restart_target(command: str) -> bool:
-    """Return True for daemon/launcher ``serve`` processes restart may kill.
+def _command_port(command: str) -> int | None:
+    """The ``--http-port`` value in a serve command, or None if absent/unparsable."""
+    tokens = command.split()
+    for i, tok in enumerate(tokens):
+        if tok == "--http-port" and i + 1 < len(tokens):
+            try:
+                return int(tokens[i + 1])
+            except ValueError:
+                return None
+        if tok.startswith("--http-port="):
+            try:
+                return int(tok.split("=", 1)[1])
+            except ValueError:
+                return None
+    return None
 
-    Bare ``octowright serve`` processes are usually MCP stdio followers. Killing
-    them severs the connected client's transport, which is the failure mode
-    ``restart`` is supposed to recover from. Detached daemon launchers always
-    carry an explicit host/port, and daemon children carry ``--daemon-mode``.
+
+def _restart_target_port() -> int:
+    """The HTTP port this restart manages — the live lock's port, else the
+    configured default. The process sweep is scoped to it so restart NEVER stops
+    a daemon on a different port (an isolated/test daemon, or another project's)."""
+    info = singleton.read_lock()
+    if info is not None and singleton.pid_is_alive(info.pid):
+        return info.http_port
+    from octowright.defaults import HTTP_PORT
+
+    return HTTP_PORT
+
+
+def _looks_like_restart_target(command: str, target_port: int) -> bool:
+    """Return True for a daemon/launcher ``serve`` process ON ``target_port`` that
+    restart should stop.
+
+    Bare ``octowright serve`` processes are MCP stdio followers — killing them
+    severs the client's transport, the very failure restart recovers from, so
+    they're excluded. Detached daemons always carry an explicit ``--http-port``,
+    so matching that port is reliable AND keeps restart from cross-killing a
+    daemon on another port (the isolation bug an isolated-lock restart used to
+    hit). A daemon with no explicit port is left alone — the lockfile PID path
+    still covers the one daemon restart is actually replacing.
     """
     if "octowright serve" not in command:
         return False
-    return "--daemon-mode" in command or "--http-host" in command or "--http-port" in command
+    if "--daemon-mode" not in command and "--http-host" not in command and "--http-port" not in command:
+        return False
+    return _command_port(command) == target_port
 
 
-def _leader_pids_from_pgrep() -> list[int]:
-    """Find daemon/launcher ``octowright serve`` pids when the lock is stale.
+def _looks_like_follower(command: str) -> bool:
+    """Return True for bare MCP-follower ``serve`` processes.
 
-    Despite the historical name, this uses ``ps`` so we can inspect command
-    lines and avoid killing bare follower transports attached to MCP clients.
+    Followers are the stdio transport for an MCP client session (Claude Code,
+    Codex, etc.). They are NOT killed by default — killing them severs the
+    client's connection. ``--kill-followers`` sweeps them for a full reset
+    when sessions are already dead or the user explicitly wants a clean slate.
     """
+    if "octowright serve" not in command:
+        return False
+    return "--daemon-mode" not in command and "--http-host" not in command and "--http-port" not in command
+
+
+def _list_process_commands() -> list[tuple[int, str]]:
+    """Return ``[(pid, command_line), ...]`` for every live process.
+
+    Uses ``ps`` on POSIX and PowerShell ``Get-CimInstance`` on Windows
+    (same approach as ``process_reaper``). Returns an empty list on any
+    failure so callers degrade gracefully.
+    """
+    if sys.platform == "win32":
+        return _list_process_commands_windows()
+    return _list_process_commands_posix()
+
+
+def _list_process_commands_posix() -> list[tuple[int, str]]:
     try:
-        # Fixed `ps` argv, PATH-resolved system binary, no shell.
         out = subprocess.run(  # nosec B603 B607
             ["ps", "-axo", "pid=,command="],
             capture_output=True,
@@ -100,22 +156,64 @@ def _leader_pids_from_pgrep() -> list[int]:
         )
     except FileNotFoundError:
         return []
-    pids: list[int] = []
+    rows: list[tuple[int, str]] = []
     for line in out.stdout.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
             pid_text, command = line.split(None, 1)
+            rows.append((int(pid_text), command))
         except ValueError:
             continue
-        if not _looks_like_restart_target(command):
+    return rows
+
+
+def _list_process_commands_windows() -> list[tuple[int, str]]:
+    # ``wmic`` is deprecated on recent Windows; ``Get-CimInstance`` is current.
+    # Matches the pattern in ``process_reaper._list_processes_windows``.
+    script = "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"
+    try:
+        out = subprocess.run(  # nosec B603 B607
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return []
+    rows: list[tuple[int, str]] = []
+    reader = csv.reader(io.StringIO(out.stdout))
+    try:
+        header = next(reader)
+    except StopIteration:
+        return rows
+    try:
+        pid_idx = header.index("ProcessId")
+        cmd_idx = header.index("CommandLine")
+    except ValueError:
+        return rows
+    for row in reader:
+        if len(row) <= max(pid_idx, cmd_idx):
             continue
         try:
-            pids.append(int(pid_text))
+            rows.append((int(row[pid_idx]), row[cmd_idx] or ""))
         except ValueError:
             continue
-    return pids
+    return rows
+
+
+def _follower_pids() -> list[int]:
+    """Return PIDs of all live bare follower ``octowright serve`` processes."""
+    return [pid for pid, cmd in _list_process_commands() if _looks_like_follower(cmd)]
+
+
+def _leader_pids_from_pgrep(target_port: int) -> list[int]:
+    """Daemon/launcher ``octowright serve`` pids ON ``target_port`` (the port this
+    restart manages). Despite the historical name this uses ``_list_process_commands``
+    (``ps`` / PowerShell), so it can read command lines, skip bare followers, and —
+    crucially — stay scoped to the target port instead of sweeping every daemon."""
+    return [pid for pid, cmd in _list_process_commands() if _looks_like_restart_target(cmd, target_port)]
 
 
 def _send_signal(pid: int, sig: int) -> bool:
@@ -182,34 +280,69 @@ def _wait_for_port_free(host: str, port: int, timeout: float) -> bool:
     return _port_is_free(host, port)
 
 
-def _stop_leader(timeout: float) -> tuple[int, int]:
-    """SIGTERM all known leader pids, escalate to SIGKILL on holdouts.
+def _locked_pid_is_octowright(locked: int) -> bool:
+    """Whether the lockfile-recorded leader pid is really an ``octowright serve``.
 
-    Returns ``(stopped_count, kill9_count)``.
+    The 0600 lockfile is same-user-writable and a recorded pid can be recycled by
+    the OS to an unrelated process after the daemon dies. The port-scoped pgrep
+    path already verifies command lines; the lockfile path did not, so a stale or
+    poisoned lock could make restart SIGKILL a foreign / recycled pid. Verify the
+    pid's command line before trusting it. If the pid isn't in the process list
+    (a ps race), fall through to the pgrep path rather than killing blind.
     """
+    return any(pid == locked and "octowright serve" in cmd for pid, cmd in _list_process_commands())
+
+
+def _collect_target_pids(kill_followers: bool) -> set[int]:
+    """Return all PIDs that should be signalled."""
     pids: set[int] = set()
+    target_port = _restart_target_port()
     locked = _leader_pid_from_lock()
-    if locked:
+    if locked and _locked_pid_is_octowright(locked):
         pids.add(locked)
-    pids.update(_leader_pids_from_pgrep())
-    if not pids:
-        # Route to stderr so an agent driving restart can distinguish
-        # "nothing was running" from "stopped N processes" — the success
-        # message that follows on stdout reflects the actual end-state.
-        click.echo("no running octowright daemon found", err=True)
-        return 0, 0
+    elif locked:
+        click.echo(
+            f"lockfile leader pid {locked} is not an octowright daemon "
+            "(stale lock or recycled pid) — not killing it directly",
+            err=True,
+        )
+    pids.update(_leader_pids_from_pgrep(target_port))
+    if kill_followers:
+        extra = [p for p in _follower_pids() if p not in pids]
+        if extra:
+            click.echo(f"killing {len(extra)} follower process(es): {sorted(extra)}")
+        pids.update(extra)
+    return pids
 
-    click.echo(f"stopping {len(pids)} octowright process(es): {sorted(pids)}")
-    for pid in pids:
-        _send_signal(pid, signal.SIGTERM)
 
+def _escalate_survivors(pids: set[int], timeout: float) -> list[int]:
+    """Wait for each pid to exit; SIGKILL holdouts. Return pids still alive."""
     survivors = [pid for pid in pids if not _wait_for_pid_exit(pid, timeout)]
     if survivors:
         click.echo(f"  escalating to SIGKILL on {survivors}")
         for pid in survivors:
             _send_signal(pid, _FORCE_KILL)
             _wait_for_pid_exit(pid, 2.0)
+    return survivors
 
+
+def _stop_leader(timeout: float, *, kill_followers: bool = False) -> tuple[int, int]:
+    """SIGTERM all known leader pids, escalate to SIGKILL on holdouts.
+
+    When *kill_followers* is True, also sweeps bare MCP follower processes
+    (``octowright serve`` without daemon flags) so stale sessions from dead
+    clients don't accumulate.
+
+    Returns ``(stopped_count, kill9_count)``.
+    """
+    pids = _collect_target_pids(kill_followers)
+    if not pids:
+        click.echo("no running octowright daemon found", err=True)
+        return 0, 0
+    click.echo(f"stopping {len(pids)} octowright process(es): {sorted(pids)}")
+    for pid in pids:
+        _send_signal(pid, signal.SIGTERM)
+    survivors = _escalate_survivors(pids, timeout)
     singleton.remove_lock()
     return len(pids) - len(survivors), len(survivors)
 
@@ -292,6 +425,15 @@ def _wait_for_health(host: str, port: int, timeout: float) -> str | None:
     help="Stop the daemon (and reap browsers) without spawning a fresh one.",
 )
 @click.option(
+    "--kill-followers",
+    is_flag=True,
+    help=(
+        "Also kill bare MCP follower processes (octowright serve without daemon flags). "
+        "Use for a full reset when prior client sessions are already dead. "
+        "WARNING: severs any currently-connected MCP client transports."
+    ),
+)
+@click.option(
     "--timeout",
     type=float,
     default=10.0,
@@ -316,6 +458,7 @@ def restart(
     ctx: click.Context,
     keep_browsers: bool,
     no_start: bool,
+    kill_followers: bool,
     timeout: float,
     http_host: str,
     http_port: int,
@@ -323,9 +466,10 @@ def restart(
     """Stop the running octowright daemon, sweep orphans, start a fresh one.
 
     Useful when the daemon is wedged or needs a clean restart. The command
-    preserves bare follower transports owned by MCP clients.
+    preserves bare follower transports owned by MCP clients unless
+    --kill-followers is passed (full reset).
     """
-    stopped, killed = _stop_leader(timeout)
+    stopped, killed = _stop_leader(timeout, kill_followers=kill_followers)
     if not keep_browsers:
         _reap_browsers()
 

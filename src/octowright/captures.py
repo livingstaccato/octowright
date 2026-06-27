@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from octowright._paths import atomic_write_text
 from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CAPTURES_DIR
 
 # Capture-specific preview cap. Intentionally smaller than the session-level
@@ -143,7 +144,9 @@ def save_capture(
         "meta": source or {},
         "content": content,
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Atomic temp-sibling + os.replace so a symlink swapped in at the
+    # destination is replaced, not followed (see atomic_write_text).
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
     stat = path.stat()
     cleanup_captures(
         root=root,

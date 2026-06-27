@@ -14,7 +14,12 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import reject_unsafe_path
-from octowright.defaults import SCENARIO_TEMPLATES_DIR, SCENARIOS_DIR, SUPPORTED_KINDS
+from octowright.defaults import (
+    SCENARIO_TEMPLATES_DIR,
+    SCENARIOS_DIR,
+    SUPPORTED_KINDS,
+    SUPPORTED_TERMINAL_KINDS,
+)
 
 # ``LiveScenario`` and ``ScenarioPool`` are the runtime/registry classes —
 # their canonical home is ``octowright.scenarios_pool``. They are NOT re-
@@ -45,6 +50,17 @@ class Participant:
     stabilize: bool | None = None
     record_video: bool | None = None
     trace: bool | None = None
+    # Terminal participants (kind == "terminal"); connector_type defaults to "pty".
+    connector_type: str | None = None
+    command: str | None = None
+    cols: int | None = None
+    rows: int | None = None
+    host: str | None = None
+    port: int | None = None
+    user: str | None = None
+    key_path: str | None = None
+    known_hosts: str | None = None
+    insecure_no_host_check: bool | None = None
 
 
 @dataclass
@@ -57,12 +73,33 @@ class Scenario:
     verify: dict[str, str] = field(default_factory=dict)
 
 
+def _validate_participant_kind(s: Scenario, p: Participant) -> None:
+    """Validate a participant's kind. Terminal participants (kind == "terminal")
+    carry a connector_type (pty/ssh, default pty) and cannot use browser macros;
+    browser participants must name a supported engine. SUPPORTED_KINDS stays
+    browser-only so this never widens browser_launch / session_launch validation.
+    """
+    if p.kind == "terminal":
+        connector_type = p.connector_type or "pty"
+        if connector_type not in SUPPORTED_TERMINAL_KINDS:
+            raise ValueError(
+                f"scenario {s.name!r}: terminal participant has unsupported connector_type {p.connector_type!r} "
+                f"(expected one of {list(SUPPORTED_TERMINAL_KINDS)})"
+            )
+        if p.startup_macros:
+            raise ValueError(
+                f"scenario {s.name!r}: terminal participant {p.persona!r} cannot declare startup_macros "
+                "(Playwright macros don't apply to terminals)"
+            )
+    elif p.kind not in SUPPORTED_KINDS:
+        raise ValueError(f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}")
+
+
 def _validate_scenario(s: Scenario) -> None:
     s.fixtures = _validate_fixtures(s.fixtures, scenario_name=s.name)
     seen: set[tuple[str, str]] = set()
     for p in s.participants:
-        if p.kind not in SUPPORTED_KINDS:
-            raise ValueError(f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}")
+        _validate_participant_kind(s, p)
         if p.role not in _KNOWN_ROLES:
             log.warning(
                 "scenario.unknown_role",
@@ -113,11 +150,21 @@ def _load_yaml_participant(raw: Any, *, index: int, scenario_name: str) -> Parti
         )
     _validate_required_participant_strings(raw, index=index, scenario_name=scenario_name)
     startup_macros = _validate_startup_macros(raw.get("startup_macros"), index=index, scenario_name=scenario_name)
-    _validate_optional_ints(raw, ("viewport_w", "viewport_h"), index=index, scenario_name=scenario_name)
-    _validate_optional_bools(raw, ("stabilize", "record_video", "trace"), index=index, scenario_name=scenario_name)
+    _validate_optional_ints(
+        raw, ("viewport_w", "viewport_h", "port", "cols", "rows"), index=index, scenario_name=scenario_name
+    )
+    _validate_optional_bools(
+        raw,
+        ("stabilize", "record_video", "trace", "insecure_no_host_check"),
+        index=index,
+        scenario_name=scenario_name,
+    )
+    kind = raw["kind"]
+    # A terminal participant defaults to a local PTY when connector_type is omitted.
+    connector_type = raw.get("connector_type") or ("pty" if kind == "terminal" else None)
     return Participant(
         persona=raw["persona"],
-        kind=raw["kind"],
+        kind=kind,
         role=raw.get("role", "player"),
         url=raw.get("url"),
         startup_macros=startup_macros,
@@ -126,6 +173,16 @@ def _load_yaml_participant(raw: Any, *, index: int, scenario_name: str) -> Parti
         stabilize=raw.get("stabilize"),
         record_video=raw.get("record_video"),
         trace=raw.get("trace"),
+        connector_type=connector_type,
+        command=raw.get("command"),
+        cols=raw.get("cols"),
+        rows=raw.get("rows"),
+        host=raw.get("host"),
+        port=raw.get("port"),
+        user=raw.get("user"),
+        key_path=raw.get("key_path"),
+        known_hosts=raw.get("known_hosts"),
+        insecure_no_host_check=raw.get("insecure_no_host_check"),
     )
 
 
@@ -409,6 +466,60 @@ def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
         "record_video": p.record_video if p.record_video is not None else False,
         "trace": p.trace if p.trace is not None else False,
     }
+
+
+def _load_persona_or_none(name: str) -> Any:
+    from octowright import personas as _p
+
+    try:
+        return _p.load_persona(name)
+    except FileNotFoundError:
+        return None
+
+
+def resolve_terminal_launch(p: Participant) -> dict[str, Any]:
+    """Return kwargs for ``terminal_pool.launch(**kwargs)`` from a terminal Participant.
+
+    Note ``terminal_pool.launch``'s ``kind`` is the *connector* type (pty/ssh);
+    the session's own kind is always ``"terminal"``. SSH fields resolve
+    participant-override → persona ``app['ssh']`` default → omit. No password is
+    read from the scenario (scenarios are persisted): key-based / known_hosts auth
+    only — the pure builders live in ``octowright.terminal.connector_config`` so
+    this stays importable on a core install.
+    """
+    from octowright.terminal.connector_config import (
+        SSH_DEFAULT_PORT,
+        pty_connector_config,
+        ssh_connector_config,
+    )
+
+    connector_type = p.connector_type or "pty"
+    if connector_type == "ssh":
+        persona = _load_persona_or_none(p.persona)
+        ssh = (getattr(persona, "app", {}) or {}).get("ssh", {}) or {}
+
+        def _pick(attr: str, key: str) -> Any:
+            value = getattr(p, attr)
+            return value if value is not None else ssh.get(key)
+
+        port = p.port if p.port is not None else int(ssh.get("port", SSH_DEFAULT_PORT))
+        insecure = (
+            bool(p.insecure_no_host_check)
+            if p.insecure_no_host_check is not None
+            else bool(ssh.get("insecure_no_host_check", False))
+        )
+        cfg = ssh_connector_config(
+            host=_pick("host", "host"),
+            port=port,
+            user=_pick("user", "user"),
+            key_path=_pick("key_path", "key_path"),
+            password=None,
+            known_hosts=_pick("known_hosts", "known_hosts"),
+            insecure_no_host_check=insecure,
+        )
+    else:
+        cfg = pty_connector_config(command=p.command, cols=p.cols, rows=p.rows)
+    return {"kind": connector_type, "connector_config": cfg, "label": None, "profile": p.persona, "protected": False}
 
 
 def resolve_startup_macros(p: Participant) -> list[str]:

@@ -1,4 +1,4 @@
-export type Kind = "chromium" | "firefox" | "webkit";
+export type Kind = "chromium" | "firefox" | "webkit" | "terminal";
 
 export interface SessionSummary {
   id: string;
@@ -53,6 +53,8 @@ export interface SessionDetail extends SessionSummary {
   cache: CacheReport;
   aria?: string;
   macro_intent?: string;
+  /** "pty" | "ssh" for terminal sessions; absent/null for browsers. */
+  connector_type?: "pty" | "ssh" | null;
 }
 
 export interface RecordingEvent {
