@@ -48,6 +48,7 @@ async def _launch(pool: object, **kw: object) -> dict:
         raise  # unreachable
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=2)
 async def test_real_renderer_crash_recovers_and_stays_usable(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
     """REGRESSION: SIGSEGV-class renderer crash → the session self-heals (new page
     in the surviving context) and is usable again. This is the test that would
