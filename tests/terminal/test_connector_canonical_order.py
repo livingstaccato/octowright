@@ -54,3 +54,6 @@ def test_external_mcp_terminal_launch_kind_arg_preserved() -> None:
     src = inspect.getsource(terminal_launch)
     assert '"ssh"' in src, "ssh dispatch branch missing from terminal_launch"
     assert '"telnet"' in src, "telnet dispatch branch missing from terminal_launch"
+    assert '"ws"' not in src, (
+        "ws connector must not be added to terminal_launch dispatch (octowright has no ws connector)"
+    )
