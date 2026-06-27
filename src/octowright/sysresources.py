@@ -111,12 +111,59 @@ def _parse_ps_rss_kb(ps_output: str) -> int:
     return total
 
 
+def _windows_process_rss_bytes(pids: list[int]) -> int:
+    """Summed WorkingSetSize (≈ RSS, bytes) of ``pids`` via the Win32
+    ``GetProcessMemoryInfo`` API (ctypes — no psutil dep). Skips pids it can't
+    open and never raises; returns 0 on any failure. The whole body is gated on
+    ``sys.platform == 'win32'`` so type-checkers (run only on Linux CI) skip it."""
+    total = 0
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class _MemCounters(ctypes.Structure):
+            _fields_ = (
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            )
+
+        query_limited_information = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        for pid in pids:
+            handle = kernel32.OpenProcess(query_limited_information, False, pid)
+            if not handle:
+                continue
+            try:
+                counters = _MemCounters()
+                counters.cb = ctypes.sizeof(_MemCounters)
+                if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                    total += int(counters.WorkingSetSize)
+            finally:
+                kernel32.CloseHandle(handle)
+    return total
+
+
 def process_rss_bytes(pids: list[int]) -> int:
-    """Summed resident-set size (bytes) of ``pids`` via ``ps`` (no psutil dep), or
-    0 when the list is empty or ``ps`` can't be read. Never raises — a sampling
-    failure must not crash the housekeeping loop that calls it."""
+    """Summed resident-set size (bytes) of ``pids``, or 0 when the list is empty
+    or the read fails. POSIX reads via ``ps`` (no psutil dep); Windows uses the
+    Win32 ``GetProcessMemoryInfo`` API. Never raises — a sampling failure must
+    not crash the housekeeping loop that calls it."""
     if not pids:
         return 0
+    if sys.platform == "win32":
+        try:
+            return _windows_process_rss_bytes(pids)
+        except Exception:
+            return 0
     try:
         result = subprocess.run(  # nosec B603 B607 - absolute path, fixed flags, pid list only
             ["/bin/ps", "-o", "rss=", "-p", ",".join(str(p) for p in pids)],
