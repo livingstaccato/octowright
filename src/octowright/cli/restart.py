@@ -280,13 +280,32 @@ def _wait_for_port_free(host: str, port: int, timeout: float) -> bool:
     return _port_is_free(host, port)
 
 
+def _locked_pid_is_octowright(locked: int) -> bool:
+    """Whether the lockfile-recorded leader pid is really an ``octowright serve``.
+
+    The 0600 lockfile is same-user-writable and a recorded pid can be recycled by
+    the OS to an unrelated process after the daemon dies. The port-scoped pgrep
+    path already verifies command lines; the lockfile path did not, so a stale or
+    poisoned lock could make restart SIGKILL a foreign / recycled pid. Verify the
+    pid's command line before trusting it. If the pid isn't in the process list
+    (a ps race), fall through to the pgrep path rather than killing blind.
+    """
+    return any(pid == locked and "octowright serve" in cmd for pid, cmd in _list_process_commands())
+
+
 def _collect_target_pids(kill_followers: bool) -> set[int]:
     """Return all PIDs that should be signalled."""
     pids: set[int] = set()
     target_port = _restart_target_port()
     locked = _leader_pid_from_lock()
-    if locked:
+    if locked and _locked_pid_is_octowright(locked):
         pids.add(locked)
+    elif locked:
+        click.echo(
+            f"lockfile leader pid {locked} is not an octowright daemon "
+            "(stale lock or recycled pid) — not killing it directly",
+            err=True,
+        )
     pids.update(_leader_pids_from_pgrep(target_port))
     if kill_followers:
         extra = [p for p in _follower_pids() if p not in pids]
