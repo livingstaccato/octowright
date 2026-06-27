@@ -352,13 +352,21 @@ async def _run_leader(
 
     _upgrade.announce_upgrade_if_changed(set_notice=set_upgrade_notice, echo=lambda b: click.echo(b, err=True))
 
+    # Generate the bridge capability token once: the SAME value is written to the
+    # 0600 lockfile (for the follower to read) and handed to the /mcp guard. A
+    # follower (singleton) leader gets a fresh token; --no-singleton (inline)
+    # leaves it empty so the gate is a no-op.
+    import secrets as _secrets
+
+    leader_token = "" if no_singleton else _secrets.token_urlsafe(32)
+
     def _on_http_bound(host: str, port: int) -> None:
         from octowright.defaults import set_actual_http_port
 
         set_actual_http_port(port)
         if no_singleton:
             return
-        info = _sn.make_leader_info(host, port)
+        info = _sn.make_leader_info(host, port, token=leader_token)
         _sn.write_lock(info)
 
     mcp_task = _asyncio.create_task(run_stdio_with_notifications(mcp), name="octowright.mcp")
@@ -372,6 +380,7 @@ async def _run_leader(
                     port=bound_port,
                     retries=HTTP_PORT_RETRIES,
                     mcp_leader=not no_singleton,
+                    mcp_token=leader_token,
                     on_bound=_on_http_bound,
                 ),
                 name="octowright.http",
