@@ -101,12 +101,12 @@ class ScreencastManager:
     def viewer_count(self) -> int:
         return len(self._viewers)
 
-    async def add_viewer(self) -> ScreencastViewer:
+    async def add_viewer(self, *, fps: int | None = None) -> ScreencastViewer:
         async with self._lock:
             if not self._started:
                 await self._start_locked(self._session.page)
 
-            viewer = ScreencastViewer(fps=self._fps)
+            viewer = ScreencastViewer(fps=self._fps if fps is None else fps)
             if self.latest is not None:
                 viewer.offer(self.latest)
             self._viewers.add(viewer)
@@ -135,10 +135,17 @@ class ScreencastManager:
                 await self._stop_recovery_watcher_locked()
                 return
 
-            await self._session.page.screencast.stop()
-            self._started = False
-            self._viewers.remove(viewer)
-            await self._stop_recovery_watcher_locked()
+            stop_error: BaseException | None = None
+            try:
+                await self._session.page.screencast.stop()
+            except BaseException as exc:
+                stop_error = exc
+            finally:
+                self._started = False
+                self._viewers.remove(viewer)
+                await self._stop_recovery_watcher_locked()
+            if stop_error is not None:
+                raise stop_error
 
     def _handle_frame(self, frame: Mapping[str, object]) -> None:
         data = frame.get("data")
@@ -217,7 +224,7 @@ async def acquire_viewer(
 
     viewer: ScreencastViewer | None = None
     try:
-        viewer = await manager.add_viewer()
+        viewer = await manager.add_viewer(fps=fps)
         await _finish_acquire(instance_id, manager, cleanup_empty=False)
     except BaseException:
         try:
