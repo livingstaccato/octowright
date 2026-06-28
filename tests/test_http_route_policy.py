@@ -125,10 +125,12 @@ def test_sensitive_api_http_routes_are_guarded() -> None:
 def test_api_websocket_routes_are_explicitly_audited() -> None:
     """WebSocket routes cannot use guard_sensitive_http, so enumerate the approved in-handler guard."""
     sockets = [route for route in all_routes() if isinstance(route, WebSocketRoute) and route.path.startswith("/api/")]
-    assert [route.path for route in sockets] == ["/api/sessions/{id}/tail"]
+    assert [route.path for route in sockets] == [
+        "/api/sessions/{id}/tail",
+        "/api/sessions/{id}/screencast",
+    ]
 
-    endpoint = sockets[0].endpoint
-    assert getattr(endpoint, "__name__", "") == "TailEndpoint"
-    source = inspect.getsource(endpoint)
-    assert "sensitive_allowed_for_connection" in source
-    assert "websocket_origin_allowed" in source
+    for route in sockets:
+        source = inspect.getsource(route.endpoint)
+        assert "sensitive_allowed_for_connection" in source
+        assert "websocket_origin_allowed" in source
