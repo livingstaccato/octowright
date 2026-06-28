@@ -550,11 +550,13 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   renderTraceControls(refs.traceSlot, detail);
   renderFooter(refs.footer, detail);
 
-  // Live preview panel — polls /screenshot/now while session is live; shows a
-  // closed-state placeholder otherwise. Stop on page unload to release the timer.
+  // Live preview panel: streams /screencast while the session is live; shows a
+  // closed-state placeholder otherwise. Stop on page unload to release the socket.
   const livePreview = mountLivePreview(refs.livePreviewSlot, {
     sessionId: detail.id,
     isLive: detail.live,
+    fullscreenMode: detail.screencast?.fullscreen_mode ?? "native",
+    ...(detail.screencast ? { fps: detail.screencast.fps } : {}),
   });
   livePreview.start();
   window.addEventListener("beforeunload", () => livePreview.destroy());
@@ -621,9 +623,9 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
           });
         }
         // The server flips ``complete: true`` when the live session
-        // transitions to closed mid-connection. Stop polling /screenshot/now
-        // immediately so the user doesn't see a stream of "transient error
-        // (0)" indicators against a dead page.
+        // transitions to closed mid-connection. Close the live preview
+        // screencast immediately so the user sees a closed state instead of a
+        // reconnectable stream error against a dead page.
         if (msg.complete) {
           livePreview.markClosed();
         }

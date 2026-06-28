@@ -46,7 +46,7 @@ vi.mock("./api.js", async (importOriginal) => {
 });
 
 // mountLivePreview is a side-effectful DOM module — stub it to a no-op handle
-// so bootSession tests don't require a real polling implementation.
+// so bootSession tests don't require a real screencast stream implementation.
 vi.mock("./live-preview.js", () => ({
   mountLivePreview: vi.fn(() => ({
     start: vi.fn(),
@@ -405,6 +405,30 @@ describe("bootSession — live session", () => {
     });
 
     expect(openTail).toHaveBeenCalled();
+  });
+
+  it("passes screencast fps and fullscreen mode to the live preview", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(
+      makeDetail({
+        live: true,
+        screencast: { fps: 12, quality: 70, fullscreen_mode: "panel" },
+      }),
+    );
+
+    const { mountLivePreview } = await import("./live-preview.js");
+
+    await bootSession(root, "sess-live-screencast", {});
+
+    expect(mountLivePreview).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.objectContaining({
+        sessionId: "sess-1",
+        isLive: true,
+        fps: 12,
+        fullscreenMode: "panel",
+      }),
+    );
   });
 
   it("markClosed is called on the live-preview when tail msg.complete is true", async () => {
