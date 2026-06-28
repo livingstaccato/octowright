@@ -176,10 +176,13 @@ Ask your MCP client `"give me the octowright dashboard URL"` (it'll call the
   screenshots from disk via `DELETE /api/sessions/{id}/recording`. Live
   sessions reject the call with 409 (close them first).
 - **Per-session debugger** — click any session for a two-column page with the
-  embedded session video on the left, action timeline on the right. Click any
-  action in the timeline to seek the video to that moment. Tabs underneath
-  the timeline switch between **console messages** (filtered by level),
-  **downloads** (with a "missing" badge if the file was moved),
+  live browser preview or embedded session video on the left, action timeline
+  on the right. Live previews stream JPEG frames over one WebSocket at
+  `/api/sessions/{id}/screencast`, avoiding repeated screenshot polling.
+  Controls include pause/resume plus fullscreen in panel or native browser
+  mode. Click any action in the timeline to seek the video to that moment.
+  Tabs underneath the timeline switch between **console messages** (filtered
+  by level), **downloads** (with a "missing" badge if the file was moved),
   **markdown export**, and **screenshots** (lazy-loaded thumbnail grid).
 - **Live updates** — for currently-running sessions, the page opens a
   WebSocket to `/api/sessions/{id}/tail` and appends new events as they
@@ -619,6 +622,9 @@ On Windows, config uses `%APPDATA%\octowright\`, while state and cache use
 | `OCTOWRIGHT_HEADLESS` | auto | Explicit `0` / `1` overrides headless mode. Auto-detected: headed on macOS or Linux+display, headless on CI (`CI=true`) or Linux without `$DISPLAY` / `$WAYLAND_DISPLAY`. |
 | `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` | — | Per-navigation / per-action timeouts. |
 | `OCTOWRIGHT_HTTP_HOST` / `OCTOWRIGHT_HTTP_PORT` | `127.0.0.1` / `6286` | Dashboard bind address. Binding to `0.0.0.0` makes the HTTP sidecar reachable on your network, but sensitive dashboard/API/MCP routes stay blocked unless `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1` is also set. Only enable remote dashboard access on trusted networks because it exposes live browser state and local artifacts. If the port is in use, the server walks up 5 higher ports automatically. |
+| `OCTOWRIGHT_LIVE_SCREENCAST_FPS` | `10` | Positive integer cap for backend live-preview stream FPS and requested frontend `fps`. |
+| `OCTOWRIGHT_LIVE_SCREENCAST_QUALITY` | `70` | JPEG quality for live-preview frames, clamped to `1..100`. |
+| `OCTOWRIGHT_LIVE_SCREENCAST_FULLSCREEN_MODE` | `native` | Live-preview fullscreen behavior: `native` browser fullscreen or `panel` in-page fullscreen. |
 | `OCTOWRIGHT_IDLE_GRACE` | `300` | Seconds before auto-exit when the browser pool is empty. Use `--keep-alive` to disable. |
 
 ## CLI
