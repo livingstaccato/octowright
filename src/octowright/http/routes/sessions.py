@@ -36,6 +36,7 @@ from octowright.http.exposure import guard_sensitive_http
 from octowright.http.recording_sidecars import is_recording_sidecar
 from octowright.http.routes._common import _parse_bool, _read_json_body
 from octowright.http.session_artifacts import session_artifact_cache
+from octowright.session.screencast_config import screencast_config_block
 from octowright.terminal.errors import ProtectedTerminalCloseError
 
 
@@ -74,6 +75,7 @@ def _build_live_session_detail(live: Any, markdown_path: str | None) -> dict[str
         "console_count": int(getattr(live, "console_count", len(live.console))),
         "download_count": int(getattr(live, "download_count", len(live.downloads))),
         "page_count": int(getattr(live, "page_count", len(live.pages))),
+        "screencast": screencast_config_block(),
         "cache": _build_cache_components(
             session_id=live.instance_id,
             jsonl_path=Path(live.log_path),

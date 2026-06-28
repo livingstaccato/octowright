@@ -21,6 +21,7 @@ from octowright import takeover as _takeover
 from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool, upgrade_notice_snapshot
 from octowright.server.registry import registered_tool_names
+from octowright.session.screencast_config import screencast_config_block
 
 log = get_logger(__name__)
 
@@ -364,6 +365,7 @@ def octowright_status() -> dict[str, Any]:
             "names": persona_names,
         },
         "profile": profile_block,
+        "screencast": screencast_config_block(),
         "advisor": _advisor.status(),
         "bridge": {
             "state_path": str(defaults.BRIDGE_STATE_PATH),

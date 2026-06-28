@@ -26,6 +26,11 @@ def test_defaults():
     assert cfg.screencast_fps() == 10
     assert cfg.screencast_quality() == 70
     assert cfg.fullscreen_mode() == "native"
+    assert cfg.screencast_config_block() == {
+        "fps": 10,
+        "quality": 70,
+        "fullscreen_mode": "native",
+    }
 
 
 def test_fps_override_and_clamp(monkeypatch):
@@ -51,3 +56,15 @@ def test_fullscreen_mode_validation(monkeypatch):
     assert cfg.fullscreen_mode() == "panel"
     monkeypatch.setenv("OCTOWRIGHT_LIVE_SCREENCAST_FULLSCREEN_MODE", "weird")
     assert cfg.fullscreen_mode() == "native"
+
+
+def test_config_block_uses_env_values(monkeypatch):
+    monkeypatch.setenv("OCTOWRIGHT_LIVE_SCREENCAST_FPS", "30")
+    monkeypatch.setenv("OCTOWRIGHT_LIVE_SCREENCAST_QUALITY", "44")
+    monkeypatch.setenv("OCTOWRIGHT_LIVE_SCREENCAST_FULLSCREEN_MODE", "panel")
+
+    assert cfg.screencast_config_block() == {
+        "fps": 30,
+        "quality": 44,
+        "fullscreen_mode": "panel",
+    }
