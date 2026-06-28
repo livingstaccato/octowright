@@ -84,6 +84,20 @@ async def test_registry_shares_one_manager_per_session():
 
 
 @pytest.mark.asyncio
+async def test_shared_manager_uses_requested_fps_per_viewer():
+    sess = FakeSession("mixed-fps")
+    m1, v1 = await sc.acquire_viewer(sess, fps=1, quality=70)
+    m2, v2 = await sc.acquire_viewer(sess, fps=1000, quality=70)
+
+    assert m1 is m2
+    assert v1._min_gap == 1.0
+    assert v2._min_gap == 0.001
+
+    await sc.release_viewer(m1, v1)
+    await sc.release_viewer(m2, v2)
+
+
+@pytest.mark.asyncio
 async def test_registry_removes_manager_when_first_start_fails():
     sess = FakeSession("start-fails")
     sess.page.screencast = FakeScreencast(fail_start=True)
@@ -132,7 +146,7 @@ async def test_acquire_cancellation_after_add_viewer_releases_created_viewer():
 
 
 @pytest.mark.asyncio
-async def test_release_keeps_manager_registered_when_final_stop_fails():
+async def test_release_drops_manager_when_final_stop_fails():
     sess = FakeSession("stop-fails")
     sess.page.screencast = FakeScreencast(fail_stop=True)
     manager, viewer = await sc.acquire_viewer(sess, fps=10, quality=70)
@@ -140,10 +154,13 @@ async def test_release_keeps_manager_registered_when_final_stop_fails():
     with pytest.raises(RuntimeError, match="stop failed"):
         await sc.release_viewer(manager, viewer)
 
-    assert sc._managers.get(sess.instance_id) is manager
-    assert manager.viewer_count == 1
+    assert sc._managers.get(sess.instance_id) is None
+    assert manager.viewer_count == 0
+    assert manager._started is False
+    assert manager._recovery_task is None
     assert sess.page.screencast.stopped is False
 
     sess.page.screencast.fail_stop = False
-    await sc.release_viewer(manager, viewer)
-    assert sc._managers.get(sess.instance_id) is None
+    new_manager, new_viewer = await sc.acquire_viewer(sess, fps=10, quality=70)
+    assert new_manager is not manager
+    await sc.release_viewer(new_manager, new_viewer)
