@@ -1,0 +1,51 @@
+name: 🚀 Release
+
+# Publish to PyPI when a GitHub Release is published, via OIDC Trusted Publishing
+# (no API token / secret). One-time setup on pypi.org: project octowright ->
+# Publishing -> add a trusted publisher with repo livingstaccato/octowright,
+# workflow release.yml, environment pypi.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    name: 📦 Build + publish to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # OIDC token for PyPI Trusted Publishing
+      contents: read
+    steps:
+      # Check out the tag the release points at.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The dashboard SPA is gitignored, so build it before packaging or the
+      # wheel ships a server with no UI (check_wheel_assets.py enforces this).
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+      - name: Build frontend SPA
+        working-directory: packages/octowright-frontend
+        run: npm install && npm run build
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      # Build wheel + sdist with the PEP 517 backend (hatchling). `python -m
+      # build` ignores [tool.uv.sources], so the unpublished provide-uterm
+      # editable sibling path is not needed here.
+      - name: Build distributions
+        run: pipx run build --wheel --sdist
+
+      # Fail the release if the wheel/sdist is missing the bundled dashboard.
+      - name: Verify packaged assets
+        run: python scripts/check_wheel_assets.py
+
+      # Upload to PyPI over OIDC — no token. Requires the trusted publisher
+      # configured on pypi.org (see the header comment).
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
