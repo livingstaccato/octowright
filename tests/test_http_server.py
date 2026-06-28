@@ -401,7 +401,11 @@ def test_session_detail_live(
     client: TestClient,
     isolated_recordings: Path,
     empty_pool: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_LIVE_SCREENCAST_FPS", "30")
+    monkeypatch.setenv("OCTOWRIGHT_LIVE_SCREENCAST_QUALITY", "44")
+    monkeypatch.setenv("OCTOWRIGHT_LIVE_SCREENCAST_FULLSCREEN_MODE", "panel")
     log_path = isolated_recordings / "20260101T000000Z-chromium-detaillive00.jsonl"
     log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
     page = MagicMock()
@@ -434,6 +438,7 @@ def test_session_detail_live(
     assert body["console_count"] == 1200
     assert body["download_count"] == 15
     assert body["page_count"] == 2
+    assert body["screencast"] == {"fps": 30, "quality": 44, "fullscreen_mode": "panel"}
 
 
 def test_session_detail_live_includes_cache_report(

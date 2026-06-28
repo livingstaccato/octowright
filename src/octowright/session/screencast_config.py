@@ -28,3 +28,11 @@ def fullscreen_mode() -> str:
     if value in {"native", "panel"}:
         return value
     return "native"
+
+
+def screencast_config_block() -> dict[str, int | str]:
+    return {
+        "fps": screencast_fps(),
+        "quality": screencast_quality(),
+        "fullscreen_mode": fullscreen_mode(),
+    }
