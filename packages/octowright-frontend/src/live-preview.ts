@@ -6,6 +6,7 @@
 
 import { counter, histogram } from "@provide-io/telemetry";
 import { liveScreenshotUrl } from "./api.js";
+import { attachFullscreen, type FullscreenMode } from "./live-preview-fullscreen.js";
 import { getLogger } from "./telemetry.js";
 
 const log = getLogger("octowright.frontend.live-preview");
@@ -26,6 +27,8 @@ export interface LivePreviewOptions {
   intervalMs?: number;
   /** Default 'jpeg' (smaller bytes for repeated polls). */
   format?: "png" | "jpeg";
+  /** Default 'native'. Falls back to panel mode when native fullscreen is unavailable. */
+  fullscreenMode?: FullscreenMode;
 }
 
 export interface LivePreviewHandle {
@@ -148,6 +151,13 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   playBtn.setAttribute("aria-label", "Pause live preview");
   playBtn.textContent = "⏸"; // pause glyph; we start in playing state
 
+  const fullscreenBtn = document.createElement("button");
+  fullscreenBtn.type = "button";
+  fullscreenBtn.className = "live-preview__play";
+  fullscreenBtn.setAttribute("data-testid", "live-preview-fullscreen");
+  fullscreenBtn.setAttribute("aria-label", "Toggle fullscreen live preview");
+  fullscreenBtn.textContent = "⛶";
+
   const rateSelect = document.createElement("select");
   rateSelect.className = "live-preview__rate";
   rateSelect.setAttribute("data-testid", "live-preview-rate");
@@ -176,7 +186,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   errorIndicator.setAttribute("data-testid", "live-preview-error");
   errorIndicator.style.display = "none";
 
-  toolbar.append(playBtn, rateSelect, lastUpdate, errorIndicator, badge);
+  toolbar.append(playBtn, fullscreenBtn, rateSelect, lastUpdate, errorIndicator, badge);
 
   const img = document.createElement("img");
   img.className = "live-preview__img";
@@ -184,6 +194,8 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   img.setAttribute("alt", "Live browser preview");
 
   container.append(toolbar, img);
+
+  const fullscreen = attachFullscreen(fullscreenBtn, container, opts.fullscreenMode ?? "native");
 
   const setBadge = (which: "live" | "paused"): void => {
     const b = badgeForState(which);
@@ -337,6 +349,9 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       badge.textContent = b.text;
       playBtn.disabled = true;
       playBtn.setAttribute("aria-label", "Session closed");
+      fullscreenBtn.disabled = true;
+      fullscreenBtn.setAttribute("aria-label", "Session closed");
+      fullscreen.destroy();
       clearError();
       log.info({ event: "live_preview_marked_closed", session_id: opts.sessionId });
     },
@@ -347,6 +362,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
         clearInterval(state.timer);
         state.timer = null;
       }
+      fullscreen.destroy();
       container.innerHTML = "";
       container.classList.remove("live-preview");
       log.info({ event: "live_preview_destroyed", session_id: opts.sessionId });
