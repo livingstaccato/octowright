@@ -8,8 +8,29 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
+from typing import Protocol
+
+
+class _PageScreencast(Protocol):
+    async def start(
+        self,
+        *,
+        on_frame: Callable[[Mapping[str, object]], None],
+        quality: int,
+    ) -> None: ...
+
+    async def stop(self) -> None: ...
+
+
+class _ScreencastPage(Protocol):
+    screencast: _PageScreencast
+
+
+class _ScreencastSession(Protocol):
+    instance_id: str
+    page: _ScreencastPage
 
 
 class ScreencastViewer:
@@ -56,3 +77,128 @@ class ScreencastViewer:
             if not waiter.done():
                 waiter.set_result(None)
                 return
+
+
+class ScreencastManager:
+    """Per-session screencast lifecycle and viewer fan-out."""
+
+    def __init__(self, session: _ScreencastSession, *, fps: int, quality: int) -> None:
+        self._session = session
+        self._fps = fps
+        self._quality = quality
+        self._lock = asyncio.Lock()
+        self._viewers: set[ScreencastViewer] = set()
+        self._started = False
+        self._instance_id = str(session.instance_id)
+        self.latest: bytes | None = None
+
+    @property
+    def viewer_count(self) -> int:
+        return len(self._viewers)
+
+    async def add_viewer(self) -> ScreencastViewer:
+        async with self._lock:
+            if not self._viewers:
+                await self._session.page.screencast.start(
+                    on_frame=self._handle_frame,
+                    quality=self._quality,
+                )
+                self._started = True
+
+            viewer = ScreencastViewer(fps=self._fps)
+            if self.latest is not None:
+                viewer.offer(self.latest)
+            self._viewers.add(viewer)
+            return viewer
+
+    async def remove_viewer(self, viewer: ScreencastViewer) -> None:
+        async with self._lock:
+            if viewer not in self._viewers:
+                return
+
+            if len(self._viewers) > 1 or not self._started:
+                self._viewers.remove(viewer)
+                return
+
+            await self._session.page.screencast.stop()
+            self._started = False
+            self._viewers.remove(viewer)
+
+    def _handle_frame(self, frame: Mapping[str, object]) -> None:
+        data = frame.get("data")
+        if not isinstance(data, bytes):
+            return
+
+        self.latest = data
+        for viewer in tuple(self._viewers):
+            viewer.offer(data)
+
+
+_registry_lock = asyncio.Lock()
+_managers: dict[str, ScreencastManager] = {}
+_pending_acquires: dict[str, int] = {}
+
+
+async def acquire_viewer(
+    session: _ScreencastSession,
+    *,
+    fps: int,
+    quality: int,
+) -> tuple[ScreencastManager, ScreencastViewer]:
+    instance_id = str(session.instance_id)
+    async with _registry_lock:
+        manager = _managers.get(instance_id)
+        if manager is None:
+            manager = ScreencastManager(session, fps=fps, quality=quality)
+            _managers[instance_id] = manager
+        _pending_acquires[instance_id] = _pending_acquires.get(instance_id, 0) + 1
+
+    viewer: ScreencastViewer | None = None
+    try:
+        viewer = await manager.add_viewer()
+        await _finish_acquire(instance_id, manager, cleanup_empty=False)
+    except BaseException:
+        try:
+            if viewer is not None:
+                await manager.remove_viewer(viewer)
+        finally:
+            await _finish_acquire(instance_id, manager, cleanup_empty=True)
+        raise
+    return manager, viewer
+
+
+async def release_viewer(manager: ScreencastManager, viewer: ScreencastViewer) -> None:
+    try:
+        await manager.remove_viewer(viewer)
+    finally:
+        if manager.viewer_count == 0:
+            await _drop_empty_manager(manager)
+
+
+async def _finish_acquire(
+    instance_id: str,
+    manager: ScreencastManager,
+    *,
+    cleanup_empty: bool,
+) -> None:
+    async with _registry_lock:
+        pending = _pending_acquires.get(instance_id, 0)
+        if pending <= 1:
+            _pending_acquires.pop(instance_id, None)
+            pending = 0
+        else:
+            _pending_acquires[instance_id] = pending - 1
+            pending -= 1
+
+        if cleanup_empty and pending == 0 and manager.viewer_count == 0 and _managers.get(instance_id) is manager:
+            _managers.pop(instance_id, None)
+
+
+async def _drop_empty_manager(manager: ScreencastManager) -> None:
+    instance_id = manager._instance_id
+    async with _registry_lock:
+        if _managers.get(instance_id) is not manager:
+            return
+        if manager.viewer_count != 0 or _pending_acquires.get(instance_id, 0):
+            return
+        _managers.pop(instance_id, None)
