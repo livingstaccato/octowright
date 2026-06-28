@@ -12,6 +12,10 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from typing import Protocol
 
+from provide.telemetry import get_logger
+
+log = get_logger(__name__)
+
 
 class _PageScreencast(Protocol):
     async def start(
@@ -89,6 +93,7 @@ class ScreencastManager:
         self._lock = asyncio.Lock()
         self._viewers: set[ScreencastViewer] = set()
         self._started = False
+        self._recovery_task: asyncio.Task[None] | None = None
         self._instance_id = str(session.instance_id)
         self.latest: bytes | None = None
 
@@ -98,12 +103,8 @@ class ScreencastManager:
 
     async def add_viewer(self) -> ScreencastViewer:
         async with self._lock:
-            if not self._viewers:
-                await self._session.page.screencast.start(
-                    on_frame=self._handle_frame,
-                    quality=self._quality,
-                )
-                self._started = True
+            if not self._started:
+                await self._start_locked(self._session.page)
 
             viewer = ScreencastViewer(fps=self._fps)
             if self.latest is not None:
@@ -111,18 +112,33 @@ class ScreencastManager:
             self._viewers.add(viewer)
             return viewer
 
+    async def rebind(self, new_page: _ScreencastPage) -> None:
+        async with self._lock:
+            self._session.page = new_page
+            if not self._started or not self._viewers:
+                return
+
+            self._started = False
+            await self._start_locked(new_page)
+
     async def remove_viewer(self, viewer: ScreencastViewer) -> None:
         async with self._lock:
             if viewer not in self._viewers:
                 return
 
-            if len(self._viewers) > 1 or not self._started:
+            if len(self._viewers) > 1:
                 self._viewers.remove(viewer)
+                return
+
+            if not self._started:
+                self._viewers.remove(viewer)
+                await self._stop_recovery_watcher_locked()
                 return
 
             await self._session.page.screencast.stop()
             self._started = False
             self._viewers.remove(viewer)
+            await self._stop_recovery_watcher_locked()
 
     def _handle_frame(self, frame: Mapping[str, object]) -> None:
         data = frame.get("data")
@@ -132,6 +148,52 @@ class ScreencastManager:
         self.latest = data
         for viewer in tuple(self._viewers):
             viewer.offer(data)
+
+    async def _start_locked(self, page: _ScreencastPage) -> None:
+        await page.screencast.start(
+            on_frame=self._handle_frame,
+            quality=self._quality,
+        )
+        self._started = True
+        self._ensure_recovery_watcher_locked()
+
+    def _ensure_recovery_watcher_locked(self) -> None:
+        if self._recovery_task is not None and not self._recovery_task.done():
+            return
+        self._recovery_task = asyncio.create_task(
+            self._watch_recovery(),
+            name=f"octowright.screencast.recovery.{self._instance_id}",
+        )
+
+    async def _stop_recovery_watcher_locked(self) -> None:
+        task = self._recovery_task
+        self._recovery_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    async def _watch_recovery(self) -> None:
+        from octowright.browser_pool.session_event_bus import session_event_bus
+
+        async with session_event_bus.subscribe() as sub:
+            while True:
+                event = await sub.get()
+                if getattr(event, "instance_id", None) != self._instance_id:
+                    continue
+                if getattr(event, "outcome", None) != "recovered":
+                    continue
+                try:
+                    await self.rebind(self._session.page)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.warning(
+                        "octowright.screencast.rebind_failed",
+                        instance_id=self._instance_id,
+                        error=repr(exc),
+                    )
 
 
 _registry_lock = asyncio.Lock()
