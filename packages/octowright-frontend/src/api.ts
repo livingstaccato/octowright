@@ -330,3 +330,10 @@ export function tailWebSocketUrl(id: string, since = 0): string {
   const qs = since > 0 ? `?since=${since}` : "";
   return `${proto}//${host}/api/sessions/${encodeURIComponent(id)}/tail${qs}`;
 }
+
+export function screencastWsUrl(id: string, opts: { fps?: number } = {}): string {
+  const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+  const host = typeof window !== "undefined" ? window.location.host : "localhost";
+  const qs = opts.fps !== undefined ? `?fps=${encodeURIComponent(String(opts.fps))}` : "";
+  return `${proto}//${host}/api/sessions/${encodeURIComponent(id)}/screencast${qs}`;
+}
