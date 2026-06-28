@@ -36,6 +36,12 @@ describe("mountLivePreview — closed session", () => {
     const badge = container.querySelector('[data-testid="live-preview-badge"]');
     expect(badge?.textContent).toBe("CLOSED");
   });
+
+  it("does not render fullscreen controls for closed sessions", () => {
+    const handle = mountLivePreview(container, { sessionId: "abc", isLive: false });
+    expect(container.querySelector('[data-testid="live-preview-fullscreen"]')).toBeNull();
+    handle.destroy();
+  });
 });
 
 describe("mountLivePreview — live session", () => {
@@ -46,6 +52,77 @@ describe("mountLivePreview — live session", () => {
     expect(container.querySelector('[data-testid="live-preview-rate"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="live-preview-timestamp"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="live-preview-badge"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="live-preview-fullscreen"]')).not.toBeNull();
+    handle.destroy();
+  });
+
+  it("fullscreen button toggles panel mode when configured", () => {
+    const handle = mountLivePreview(container, {
+      sessionId: "live-fullscreen-panel",
+      isLive: true,
+      fullscreenMode: "panel",
+    });
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="live-preview-fullscreen"]',
+    );
+    if (!fullscreenBtn) throw new Error("fullscreen button missing");
+
+    fullscreenBtn.click();
+    expect(container.classList.contains("live-preview--maximized")).toBe(true);
+    fullscreenBtn.click();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+    handle.destroy();
+  });
+
+  it("destroy cleans up fullscreen controller state and listeners", () => {
+    const handle = mountLivePreview(container, {
+      sessionId: "live-fullscreen-destroy",
+      isLive: true,
+      fullscreenMode: "panel",
+    });
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="live-preview-fullscreen"]',
+    );
+    if (!fullscreenBtn) throw new Error("fullscreen button missing");
+
+    fullscreenBtn.click();
+    handle.destroy();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+
+    fullscreenBtn.click();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+  });
+
+  it("markClosed disables fullscreen and prevents stale native fallback", async () => {
+    let rejectRequest!: (err: Error) => void;
+    const req = vi.fn(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectRequest = reject;
+        }),
+    );
+    (container as unknown as { requestFullscreen: () => Promise<void> }).requestFullscreen = req;
+    const handle = mountLivePreview(container, {
+      sessionId: "live-fullscreen-mark-closed",
+      isLive: true,
+      fullscreenMode: "native",
+    });
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="live-preview-fullscreen"]',
+    );
+    if (!fullscreenBtn) throw new Error("fullscreen button missing");
+
+    fullscreenBtn.click();
+    handle.markClosed();
+    expect(fullscreenBtn.disabled).toBe(true);
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+
+    rejectRequest(new Error("denied"));
+    await Promise.resolve();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+
+    fullscreenBtn.click();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
     handle.destroy();
   });
 
