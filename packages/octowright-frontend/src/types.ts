@@ -53,6 +53,11 @@ export interface SessionDetail extends SessionSummary {
   cache: CacheReport;
   aria?: string;
   macro_intent?: string;
+  screencast?: {
+    fps: number;
+    quality: number;
+    fullscreen_mode: "native" | "panel";
+  };
   /** "pty" | "ssh" for terminal sessions; absent/null for browsers. */
   connector_type?: "pty" | "ssh" | null;
 }
