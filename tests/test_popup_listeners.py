@@ -13,6 +13,13 @@ import sys
 import pytest
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    # BrowserPool drives Playwright's asyncio API; the trio backend can crash
+    # macOS WebKit before this test reaches the popup-listener path.
+    return "asyncio"
+
+
 # WebKit's popup behavior under virtualized CI runners differs from a real
 # desktop session: programmatic popups (window.open from JS, no user gesture)
 # get closed by the popup blocker before the first popup.evaluate() lands,
