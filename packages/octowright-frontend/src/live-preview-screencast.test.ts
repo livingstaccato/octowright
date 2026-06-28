@@ -3,15 +3,31 @@ import { screencastWsUrl } from "./api.js";
 import { openScreencast } from "./live-preview-screencast.js";
 
 class FakeWS {
-  listeners: Record<string, ((e: any) => void)[]> = {};
+  listeners: Record<string, EventListener[]> = {};
   binaryType: BinaryType = "arraybuffer";
   close = vi.fn();
-  addEventListener(type: string, cb: (e: any) => void) {
-    (this.listeners[type] ??= []).push(cb);
+
+  constructor(readonly url = "") {}
+
+  addEventListener(type: string, cb: EventListener) {
+    const listeners = this.listeners[type] ?? [];
+    listeners.push(cb);
+    this.listeners[type] = listeners;
   }
-  emit(type: string, e: any) {
-    (this.listeners[type] ?? []).forEach((cb) => cb(e));
+  emit(type: string, e: Event) {
+    for (const cb of this.listeners[type] ?? []) {
+      cb(e);
+    }
   }
+}
+
+function webSocketCtorRecording(instances: FakeWS[]): typeof WebSocket {
+  return class extends FakeWS {
+    constructor(url: string) {
+      super(url);
+      instances.push(this);
+    }
+  } as unknown as typeof WebSocket;
 }
 
 afterEach(() => {
@@ -23,10 +39,11 @@ describe("openScreencast", () => {
     const instances: FakeWS[] = [];
     vi.stubGlobal(
       "WebSocket",
-      function () {
-        const ws = new FakeWS();
-        instances.push(ws);
-        return ws;
+      class extends FakeWS {
+        constructor(url: string) {
+          super(url);
+          instances.push(this);
+        }
       },
     );
     openScreencast("ws://x/screencast", { onFrame: () => {} });
@@ -34,82 +51,86 @@ describe("openScreencast", () => {
   });
 
   it("sets binaryType to blob", () => {
-    const ws = new FakeWS();
+    const instances: FakeWS[] = [];
     openScreencast("ws://x/screencast", {
       onFrame: () => {},
-      webSocketCtor: function () {
-        return ws;
-      } as unknown as typeof WebSocket,
+      webSocketCtor: webSocketCtorRecording(instances),
     });
-    expect(ws.binaryType).toBe("blob");
+    expect(instances[0]?.binaryType).toBe("blob");
   });
 
   it("delivers binary frames as Blobs", () => {
-    const ws = new FakeWS();
+    const instances: FakeWS[] = [];
     const frames: Blob[] = [];
     openScreencast("ws://x/screencast", {
       onFrame: (b) => frames.push(b),
-      webSocketCtor: function () {
-        return ws;
-      } as unknown as typeof WebSocket,
+      webSocketCtor: webSocketCtorRecording(instances),
     });
-    ws.emit("message", { data: new Blob([new Uint8Array([1, 2, 3])]) });
+    const ws = instances[0];
+    if (!ws) throw new Error("socket missing");
+    ws.emit("message", new MessageEvent("message", { data: new Blob([new Uint8Array([1, 2, 3])]) }));
     expect(frames.length).toBe(1);
   });
 
   it("ignores non-Blob messages", () => {
-    const ws = new FakeWS();
+    const instances: FakeWS[] = [];
     const onFrame = vi.fn();
     openScreencast("ws://x/screencast", {
       onFrame,
-      webSocketCtor: function () {
-        return ws;
-      } as unknown as typeof WebSocket,
+      webSocketCtor: webSocketCtorRecording(instances),
     });
-    ws.emit("message", { data: new Uint8Array([1, 2, 3]) });
+    const ws = instances[0];
+    if (!ws) throw new Error("socket missing");
+    ws.emit("message", new MessageEvent("message", { data: new Uint8Array([1, 2, 3]) }));
     expect(onFrame).not.toHaveBeenCalled();
   });
 
   it("close() closes the socket", () => {
-    const ws = new FakeWS();
+    const instances: FakeWS[] = [];
     const handle = openScreencast("ws://x", {
       onFrame: () => {},
-      webSocketCtor: function () {
-        return ws;
-      } as unknown as typeof WebSocket,
+      webSocketCtor: webSocketCtorRecording(instances),
     });
+    const ws = instances[0];
+    if (!ws) throw new Error("socket missing");
     handle.close();
     expect(ws.close).toHaveBeenCalled();
   });
 
   it("close() does not throw if socket close throws", () => {
-    const ws = new FakeWS();
-    ws.close.mockImplementation(() => {
-      throw new Error("close failed");
-    });
+    const instances: FakeWS[] = [];
     const handle = openScreencast("ws://x", {
       onFrame: () => {},
-      webSocketCtor: function () {
-        return ws;
-      } as unknown as typeof WebSocket,
+      webSocketCtor: webSocketCtorRecording(instances),
+    });
+    const ws = instances[0];
+    if (!ws) throw new Error("socket missing");
+    ws.close.mockImplementation(() => {
+      throw new Error("close failed");
     });
     expect(() => handle.close()).not.toThrow();
   });
 
   it("forwards error and close callbacks", () => {
-    const ws = new FakeWS();
+    const instances: FakeWS[] = [];
     const onError = vi.fn();
     const onClose = vi.fn();
     openScreencast("ws://x", {
       onFrame: () => {},
       onError,
       onClose,
-      webSocketCtor: function () {
-        return ws;
-      } as unknown as typeof WebSocket,
+      webSocketCtor: webSocketCtorRecording(instances),
     });
+    const ws = instances[0];
+    if (!ws) throw new Error("socket missing");
     ws.emit("error", new Event("error"));
-    ws.emit("close", { code: 1000, reason: "ok", wasClean: true });
+    const closeEvent = new Event("close") as CloseEvent;
+    Object.defineProperties(closeEvent, {
+      code: { value: 1000 },
+      reason: { value: "ok" },
+      wasClean: { value: true },
+    });
+    ws.emit("close", closeEvent);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
