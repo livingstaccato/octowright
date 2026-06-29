@@ -38,6 +38,8 @@ class _FakeSession:
         return await self._record("resize", width, height)
 
     async def evaluate(self, expression: str) -> Any:
+        if expression == "largeString()":
+            return "x" * 20
         return await self._record("evaluate", expression)
 
     async def wait_for(self, *, selector: str | None, text: str | None, timeout_ms: int | None) -> Any:
@@ -61,6 +63,7 @@ class _FakePool:
 
 @pytest.fixture
 def fake_pool(monkeypatch: pytest.MonkeyPatch) -> _FakePool:
+    monkeypatch.delenv("OCTOWRIGHT_PROFILE", raising=False)
     sessions = {
         "alpha": _FakeSession("alpha"),
         "beta": _FakeSession("beta"),
@@ -105,8 +108,91 @@ async def test_browser_each_resize_forwards_width_and_height(fake_pool: _FakePoo
 @pytest.mark.asyncio
 async def test_browser_each_evaluate_passes_expression(fake_pool: _FakePool) -> None:
     out = await each.browser_each("evaluate", expression="document.title")
-    assert out["alpha"]["result"]["args"] == ("document.title",)
-    assert out["beta"]["result"]["args"] == ("document.title",)
+    assert out["alpha"]["result"]["result"]["args"] == ("document.title",)
+    assert out["alpha"]["result"]["truncated"] is False
+    assert out["beta"]["result"]["result"]["args"] == ("document.title",)
+
+
+@pytest.mark.asyncio
+async def test_browser_each_evaluate_truncates_large_results_by_default(fake_pool: _FakePool) -> None:
+    out = await each.browser_each("evaluate", expression="largeString()", max_chars=5)
+
+    assert out["alpha"]["result"] == {
+        "result": "xxxxx",
+        "truncated": True,
+        "result_size": 20,
+        "cap": 5,
+        "next_actions": [
+            {
+                "tool": "browser_evaluate",
+                "args": {"instance_id": "alpha", "expression": "largeString()", "full": True},
+            }
+        ],
+    }
+    assert out["beta"]["result"]["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_browser_each_evaluate_full_mode_preserves_large_results(fake_pool: _FakePool) -> None:
+    out = await each.browser_each("evaluate", expression="largeString()", max_chars=5, full=True)
+
+    assert out["alpha"]["result"] == {
+        "result": "x" * 20,
+        "truncated": False,
+        "result_size": 20,
+    }
+
+
+@pytest.mark.asyncio
+async def test_browser_each_summary_mode_bounds_parallel_results(fake_pool: _FakePool) -> None:
+    out = await each.browser_each(
+        "evaluate",
+        instance_ids=["alpha", "beta"],
+        expression="largeString()",
+        max_chars=5,
+        response_mode="summary",
+        limit=1,
+    )
+
+    assert out == {
+        "action": "evaluate",
+        "total": 2,
+        "returned": 1,
+        "ok_count": 2,
+        "error_count": 0,
+        "truncated": True,
+        "results": [
+            {
+                "instance_id": "alpha",
+                "ok": True,
+                "result": {
+                    "result": "xxxxx",
+                    "truncated": True,
+                    "result_size": 20,
+                    "cap": 5,
+                    "next_actions": [
+                        {
+                            "tool": "browser_evaluate",
+                            "args": {"instance_id": "alpha", "expression": "largeString()", "full": True},
+                        }
+                    ],
+                },
+            }
+        ],
+        "next_actions": [
+            {
+                "tool": "browser_each",
+                "args": {
+                    "action": "evaluate",
+                    "instance_ids": ["alpha", "beta"],
+                    "expression": "largeString()",
+                    "max_chars": 5,
+                    "response_mode": "summary",
+                    "limit": 1,
+                },
+            }
+        ],
+    }
 
 
 # ── wait_for ──────────────────────────────────────────────────────────────────
@@ -153,6 +239,27 @@ async def test_browser_each_error_in_one_instance_does_not_cancel_others(
     assert out["good"]["ok"] is True
     assert out["bad"]["ok"] is False
     assert "navigate failed for bad" in out["bad"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_browser_each_summary_mode_preserves_error_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    sessions = {
+        "good": _FakeSession("good"),
+        "bad": _FakeSession("bad", raise_on="navigate"),
+    }
+    monkeypatch.setattr(each, "pool", _FakePool(sessions))
+
+    out = await each.browser_each(
+        "navigate",
+        url="https://octowright.com",
+        response_mode="summary",
+    )
+
+    assert out["ok_count"] == 1
+    assert out["error_count"] == 1
+    assert out["results"][1]["instance_id"] == "bad"
+    assert out["results"][1]["ok"] is False
+    assert "navigate failed for bad" in out["results"][1]["error"]
 
 
 # ── unknown action ────────────────────────────────────────────────────────────

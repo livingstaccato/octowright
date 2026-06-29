@@ -18,6 +18,7 @@ is the back-compat default.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from provide.telemetry import get_logger
 
@@ -49,10 +50,15 @@ PROFILES: dict[str, list[str]] = {
         "browser_close",
         "browser_close_all",
         "browser_set_protected",
+        "browser_fields",
         "browser_fill",
+        "browser_find_field",
+        "browser_find_link",
         "browser_launch",
+        "browser_links",
         "browser_list",
         "browser_navigate",
+        "browser_page_outline",
         "browser_press_key",
         "browser_quick_launch",
         "browser_read_markdown",
@@ -60,6 +66,9 @@ PROFILES: dict[str, list[str]] = {
         "browser_suggest_for_url",
         "browser_type",
         "browser_wait_for",
+        "web_find_links",
+        "web_page_outline",
+        "web_site_links",
     ],
     # Inspection + assertions + ARIA-locator interactions for stable test
     # automation. Layer on top of `core`.
@@ -67,9 +76,14 @@ PROFILES: dict[str, list[str]] = {
         "capture_cleanup",
         "capture_create",
         "capture_get",
+        "capture_lines",
         "capture_list",
         "capture_search",
+        "capture_summary",
         "browser_console_messages",
+        "browser_console_summary",
+        "browser_downloads",
+        "browser_downloads_summary",
         "browser_each",
         "browser_evaluate",
         "browser_expect_js",
@@ -78,11 +92,15 @@ PROFILES: dict[str, list[str]] = {
         "browser_expect_url",
         "browser_export_script",
         "browser_get_text_by",
+        "browser_network_requests",
+        "browser_network_summary",
+        "browser_observe",
         "browser_relaunch_fluid",
         "browser_resize",
         "browser_recording_path",
         "browser_snapshot",
         "browser_tail_recording",
+        "browser_wait_for_download",
         "browser_viewport_status",
         "browser_viewport_sync",
     ],
@@ -206,3 +224,38 @@ def active_filter(env: dict[str, str] | None = None) -> set[str] | None:
     if not raw or raw.lower() == "all":
         return None
     return build_allowed_set(raw)
+
+
+def profiles_for_tool(tool_name: str) -> list[str]:
+    return sorted(name for name, tools in PROFILES.items() if tool_name in tools)
+
+
+def annotate_next_actions_for_profile(
+    actions: Any,
+    env: dict[str, str] | None = None,
+) -> Any:
+    """Mark follow-up actions that are hidden by the active profile.
+
+    ``next_actions`` are guidance, not tool registration. Under a slim
+    profile, keeping a useful but unavailable follow-up is still valuable
+    if the agent can see it requires another profile instead of blindly
+    calling a hidden tool.
+    """
+    allowed = active_filter(env)
+    if allowed is None:
+        return actions
+
+    annotated: list[dict[str, Any]] = []
+    for action in actions:
+        tool_name = str(action.get("tool") or "")
+        if tool_name in allowed:
+            annotated.append(action)
+            continue
+        copied = dict(action)
+        copied["available"] = False
+        profiles = profiles_for_tool(tool_name)
+        if profiles:
+            copied["requires_profile"] = profiles[0]
+            copied["available_profiles"] = profiles
+        annotated.append(copied)
+    return annotated

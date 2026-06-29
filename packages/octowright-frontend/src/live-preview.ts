@@ -1,6 +1,6 @@
 // Live preview panel: streams live browser frames over a single WebSocket.
 
-import { screencastWsUrl } from "./api.js";
+import { liveScreenshotUrl, screencastWsUrl } from "./api.js";
 import { attachFullscreen, type FullscreenMode } from "./live-preview-fullscreen.js";
 import { openScreencast, type ScreencastHandle } from "./live-preview-screencast.js";
 import { getLogger } from "./telemetry.js";
@@ -33,6 +33,7 @@ export interface LivePreviewHandle {
 
 interface InternalState {
   stream: ScreencastHandle | null;
+  fallbackTimer: ReturnType<typeof setInterval> | null;
   generation: number;
   expectedCloseGeneration: number | null;
   destroyed: boolean;
@@ -71,6 +72,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
 
   const state: InternalState = {
     stream: null,
+    fallbackTimer: null,
     generation: 0,
     expectedCloseGeneration: null,
     destroyed: false,
@@ -170,6 +172,11 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     errorIndicator.textContent = "stream error; resume to reconnect";
   };
 
+  const showFallbackNotice = (): void => {
+    errorIndicator.style.display = "";
+    errorIndicator.textContent = "screencast unavailable; using screenshot fallback";
+  };
+
   const clearError = (): void => {
     errorIndicator.style.display = "none";
     errorIndicator.textContent = "";
@@ -199,8 +206,36 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     stream.close();
   };
 
+  const stopFallbackPoll = (): void => {
+    if (state.fallbackTimer === null) return;
+    clearInterval(state.fallbackTimer);
+    state.fallbackTimer = null;
+  };
+
+  const updateFallbackFrame = (): void => {
+    if (state.destroyed || state.closed || state.fallbackTimer === null) return;
+    img.src = liveScreenshotUrl(opts.sessionId, {
+      format: opts.format ?? "png",
+      cacheBust: Date.now(),
+    });
+    lastUpdate.textContent = fmtTimestamp(new Date());
+    setPlayingUi();
+    showFallbackNotice();
+  };
+
+  const startFallbackPoll = (): void => {
+    if (state.destroyed || state.closed || state.fallbackTimer !== null) return;
+    state.fallbackTimer = setInterval(updateFallbackFrame, opts.intervalMs ?? 3000);
+    updateFallbackFrame();
+  };
+
+  const stopActivePreview = (expectedStreamClose: boolean): void => {
+    closeStream(expectedStreamClose);
+    stopFallbackPoll();
+  };
+
   const startStream = (): void => {
-    if (state.destroyed || state.closed || state.stream !== null) return;
+    if (state.destroyed || state.closed || state.stream !== null || state.fallbackTimer !== null) return;
     state.generation += 1;
     const generation = state.generation;
     const url = screencastWsUrl(
@@ -231,8 +266,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
         }
         state.stream = null;
         state.generation += 1;
-        setPausedUi();
-        showStreamError();
+        startFallbackPoll();
         log.warn({
           event: "live_preview_stream_closed",
           session_id: opts.sessionId,
@@ -261,8 +295,8 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     },
     stop: () => {
       if (state.destroyed || state.closed) return;
-      const wasRunning = state.stream !== null;
-      closeStream(true);
+      const wasRunning = state.stream !== null || state.fallbackTimer !== null;
+      stopActivePreview(true);
       setPausedUi();
       clearError();
       if (wasRunning) {
@@ -275,7 +309,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     markClosed: () => {
       if (state.destroyed || state.closed) return;
       state.closed = true;
-      closeStream(true);
+      stopActivePreview(true);
       revokeObjectUrl(state);
       const b = badgeForState("closed");
       badge.className = `live-preview__badge ${b.className}`;
@@ -291,7 +325,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     destroy: () => {
       if (state.destroyed) return;
       state.destroyed = true;
-      closeStream(true);
+      stopActivePreview(true);
       revokeObjectUrl(state);
       fullscreen.destroy();
       container.innerHTML = "";
@@ -301,7 +335,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   };
 
   playBtn.addEventListener("click", () => {
-    if (state.stream !== null) {
+    if (state.stream !== null || state.fallbackTimer !== null) {
       handle.stop();
     } else {
       handle.start();

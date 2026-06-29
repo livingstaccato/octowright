@@ -61,6 +61,23 @@ async def test_browser_navigate_back_forwards_to_session(_patch_pool: MagicMock)
 
 
 @pytest.mark.anyio
+async def test_browser_navigate_back_outline_mode_returns_page_outline(
+    _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = {"ok": True, "url": "https://prev.octowright.com", "title": "Prev"}
+    session = _stub_session("navigate_back", expected)
+    _patch_pool.get = MagicMock(return_value=session)
+    outline = AsyncMock(return_value={"url": "https://prev.octowright.com", "headings": []})
+    monkeypatch.setattr(_lifecycle, "browser_page_outline", outline)
+
+    result = await _lifecycle.browser_navigate_back("inst-1", response_mode="outline")
+
+    assert result["outline"]["url"] == "https://prev.octowright.com"
+    session.navigate_back.assert_awaited_once_with()
+    outline.assert_awaited_once_with("inst-1")
+
+
+@pytest.mark.anyio
 async def test_browser_resize_forwards_dimensions(_patch_pool: MagicMock) -> None:
     expected = {"ok": True, "width": 800, "height": 600}
     session = _stub_session("resize", expected)
@@ -131,6 +148,23 @@ async def test_browser_open_url_window_target_passes_size(_patch_pool: MagicMock
 
     session.open_url.assert_awaited_once_with("https://x", target="window", width=900, height=700)
     assert result == expected
+
+
+@pytest.mark.anyio
+async def test_browser_open_url_outline_mode_returns_page_outline(
+    _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = {"ok": True, "target": "tab", "page_index": 1, "url": "https://x"}
+    session = _stub_session("open_url", expected)
+    _patch_pool.get = MagicMock(return_value=session)
+    outline = AsyncMock(return_value={"url": "https://x", "links": []})
+    monkeypatch.setattr(_lifecycle, "browser_page_outline", outline)
+
+    result = await _lifecycle.browser_open_url("inst-1", "https://x", response_mode="outline")
+
+    assert result["outline"]["url"] == "https://x"
+    session.open_url.assert_awaited_once_with("https://x", target="tab", width=1024, height=768)
+    outline.assert_awaited_once_with("inst-1")
 
 
 @pytest.mark.anyio

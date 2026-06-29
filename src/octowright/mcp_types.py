@@ -254,6 +254,14 @@ class BrowserScreenshotResult(TypedDict):
     path: str
 
 
+class BrowserToolAction(TypedDict, total=False):
+    tool: str
+    args: dict[str, Any]
+    available: bool
+    requires_profile: str
+    available_profiles: list[str]
+
+
 class BrowserSnapshotResult(TypedDict, total=False):
     url: str
     title: str
@@ -262,10 +270,11 @@ class BrowserSnapshotResult(TypedDict, total=False):
     aria_size: int
     cap: int
     # Set when the aria snapshot exceeded SNAPSHOT_TIMEOUT_SECONDS on a heavy DOM;
-    # the result then carries a hint toward read_markdown / a scoped selector.
+    # the result then carries compact follow-up actions instead of hanging.
     snapshot_timed_out: bool
     timeout_s: float
     hint: str
+    actions: list[BrowserToolAction]
 
 
 class BrowserEvaluateResult(TypedDict, total=False):
@@ -273,6 +282,7 @@ class BrowserEvaluateResult(TypedDict, total=False):
     truncated: bool
     result_size: int
     cap: int
+    next_actions: list[BrowserToolAction]
 
 
 class ConsoleMessage(TypedDict, total=False):
@@ -290,10 +300,11 @@ class BrowserConsoleMessagesResult(TypedDict):
     total: int
 
 
-class BrowserOkResult(TypedDict):
+class BrowserOkResult(TypedDict, total=False):
     """Generic ``{ok: True}`` shape used by wait_for / mock / unmock."""
 
     ok: bool
+    outline: BrowserPageOutlineResult
 
 
 class BrowserPathResult(TypedDict):
@@ -309,6 +320,10 @@ class BrowserCaptureAndCloseResult(TypedDict, total=False):
     screenshot_path: str
     closed: bool
     aria: str
+    snapshot_timed_out: bool
+    timeout_s: float
+    hint: str
+    actions: list[BrowserToolAction]
 
 
 class BrowserExpectUrlResult(TypedDict):
@@ -316,9 +331,13 @@ class BrowserExpectUrlResult(TypedDict):
     url: str
 
 
-class BrowserExpectTextResult(TypedDict):
+class BrowserExpectTextResult(TypedDict, total=False):
     ok: bool
     text: str
+    truncated: bool
+    text_size: int
+    cap: int
+    next_actions: list[BrowserToolAction]
 
 
 class BrowserExpectSelectorResult(TypedDict):
@@ -327,29 +346,167 @@ class BrowserExpectSelectorResult(TypedDict):
     present: bool
 
 
-class BrowserExpectJsResult(TypedDict):
+class BrowserExpectJsResult(TypedDict, total=False):
     ok: bool
     result: Any
+    truncated: bool
+    result_size: int
+    cap: int
+    next_actions: list[BrowserToolAction]
 
 
-class BrowserTailRecordingResult(TypedDict):
+class BrowserTailRecordingResult(TypedDict, total=False):
     events: list[dict[str, Any]]
+    summary: dict[str, Any]
     cursor: int
     total_bytes: int
     complete: bool
+    event_count: int
+    returned_event_count: int
+    truncated: bool
+    next_actions: list[BrowserToolAction]
 
 
 class BrowserReadMarkdownResult(TypedDict, total=False):
     url: str
+    title: str | None
     markdown: str
     truncated: bool
     markdown_size: int
+    capture_id: str
+    kind: str
+    size_chars: int
+    summary: dict[str, Any]
+    actions: list[str]
+    next_actions: list[BrowserToolAction]
 
 
 class BrowserBriefResult(TypedDict):
     url: str
     title: str
     elements: str
+
+
+class BrowserActionSuggestion(TypedDict, total=False):
+    tool: str
+    args: dict[str, Any]
+    fallback_args: dict[str, Any]
+    requires_args: list[str]
+
+
+class BrowserLinkCandidate(TypedDict, total=False):
+    text: str
+    href: str | None
+    role: str | None
+    label: str | None
+    title: str | None
+    selector: str | None
+    visible: bool
+    action: BrowserActionSuggestion
+    rank: int
+    score: float
+    reason: str
+
+
+class BrowserLinksResult(TypedDict):
+    url: str
+    title: str
+    links: list[BrowserLinkCandidate]
+    total: int
+    truncated: bool
+    next_actions: list[BrowserToolAction]
+
+
+class BrowserFindLinkResult(BrowserLinksResult):
+    query: str
+
+
+class BrowserFieldCandidate(TypedDict, total=False):
+    name: str
+    type: str
+    tag: str
+    label: str | None
+    placeholder: str | None
+    value: str | None
+    selector: str | None
+    required: bool
+    disabled: bool
+    visible: bool
+    action: BrowserActionSuggestion
+    rank: int
+    score: float
+    reason: str
+
+
+class BrowserFieldsResult(TypedDict):
+    url: str
+    title: str
+    fields: list[BrowserFieldCandidate]
+    total: int
+    truncated: bool
+    next_actions: list[BrowserToolAction]
+
+
+class BrowserFindFieldResult(BrowserFieldsResult):
+    query: str
+
+
+class BrowserHeadingCandidate(TypedDict, total=False):
+    level: int
+    text: str
+    selector: str | None
+    visible: bool
+
+
+class BrowserLandmarkCandidate(TypedDict, total=False):
+    role: str
+    text: str
+    selector: str | None
+    visible: bool
+
+
+class BrowserPageOutlineResult(TypedDict):
+    url: str
+    title: str
+    headings: list[BrowserHeadingCandidate]
+    landmarks: list[BrowserLandmarkCandidate]
+    links: list[BrowserLinkCandidate]
+    fields: list[BrowserFieldCandidate]
+    counts: dict[str, int]
+    truncated: bool
+    next_actions: list[BrowserToolAction]
+
+
+class WebLinkCandidate(TypedDict, total=False):
+    text: str
+    href: str
+    label: str
+    title: str
+    rel: str
+    tag: str
+    action: BrowserActionSuggestion
+    actions: list[BrowserToolAction]
+    score: float
+    reason: str
+
+
+class WebPageOutlineResult(TypedDict, total=False):
+    url: str
+    title: str
+    canonical: str | None
+    headings: list[str]
+    links: list[WebLinkCandidate]
+    total_links: int
+    truncated: bool
+    next_actions: list[BrowserToolAction]
+
+
+class WebFindLinksResult(WebPageOutlineResult):
+    query: str
+
+
+class WebSiteLinksResult(WebFindLinksResult):
+    sources: list[str]
 
 
 # ─── cleanup tools (server/macros.py) ────────────────────────────────────────
