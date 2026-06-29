@@ -14,6 +14,7 @@ from octowright.server.browser import network as _network
 
 @pytest.fixture(autouse=True)
 def _patch_pool(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    monkeypatch.delenv("OCTOWRIGHT_PROFILE", raising=False)
     fake_pool = MagicMock()
     monkeypatch.setattr(_network, "pool", fake_pool)
     return fake_pool
