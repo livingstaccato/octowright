@@ -16,9 +16,13 @@ does not cancel the others.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from octowright.server._state import mcp, pool
+from octowright.server.profiles import annotate_next_actions_for_profile
+
+DEFAULT_PREVIEW_CHARS = 4000
 
 
 def _select_instance_ids(instance_ids: list[str] | None) -> list[str]:
@@ -65,7 +69,27 @@ async def _act_evaluate(session: Any, kwargs: dict[str, Any]) -> Any:
     expression = kwargs.get("expression")
     if expression is None:
         raise ValueError("expression is required for evaluate")
-    return await session.evaluate(expression)
+    result = await session.evaluate(expression)
+    cap = None if kwargs.get("full") else (kwargs.get("max_chars") or DEFAULT_PREVIEW_CHARS)
+    rendered = result if isinstance(result, str | bytes) else json.dumps(result, default=str)
+    if isinstance(rendered, bytes):
+        rendered = rendered.decode("utf-8", errors="replace")
+    if cap is not None and len(rendered) > cap:
+        return {
+            "result": rendered[:cap],
+            "truncated": True,
+            "result_size": len(rendered),
+            "cap": cap,
+            "next_actions": annotate_next_actions_for_profile(
+                [
+                    {
+                        "tool": "browser_evaluate",
+                        "args": {"instance_id": session.instance_id, "expression": expression, "full": True},
+                    }
+                ]
+            ),
+        }
+    return {"result": result, "truncated": False, "result_size": len(rendered)}
 
 
 async def _act_wait_for(session: Any, kwargs: dict[str, Any]) -> Any:
@@ -91,6 +115,50 @@ _DISPATCH: dict[str, Any] = {
 }
 
 
+def _summary_row(instance_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    row: dict[str, Any] = {"instance_id": instance_id, "ok": bool(record.get("ok"))}
+    if record.get("ok"):
+        row["result"] = record.get("result")
+    else:
+        row["error"] = record.get("error")
+    return row
+
+
+def _clean_next_action_args(args: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in args.items() if value is not None and value is not False}
+
+
+def _summarize_results(
+    action: str,
+    results: dict[str, dict[str, Any]],
+    *,
+    limit: int,
+    action_args: dict[str, Any],
+) -> dict[str, Any]:
+    capped = max(0, min(int(limit), 100))
+    items = list(results.items())
+    rows = items[:capped]
+    ok_count = sum(1 for record in results.values() if record.get("ok"))
+    next_args = _clean_next_action_args(
+        {
+            "action": action,
+            **action_args,
+            "response_mode": "summary",
+            "limit": limit,
+        }
+    )
+    return {
+        "action": action,
+        "total": len(results),
+        "returned": len(rows),
+        "ok_count": ok_count,
+        "error_count": len(results) - ok_count,
+        "truncated": len(rows) < len(results),
+        "results": [_summary_row(instance_id, record) for instance_id, record in rows],
+        "next_actions": [{"tool": "browser_each", "args": next_args}],
+    }
+
+
 async def _dispatch(action: str, iid: str, **kwargs: Any) -> Any:
     handler = _DISPATCH.get(action)
     if handler is None:
@@ -107,13 +175,16 @@ async def _dispatch(action: str, iid: str, **kwargs: Any) -> Any:
         "Per-action required params:\n"
         "  navigate  — url (str)\n"
         "  resize    — width (int), height (int)\n"
-        "  evaluate  — expression (str)\n"
+        "  evaluate  — expression (str); stringified results are truncated to "
+        "~4000 chars by default, pass max_chars=N for a custom cap or full=True "
+        "to disable truncation\n"
         "  wait_for  — selector (str) or text (str) or neither for network-idle; "
         "optional timeout_ms (int)\n"
         "  screenshot — no extra params; each screenshot is written next to the "
         "instance's recording and the path is returned.\n"
         "Returns {<instance_id>: {ok, result|error}} — one failing instance does "
-        "not cancel the others."
+        "not cancel the others. Pass response_mode='summary' for counts plus bounded "
+        "per-instance rows instead of the full keyed result map."
     ),
 )
 async def browser_each(
@@ -126,6 +197,10 @@ async def browser_each(
     selector: str | None = None,
     text: str | None = None,
     timeout_ms: int | None = None,
+    max_chars: int | None = None,
+    full: bool = False,
+    response_mode: str | None = None,
+    limit: int = 20,
 ) -> dict[str, Any]:
     ids = _select_instance_ids(instance_ids)
     kwargs: dict[str, Any] = {
@@ -136,5 +211,15 @@ async def browser_each(
         "selector": selector,
         "text": text,
         "timeout_ms": timeout_ms,
+        "max_chars": max_chars,
+        "full": full,
     }
-    return await _gather(ids, lambda iid: _dispatch(action, iid, **kwargs))
+    results = await _gather(ids, lambda iid: _dispatch(action, iid, **kwargs))
+    if response_mode == "summary":
+        return _summarize_results(
+            action,
+            results,
+            limit=limit,
+            action_args={"instance_ids": instance_ids, **kwargs},
+        )
+    return results

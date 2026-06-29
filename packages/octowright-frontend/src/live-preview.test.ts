@@ -66,6 +66,7 @@ beforeEach(() => {
 afterEach(() => {
   container.remove();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 function mountLive(sessionId = "live1") {
@@ -312,7 +313,7 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
   });
 
-  it("unexpected stream error and close leave the user able to resume", () => {
+  it("unexpected stream error and close start fallback while keeping controls usable", () => {
     const handle = mountLive("live-error");
     handle.start();
     const ws = FakeWebSocket.instances[0];
@@ -324,12 +325,44 @@ describe("mountLivePreview — live session", () => {
     ws.emitError();
     expect(error.textContent).toContain("stream error");
     ws.emitClose(1006, "abnormal", false);
-    expect(badge.textContent).toBe("PAUSED");
+    expect(badge.textContent).toBe("LIVE");
+    expect(error.textContent).toContain("screenshot fallback");
     expect(playBtn.disabled).toBe(false);
 
+    handle.stop();
+    expect(badge.textContent).toBe("PAUSED");
     handle.start();
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(error.style.display).toBe("none");
+    handle.destroy();
+  });
+
+  it("falls back to screenshot polling after an unexpected screencast close", async () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, {
+      sessionId: "live-fallback",
+      isLive: true,
+      fps: 7,
+      intervalMs: 1200,
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    handle.start();
+    const ws = FakeWebSocket.instances[0];
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!ws || !img || !badge || !error) throw new Error("missing preview elements");
+
+    ws.emitClose(1011, "screencast unavailable; use fallback", false);
+    expect(img.src).toContain("/api/sessions/live-fallback/screenshot/now?format=png");
+    expect(error.textContent).toContain("screenshot fallback");
+    expect(badge.textContent).toBe("LIVE");
+    const firstSrc = img.src;
+
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(img.src).toContain("/api/sessions/live-fallback/screenshot/now?format=png");
+    expect(img.src).not.toBe(firstSrc);
+
     handle.destroy();
   });
 

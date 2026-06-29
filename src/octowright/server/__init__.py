@@ -30,6 +30,7 @@ from octowright.server import macros as _macros  # noqa: F401
 from octowright.server import meta as _meta  # noqa: F401
 from octowright.server import personas as _personas  # noqa: F401
 from octowright.server import scenarios as _scenarios  # noqa: F401
+from octowright.server import web as _web  # noqa: F401
 from octowright.server._state import log, mcp, pool, scenario_pool
 
 # Re-export every tool function at the package level for direct test access
@@ -41,7 +42,9 @@ from octowright.server.browser import (
     browser_close,
     browser_close_all,
     browser_console_messages,
+    browser_console_summary,
     browser_downloads,
+    browser_downloads_summary,
     browser_drag,
     browser_each,
     browser_evaluate,
@@ -50,18 +53,25 @@ from octowright.server.browser import (
     browser_expect_text,
     browser_expect_url,
     browser_export_script,
+    browser_fields,
     browser_fill,
+    browser_find_field,
+    browser_find_link,
     browser_get_text_by,
     browser_hover,
     browser_launch,
+    browser_links,
     browser_list,
     browser_list_frames,
     browser_mock_route,
     browser_navigate,
     browser_navigate_back,
     browser_network_requests,
+    browser_network_summary,
+    browser_observe,
     browser_open_trace,
     browser_open_url,
+    browser_page_outline,
     browser_press_key,
     browser_quick_launch,
     browser_read_markdown,
@@ -93,8 +103,10 @@ from octowright.server.captures import (
     capture_cleanup,
     capture_create,
     capture_get,
+    capture_lines,
     capture_list,
     capture_search,
+    capture_summary,
     octowright_storage_report,
 )
 from octowright.server.goldens import (
@@ -149,6 +161,7 @@ from octowright.server.scenarios import (
     scenario_stop,
     scenario_tail,
 )
+from octowright.server.web import web_find_links, web_page_outline, web_site_links
 
 __all__ = [
     "browser_brief",
@@ -157,7 +170,9 @@ __all__ = [
     "browser_close",
     "browser_close_all",
     "browser_console_messages",
+    "browser_console_summary",
     "browser_downloads",
+    "browser_downloads_summary",
     "browser_drag",
     "browser_each",
     "browser_evaluate",
@@ -166,18 +181,25 @@ __all__ = [
     "browser_expect_text",
     "browser_expect_url",
     "browser_export_script",
+    "browser_fields",
     "browser_fill",
+    "browser_find_field",
+    "browser_find_link",
     "browser_get_text_by",
     "browser_hover",
     "browser_launch",
+    "browser_links",
     "browser_list",
     "browser_list_frames",
     "browser_mock_route",
     "browser_navigate",
     "browser_navigate_back",
     "browser_network_requests",
+    "browser_network_summary",
+    "browser_observe",
     "browser_open_trace",
     "browser_open_url",
+    "browser_page_outline",
     "browser_press_key",
     "browser_quick_launch",
     "browser_read_markdown",
@@ -204,8 +226,10 @@ __all__ = [
     "capture_cleanup",
     "capture_create",
     "capture_get",
+    "capture_lines",
     "capture_list",
     "capture_search",
+    "capture_summary",
     "golden_assert",
     "golden_delete",
     "golden_list",
@@ -257,4 +281,7 @@ __all__ = [
     "scenario_status",
     "scenario_stop",
     "scenario_tail",
+    "web_find_links",
+    "web_page_outline",
+    "web_site_links",
 ]
