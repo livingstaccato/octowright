@@ -158,6 +158,32 @@ async def test_recovery_screenshot_failure_does_not_break_recovery() -> None:
     assert incidents.recent(category="renderer_crash")[0]["screenshot"] is None
 
 
+async def test_recovered_incident_visible_before_slow_screenshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _session()
+    screenshot_started = asyncio.Event()
+    release_screenshot = asyncio.Event()
+
+    async def slow_screenshot(_session: object) -> str:
+        screenshot_started.set()
+        await release_screenshot.wait()
+        return "/tmp/later.png"
+
+    monkeypatch.setattr(crash_recovery, "_capture_recovery_screenshot", slow_screenshot)
+
+    task = asyncio.create_task(crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com"))
+    await screenshot_started.wait()
+
+    inc = incidents.recent(category="renderer_crash")
+    assert len(inc) == 1
+    assert inc[0]["outcome"] == "recovered"
+    assert inc[0]["screenshot"] is None
+    assert crash_recovery.recovery_stats()["recoveries"] == 1
+
+    release_screenshot.set()
+    assert await task is True
+    assert inc[0]["screenshot"] == "/tmp/later.png"
+
+
 async def test_recover_succeeds_even_if_recorder_marker_fails() -> None:
     s = _session()
     s.recorder.record.side_effect = RuntimeError("recorder closed")
