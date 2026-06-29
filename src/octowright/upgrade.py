@@ -48,6 +48,14 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "Live preview is more resilient: the dashboard falls back from screencast streaming to "
         "snapshot polling when a browser cannot provide live frames.",
     ],
+    "0.10.1": [
+        "Survives a compaction freeze: when your MCP client (Codex/Claude) pauses to compact and "
+        "freezes Octowright's follower, the bridge no longer times out and dies on resume — it "
+        "detects the suspension, keeps in-flight calls alive, and re-handshakes the leader cleanly "
+        "instead of stranding on a half-initialized session. No more 'Octowright timed out' after a compaction.",
+        "Terminal connectors now enumerate in the canonical ssh, telnet, pty order; the terminal_launch "
+        "kind arg and behavior are unchanged.",
+    ],
     "0.10.0": [
         "Terminals, alongside browsers: the optional octowright[terminal] extra adds in-process "
         "PTY / SSH / telnet sessions that record to the same JSONL and show up in the dashboard "
