@@ -19,6 +19,7 @@ from octowright.server.browser import inspect_recording as _inspect_recording
 
 @pytest.fixture
 def stub_pool(monkeypatch, tmp_path):
+    monkeypatch.delenv("OCTOWRIGHT_PROFILE", raising=False)
     log_path = tmp_path / "rec.jsonl"
     sessions = {"abc": SimpleNamespace(log_path=log_path)}
     fake_pool = SimpleNamespace(get=lambda iid: sessions[iid])
