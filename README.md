@@ -176,9 +176,10 @@ Ask your MCP client `"give me the octowright dashboard URL"` (it'll call the
   screenshots from disk via `DELETE /api/sessions/{id}/recording`. Live
   sessions reject the call with 409 (close them first).
 - **Per-session debugger** — click any session for a two-column page with the
-  live browser preview or embedded session video on the left, action timeline
-  on the right. Live previews stream JPEG frames over one WebSocket at
-  `/api/sessions/{id}/screencast`, avoiding repeated screenshot polling.
+	  live browser preview or embedded session video on the left, action timeline
+	  on the right. Live previews stream JPEG frames over one WebSocket at
+	  `/api/sessions/{id}/screencast`, with bounded screenshot polling as a
+	  compatibility fallback.
   Controls include pause/resume plus fullscreen in panel or native browser
   mode. Click any action in the timeline to seek the video to that moment.
   Tabs underneath the timeline switch between **console messages** (filtered
@@ -645,7 +646,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 111 tools — every workflow Octowright supports
+The full MCP tool surface is currently 125 tools on a core install — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
@@ -656,18 +657,19 @@ find the dashboard, and surface local guidance even under narrow profiles.
 
 | Profile | What | Tool count |
 |---|---|---|
-| `core` | Minimum to drive a browser end-to-end (launch, navigate, click/type/fill, observe, close). | 16 |
-| `advanced` | Inspection, cached captures, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 21 |
+| `core` | Minimum to drive a browser end-to-end, including compact DOM and HTTP-first discovery. | 24 |
+| `advanced` | Inspection, cached captures, summaries, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 30 |
 | `macros` | Macro record / list / run / lint / repair / compile + artifact bundles. | 15 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
 | `personas` | Persona + on-disk profile management. | 8 |
 | `goldens` | Accessibility-tree snapshot baselines + diff. | 5 |
+| `terminals` | Optional terminal sessions; registers only when `octowright[terminal]` is installed. | 7 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
-| `all` (or unset) | Default — every tool registers. | 111 |
+| `all` (or unset) | Default — every core-install tool registers. | 125 |
 
 ```bash
-octowright serve --profile=core              # 23 tools — core + always-on
-octowright serve --profile=core,macros       # 38 tools — browser + macro pipeline + always-on
+octowright serve --profile=core              # 31 tools — core + always-on
+octowright serve --profile=core,macros       # 46 tools — browser + macro pipeline + always-on
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 

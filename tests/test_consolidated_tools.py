@@ -69,6 +69,27 @@ async def test_browser_quick_launch_direct_profile(_patch_state: dict[str, Magic
 
 
 @pytest.mark.anyio
+async def test_browser_quick_launch_outline_mode_returns_page_outline(
+    _patch_state: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = _patch_state["pool"]
+    pool.launch = AsyncMock(return_value={"instance_id": "inst-1", "url": "https://x.com"})
+    outline = AsyncMock(return_value={"url": "https://x.com", "headings": []})
+    monkeypatch.setattr(_lifecycle, "browser_page_outline", outline)
+
+    result = await _lifecycle.browser_quick_launch(
+        url="https://x.com",
+        profile="my-persona",
+        response_mode="outline",
+    )
+
+    assert result["instance_id"] == "inst-1"
+    assert result["profile_used"] == "my-persona"
+    assert result["outline"]["url"] == "https://x.com"
+    outline.assert_awaited_once_with("inst-1")
+
+
+@pytest.mark.anyio
 async def test_browser_quick_launch_with_ambiguous_suggest(_patch_state: dict[str, MagicMock]) -> None:
     resolve = _patch_state["resolve"]
     resolve.suggest_for_url.return_value = {"ambiguous": True, "matches": [{"persona": "A"}, {"persona": "B"}]}
@@ -144,6 +165,26 @@ async def test_browser_launch_returns_before_mcp_timeout(
 
     with pytest.raises(TimeoutError, match=r"browser launch exceeded 0\.0s"):
         await _lifecycle.browser_launch(url="https://x.com", ephemeral=True)
+
+
+@pytest.mark.anyio
+async def test_browser_launch_outline_mode_returns_page_outline(
+    _patch_state: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = _patch_state["pool"]
+    pool.launch = AsyncMock(return_value={"instance_id": "inst-1", "url": "https://x.com"})
+    outline = AsyncMock(return_value={"url": "https://x.com", "links": []})
+    monkeypatch.setattr(_lifecycle, "browser_page_outline", outline)
+
+    result = await _lifecycle.browser_launch(
+        url="https://x.com",
+        ephemeral=True,
+        response_mode="outline",
+    )
+
+    assert result["instance_id"] == "inst-1"
+    assert result["outline"]["url"] == "https://x.com"
+    outline.assert_awaited_once_with("inst-1")
 
 
 @pytest.mark.anyio

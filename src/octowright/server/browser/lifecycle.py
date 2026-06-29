@@ -19,12 +19,14 @@ from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import (
     BROWSER_LAUNCH_TIMEOUT_SECONDS,
     PROTECT_BROWSERS_DEFAULT,
+    SNAPSHOT_TIMEOUT_SECONDS,
     _read_project_config,
     get_default_label,
     project_config_str,
 )
 from octowright.server._state import mcp, pool
-from octowright.server.browser.inspect import browser_brief
+from octowright.server.browser.inspect import browser_brief, browser_page_outline
+from octowright.server.browser.lifecycle_summary import browser_list_summary_row
 
 
 def _enforce_browser_cap(*, adding: int) -> None:
@@ -38,7 +40,7 @@ def _enforce_browser_cap(*, adding: int) -> None:
 
 
 def _enforce_memory_floor(*, adding: int) -> None:
-    """Single-launch shim over the pool-layer memory floor (`browser_pool.limits`)."""
+    """Shim over the pool-layer memory floor (`browser_pool.limits`)."""
     _limits.enforce_memory(adding=adding)
 
 
@@ -52,9 +54,14 @@ async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
         raise TimeoutError(
             f"browser launch exceeded {timeout:.1f}s before a session was ready; "
             "Octowright cancelled the launch so the MCP client stays connected. "
-            "Retry with ephemeral=True or a different profile, or raise "
-            "OCTOWRIGHT_BROWSER_LAUNCH_TIMEOUT_SECONDS if the site/browser is expected to start slowly."
+            "Retry ephemeral/session, switch profile, or raise OCTOWRIGHT_BROWSER_LAUNCH_TIMEOUT_SECONDS."
         ) from exc
+
+
+async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | None) -> dict[str, Any]:
+    if response_mode == "outline" and isinstance(result.get("instance_id"), str):
+        result["outline"] = await browser_page_outline(result["instance_id"])
+    return result
 
 
 @mcp.tool(
@@ -62,13 +69,12 @@ async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
     description=(
         "Launch a browser. kind = 'chromium' | 'firefox' | 'webkit'. "
         "BEFORE CALLING THIS for a vague request like 'open google.com' or 'go to discord.com' "
-        "where the user did NOT name a persona, FIRST call browser_suggest_for_url(url=...) — "
-        "if it reports `ambiguous: true`, ask the user which persona to use instead of guessing. "
-        "If it reports `ephemeral_ok: true`, this call with no profile= is fine. "
-        "DEFAULT IS HEADED — auto-detected based on OS/environment if headed=None. "
-        "Leave headed=None unless you have a specific background-verification reason "
-        "(automated health check, scripted parity run, CI). If a human will look at "
-        "the window, stay headed. "
+        "where the user did NOT name a persona, FIRST call browser_suggest_for_url(url=...) — if it reports "
+        "`ambiguous: true`, ask the user which persona to use instead of guessing. If it reports "
+        "`ephemeral_ok: true`, this call with no profile= is fine. DEFAULT IS HEADED — auto-detected "
+        "based on OS/environment if headed=None. Leave headed=None unless you have a specific "
+        "background-verification reason (automated health check, scripted parity run, CI). If a human "
+        "will look at the window, stay headed. "
         "If profile is given, uses a persistent on-disk user-data-dir so cookies, "
         "localStorage, and IndexedDB survive close/relaunch (recommended for Discord, "
         "Slack, etc.). Profiles are scoped per-kind: (kind, profile) is the identity. "
@@ -102,7 +108,9 @@ async def _pool_launch_with_deadline(**kwargs: Any) -> dict[str, Any]:
         "If the initial navigation fails (network error, bad URL, DNS failure, etc.) the "
         "browser instance is NOT destroyed — it stays alive and registered. The return dict "
         "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
-        "to retry navigation or go to a different URL without re-launching."
+        "to retry navigation or go to a different URL without re-launching. "
+        "Pass response_mode='outline' to include a compact browser_page_outline in the "
+        "same call when launch produced an instance_id."
     ),
 )
 async def browser_launch(
@@ -127,6 +135,7 @@ async def browser_launch(
     ephemeral: bool = False,
     session: bool = False,
     protected: bool = PROTECT_BROWSERS_DEFAULT,
+    response_mode: str | None = None,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
     # apply context-aware defaults so the browser has a human name and a
@@ -179,22 +188,20 @@ async def browser_launch(
     )
     result = await _pool_launch_with_deadline(**options.to_pool_kwargs())
     publish_dashboard_invalidation_nowait("sessions")
-    return result
+    return await _maybe_attach_outline(result, response_mode)
 
 
 @mcp.tool(
     structured_output=False,
     description=(
-        "Resolve an ambiguous URL to a ranked list of saved persona/profile candidates "
-        "BEFORE calling browser_launch. Use this whenever the user says 'open <site>', "
-        "'go to <site>', or partially specifies the engine ('open tradewars.com using firefox') "
-        "without naming a persona. "
+        "Resolve an ambiguous URL to a ranked list of saved persona/profile candidates BEFORE calling "
+        "browser_launch. Use this whenever the user says 'open <site>', 'go to <site>', or partially "
+        "specifies the engine ('open tradewars.com using firefox') without naming a persona. "
         "Pass `kind` when the user named an engine — that narrows the candidate list. "
         "Returns {url, host, kind_filter, matches, ambiguous, ephemeral_ok, recommendation}: "
-        "`ambiguous=true` means several saved personas have this host as their default — "
-        "ASK THE USER which one to use, don't guess. "
-        "`ephemeral_ok=true` means no saved persona owns this host — calling browser_launch "
-        "with no profile is fine. "
+        "`ambiguous=true` means several saved personas have this host as their default — ASK THE USER which "
+        "one to use, don't guess. `ephemeral_ok=true` means no saved persona owns this host — calling "
+        "browser_launch with no profile is fine. "
         "Each match has {persona, kind, score, reasons[], last_used} so you can show the "
         "user a sensible disambiguation prompt."
     ),
@@ -206,21 +213,19 @@ def browser_suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]
 @mcp.tool(
     structured_output=False,
     description=(
-        "ONE-SHOT LAUNCH: Resolves the best persona for a URL and launches it in one call. "
-        "Use this for most 'open <url>' tasks to save turns. "
-        "Logic: "
-        "1. If profile is given, launches directly. "
-        "2. If not, calls suggest_for_url internally. "
-        "3. If suggest finds a clear high-score persona, uses it. "
-        "4. If suggest finds multiple ambiguous options, RETURNS the list and "
-        "requires you to pick one via browser_launch. "
-        "5. If suggest says ephemeral_ok, launches with no profile. "
+        "ONE-SHOT LAUNCH: Resolves the best persona for a URL and launches it in one call. Use this for most "
+        "'open <url>' tasks to save turns. Logic: 1. If profile is given, launches directly. 2. If not, "
+        "calls suggest_for_url internally. 3. If suggest finds a clear high-score persona, uses it. "
+        "4. If suggest finds multiple ambiguous options, RETURNS the list and requires you to pick one via "
+        "browser_launch. 5. If suggest says ephemeral_ok, launches with no profile. "
         "Returns {instance_id, url, profile_used} on success, or {ambiguous: true, matches: [...]} "
         "if you need to ask the user. "
         "If the initial navigation fails (network error, bad URL, DNS failure, etc.) the "
         "browser instance is NOT destroyed — it stays alive and registered. The return dict "
         "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
-        "to retry navigation or go to a different URL without re-launching."
+        "to retry navigation or go to a different URL without re-launching. "
+        "Pass response_mode='outline' to include a compact browser_page_outline in the "
+        "same call when launch produced an instance_id."
     ),
 )
 async def browser_quick_launch(
@@ -245,6 +250,7 @@ async def browser_quick_launch(
     ephemeral: bool = False,
     session: bool = False,
     protected: bool = PROTECT_BROWSERS_DEFAULT,
+    response_mode: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
@@ -300,7 +306,7 @@ async def browser_quick_launch(
         opts = _build_options(profile_for_launch=profile, kind_for_launch=kind)
         res = await _pool_launch_with_deadline(**opts.to_pool_kwargs())
         publish_dashboard_invalidation_nowait("sessions")
-        return {**res, "profile_used": profile}
+        return await _maybe_attach_outline({**res, "profile_used": profile}, response_mode)
 
     # Internal suggest
     suggest = resolve_mod.suggest_for_url(url, kind=kind)
@@ -322,7 +328,7 @@ async def browser_quick_launch(
     opts = _build_options(profile_for_launch=profile_to_use, kind_for_launch=kind)
     res = await _pool_launch_with_deadline(**opts.to_pool_kwargs())
     publish_dashboard_invalidation_nowait("sessions")
-    return {**res, "profile_used": profile_to_use}
+    return await _maybe_attach_outline({**res, "profile_used": profile_to_use}, response_mode)
 
 
 @mcp.tool(
@@ -331,11 +337,26 @@ async def browser_quick_launch(
         "List all live browser instances. Returns {summary, count, browsers}: "
         "`summary` is a one-line human-readable gist (e.g. "
         "'3 browsers: dante/webkit @ discord.com/app · ops/firefox @ monitor'); "
-        "`browsers` is the structured per-instance data."
+        "`browsers` is the structured per-instance data. Pass response_mode='summary' "
+        "for bounded rows with browser_page_outline/browser_close action payloads."
     ),
 )
-def browser_list() -> dict[str, Any]:
+def browser_list(response_mode: str | None = None, limit: int = 20) -> dict[str, Any]:
     sessions = pool.list_sessions()
+    if response_mode == "summary":
+        capped = max(1, min(int(limit), 100))
+        rows = sessions[:capped]
+        return {
+            "summary": fmt.browser_summary(sessions),
+            "count": len(sessions),
+            "returned": len(rows),
+            "truncated": len(rows) < len(sessions),
+            "browsers": [browser_list_summary_row(session) for session in rows],
+            "next_actions": [
+                {"tool": "browser_list", "args": {"response_mode": "summary", "limit": min(len(sessions), capped + 1)}},
+                {"tool": "browser_close_all", "args": {}},
+            ],
+        }
     return {
         "summary": fmt.browser_summary(sessions),
         "count": len(sessions),
@@ -400,9 +421,9 @@ async def browser_set_protected(instance_id: str, protected: bool) -> dict[str, 
         "Navigate an instance to a URL. Use this to go to a new page; do NOT use for "
         "in-app routing that the SPA handles via clicks (use browser_click instead). "
         "Equivalent to typing the URL in the address bar and hitting enter. "
-        "Pass response_mode='brief' to also return a browser_brief snapshot (url, "
-        "title, top elements) in the same call — saves a round trip when you would "
-        "otherwise immediately call browser_brief next."
+        "Pass response_mode='outline' to also return a compact browser_page_outline "
+        "(headings, landmarks, links, fields) in the same call, or response_mode='brief' "
+        "for the older aria-based browser_brief snapshot."
     ),
 )
 async def browser_navigate(
@@ -411,8 +432,16 @@ async def browser_navigate(
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     res: dict[str, Any] = await pool.get(instance_id).navigate(url)
+    if response_mode == "outline":
+        res["outline"] = await browser_page_outline(instance_id)
     if response_mode == "brief":
-        res["brief"] = await browser_brief(instance_id)
+        try:
+            res["brief"] = await asyncio.wait_for(browser_brief(instance_id), timeout=SNAPSHOT_TIMEOUT_SECONDS)
+        except TimeoutError:
+            res["brief_warning"] = (
+                f"browser_brief timed out after {SNAPSHOT_TIMEOUT_SECONDS:.1f}s; "
+                "navigation succeeded, call browser_brief separately or use a scoped snapshot."
+            )
     return res
 
 
@@ -422,11 +451,16 @@ async def browser_navigate(
         "Navigate back in the browser's history (equivalent to clicking the Back button). "
         "Returns {ok, url, title} — ok is False when there is no previous page in history. "
         "Use this after a browser_navigate or link-click to return to the prior page. "
-        "Do NOT use for in-app routing where the SPA manages its own history stack."
+        "Do NOT use for in-app routing where the SPA manages its own history stack. "
+        "Pass response_mode='outline' to include a compact browser_page_outline in the same call."
     ),
 )
-async def browser_navigate_back(instance_id: str) -> dict[str, Any]:
-    return await pool.get(instance_id).navigate_back()
+async def browser_navigate_back(instance_id: str, response_mode: str | None = None) -> dict[str, Any]:
+    res = await pool.get(instance_id).navigate_back()
+    out = dict(res)
+    if response_mode == "outline":
+        out["outline"] = await browser_page_outline(instance_id)
+    return out
 
 
 @mcp.tool(
@@ -478,7 +512,8 @@ async def browser_relaunch_fluid(instance_id: str) -> dict[str, Any]:
         "user explicitly says 'in a new window'. For 'window', width and height "
         "set the popup window size (defaults 1024x768). Returns {ok, target, "
         "page_index, url}; the new page is appended to the instance's page list "
-        "and is the same shape page_switch / page_close use."
+        "and is the same shape page_switch / page_close use. Pass response_mode='outline' "
+        "to include a compact browser_page_outline for the newly active page in the same call."
     ),
 )
 async def browser_open_url(
@@ -487,8 +522,13 @@ async def browser_open_url(
     target: str = "tab",
     width: int = 1024,
     height: int = 768,
+    response_mode: str | None = None,
 ) -> dict[str, Any]:
-    return await pool.get(instance_id).open_url(url, target=target, width=width, height=height)
+    res = await pool.get(instance_id).open_url(url, target=target, width=width, height=height)
+    out = dict(res)
+    if response_mode == "outline":
+        out["outline"] = await browser_page_outline(instance_id)
+    return out
 
 
 @mcp.tool(

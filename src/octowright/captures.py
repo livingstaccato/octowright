@@ -22,6 +22,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from octowright._paths import atomic_write_text
+from octowright.capture_actions import base_capture_next_actions, capture_search_next_actions, listed_capture_actions
+from octowright.capture_summaries import summarize_capture_payload
 from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CAPTURES_DIR
 
 # Capture-specific preview cap. Intentionally smaller than the session-level
@@ -35,6 +37,8 @@ DEFAULT_SLICE_CHARS = 4000
 MAX_SLICE_CHARS = 12_000
 MAX_SEARCH_CONTEXT_CHARS = 1_000
 MAX_SEARCH_MATCHES = 50
+MAX_LINE_SLICE_LINES = 200
+MAX_LINE_TEXT_CHARS = 2_000
 
 
 @dataclass(frozen=True)
@@ -167,7 +171,8 @@ def save_capture(
         "size_bytes": stat.st_size,
         "preview": content[:preview_chars],
         "truncated": len(content) > preview_chars,
-        "actions": ["capture_get", "capture_search", "capture_list", "capture_cleanup"],
+        "actions": ["capture_summary", "capture_search", "capture_lines", "capture_get", "capture_list"],
+        "next_actions": base_capture_next_actions(capture_id, DEFAULT_SLICE_CHARS),
     }
 
 
@@ -191,16 +196,74 @@ def get_capture_slice(
     start = max(0, offset)
     cap = max(0, min(limit, MAX_SLICE_CHARS))
     end = min(len(content), start + cap)
-    return {
+    next_offset = end if end < len(content) else None
+    out: dict[str, Any] = {
         "capture_id": capture_id,
         "offset": start,
         "limit": cap,
-        "next_offset": end if end < len(content) else None,
+        "next_offset": next_offset,
         "size_chars": len(content),
         "content": content[start:end],
         "truncated": end < len(content),
         "path": str(path),
     }
+    if next_offset is not None:
+        out["next_action"] = {
+            "tool": "capture_get",
+            "args": {"capture_id": capture_id, "offset": next_offset, "limit": cap},
+        }
+        out["next_actions"] = [out["next_action"]]
+    return out
+
+
+def get_capture_lines(
+    capture_id: str,
+    *,
+    start_line: int = 1,
+    limit: int = 80,
+    root: Path = CAPTURES_DIR,
+) -> dict[str, Any]:
+    path = find_capture(capture_id, root=root)
+    payload = _read_payload(path)
+    content = str(payload.get("content", ""))
+    all_lines = content.splitlines()
+    start = max(1, int(start_line))
+    capped_limit = max(1, min(int(limit), MAX_LINE_SLICE_LINES))
+    start_index = min(start - 1, len(all_lines))
+    raw_selected = all_lines[start_index : start_index + capped_limit]
+    selected = [line[:MAX_LINE_TEXT_CHARS] for line in raw_selected]
+    end_line = start_index + len(selected)
+    next_start_line = end_line + 1 if end_line < len(all_lines) else None
+    clipped_lines = _clipped_line_rows(raw_selected, start_index=start_index)
+    out: dict[str, Any] = {
+        "capture_id": capture_id,
+        "start_line": start,
+        "end_line": end_line if selected else None,
+        "next_start_line": next_start_line,
+        "limit": capped_limit,
+        "line_count": len(all_lines),
+        "lines": [{"line": start_index + offset + 1, "text": text} for offset, text in enumerate(selected)],
+        "truncated": end_line < len(all_lines) or bool(clipped_lines),
+        "path": str(path),
+    }
+    if clipped_lines:
+        out["line_text_chars"] = MAX_LINE_TEXT_CHARS
+        out["clipped_lines"] = clipped_lines
+    if next_start_line is not None:
+        out["next_action"] = {
+            "tool": "capture_lines",
+            "args": {"capture_id": capture_id, "start_line": next_start_line, "limit": capped_limit},
+        }
+        out["next_actions"] = [out["next_action"]]
+    return out
+
+
+def _clipped_line_rows(lines: list[str], *, start_index: int) -> list[dict[str, int]]:
+    return [
+        {"line": start_index + offset + 1, "original_chars": len(text)}
+        for offset, text in enumerate(lines)
+        if len(text) > MAX_LINE_TEXT_CHARS
+    ]
 
 
 def search_capture(
@@ -232,6 +295,14 @@ def search_capture(
                 "context_start": start,
                 "context_end": end,
                 "context": content[start:end],
+                "action": {
+                    "tool": "capture_get",
+                    "args": {
+                        "capture_id": capture_id,
+                        "offset": start,
+                        "limit": end - start,
+                    },
+                },
             }
         )
         if len(matches) >= capped_limit:
@@ -244,8 +315,26 @@ def search_capture(
         "limit": capped_limit,
         "context_chars": capped_context,
         "matches": matches,
+        "next_actions": capture_search_next_actions(capture_id, DEFAULT_SLICE_CHARS),
         "path": str(path),
     }
+
+
+def summarize_capture(
+    capture_id: str,
+    *,
+    root: Path = CAPTURES_DIR,
+    limit: int = 40,
+) -> dict[str, Any]:
+    path = find_capture(capture_id, root=root)
+    payload = _read_payload(path)
+    return summarize_capture_payload(
+        capture_id=capture_id,
+        payload=payload,
+        path=path,
+        default_slice_chars=DEFAULT_SLICE_CHARS,
+        limit=limit,
+    )
 
 
 def list_captures(
@@ -284,6 +373,7 @@ def list_captures(
                 "size_bytes": r.size_bytes,
                 "created_at": r.created_at,
                 "path": str(r.path),
+                "actions": listed_capture_actions(r.capture_id, DEFAULT_SLICE_CHARS),
             }
             for r in selected
         ],
