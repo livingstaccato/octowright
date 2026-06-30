@@ -58,6 +58,27 @@ def test_fastmcp_constructor_accepts_name_and_instructions() -> None:
     )
 
 
+def test_mcp_instructions_advertise_compact_browsing_workflow() -> None:
+    from octowright.server._state import mcp
+
+    instructions = mcp.instructions
+
+    assert "web_site_links" in instructions
+    assert "browser_page_outline" in instructions
+    assert "browser_observe" in instructions
+    assert "browser_read_markdown" in instructions
+    assert "response_mode='outline'" in instructions
+    assert "response_mode='summary'" in instructions
+    assert "capture_create(response_mode='summary')" in instructions
+    assert "browser_snapshot" in instructions
+    assert "heavy snapshots" in instructions
+    assert "action payload" in instructions
+    assert "next_actions" in instructions
+    assert "prefer structured next_actions" in instructions
+    assert "browser_console_summary" in instructions
+    assert "browser_downloads_summary" in instructions
+
+
 def test_fastmcp_tool_decorator_signature() -> None:
     """`mcp.tool(name=, title=, description=, annotations=)` is the
     decorator surface our @mcp.tool callers expect. _ProfiledFastMCP's
