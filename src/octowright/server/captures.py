@@ -14,6 +14,7 @@ from octowright import captures as _captures
 from octowright.config_paths import user_config_dir
 from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CAPTURES_DIR, RECORDINGS_DIR
 from octowright.server._state import mcp, pool
+from octowright.server.profiles import annotate_next_actions_for_profile
 
 
 async def _capture_snapshot(session: Any, _meta: dict[str, Any], _expression: str | None) -> str:
@@ -65,6 +66,38 @@ _CAPTURE_SOURCES = {
 }
 
 
+def _capture_summary_next_actions(capture_id: str, summary_limit: int) -> list[dict[str, Any]]:
+    return annotate_next_actions_for_profile(
+        [
+            {"tool": "capture_summary", "args": {"capture_id": capture_id, "limit": summary_limit}},
+            {"tool": "capture_search", "args": {"capture_id": capture_id, "query": "<query>", "limit": 20}},
+            {"tool": "capture_lines", "args": {"capture_id": capture_id, "start_line": 1, "limit": 80}},
+            {
+                "tool": "capture_get",
+                "args": {"capture_id": capture_id, "offset": 0, "limit": _captures.DEFAULT_SLICE_CHARS},
+            },
+        ]
+    )
+
+
+def _annotate_capture_result_actions(result: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(result.get("next_actions"), list):
+        result["next_actions"] = annotate_next_actions_for_profile(result["next_actions"])
+    if isinstance(result.get("next_action"), dict):
+        annotated = annotate_next_actions_for_profile([result["next_action"]])
+        if annotated:
+            result["next_action"] = annotated[0]
+
+    for value in result.values():
+        if isinstance(value, dict):
+            _annotate_capture_result_actions(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _annotate_capture_result_actions(item)
+    return result
+
+
 async def _capture_content(instance_id: str, source: str, expression: str | None) -> tuple[str, dict[str, Any]]:
     session = pool.get(instance_id)
     meta: dict[str, Any] = {"source": source}
@@ -82,7 +115,8 @@ async def _capture_content(instance_id: str, source: str, expression: str | None
     description=(
         "Create a cached full-fidelity payload for later analysis without dumping it all into context. "
         "source is one of: snapshot, text, evaluate, console, network, markdown, recording. "
-        "Returns a compact preview plus capture_id; follow up with capture_search or capture_get."
+        "Returns a compact preview plus capture_id. Pass response_mode='summary' to also return "
+        "capture_summary inline; follow up with capture_search, capture_lines, or capture_get."
     ),
 )
 async def capture_create(
@@ -90,10 +124,12 @@ async def capture_create(
     source: str = "snapshot",
     expression: str | None = None,
     preview_chars: int = _captures.CAPTURE_PREVIEW_CHARS,
+    response_mode: str | None = None,
+    summary_limit: int = 40,
 ) -> dict[str, Any]:
     session = pool.get(instance_id)
     content, meta = await _capture_content(instance_id, source, expression)
-    return _captures.save_capture(
+    result = _captures.save_capture(
         kind=source,
         content=content,
         # _target().url so the capture's url matches the frame the content came from.
@@ -103,6 +139,14 @@ async def capture_create(
         source=meta,
         preview_chars=preview_chars,
     )
+    _annotate_capture_result_actions(result)
+    if response_mode == "summary":
+        capture_id = str(result["capture_id"])
+        result["summary"] = _captures.summarize_capture(capture_id, limit=summary_limit)
+        _annotate_capture_result_actions(result["summary"])
+        result["actions"] = ["capture_summary", "capture_search", "capture_lines", "capture_get"]
+        result["next_actions"] = _capture_summary_next_actions(capture_id, summary_limit)
+    return result
 
 
 @mcp.tool(
@@ -110,7 +154,18 @@ async def capture_create(
     description="Read a bounded slice from a cached capture by capture_id. Use offset/limit for paging.",
 )
 def capture_get(capture_id: str, offset: int = 0, limit: int = _captures.DEFAULT_SLICE_CHARS) -> dict[str, Any]:
-    return _captures.get_capture_slice(capture_id, offset=offset, limit=limit)
+    return _annotate_capture_result_actions(_captures.get_capture_slice(capture_id, offset=offset, limit=limit))
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Read a bounded 1-based line range from a cached capture. "
+        "Use after capture_summary when it gives useful line numbers."
+    ),
+)
+def capture_lines(capture_id: str, start_line: int = 1, limit: int = 80) -> dict[str, Any]:
+    return _annotate_capture_result_actions(_captures.get_capture_lines(capture_id, start_line=start_line, limit=limit))
 
 
 @mcp.tool(
@@ -127,13 +182,26 @@ def capture_search(
     context_chars: int = 500,
     limit: int = 20,
 ) -> dict[str, Any]:
-    return _captures.search_capture(
-        capture_id,
-        query,
-        regex=regex,
-        context_chars=context_chars,
-        limit=limit,
+    return _annotate_capture_result_actions(
+        _captures.search_capture(
+            capture_id,
+            query,
+            regex=regex,
+            context_chars=context_chars,
+            limit=limit,
+        )
     )
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Return a compact structural outline for a cached capture without dumping the payload. "
+        "Use before capture_get when you need to decide which section or line range to inspect."
+    ),
+)
+def capture_summary(capture_id: str, limit: int = 40) -> dict[str, Any]:
+    return _annotate_capture_result_actions(_captures.summarize_capture(capture_id, limit=limit))
 
 
 @mcp.tool(
@@ -141,7 +209,7 @@ def capture_search(
     description="List cached captures, optionally filtered by instance_id or host.",
 )
 def capture_list(instance_id: str | None = None, host: str | None = None, limit: int = 50) -> dict[str, Any]:
-    return _captures.list_captures(instance_id=instance_id, host=host, limit=limit)
+    return _annotate_capture_result_actions(_captures.list_captures(instance_id=instance_id, host=host, limit=limit))
 
 
 @mcp.tool(

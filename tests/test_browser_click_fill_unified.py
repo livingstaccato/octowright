@@ -35,6 +35,7 @@ def _session(patch: MagicMock) -> MagicMock:
     s.click_by = AsyncMock(return_value={"ok": True})
     s.fill = AsyncMock(return_value=None)
     s.fill_by = AsyncMock(return_value={"ok": True})
+    s.press_key = AsyncMock(return_value=None)
     patch.get.return_value = s
     return s
 
@@ -59,6 +60,24 @@ async def test_browser_click_css_selector_with_brief_returns_brief(
     out = await _input.browser_click("i", selector="button", response_mode="brief")
     s.click.assert_awaited_once()
     assert out["brief"]["url"] == "x"
+
+
+@pytest.mark.anyio
+async def test_browser_click_css_selector_with_outline_returns_page_outline(
+    _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = _session(_patch_pool)
+    brief = AsyncMock(return_value={"url": "brief"})
+    outline = AsyncMock(return_value={"url": "outline", "headings": []})
+    monkeypatch.setattr(_input, "browser_brief", brief)
+    monkeypatch.setattr(_input, "browser_page_outline", outline)
+
+    out = await _input.browser_click("i", selector="button", response_mode="outline")
+
+    s.click.assert_awaited_once()
+    outline.assert_awaited_once_with("i")
+    brief.assert_not_awaited()
+    assert out["outline"]["url"] == "outline"
 
 
 # ── browser_click — ARIA locator path ────────────────────────────────────────
@@ -133,6 +152,21 @@ async def test_browser_fill_css_selector_calls_session_fill(_patch_pool: MagicMo
     assert out["ok"] is True
 
 
+@pytest.mark.anyio
+async def test_browser_fill_css_selector_with_outline_returns_page_outline(
+    _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = _session(_patch_pool)
+    outline = AsyncMock(return_value={"url": "outline", "fields": []})
+    monkeypatch.setattr(_input, "browser_page_outline", outline)
+
+    out = await _input.browser_fill("i", "hello", selector="#email", response_mode="outline")
+
+    s.fill.assert_awaited_once_with("#email", "hello")
+    outline.assert_awaited_once_with("i")
+    assert out["outline"]["url"] == "outline"
+
+
 # ── browser_fill — ARIA locator path ─────────────────────────────────────────
 
 
@@ -183,3 +217,18 @@ async def test_browser_fill_no_locator_raises(_patch_pool: MagicMock) -> None:
     _session(_patch_pool)
     with pytest.raises(ValueError, match="selector"):
         await _input.browser_fill("i", "hello")
+
+
+@pytest.mark.anyio
+async def test_browser_press_key_with_outline_returns_page_outline(
+    _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = _session(_patch_pool)
+    outline = AsyncMock(return_value={"url": "outline", "headings": []})
+    monkeypatch.setattr(_input, "browser_page_outline", outline)
+
+    out = await _input.browser_press_key("i", "Enter", response_mode="outline")
+
+    s.press_key.assert_awaited_once_with("Enter")
+    outline.assert_awaited_once_with("i")
+    assert out["outline"]["url"] == "outline"

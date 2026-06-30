@@ -49,13 +49,13 @@ async def test_scenario_wait_for_sync(tmp_octowright, monkeypatch):
                 "participants": [
                     {
                         "persona": "p1",
-                        "kind": "webkit",
+                        "kind": "chromium",
                         "role": "player",
                         "url": "data:text/html,<html><div id='p'>player</div></html>",
                     },
                     {
                         "persona": "p2",
-                        "kind": "webkit",
+                        "kind": "chromium",
                         "role": "monitor",
                         "url": "data:text/html,<html><div id='m'>monitor</div></html>",
                     },

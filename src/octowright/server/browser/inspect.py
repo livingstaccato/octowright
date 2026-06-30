@@ -11,34 +11,108 @@ from __future__ import annotations
 import asyncio
 import json as _json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
+from octowright import captures as _captures
 from octowright._paths import reject_unsafe_path
 from octowright.defaults import RECORDINGS_DIR, SNAPSHOT_TIMEOUT_SECONDS
 from octowright.export import export_script as _export_script
 from octowright.mcp_types import (
     BrowserBriefResult,
     BrowserCaptureAndCloseResult,
-    BrowserConsoleMessagesResult,
     BrowserEvaluateResult,
-    BrowserExpectJsResult,
-    BrowserExpectSelectorResult,
-    BrowserExpectTextResult,
-    BrowserExpectUrlResult,
     BrowserOkResult,
     BrowserPathResult,
     BrowserReadMarkdownResult,
     BrowserScreenshotResult,
     BrowserSnapshotResult,
-    BrowserTailRecordingResult,
-    ConsoleMessage,
+    BrowserToolAction,
 )
-from octowright.recorder import tail_log
 from octowright.server._state import mcp, pool
+from octowright.server.browser.discovery import (
+    _outline_next_actions,
+    browser_fields,
+    browser_find_field,
+    browser_page_outline,
+)
+from octowright.server.browser.discovery_links import browser_find_link, browser_links
+from octowright.server.browser.inspect_assertions import (
+    browser_expect_js,
+    browser_expect_selector,
+    browser_expect_text,
+    browser_expect_url,
+)
+from octowright.server.browser.inspect_console import browser_console_messages, browser_console_summary
+from octowright.server.browser.inspect_recording import browser_tail_recording
+from octowright.server.browser.network import browser_network_summary
+from octowright.server.browser.views import browser_downloads_summary
+from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session import DEFAULT_PREVIEW_CHARS
 
 # Module-level alias so tests can monkeypatch the snapshot timeout cheaply.
 SNAPSHOT_TIMEOUT_S = SNAPSHOT_TIMEOUT_SECONDS
+
+__all__ = [
+    "_outline_next_actions",
+    "browser_console_messages",
+    "browser_console_summary",
+    "browser_expect_js",
+    "browser_expect_selector",
+    "browser_expect_text",
+    "browser_expect_url",
+    "browser_fields",
+    "browser_find_field",
+    "browser_find_link",
+    "browser_links",
+    "browser_page_outline",
+    "browser_tail_recording",
+]
+
+
+def _snapshot_compact_actions(instance_id: str) -> list[BrowserToolAction]:
+    return annotate_next_actions_for_profile(
+        [
+            {"tool": "browser_page_outline", "args": {"instance_id": instance_id}},
+            {
+                "tool": "browser_read_markdown",
+                "args": {"instance_id": instance_id, "response_mode": "summary"},
+            },
+            {"tool": "browser_snapshot", "args": {"instance_id": instance_id, "selector": "main"}},
+        ]
+    )
+
+
+def _snapshot_timeout_result(instance_id: str) -> BrowserSnapshotResult:
+    return {
+        "snapshot_timed_out": True,
+        "timeout_s": SNAPSHOT_TIMEOUT_S,
+        "hint": (
+            "aria snapshot timed out on a heavy DOM — use browser_page_outline, "
+            "browser_read_markdown(response_mode='summary'), or browser_snapshot with "
+            "a scoped selector (e.g. selector='main')"
+        ),
+        "actions": _snapshot_compact_actions(instance_id),
+    }
+
+
+def _evaluate_truncated_actions(instance_id: str, expression: str) -> list[BrowserToolAction]:
+    return annotate_next_actions_for_profile(
+        [
+            {
+                "tool": "capture_create",
+                "args": {
+                    "instance_id": instance_id,
+                    "source": "evaluate",
+                    "expression": expression,
+                    "response_mode": "summary",
+                },
+            },
+            {
+                "tool": "browser_evaluate",
+                "args": {"instance_id": instance_id, "expression": expression, "full": True},
+            },
+        ]
+    )
 
 
 @mcp.tool(
@@ -78,14 +152,7 @@ async def browser_snapshot(
         # A heavy DOM can make aria_snapshot() run past the bridge request timeout,
         # which the agent can't distinguish from a disconnect. Degrade to a typed
         # result that points at the cheaper observe paths instead of hanging.
-        return {
-            "snapshot_timed_out": True,
-            "timeout_s": SNAPSHOT_TIMEOUT_S,
-            "hint": (
-                "aria snapshot timed out on a heavy DOM — use browser_read_markdown, "
-                "browser_brief, or browser_snapshot with a scoped selector (e.g. selector='main')"
-            ),
-        }
+        return _snapshot_timeout_result(instance_id)
     aria = snap["aria"]
     cap = None if full else (max_chars or DEFAULT_PREVIEW_CHARS)
     out: BrowserSnapshotResult = {
@@ -97,6 +164,7 @@ async def browser_snapshot(
         out["truncated"] = True
         out["aria_size"] = len(aria)
         out["cap"] = cap
+        out["actions"] = _snapshot_compact_actions(instance_id)
     else:
         out["aria"] = aria
         out["truncated"] = False
@@ -131,32 +199,9 @@ async def browser_evaluate(
             "truncated": True,
             "result_size": len(rendered),
             "cap": cap,
+            "next_actions": _evaluate_truncated_actions(instance_id, expression),
         }
     return {"result": result, "truncated": False, "result_size": len(rendered)}
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Return console messages from an instance. Optionally filter by level "
-        "(e.g. 'error', 'warning') and pass `since` (a cursor returned from a "
-        "previous call) for incremental reads."
-    ),
-)
-def browser_console_messages(
-    instance_id: str,
-    level: str | None = None,
-    since: int | None = None,
-) -> BrowserConsoleMessagesResult:
-    msgs = list(pool.get(instance_id).console)
-    start = since or 0
-    sliced = msgs[start:]
-    filtered = [m for m in sliced if m.get("level") == level] if level else sliced
-    return {
-        "messages": cast("list[ConsoleMessage]", filtered),
-        "next_cursor": len(msgs),
-        "total": len(msgs),
-    }
 
 
 @mcp.tool(
@@ -174,7 +219,8 @@ def browser_console_messages(
         "returns truthy. Use for compound conditions a selector can't express, "
         "e.g. `\"!document.querySelector('.spinner') && document.querySelectorAll('tbody tr').length > 0\"`.\n"
         "  - none of the above → wait for network-idle.\n"
-        "Passing more than one is a 400-equivalent error."
+        "Passing more than one is a 400-equivalent error. "
+        "Pass response_mode='outline' to include a compact browser_page_outline after the wait succeeds."
     ),
 )
 async def browser_wait_for(
@@ -183,9 +229,13 @@ async def browser_wait_for(
     text: str | None = None,
     timeout_ms: int | None = None,
     expression: str | None = None,
+    response_mode: str | None = None,
 ) -> BrowserOkResult:
     await pool.get(instance_id).wait_for(selector, text, timeout_ms, expression=expression)
-    return {"ok": True}
+    result: BrowserOkResult = {"ok": True}
+    if response_mode == "outline":
+        result["outline"] = await browser_page_outline(instance_id)
+    return result
 
 
 @mcp.tool(structured_output=False, description="Path to the JSONL action log for an instance.")
@@ -230,9 +280,16 @@ async def browser_capture_and_close(
 
     # Optional Snapshot
     aria = None
+    snapshot_timeout: BrowserSnapshotResult | None = None
     if snapshot:
-        aria_full = await frame_target.locator("html").aria_snapshot()
-        aria = aria_full[:DEFAULT_PREVIEW_CHARS]
+        try:
+            aria_full = await asyncio.wait_for(
+                frame_target.locator("html").aria_snapshot(),
+                timeout=SNAPSHOT_TIMEOUT_S,
+            )
+            aria = aria_full[:DEFAULT_PREVIEW_CHARS]
+        except TimeoutError:
+            snapshot_timeout = _snapshot_timeout_result(instance_id)
 
     # Close
     await pool.close(instance_id, force=force)
@@ -245,6 +302,11 @@ async def browser_capture_and_close(
     }
     if aria:
         res["aria"] = aria
+    if snapshot_timeout is not None:
+        res["snapshot_timed_out"] = True
+        res["timeout_s"] = snapshot_timeout["timeout_s"]
+        res["hint"] = snapshot_timeout["hint"]
+        res["actions"] = snapshot_timeout["actions"]
     return res
 
 
@@ -266,123 +328,64 @@ def browser_export_script(
     return {"path": str(result)}
 
 
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "ASSERT the current page URL matches `pattern`. Raises on mismatch — use this "
-        "to verify navigation reached the right place (e.g. after a successful login). "
-        "`pattern` is a regex by default; pass mode='equals' for exact match or "
-        "mode='contains' for substring. Don't use this just to read the URL — that's `browser_evaluate('location.href')`."
-    ),
-)
-async def browser_expect_url(
-    instance_id: str,
-    pattern: str,
-    mode: str = "regex",
-) -> BrowserExpectUrlResult:
-    session = pool.get(instance_id)
-    actual = await session.expect_url(pattern, mode)
-    return {"ok": True, "url": actual}
+def _markdown_summary_next_actions(capture_id: str, summary_limit: int) -> list[BrowserToolAction]:
+    return annotate_next_actions_for_profile(
+        [
+            {"tool": "capture_summary", "args": {"capture_id": capture_id, "limit": summary_limit}},
+            {"tool": "capture_search", "args": {"capture_id": capture_id, "query": "<query>", "limit": 20}},
+            {"tool": "capture_lines", "args": {"capture_id": capture_id, "start_line": 1, "limit": 80}},
+            {
+                "tool": "capture_get",
+                "args": {"capture_id": capture_id, "offset": 0, "limit": _captures.DEFAULT_SLICE_CHARS},
+            },
+        ]
+    )
 
 
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "ASSERT an element matching `selector` contains `text`. Polls up to "
-        "`timeout_ms` waiting for the element to appear AND its text to match. "
-        "mode: 'contains' (default), 'equals', or 'regex'. "
-        "Use this to verify rendered output (welcome banner, error message, table cell). "
-        "If you only need 'does this element exist?' use browser_expect_selector."
-    ),
-)
-async def browser_expect_text(
-    instance_id: str,
-    selector: str,
-    text: str,
-    mode: str = "contains",
-    timeout_ms: int | None = None,
-) -> BrowserExpectTextResult:
-    session = pool.get(instance_id)
-    actual = await session.expect_text(selector, text, mode, timeout_ms)
-    return {"ok": True, "text": actual}
+def _annotate_capture_result_actions(result: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(result.get("next_actions"), list):
+        result["next_actions"] = annotate_next_actions_for_profile(result["next_actions"])
+    if isinstance(result.get("next_action"), dict):
+        annotated = annotate_next_actions_for_profile([result["next_action"]])
+        if annotated:
+            result["next_action"] = annotated[0]
+    for value in result.values():
+        if isinstance(value, dict):
+            _annotate_capture_result_actions(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _annotate_capture_result_actions(item)
+    return result
 
 
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "ASSERT at least one element matching `selector` exists (or DOES NOT exist, if "
-        "present=False). Polls up to `timeout_ms` for the condition. "
-        "Use this for existence checks (modal opened, error banner appeared/disappeared). "
-        "If you also need to check the text inside, use browser_expect_text in one call."
-    ),
-)
-async def browser_expect_selector(
-    instance_id: str,
-    selector: str,
-    present: bool = True,
-    timeout_ms: int | None = None,
-) -> BrowserExpectSelectorResult:
-    session = pool.get(instance_id)
-    await session.expect_selector(selector, present, timeout_ms)
-    return {"ok": True, "selector": selector, "present": present}
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Assert a JavaScript expression evaluates to a truthy value (or equals `equals` "
-        "if supplied). The expression runs in the page, like browser_evaluate."
-    ),
-)
-async def browser_expect_js(
-    instance_id: str,
-    expression: str,
-    equals: Any = None,
-) -> BrowserExpectJsResult:
-    session = pool.get(instance_id)
-    result = await session.expect_js(expression, equals)
-    return {"ok": True, "result": result}
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Read JSONL events appended to an instance's recording since byte offset `since`. "
-        "Use this to STREAM events as they happen; use browser_recording_path if you just "
-        "need the file path on disk. Pass the returned `cursor` back as `since` on the next "
-        "call to read only new events (cursor pattern). When the file ends mid-line, the "
-        "cursor stops at the start of the partial fragment so it will be re-read once "
-        "completed; `complete` is True iff cursor == total_bytes."
-    ),
-)
-def browser_tail_recording(
-    instance_id: str,
-    since: int | None = None,
-) -> BrowserTailRecordingResult:
-    session = pool.get(instance_id)
-    log_path = Path(session.log_path)
-    prev = since or 0
-
-    events, new_cursor, total_bytes = tail_log(log_path, prev)
-
-    return {
-        "events": events,
-        "cursor": new_cursor,
-        "total_bytes": total_bytes,
-        "complete": new_cursor >= total_bytes,
-    }
+def _markdown_truncated_next_actions(instance_id: str, original_size: int) -> list[BrowserToolAction]:
+    return annotate_next_actions_for_profile(
+        [
+            {"tool": "browser_read_markdown", "args": {"instance_id": instance_id, "response_mode": "summary"}},
+            {"tool": "browser_read_markdown", "args": {"instance_id": instance_id, "max_chars": original_size}},
+            {
+                "tool": "capture_create",
+                "args": {"instance_id": instance_id, "source": "markdown", "response_mode": "summary"},
+            },
+        ]
+    )
 
 
 @mcp.tool(
     structured_output=False,
     description=(
         "Read the cached Markdown representation of the page. "
-        "Highly token-efficient way to read article content or documentation."
+        "Highly token-efficient way to read article content or documentation. "
+        "Pass response_mode='summary' to save the full markdown as a capture and "
+        "return a compact outline plus capture_id instead of inline markdown."
     ),
 )
 async def browser_read_markdown(
     instance_id: str,
     max_chars: int | None = None,
+    response_mode: str | None = None,
+    summary_limit: int = 40,
 ) -> BrowserReadMarkdownResult:
     session = pool.get(instance_id)
     if max_chars is not None and max_chars < 0:
@@ -398,8 +401,34 @@ async def browser_read_markdown(
             "ensure markitdown is installed and the page rendered HTML content"
         )
 
-    text = path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8", errors="replace")
     original_size = len(text)
+
+    if response_mode == "summary":
+        target = session._target()
+        saved = _captures.save_capture(
+            kind="markdown",
+            content=text,
+            url=target.url,
+            title=await session.page.title(),
+            instance_id=instance_id,
+            source={"source": "markdown", "path": str(path)},
+        )
+        _annotate_capture_result_actions(saved)
+        capture_id = str(saved["capture_id"])
+        summary = _annotate_capture_result_actions(_captures.summarize_capture(capture_id, limit=summary_limit))
+        return {
+            "url": target.url,
+            "title": saved.get("title") if isinstance(saved.get("title"), str) else None,
+            "capture_id": capture_id,
+            "kind": "markdown",
+            "markdown_size": original_size,
+            "size_chars": original_size,
+            "summary": summary,
+            "actions": ["capture_summary", "capture_search", "capture_lines", "capture_get"],
+            "next_actions": _markdown_summary_next_actions(capture_id, summary_limit),
+        }
+
     cap = DEFAULT_PREVIEW_CHARS if max_chars is None else max_chars
 
     truncated = False
@@ -407,13 +436,16 @@ async def browser_read_markdown(
         text = text[:cap]
         truncated = True
 
-    return {
+    result: BrowserReadMarkdownResult = {
         # _target().url so the reported url matches the frame the markdown came from.
         "url": session._target().url,
         "markdown": text,
         "truncated": truncated,
         "markdown_size": original_size,
     }
+    if truncated:
+        result["next_actions"] = _markdown_truncated_next_actions(instance_id, original_size)
+    return result
 
 
 @mcp.tool(
@@ -438,3 +470,51 @@ async def browser_brief(instance_id: str) -> BrowserBriefResult:
         "title": title,
         "elements": elements,
     }
+
+
+def _observe_next_actions(instance_id: str, limit: int) -> list[dict[str, Any]]:
+    return annotate_next_actions_for_profile(
+        [
+            {"tool": "browser_page_outline", "args": {"instance_id": instance_id, "limit": limit}},
+            {"tool": "browser_find_link", "args": {"instance_id": instance_id, "query": "<intent>", "limit": 8}},
+            {"tool": "browser_find_field", "args": {"instance_id": instance_id, "query": "<intent>", "limit": 8}},
+            {
+                "tool": "browser_read_markdown",
+                "args": {"instance_id": instance_id, "response_mode": "summary"},
+            },
+            {
+                "tool": "capture_create",
+                "args": {"instance_id": instance_id, "source": "snapshot", "response_mode": "summary"},
+            },
+        ]
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Return one compact observation bundle for the active page: page outline plus optional "
+        "console, network, and download summaries. Use this when you need orientation and diagnostics "
+        "in one low-token call before deciding whether a heavier snapshot or raw request list is needed."
+    ),
+)
+async def browser_observe(
+    instance_id: str,
+    limit: int = 20,
+    include_console: bool = True,
+    include_network: bool = True,
+    include_downloads: bool = False,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "instance_id": instance_id,
+        "outline": await browser_page_outline(instance_id, limit=limit),
+        "actions": ["browser_page_outline", "browser_find_link", "browser_find_field", "browser_read_markdown"],
+        "next_actions": _observe_next_actions(instance_id, limit),
+    }
+    if include_console:
+        result["console"] = browser_console_summary(instance_id)
+    if include_network:
+        result["network"] = browser_network_summary(instance_id)
+    if include_downloads:
+        result["downloads"] = browser_downloads_summary(instance_id)
+    return result

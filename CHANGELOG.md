@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-06-29
+
+A token-efficiency release for agentic browsing: Octowright keeps the broad
+browser/macro/scenario surface, but adds cheaper discovery paths, bounded
+summaries, and profile-aware follow-up guidance so agents can orient before
+spending tokens on full snapshots or raw dumps.
+
+### Added
+- **HTTP-first web discovery tools.** New `web_page_outline`,
+  `web_find_links`, and `web_site_links` tools fetch and parse public HTTP(S)
+  pages without launching a browser, returning compact headings/link candidates
+  and profile-aware next actions.
+- **Compact browser discovery tools.** New `browser_links`,
+  `browser_find_link`, `browser_fields`, `browser_find_field`,
+  `browser_page_outline`, and `browser_observe` expose bounded DOM, form,
+  navigation, console, network, and download summaries for live browser
+  sessions.
+- **Capture summaries and line/search follow-ups.** Stored captures now support
+  summary-oriented payloads for markdown, snapshots, evaluate results, network
+  logs, console logs, and recordings, with follow-up actions for targeted
+  retrieval.
+- **Profile-aware next actions.** Truncated or summarized responses now annotate
+  follow-up tool suggestions that are hidden by the active
+  `OCTOWRIGHT_PROFILE`, so agents know whether to call another compact tool or
+  restart with a wider profile.
+- **Dashboard live-preview fallback.** The frontend live preview falls back to
+  screenshot polling when screencast streaming closes, keeping the debug view
+  useful on engines or sessions where streaming is unavailable.
+
+### Changed
+- **Capability profiles were rebalanced for low-token browsing.** `core` now
+  includes compact browser and HTTP discovery tools; `advanced` includes
+  summaries for console, network, downloads, captures, and fan-out workflows.
+  A core install now exposes 125 MCP tools by default (132 with the optional
+  terminal extra), while `--profile=core` trims the visible surface to 31 tools.
+- **Heavy read tools are more conservative by default.** Evaluate, text reads,
+  snapshots, recording tails, console/network/download reads, and multi-browser
+  fan-out now prefer bounded results with explicit follow-up actions for full
+  payloads or targeted retrieval.
+- **Large server modules were split by responsibility** so discovery, assertions,
+  recording tailing, console summaries, capture summaries, and link scoring stay
+  under the repo's LOC and complexity gates.
+
+### Fixed
+- **Profile-filtered test isolation.** Tests that assert exact follow-up action
+  payloads now clear leaked `OCTOWRIGHT_PROFILE` state, preventing order-
+  dependent failures in full-suite runs.
+- **XML sitemap parsing uses `defusedxml`** in HTTP-first discovery.
+
 ## [0.10.1] - 2026-06-27
 
 A bridge-resilience patch plus a terminal-connector tidy.
@@ -584,6 +633,8 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
+[0.11.0]: https://github.com/livingstaccato/octowright/compare/v0.10.1...main
+[0.10.1]: https://github.com/livingstaccato/octowright/compare/v0.10.0...v0.10.1
 [0.9.1]: https://github.com/livingstaccato/octowright/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/livingstaccato/octowright/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/livingstaccato/octowright/compare/v0.7.0...v0.8.0

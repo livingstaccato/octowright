@@ -99,6 +99,7 @@ SENSITIVE_ROUTE_PATTERNS = {
 
 SENSITIVE_WEBSOCKET_ROUTE_PATTERNS = {
     ("WEBSOCKET", "/api/sessions/{id}/tail"),
+    ("WEBSOCKET", "/api/sessions/{id}/screencast"),
 }
 
 PUBLIC_API_ROUTE_PATTERNS = {

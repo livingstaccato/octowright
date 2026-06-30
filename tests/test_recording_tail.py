@@ -14,14 +14,17 @@ import pytest
 
 from octowright.recorder import tail_log
 from octowright.server.browser import inspect as _inspect
+from octowright.server.browser import inspect_recording as _inspect_recording
 
 
 @pytest.fixture
 def stub_pool(monkeypatch, tmp_path):
+    monkeypatch.delenv("OCTOWRIGHT_PROFILE", raising=False)
     log_path = tmp_path / "rec.jsonl"
     sessions = {"abc": SimpleNamespace(log_path=log_path)}
     fake_pool = SimpleNamespace(get=lambda iid: sessions[iid])
     monkeypatch.setattr(_inspect, "pool", fake_pool)
+    monkeypatch.setattr(_inspect_recording, "pool", fake_pool)
     return log_path
 
 
@@ -54,6 +57,55 @@ def test_all_complete_lines(stub_pool):
     assert result["cursor"] == size
     assert result["total_bytes"] == size
     assert result["complete"] is True
+
+
+def test_tail_recording_summary_mode_bounds_payload_and_suggests_next_actions(stub_pool):
+    events = [
+        {"action": "navigate", "url": "https://example.com"},
+        {"action": "click", "selector": "#a"},
+        {"action": "type", "selector": "#q", "value": "secret@example.com"},
+        {"action": "click", "selector": "#submit"},
+    ]
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+    result = _inspect.browser_tail_recording(instance_id="abc", since=0, response_mode="summary", recent_limit=2)
+
+    assert "events" not in result
+    assert result["summary"] == {
+        "event_count": 4,
+        "by_action": [
+            {"key": "click", "count": 2},
+            {"key": "navigate", "count": 1},
+            {"key": "type", "count": 1},
+        ],
+        "recent": [
+            {"action": "type", "selector": "#q"},
+            {"action": "click", "selector": "#submit"},
+        ],
+        "recent_limit": 2,
+    }
+    assert result["next_actions"] == [
+        {
+            "tool": "browser_tail_recording",
+            "args": {"instance_id": "abc", "since": result["cursor"], "response_mode": "summary"},
+        },
+        {"tool": "browser_tail_recording", "args": {"instance_id": "abc", "since": result["cursor"]}},
+    ]
+
+
+def test_tail_recording_raw_mode_can_limit_events(stub_pool):
+    events = [{"action": "click", "n": n} for n in range(5)]
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+    result = _inspect.browser_tail_recording(instance_id="abc", since=0, max_events=2)
+
+    assert result["events"] == events[:2]
+    assert result["event_count"] == 5
+    assert result["returned_event_count"] == 2
+    assert result["truncated"] is True
+    assert result["next_actions"] == [
+        {"tool": "browser_tail_recording", "args": {"instance_id": "abc", "since": result["cursor"]}},
+    ]
 
 
 def test_partial_trailing_line(stub_pool):

@@ -97,8 +97,9 @@ async def test_resize_each_forwards_width_height(fake_pool: _FakePool) -> None:
 @pytest.mark.asyncio
 async def test_evaluate_each_returns_per_instance_results(fake_pool: _FakePool) -> None:
     out = await each.browser_each("evaluate", expression="location.href")
-    assert out["alpha"]["result"]["args"] == ("location.href",)
-    assert out["beta"]["result"]["args"] == ("location.href",)
+    assert out["alpha"]["result"]["result"]["args"] == ("location.href",)
+    assert out["alpha"]["result"]["truncated"] is False
+    assert out["beta"]["result"]["result"]["args"] == ("location.href",)
 
 
 @pytest.mark.asyncio

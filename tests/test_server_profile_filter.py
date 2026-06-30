@@ -49,6 +49,31 @@ def test_build_allowed_set_multiple_profiles_union() -> None:
     assert allowed == expected
 
 
+def test_browser_observe_is_advanced_not_core() -> None:
+    assert "browser_observe" not in profiles.PROFILES["core"]
+    assert "browser_observe" in profiles.PROFILES["advanced"]
+
+
+def test_advanced_profile_includes_diagnostic_raw_followups() -> None:
+    assert "browser_network_summary" in profiles.PROFILES["advanced"]
+    assert "browser_network_requests" in profiles.PROFILES["advanced"]
+    assert "browser_downloads_summary" in profiles.PROFILES["advanced"]
+    assert "browser_downloads" in profiles.PROFILES["advanced"]
+    assert "browser_wait_for_download" in profiles.PROFILES["advanced"]
+
+
+def test_core_outline_marks_advanced_capture_followup_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.server.browser import inspect as _inspect
+
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core")
+
+    actions = _inspect._outline_next_actions("i")
+    capture_action = next(action for action in actions if action["tool"] == "capture_create")
+
+    assert capture_action["available"] is False
+    assert capture_action["requires_profile"] == "advanced"
+
+
 def test_build_allowed_set_unknown_profile_ignored() -> None:
     allowed = profiles.build_allowed_set("core,bogus")
     assert allowed == set(profiles.PROFILES["core"]) | set(profiles.ALWAYS_ON_TOOLS)
@@ -131,6 +156,14 @@ def test_profile_core_subprocess_filters_tools() -> None:
     assert expected.issubset(names), f"missing core tools: {expected - names}"
     assert "browser_suggest_for_url" in names
     assert "browser_quick_launch" in names
+    assert "browser_links" in names
+    assert "browser_find_link" in names
+    assert "browser_fields" in names
+    assert "browser_find_field" in names
+    assert "browser_page_outline" in names
+    assert "web_page_outline" in names
+    assert "web_find_links" in names
+    assert "web_site_links" in names
     assert "octowright_advisor_status" in names
     assert "octowright_advisor_set_preference" in names
     assert "octowright_advisor_record_macro_observation" in names
@@ -154,6 +187,11 @@ def test_profile_core_advanced_subprocess_combines() -> None:
     names = _registered_names_in_subprocess("core,advanced")
     union = set(profiles.PROFILES["core"]) | set(profiles.PROFILES["advanced"])
     assert union.issubset(names)
+    assert "capture_summary" in names
+    assert "capture_lines" in names
+    assert "browser_console_summary" in names
+    assert "browser_downloads_summary" in names
+    assert "browser_network_summary" in names
     # Things outside both profiles still excluded.
     assert "scenario_start" not in names
 
