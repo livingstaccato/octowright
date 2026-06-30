@@ -84,17 +84,17 @@ Octowright ships a Click-based CLI. Useful subcommands:
 
 ## Slimming the LLM tool surface
 
-The full MCP surface is currently 111 tools. When a workflow only needs a slice (driving
+The full MCP surface is currently 125 tools on a core install. When a workflow only needs a slice (driving
 a browser, replaying macros, etc.), pass `--profile` to slim what the LLM
 sees at connection time:
 
 ```bash
-octowright serve --profile=core              # 20 tools — browser core + always-on diagnostics
-octowright serve --profile=core,macros       # 29 tools — browser + macro replay + always-on diagnostics
+octowright serve --profile=core              # 31 tools — browser core + always-on diagnostics
+octowright serve --profile=core,macros       # 46 tools — browser + macro replay + always-on diagnostics
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 
-The named profiles (`core`, `advanced`, `macros`, `scenarios`, `personas`)
+The named profiles (`core`, `advanced`, `macros`, `scenarios`, `personas`, `goldens`, `terminals`)
 live in `src/octowright/server/profiles.py`. Omit `--profile` (or use `all`)
 to register every tool — that is the default.
 

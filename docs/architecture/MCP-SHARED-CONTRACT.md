@@ -9,6 +9,7 @@ format here in lockstep.
 - Static SPA: `/`
 - API: `/api/*`
 - WebSocket: `/api/sessions/{id}/tail`
+- WebSocket: `/api/sessions/{id}/screencast`
 
 ## Endpoints
 
@@ -27,6 +28,7 @@ GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor":
 GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
 GET    /api/sessions/{id}/downloads?since=N      → {"downloads": [DownloadRecord, ...], "cursor": int, "total": int}
 WS     /api/sessions/{id}/tail                   → server pushes {"events": [...], "cursor": int, "complete": bool} every ~1s for LIVE sessions; closed/unknown sessions are rejected at connect time (see WS semantics below)
+WS     /api/sessions/{id}/screencast?fps=N       → binary JPEG frames for LIVE browser sessions. Requested fps is clamped to the configured backend cap; closed/unknown sessions are rejected at connect time (see WS semantics below)
 GET    /api/sessions/{id}/frame?t=<seconds>      → image/png bytes (extracted at the requested timestamp). 404 if no video for this session.
 GET    /api/sessions/{id}/video                  → video bytes (HTTP range supported via FileResponse). 404 if missing.
 GET    /api/sessions/{id}/trace                  → application/zip download. 404 if missing.
@@ -157,9 +159,15 @@ SessionDetail = SessionSummary + {
     "console_count": int,
     "download_count": int,
     "page_count": int,
+    "screencast"?: {
+        "fps": int,
+        "quality": int,
+        "fullscreen_mode": "native" | "panel",
+    },
     "cache": CacheReport,
-    # Live sessions also include an "aria" ARIA-tree snapshot (str) and may
-    # include "macro_intent" (str). Closed sessions may include "url" (str).
+    # Live browser sessions include "screencast". Live sessions also include
+    # an "aria" ARIA-tree snapshot (str) and may include "macro_intent" (str).
+    # Closed sessions may include "url" (str).
 }
 
 CacheReport = {
@@ -298,6 +306,24 @@ The manifest is diagnostic only; it is not a browser reattach registry.
   and the file-size figure has no client-side use during the connection.
   Clients that need it should call REST `/events` once, then upgrade to WS
   using the returned cursor.
+
+## WebSocket `/screencast` semantics
+
+`/screencast` is for LIVE browser sessions only. It sends each frame as a
+binary WebSocket message containing JPEG bytes; no JSON envelope or heartbeat
+frame is emitted. The optional `?fps=N` request is clamped to `1..configured_cap`
+(`OCTOWRIGHT_LIVE_SCREENCAST_FPS`, default `10`), and JPEG quality comes from
+`OCTOWRIGHT_LIVE_SCREENCAST_QUALITY` (default `70`, clamped to `1..100`).
+
+- **Live session**: the endpoint starts or joins that session's Playwright
+  screencast producer and fans out JPEG frames until the client disconnects.
+- **Closed or unknown at connect time**: close with code `1008` and reason
+  `"no live session with id <id>"`.
+- **Host/Origin policy failure**: close with code `1008`; reasons are
+  `"remote dashboard access is disabled"` or
+  `"cross-origin websocket handshake is blocked"`.
+- **Screencast acquisition failure**: close with code `1011` and reason
+  `"screencast unavailable; use fallback"`.
 
 ## `/api/sessions/{id}/frame` caching
 
