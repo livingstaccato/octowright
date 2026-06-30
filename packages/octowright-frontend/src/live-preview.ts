@@ -1,30 +1,24 @@
-// Live preview panel — polls /api/sessions/{id}/screenshot/now on a tick.
-//
-// Engine-agnostic alternative to CDP screencast: a periodic <img>.src refresh
-// against a live BrowserSession.page. 2-5s lag is fine for monitoring "what
-// is my login flow stuck on right now" — the use case.
+// Live preview panel: streams live browser frames over a single WebSocket.
 
-import { counter, histogram } from "@provide-io/telemetry";
-import { liveScreenshotUrl } from "./api.js";
+import { liveScreenshotUrl, screencastWsUrl } from "./api.js";
+import { attachFullscreen, type FullscreenMode } from "./live-preview-fullscreen.js";
+import { openScreencast, type ScreencastHandle } from "./live-preview-screencast.js";
 import { getLogger } from "./telemetry.js";
 
 const log = getLogger("octowright.frontend.live-preview");
 
-const ticksCounter = counter("octowright_frontend_live_preview_ticks_total", {
-  description: "Live preview poll ticks",
-});
-
-const tickLatencyHistogram = histogram("octowright_frontend_live_preview_tick_ms", {
-  description: "Live preview poll latency",
-  unit: "ms",
-});
-
 export interface LivePreviewOptions {
   sessionId: string;
   isLive: boolean;
-  /** Default 3000ms. */
+  /** Server-side screencast FPS. The stream endpoint controls frame cadence. */
+  fps?: number;
+  /** Default 'native'. Falls back to panel mode when native fullscreen is unavailable. */
+  fullscreenMode?: FullscreenMode;
+  /** Inject a WebSocket constructor for tests. */
+  webSocketCtor?: typeof WebSocket;
+  /** Deprecated compatibility option ignored by the screencast stream. */
   intervalMs?: number;
-  /** Default 'jpeg' (smaller bytes for repeated polls). */
+  /** Deprecated compatibility option ignored by the screencast stream. */
   format?: "png" | "jpeg";
 }
 
@@ -32,39 +26,19 @@ export interface LivePreviewHandle {
   start: () => void;
   stop: () => void;
   setInterval: (ms: number) => void;
-  /** Transition a previously-live preview to its closed state. Stops polling
-   * and swaps the badge so the user sees "session closed" instead of a
-   * stream of "transient error (0)" indicators. Idempotent. */
+  /** Transition a previously-live preview to its closed state. Idempotent. */
   markClosed: () => void;
   destroy: () => void;
 }
 
-const RATE_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 1000, label: "1s" },
-  { value: 3000, label: "3s" },
-  { value: 10000, label: "10s" },
-];
-
-const DEFAULT_INTERVAL_MS = 3000;
-const MAX_BACKOFF_INTERVAL_MS = 10000;
-
 interface InternalState {
-  intervalMs: number;
-  effectiveIntervalMs: number;
-  consecutiveErrors: number;
-  format: "png" | "jpeg";
-  timer: ReturnType<typeof setInterval> | null;
+  stream: ScreencastHandle | null;
+  fallbackTimer: ReturnType<typeof setInterval> | null;
+  generation: number;
+  expectedCloseGeneration: number | null;
   destroyed: boolean;
-  /** Set while an <img> fetch is outstanding so a slow server can't make
-   * setInterval stack new requests + listeners on top of an unresolved one. */
-  inflight: boolean;
-}
-
-function nowMs(): number {
-  if (typeof performance !== "undefined" && typeof performance.now === "function") {
-    return performance.now();
-  }
-  return Date.now();
+  closed: boolean;
+  objectUrl: string | null;
 }
 
 function fmtTimestamp(d: Date): string {
@@ -85,22 +59,28 @@ function badgeForState(state: "live" | "paused" | "closed"): BadgeState {
   return { text: "CLOSED", className: "live-preview__badge--closed" };
 }
 
+function revokeObjectUrl(state: InternalState): void {
+  if (state.objectUrl === null) return;
+  URL.revokeObjectURL(state.objectUrl);
+  state.objectUrl = null;
+}
+
 export function mountLivePreview(container: HTMLElement, opts: LivePreviewOptions): LivePreviewHandle {
   container.innerHTML = "";
   container.classList.add("live-preview");
   container.setAttribute("data-testid", "live-preview");
 
   const state: InternalState = {
-    intervalMs: opts.intervalMs ?? DEFAULT_INTERVAL_MS,
-    effectiveIntervalMs: opts.intervalMs ?? DEFAULT_INTERVAL_MS,
-    consecutiveErrors: 0,
-    format: opts.format ?? "jpeg",
-    timer: null,
+    stream: null,
+    fallbackTimer: null,
+    generation: 0,
+    expectedCloseGeneration: null,
     destroyed: false,
-    inflight: false,
+    closed: false,
+    objectUrl: null,
   };
 
-  // Closed-session placeholder: never polls.
+  // Closed-session placeholder: never opens a stream.
   if (!opts.isLive) {
     const note = document.createElement("p");
     note.className = "live-preview__placeholder";
@@ -117,13 +97,13 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
 
     return {
       start: () => {
-        // no-op — closed sessions never poll
+        // no-op: closed sessions never stream
       },
       stop: () => {
         // no-op
       },
       setInterval: () => {
-        // no-op
+        // no-op: WebSocket cadence is controlled by the backend
       },
       markClosed: () => {
         // already closed
@@ -137,7 +117,6 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     };
   }
 
-  // ---- Live session: full UI -------------------------------------------------
   const toolbar = document.createElement("div");
   toolbar.className = "live-preview__toolbar";
 
@@ -145,20 +124,15 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   playBtn.type = "button";
   playBtn.className = "live-preview__play";
   playBtn.setAttribute("data-testid", "live-preview-play");
-  playBtn.setAttribute("aria-label", "Pause live preview");
-  playBtn.textContent = "⏸"; // pause glyph; we start in playing state
+  playBtn.setAttribute("aria-label", "Resume live preview");
+  playBtn.textContent = "▶";
 
-  const rateSelect = document.createElement("select");
-  rateSelect.className = "live-preview__rate";
-  rateSelect.setAttribute("data-testid", "live-preview-rate");
-  rateSelect.setAttribute("aria-label", "Live preview refresh rate");
-  for (const opt of RATE_OPTIONS) {
-    const o = document.createElement("option");
-    o.value = String(opt.value);
-    o.textContent = opt.label;
-    rateSelect.append(o);
-  }
-  rateSelect.value = String(state.intervalMs);
+  const fullscreenBtn = document.createElement("button");
+  fullscreenBtn.type = "button";
+  fullscreenBtn.className = "live-preview__play";
+  fullscreenBtn.setAttribute("data-testid", "live-preview-fullscreen");
+  fullscreenBtn.setAttribute("aria-label", "Toggle fullscreen live preview");
+  fullscreenBtn.textContent = "⛶";
 
   const lastUpdate = document.createElement("span");
   lastUpdate.className = "live-preview__timestamp";
@@ -166,17 +140,17 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   lastUpdate.textContent = "—";
 
   const badge = document.createElement("span");
-  const liveBadge = badgeForState("live");
-  badge.className = `live-preview__badge ${liveBadge.className}`;
+  const pausedBadge = badgeForState("paused");
+  badge.className = `live-preview__badge ${pausedBadge.className}`;
   badge.setAttribute("data-testid", "live-preview-badge");
-  badge.textContent = liveBadge.text;
+  badge.textContent = pausedBadge.text;
 
   const errorIndicator = document.createElement("span");
   errorIndicator.className = "live-preview__error";
   errorIndicator.setAttribute("data-testid", "live-preview-error");
   errorIndicator.style.display = "none";
 
-  toolbar.append(playBtn, rateSelect, lastUpdate, errorIndicator, badge);
+  toolbar.append(playBtn, fullscreenBtn, lastUpdate, errorIndicator, badge);
 
   const img = document.createElement("img");
   img.className = "live-preview__img";
@@ -185,15 +159,22 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
 
   container.append(toolbar, img);
 
-  const setBadge = (which: "live" | "paused"): void => {
+  const fullscreen = attachFullscreen(fullscreenBtn, container, opts.fullscreenMode ?? "native");
+
+  const setBadge = (which: "live" | "paused" | "closed"): void => {
     const b = badgeForState(which);
     badge.className = `live-preview__badge ${b.className}`;
     badge.textContent = b.text;
   };
 
-  const showError = (status: number): void => {
+  const showStreamError = (): void => {
     errorIndicator.style.display = "";
-    errorIndicator.textContent = `transient error (${status})`;
+    errorIndicator.textContent = "stream error; resume to reconnect";
+  };
+
+  const showFallbackNotice = (): void => {
+    errorIndicator.style.display = "";
+    errorIndicator.textContent = "screencast unavailable; using screenshot fallback";
   };
 
   const clearError = (): void => {
@@ -201,171 +182,164 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     errorIndicator.textContent = "";
   };
 
-  const tick = (): void => {
-    if (state.destroyed) return;
-    // Skip if the previous tick's <img> fetch hasn't resolved yet. Without
-    // this guard, setInterval would stack listeners and in-flight requests
-    // on slow links — and the implicit src-replacement abort would fire
-    // spurious `error` events that bumped consecutiveErrors falsely.
-    if (state.inflight) {
-      log.debug({ event: "live_preview_tick_skipped_inflight", session_id: opts.sessionId });
-      return;
-    }
-    const start = nowMs();
-    const url = liveScreenshotUrl(opts.sessionId, {
-      format: state.format,
-      cacheBust: Date.now(),
-    });
-    const cleanup = (): void => {
-      state.inflight = false;
-      img.removeEventListener("load", onLoad);
-      img.removeEventListener("error", onError);
-    };
-    // Drive the fetch via the <img> rather than fetch() so the browser handles
-    // caching/decoding. We use load/error events to update the UI.
-    const onLoad = (): void => {
-      cleanup();
-      const latency = nowMs() - start;
-      ticksCounter.add(1, { session_id: opts.sessionId });
-      tickLatencyHistogram.record(latency, { session_id: opts.sessionId });
-      lastUpdate.textContent = fmtTimestamp(new Date());
-      clearError();
-      state.consecutiveErrors = 0;
-      if (state.effectiveIntervalMs !== state.intervalMs) {
-        state.effectiveIntervalMs = state.intervalMs;
-        if (state.timer !== null) {
-          clearInterval(state.timer);
-          state.timer = setInterval(tick, state.effectiveIntervalMs);
-        }
-      }
-      log.debug({
-        event: "live_preview_tick",
-        session_id: opts.sessionId,
-        latency_ms: latency,
-      });
-    };
-    const onError = (): void => {
-      cleanup();
-      state.consecutiveErrors += 1;
-      state.effectiveIntervalMs = Math.min(
-        MAX_BACKOFF_INTERVAL_MS,
-        state.intervalMs * 2 ** state.consecutiveErrors,
-      );
-      if (state.timer !== null) {
-        clearInterval(state.timer);
-        state.timer = setInterval(tick, state.effectiveIntervalMs);
-      }
-      log.warn({
-        event: "live_preview_error",
-        session_id: opts.sessionId,
-        status: 0,
-      });
-      showError(0);
-    };
-    state.inflight = true;
-    img.addEventListener("load", onLoad);
-    img.addEventListener("error", onError);
-    img.src = url;
-  };
-
-  const startPolling = (): void => {
-    if (state.timer !== null) return;
-    state.timer = setInterval(tick, state.effectiveIntervalMs);
+  const setPlayingUi = (): void => {
     setBadge("live");
     playBtn.textContent = "⏸";
     playBtn.setAttribute("aria-label", "Pause live preview");
-    // Fire one tick immediately so the user sees something within a frame.
-    tick();
   };
 
-  const stopPolling = (): void => {
-    if (state.timer !== null) {
-      clearInterval(state.timer);
-      state.timer = null;
-    }
+  const setPausedUi = (): void => {
     setBadge("paused");
     playBtn.textContent = "▶";
     playBtn.setAttribute("aria-label", "Resume live preview");
   };
 
+  const closeStream = (expected: boolean): void => {
+    if (state.stream === null) return;
+    const stream = state.stream;
+    const generation = state.generation;
+    state.stream = null;
+    if (expected) {
+      state.expectedCloseGeneration = generation;
+      state.generation += 1;
+    }
+    stream.close();
+  };
+
+  const stopFallbackPoll = (): void => {
+    if (state.fallbackTimer === null) return;
+    clearInterval(state.fallbackTimer);
+    state.fallbackTimer = null;
+  };
+
+  const updateFallbackFrame = (): void => {
+    if (state.destroyed || state.closed || state.fallbackTimer === null) return;
+    img.src = liveScreenshotUrl(opts.sessionId, {
+      format: opts.format ?? "png",
+      cacheBust: Date.now(),
+    });
+    lastUpdate.textContent = fmtTimestamp(new Date());
+    setPlayingUi();
+    showFallbackNotice();
+  };
+
+  const startFallbackPoll = (): void => {
+    if (state.destroyed || state.closed || state.fallbackTimer !== null) return;
+    state.fallbackTimer = setInterval(updateFallbackFrame, opts.intervalMs ?? 3000);
+    updateFallbackFrame();
+  };
+
+  const stopActivePreview = (expectedStreamClose: boolean): void => {
+    closeStream(expectedStreamClose);
+    stopFallbackPoll();
+  };
+
+  const startStream = (): void => {
+    if (state.destroyed || state.closed || state.stream !== null || state.fallbackTimer !== null) return;
+    state.generation += 1;
+    const generation = state.generation;
+    const url = screencastWsUrl(
+      opts.sessionId,
+      opts.fps === undefined ? {} : { fps: opts.fps },
+    );
+    state.stream = openScreencast(url, {
+      onFrame: (blob) => {
+        if (state.destroyed || state.closed || state.generation !== generation) return;
+        const nextUrl = URL.createObjectURL(blob);
+        revokeObjectUrl(state);
+        state.objectUrl = nextUrl;
+        img.src = nextUrl;
+        lastUpdate.textContent = fmtTimestamp(new Date());
+        clearError();
+        setPlayingUi();
+      },
+      onError: () => {
+        if (state.destroyed || state.closed || state.generation !== generation) return;
+        showStreamError();
+        log.warn({ event: "live_preview_stream_error", session_id: opts.sessionId });
+      },
+      onClose: (event) => {
+        if (state.destroyed || state.closed || state.generation !== generation) return;
+        if (state.expectedCloseGeneration === generation) {
+          state.expectedCloseGeneration = null;
+          return;
+        }
+        state.stream = null;
+        state.generation += 1;
+        startFallbackPoll();
+        log.warn({
+          event: "live_preview_stream_closed",
+          session_id: opts.sessionId,
+          code: event.code,
+          reason: event.reason,
+          was_clean: event.wasClean,
+        });
+      },
+      ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
+    });
+    clearError();
+    setPlayingUi();
+  };
+
   const handle: LivePreviewHandle = {
     start: () => {
-      if (state.destroyed) return;
-      const wasRunning = state.timer !== null;
-      startPolling();
-      if (!wasRunning) {
+      const wasRunning = state.stream !== null;
+      startStream();
+      if (!wasRunning && state.stream !== null) {
         log.info({
           event: "live_preview_started",
           session_id: opts.sessionId,
-          interval_ms: state.intervalMs,
+          fps: opts.fps,
         });
       }
     },
     stop: () => {
-      if (state.destroyed) return;
-      const wasRunning = state.timer !== null;
-      stopPolling();
+      if (state.destroyed || state.closed) return;
+      const wasRunning = state.stream !== null || state.fallbackTimer !== null;
+      stopActivePreview(true);
+      setPausedUi();
+      clearError();
       if (wasRunning) {
         log.info({ event: "live_preview_paused", session_id: opts.sessionId });
       }
     },
-    setInterval: (ms: number) => {
-      if (state.destroyed) return;
-      state.intervalMs = ms;
-      state.effectiveIntervalMs = ms;
-      state.consecutiveErrors = 0;
-      rateSelect.value = String(ms);
-      log.info({
-        event: "live_preview_interval_changed",
-        session_id: opts.sessionId,
-        new_ms: ms,
-      });
-      if (state.timer !== null) {
-        clearInterval(state.timer);
-        state.timer = setInterval(tick, state.effectiveIntervalMs);
-      }
+    setInterval: () => {
+      // no-op: WebSocket cadence is controlled by the backend
     },
     markClosed: () => {
-      if (state.destroyed) return;
-      stopPolling();
-      // Swap the live toolbar's "PAUSED" badge for the closed-session one and
-      // disable the play button so the user can't restart polling against a
-      // dead page. The error indicator is cleared too — it would otherwise
-      // sit on screen showing the last "transient error (0)".
+      if (state.destroyed || state.closed) return;
+      state.closed = true;
+      stopActivePreview(true);
+      revokeObjectUrl(state);
       const b = badgeForState("closed");
       badge.className = `live-preview__badge ${b.className}`;
       badge.textContent = b.text;
       playBtn.disabled = true;
       playBtn.setAttribute("aria-label", "Session closed");
+      fullscreenBtn.disabled = true;
+      fullscreenBtn.setAttribute("aria-label", "Session closed");
+      fullscreen.destroy();
       clearError();
       log.info({ event: "live_preview_marked_closed", session_id: opts.sessionId });
     },
     destroy: () => {
       if (state.destroyed) return;
       state.destroyed = true;
-      if (state.timer !== null) {
-        clearInterval(state.timer);
-        state.timer = null;
-      }
+      stopActivePreview(true);
+      revokeObjectUrl(state);
+      fullscreen.destroy();
       container.innerHTML = "";
       container.classList.remove("live-preview");
       log.info({ event: "live_preview_destroyed", session_id: opts.sessionId });
     },
   };
 
-  // Wire toolbar interactions.
   playBtn.addEventListener("click", () => {
-    if (state.timer !== null) {
+    if (state.stream !== null || state.fallbackTimer !== null) {
       handle.stop();
     } else {
       handle.start();
       log.info({ event: "live_preview_resumed", session_id: opts.sessionId });
-    }
-  });
-  rateSelect.addEventListener("change", () => {
-    const next = Number.parseInt(rateSelect.value, 10);
-    if (Number.isFinite(next) && next > 0) {
-      handle.setInterval(next);
     }
   });
 

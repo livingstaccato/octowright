@@ -1,33 +1,100 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountLivePreview } from "./live-preview.js";
 
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+
+  binaryType: BinaryType = "arraybuffer";
+  close = vi.fn(() => {
+    this.emitClose(1000, "closed", true);
+  });
+  readonly listeners = new Map<string, EventListener[]>();
+
+  constructor(readonly url: string) {
+    FakeWebSocket.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: EventListener): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  emitMessage(data: Blob | Uint8Array): void {
+    this.emit(new MessageEvent("message", { data }));
+  }
+
+  emitError(): void {
+    this.emit(new Event("error"));
+  }
+
+  emitClose(code = 1006, reason = "lost", wasClean = false): void {
+    const event = new Event("close") as CloseEvent;
+    Object.defineProperties(event, {
+      code: { value: code },
+      reason: { value: reason },
+      wasClean: { value: wasClean },
+    });
+    this.emit(event);
+  }
+
+  private emit(event: Event): void {
+    for (const listener of this.listeners.get(event.type) ?? []) {
+      listener(event);
+    }
+  }
+}
+
 let container: HTMLDivElement;
+let objectUrlCount = 0;
+
 beforeEach(() => {
+  FakeWebSocket.instances = [];
+  objectUrlCount = 0;
   container = document.createElement("div");
   document.body.append(container);
-});
-afterEach(() => {
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
+  vi.stubGlobal("URL", {
+    ...URL,
+    createObjectURL: vi.fn(() => {
+      objectUrlCount += 1;
+      return `blob:frame-${objectUrlCount}`;
+    }),
+    revokeObjectURL: vi.fn(),
+  });
 });
 
+afterEach(() => {
+  container.remove();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+function mountLive(sessionId = "live1") {
+  return mountLivePreview(container, {
+    sessionId,
+    isLive: true,
+    fps: 7,
+    webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+  });
+}
+
 describe("mountLivePreview — closed session", () => {
-  it("renders the closed-state placeholder and never polls", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "abc", isLive: false });
+  it("renders the closed-state placeholder and never opens a stream", () => {
+    const handle = mountLivePreview(container, {
+      sessionId: "abc",
+      isLive: false,
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
     const placeholder = container.querySelector('[data-testid="live-preview-placeholder"]');
     expect(placeholder).not.toBeNull();
     expect(placeholder?.textContent).toMatch(/closed/i);
 
-    // No <img> rendered for closed sessions.
     expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
 
-    // start() must be a no-op — calling it should not create timers.
     handle.start();
     handle.stop();
     handle.setInterval(1000);
-    vi.advanceTimersByTime(60_000);
-    expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
+    expect(FakeWebSocket.instances).toHaveLength(0);
     handle.destroy();
   });
 
@@ -36,322 +103,420 @@ describe("mountLivePreview — closed session", () => {
     const badge = container.querySelector('[data-testid="live-preview-badge"]');
     expect(badge?.textContent).toBe("CLOSED");
   });
+
+  it("does not render fullscreen controls for closed sessions", () => {
+    const handle = mountLivePreview(container, { sessionId: "abc", isLive: false });
+    expect(container.querySelector('[data-testid="live-preview-fullscreen"]')).toBeNull();
+    handle.destroy();
+  });
 });
 
 describe("mountLivePreview — live session", () => {
-  it("renders toolbar + img element", () => {
-    const handle = mountLivePreview(container, { sessionId: "live1", isLive: true });
+  it("renders toolbar + img element without a polling-rate selector", () => {
+    const handle = mountLive();
     expect(container.querySelector('[data-testid="live-preview-img"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="live-preview-play"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="live-preview-rate"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="live-preview-rate"]')).toBeNull();
     expect(container.querySelector('[data-testid="live-preview-timestamp"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="live-preview-badge"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="live-preview-fullscreen"]')).not.toBeNull();
     handle.destroy();
   });
 
-  it("on start() the <img>.src updates with cache-busted URL", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live2", isLive: true, intervalMs: 5000 });
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
+  it("fullscreen button toggles panel mode when configured", () => {
+    const handle = mountLivePreview(container, {
+      sessionId: "live-fullscreen-panel",
+      isLive: true,
+      fullscreenMode: "panel",
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="live-preview-fullscreen"]',
+    );
+    if (!fullscreenBtn) throw new Error("fullscreen button missing");
+
+    fullscreenBtn.click();
+    expect(container.classList.contains("live-preview--maximized")).toBe(true);
+    fullscreenBtn.click();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+    handle.destroy();
+  });
+
+  it("destroy cleans up fullscreen controller state and listeners", () => {
+    const handle = mountLivePreview(container, {
+      sessionId: "live-fullscreen-destroy",
+      isLive: true,
+      fullscreenMode: "panel",
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="live-preview-fullscreen"]',
+    );
+    if (!fullscreenBtn) throw new Error("fullscreen button missing");
+
+    fullscreenBtn.click();
+    handle.destroy();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+
+    fullscreenBtn.click();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+  });
+
+  it("markClosed disables fullscreen and prevents stale native fallback", async () => {
+    let rejectRequest!: (err: Error) => void;
+    const req = vi.fn(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectRequest = reject;
+        }),
+    );
+    (container as unknown as { requestFullscreen: () => Promise<void> }).requestFullscreen = req;
+    const handle = mountLivePreview(container, {
+      sessionId: "live-fullscreen-mark-closed",
+      isLive: true,
+      fullscreenMode: "native",
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="live-preview-fullscreen"]',
+    );
+    if (!fullscreenBtn) throw new Error("fullscreen button missing");
+
+    fullscreenBtn.click();
+    handle.markClosed();
+    expect(fullscreenBtn.disabled).toBe(true);
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+
+    rejectRequest(new Error("denied"));
+    await Promise.resolve();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+
+    fullscreenBtn.click();
+    expect(container.classList.contains("live-preview--maximized")).toBe(false);
+    handle.destroy();
+  });
+
+  it("start opens one screencast WebSocket using backend fps", () => {
+    const handle = mountLive("live2");
     handle.start();
-    // Initial tick fires synchronously inside start().
-    expect(img.src).toContain("/api/sessions/live2/screenshot/now");
-    expect(img.src).toMatch(/[?&]_=\d+/);
+    handle.start();
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]?.url).toContain("/api/sessions/live2/screencast?fps=7");
+    expect(FakeWebSocket.instances[0]?.binaryType).toBe("blob");
     handle.destroy();
   });
 
-  it("uses Date.now/performance fallback path when load completes without performance.now", () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("performance", undefined);
-    const handle = mountLivePreview(container, { sessionId: "live-no-perf", isLive: true });
+  it("frame updates img src, timestamp, badge, and revokes the previous frame URL", () => {
+    const handle = mountLive("live-frame");
+    handle.start();
+    const ws = FakeWebSocket.instances[0];
     const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
     const timestamp = container.querySelector('[data-testid="live-preview-timestamp"]');
-    if (!img || !timestamp) throw new Error("missing preview elements");
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    if (!ws || !img || !timestamp || !badge) throw new Error("missing preview elements");
 
-    handle.start();
-    img.dispatchEvent(new Event("load"));
-
+    ws.emitMessage(new Blob([new Uint8Array([1])]));
+    expect(img.src).toBe("blob:frame-1");
     expect(timestamp.textContent).not.toBe("—");
+    expect(badge.textContent).toBe("LIVE");
+
+    ws.emitMessage(new Blob([new Uint8Array([2])]));
+    expect(img.src).toBe("blob:frame-2");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:frame-1");
     handle.destroy();
   });
 
-  it("stop() halts polling and start() resumes", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live3", isLive: true, intervalMs: 1000 });
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
+  it("stop closes the active stream and shows PAUSED without an error", () => {
+    const handle = mountLive("live3");
     handle.start();
-    const firstSrc = img.src;
-    expect(firstSrc).toContain("screenshot/now");
-    handle.stop();
-    // After stop, advancing time should not change src.
-    vi.advanceTimersByTime(5000);
-    expect(img.src).toBe(firstSrc);
-    // After start, the immediate tick changes src (cache-bust differs).
-    vi.advanceTimersByTime(1); // tick the timestamp
-    handle.start();
-    expect(img.src).toContain("screenshot/now");
-    handle.destroy();
-  });
-
-  it("start and stop are idempotent while already in the target state", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live3b", isLive: true, intervalMs: 1000 });
-    handle.start();
-    const timerCount = vi.getTimerCount();
-    handle.start();
-    expect(vi.getTimerCount()).toBe(timerCount);
-    handle.stop();
-    handle.stop();
-    expect(vi.getTimerCount()).toBe(0);
-    handle.destroy();
-  });
-
-  it("setInterval(ms) changes tick rate", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live4", isLive: true, intervalMs: 5000 });
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
-    handle.start();
-    img.dispatchEvent(new Event("load")); // release the initial tick's inflight guard
-    const initialSrc = img.src;
-    // Switch to 1000ms; advance 1100ms — should have ticked.
-    handle.setInterval(1000);
-    vi.advanceTimersByTime(1100);
-    expect(img.src).not.toBe(initialSrc);
-    // Rate select reflects the new value.
-    const rate = container.querySelector<HTMLSelectElement>('[data-testid="live-preview-rate"]');
-    expect(rate?.value).toBe("1000");
-    handle.destroy();
-  });
-
-  it("setInterval before start updates the selector without creating a timer", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live4b", isLive: true, intervalMs: 3000 });
-    handle.setInterval(10000);
-    const rate = container.querySelector<HTMLSelectElement>('[data-testid="live-preview-rate"]');
-    expect(rate?.value).toBe("10000");
-    expect(vi.getTimerCount()).toBe(0);
-    handle.destroy();
-  });
-
-  it("destroy() removes DOM and cancels pending interval", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live5", isLive: true, intervalMs: 1000 });
-    handle.start();
-    expect(container.querySelector('[data-testid="live-preview-img"]')).not.toBeNull();
-    handle.destroy();
-    expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
-    // Advancing time after destroy must be safe and not re-create the img.
-    vi.advanceTimersByTime(60_000);
-    expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
-  });
-
-  it("badge transitions LIVE → PAUSED on stop, back to LIVE on start", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live6", isLive: true });
-    handle.start();
-    const badge = container.querySelector('[data-testid="live-preview-badge"]');
-    expect(badge?.textContent).toBe("LIVE");
-    handle.stop();
-    expect(badge?.textContent).toBe("PAUSED");
-    handle.start();
-    expect(badge?.textContent).toBe("LIVE");
-    handle.destroy();
-  });
-
-  it("rate selector dropdown change calls setInterval with new value", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live7", isLive: true, intervalMs: 3000 });
-    handle.start();
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
-    img.dispatchEvent(new Event("load")); // release the initial tick's inflight guard
-    const rate = container.querySelector<HTMLSelectElement>('[data-testid="live-preview-rate"]');
-    if (!rate) throw new Error("rate select missing");
-    rate.value = "10000";
-    rate.dispatchEvent(new Event("change"));
-    // Internal state followed: a 1500ms tick now should NOT update src.
-    const before = img.src;
-    vi.advanceTimersByTime(1500);
-    expect(img.src).toBe(before);
-    // But 10000ms+ should.
-    vi.advanceTimersByTime(9000);
-    expect(img.src).not.toBe(before);
-    handle.destroy();
-  });
-
-  it("ignores invalid rate selector values", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live7b", isLive: true, intervalMs: 3000 });
-    handle.start();
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    const rate = container.querySelector<HTMLSelectElement>('[data-testid="live-preview-rate"]');
-    if (!img || !rate) throw new Error("missing preview controls");
-    img.dispatchEvent(new Event("load"));
-    rate.value = "";
-    rate.dispatchEvent(new Event("change"));
-    const before = img.src;
-    vi.advanceTimersByTime(1000);
-    expect(img.src).toBe(before);
-    handle.destroy();
-  });
-
-  it("play button toggles polling state", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live8", isLive: true });
-    handle.start();
-    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
-    if (!playBtn) throw new Error("play button missing");
-    expect(playBtn.textContent).toBe("⏸");
-    playBtn.click();
-    expect(playBtn.textContent).toBe("▶");
-    playBtn.click();
-    expect(playBtn.textContent).toBe("⏸");
-    handle.destroy();
-  });
-
-  it("markClosed stops polling, swaps to CLOSED badge, and disables play", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live9", isLive: true, intervalMs: 1000 });
-    handle.start();
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const ws = FakeWebSocket.instances[0];
     const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
     const badge = container.querySelector('[data-testid="live-preview-badge"]');
-    if (!img || !playBtn || !badge) throw new Error("missing elements");
-
-    handle.markClosed();
-    const srcAfterClose = img.src;
-    // Advance well past several poll intervals — img.src must not change again.
-    vi.advanceTimersByTime(60_000);
-    expect(img.src).toBe(srcAfterClose);
-    expect(badge.textContent).toBe("CLOSED");
-    expect(playBtn.disabled).toBe(true);
-    handle.destroy();
-  });
-
-  it("markClosed clears a visible error indicator", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live9b", isLive: true, intervalMs: 1000 });
-    handle.start();
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
     const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
-    if (!img || !error) throw new Error("missing preview elements");
+    if (!ws || !playBtn || !badge || !error) throw new Error("missing preview elements");
 
-    img.dispatchEvent(new Event("error"));
-    expect(error.style.display).toBe("");
-    handle.markClosed();
+    handle.stop();
+
+    expect(ws.close).toHaveBeenCalledTimes(1);
+    expect(playBtn.textContent).toBe("▶");
+    expect(badge.textContent).toBe("PAUSED");
     expect(error.style.display).toBe("none");
     handle.destroy();
   });
 
-  it("markClosed is idempotent and a no-op for already-closed sessions", () => {
-    const closedHandle = mountLivePreview(container, { sessionId: "closed1", isLive: false });
-    // Should not throw — closed-mode handle exposes a no-op markClosed.
-    closedHandle.markClosed();
-    closedHandle.markClosed();
-    closedHandle.destroy();
-  });
-
-  it("backs off poll interval after repeated screenshot errors", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live10", isLive: true, intervalMs: 1000 });
+  it("ignores late message, error, and close callbacks from a paused stream", () => {
+    const handle = mountLive("live-stale-after-stop");
     handle.start();
+    const ws = FakeWebSocket.instances[0];
     const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
-
-    img.dispatchEvent(new Event("error"));
-    img.dispatchEvent(new Event("error"));
-
-    const before = img.src;
-    vi.advanceTimersByTime(1_000);
-    expect(img.src).toBe(before);
-    vi.advanceTimersByTime(1_100);
-    expect(img.src).not.toBe(before);
-    handle.destroy();
-  });
-
-  it("handles an image error after polling has already been stopped", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live10b", isLive: true, intervalMs: 1000 });
-    handle.start();
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    const timestamp = container.querySelector('[data-testid="live-preview-timestamp"]');
     const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
-    if (!img || !error) throw new Error("missing preview elements");
+    if (!ws || !img || !playBtn || !badge || !timestamp || !error) {
+      throw new Error("missing preview elements");
+    }
+
+    ws.emitMessage(new Blob([new Uint8Array([1])]));
+    const imgSrcAfterFrame = img.src;
+    expect(imgSrcAfterFrame).toBe("blob:frame-1");
 
     handle.stop();
-    img.dispatchEvent(new Event("error"));
+    const pausedState = {
+      imgSrc: img.src,
+      badgeText: badge.textContent,
+      playText: playBtn.textContent,
+      timestampText: timestamp.textContent,
+      errorDisplay: error.style.display,
+      errorText: error.textContent,
+    };
 
-    expect(error.textContent).toContain("transient error");
-    expect(vi.getTimerCount()).toBe(0);
+    ws.emitMessage(new Blob([new Uint8Array([2])]));
+    ws.emitError();
+    ws.emitClose(1006, "late close", false);
+
+    expect(img.src).toBe(pausedState.imgSrc);
+    expect(badge.textContent).toBe(pausedState.badgeText);
+    expect(playBtn.textContent).toBe(pausedState.playText);
+    expect(timestamp.textContent).toBe(pausedState.timestampText);
+    expect(error.style.display).toBe(pausedState.errorDisplay);
+    expect(error.textContent).toBe(pausedState.errorText);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
     handle.destroy();
   });
 
-  it("returns to base interval quickly after first success", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live11", isLive: true, intervalMs: 1000 });
+  it("start after stop opens a fresh stream", () => {
+    const handle = mountLive("live4");
     handle.start();
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
+    const first = FakeWebSocket.instances[0];
+    handle.stop();
+    handle.start();
 
-    img.dispatchEvent(new Event("error"));
-    vi.advanceTimersByTime(2_100);
-    img.dispatchEvent(new Event("load"));
-
-    const before = img.src;
-    vi.advanceTimersByTime(1_100);
-    expect(img.src).not.toBe(before);
+    expect(first?.close).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
     handle.destroy();
   });
 
-  it("caps adaptive backoff at the maximum interval", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live12", isLive: true, intervalMs: 1000 });
+  it("play button toggles stream state", () => {
+    const handle = mountLive("live5");
     handle.start();
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    if (!playBtn) throw new Error("play button missing");
+    expect(playBtn.textContent).toBe("⏸");
 
-    for (let i = 0; i < 5; i++) {
-      img.dispatchEvent(new Event("error"));
-      vi.advanceTimersByTime(10_100);
+    playBtn.click();
+    expect(playBtn.textContent).toBe("▶");
+    playBtn.click();
+    expect(playBtn.textContent).toBe("⏸");
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    handle.destroy();
+  });
+
+  it("unexpected stream error and close start fallback while keeping controls usable", () => {
+    const handle = mountLive("live-error");
+    handle.start();
+    const ws = FakeWebSocket.instances[0];
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!ws || !playBtn || !badge || !error) throw new Error("missing preview elements");
+
+    ws.emitError();
+    expect(error.textContent).toContain("stream error");
+    ws.emitClose(1006, "abnormal", false);
+    expect(badge.textContent).toBe("LIVE");
+    expect(error.textContent).toContain("screenshot fallback");
+    expect(playBtn.disabled).toBe(false);
+
+    handle.stop();
+    expect(badge.textContent).toBe("PAUSED");
+    handle.start();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(error.style.display).toBe("none");
+    handle.destroy();
+  });
+
+  it("falls back to screenshot polling after an unexpected screencast close", async () => {
+    vi.useFakeTimers();
+    const handle = mountLivePreview(container, {
+      sessionId: "live-fallback",
+      isLive: true,
+      fps: 7,
+      intervalMs: 1200,
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    handle.start();
+    const ws = FakeWebSocket.instances[0];
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!ws || !img || !badge || !error) throw new Error("missing preview elements");
+
+    ws.emitClose(1011, "screencast unavailable; use fallback", false);
+    expect(img.src).toContain("/api/sessions/live-fallback/screenshot/now?format=png");
+    expect(error.textContent).toContain("screenshot fallback");
+    expect(badge.textContent).toBe("LIVE");
+    const firstSrc = img.src;
+
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(img.src).toContain("/api/sessions/live-fallback/screenshot/now?format=png");
+    expect(img.src).not.toBe(firstSrc);
+
+    handle.destroy();
+  });
+
+  it("ignores late message and error callbacks after an unexpected close", () => {
+    const handle = mountLive("live-stale-after-close");
+    handle.start();
+    const ws = FakeWebSocket.instances[0];
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    const timestamp = container.querySelector('[data-testid="live-preview-timestamp"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!ws || !img || !playBtn || !badge || !timestamp || !error) {
+      throw new Error("missing preview elements");
     }
-    // Resolve the trailing inflight tick with one more error so backoff stays
-    // capped (a load would reset to the base interval). This puts us in a
-    // clean state where the next interval-driven tick can run.
-    img.dispatchEvent(new Event("error"));
 
-    const before = img.src;
-    vi.advanceTimersByTime(9_000);
-    expect(img.src).toBe(before);
-    vi.advanceTimersByTime(1_100);
-    expect(img.src).not.toBe(before);
+    ws.emitMessage(new Blob([new Uint8Array([1])]));
+    expect(img.src).toBe("blob:frame-1");
+    ws.emitClose(1006, "abnormal", false);
+    const closedState = {
+      imgSrc: img.src,
+      badgeText: badge.textContent,
+      playText: playBtn.textContent,
+      timestampText: timestamp.textContent,
+      errorDisplay: error.style.display,
+      errorText: error.textContent,
+    };
+
+    ws.emitMessage(new Blob([new Uint8Array([2])]));
+    ws.emitError();
+
+    expect(img.src).toBe(closedState.imgSrc);
+    expect(badge.textContent).toBe(closedState.badgeText);
+    expect(playBtn.textContent).toBe(closedState.playText);
+    expect(timestamp.textContent).toBe(closedState.timestampText);
+    expect(error.style.display).toBe(closedState.errorDisplay);
+    expect(error.textContent).toBe(closedState.errorText);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
     handle.destroy();
   });
 
-  it("skips ticks while a fetch is still in flight (no listener stacking)", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live13", isLive: true, intervalMs: 100 });
+  it("markClosed closes stream, disables controls, clears errors, and revokes the current frame URL", () => {
+    const handle = mountLive("live-closed");
     handle.start();
-    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
-    if (!img) throw new Error("img missing");
+    const ws = FakeWebSocket.instances[0];
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="live-preview-fullscreen"]',
+    );
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!ws || !playBtn || !fullscreenBtn || !badge || !error) throw new Error("missing elements");
 
-    const initialSrc = img.src;
-    // Multiple tick intervals fire before the first load resolves.
-    vi.advanceTimersByTime(500);
-    // src never changes again because tick() short-circuits while inflight.
-    expect(img.src).toBe(initialSrc);
+    ws.emitMessage(new Blob([new Uint8Array([1])]));
+    ws.emitError();
+    expect(error.style.display).toBe("");
 
-    // Resolving the in-flight load lets a subsequent tick proceed.
-    img.dispatchEvent(new Event("load"));
-    vi.advanceTimersByTime(150);
-    expect(img.src).not.toBe(initialSrc);
+    handle.markClosed();
+
+    expect(ws.close).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:frame-1");
+    expect(badge.textContent).toBe("CLOSED");
+    expect(playBtn.disabled).toBe(true);
+    expect(fullscreenBtn.disabled).toBe(true);
+    expect(error.style.display).toBe("none");
+
+    handle.start();
+    expect(FakeWebSocket.instances).toHaveLength(1);
     handle.destroy();
+  });
+
+  it("ignores late message, error, and close callbacks after markClosed", () => {
+    const handle = mountLive("live-stale-after-mark-closed");
+    handle.start();
+    const ws = FakeWebSocket.instances[0];
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="live-preview-fullscreen"]',
+    );
+    const badge = container.querySelector('[data-testid="live-preview-badge"]');
+    const timestamp = container.querySelector('[data-testid="live-preview-timestamp"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!ws || !img || !playBtn || !fullscreenBtn || !badge || !timestamp || !error) {
+      throw new Error("missing preview elements");
+    }
+
+    ws.emitMessage(new Blob([new Uint8Array([1])]));
+    expect(img.src).toBe("blob:frame-1");
+
+    handle.markClosed();
+    const closedState = {
+      imgSrc: img.src,
+      badgeText: badge.textContent,
+      playDisabled: playBtn.disabled,
+      fullscreenDisabled: fullscreenBtn.disabled,
+      timestampText: timestamp.textContent,
+      errorDisplay: error.style.display,
+      errorText: error.textContent,
+    };
+
+    ws.emitMessage(new Blob([new Uint8Array([2])]));
+    ws.emitError();
+    ws.emitClose(1006, "late close", false);
+
+    expect(img.src).toBe(closedState.imgSrc);
+    expect(badge.textContent).toBe("CLOSED");
+    expect(badge.textContent).toBe(closedState.badgeText);
+    expect(playBtn.disabled).toBe(true);
+    expect(playBtn.disabled).toBe(closedState.playDisabled);
+    expect(fullscreenBtn.disabled).toBe(true);
+    expect(fullscreenBtn.disabled).toBe(closedState.fullscreenDisabled);
+    expect(timestamp.textContent).toBe(closedState.timestampText);
+    expect(error.style.display).toBe("none");
+    expect(error.style.display).toBe(closedState.errorDisplay);
+    expect(error.textContent).toBe(closedState.errorText);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    handle.destroy();
+  });
+
+  it("destroy closes stream, revokes current object URL, and removes DOM", () => {
+    const handle = mountLive("live-destroy");
+    handle.start();
+    const ws = FakeWebSocket.instances[0];
+    if (!ws) throw new Error("stream missing");
+    ws.emitMessage(new Blob([new Uint8Array([1])]));
+
+    handle.destroy();
+
+    expect(ws.close).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:frame-1");
+    expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
+    expect(container.classList.contains("live-preview")).toBe(false);
+  });
+
+  it("ignores late message, error, and close callbacks after destroy", () => {
+    const handle = mountLive("live-stale-after-destroy");
+    handle.start();
+    const ws = FakeWebSocket.instances[0];
+    if (!ws) throw new Error("stream missing");
+
+    handle.destroy();
+
+    expect(() => {
+      ws.emitMessage(new Blob([new Uint8Array([1])]));
+      ws.emitError();
+      ws.emitClose(1006, "late close", false);
+    }).not.toThrow();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
   });
 
   it("live handle methods are no-ops after destroy", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live14", isLive: true, intervalMs: 1000 });
+    const handle = mountLive("live-noop");
     handle.start();
     handle.destroy();
 
@@ -361,14 +526,6 @@ describe("mountLivePreview — live session", () => {
       handle.setInterval(1000);
       handle.markClosed();
     }).not.toThrow();
-    expect(container.querySelector('[data-testid="live-preview-img"]')).toBeNull();
-  });
-
-  it("destroy before start removes DOM without clearing a timer", () => {
-    vi.useFakeTimers();
-    const handle = mountLivePreview(container, { sessionId: "live15", isLive: true, intervalMs: 1000 });
-    handle.destroy();
-    expect(vi.getTimerCount()).toBe(0);
-    expect(container.classList.contains("live-preview")).toBe(false);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

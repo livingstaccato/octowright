@@ -172,9 +172,12 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float, url: str) 
     _RECOVERED.add(1, attributes={"kind": session.kind})
     _publish_recovered(session, "recovered")
     log.info("octowright.crash.recovered", instance_id=iid, attempt=session._crash_recoveries)
+    incident = _record_incident(session, url, "recovered")
     # H5a: snapshot the recovered page so a postmortem has a frame, not just a marker.
+    # Record the incident before awaiting the screenshot; slow runners must not
+    # observe "recovered" stats without a visible incident.
     screenshot = await _capture_recovery_screenshot(session)
-    _record_incident(session, url, "recovered", screenshot=screenshot)
+    incident["screenshot"] = screenshot
     try:
         session.recorder.record("page_recovered", attempt=session._crash_recoveries)
     except Exception as exc:
@@ -195,8 +198,8 @@ async def _capture_recovery_screenshot(session: Any) -> str | None:
         return None
 
 
-def _record_incident(session: Any, url: str, outcome: str, *, screenshot: str | None = None) -> None:
-    incidents.record(
+def _record_incident(session: Any, url: str, outcome: str, *, screenshot: str | None = None) -> dict[str, Any]:
+    return incidents.record(
         incidents.CATEGORY_RENDERER_CRASH,
         instance_id=session.instance_id,
         kind=session.kind,

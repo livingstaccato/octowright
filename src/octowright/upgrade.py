@@ -40,6 +40,14 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.11.0": [
+        "Cheaper browsing loops: new compact browser and HTTP-first discovery tools help agents "
+        "find links, fields, and page outlines before paying for full snapshots or raw dumps.",
+        "Bounded summaries by default: console, network, downloads, captures, and text reads now "
+        "surface concise next actions so agents can drill in only when needed.",
+        "Live preview is more resilient: the dashboard falls back from screencast streaming to "
+        "snapshot polling when a browser cannot provide live frames.",
+    ],
     "0.10.1": [
         "Survives a compaction freeze: when your MCP client (Codex/Claude) pauses to compact and "
         "freezes Octowright's follower, the bridge no longer times out and dies on resume — it "
