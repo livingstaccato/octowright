@@ -247,6 +247,37 @@ async def _probe_alive_leader(sn: Any) -> Any | None:
     return info if info and not sn.is_stale(info) and await sn.probe_http_alive(info) else None
 
 
+async def _canonical_port_serves_octowright(http_host: str | None, http_port: int | None) -> bool:
+    """True iff the PREFERRED HTTP port already answers ``/api/health`` as octowright.
+
+    Split-brain guard, independent of the lockfile. ``_probe_alive_leader`` trusts
+    the lockfile, which can false-negative during a storm — a healthy leader that's
+    momentarily slow, or a lockfile a racing respawn already repointed elsewhere.
+    Spawning then makes ``http/lifespan`` walk the busy canonical port up to a
+    BUMPED one (e.g. 6286 → 6287) and bind a SECOND leader beside the healthy one
+    (observed live). So before spawning, confirm the canonical port isn't already a
+    live octowright; if it is, defer rather than fork the daemon.
+    """
+    import httpx
+
+    from octowright.defaults import HTTP_HOST, HTTP_PORT
+    from octowright.http.exposure import is_loopback_host
+
+    host = http_host or HTTP_HOST
+    # A wildcard/non-loopback bind still answers on loopback; probe there.
+    probe_host = host if is_loopback_host(host) else "127.0.0.1"
+    port = http_port if http_port is not None else HTTP_PORT
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(f"http://{probe_host}:{port}/api/health")
+        if response.status_code != 200:
+            return False
+        body = response.json()
+        return isinstance(body, dict) and body.get("ok") is True
+    except (httpx.HTTPError, OSError, ValueError):
+        return False
+
+
 async def _respawn_if_leader_gone(
     *, http_host: str | None, http_port: int | None, idle_grace: float | None, keep_alive: bool = False
 ) -> None:
@@ -259,6 +290,13 @@ async def _respawn_if_leader_gone(
     async with _sn.async_election_lock():
         if await _probe_alive_leader(_sn) is not None:
             click.echo("octowright: leader still healthy, exiting", err=True)
+            return
+        if await _canonical_port_serves_octowright(http_host, http_port):
+            click.echo(
+                "octowright: canonical HTTP port already serves a healthy leader; "
+                "not spawning a competing daemon (split-brain guard)",
+                err=True,
+            )
             return
         click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
         _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
