@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-07-02
+
+A leader-memory hotfix. A reconnect storm could leave the daemon leader holding
+gigabytes of RAM with zero live browsers; idle MCP sessions are now reaped.
+
+### Fixed
+- **Unbounded leader memory leak from abandoned MCP sessions.** The StreamableHTTP
+  session manager defaults `session_idle_timeout=None` — it never reaps sessions,
+  so every session's per-session server task + transport lingered in the manager's
+  task group even after the client vanished (~54KB/session, unbounded — observed a
+  leader at 2.4GB RSS with zero live browsers after ~17h of reconnect churn).
+  `http/app.py` now sets the timeout on the manager after `streamable_http_app()`
+  builds it; the manager resets the deadline on each request, so an active session
+  is never reaped — only a truly idle/abandoned one, whose task then exits and
+  frees its memory. Tunable via `OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS` (default 300;
+  `0`/`off` restores the leaky default). Reproduced (RSS 97→151MB over 1000
+  abandoned sessions, linear) and validated (RSS flat at ~110MB with the reaper on).
+
 ## [0.12.0] - 2026-07-02
 
 A follower-bridge stability release. The bridge that connects an MCP client
