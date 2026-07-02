@@ -20,6 +20,7 @@ from provide.telemetry import get_logger
 from octowright import scenarios_pool as _scenario_pool_mod
 from octowright import terminal as _terminal
 from octowright.browser_pool import BrowserPool
+from octowright.server._heartbeat import _progress_heartbeat
 from octowright.server._idempotency import _idempotent_dispatch
 from octowright.server.profiles import active_filter
 
@@ -151,11 +152,13 @@ class _ProfiledFastMCP(FastMCP):
         if allowed is None:
 
             def wrap_all(fn: Callable[..., Any]) -> Callable[..., Any]:
-                # Idempotency dedup wraps OUTSIDE advisor tracking so a cache hit
-                # skips both re-execution and double-counting; both layers preserve
-                # the signature via functools.wraps, so FastMCP Context injection
-                # and the input schema still resolve through them.
-                return decorator(_idempotent_dispatch(_track_advisor_usage(fn)))
+                # Progress heartbeat wraps OUTERMOST so it also keeps a follower
+                # alive while it awaits an in-progress idempotency entry (resend
+                # race). Idempotency dedup wraps OUTSIDE advisor tracking so a cache
+                # hit skips both re-execution and double-counting; every layer
+                # preserves the signature via functools.wraps, so FastMCP Context
+                # injection and the input schema still resolve through them.
+                return decorator(_progress_heartbeat(_idempotent_dispatch(_track_advisor_usage(fn))))
 
             return wrap_all
 
@@ -167,7 +170,7 @@ class _ProfiledFastMCP(FastMCP):
             resolved_name = name if name is not None else getattr(fn, "__name__", "")
             if resolved_name not in allowed:
                 return fn
-            return decorator(_idempotent_dispatch(_track_advisor_usage(fn)))
+            return decorator(_progress_heartbeat(_idempotent_dispatch(_track_advisor_usage(fn))))
 
         return wrap
 
@@ -200,8 +203,12 @@ mcp = _ProfiledFastMCP(
         "post-action page outline without an extra call. "
         "reserve `browser_snapshot`, full console dumps, screenshots, or raw recordings for cases where "
         "the compact tools are insufficient. "
-        "Octowright PROACTIVELY pushes MCP notifications for exceptional situations — react to the "
-        "notification's `hint` instead of polling: "
+        "Octowright PROACTIVELY pushes MCP notifications for exceptional situations (below); stdio clients "
+        "receive them through the follower bridge even in the default detached-daemon deployment. Treat them "
+        "as best-effort though — also confirm critical state with `octowright_status()` (health, crash.recent, "
+        "pool.lost_sessions) after long operations, after any tool error, and whenever you suspect a crash or "
+        "driver loss (a direct HTTP-MCP client that bypasses the follower gets no push). React to a "
+        "notification's `hint`: "
         "notifications/octowright/browser_crashed (a page crashed; if recovering=true Octowright is "
         "auto-replacing the page — WAIT for browser_recovered, do NOT relaunch yet); "
         "notifications/octowright/browser_recovered (outcome=recovered → the page is usable again, just "
