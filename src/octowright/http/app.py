@@ -17,6 +17,7 @@ browser pool — see ``octowright.singleton`` and ``cli.serve``.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from provide.telemetry import TelemetryMiddleware, get_logger
@@ -34,6 +35,42 @@ from octowright.http.routes import all_routes
 from octowright.http.routes.new_tab import new_tab, otto_svg
 
 log = get_logger(__name__)
+
+# --- MCP idle-session reaper config -----------------------------------------
+# Seconds an MCP session may sit idle before the manager reaps it (freeing its
+# per-session server task + transport), fixing the unbounded session-accumulation
+# leak (see build_app). Config lives here as named consts — defaults.py is at its
+# 550-LOC ceiling, so per the codebase convention subsystem knobs sit at the top
+# of their own module (cf. recorder._recording_max_bytes, sysresources).
+MCP_SESSION_IDLE_ENV = "OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS"
+MCP_SESSION_IDLE_DEFAULT = "300"
+# Falsey tokens that disable reaping (restore the leaky mcp default).
+MCP_SESSION_IDLE_DISABLED = frozenset({"0", "off", "never", "none", "disabled", "false", "no"})
+
+
+def _mcp_session_idle_seconds(raw: str | None = None) -> float | None:
+    # Read per-call so tests and the daemon both see the live env.
+    raw = (raw if raw is not None else os.environ.get(MCP_SESSION_IDLE_ENV, MCP_SESSION_IDLE_DEFAULT)).strip().lower()
+    if raw in MCP_SESSION_IDLE_DISABLED:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _apply_mcp_session_idle_timeout(mcp: Any) -> None:
+    """Set the StreamableHTTP session manager's idle timeout after it's built, so
+    abandoned/idle sessions get reaped instead of leaking (see build_app)."""
+    seconds = _mcp_session_idle_seconds()
+    if seconds is None:
+        return
+    manager = getattr(mcp, "_session_manager", None)
+    if manager is not None:
+        manager.session_idle_timeout = seconds
+        log.info("octowright.mcp.session_idle_timeout_set", seconds=seconds)
+
 
 # Tracker covering active streamable-HTTP MCP sessions; reset on every
 # build_app() so the count belongs to the most recently built leader app.
@@ -74,6 +111,16 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
         # endpoint at "/mcp" exactly (not "/mcp/mcp").
         _mcp.settings.streamable_http_path = "/"
         mcp_app = _mcp.streamable_http_app()
+
+        # Reap abandoned/idle MCP sessions. The mcp session manager defaults
+        # session_idle_timeout=None (never reap), so every session's per-session
+        # server task + transport lingers in the manager's task group even after
+        # the client vanishes — a real, unbounded leak (~54KB/session; a reconnect
+        # storm left a leader at 2.4GB with zero live browsers). Set it after
+        # construction (the manager reads it at session-create and resets the
+        # deadline on each request, so an ACTIVE session is never reaped — only a
+        # truly idle/abandoned one). `0`/`off` restores the leaky default.
+        _apply_mcp_session_idle_timeout(_mcp)
 
         _session_tracker = McpSessionTracker()
         tracked_app = McpSessionTrackingMiddleware(mcp_app, _session_tracker)
