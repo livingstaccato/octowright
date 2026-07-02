@@ -83,12 +83,13 @@ log = get_logger(__name__)
 _active_session_write: Any | None = None
 
 
-def _build_notification(event: SessionEvent) -> SessionMessage:
-    """Convert a pool event into a raw JSON-RPC notification frame.
+def notification_payload(event: SessionEvent) -> dict[str, Any]:
+    """The JSON-RPC ``{method, params}`` for a pool event.
 
-    Two shapes: a ``SessionClosedEvent`` (the session left the pool) becomes
-    ``session_closed``; a ``SessionCrashedEvent`` (a crash was observed, session
-    may still be alive) becomes ``browser_crashed`` with an actionable hint.
+    Single source of truth for the notification wire shape, shared by the stdio
+    emitter (:func:`_build_notification`) and the leader's ``/api/mcp-events`` SSE
+    stream (which the follower reconstructs via :func:`payload_to_message`), so
+    both delivery paths emit identical frames to the client.
     """
     if isinstance(event, DriverDiedEvent):
         if event.relaunch_mode == "off":
@@ -102,23 +103,20 @@ def _build_notification(event: SessionEvent) -> SessionMessage:
                 f"auto-reopening them ({event.relaunch_mode}); see octowright_status().pool.lost_sessions for the "
                 "old→new instance_id mapping"
             )
-        died = JSONRPCNotification(
-            jsonrpc="2.0",
-            method="notifications/octowright/driver_died",
-            params={
+        return {
+            "method": "notifications/octowright/driver_died",
+            "params": {
                 "restart_count": event.restart_count,
                 "relaunch_mode": event.relaunch_mode,
                 "lost_count": event.lost_count,
                 "lost_instance_ids": list(event.lost_instance_ids),
                 "hint": driver_hint,
             },
-        )
-        return SessionMessage(JSONRPCMessage(root=died))
+        }
     if isinstance(event, SessionRecoveredEvent):
-        recovered = JSONRPCNotification(
-            jsonrpc="2.0",
-            method="notifications/octowright/browser_recovered",
-            params={
+        return {
+            "method": "notifications/octowright/browser_recovered",
+            "params": {
                 "instance_id": event.instance_id,
                 "kind": event.kind,
                 "label": event.label,
@@ -128,8 +126,7 @@ def _build_notification(event: SessionEvent) -> SessionMessage:
                 "log_path": event.log_path,
                 "hint": _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved"),
             },
-        )
-        return SessionMessage(JSONRPCMessage(root=recovered))
+        }
     if isinstance(event, SessionCrashedEvent):
         # Accurate to the auto-recovery behavior: when recovery is scheduled the
         # client should WAIT for the browser_recovered outcome, not relaunch a
@@ -141,10 +138,9 @@ def _build_notification(event: SessionEvent) -> SessionMessage:
             if event.recovering
             else "the page crashed and auto-recovery is off/exhausted — relaunch the browser with browser_launch"
         )
-        crash = JSONRPCNotification(
-            jsonrpc="2.0",
-            method="notifications/octowright/browser_crashed",
-            params={
+        return {
+            "method": "notifications/octowright/browser_crashed",
+            "params": {
                 "instance_id": event.instance_id,
                 "kind": event.kind,
                 "label": event.label,
@@ -154,12 +150,10 @@ def _build_notification(event: SessionEvent) -> SessionMessage:
                 "log_path": event.log_path,
                 "hint": hint,
             },
-        )
-        return SessionMessage(JSONRPCMessage(root=crash))
-    notification = JSONRPCNotification(
-        jsonrpc="2.0",
-        method="notifications/octowright/session_closed",
-        params={
+        }
+    return {
+        "method": "notifications/octowright/session_closed",
+        "params": {
             "instance_id": event.instance_id,
             "kind": event.kind,
             "label": event.label,
@@ -167,8 +161,24 @@ def _build_notification(event: SessionEvent) -> SessionMessage:
             "reason": event.reason,
             "log_path": event.log_path,
         },
+    }
+
+
+def payload_to_message(payload: dict[str, Any]) -> SessionMessage:
+    """Wrap a ``{method, params}`` payload into a JSON-RPC notification frame.
+
+    Used by the follower to reconstruct a leader-streamed notification (received
+    as JSON over ``/api/mcp-events``) into the exact ``SessionMessage`` the local
+    MCP client expects on its stdio stream.
+    """
+    return SessionMessage(
+        JSONRPCMessage(root=JSONRPCNotification(jsonrpc="2.0", method=payload["method"], params=payload["params"]))
     )
-    return SessionMessage(JSONRPCMessage(root=notification))
+
+
+def _build_notification(event: SessionEvent) -> SessionMessage:
+    """Convert a pool event into a raw JSON-RPC notification frame (stdio path)."""
+    return payload_to_message(notification_payload(event))
 
 
 def _event_id(event: SessionEvent) -> str:
@@ -290,6 +300,8 @@ def get_emit_task_or_none() -> asyncio.Task[None] | None:
 
 __all__ = [
     "get_emit_task_or_none",
+    "notification_payload",
+    "payload_to_message",
     "run_stdio_with_notifications",
     "run_with_notifications",
 ]

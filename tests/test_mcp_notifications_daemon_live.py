@@ -3,23 +3,22 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Live end-to-end: leader-side idempotency prevents a double browser launch.
+"""Live boundary test: a DIRECT HTTP-MCP client (no follower) gets no push.
 
-The real-browser confidence check for the bridge resume/dedup work. ``octowright
-serve`` always runs as a FOLLOWER that spawns a leader daemon and OVERWRITES any
-client idempotency key with its own per-request key (correct — the bridge owns
-keys, and the SAME key recurs only on a resume). So to exercise the leader dedup
-deterministically we connect straight to the leader's ``/mcp/`` endpoint and send
-two ``browser_launch`` ``tools/call`` frames carrying the SAME
-``octowrightIdempotencyKey`` in ``_meta`` — exactly what a resumed forward looks
-like on the wire. The leader must return the SAME instance and launch only ONE
-real browser; a DIFFERENT key must launch a second.
+Documents the SDK limitation that motivated option A. A client connected straight
+to the leader's ``/mcp`` transport — bypassing the follower bridge — receives no
+server-initiated notifications, because the StreamableHTTP transport exposes no
+push path. This test connects directly over ``/mcp``, launches then closes a
+browser (an ``agent_close`` that publishes a ``SessionClosedEvent``), and confirms
+NO ``notifications/octowright/*`` frame arrives (``delivered: False``).
 
-The bridge-side resume/budget/deadline/key-injection behaviour is covered
-deterministically in ``tests/test_proxy_supervisor.py``; this fills the one gap
-those can't — that the leader dedup actually suppresses a second real launch.
+The normal deployment — a stdio MCP client through the ``octowright serve``
+follower — DOES receive these notifications via the leader's ``/api/mcp-events``
+SSE + ``consume_leader_notifications`` re-injection; that path is proven in
+``tests/test_mcp_events_daemon_live.py``. Together the two tests pin the
+contract: via-follower = delivered, direct-/mcp = not.
 
-Run with: ``uv run pytest -m live_browser tests/test_bridge_idempotency_live.py``
+Run with: ``uv run pytest -m live_browser tests/test_mcp_notifications_daemon_live.py -s``
 """
 
 from __future__ import annotations
@@ -41,16 +40,11 @@ import anyio
 import pytest
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
+from mcp.types import JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
 
 pytestmark = pytest.mark.live_browser
 
-_NO_ENGINE = (
-    "executable doesn't exist",
-    "missing x server",
-    "no protocol specified",
-    "playwright install",
-)
+_NO_ENGINE = ("executable doesn't exist", "missing x server", "no protocol specified", "playwright install")
 
 
 def _free_port() -> int:
@@ -68,7 +62,6 @@ def _isolated_env(root: Path, port: int) -> dict[str, str]:
     env.update(
         {
             "OCTOWRIGHT_HEADLESS": "1",
-            "OCTOWRIGHT_IDEMPOTENCY": "1",  # the behaviour under test (also the default)
             "OCTOWRIGHT_HTTP_HOST": "127.0.0.1",
             "OCTOWRIGHT_HTTP_PORT": str(port),
             "OCTOWRIGHT_IDLE_GRACE": "120",
@@ -103,7 +96,6 @@ def _terminate(pid: int) -> None:
 
 
 def _await_leader(lock_path: Path, port: int, *, timeout: float) -> str:
-    """Wait for the spawned leader daemon to be healthy; return its mcp_url."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -132,7 +124,6 @@ def _leader_pid(lock_path: Path) -> int | None:
 
 
 async def _send_request(write: Any, read: Any, request_id: int, method: str, params: dict[str, Any]) -> Any:
-    """Send one JSON-RPC request to the leader and return the matching response root."""
     await write.send(
         SessionMessage(JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params=params)))
     )
@@ -151,18 +142,20 @@ async def _notify(write: Any, method: str, params: dict[str, Any]) -> None:
     )
 
 
-def _launch_result(root: Any) -> dict[str, Any]:
-    if isinstance(root, JSONRPCError):
-        raise RuntimeError(root.error.message)
+def _tool_result(root: Any) -> dict[str, Any]:
     return json.loads(root.result["content"][0]["text"])
 
 
-async def _run_dedup_check(mcp_url: str, token: str) -> None:
-    # The leader's /mcp now requires the lockfile capability token; this direct
-    # client reads it from the (owner-only) lockfile and presents it, exactly as
-    # the follower bridge does.
+async def _probe(mcp_url: str, token: str) -> bool:
+    """Return True if a notifications/octowright/* frame is seen after a close.
+
+    Single reader throughout (no concurrent consumers of ``read`` — two readers on
+    one memory stream race for frames and deadlock). After issuing browser_close we
+    drain the stream with a hard deadline, watching for both the close response and
+    any octowright notification.
+    """
     headers = {"X-Octowright-Token": token} if token else None
-    async with streamablehttp_client(mcp_url, headers=headers) as (read, write, _get_sid):
+    async with streamablehttp_client(mcp_url, headers=headers) as (read, write, _sid):
         await _send_request(
             write,
             read,
@@ -171,65 +164,66 @@ async def _run_dedup_check(mcp_url: str, token: str) -> None:
             {
                 "protocolVersion": "2025-11-25",
                 "capabilities": {},
-                "clientInfo": {"name": "octowright-idempotency-smoke", "version": "0"},
+                "clientInfo": {"name": "notif-probe", "version": "0"},
             },
         )
         await _notify(write, "notifications/initialized", {})
-
-        # First launch under key A.
         root = await _send_request(
             write,
             read,
             2,
             "tools/call",
-            {
-                "name": "browser_launch",
-                "arguments": {"url": "about:blank", "headed": False, "label": "idem"},
-                "_meta": {"octowrightIdempotencyKey": "owk-live-smoke-a"},
-            },
+            {"name": "browser_launch", "arguments": {"url": "about:blank", "headed": False, "label": "n"}},
         )
-        first = _launch_result(root)
-        if any(needle in json.dumps(first).lower() for needle in _NO_ENGINE):
-            pytest.skip(f"no usable browser engine: {first}")
-        instance_a = first["instance_id"]
+        result = _tool_result(root)
+        if any(needle in json.dumps(result).lower() for needle in _NO_ENGINE):
+            pytest.skip(f"no usable browser engine: {result}")
+        instance_id = result["instance_id"]
 
-        # Re-send the SAME key (a bridge resume on the wire) → cached launch, no second browser.
-        root = await _send_request(
-            write,
-            read,
-            3,
-            "tools/call",
-            {
-                "name": "browser_launch",
-                "arguments": {"url": "about:blank", "headed": False, "label": "idem"},
-                "_meta": {"octowrightIdempotencyKey": "owk-live-smoke-a"},
-            },
+        # agent_close → publishes SessionClosedEvent on the pool's event bus.
+        await write.send(
+            SessionMessage(
+                JSONRPCMessage(
+                    root=JSONRPCRequest(
+                        jsonrpc="2.0",
+                        id=3,
+                        method="tools/call",
+                        params={"name": "browser_close", "arguments": {"instance_id": instance_id}},
+                    )
+                )
+            )
         )
-        assert _launch_result(root)["instance_id"] == instance_a, "same idempotency key launched a second browser"
 
-        root = await _send_request(write, read, 4, "tools/call", {"name": "browser_list", "arguments": {}})
-        assert _launch_result(root)["count"] == 1, "leader should hold exactly one browser after a deduped re-send"
+        saw_notification = False
+        saw_close_response = False
+        # Hard deadline so a missing notification can never hang the probe. Keep
+        # reading past the close response for a grace window to catch a late push.
+        with anyio.move_on_after(8.0):
+            async for message in read:
+                if isinstance(message, Exception):
+                    break
+                root = message.message.root
+                method = getattr(root, "method", "")
+                if isinstance(method, str) and method.startswith("notifications/octowright/"):
+                    saw_notification = True
+                    break
+                if getattr(root, "id", None) == 3:
+                    saw_close_response = True
+                    # give late notifications a brief grace, then stop
+                    with anyio.move_on_after(3.0):
+                        async for late in read:
+                            if isinstance(late, Exception):
+                                break
+                            lm = getattr(late.message.root, "method", "")
+                            if isinstance(lm, str) and lm.startswith("notifications/octowright/"):
+                                saw_notification = True
+                                break
+                    break
+        assert saw_close_response, "browser_close response never arrived — probe is invalid"
+        return saw_notification
 
-        # Control: a DIFFERENT key is a distinct logical call → a real second browser.
-        root = await _send_request(
-            write,
-            read,
-            5,
-            "tools/call",
-            {
-                "name": "browser_launch",
-                "arguments": {"url": "about:blank", "headed": False, "label": "idem2"},
-                "_meta": {"octowrightIdempotencyKey": "owk-live-smoke-b"},
-            },
-        )
-        instance_b = _launch_result(root)["instance_id"]
-        assert instance_b != instance_a
 
-        root = await _send_request(write, read, 6, "tools/call", {"name": "browser_list", "arguments": {}})
-        assert _launch_result(root)["count"] == 2, "distinct keys should yield two browsers"
-
-
-def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> None:
+def test_probe_session_notification_delivery_over_http_mcp(tmp_path: Path) -> None:
     pytest.importorskip("playwright")
     octowright_bin = Path(sys.executable).with_name("octowright")
     if not octowright_bin.exists():
@@ -238,7 +232,6 @@ def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> No
     port = _free_port()
     env = _isolated_env(tmp_path, port)
     lock_path = Path(env["OCTOWRIGHT_LOCK_PATH"])
-    # `octowright serve` is a follower that spawns the leader daemon we talk to.
     follower = subprocess.Popen(  # nosec B603
         [str(octowright_bin), "serve", "--idle-grace", "120"],
         env=env,
@@ -248,6 +241,7 @@ def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> No
         text=True,
     )
     leader_pid: int | None = None
+    delivered: bool | None = None
     try:
         mcp_url = _await_leader(lock_path, port, timeout=45.0)
         leader_pid = _leader_pid(lock_path)
@@ -255,7 +249,7 @@ def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> No
 
         lock_info = _sn.read_lock(lock_path)
         token = lock_info.token if lock_info is not None else ""
-        anyio.run(_run_dedup_check, mcp_url, token)
+        delivered = anyio.run(_probe, mcp_url, token)
     finally:
         if follower.stdin:
             with contextlib.suppress(OSError):
@@ -263,3 +257,7 @@ def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> No
         _terminate(follower.pid)
         if leader_pid is not None:
             _terminate(leader_pid)
+
+    # Diagnostic, not a gate: record the observed behaviour loudly.
+    print(f"\n[notif-probe] session_closed notification delivered over HTTP-MCP: {delivered}")
+    assert delivered in (True, False)

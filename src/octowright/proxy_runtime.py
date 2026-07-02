@@ -13,10 +13,12 @@ via module globals, so tests monkeypatch them here (``proxy_runtime.X``).
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import threading
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 import anyio
@@ -135,6 +137,49 @@ def reconnect_delay(attempt: int, *, max_delay: float) -> float:
     return min(base, max_delay)
 
 
+# A session that lived shorter than this is a "flap": the leader accepted then
+# almost-immediately ended it. Reconnecting a flap with no backoff busy-loops the
+# leader into a create/terminate storm (observed ~300+/sec across followers); a
+# session that lived at least this long reconnects promptly. (defaults.py at LOC ceiling.)
+BRIDGE_MIN_SESSION_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_MIN_SESSION_SECONDS", "2.0"))
+
+
+def _post_session_backoff(session_seconds: float, flap_attempt: int) -> tuple[float, int]:
+    """After a session end, return ``(sleep_seconds, next_flap_attempt)``.
+
+    A session shorter than ``BRIDGE_MIN_SESSION_SECONDS`` is a flap → back off by
+    ``reconnect_delay(flap_attempt)`` so a leader that instantly ends sessions
+    can't be hot-looped into a create/terminate storm. A healthy-length session
+    reconnects immediately (0 delay) and resets the flap counter."""
+    if session_seconds < BRIDGE_MIN_SESSION_SECONDS:
+        flap_attempt += 1
+        return reconnect_delay(flap_attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS), flap_attempt
+    return 0.0, 0
+
+
+async def _flap_backoff(connected_at: float | None, flap_attempt: int) -> tuple[int, bool]:
+    """If a session OPENED then ended too fast, sleep a flap backoff and return
+    ``(next_flap_attempt, True)``; else ``(flap_attempt, False)``. Used on BOTH the
+    success path (clean instant end) and the error path (connect-then-abort /
+    ClientDisconnect) — the latter matters because its ``attempt`` counter resets on
+    each connect, so the (only-grows) flap counter is what actually throttles it."""
+    if connected_at is None:
+        return flap_attempt, False
+    session_seconds = anyio.current_time() - connected_at
+    delay, flap_attempt = _post_session_backoff(session_seconds, flap_attempt)
+    if delay <= 0:
+        return flap_attempt, False
+    _BRIDGE_RECONNECT.add(1, attributes={"reason": "session_flap"})
+    log.warning(
+        "octowright.bridge.session_flap",
+        session_seconds=round(session_seconds, 3),
+        flap_attempt=flap_attempt,
+        backoff_seconds=round(delay, 3),
+    )
+    await anyio.sleep(delay)
+    return flap_attempt, True
+
+
 def _arm_follower_exit_backstop(
     grace_seconds: float, *, exit_fn: Callable[[int], object] = os._exit
 ) -> threading.Timer:
@@ -184,6 +229,83 @@ async def monitor_leader_health(
             if failures >= max_failures:
                 on_unhealthy()
                 failures = 0
+
+
+def _events_url_from_mcp(mcp_url: str) -> str:
+    """The leader's ``/api/mcp-events`` SSE URL derived from its ``/mcp`` URL —
+    same host:port, mirroring how the health URL is derived in ``_run_follower``."""
+    return mcp_url.rsplit("/mcp", 1)[0] + "/api/mcp-events"
+
+
+async def consume_leader_notifications(
+    fallback_mcp_url: str,
+    local_write: Any,
+    *,
+    sleep: Callable[[float], Any] = anyio.sleep,
+) -> None:
+    """Stream the leader's ``/api/mcp-events`` SSE and inject each MCP notification
+    into the local stdio client write.
+
+    This is what makes proactive notifications (browser_crashed / browser_recovered
+    / driver_died / session_closed) reach the client in the default detached-daemon
+    deployment: the leader's HTTP-MCP transport delivers no server-initiated
+    notifications, so the follower re-sources them from the leader's session-event
+    SSE and writes them onto the same stdio stream the client reads. The leader's
+    own stdio emitter writes to the detached daemon's (clientless) stdout, so there
+    is no double-delivery.
+
+    Reconnects with the same backoff as the RPC bridge; a re-resolved leader URL
+    each attempt picks up a restarted leader's new port. Runs until cancelled.
+    """
+    cancelled = anyio.get_cancelled_exc_class()
+    # No read timeout (SSE is long-lived); bound only the connect handshake so a
+    # dead leader fails fast into the reconnect backoff instead of hanging.
+    timeout = httpx.Timeout(None, connect=BRIDGE_CONNECT_TIMEOUT_SECONDS)
+    attempt = 0
+    while True:
+        events_url = _events_url_from_mcp(resolve_leader_url(fallback_mcp_url))
+        try:
+            async with (
+                httpx.AsyncClient(timeout=timeout) as client,
+                client.stream("GET", events_url) as response,
+            ):
+                if response.status_code != 200:
+                    raise RuntimeError(f"mcp-events stream returned HTTP {response.status_code}")
+                attempt = 0  # connected → reset backoff
+                await _forward_sse_notifications(response.aiter_lines(), local_write)
+        except cancelled:
+            raise
+        except Exception as exc:
+            log.debug("octowright.bridge.notif_stream_error", error=repr(exc))
+        await sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
+        attempt += 1
+
+
+async def _forward_sse_notifications(lines: Any, local_write: Any) -> None:
+    """Parse an async iterator of SSE lines and inject each JSON-RPC notification
+    payload into ``local_write``.
+
+    Skips SSE comments (``: heartbeat`` / ``: ready``), blank separators, and
+    malformed ``data:`` frames. A send failure (the local client closed) is
+    swallowed — the RPC bridge owns teardown — so one dead write doesn't kill the
+    stream. Extracted from ``consume_leader_notifications`` so the parse/deliver
+    contract is unit-testable without a live HTTP stream.
+    """
+    from octowright.server.mcp_notifications import payload_to_message
+
+    async for line in lines:
+        if not line.startswith("data:"):
+            continue
+        raw = line[len("data:") :].strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and "method" in payload and "params" in payload:
+            with suppress(Exception):
+                await local_write.send(payload_to_message(payload))
 
 
 async def leader_health_alive(health_url: str) -> bool:
@@ -267,7 +389,12 @@ async def run_supervised_proxy(
                     _LEADER_RECOVERY.add(1, attributes={"outcome": "exhausted"})
                     return False
 
+                flap_attempt = 0
                 while True:
+                    # When this iteration's session became live (None until the
+                    # stream opens). Used to detect a flap — a session that ends
+                    # almost immediately — on the success path below.
+                    connected_at: float | None = None
                     remote_url = resolve_leader_url(leader_mcp_url)
                     # Present the capability token from the 0600 lockfile so the
                     # leader's /mcp guard admits us. Re-read each connect so a
@@ -296,6 +423,7 @@ async def run_supervised_proxy(
                                 httpx_client_factory=httpx_factory,
                             ) as (remote_read, remote_write, get_sid):
                                 _connect_scope.deadline = math.inf
+                                connected_at = anyio.current_time()
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
                                 try:
@@ -351,6 +479,8 @@ async def run_supervised_proxy(
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
                             return
+                        # Flap guard (success path): throttle a clean instant session.
+                        flap_attempt, _ = await _flap_backoff(connected_at, flap_attempt)
                     except Exception as exc:
                         remote_write_slot.write = None
                         remote_write_slot.ready = (
@@ -373,12 +503,23 @@ async def run_supervised_proxy(
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
                             return
-                        await anyio.sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
-                        attempt += 1
+                        # A connect-then-abort (ClientDisconnect) is a flap here too;
+                        # throttle by the flap counter. A genuine connect failure
+                        # (session never opened) falls through to attempt backoff.
+                        flap_attempt, flapped = await _flap_backoff(connected_at, flap_attempt)
+                        if not flapped:
+                            await anyio.sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
+                            attempt += 1
 
             local_tg.start_soon(_local_forwarder)
             local_tg.start_soon(_remote_supervisor)
             local_tg.start_soon(supervisor_obj.watch_deadlines, 0.1, remote_reset_slot)
+            # Re-source the leader's proactive MCP notifications (crash / driver-died
+            # / session-closed) over its /api/mcp-events SSE and inject them into the
+            # local client write — the HTTP-MCP transport the leader serves delivers
+            # no server-initiated notifications, so without this the daemon-mode
+            # client never sees them (see http/routes/mcp_events.py).
+            local_tg.start_soon(consume_leader_notifications, leader_mcp_url, supervisor_obj.local_write)
             if health_url is not None:
                 # The background monitor catches a leader whose SSE read goes
                 # SILENT (a hard crash: no close, no error). It cancels the stuck
