@@ -3,23 +3,23 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Live end-to-end: leader-side idempotency prevents a double browser launch.
+"""Live end-to-end: the leader emits progress heartbeats over the REAL wire.
 
-The real-browser confidence check for the bridge resume/dedup work. ``octowright
-serve`` always runs as a FOLLOWER that spawns a leader daemon and OVERWRITES any
-client idempotency key with its own per-request key (correct — the bridge owns
-keys, and the SAME key recurs only on a resume). So to exercise the leader dedup
-deterministically we connect straight to the leader's ``/mcp/`` endpoint and send
-two ``browser_launch`` ``tools/call`` frames carrying the SAME
-``octowrightIdempotencyKey`` in ``_meta`` — exactly what a resumed forward looks
-like on the wire. The leader must return the SAME instance and launch only ONE
-real browser; a DIFFERENT key must launch a second.
+The unit tests (``tests/test_progress_heartbeat.py``) prove the leader wrapper
+calls ``send_progress_notification`` and that a returned progress frame re-arms the
+follower deadline. This is the one thing they can't cover: that those pings
+actually travel over the real streamable-HTTP ``/mcp`` transport during a tool
+call, on the exact ``progressToken`` the caller supplied — the mechanism that
+keeps a slow-but-alive tool call from tripping the follower's in-flight deadline
+and surfacing as a spurious "Octowright disconnected".
 
-The bridge-side resume/budget/deadline/key-injection behaviour is covered
-deterministically in ``tests/test_proxy_supervisor.py``; this fills the one gap
-those can't — that the leader dedup actually suppresses a second real launch.
+We connect straight to the leader's ``/mcp`` (like the idempotency live smoke),
+drive the daemon with a tiny ``OCTOWRIGHT_HEARTBEAT_INTERVAL_SECONDS`` so any real
+tool call (``browser_launch`` takes well over the interval) emits at least one
+ping, supply our own ``progressToken`` in ``_meta``, and assert progress frames
+arrive on that token before the tool response.
 
-Run with: ``uv run pytest -m live_browser tests/test_bridge_idempotency_live.py``
+Run with: ``uv run pytest -m live_browser tests/test_bridge_heartbeat_live.py``
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ _NO_ENGINE = (
     "no protocol specified",
     "playwright install",
 )
+_HEARTBEAT_INTERVAL = "0.3"  # tiny, so a ~1-3s browser_launch emits several pings
 
 
 def _free_port() -> int:
@@ -68,10 +69,12 @@ def _isolated_env(root: Path, port: int) -> dict[str, str]:
     env.update(
         {
             "OCTOWRIGHT_HEADLESS": "1",
-            "OCTOWRIGHT_IDEMPOTENCY": "1",  # the behaviour under test (also the default)
             "OCTOWRIGHT_HTTP_HOST": "127.0.0.1",
             "OCTOWRIGHT_HTTP_PORT": str(port),
             "OCTOWRIGHT_IDLE_GRACE": "120",
+            # The behaviour under test: a fast heartbeat cadence so a real tool call
+            # emits progress pings we can observe on the wire.
+            "OCTOWRIGHT_HEARTBEAT_INTERVAL_SECONDS": _HEARTBEAT_INTERVAL,
             "OCTOWRIGHT_LOCK_PATH": str(root / "state" / "octowright.lock"),
             "OCTOWRIGHT_BRIDGE_STATE": str(root / "state" / "bridge-state.json"),
             "OCTOWRIGHT_RECORDINGS": str(root / "state" / "sessions"),
@@ -103,7 +106,6 @@ def _terminate(pid: int) -> None:
 
 
 def _await_leader(lock_path: Path, port: int, *, timeout: float) -> str:
-    """Wait for the spawned leader daemon to be healthy; return its mcp_url."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -132,7 +134,6 @@ def _leader_pid(lock_path: Path) -> int | None:
 
 
 async def _send_request(write: Any, read: Any, request_id: int, method: str, params: dict[str, Any]) -> Any:
-    """Send one JSON-RPC request to the leader and return the matching response root."""
     await write.send(
         SessionMessage(JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params=params)))
     )
@@ -151,16 +152,39 @@ async def _notify(write: Any, method: str, params: dict[str, Any]) -> None:
     )
 
 
+async def _call_collecting_progress(
+    write: Any, read: Any, request_id: int, params: dict[str, Any], progress_token: str
+) -> tuple[Any, list[Any]]:
+    """Send a tools/call carrying ``progress_token`` and return (response_root,
+    progress_frames_on_that_token) — collecting every notifications/progress that
+    arrives before the matching response id."""
+    await write.send(
+        SessionMessage(
+            JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method="tools/call", params=params))
+        )
+    )
+    pings: list[Any] = []
+    async for message in read:
+        if isinstance(message, Exception):
+            raise message
+        root = message.message.root
+        if isinstance(root, JSONRPCNotification) and root.method == "notifications/progress":
+            token = (root.params or {}).get("progressToken")
+            if token == progress_token:
+                pings.append(root.params)
+            continue
+        if getattr(root, "id", None) == request_id:
+            return root, pings
+    raise RuntimeError("leader stream closed before response")
+
+
 def _launch_result(root: Any) -> dict[str, Any]:
     if isinstance(root, JSONRPCError):
         raise RuntimeError(root.error.message)
     return json.loads(root.result["content"][0]["text"])
 
 
-async def _run_dedup_check(mcp_url: str, token: str) -> None:
-    # The leader's /mcp now requires the lockfile capability token; this direct
-    # client reads it from the (owner-only) lockfile and presents it, exactly as
-    # the follower bridge does.
+async def _run_heartbeat_check(mcp_url: str, token: str) -> None:
     headers = {"X-Octowright-Token": token} if token else None
     async with streamablehttp_client(mcp_url, headers=headers) as (read, write, _get_sid):
         await _send_request(
@@ -171,65 +195,38 @@ async def _run_dedup_check(mcp_url: str, token: str) -> None:
             {
                 "protocolVersion": "2025-11-25",
                 "capabilities": {},
-                "clientInfo": {"name": "octowright-idempotency-smoke", "version": "0"},
+                "clientInfo": {"name": "octowright-heartbeat-smoke", "version": "0"},
             },
         )
         await _notify(write, "notifications/initialized", {})
 
-        # First launch under key A.
-        root = await _send_request(
+        progress_token = "owpt-heartbeat-live"
+        root, pings = await _call_collecting_progress(
             write,
             read,
             2,
-            "tools/call",
             {
                 "name": "browser_launch",
-                "arguments": {"url": "about:blank", "headed": False, "label": "idem"},
-                "_meta": {"octowrightIdempotencyKey": "owk-live-smoke-a"},
+                "arguments": {"url": "about:blank", "headed": False, "label": "hb"},
+                "_meta": {"progressToken": progress_token},
             },
+            progress_token,
         )
-        first = _launch_result(root)
-        if any(needle in json.dumps(first).lower() for needle in _NO_ENGINE):
-            pytest.skip(f"no usable browser engine: {first}")
-        instance_a = first["instance_id"]
+        result = _launch_result(root)
+        if any(needle in json.dumps(result).lower() for needle in _NO_ENGINE):
+            pytest.skip(f"no usable browser engine: {result}")
 
-        # Re-send the SAME key (a bridge resume on the wire) → cached launch, no second browser.
-        root = await _send_request(
-            write,
-            read,
-            3,
-            "tools/call",
-            {
-                "name": "browser_launch",
-                "arguments": {"url": "about:blank", "headed": False, "label": "idem"},
-                "_meta": {"octowrightIdempotencyKey": "owk-live-smoke-a"},
-            },
-        )
-        assert _launch_result(root)["instance_id"] == instance_a, "same idempotency key launched a second browser"
-
-        root = await _send_request(write, read, 4, "tools/call", {"name": "browser_list", "arguments": {}})
-        assert _launch_result(root)["count"] == 1, "leader should hold exactly one browser after a deduped re-send"
-
-        # Control: a DIFFERENT key is a distinct logical call → a real second browser.
-        root = await _send_request(
-            write,
-            read,
-            5,
-            "tools/call",
-            {
-                "name": "browser_launch",
-                "arguments": {"url": "about:blank", "headed": False, "label": "idem2"},
-                "_meta": {"octowrightIdempotencyKey": "owk-live-smoke-b"},
-            },
-        )
-        instance_b = _launch_result(root)["instance_id"]
-        assert instance_b != instance_a
-
-        root = await _send_request(write, read, 6, "tools/call", {"name": "browser_list", "arguments": {}})
-        assert _launch_result(root)["count"] == 2, "distinct keys should yield two browsers"
+        # The load-bearing assertion: the leader streamed at least one progress
+        # heartbeat on OUR token over the real transport during the call. That is
+        # exactly what re-arms the follower's in-flight deadline and prevents the
+        # slow-call-looks-like-a-disconnect failure.
+        assert pings, "leader emitted no progress heartbeat on the wire during a real tool call"
+        # progress is monotonically increasing (MCP requires it)
+        values = [p.get("progress") for p in pings]
+        assert values == sorted(values)
 
 
-def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> None:
+def test_leader_emits_progress_heartbeat_over_the_wire(tmp_path: Path) -> None:
     pytest.importorskip("playwright")
     octowright_bin = Path(sys.executable).with_name("octowright")
     if not octowright_bin.exists():
@@ -238,7 +235,6 @@ def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> No
     port = _free_port()
     env = _isolated_env(tmp_path, port)
     lock_path = Path(env["OCTOWRIGHT_LOCK_PATH"])
-    # `octowright serve` is a follower that spawns the leader daemon we talk to.
     follower = subprocess.Popen(  # nosec B603
         [str(octowright_bin), "serve", "--idle-grace", "120"],
         env=env,
@@ -255,7 +251,7 @@ def test_idempotent_browser_launch_does_not_double_execute(tmp_path: Path) -> No
 
         lock_info = _sn.read_lock(lock_path)
         token = lock_info.token if lock_info is not None else ""
-        anyio.run(_run_dedup_check, mcp_url, token)
+        anyio.run(_run_heartbeat_check, mcp_url, token)
     finally:
         if follower.stdin:
             with contextlib.suppress(OSError):
