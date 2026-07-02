@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-07-02
+
+A follower-bridge stability release. The bridge that connects an MCP client
+(Codex, Claude Code, …) to the shared daemon leader no longer surfaces false
+"Octowright disconnected" errors on slow tool calls, delivers proactive
+notifications in the default daemon deployment, and cannot be driven into a
+reconnect storm or a split-brain second daemon.
+
+### Added
+- **Tool-call progress heartbeat.** The leader emits periodic MCP progress for
+  every in-flight tool call (`server/_heartbeat.py`), reviving the follower's
+  deadline re-arm so a slow-but-alive call keeps its bridge deadline alive as
+  long as the leader event loop is alive. A genuinely wedged/dead leader still
+  times out fast. Tunable via `OCTOWRIGHT_HEARTBEAT_INTERVAL_SECONDS` (default 8)
+  and `OCTOWRIGHT_HEARTBEAT_MAX_SECONDS` (ceiling, default 600).
+- **Proactive notifications in daemon mode.** The detached-daemon leader now
+  streams `session_event_bus` over a new `GET /api/mcp-events` SSE endpoint, and
+  the follower re-injects each frame into the local stdio client — so
+  `browser_crashed` / `browser_recovered` / `driver_died` / `session_closed`
+  reach stdio clients even though the HTTP-MCP transport carries no
+  server-initiated notifications. A direct HTTP-MCP client (no follower) still
+  gets none (SDK limitation), so `octowright_status()` remains the authoritative
+  pull check.
+- **`OCTOWRIGHT_BRIDGE_MIN_SESSION_SECONDS`** (default 2.0) — flap threshold for
+  the reconnect backoff below.
+
+### Fixed
+- **False "disconnected" on slow tool calls.** A tool call that outran the flat
+  bridge deadline surfaced as a transport disconnect even while the leader was
+  working; the heartbeat above keeps it alive.
+- **Reconnect transport storm.** A session the leader ended almost immediately
+  reconnected with no backoff, busy-looping the leader into a
+  `Created new transport` / `Terminating session` storm (observed ~300+/sec
+  across followers). Both reconnect paths — a clean instant end and a
+  connect-then-abort (`ClientDisconnect` / reset, whose `attempt` counter reset
+  on each connect) — now throttle by an increasing flap backoff.
+- **Split-brain second daemon.** A follower's respawn (and now the initial
+  election) could bind a bumped port (6286 → 6287) and become a second leader
+  beside a healthy one when the lockfile probe false-negatived during a storm.
+  Both paths now probe the canonical port directly and adopt the existing leader
+  instead of forking a competitor.
+
 ## [0.11.0] - 2026-06-29
 
 A token-efficiency release for agentic browsing: Octowright keeps the broad
