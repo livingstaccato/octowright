@@ -615,3 +615,64 @@ async def test_flapping_session_is_throttled_not_hot_looped(monkeypatch: pytest.
     # which would leave `delays` empty), and it did re-open a session each round.
     assert delays[:3] == [1, 2, 3]
     assert opens["n"] >= 3
+
+
+@pytest.mark.anyio
+async def test_connect_then_abort_storm_is_throttled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A leader that ACCEPTS the connection then aborts the session mid-stream (a
+    ClientDisconnect / connection reset) must not be reconnected in a near-zero
+    hot loop. This is the ERROR-path analogue of the clean-session flap: the
+    `attempt` backoff counter resets on each successful connect, so without a
+    duration-aware guard the follower storms at ~4/sec/follower."""
+    delays: list[int] = []
+
+    def spy_delay(attempt: int, *, max_delay: float) -> float:
+        delays.append(attempt)
+        return 0.001
+
+    monkeypatch.setattr(supervisor, "reconnect_delay", spy_delay)
+    monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
+    monkeypatch.setattr(supervisor, "resolve_leader_token", lambda: "")
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+
+    async def _noop_consumer(*_args: Any, **_kwargs: Any) -> None:
+        await anyio.sleep_forever()
+
+    monkeypatch.setattr(supervisor, "consume_leader_notifications", _noop_consumer)
+
+    @asynccontextmanager
+    async def aborting_client(_url: str, **_kwargs: Any):  # type: ignore[no-untyped-def]
+        # Connect SUCCEEDS (session opens), then the read stream immediately yields
+        # an Exception → the remote reader re-raises it → the error path fires,
+        # exactly like a ClientDisconnect abort right after the session opened.
+        read_send, read_recv = anyio.create_memory_object_stream[Any](1)
+        await read_send.send(ConnectionError("session aborted"))
+        write_send, _write_recv = anyio.create_memory_object_stream[SessionMessage](10)
+        yield (read_recv, write_send, lambda: "sid")
+
+    monkeypatch.setattr(supervisor, "streamablehttp_client", aborting_client)
+
+    local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
+
+    @asynccontextmanager
+    async def fake_stdio():  # type: ignore[no-untyped-def]
+        yield (local_in_recv, local_out_send)
+
+    monkeypatch.setattr(supervisor, "stdio_server", fake_stdio)
+
+    async def run_proxy() -> None:
+        await supervisor.run_supervised_proxy(leader_mcp_url="http://leader.invalid/mcp/")
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(run_proxy)
+        with anyio.fail_after(3.0):
+            while len(delays) < 3:
+                await anyio.sleep(0.005)
+        tg.cancel_scope.cancel()
+
+    await local_in_send.aclose()
+
+    # An open-then-abort cycle must back off with an INCREASING flap counter, not
+    # a reset-to-0 hot loop. Before the error-path flap guard this was [0, 0, 0].
+    assert delays[:3] == [1, 2, 3], f"connect-then-abort hot-loops instead of backing off: {delays[:6]}"

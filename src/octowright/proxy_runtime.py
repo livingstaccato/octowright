@@ -137,18 +137,15 @@ def reconnect_delay(attempt: int, *, max_delay: float) -> float:
     return min(base, max_delay)
 
 
-# A cleanly-ended session that lived shorter than this is a "flap": the leader
-# accepted the connection then almost-immediately ended the session. The
-# reconnect loop's success path (unlike the error path) has no backoff, so a
-# flapping session would busy-loop the leader into a create/terminate storm
-# (observed at ~300+ transports/sec across several followers). A session that
-# lived at least this long is a normal long session that finally ended and
-# reconnects promptly. Lives here (defaults.py is at its LOC ceiling).
+# A session that lived shorter than this is a "flap": the leader accepted then
+# almost-immediately ended it. Reconnecting a flap with no backoff busy-loops the
+# leader into a create/terminate storm (observed ~300+/sec across followers); a
+# session that lived at least this long reconnects promptly. (defaults.py at LOC ceiling.)
 BRIDGE_MIN_SESSION_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_MIN_SESSION_SECONDS", "2.0"))
 
 
 def _post_session_backoff(session_seconds: float, flap_attempt: int) -> tuple[float, int]:
-    """After a CLEAN session end, return ``(sleep_seconds, next_flap_attempt)``.
+    """After a session end, return ``(sleep_seconds, next_flap_attempt)``.
 
     A session shorter than ``BRIDGE_MIN_SESSION_SECONDS`` is a flap → back off by
     ``reconnect_delay(flap_attempt)`` so a leader that instantly ends sessions
@@ -158,6 +155,29 @@ def _post_session_backoff(session_seconds: float, flap_attempt: int) -> tuple[fl
         flap_attempt += 1
         return reconnect_delay(flap_attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS), flap_attempt
     return 0.0, 0
+
+
+async def _flap_backoff(connected_at: float | None, flap_attempt: int) -> tuple[int, bool]:
+    """If a session OPENED then ended too fast, sleep a flap backoff and return
+    ``(next_flap_attempt, True)``; else ``(flap_attempt, False)``. Used on BOTH the
+    success path (clean instant end) and the error path (connect-then-abort /
+    ClientDisconnect) — the latter matters because its ``attempt`` counter resets on
+    each connect, so the (only-grows) flap counter is what actually throttles it."""
+    if connected_at is None:
+        return flap_attempt, False
+    session_seconds = anyio.current_time() - connected_at
+    delay, flap_attempt = _post_session_backoff(session_seconds, flap_attempt)
+    if delay <= 0:
+        return flap_attempt, False
+    _BRIDGE_RECONNECT.add(1, attributes={"reason": "session_flap"})
+    log.warning(
+        "octowright.bridge.session_flap",
+        session_seconds=round(session_seconds, 3),
+        flap_attempt=flap_attempt,
+        backoff_seconds=round(delay, 3),
+    )
+    await anyio.sleep(delay)
+    return flap_attempt, True
 
 
 def _arm_follower_exit_backstop(
@@ -459,22 +479,8 @@ async def run_supervised_proxy(
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
                             return
-                        # Flap guard: the success path reconnects with no backoff, so
-                        # a session the leader ended almost immediately would hot-loop
-                        # it. Throttle a too-short session (increasing backoff); a
-                        # healthy-length session reconnects at once and resets.
-                        if connected_at is not None:
-                            session_seconds = anyio.current_time() - connected_at
-                            delay, flap_attempt = _post_session_backoff(session_seconds, flap_attempt)
-                            if delay > 0:
-                                _BRIDGE_RECONNECT.add(1, attributes={"reason": "session_flap"})
-                                log.warning(
-                                    "octowright.bridge.session_flap",
-                                    session_seconds=round(session_seconds, 3),
-                                    flap_attempt=flap_attempt,
-                                    backoff_seconds=round(delay, 3),
-                                )
-                                await anyio.sleep(delay)
+                        # Flap guard (success path): throttle a clean instant session.
+                        flap_attempt, _ = await _flap_backoff(connected_at, flap_attempt)
                     except Exception as exc:
                         remote_write_slot.write = None
                         remote_write_slot.ready = (
@@ -497,8 +503,13 @@ async def run_supervised_proxy(
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
                             return
-                        await anyio.sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
-                        attempt += 1
+                        # A connect-then-abort (ClientDisconnect) is a flap here too;
+                        # throttle by the flap counter. A genuine connect failure
+                        # (session never opened) falls through to attempt backoff.
+                        flap_attempt, flapped = await _flap_backoff(connected_at, flap_attempt)
+                        if not flapped:
+                            await anyio.sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
+                            attempt += 1
 
             local_tg.start_soon(_local_forwarder)
             local_tg.start_soon(_remote_supervisor)
