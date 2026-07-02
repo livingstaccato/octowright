@@ -22,14 +22,62 @@ import pytest
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
-from octowright.browser_pool.events import SessionClosedEvent
+from octowright.browser_pool.events import (
+    DriverDiedEvent,
+    SessionClosedEvent,
+    SessionCrashedEvent,
+    SessionRecoveredEvent,
+)
 from octowright.browser_pool.session_event_bus import session_event_bus
-from octowright.server.mcp_notifications import _build_notification, run_with_notifications
+from octowright.server.mcp_notifications import (
+    _build_notification,
+    notification_payload,
+    payload_to_message,
+    run_with_notifications,
+)
 
 
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+# ─── payload / message parity (stdio path == SSE path) ───────────────────────
+
+
+def test_payload_roundtrip_equals_build_notification() -> None:
+    """The follower reconstructs a leader-streamed notification from its JSON
+    payload; that reconstruction MUST equal the frame the stdio emitter builds,
+    so both transports deliver identical notifications to the client."""
+    events = [
+        SessionClosedEvent(
+            instance_id="a", kind="chromium", label="L", profile="P", reason="agent_close", log_path="/a.jsonl"
+        ),
+        SessionCrashedEvent(
+            instance_id="b",
+            kind="firefox",
+            label=None,
+            profile=None,
+            scope="renderer",
+            log_path="/b.jsonl",
+            recovering=True,
+        ),
+        SessionRecoveredEvent(
+            instance_id="c",
+            kind="webkit",
+            label=None,
+            profile=None,
+            outcome="recovered",
+            attempts=1,
+            log_path="/c.jsonl",
+        ),
+        DriverDiedEvent(restart_count=2, relaunch_mode="new-id", lost_count=3, lost_instance_ids=("c", "d", "e")),
+    ]
+    for event in events:
+        direct = _build_notification(event)
+        reconstructed = payload_to_message(notification_payload(event))
+        assert reconstructed.message.root.method == direct.message.root.method
+        assert reconstructed.message.root.params == direct.message.root.params
 
 
 # ─── _build_notification ──────────────────────────────────────────────────────
