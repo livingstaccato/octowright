@@ -40,6 +40,17 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.12.0": [
+        "No more false 'Octowright disconnected' on slow tool calls: the leader now heartbeats progress "
+        "for every in-flight call, so a slow-but-alive browser action keeps its bridge deadline alive "
+        "instead of timing out — a genuinely wedged leader still fails fast.",
+        "Proactive notifications reach you in the default daemon setup: crash / recovery / driver-death / "
+        "session-closed now stream to stdio clients (Codex, Claude Code) over the leader's new "
+        "/api/mcp-events channel, not just in inline mode.",
+        "The bridge no longer storms or splits: a leader that instantly ends a session is backed off "
+        "instead of hot-looped into a transport storm, and a respawn can't spin up a second competing "
+        "daemon beside a healthy one.",
+    ],
     "0.11.0": [
         "Cheaper browsing loops: new compact browser and HTTP-first discovery tools help agents "
         "find links, fields, and page outlines before paying for full snapshots or raw dumps.",
