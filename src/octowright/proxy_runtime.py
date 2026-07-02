@@ -137,6 +137,29 @@ def reconnect_delay(attempt: int, *, max_delay: float) -> float:
     return min(base, max_delay)
 
 
+# A cleanly-ended session that lived shorter than this is a "flap": the leader
+# accepted the connection then almost-immediately ended the session. The
+# reconnect loop's success path (unlike the error path) has no backoff, so a
+# flapping session would busy-loop the leader into a create/terminate storm
+# (observed at ~300+ transports/sec across several followers). A session that
+# lived at least this long is a normal long session that finally ended and
+# reconnects promptly. Lives here (defaults.py is at its LOC ceiling).
+BRIDGE_MIN_SESSION_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_MIN_SESSION_SECONDS", "2.0"))
+
+
+def _post_session_backoff(session_seconds: float, flap_attempt: int) -> tuple[float, int]:
+    """After a CLEAN session end, return ``(sleep_seconds, next_flap_attempt)``.
+
+    A session shorter than ``BRIDGE_MIN_SESSION_SECONDS`` is a flap → back off by
+    ``reconnect_delay(flap_attempt)`` so a leader that instantly ends sessions
+    can't be hot-looped into a create/terminate storm. A healthy-length session
+    reconnects immediately (0 delay) and resets the flap counter."""
+    if session_seconds < BRIDGE_MIN_SESSION_SECONDS:
+        flap_attempt += 1
+        return reconnect_delay(flap_attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS), flap_attempt
+    return 0.0, 0
+
+
 def _arm_follower_exit_backstop(
     grace_seconds: float, *, exit_fn: Callable[[int], object] = os._exit
 ) -> threading.Timer:
@@ -346,7 +369,12 @@ async def run_supervised_proxy(
                     _LEADER_RECOVERY.add(1, attributes={"outcome": "exhausted"})
                     return False
 
+                flap_attempt = 0
                 while True:
+                    # When this iteration's session became live (None until the
+                    # stream opens). Used to detect a flap — a session that ends
+                    # almost immediately — on the success path below.
+                    connected_at: float | None = None
                     remote_url = resolve_leader_url(leader_mcp_url)
                     # Present the capability token from the 0600 lockfile so the
                     # leader's /mcp guard admits us. Re-read each connect so a
@@ -375,6 +403,7 @@ async def run_supervised_proxy(
                                 httpx_client_factory=httpx_factory,
                             ) as (remote_read, remote_write, get_sid):
                                 _connect_scope.deadline = math.inf
+                                connected_at = anyio.current_time()
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
                                 try:
@@ -430,6 +459,22 @@ async def run_supervised_proxy(
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
                             return
+                        # Flap guard: the success path reconnects with no backoff, so
+                        # a session the leader ended almost immediately would hot-loop
+                        # it. Throttle a too-short session (increasing backoff); a
+                        # healthy-length session reconnects at once and resets.
+                        if connected_at is not None:
+                            session_seconds = anyio.current_time() - connected_at
+                            delay, flap_attempt = _post_session_backoff(session_seconds, flap_attempt)
+                            if delay > 0:
+                                _BRIDGE_RECONNECT.add(1, attributes={"reason": "session_flap"})
+                                log.warning(
+                                    "octowright.bridge.session_flap",
+                                    session_seconds=round(session_seconds, 3),
+                                    flap_attempt=flap_attempt,
+                                    backoff_seconds=round(delay, 3),
+                                )
+                                await anyio.sleep(delay)
                     except Exception as exc:
                         remote_write_slot.write = None
                         remote_write_slot.ready = (
