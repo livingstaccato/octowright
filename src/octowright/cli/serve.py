@@ -22,6 +22,7 @@ from typing import Any
 import click
 from provide.telemetry import get_logger, setup_telemetry, shutdown_telemetry
 
+from octowright.cli import _leader_election as _election
 from octowright.cli._leader_runtime import _run_leader_phases
 from octowright.cli._root import cli
 
@@ -209,10 +210,16 @@ async def _ensure_leader_or_inline(
     from octowright import singleton as _sn
 
     # Probe outside the lock; recheck under it to avoid duplicate spawn.
-    if (found := await _probe_alive_leader(_sn)) is not None:
+    if (found := await _election._probe_alive_leader(_sn)) is not None:
         return found
     async with _sn.async_election_lock():
-        if (found := await _probe_alive_leader(_sn)) is not None:
+        if (found := await _election._probe_alive_leader(_sn)) is not None:
+            return found
+        # Split-brain guard: the lockfile says no leader, but a healthy octowright
+        # may already hold the canonical port (lockfile lag / stale lock). Adopt it
+        # rather than spawn a competitor on a bumped port (same guard as respawn).
+        if (found := await _election._adopt_canonical_leader(_sn, http_host, http_port)) is not None:
+            click.echo("octowright: adopted existing leader on canonical port; not spawning", err=True)
             return found
         click.echo("octowright: no live leader; spawning daemon", err=True)
         keep_alive = bool(leader_kwargs.get("keep_alive"))
@@ -241,57 +248,20 @@ async def _bridge_to_leader(leader_info: Any) -> None:
         click.echo("octowright: leader bridge closed; checking daemon", err=True)
 
 
-async def _probe_alive_leader(sn: Any) -> Any | None:
-    """Return LeaderInfo iff lockfile + HTTP probe both confirm live."""
-    info = sn.read_lock()
-    return info if info and not sn.is_stale(info) and await sn.probe_http_alive(info) else None
-
-
-async def _canonical_port_serves_octowright(http_host: str | None, http_port: int | None) -> bool:
-    """True iff the PREFERRED HTTP port already answers ``/api/health`` as octowright.
-
-    Split-brain guard, independent of the lockfile. ``_probe_alive_leader`` trusts
-    the lockfile, which can false-negative during a storm — a healthy leader that's
-    momentarily slow, or a lockfile a racing respawn already repointed elsewhere.
-    Spawning then makes ``http/lifespan`` walk the busy canonical port up to a
-    BUMPED one (e.g. 6286 → 6287) and bind a SECOND leader beside the healthy one
-    (observed live). So before spawning, confirm the canonical port isn't already a
-    live octowright; if it is, defer rather than fork the daemon.
-    """
-    import httpx
-
-    from octowright.defaults import HTTP_HOST, HTTP_PORT
-    from octowright.http.exposure import is_loopback_host
-
-    host = http_host or HTTP_HOST
-    # A wildcard/non-loopback bind still answers on loopback; probe there.
-    probe_host = host if is_loopback_host(host) else "127.0.0.1"
-    port = http_port if http_port is not None else HTTP_PORT
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            response = await client.get(f"http://{probe_host}:{port}/api/health")
-        if response.status_code != 200:
-            return False
-        body = response.json()
-        return isinstance(body, dict) and body.get("ok") is True
-    except (httpx.HTTPError, OSError, ValueError):
-        return False
-
-
 async def _respawn_if_leader_gone(
     *, http_host: str | None, http_port: int | None, idle_grace: float | None, keep_alive: bool = False
 ) -> None:
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
-    if await _probe_alive_leader(_sn) is not None:
+    if await _election._probe_alive_leader(_sn) is not None:
         click.echo("octowright: leader still healthy, exiting", err=True)
         return
     async with _sn.async_election_lock():
-        if await _probe_alive_leader(_sn) is not None:
+        if await _election._probe_alive_leader(_sn) is not None:
             click.echo("octowright: leader still healthy, exiting", err=True)
             return
-        if await _canonical_port_serves_octowright(http_host, http_port):
+        if await _election._canonical_port_serves_octowright(http_host, http_port):
             click.echo(
                 "octowright: canonical HTTP port already serves a healthy leader; "
                 "not spawning a competing daemon (split-brain guard)",

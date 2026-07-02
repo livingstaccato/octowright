@@ -12,6 +12,7 @@ from typing import Any
 import anyio
 import pytest
 
+from octowright.cli import _leader_election as _election
 from octowright.cli import serve as _serve
 
 
@@ -109,7 +110,7 @@ async def test_respawn_defers_when_canonical_port_serves_octowright(monkeypatch:
     async def canonical_has_leader(_host: Any, _port: Any) -> bool:
         return True
 
-    monkeypatch.setattr(_serve, "_canonical_port_serves_octowright", canonical_has_leader)
+    monkeypatch.setattr(_election, "_canonical_port_serves_octowright", canonical_has_leader)
 
     await _serve._respawn_if_leader_gone(http_host=None, http_port=None, idle_grace=None)
 
@@ -141,7 +142,7 @@ async def test_respawn_spawns_when_canonical_port_is_not_octowright(monkeypatch:
     async def canonical_free(_host: Any, _port: Any) -> bool:
         return False
 
-    monkeypatch.setattr(_serve, "_canonical_port_serves_octowright", canonical_free)
+    monkeypatch.setattr(_election, "_canonical_port_serves_octowright", canonical_free)
 
     await _serve._respawn_if_leader_gone(http_host=None, http_port=None, idle_grace=None)
 
@@ -189,16 +190,92 @@ async def test_canonical_port_serves_octowright_classifies_health(monkeypatch: p
 
     # live octowright
     monkeypatch.setattr(httpx, "AsyncClient", client_factory(resp=_Resp(200, {"ok": True, "version": "0.10.0"})))
-    assert await _serve._canonical_port_serves_octowright(None, None) is True
+    assert await _election._canonical_port_serves_octowright(None, None) is True
 
     # 200 but not octowright shape
     monkeypatch.setattr(httpx, "AsyncClient", client_factory(resp=_Resp(200, {"status": "other"})))
-    assert await _serve._canonical_port_serves_octowright(None, None) is False
+    assert await _election._canonical_port_serves_octowright(None, None) is False
 
     # non-200
     monkeypatch.setattr(httpx, "AsyncClient", client_factory(resp=_Resp(503, {"ok": True})))
-    assert await _serve._canonical_port_serves_octowright(None, None) is False
+    assert await _election._canonical_port_serves_octowright(None, None) is False
 
     # unreachable
     monkeypatch.setattr(httpx, "AsyncClient", client_factory(exc=httpx.ConnectError("down")))
-    assert await _serve._canonical_port_serves_octowright(None, None) is False
+    assert await _election._canonical_port_serves_octowright(None, None) is False
+
+
+# ─── initial-election split-brain guard: adopt canonical leader, don't fork ───
+
+
+@pytest.mark.anyio
+async def test_ensure_leader_adopts_canonical_when_lockfile_lags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Initial election: the lockfile probe misses (lock lags the port bind) but a
+    healthy octowright already holds the canonical port. Adopt that leader instead
+    of spawning a second one on a bumped port."""
+    from octowright import daemonize as _daemon
+    from octowright import singleton as _sn
+
+    leader = SimpleNamespace(pid=1, mcp_url="http://127.0.0.1:6286/mcp/")
+    # outside-lock None, under-lock None, adopt-retry None then the leader appears
+    probe_seq: list[Any] = [None, None, None, leader]
+
+    async def fake_probe(_sn: Any) -> Any:
+        return probe_seq.pop(0) if probe_seq else leader
+
+    async def canonical_yes(_host: Any, _port: Any) -> bool:
+        return True
+
+    spawn_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(_election, "_probe_alive_leader", fake_probe)
+    monkeypatch.setattr(_election, "_canonical_port_serves_octowright", canonical_yes)
+    monkeypatch.setattr(_election, "_CANONICAL_LEADER_WAIT_INTERVAL", 0.001)
+    monkeypatch.setattr(_daemon, "spawn_daemon", lambda **k: spawn_calls.append(k))
+    monkeypatch.setattr(_serve.click, "echo", lambda *_a, **_k: None)
+
+    @asynccontextmanager
+    async def fake_lock(*_a: Any, **_k: Any) -> Any:
+        yield
+
+    monkeypatch.setattr(_sn, "async_election_lock", fake_lock)
+
+    result = await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
+
+    assert result is leader
+    assert spawn_calls == []  # adopted, did not fork a competitor
+
+
+@pytest.mark.anyio
+async def test_ensure_leader_spawns_when_canonical_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Control: no leader anywhere and the canonical port is not octowright → the
+    daemon IS spawned (normal first-start)."""
+    from octowright import daemonize as _daemon
+    from octowright import singleton as _sn
+
+    async def fake_probe(_sn: Any) -> Any:
+        return None
+
+    async def canonical_no(_host: Any, _port: Any) -> bool:
+        return False
+
+    spawn_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(_election, "_probe_alive_leader", fake_probe)
+    monkeypatch.setattr(_election, "_canonical_port_serves_octowright", canonical_no)
+    monkeypatch.setattr(_daemon, "spawn_daemon", lambda **k: spawn_calls.append(k))
+
+    async def fake_wait(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(pid=9, mcp_url="http://127.0.0.1:6286/mcp/")
+
+    monkeypatch.setattr(_daemon, "wait_for_daemon", fake_wait)
+    monkeypatch.setattr(_serve.click, "echo", lambda *_a, **_k: None)
+
+    @asynccontextmanager
+    async def fake_lock(*_a: Any, **_k: Any) -> Any:
+        yield
+
+    monkeypatch.setattr(_sn, "async_election_lock", fake_lock)
+
+    result = await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
+
+    assert len(spawn_calls) == 1
+    assert result.pid == 9
