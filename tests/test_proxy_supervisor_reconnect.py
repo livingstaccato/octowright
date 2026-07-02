@@ -260,6 +260,34 @@ def test_backoff_sequence_caps_at_max() -> None:
     ]
 
 
+def test_post_session_backoff_throttles_flaps_and_resets_on_healthy() -> None:
+    """A cleanly-ended session shorter than BRIDGE_MIN_SESSION_SECONDS is a flap:
+    it must return a positive backoff and increment the flap counter, so the
+    success-path reconnect can't hot-loop the leader. A healthy-length session
+    returns 0 delay and resets the counter."""
+    short = runtime.BRIDGE_MIN_SESSION_SECONDS / 10.0
+
+    # Consecutive flaps → increasing backoff (matches reconnect_delay(1..4)) with a
+    # monotonically rising flap counter.
+    d1, n1 = runtime._post_session_backoff(short, 0)
+    d2, n2 = runtime._post_session_backoff(short, n1)
+    d3, n3 = runtime._post_session_backoff(short, n2)
+    d4, n4 = runtime._post_session_backoff(short, n3)
+    d5, n5 = runtime._post_session_backoff(short, n4)
+    assert (n1, n2, n3, n4, n5) == (1, 2, 3, 4, 5)
+    assert [d1, d2, d3, d4] == [0.5, 1.0, 2.0, runtime.BRIDGE_RECONNECT_MAX_SECONDS]
+    assert d5 == runtime.BRIDGE_RECONNECT_MAX_SECONDS  # caps at max
+    assert d1 > 0  # a flap always backs off (never zero-delay hot-loop)
+
+    # A session that lived long enough is NOT a flap → no delay, counter resets.
+    delay, flaps = runtime._post_session_backoff(runtime.BRIDGE_MIN_SESSION_SECONDS + 0.01, 4)
+    assert delay == 0.0
+    assert flaps == 0
+
+    # Boundary: exactly the threshold counts as healthy (not a flap).
+    assert runtime._post_session_backoff(runtime.BRIDGE_MIN_SESSION_SECONDS, 3) == (0.0, 0)
+
+
 def test_within_recovery_window() -> None:
     # Not yet stamped → treat as inside the window.
     assert runtime._within_recovery_window(None, 100.0, 15.0) is True

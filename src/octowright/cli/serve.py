@@ -22,6 +22,7 @@ from typing import Any
 import click
 from provide.telemetry import get_logger, setup_telemetry, shutdown_telemetry
 
+from octowright.cli import _leader_election as _election
 from octowright.cli._leader_runtime import _run_leader_phases
 from octowright.cli._root import cli
 
@@ -209,10 +210,16 @@ async def _ensure_leader_or_inline(
     from octowright import singleton as _sn
 
     # Probe outside the lock; recheck under it to avoid duplicate spawn.
-    if (found := await _probe_alive_leader(_sn)) is not None:
+    if (found := await _election._probe_alive_leader(_sn)) is not None:
         return found
     async with _sn.async_election_lock():
-        if (found := await _probe_alive_leader(_sn)) is not None:
+        if (found := await _election._probe_alive_leader(_sn)) is not None:
+            return found
+        # Split-brain guard: the lockfile says no leader, but a healthy octowright
+        # may already hold the canonical port (lockfile lag / stale lock). Adopt it
+        # rather than spawn a competitor on a bumped port (same guard as respawn).
+        if (found := await _election._adopt_canonical_leader(_sn, http_host, http_port)) is not None:
+            click.echo("octowright: adopted existing leader on canonical port; not spawning", err=True)
             return found
         click.echo("octowright: no live leader; spawning daemon", err=True)
         keep_alive = bool(leader_kwargs.get("keep_alive"))
@@ -241,24 +248,25 @@ async def _bridge_to_leader(leader_info: Any) -> None:
         click.echo("octowright: leader bridge closed; checking daemon", err=True)
 
 
-async def _probe_alive_leader(sn: Any) -> Any | None:
-    """Return LeaderInfo iff lockfile + HTTP probe both confirm live."""
-    info = sn.read_lock()
-    return info if info and not sn.is_stale(info) and await sn.probe_http_alive(info) else None
-
-
 async def _respawn_if_leader_gone(
     *, http_host: str | None, http_port: int | None, idle_grace: float | None, keep_alive: bool = False
 ) -> None:
     from octowright import daemonize as _daemon
     from octowright import singleton as _sn
 
-    if await _probe_alive_leader(_sn) is not None:
+    if await _election._probe_alive_leader(_sn) is not None:
         click.echo("octowright: leader still healthy, exiting", err=True)
         return
     async with _sn.async_election_lock():
-        if await _probe_alive_leader(_sn) is not None:
+        if await _election._probe_alive_leader(_sn) is not None:
             click.echo("octowright: leader still healthy, exiting", err=True)
+            return
+        if await _election._canonical_port_serves_octowright(http_host, http_port):
+            click.echo(
+                "octowright: canonical HTTP port already serves a healthy leader; "
+                "not spawning a competing daemon (split-brain guard)",
+                err=True,
+            )
             return
         click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
         _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
