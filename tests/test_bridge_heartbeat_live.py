@@ -62,6 +62,10 @@ def _free_port() -> int:
 
 def _isolated_env(root: Path, port: int) -> dict[str, str]:
     env = os.environ.copy()
+    # Isolate the state dir so the detached daemon writes its log under the test
+    # tmpdir (user_state_dir honors XDG_STATE_HOME) instead of polluting the
+    # user's shared ~/.local/state/octowright/logs/octowright-daemon.log.
+    env["XDG_STATE_HOME"] = str(root)
     env.update(
         {
             "OCTOWRIGHT_HEADLESS": "1",
