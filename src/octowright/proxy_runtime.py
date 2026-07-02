@@ -13,10 +13,12 @@ via module globals, so tests monkeypatch them here (``proxy_runtime.X``).
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import threading
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 import anyio
@@ -184,6 +186,83 @@ async def monitor_leader_health(
             if failures >= max_failures:
                 on_unhealthy()
                 failures = 0
+
+
+def _events_url_from_mcp(mcp_url: str) -> str:
+    """The leader's ``/api/mcp-events`` SSE URL derived from its ``/mcp`` URL —
+    same host:port, mirroring how the health URL is derived in ``_run_follower``."""
+    return mcp_url.rsplit("/mcp", 1)[0] + "/api/mcp-events"
+
+
+async def consume_leader_notifications(
+    fallback_mcp_url: str,
+    local_write: Any,
+    *,
+    sleep: Callable[[float], Any] = anyio.sleep,
+) -> None:
+    """Stream the leader's ``/api/mcp-events`` SSE and inject each MCP notification
+    into the local stdio client write.
+
+    This is what makes proactive notifications (browser_crashed / browser_recovered
+    / driver_died / session_closed) reach the client in the default detached-daemon
+    deployment: the leader's HTTP-MCP transport delivers no server-initiated
+    notifications, so the follower re-sources them from the leader's session-event
+    SSE and writes them onto the same stdio stream the client reads. The leader's
+    own stdio emitter writes to the detached daemon's (clientless) stdout, so there
+    is no double-delivery.
+
+    Reconnects with the same backoff as the RPC bridge; a re-resolved leader URL
+    each attempt picks up a restarted leader's new port. Runs until cancelled.
+    """
+    cancelled = anyio.get_cancelled_exc_class()
+    # No read timeout (SSE is long-lived); bound only the connect handshake so a
+    # dead leader fails fast into the reconnect backoff instead of hanging.
+    timeout = httpx.Timeout(None, connect=BRIDGE_CONNECT_TIMEOUT_SECONDS)
+    attempt = 0
+    while True:
+        events_url = _events_url_from_mcp(resolve_leader_url(fallback_mcp_url))
+        try:
+            async with (
+                httpx.AsyncClient(timeout=timeout) as client,
+                client.stream("GET", events_url) as response,
+            ):
+                if response.status_code != 200:
+                    raise RuntimeError(f"mcp-events stream returned HTTP {response.status_code}")
+                attempt = 0  # connected → reset backoff
+                await _forward_sse_notifications(response.aiter_lines(), local_write)
+        except cancelled:
+            raise
+        except Exception as exc:
+            log.debug("octowright.bridge.notif_stream_error", error=repr(exc))
+        await sleep(reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS))
+        attempt += 1
+
+
+async def _forward_sse_notifications(lines: Any, local_write: Any) -> None:
+    """Parse an async iterator of SSE lines and inject each JSON-RPC notification
+    payload into ``local_write``.
+
+    Skips SSE comments (``: heartbeat`` / ``: ready``), blank separators, and
+    malformed ``data:`` frames. A send failure (the local client closed) is
+    swallowed — the RPC bridge owns teardown — so one dead write doesn't kill the
+    stream. Extracted from ``consume_leader_notifications`` so the parse/deliver
+    contract is unit-testable without a live HTTP stream.
+    """
+    from octowright.server.mcp_notifications import payload_to_message
+
+    async for line in lines:
+        if not line.startswith("data:"):
+            continue
+        raw = line[len("data:") :].strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and "method" in payload and "params" in payload:
+            with suppress(Exception):
+                await local_write.send(payload_to_message(payload))
 
 
 async def leader_health_alive(health_url: str) -> bool:
@@ -379,6 +458,12 @@ async def run_supervised_proxy(
             local_tg.start_soon(_local_forwarder)
             local_tg.start_soon(_remote_supervisor)
             local_tg.start_soon(supervisor_obj.watch_deadlines, 0.1, remote_reset_slot)
+            # Re-source the leader's proactive MCP notifications (crash / driver-died
+            # / session-closed) over its /api/mcp-events SSE and inject them into the
+            # local client write — the HTTP-MCP transport the leader serves delivers
+            # no server-initiated notifications, so without this the daemon-mode
+            # client never sees them (see http/routes/mcp_events.py).
+            local_tg.start_soon(consume_leader_notifications, leader_mcp_url, supervisor_obj.local_write)
             if health_url is not None:
                 # The background monitor catches a leader whose SSE read goes
                 # SILENT (a hard crash: no close, no error). It cancels the stuck
