@@ -123,6 +123,7 @@ async def handoff_browser(
     source_trace = getattr(source, "trace", False)
     source_har_path = getattr(source, "har_path", None)
     source_protected = getattr(source, "protected", False)
+    source_protected_reason = getattr(source, "protected_reason", "explicit")
     target_url = getattr(source.page, "url", None) or source.url
     with span(
         "octowright.browser.handoff",
@@ -145,7 +146,12 @@ async def handoff_browser(
         close_result: dict[str, Any] | None = None
         if close_original:
             try:
-                close_result = await pool.close(old_instance_id)
+                # force=True: the caller explicitly opted into close_original
+                # (close-then-relaunch of the same logical browser, state
+                # preserved) — not a destructive agent close, so a protected
+                # (e.g. headed-by-default) source must not refuse here the
+                # way an explicit browser_close would.
+                close_result = await pool.close(old_instance_id, force=True)
             except KeyError:
                 # The session was evicted (external-close listener fired)
                 # between pool.get() above and this close(). Treat as
@@ -173,6 +179,19 @@ async def handoff_browser(
             session=session_scoped,
             protected=source_protected,
         )
+        # resolve_protected() always stamps reason="explicit" whenever an
+        # explicit (non-None) protected value is passed in — which we just did
+        # with source_protected above, to carry the boolean across the
+        # handoff. That correctly preserves the protected bit but loses the
+        # ORIGINAL reason (e.g. "headed_default"), which the tailored
+        # close-refusal message keys off. Restore it post-hoc now that the new
+        # session is registered in the pool. Use maybe_get (not get): some
+        # unit tests stub out ``pool.launch`` entirely, so there may be no
+        # real session behind the returned instance_id — nothing to patch in
+        # that case.
+        new_session = pool.maybe_get(launch["instance_id"])
+        if new_session is not None:
+            new_session.protected_reason = source_protected_reason
 
         return {
             "ok": True,
