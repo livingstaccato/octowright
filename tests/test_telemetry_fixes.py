@@ -561,7 +561,7 @@ class TestHandoffSpan:
             page=SimpleNamespace(url="https://octowright.com/live"),
         )
 
-        async def _fake_close(instance_id: str) -> dict[str, Any]:
+        async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
             pool._sessions.pop(instance_id, None)
             return {"closed": True}
 
@@ -632,7 +632,7 @@ class TestRelaunchFluidSpan:
         )
         pool._sessions["rid"] = source
 
-        async def _fake_close(instance_id: str) -> dict[str, Any]:
+        async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
             pool._sessions.pop(instance_id, None)
             return {"closed": True}
 
