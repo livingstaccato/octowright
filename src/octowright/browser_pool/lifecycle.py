@@ -110,6 +110,7 @@ async def handoff_browser(
     source_stabilize = getattr(source, "stabilize", False)
     source_trace = getattr(source, "trace", False)
     source_har_path = getattr(source, "har_path", None)
+    source_protected = getattr(source, "protected", False)
     target_url = getattr(source.page, "url", None) or source.url
     with span(
         "octowright.browser.handoff",
@@ -158,6 +159,7 @@ async def handoff_browser(
             har=bool(source_har_path),
             har_path=str(next_har) if next_har else None,
             session=session_scoped,
+            protected=source_protected,
         )
 
         return {
