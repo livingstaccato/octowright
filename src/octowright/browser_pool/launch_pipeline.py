@@ -208,6 +208,14 @@ def _build_session_object(
 
     Pulled out so ``post_context_setup`` stays under xenon's complexity bar.
     """
+    # protected must be resolved to a concrete bool before this point — the
+    # only caller (post_context_setup) is only ever invoked from
+    # BrowserPool._launch_impl, which calls resolve_protected() and rebinds
+    # launch_options via dataclasses.replace() before handing off here. See
+    # pool.py's resolve_protected call.
+    assert launch_options.protected is not None, (  # nosec B101  # narrow for type-checker
+        "protected must be resolved to a concrete bool before this point — see pool.py's resolve_protected call"
+    )
     new_session = BrowserSession(
         instance_id=instance_id,
         kind=kind,
@@ -388,6 +396,13 @@ async def post_context_setup(
             )
 
         new_session._schedule_markdown_capture()
+        # protected must be resolved to a concrete bool before this point —
+        # see pool.py's resolve_protected call (same invariant as
+        # _build_session_object above; post_context_setup has a single
+        # caller, BrowserPool._launch_impl, which resolves it first).
+        assert launch_options.protected is not None, (  # nosec B101  # narrow for type-checker
+            "protected must be resolved to a concrete bool before this point — see pool.py's resolve_protected call"
+        )
         result = build_launch_result(
             instance_id=instance_id,
             kind=kind,
