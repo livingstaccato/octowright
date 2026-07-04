@@ -153,6 +153,7 @@ def build_launch_result(
     har_content: str | None,
     log_viewport: Any,
     protected: bool = False,
+    protected_reason: str = "explicit",
     video_dir: Path | None,
 ) -> dict[str, Any]:
     """Assemble the dict returned to MCP callers from ``BrowserPool.launch``.
@@ -172,6 +173,7 @@ def build_launch_result(
         "har": bool(har_path),
         "viewport": log_viewport,
         "protected": protected,
+        "protected_reason": protected_reason,
     }
     if video_dir is not None:
         result["video_dir"] = str(video_dir)
@@ -220,6 +222,7 @@ def _build_session_object(
         profile=profile,
         stabilize=launch_options.stabilize,
         protected=launch_options.protected,
+        protected_reason=launch_options.protected_reason,
         trace=launch_options.trace,
         har_path=har_path,
         viewport_mode=viewport_info.mode.value,
@@ -401,6 +404,7 @@ async def post_context_setup(
             log_viewport=log_viewport,
             video_dir=video_dir,
             protected=launch_options.protected,
+            protected_reason=launch_options.protected_reason,
         )
         if nav_error is not None:
             result["nav_warning"] = nav_error
