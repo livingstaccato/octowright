@@ -23,6 +23,7 @@ pytestmark = pytest.mark.live_browser
 _NO_ENGINE = (
     "executable doesn't exist",
     "missing x server",
+    "xserver running",
     "no protocol specified",
     "playwright install",
 )
@@ -123,6 +124,12 @@ async def test_roster_headed_participant_is_protected_by_default(
             if any(snippet in str(exc).lower() for snippet in _NO_ENGINE):
                 pytest.skip(f"live browser engine unavailable: {exc}")
             raise
+        # Unlike pool.launch(), spawn_roster() doesn't raise on a per-participant
+        # launch failure — it collects it in result["errors"] instead. Route those
+        # through the same engine-unavailable skip as the exception path above.
+        for err in result["errors"]:
+            if any(snippet in str(err).lower() for snippet in _NO_ENGINE):
+                pytest.skip(f"live browser engine unavailable: {err}")
         assert result["errors"] == []
         assert len(result["launched"]) == 1
         instance_id = result["launched"][0]["instance_id"]
