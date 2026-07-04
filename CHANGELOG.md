@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-07-04
+
+Headed browsers now protect themselves by default.
+
+### Added
+- **Headed browsers protect-by-default.** A resolved-headed, non-ephemeral
+  browser now launches with `protected=True` — an agent's reflex
+  `browser_close` right after a screenshot is refused unless `force=True` is
+  passed, so a window the user was told to watch can't be destroyed out from
+  under them. Headless/CI/agent-internal browsers are completely untouched.
+  Reuses the existing `protected` mechanism; no new API surface.
+  Precedence: explicit `protected` arg → `OCTOWRIGHT_PROTECT_BROWSERS=1` (all)
+  → `OCTOWRIGHT_PROTECT_HEADED` (headed, default **on**) → unprotected. New
+  env var `OCTOWRIGHT_PROTECT_HEADED` (`=0` opts out). The refusal message is
+  tailored by `protected_reason` to explain why and how to proceed. Resolves
+  at the pool's single launch chokepoint, so direct `browser_launch`,
+  `browser_spawn_roster`, and scenario launches are all covered, and the
+  protection (and its reason) survives `relaunch_fluid`/`browser_handoff`.
+
+### Fixed
+- `relaunch_fluid`/`handoff_browser` now force-close the source browser during
+  a relaunch/handoff — previously they didn't pass `force=True`, which was
+  harmless while `protected` was rare but would have broken relaunch/handoff
+  for any ordinary headed browser now that headed browsers protect by
+  default. A relaunch is a transparent same-browser replacement, not a
+  destructive close, matching the existing "internal rollback/teardown"
+  `force=True` exception.
+
 ## [0.12.1] - 2026-07-02
 
 A leader-memory hotfix. A reconnect storm could leave the daemon leader holding
