@@ -70,6 +70,7 @@ class BrowserSession(
     profile: str | None = None
     stabilize: bool = False
     protected: bool = False
+    protected_reason: str = "explicit"
     trace: bool = False
     har_path: Path | None = None
     viewport_mode: str = _VIEWPORT_MODE_UNKNOWN

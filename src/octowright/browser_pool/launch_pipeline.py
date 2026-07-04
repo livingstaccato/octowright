@@ -153,6 +153,7 @@ def build_launch_result(
     har_content: str | None,
     log_viewport: Any,
     protected: bool = False,
+    protected_reason: str = "explicit",
     video_dir: Path | None,
 ) -> dict[str, Any]:
     """Assemble the dict returned to MCP callers from ``BrowserPool.launch``.
@@ -172,6 +173,7 @@ def build_launch_result(
         "har": bool(har_path),
         "viewport": log_viewport,
         "protected": protected,
+        "protected_reason": protected_reason,
     }
     if video_dir is not None:
         result["video_dir"] = str(video_dir)
@@ -206,6 +208,14 @@ def _build_session_object(
 
     Pulled out so ``post_context_setup`` stays under xenon's complexity bar.
     """
+    # protected must be resolved to a concrete bool before this point — the
+    # only caller (post_context_setup) is only ever invoked from
+    # BrowserPool._launch_impl, which calls resolve_protected() and rebinds
+    # launch_options via dataclasses.replace() before handing off here. See
+    # pool.py's resolve_protected call.
+    assert launch_options.protected is not None, (  # nosec B101  # narrow for type-checker
+        "protected must be resolved to a concrete bool before this point — see pool.py's resolve_protected call"
+    )
     new_session = BrowserSession(
         instance_id=instance_id,
         kind=kind,
@@ -220,6 +230,7 @@ def _build_session_object(
         profile=profile,
         stabilize=launch_options.stabilize,
         protected=launch_options.protected,
+        protected_reason=launch_options.protected_reason,
         trace=launch_options.trace,
         har_path=har_path,
         viewport_mode=viewport_info.mode.value,
@@ -385,6 +396,13 @@ async def post_context_setup(
             )
 
         new_session._schedule_markdown_capture()
+        # protected must be resolved to a concrete bool before this point —
+        # see pool.py's resolve_protected call (same invariant as
+        # _build_session_object above; post_context_setup has a single
+        # caller, BrowserPool._launch_impl, which resolves it first).
+        assert launch_options.protected is not None, (  # nosec B101  # narrow for type-checker
+            "protected must be resolved to a concrete bool before this point — see pool.py's resolve_protected call"
+        )
         result = build_launch_result(
             instance_id=instance_id,
             kind=kind,
@@ -401,6 +419,7 @@ async def post_context_setup(
             log_viewport=log_viewport,
             video_dir=video_dir,
             protected=launch_options.protected,
+            protected_reason=launch_options.protected_reason,
         )
         if nav_error is not None:
             result["nav_warning"] = nav_error
