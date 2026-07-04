@@ -42,8 +42,22 @@ log = get_logger(__name__)
 # leak (see build_app). Config lives here as named consts — defaults.py is at its
 # 550-LOC ceiling, so per the codebase convention subsystem knobs sit at the top
 # of their own module (cf. recorder._recording_max_bytes, sysresources).
+#
+# OFF by default — mirrors OCTOWRIGHT_IDLE_GRACE's philosophy (defaults.py):
+# killing a live client session by default is worse than a slow leak. Nothing
+# pings the leader to reset a session's idle deadline between real tool calls
+# (only an in-flight call's progress heartbeat does, via server/_heartbeat.py),
+# so an ordinary interactive gap — the human reading output, deciding what to
+# say, or the agent watching a slow build/CI run (easily 30-60+ minutes) —
+# looks identical to an abandoned session to this timer. A prior default
+# (first 300s, then 3600s) reaped live, wanted sessions during completely
+# normal silence — there is no timeout short enough to catch a reconnect-storm
+# abandoned session (which gets no activity, ever, so any positive timeout
+# eventually reclaims it) without also risking a real session that just
+# happens to pause exactly that long. Opt in on shared/CI hosts that want
+# bounded memory over long-lived idle sessions.
 MCP_SESSION_IDLE_ENV = "OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS"
-MCP_SESSION_IDLE_DEFAULT = "300"
+MCP_SESSION_IDLE_DEFAULT = "off"
 # Falsey tokens that disable reaping (restore the leaky mcp default).
 MCP_SESSION_IDLE_DISABLED = frozenset({"0", "off", "never", "none", "disabled", "false", "no"})
 

@@ -43,9 +43,14 @@ def test_mcp_session_idle_seconds_parsing(raw: str, expected: float | None) -> N
     assert _app._mcp_session_idle_seconds(raw) == expected
 
 
-def test_mcp_session_idle_seconds_default_is_300(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mcp_session_idle_seconds_default_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS", raising=False)
-    assert _app._mcp_session_idle_seconds() == 300.0
+    assert _app._mcp_session_idle_seconds() is None
+
+
+def test_mcp_session_idle_seconds_opt_in_via_positive_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS", "1800")
+    assert _app._mcp_session_idle_seconds() == 1800.0
 
 
 def test_mcp_session_idle_seconds_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
