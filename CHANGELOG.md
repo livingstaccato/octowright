@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-07-04
+
+A hotfix for 0.12.1's idle-session reaper.
+
+### Fixed
+- **`OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS` is now OFF by default**, not
+  `300`s. Nothing pings the leader to reset a session's idle deadline
+  between real tool calls, so an ordinary interactive pause — reading
+  output, deciding what to say, watching a slow build/CI run — looked
+  identical to an abandoned session to this timer, and live sessions were
+  getting silently killed every few minutes. Mirrors `OCTOWRIGHT_IDLE_GRACE`'s
+  existing philosophy: killing a live client session by default is worse
+  than a slow leak. Set a positive value to opt in on a shared/CI host that
+  wants bounded memory over long-lived idle sessions.
+
 ## [0.13.0] - 2026-07-04
 
 Headed browsers now protect themselves by default.
