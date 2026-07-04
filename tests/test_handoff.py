@@ -32,7 +32,7 @@ async def test_handoff_reuses_profile_and_closes_original(monkeypatch: pytest.Mo
 
     close_calls: list[str] = []
 
-    async def _fake_close(instance_id: str) -> dict[str, Any]:
+    async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
         close_calls.append(instance_id)
         pool._sessions.pop(instance_id, None)
         return {"closed": True}
@@ -117,7 +117,7 @@ async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.Monke
     pool._sessions["old-session"] = source  # type: ignore[assignment]
     launched: dict[str, object] = {}
 
-    async def fake_close(instance_id: str) -> dict[str, object]:
+    async def fake_close(instance_id: str, **_kwargs: object) -> dict[str, object]:
         pool._sessions.pop(instance_id, None)
         return {"closed": True}
 
@@ -176,7 +176,7 @@ async def test_handoff_survives_eviction_race(monkeypatch: pytest.MonkeyPatch) -
 
     close_calls: list[str] = []
 
-    async def _fake_close(instance_id: str) -> dict[str, Any]:
+    async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
         # Simulate the race: an external-close eviction popped the session
         # between handoff_browser's pool.get() snapshot and this close().
         close_calls.append(instance_id)
@@ -238,7 +238,7 @@ async def test_relaunch_fluid_survives_eviction_race(monkeypatch: pytest.MonkeyP
 
     close_calls: list[str] = []
 
-    async def _fake_close(instance_id: str) -> dict[str, Any]:
+    async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
         close_calls.append(instance_id)
         raise KeyError(pool._missing_session_message(instance_id))
 
