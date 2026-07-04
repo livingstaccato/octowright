@@ -10,6 +10,7 @@ import sys
 import time
 import uuid
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ from octowright.browser_pool.launch_helpers import (
 )
 from octowright.browser_pool.launch_pipeline import cleanup_failed_launch, post_context_setup
 from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
-from octowright.browser_pool.options import LaunchOptions
+from octowright.browser_pool.options import LaunchOptions, resolve_protected
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
@@ -146,6 +147,16 @@ class BrowserPool:
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
+        # Decide the effective protected flag now that headed is resolved
+        # (the tool layer passes None to mean "pool decides"). Headed,
+        # non-ephemeral browsers protect by default so a reflex browser_close
+        # can't destroy a window the user is watching. LaunchOptions is
+        # frozen, so rebind the local via dataclasses.replace rather than
+        # assigning the fields in place.
+        protected, protected_reason = resolve_protected(
+            launch_options.protected, headed=not headless, ephemeral=launch_options.ephemeral
+        )
+        launch_options = replace(launch_options, protected=protected, protected_reason=protected_reason)
         target_url = launch_options.url or get_default_url()
         log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
 
@@ -326,6 +337,7 @@ class BrowserPool:
         source_stabilize = source.stabilize
         source_trace = source.trace
         source_har_path = source.har_path
+        source_protected = getattr(source, "protected", False)
         target_url = getattr(source.page, "url", None) or source.url
         # Wrap close+launch under a parent span so the child browser.close /
         # browser.launch spans nest underneath as one fluid-mode round-trip.
@@ -356,6 +368,7 @@ class BrowserPool:
                 badge=True,
                 ephemeral=stateless,
                 session=session_scoped,
+                protected=source_protected,
             )
             return {
                 "ok": True,
