@@ -9,8 +9,25 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from octowright import defaults
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
+
+
+def resolve_protected(explicit: bool | None, *, headed: bool, ephemeral: bool) -> tuple[bool, str]:
+    """Decide a browser's effective `protected` flag + the reason it was chosen.
+
+    Precedence: an explicit arg wins; else OCTOWRIGHT_PROTECT_BROWSERS protects
+    all; else a headed, non-ephemeral browser is protected by default; else not.
+    The reason drives the close-refusal message.
+    """
+    if explicit is not None:
+        return explicit, "explicit"
+    if defaults.PROTECT_BROWSERS_DEFAULT:
+        return True, "all_default"
+    if defaults.PROTECT_HEADED_DEFAULT and headed and not ephemeral:
+        return True, "headed_default"
+    return False, "unprotected"
 
 
 @dataclass(frozen=True)
@@ -35,12 +52,11 @@ class LaunchOptions:
     tile: bool = False
     ephemeral: bool = False
     session: bool = False
-    protected: bool = False
+    protected: bool | None = None
+    protected_reason: str = "explicit"
 
     @classmethod
     def from_mapping(cls, options: dict[str, Any]) -> LaunchOptions:
-        from octowright.defaults import PROTECT_BROWSERS_DEFAULT
-
         launch_options = cls(
             kind=options.get("kind", "chromium"),
             url=options.get("url"),
@@ -62,7 +78,7 @@ class LaunchOptions:
             tile=options.get("tile", False),
             ephemeral=options.get("ephemeral", False),
             session=options.get("session", False),
-            protected=options.get("protected", PROTECT_BROWSERS_DEFAULT),
+            protected=options.get("protected"),
         )
         launch_options.validate()
         return launch_options
