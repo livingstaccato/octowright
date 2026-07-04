@@ -18,7 +18,6 @@ from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import (
     BROWSER_LAUNCH_TIMEOUT_SECONDS,
-    PROTECT_BROWSERS_DEFAULT,
     SNAPSHOT_TIMEOUT_SECONDS,
     _read_project_config,
     get_default_label,
@@ -101,10 +100,11 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "only — state survives close+relaunch within the same daemon, but is wiped on "
         "daemon shutdown. Useful for 'this session only' scopes. Mutually exclusive "
         "with ephemeral=True. "
-        "Pass protected=True (or set OCTOWRIGHT_PROTECT_BROWSERS=1) to mark this browser "
-        "as user-owned: close-capable tools (browser_close, browser_close_all, "
-        "browser_capture_and_close) will refuse to close it unless force=True is passed. "
-        "Use this for any browser the user is actively watching. Returns instance_id. "
+        "protected: leave unset (None) to use the default policy — HEADED browsers are "
+        "protected automatically (a reflex close is refused) while headless ones stay closeable. "
+        "Pass protected=True to force protection, or protected=False to allow a normal close "
+        "(e.g. scripted headed work). OCTOWRIGHT_PROTECT_HEADED=0 disables the headed default; "
+        "OCTOWRIGHT_PROTECT_BROWSERS=1 protects everything. Returns instance_id. "
         "If the initial navigation fails (network error, bad URL, DNS failure, etc.) the "
         "browser instance is NOT destroyed — it stays alive and registered. The return dict "
         "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
@@ -134,7 +134,7 @@ async def browser_launch(
     tile: bool = False,
     ephemeral: bool = False,
     session: bool = False,
-    protected: bool = PROTECT_BROWSERS_DEFAULT,
+    protected: bool | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
@@ -249,7 +249,7 @@ async def browser_quick_launch(
     tile: bool = False,
     ephemeral: bool = False,
     session: bool = False,
-    protected: bool = PROTECT_BROWSERS_DEFAULT,
+    protected: bool | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(url, str) or not url:
