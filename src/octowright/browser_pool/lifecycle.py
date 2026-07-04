@@ -23,6 +23,19 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
+def _protected_close_message(instance_id: str, reason: str) -> str:
+    if reason == "headed_default":
+        return (
+            f"browser {instance_id!r} is headed/user-facing and protected by default "
+            "(OCTOWRIGHT_PROTECT_HEADED). Pass force=True to close it, or relaunch with "
+            "protected=False for scripted headed work."
+        )
+    return (
+        f"browser {instance_id!r} is protected; pass force=True to close it. "
+        "Protected browsers are meant to stay open for the user."
+    )
+
+
 async def close_browser(
     pool: BrowserPool,
     instance_id: str,
@@ -33,8 +46,7 @@ async def close_browser(
     session = pool.get(instance_id)
     if getattr(session, "protected", False) and not force:
         raise ProtectedBrowserCloseError(
-            f"browser {instance_id!r} is protected; pass force=True to close it. "
-            "Protected browsers are meant to stay open for the user."
+            _protected_close_message(instance_id, getattr(session, "protected_reason", "explicit"))
         )
     # Remove from the registry before awaiting session.close(); that call fires
     # close events wired by listeners, which should then no-op.
