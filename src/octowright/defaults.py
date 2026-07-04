@@ -208,7 +208,7 @@ HEADLESS_DEFAULT = _detect_headless_default()
 # browser_close / browser_close_all require force=True. Per-launch override via
 # the browser_launch `protected` parameter.
 PROTECT_BROWSERS_DEFAULT: bool = os.environ.get("OCTOWRIGHT_PROTECT_BROWSERS", "").strip() == "1"
-
+PROTECT_HEADED_DEFAULT: bool = os.environ.get("OCTOWRIGHT_PROTECT_HEADED", "1").strip() != "0"  # headed default
 BADGE_OPACITY: float = float(os.environ.get("OCTOWRIGHT_BADGE_OPACITY", "0.35"))
 
 SUPPORTED_KINDS = ("chromium", "firefox", "webkit")

@@ -10,6 +10,7 @@ import sys
 import time
 import uuid
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ from octowright.browser_pool.launch_helpers import (
 )
 from octowright.browser_pool.launch_pipeline import cleanup_failed_launch, post_context_setup
 from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
-from octowright.browser_pool.options import LaunchOptions
+from octowright.browser_pool.options import LaunchOptions, resolve_protected
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
@@ -146,6 +147,16 @@ class BrowserPool:
         pw = await self._ensure_pw()
         browser_type = getattr(pw, kind)
         headless = not headed if headed is not None else HEADLESS_DEFAULT
+        # Decide the effective protected flag now that headed is resolved
+        # (the tool layer passes None to mean "pool decides"). Headed,
+        # non-ephemeral browsers protect by default so a reflex browser_close
+        # can't destroy a window the user is watching. LaunchOptions is
+        # frozen, so rebind the local via dataclasses.replace rather than
+        # assigning the fields in place.
+        protected, protected_reason = resolve_protected(
+            launch_options.protected, headed=not headless, ephemeral=launch_options.ephemeral
+        )
+        launch_options = replace(launch_options, protected=protected, protected_reason=protected_reason)
         target_url = launch_options.url or get_default_url()
         log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
 
@@ -326,6 +337,8 @@ class BrowserPool:
         source_stabilize = source.stabilize
         source_trace = source.trace
         source_har_path = source.har_path
+        source_protected = getattr(source, "protected", False)
+        source_protected_reason = getattr(source, "protected_reason", "explicit")
         target_url = getattr(source.page, "url", None) or source.url
         # Wrap close+launch under a parent span so the child browser.close /
         # browser.launch spans nest underneath as one fluid-mode round-trip.
@@ -335,7 +348,12 @@ class BrowserPool:
             # Don't overwrite the prior HAR — relaunch gets a sibling path.
             next_har = rotate_har_path(source_har_path)
             try:
-                close_result: dict[str, Any] | None = await self.close(instance_id)
+                # force=True: relaunch_fluid closes the source only to reopen
+                # the same logical browser immediately after (state/profile
+                # preserved) — it is not a destructive agent close, so a
+                # protected (e.g. headed-by-default) source must not refuse
+                # here the way an explicit browser_close would.
+                close_result: dict[str, Any] | None = await self.close(instance_id, force=True)
             except KeyError:
                 log.warning(
                     "octowright.browser.relaunch_fluid.close_raced_eviction",
@@ -356,7 +374,21 @@ class BrowserPool:
                 badge=True,
                 ephemeral=stateless,
                 session=session_scoped,
+                protected=source_protected,
             )
+            # resolve_protected() always stamps reason="explicit" whenever an
+            # explicit (non-None) protected value is passed in — which we just
+            # did with source_protected above, to carry the boolean across the
+            # relaunch. That correctly preserves the protected bit but loses
+            # the ORIGINAL reason (e.g. "headed_default"), which the tailored
+            # close-refusal message keys off. Restore it post-hoc now that the
+            # new session is registered in the pool. Use maybe_get (not get):
+            # some unit tests stub out ``launch`` entirely, so there may be no
+            # real session behind the returned instance_id — nothing to patch
+            # in that case.
+            new_session = self.maybe_get(result["instance_id"])
+            if new_session is not None:
+                new_session.protected_reason = source_protected_reason
             return {
                 "ok": True,
                 "old_instance_id": instance_id,

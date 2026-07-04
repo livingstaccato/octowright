@@ -23,6 +23,19 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
+def _protected_close_message(instance_id: str, reason: str) -> str:
+    if reason == "headed_default":
+        return (
+            f"browser {instance_id!r} is headed/user-facing and protected by default "
+            "(OCTOWRIGHT_PROTECT_HEADED). Pass force=True to close it, or relaunch with "
+            "protected=False for scripted headed work."
+        )
+    return (
+        f"browser {instance_id!r} is protected; pass force=True to close it. "
+        "Protected browsers are meant to stay open for the user."
+    )
+
+
 async def close_browser(
     pool: BrowserPool,
     instance_id: str,
@@ -33,8 +46,7 @@ async def close_browser(
     session = pool.get(instance_id)
     if getattr(session, "protected", False) and not force:
         raise ProtectedBrowserCloseError(
-            f"browser {instance_id!r} is protected; pass force=True to close it. "
-            "Protected browsers are meant to stay open for the user."
+            _protected_close_message(instance_id, getattr(session, "protected_reason", "explicit"))
         )
     # Remove from the registry before awaiting session.close(); that call fires
     # close events wired by listeners, which should then no-op.
@@ -110,6 +122,8 @@ async def handoff_browser(
     source_stabilize = getattr(source, "stabilize", False)
     source_trace = getattr(source, "trace", False)
     source_har_path = getattr(source, "har_path", None)
+    source_protected = getattr(source, "protected", False)
+    source_protected_reason = getattr(source, "protected_reason", "explicit")
     target_url = getattr(source.page, "url", None) or source.url
     with span(
         "octowright.browser.handoff",
@@ -132,7 +146,12 @@ async def handoff_browser(
         close_result: dict[str, Any] | None = None
         if close_original:
             try:
-                close_result = await pool.close(old_instance_id)
+                # force=True: the caller explicitly opted into close_original
+                # (close-then-relaunch of the same logical browser, state
+                # preserved) — not a destructive agent close, so a protected
+                # (e.g. headed-by-default) source must not refuse here the
+                # way an explicit browser_close would.
+                close_result = await pool.close(old_instance_id, force=True)
             except KeyError:
                 # The session was evicted (external-close listener fired)
                 # between pool.get() above and this close(). Treat as
@@ -158,7 +177,21 @@ async def handoff_browser(
             har=bool(source_har_path),
             har_path=str(next_har) if next_har else None,
             session=session_scoped,
+            protected=source_protected,
         )
+        # resolve_protected() always stamps reason="explicit" whenever an
+        # explicit (non-None) protected value is passed in — which we just did
+        # with source_protected above, to carry the boolean across the
+        # handoff. That correctly preserves the protected bit but loses the
+        # ORIGINAL reason (e.g. "headed_default"), which the tailored
+        # close-refusal message keys off. Restore it post-hoc now that the new
+        # session is registered in the pool. Use maybe_get (not get): some
+        # unit tests stub out ``pool.launch`` entirely, so there may be no
+        # real session behind the returned instance_id — nothing to patch in
+        # that case.
+        new_session = pool.maybe_get(launch["instance_id"])
+        if new_session is not None:
+            new_session.protected_reason = source_protected_reason
 
         return {
             "ok": True,

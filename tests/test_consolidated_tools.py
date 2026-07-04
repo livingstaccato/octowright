@@ -229,7 +229,7 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport() -> None
 
     result = await pool.relaunch_fluid("old-id")
 
-    pool.close.assert_awaited_once_with("old-id")
+    pool.close.assert_awaited_once_with("old-id", force=True)
     pool.launch.assert_awaited_once()
     _, kwargs = pool.launch.call_args
     assert kwargs["url"] == "https://octowright.com/current"
