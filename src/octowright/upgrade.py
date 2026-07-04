@@ -40,6 +40,11 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.0": [
+        "Headed browsers protect themselves: a browser launched headed (so you can watch it) now refuses a "
+        "reflex browser_close by default — an agent needs force=True to close it. Headless/CI browsers are "
+        "unaffected. Opt out with OCTOWRIGHT_PROTECT_HEADED=0.",
+    ],
     "0.12.1": [
         "Leader memory stays bounded: abandoned MCP sessions (left behind by a reconnect storm) are now "
         "reaped instead of piling up forever — a leak that could grow the daemon to gigabytes of RAM with "
