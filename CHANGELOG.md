@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-07-05
+
+A release-tooling fix, no package code changes.
+
+### Fixed
+- **PyPI trusted-publisher OIDC exchange.** The release workflow was a
+  single job publishing straight to PyPI, but the `invalid-publisher`
+  exchange failure meant nothing on pypi.org matched its OIDC claims. Split
+  into a `build` job producing the wheel/sdist as an artifact, plus two
+  conditional publish jobs: `publish-testpypi` (environment `testpypi`,
+  test.pypi.org) for pre-release GitHub Releases, and `publish-pypi`
+  (environment `pypi`, pypi.org) for full releases — matching the trusted
+  publishers now configured on both.
+
 ## [0.13.1] - 2026-07-04
 
 A hotfix for 0.12.1's idle-session reaper.

@@ -40,6 +40,10 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.2": [
+        "Release-tooling fix only — no octowright behavior changed. The PyPI/TestPyPI publish workflow now "
+        "matches the trusted-publisher setup on both registries, so releases actually reach PyPI again.",
+    ],
     "0.13.1": [
         "No more silent mid-conversation disconnects: the idle-session reaper added in 0.12.1 is now OFF by "
         "default (it was killing live, wanted sessions during completely normal pauses) — opt in with "
