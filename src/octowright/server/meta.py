@@ -229,6 +229,7 @@ def octowright_status() -> dict[str, Any]:
     import time
 
     from octowright import bridge_state, defaults
+    from octowright import housekeeping as _housekeeping
     from octowright import http as _http
     from octowright import personas as _personas
     from octowright import session_manifest as _session_manifest
@@ -372,6 +373,10 @@ def octowright_status() -> dict[str, Any]:
             # summary reflects the FULL state (true follower_count); bounded_view caps
             # the raw followers/events dump so a stale-follower leak can't blow the payload.
             "summary": bridge_state.summarize_state(bridge_snapshot),
+            # Process-lifetime count of leader MCP sessions the housekeeping
+            # pid-liveness reaper has terminated (dead-follower cleanup, not
+            # idle-time reaping) — visible here without grepping daemon logs.
+            "follower_sessions_reaped": _housekeeping.get_reaped_follower_session_count(),
             **bridge_state.bounded_view(bridge_snapshot),
         },
         "metrics": {

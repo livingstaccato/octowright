@@ -8,6 +8,7 @@ from __future__ import annotations
 import itertools
 import json
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -175,6 +176,67 @@ def record_snapshot(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + f".{follower_pid}.{next(_TMP_COUNTER)}.tmp")
+        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        return
+
+
+# A live write's tmp sibling exists for microseconds (write, then os.replace).
+# Anything older than this was orphaned by a process killed between the two —
+# a crash, SIGKILL, or host restart mid-write — not a write in flight. Wide
+# margin so this can never race a genuinely in-progress write.
+_STALE_TMP_AGE_SECONDS = 300.0
+
+
+def sweep_stale_tmp_files(path: Path, *, max_age_seconds: float = _STALE_TMP_AGE_SECONDS) -> list[str]:
+    """Delete leftover atomic-write tmp siblings older than ``max_age_seconds``.
+
+    ``record_snapshot`` / ``remove_followers`` write via a temp-sibling-then-
+    ``os.replace``, which normally leaves no tmp file behind — but a process
+    killed between the write and the replace orphans one permanently (found
+    364 of these, some weeks old, on 2026-07-09 after repeated ungraceful
+    daemon deaths; hand-cleaned then, unbounded again since nothing swept
+    them automatically). Best-effort: a stat/unlink race with another writer
+    is swallowed, not raised.
+    """
+    removed: list[str] = []
+    try:
+        candidates = list(path.parent.glob(f"{path.name}.*.tmp"))
+    except OSError:
+        return removed
+    now = time.time()
+    for tmp in candidates:
+        try:
+            if now - tmp.stat().st_mtime < max_age_seconds:
+                continue
+            tmp.unlink()
+        except OSError:
+            continue
+        removed.append(tmp.name)
+    return removed
+
+
+def remove_followers(path: Path, pids: Iterable[int]) -> None:
+    """Drop specific follower entries by PID from the shared state file.
+
+    Used by the leader's dead-follower session reaper (``housekeeping``) after
+    it terminates a dead follower's MCP session, so the entry doesn't linger
+    pointing at a session that no longer exists. Best-effort and idempotent —
+    a no-op if another writer already dropped the same entries (matches
+    ``record_snapshot``'s atomic tmp-then-replace pattern).
+    """
+    keys = {str(pid) for pid in pids}
+    if not keys:
+        return
+    state = read_state(path)
+    followers = state.get("followers", {})
+    if not any(key in followers for key in keys):
+        return
+    state["followers"] = {key: snap for key, snap in followers.items() if key not in keys}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + f".reaper.{next(_TMP_COUNTER)}.tmp")
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
         tmp.replace(path)
     except OSError:
