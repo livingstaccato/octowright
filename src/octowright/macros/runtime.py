@@ -82,8 +82,16 @@ _REPLAY_DROP_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 # Recorded keys that need renaming to match the method's parameter names.
+# mock_route/unmock_route: session/core_interaction_mixin.py's recorder.record()
+# writes the field as "pattern" (matching macros/lint.py's required-field name),
+# but the session methods' parameter is "url_pattern" — without this rename,
+# every recorded mock_route/unmock_route replay raised TypeError: unexpected
+# keyword argument 'pattern', dead on arrival since the two sides disagreed
+# on the field name.
 _REPLAY_RENAME_KEYS: dict[str, dict[str, str]] = {
     "drag": {"source": "source_selector", "target": "target_selector"},
+    "mock_route": {"pattern": "url_pattern"},
+    "unmock_route": {"pattern": "url_pattern"},
 }
 
 
