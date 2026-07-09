@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] - 2026-07-09
+
+Addresses the root cause behind recurring "Octowright disconnected" reports: the
+leader process itself leaking memory over multi-day uptime (observed as high as
+18.8GB RSS under heavy concurrent-follower load), which stalls the daemon under
+memory pressure and looks like a random disconnect.
+
+### Added
+- **Dead-follower MCP session reaper.** A new housekeeping job reaps leader-side
+  StreamableHTTP sessions by PID liveness, independent of and complementary to
+  `OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS` (which stays off by default). A follower
+  whose OS process is confirmed dead has its session terminated immediately —
+  unlike idle-time reaping, this can never false-positive on a live client
+  that's merely quiet (reading output, thinking, a long CI run), so it runs
+  unconditionally and needs no opt-in.
+- **Bridge-state tmp-file sweep.** A process killed mid atomic-write (crash,
+  SIGKILL, an ungraceful restart) can orphan a `bridge-state.json.*.tmp`
+  sibling forever; a new housekeeping job age-gates and removes these
+  automatically (364 such files, some weeks old, were found and hand-cleaned
+  during this investigation).
+- `octowright_status()["bridge"]["follower_sessions_reaped"]` surfaces the
+  pid-liveness reaper's running total, and `octowright_follower_session_reaped_total`
+  is exported as a metric.
+
 ## [0.13.2] - 2026-07-05
 
 A release-tooling fix, no package code changes.
