@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import stat as _stat
 from unittest.mock import MagicMock
@@ -215,6 +216,361 @@ def test_daemon_housekeeping_loop_runs_jobs_and_survives_failures(monkeypatch: p
     assert "octowright.housekeeping.log_guard_failed" in logged
 
 
+def _fake_transport(*, terminated: bool = False):
+    from unittest.mock import AsyncMock
+
+    transport = MagicMock()
+    transport.is_terminated = terminated
+    transport.terminate = AsyncMock()
+    return transport
+
+
+def _install_fake_session_manager(monkeypatch: pytest.MonkeyPatch, instances: dict):
+    import octowright.server as server_mod
+
+    fake_manager = MagicMock()
+    fake_manager._server_instances = instances
+    fake_mcp = MagicMock()
+    fake_mcp._session_manager = fake_manager
+    monkeypatch.setattr(server_mod, "mcp", fake_mcp)
+
+
+def test_reap_dead_follower_sessions_terminates_and_prunes(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    dead_pid = 1_000_000_000  # no such process
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=dead_pid,
+        remote_url="http://x/mcp/",
+        remote_session_id="dead-sid",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+
+    transport = _fake_transport()
+    instances = {"dead-sid": transport}
+    _install_fake_session_manager(monkeypatch, instances)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))
+
+    transport.terminate.assert_awaited_once()
+    assert "dead-sid" not in instances
+    data = json.loads(path.read_text())
+    assert str(dead_pid) not in data["followers"]
+    log.warning.assert_called_once()
+    assert log.warning.call_args.kwargs["count"] == 1
+
+
+def test_reap_dead_follower_sessions_leaves_live_pid_alone(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=os.getpid(),
+        remote_url="http://x/mcp/",
+        remote_session_id="live-sid",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+
+    transport = _fake_transport()
+    instances = {"live-sid": transport}
+    _install_fake_session_manager(monkeypatch, instances)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))
+
+    transport.terminate.assert_not_awaited()
+    assert "live-sid" in instances
+    data = json.loads(path.read_text())
+    assert str(os.getpid()) in data["followers"]
+    log.warning.assert_not_called()
+
+
+def test_reap_dead_follower_sessions_pops_already_terminated_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A transport some other path already terminated (e.g. the opt-in idle
+    reaper) must still get its dict entry popped, or it leaks forever — the
+    manager's own cleanup path skips popping once is_terminated is True."""
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    dead_pid = 1_000_000_001
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=dead_pid,
+        remote_url="http://x/mcp/",
+        remote_session_id="already-dead-sid",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+
+    transport = _fake_transport(terminated=True)
+    instances = {"already-dead-sid": transport}
+    _install_fake_session_manager(monkeypatch, instances)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))
+
+    transport.terminate.assert_not_awaited()  # already terminated — don't call again
+    assert "already-dead-sid" not in instances  # but the dict entry is still freed
+
+
+def test_reap_dead_follower_sessions_noop_when_not_leader(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """No _session_manager (this process isn't the HTTP-MCP leader) -> quiet no-op."""
+    import octowright.server as server_mod
+    from octowright import defaults
+    from octowright import housekeeping as _hk
+
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", tmp_path / "bridge-state.json")
+    fake_mcp = MagicMock()
+    fake_mcp._session_manager = None
+    monkeypatch.setattr(server_mod, "mcp", fake_mcp)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))  # must not raise
+    log.warning.assert_not_called()
+
+
+def test_reap_dead_follower_sessions_missing_followers_dict_noop(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", tmp_path / "bridge-state.json")
+    monkeypatch.setattr(bridge_state, "read_state", lambda _path: {"followers": "not-a-dict", "events": []})
+    instances: dict = {}
+    _install_fake_session_manager(monkeypatch, instances)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))  # must not raise
+    log.warning.assert_not_called()
+
+
+def test_reap_dead_follower_sessions_skips_non_dict_snapshot_entry(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    monkeypatch.setattr(
+        bridge_state, "read_state", lambda _path: {"followers": {"111": "not-a-snapshot-dict"}, "events": []}
+    )
+    instances: dict = {}
+    _install_fake_session_manager(monkeypatch, instances)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))  # must not raise
+    log.warning.assert_not_called()
+
+
+def test_reap_dead_follower_sessions_skips_unparsable_pid_key(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    monkeypatch.setattr(
+        bridge_state,
+        "read_state",
+        lambda _path: {"followers": {"not-a-pid": {"remote_session_id": "sid"}}, "events": []},
+    )
+    instances: dict = {}
+    _install_fake_session_manager(monkeypatch, instances)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))  # must not raise
+    log.warning.assert_not_called()
+
+
+def test_reap_dead_follower_sessions_treats_liveness_check_error_as_dead(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """pid_is_alive raising (overflowing/malformed PID) must be treated as dead,
+    not skipped — the try/except around it defaults conservatively to reap."""
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=999,
+        remote_url="http://x/mcp/",
+        remote_session_id="sid-999",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+    transport = _fake_transport()
+    _install_fake_session_manager(monkeypatch, {"sid-999": transport})
+    import octowright.singleton as singleton_mod
+
+    def _raise_value_error(_pid: int) -> bool:
+        raise ValueError("bad pid")
+
+    monkeypatch.setattr(singleton_mod, "pid_is_alive", _raise_value_error)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))
+
+    transport.terminate.assert_awaited_once()
+
+
+def test_reap_dead_follower_sessions_dead_pid_with_no_session_id_still_prunes_bridge_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    dead_pid = 1_000_000_003
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=dead_pid,
+        remote_url="http://x/mcp/",
+        remote_session_id=None,
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+    instances: dict = {}
+    _install_fake_session_manager(monkeypatch, instances)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))
+
+    data = json.loads(path.read_text())
+    assert str(dead_pid) not in data["followers"]  # bridge-state cleaned up
+    log.warning.assert_not_called()  # nothing to terminate — no session_id to act on
+
+
+def test_reap_dead_follower_sessions_dead_pid_session_not_in_instances(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A dead pid whose session_id isn't (or is no longer) in the manager's
+    instances dict must be skipped cleanly, not raise."""
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    dead_pid = 1_000_000_004
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=dead_pid,
+        remote_url="http://x/mcp/",
+        remote_session_id="gone-sid",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+    instances: dict = {}  # "gone-sid" not present
+    _install_fake_session_manager(monkeypatch, instances)
+
+    log = MagicMock()
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=log))  # must not raise
+
+    data = json.loads(path.read_text())
+    assert str(dead_pid) not in data["followers"]
+    log.warning.assert_not_called()
+
+
+def test_daemon_housekeeping_loop_survives_tmp_sweep_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import housekeeping as _hk
+
+    monkeypatch.setattr(_hk, "_reap_orphans_once", lambda **_kw: None)
+    monkeypatch.setattr(_hk, "_guard_daemon_log_size", lambda **_kw: None)
+
+    async def _noop_follower_reap(*, log: object) -> None:
+        return None
+
+    monkeypatch.setattr(_hk, "_reap_dead_follower_sessions_once", _noop_follower_reap)
+
+    def _boom(*, log: object) -> None:
+        raise RuntimeError("sweep boom")
+
+    monkeypatch.setattr(_hk, "_sweep_bridge_state_tmp_once", _boom)
+    log = MagicMock()
+
+    async def _run() -> None:
+        task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
+        for _ in range(200):
+            await asyncio.sleep(0.001)
+            if log.warning.call_args_list:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_run())
+    logged = {c.args[0] for c in log.warning.call_args_list}
+    assert "octowright.housekeeping.bridge_tmp_sweep_failed" in logged
+
+
+def test_reap_dead_follower_sessions_swallows_failure_in_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import housekeeping as _hk
+
+    async def _boom(*, log: object) -> None:
+        raise RuntimeError("boom")
+
+    calls = {"reap": 0, "guard": 0, "follower": 0}
+
+    def _reap(*, log: object) -> None:
+        calls["reap"] += 1
+
+    def _guard(*, log: object) -> None:
+        calls["guard"] += 1
+
+    async def _follower_reap(*, log: object) -> None:
+        calls["follower"] += 1
+        raise RuntimeError("follower reap boom")
+
+    monkeypatch.setattr(_hk, "_reap_orphans_once", _reap)
+    monkeypatch.setattr(_hk, "_guard_daemon_log_size", _guard)
+    monkeypatch.setattr(_hk, "_reap_dead_follower_sessions_once", _follower_reap)
+    log = MagicMock()
+
+    async def _run() -> None:
+        task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
+        for _ in range(200):
+            await asyncio.sleep(0.001)
+            if calls["follower"] >= 1:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_run())
+    assert calls["follower"] >= 1
+    logged = {c.args[0] for c in log.warning.call_args_list}
+    assert "octowright.housekeeping.follower_reap_failed" in logged
+
+
 def test_sample_process_rss_records_leader_browsers_total(monkeypatch: pytest.MonkeyPatch) -> None:
     from octowright import housekeeping as _hk
     from octowright import process_reaper, sysresources
@@ -254,3 +610,90 @@ def test_sample_process_rss_real_host_reports_leader() -> None:
     total = rec.values_for("scope", "total")
     assert leader and leader[0] > 0  # our own process has real RSS
     assert total[0] == leader[0] + browsers[0]
+
+
+def test_reap_dead_follower_sessions_increments_process_lifetime_counter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    monkeypatch.setattr(_hk, "_reaped_follower_sessions_total", 0)
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    dead_pid = 1_000_000_002
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=dead_pid,
+        remote_url="http://x/mcp/",
+        remote_session_id="dead-sid",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+    _install_fake_session_manager(monkeypatch, {"dead-sid": _fake_transport()})
+
+    asyncio.run(_hk._reap_dead_follower_sessions_once(log=MagicMock()))
+
+    assert _hk.get_reaped_follower_session_count() == 1
+
+
+def test_sweep_bridge_state_tmp_once_logs_when_removed(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from octowright import bridge_state, defaults
+    from octowright import housekeeping as _hk
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    monkeypatch.setattr(bridge_state, "sweep_stale_tmp_files", lambda _path, **_kw: ["a.tmp", "b.tmp"])
+
+    log = MagicMock()
+    _hk._sweep_bridge_state_tmp_once(log=log)
+
+    log.warning.assert_called_once()
+    assert log.warning.call_args.args[0] == "octowright.housekeeping.swept_stale_bridge_tmp_files"
+    assert log.warning.call_args.kwargs["count"] == 2
+
+
+def test_sweep_bridge_state_tmp_once_silent_when_nothing_removed(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from octowright import defaults
+    from octowright import housekeeping as _hk
+
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", tmp_path / "bridge-state.json")
+    log = MagicMock()
+    _hk._sweep_bridge_state_tmp_once(log=log)
+    log.warning.assert_not_called()
+
+
+def test_daemon_housekeeping_loop_runs_tmp_sweep_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import housekeeping as _hk
+
+    calls = {"sweep": 0}
+
+    def _sweep(*, log: object) -> None:
+        calls["sweep"] += 1
+
+    monkeypatch.setattr(_hk, "_reap_orphans_once", lambda **_kw: None)
+    monkeypatch.setattr(_hk, "_guard_daemon_log_size", lambda **_kw: None)
+
+    async def _noop_follower_reap(*, log: object) -> None:
+        return None
+
+    monkeypatch.setattr(_hk, "_reap_dead_follower_sessions_once", _noop_follower_reap)
+    monkeypatch.setattr(_hk, "_sweep_bridge_state_tmp_once", _sweep)
+    log = MagicMock()
+
+    async def _run() -> None:
+        task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
+        for _ in range(200):
+            await asyncio.sleep(0.001)
+            if calls["sweep"] >= 1:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_run())
+    assert calls["sweep"] >= 1
