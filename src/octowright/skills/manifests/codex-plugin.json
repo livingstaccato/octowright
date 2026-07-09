@@ -3,7 +3,7 @@
   "version": "{version}",
   "description": "Playwright automation toolkit for Codex workflows.",
   "author": {
-    "name": "Provide IO",
+    "name": "provide.io",
     "url": "https://github.com/livingstaccato/octowright"
   },
   "homepage": "https://github.com/livingstaccato/octowright",
@@ -19,7 +19,7 @@
     "displayName": "Octowright",
     "shortDescription": "Browser automation tools",
     "longDescription": "Use Octowright to run Playwright-based browser automation and testing workflows.",
-    "developerName": "Provide IO",
+    "developerName": "provide.io",
     "category": "Developer Tools",
     "capabilities": [
       "Read",
