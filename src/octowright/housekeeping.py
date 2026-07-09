@@ -210,25 +210,25 @@ def _dead_pid_or_none(pid_key: str, pid_is_alive: Any) -> int | None:
     return None if alive else pid
 
 
-async def _terminate_follower_transport(instances: dict[str, Any], session_id: Any) -> bool:
+async def _terminate_follower_transport(instances: dict[str, Any], session_id: Any) -> str | None:
     """Terminate + drop ``session_id``'s transport from ``instances`` if present.
 
-    Returns whether a session was actually reaped. terminate() sets
-    ``is_terminated``, which makes the session's own ``run_server`` task skip
-    its usual "pop from _server_instances" cleanup (see
-    ``StreamableHTTPSessionManager._handle_stateful_request``) — so regardless
-    of whether terminate() already ran (e.g. the opt-in idle reaper got there
-    first), we always pop the dict entry ourselves rather than leaking it
-    forever."""
+    Returns the session id if a session was actually reaped, else ``None``.
+    terminate() sets ``is_terminated``, which makes the session's own
+    ``run_server`` task skip its usual "pop from _server_instances" cleanup
+    (see ``StreamableHTTPSessionManager._handle_stateful_request``) — so
+    regardless of whether terminate() already ran (e.g. the opt-in idle
+    reaper got there first), we always pop the dict entry ourselves rather
+    than leaking it forever."""
     if not isinstance(session_id, str) or not session_id:
-        return False
+        return None
     transport = instances.get(session_id)
     if transport is None:
-        return False
+        return None
     if not transport.is_terminated:
         await transport.terminate()
     instances.pop(session_id, None)
-    return True
+    return session_id
 
 
 async def _reap_dead_follower_sessions_once(*, log: Any) -> None:
@@ -266,9 +266,9 @@ async def _reap_dead_follower_sessions_once(*, log: Any) -> None:
         if pid is None:
             continue
         dead_pids.append(pid)
-        session_id = snap.get("remote_session_id")
-        if await _terminate_follower_transport(instances, session_id):
-            reaped_sessions.append(session_id)
+        reaped_session_id = await _terminate_follower_transport(instances, snap.get("remote_session_id"))
+        if reaped_session_id is not None:
+            reaped_sessions.append(reaped_session_id)
 
     if dead_pids:
         bridge_state.remove_followers(defaults.BRIDGE_STATE_PATH, dead_pids)
