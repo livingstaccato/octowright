@@ -40,6 +40,11 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.4": [
+        "Fixes recorded mock_route/unmock_route replay: the recorder and replayer disagreed on the route "
+        "pattern's field name, so any macro or recording using route mocking failed on replay with a "
+        "TypeError. Recorded route mocks now replay correctly.",
+    ],
     "0.13.3": [
         "Fixes the real cause behind repeated 'Octowright disconnected' reports: the leader process leaking "
         "memory over multi-day uptime (seen as high as 18.8GB RSS). A new housekeeping reaper terminates "
