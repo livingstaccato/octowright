@@ -40,6 +40,13 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.3": [
+        "Fixes the real cause behind repeated 'Octowright disconnected' reports: the leader process leaking "
+        "memory over multi-day uptime (seen as high as 18.8GB RSS). A new housekeeping reaper terminates "
+        "leader-side sessions the instant a follower's OS process is confirmed dead — not by guessing from "
+        "idle time, so it can never drop a client that's just being quiet — plus automatic cleanup of "
+        "orphaned bridge-state tmp files.",
+    ],
     "0.13.2": [
         "Release-tooling fix only — no octowright behavior changed. The PyPI/TestPyPI publish workflow now "
         "matches the trusted-publisher setup on both registries, so releases actually reach PyPI again.",
