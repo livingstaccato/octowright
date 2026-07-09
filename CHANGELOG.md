@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.4] - 2026-07-09
+
+### Fixed
+- **Recorded `mock_route`/`unmock_route` were dead on replay.** The recorder
+  writes the field as `pattern` (matching the macro linter's required-field
+  name), but the session methods' parameter is `url_pattern`. The replay
+  rename table had no entry for either action, so any macro or recording
+  replay touching route mocking raised `TypeError: unexpected keyword
+  argument 'pattern'`.
+
 ## [0.13.3] - 2026-07-09
 
 Addresses the root cause behind recurring "Octowright disconnected" reports: the
