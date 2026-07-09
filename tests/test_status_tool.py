@@ -67,6 +67,14 @@ def test_status_includes_bridge_diagnostics(monkeypatch, tmp_path: Path) -> None
     assert snap["bridge"]["summary"]["latest_error"] == "remote leader session reset"
 
 
+def test_status_includes_follower_sessions_reaped_count(monkeypatch) -> None:
+    from octowright import housekeeping
+
+    monkeypatch.setattr(housekeeping, "_reaped_follower_sessions_total", 7)
+    snap = octowright_status()
+    assert snap["bridge"]["follower_sessions_reaped"] == 7
+
+
 def test_advisor_status_tool_returns_named_status(monkeypatch, tmp_path: Path) -> None:
     from octowright import advisor
 
