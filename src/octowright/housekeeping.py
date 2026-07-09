@@ -6,7 +6,7 @@
 """Periodic leader-only housekeeping: reap orphaned browsers + bound the daemon log.
 
 Armed once in the leader (see ``cli.serve._run_leader``) when
-``HOUSEKEEPING_INTERVAL_SECONDS`` is enabled. Two jobs run every interval:
+``HOUSEKEEPING_INTERVAL_SECONDS`` is enabled. Four jobs run every interval:
 
 1. **Reap orphaned browsers.** When a Playwright driver dies — crash, OOM, a
    killed daemon generation, or ``octowright restart`` taking out a previous
@@ -25,6 +25,28 @@ Armed once in the leader (see ``cli.serve._run_leader``) when
    resume at offset 0) and leave a breadcrumb. Gated on fd 2 being that exact
    file, so an inline/follower leader (stderr = terminal) or a user-redirected
    stderr is never touched.
+
+3. **Reap dead-follower MCP sessions.** ``OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS``
+   (off by default) is the only other session-reclaim knob, and it reaps by
+   *idle time* — which can't tell a follower that's merely quiet (human
+   reading output, a long CI run) from one whose OS process is actually gone.
+   This job reaps by *PID liveness* instead: bridge-state.json already carries
+   each follower's ``(follower_pid, remote_session_id)`` on every activity
+   snapshot, so a follower whose PID no longer exists is unambiguously dead —
+   never a live client being quiet — and its leader-side StreamableHTTP
+   session (which pins a per-session server task + transport in memory
+   indefinitely once abandoned, the multi-GB leak this job exists to contain)
+   gets terminated immediately, independent of idle time and safe to run
+   unconditionally.
+
+4. **Sweep stale bridge-state tmp debris.** ``bridge_state.record_snapshot`` /
+   ``remove_followers`` write via a temp-sibling-then-``os.replace``, which
+   normally leaves no tmp file behind — but a process killed between the
+   write and the replace (crash, SIGKILL, host restart) orphans one
+   permanently. 364 of these (some weeks old) were found and hand-cleaned on
+   2026-07-09; nothing swept them automatically, so they'd reaccumulate
+   forever. Age-gated well past any real write's lifetime so it can never
+   race one still in flight.
 """
 
 from __future__ import annotations
@@ -34,7 +56,7 @@ import os
 import stat as _stat
 from typing import Any
 
-from octowright._tracing import histogram
+from octowright._tracing import counter, histogram
 
 # Leader + managed-browser resident memory, sampled each housekeeping cycle (noop
 # unless telemetry is on). This is the continuous, multi-day RSS signal that the
@@ -45,6 +67,26 @@ _PROCESS_RSS = histogram(
     description="Resident memory of the leader + its browser processes (scope=leader|browsers|total)",
     unit="By",
 )
+
+# Leader MCP sessions terminated because pid-liveness found their follower's
+# OS process gone. A high value means followers are dying (crashed clients,
+# killed terminals) faster than anything else notices — the signal this job
+# exists to surface as well as act on.
+_FOLLOWER_SESSIONS_REAPED = counter(
+    "octowright_follower_session_reaped_total",
+    description="Leader MCP sessions terminated because their follower process was found dead (pid-liveness reap)",
+)
+
+# Process-lifetime running total, mirroring the OTel counter above but readable
+# in-process without a meter/exporter — octowright_status()'s bridge block
+# surfaces this so an operator can see the reaper working without grepping
+# daemon logs for "reaped_dead_follower_sessions".
+_reaped_follower_sessions_total = 0
+
+
+def get_reaped_follower_session_count() -> int:
+    """Total leader MCP sessions reaped by pid-liveness since this leader started."""
+    return _reaped_follower_sessions_total
 
 
 def reap_orphan_browsers_at_boot(*, log: Any) -> None:
@@ -109,6 +151,14 @@ async def daemon_housekeeping(*, interval_seconds: float, log: Any) -> None:
             _sample_process_rss()
         except Exception as exc:
             log.warning("octowright.housekeeping.rss_sample_failed", error=repr(exc))
+        try:
+            await _reap_dead_follower_sessions_once(log=log)
+        except Exception as exc:
+            log.warning("octowright.housekeeping.follower_reap_failed", error=repr(exc))
+        try:
+            _sweep_bridge_state_tmp_once(log=log)
+        except Exception as exc:
+            log.warning("octowright.housekeeping.bridge_tmp_sweep_failed", error=repr(exc))
 
 
 def _reap_orphans_once(*, log: Any) -> None:
@@ -140,6 +190,108 @@ def _sample_process_rss() -> None:
     _PROCESS_RSS.record(leader, attributes={"scope": "leader"})
     _PROCESS_RSS.record(browsers, attributes={"scope": "browsers"})
     _PROCESS_RSS.record(leader + browsers, attributes={"scope": "total"})
+
+
+def _dead_pid_or_none(pid_key: str, pid_is_alive: Any) -> int | None:
+    """Parse a bridge-state follower key and return its PID if confirmed dead.
+
+    Returns ``None`` for an unparsable key or a PID that's alive (or whose
+    liveness can't be determined — ``pid_is_alive`` raising is treated
+    conservatively as dead, since an unusable/overflowing PID can't belong to
+    a real live follower)."""
+    try:
+        pid = int(pid_key)
+    except (TypeError, ValueError):
+        return None
+    try:
+        alive = pid_is_alive(pid)
+    except (OverflowError, ValueError):
+        alive = False
+    return None if alive else pid
+
+
+async def _terminate_follower_transport(instances: dict[str, Any], session_id: Any) -> bool:
+    """Terminate + drop ``session_id``'s transport from ``instances`` if present.
+
+    Returns whether a session was actually reaped. terminate() sets
+    ``is_terminated``, which makes the session's own ``run_server`` task skip
+    its usual "pop from _server_instances" cleanup (see
+    ``StreamableHTTPSessionManager._handle_stateful_request``) — so regardless
+    of whether terminate() already ran (e.g. the opt-in idle reaper got there
+    first), we always pop the dict entry ourselves rather than leaking it
+    forever."""
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    transport = instances.get(session_id)
+    if transport is None:
+        return False
+    if not transport.is_terminated:
+        await transport.terminate()
+    instances.pop(session_id, None)
+    return True
+
+
+async def _reap_dead_follower_sessions_once(*, log: Any) -> None:
+    """Terminate leader-side MCP sessions whose follower process has died.
+
+    Reads bridge-state.json for each follower's ``(follower_pid,
+    remote_session_id)``; a PID that ``pid_is_alive`` reports gone means that
+    session is abandoned beyond doubt, so it's terminated here-and-now rather
+    than waiting on the opt-in idle-time reaper (which can't run this
+    conservatively — idle time alone can't distinguish a dead follower from a
+    live one that's just quiet). No-ops entirely when this process isn't the
+    HTTP-MCP leader (``_session_manager`` is unset), matching how
+    ``_apply_mcp_session_idle_timeout`` guards the same attribute.
+    """
+    from octowright import bridge_state, defaults
+    from octowright.server import mcp as _mcp
+    from octowright.singleton import pid_is_alive
+
+    manager = getattr(_mcp, "_session_manager", None)
+    instances = getattr(manager, "_server_instances", None)
+    if not isinstance(instances, dict):
+        return
+
+    state = bridge_state.read_state(defaults.BRIDGE_STATE_PATH)
+    followers = state.get("followers")
+    if not isinstance(followers, dict):
+        return
+
+    dead_pids: list[int] = []
+    reaped_sessions: list[str] = []
+    for pid_key, snap in followers.items():
+        if not isinstance(snap, dict):
+            continue
+        pid = _dead_pid_or_none(pid_key, pid_is_alive)
+        if pid is None:
+            continue
+        dead_pids.append(pid)
+        session_id = snap.get("remote_session_id")
+        if await _terminate_follower_transport(instances, session_id):
+            reaped_sessions.append(session_id)
+
+    if dead_pids:
+        bridge_state.remove_followers(defaults.BRIDGE_STATE_PATH, dead_pids)
+    if reaped_sessions:
+        log.warning(
+            "octowright.housekeeping.reaped_dead_follower_sessions",
+            count=len(reaped_sessions),
+            session_ids=reaped_sessions,
+        )
+        _FOLLOWER_SESSIONS_REAPED.add(len(reaped_sessions))
+        global _reaped_follower_sessions_total
+        _reaped_follower_sessions_total += len(reaped_sessions)
+
+
+def _sweep_bridge_state_tmp_once(*, log: Any) -> None:
+    from octowright import bridge_state, defaults
+
+    removed = bridge_state.sweep_stale_tmp_files(defaults.BRIDGE_STATE_PATH)
+    if removed:
+        log.warning(
+            "octowright.housekeeping.swept_stale_bridge_tmp_files",
+            count=len(removed),
+        )
 
 
 def _guard_daemon_log_size(*, log: Any) -> None:
