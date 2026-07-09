@@ -681,6 +681,42 @@ class TestNewlyReplayableActions:
         s.drag.assert_awaited_once_with(source_selector="#a", target_selector="#b")
 
     @pytest.mark.anyio
+    async def test_mock_route_renames_pattern_to_url_pattern(self) -> None:
+        """Recorder writes ``pattern`` (session/core_interaction_mixin.py); the
+        session method's parameter is ``url_pattern`` — without the rename this
+        replay raises TypeError: unexpected keyword argument 'pattern'."""
+        s = MagicMock()
+        s.mock_route = AsyncMock()
+        result = await _dispatch_via_simple(
+            s,
+            {
+                "action": "mock_route",
+                "pattern": "**/api/checkout",
+                "status": 200,
+                "content_type": "application/json",
+                "body": '{"ok": true}',
+                "headers": {},
+            },
+        )
+        assert result == (1, 0)
+        s.mock_route.assert_awaited_once_with(
+            url_pattern="**/api/checkout",
+            status=200,
+            content_type="application/json",
+            body='{"ok": true}',
+            headers={},
+        )
+
+    @pytest.mark.anyio
+    async def test_unmock_route_renames_pattern_to_url_pattern(self) -> None:
+        """Recorder writes ``pattern``; the session method takes ``url_pattern``."""
+        s = MagicMock()
+        s.unmock_route = AsyncMock()
+        result = await _dispatch_via_simple(s, {"action": "unmock_route", "pattern": "**/api/checkout"})
+        assert result == (1, 0)
+        s.unmock_route.assert_awaited_once_with(url_pattern="**/api/checkout")
+
+    @pytest.mark.anyio
     async def test_navigate_back_drops_recorded_url_field(self) -> None:
         """``navigate_back`` records the resulting URL but the method takes no args."""
         s = MagicMock()
