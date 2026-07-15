@@ -72,6 +72,25 @@ _BROWSER_PATH_SUBSTRINGS = (
     "ms-playwright/webkit",
 )
 
+# Crash-reporter helpers that ship INSIDE the browser bundle, so they sit under
+# the same ms-playwright/<engine>-* path a browser does. They are not browsers:
+# they own no window, and the pool never drives or closes them.
+#
+# They must be excluded explicitly because they defeat the orphan heuristic by
+# design. A reporter has to survive the crash it reports, so it is spawned
+# detached and the kernel parents it to init — giving it ``ppid == 1``, the very
+# signal ``_is_orphaned_browser`` reads as "the driver died, reap it". The result
+# was a false positive on every healthy session: each housekeeping cycle SIGKILLed
+# both crashpad handlers of every live browser on the box (observed live as a
+# repeating ``reaped_orphan_browsers count=2`` with fresh pids each minute).
+# Killing them frees nothing and silently disables crash reporting for sessions
+# that are working fine — which then hides the genuine renderer crashes the
+# reporter exists to capture.
+_CRASH_HELPER_SUBSTRINGS = (
+    "crashpad_handler",  # chromium
+    "crashreporter",  # firefox
+)
+
 
 def _is_windows() -> bool:
     return sys.platform == "win32"
@@ -81,6 +100,8 @@ def _is_browser_command(command: str) -> bool:
     # Playwright command lines use ``/`` on POSIX and ``\`` on Windows;
     # normalize so a single substring list catches both.
     normalized = command.replace("\\", "/").lower()
+    if any(needle in normalized for needle in _CRASH_HELPER_SUBSTRINGS):
+        return False
     return any(needle in normalized for needle in _BROWSER_PATH_SUBSTRINGS)
 
 
