@@ -42,6 +42,7 @@ from pathlib import Path
 import click
 
 from octowright import singleton
+from octowright.cli import port_owner
 from octowright.cli._root import cli
 from octowright.defaults import HTTP_HOST, HTTP_PORT
 from octowright.process_reaper import reap_orphan_browsers
@@ -293,8 +294,28 @@ def _locked_pid_is_octowright(locked: int) -> bool:
     return any(pid == locked and "octowright serve" in cmd for pid, cmd in _list_process_commands())
 
 
-def _collect_target_pids(kill_followers: bool) -> set[int]:
-    """Return all PIDs that should be signalled."""
+def _spawn_port_squatter(spawn_port: int | None, already: set[int]) -> int | None:
+    """A split-brain octowright leader listening on the spawn port that isn't
+    already in the kill set. Returned so the fresh daemon can bind. None when the
+    port is free, held by a non-octowright process, or already targeted."""
+    if spawn_port is None:
+        return None
+    squatter = port_owner.octowright_leader_on_port(spawn_port, _list_process_commands)
+    if squatter is None or squatter in already:
+        return None
+    click.echo(f"reclaiming spawn port {spawn_port} from split-brain leader pid {squatter}")
+    return squatter
+
+
+def _collect_target_pids(kill_followers: bool, spawn_port: int | None = None) -> set[int]:
+    """Return all PIDs that should be signalled.
+
+    ``spawn_port`` is the port the fresh daemon will bind. If a *different*
+    octowright leader is squatting on it (split-brain: the lockfile leader bumped
+    to another port while this one holds the canonical port), it must be killed
+    too or the spawn can't bind. It is found by the listening socket — its command
+    line may lack ``--http-port``, so the port-scoped pgrep can't see it.
+    """
     pids: set[int] = set()
     target_port = _restart_target_port()
     locked = _leader_pid_from_lock()
@@ -307,6 +328,9 @@ def _collect_target_pids(kill_followers: bool) -> set[int]:
             err=True,
         )
     pids.update(_leader_pids_from_pgrep(target_port))
+    squatter = _spawn_port_squatter(spawn_port, pids)
+    if squatter is not None:
+        pids.add(squatter)
     if kill_followers:
         extra = [p for p in _follower_pids() if p not in pids]
         if extra:
@@ -326,16 +350,17 @@ def _escalate_survivors(pids: set[int], timeout: float) -> list[int]:
     return survivors
 
 
-def _stop_leader(timeout: float, *, kill_followers: bool = False) -> tuple[int, int]:
+def _stop_leader(timeout: float, *, kill_followers: bool = False, spawn_port: int | None = None) -> tuple[int, int]:
     """SIGTERM all known leader pids, escalate to SIGKILL on holdouts.
 
     When *kill_followers* is True, also sweeps bare MCP follower processes
     (``octowright serve`` without daemon flags) so stale sessions from dead
-    clients don't accumulate.
+    clients don't accumulate. ``spawn_port`` lets the sweep also reclaim a
+    split-brain leader squatting on the port the fresh daemon will bind.
 
     Returns ``(stopped_count, kill9_count)``.
     """
-    pids = _collect_target_pids(kill_followers)
+    pids = _collect_target_pids(kill_followers, spawn_port=spawn_port)
     if not pids:
         click.echo("no running octowright daemon found", err=True)
         return 0, 0
@@ -469,7 +494,10 @@ def restart(
     preserves bare follower transports owned by MCP clients unless
     --kill-followers is passed (full reset).
     """
-    stopped, killed = _stop_leader(timeout, kill_followers=kill_followers)
+    # When we're going to spawn, also reclaim the spawn port from a split-brain
+    # leader squatting on it (otherwise the bind below fails and nothing starts).
+    spawn_port = None if no_start else http_port
+    stopped, killed = _stop_leader(timeout, kill_followers=kill_followers, spawn_port=spawn_port)
     if not keep_browsers:
         _reap_browsers()
 

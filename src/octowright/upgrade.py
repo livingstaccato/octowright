@@ -40,6 +40,13 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.6": [
+        "Split-brain daemons are closed in both directions. A dying leader no longer leaves two daemons "
+        "racing on different ports — the election lock is now held until the replacement is confirmed up, so "
+        "followers adopt the new leader instead of forking a rival. And `octowright restart` now recovers "
+        "from an existing split-brain by reclaiming the canonical port from the rival leader (found by its "
+        "listening socket, not by guessing from its command line).",
+    ],
     "0.13.5": [
         "Fixes the orphan-browser reaper silently killing Chromium's crash handlers every housekeeping "
         "cycle: chrome_crashpad_handler lives inside the browser bundle and detaches to ppid 1, so the "
