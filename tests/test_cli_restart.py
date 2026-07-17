@@ -36,6 +36,10 @@ def _no_real_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("real subprocess.run not expected in this test")
 
     monkeypatch.setattr(_restart_mod.subprocess, "run", _boom)
+    # restart now probes the spawn port's listener (split-brain reclaim); default
+    # to "no squatter" so these non-split-brain tests don't shell out to lsof.
+    # test_restart_split_brain.py stubs this explicitly where it matters.
+    monkeypatch.setattr("octowright.cli.port_owner._pid_listening_on_port", lambda _port: None)
 
 
 @pytest.fixture
