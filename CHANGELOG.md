@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.5] - 2026-07-17
+
+### Fixed
+- **The orphan-browser reaper was killing Chromium's crash handlers.**
+  `chrome_crashpad_handler` ships inside the browser bundle (under
+  `ms-playwright/chromium-*/`), so it matched the reaper's browser-path filter,
+  and it is deliberately spawned detached — the kernel reparents it to `ppid 1`,
+  the exact signal `_is_orphaned_browser` reads as "the driver died, reap it." So
+  every housekeeping cycle SIGKILLed both crash handlers of every live browser on
+  the box (observed as a repeating `reaped_orphan_browsers count=2` with fresh
+  pids each minute). Killing them freed nothing — a handler owns no window and the
+  pool never drives it — and silently disabled Chromium crash reporting for
+  perfectly healthy sessions, hiding the renderer crashes the handler exists to
+  capture. Crash-reporter helpers (`crashpad_handler`, `crashreporter`) are now
+  excluded from the reaper before the orphan rule runs; a genuinely reparented
+  browser sitting beside a handler is still reaped.
+
+### Security
+- **Dependency refresh.** All locked dependencies bumped to their latest
+  compatible versions, clearing three `mcp` advisories (CVE-2026-52870,
+  CVE-2026-52869, CVE-2026-59950; `mcp` 1.27.1 → 1.28.1). No API or behavior
+  changes in octowright — lockfile-only, verified against the full test suite.
+
 ## [0.13.4] - 2026-07-09
 
 ### Fixed
