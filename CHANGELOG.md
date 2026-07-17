@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   excluded from the reaper before the orphan rule runs; a genuinely reparented
   browser sitting beside a handler is still reaped.
 
+### Security
+- **Dependency refresh.** All locked dependencies bumped to their latest
+  compatible versions, clearing three `mcp` advisories (CVE-2026-52870,
+  CVE-2026-52869, CVE-2026-59950; `mcp` 1.27.1 → 1.28.1). No API or behavior
+  changes in octowright — lockfile-only, verified against the full test suite.
+
 ## [0.13.4] - 2026-07-09
 
 ### Fixed

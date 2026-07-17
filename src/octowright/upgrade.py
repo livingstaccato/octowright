@@ -45,7 +45,8 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "cycle: chrome_crashpad_handler lives inside the browser bundle and detaches to ppid 1, so the "
         "reaper matched it as an orphaned browser and SIGKILLed both handlers of every live browser once a "
         "minute — which freed nothing and disabled crash reporting for perfectly healthy sessions. "
-        "Crash-reporter helpers are now spared.",
+        "Crash-reporter helpers are now spared. Also refreshes all locked dependencies, clearing three mcp "
+        "security advisories (mcp 1.27.1 -> 1.28.1) with no octowright behavior change.",
     ],
     "0.13.4": [
         "Fixes recorded mock_route/unmock_route replay: the recorder and replayer disagreed on the route "
