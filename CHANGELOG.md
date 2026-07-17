@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.6] - 2026-07-17
+
+### Fixed
+- **Split-brain daemons: closed in both directions.** A leader dying could leave
+  two daemons alive on different ports (canonical + a bumped one), and
+  `octowright restart` couldn't recover from it.
+  - *No longer forms.* When a leader died, every follower ran the respawn path;
+    the election flock serialized the spawn decision, but `wait_for_daemon` ran
+    outside the lock — so the first follower released the flock before its
+    spawned daemon bound the port, and a second follower then spawned a
+    competitor that port-walked to a bumped port. The election lock is now held
+    until the spawned daemon is confirmed up, so the next follower adopts the new
+    leader and defers instead of forking a rival. A lock-acquire timeout defers
+    quietly rather than spawning or raising.
+  - *Restart recovers from an existing split-brain.* `octowright restart` scoped
+    its process sweep to the lockfile leader's `--http-port` and then spawned on
+    the canonical port; a rival leader holding the canonical port (whose command
+    line may carry no `--http-port` at all) was never killed, so the bind failed
+    and the daemon stayed down. Restart now reclaims the spawn port by the actual
+    listening socket — command-verified as `octowright serve` — so the rival is
+    cleared and a fresh daemon binds. Non-octowright port holders and bare MCP
+    followers are never targeted.
+
 ## [0.13.5] - 2026-07-17
 
 ### Fixed
