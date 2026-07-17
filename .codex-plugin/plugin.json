@@ -1,6 +1,6 @@
 {
   "name": "octowright",
-  "version": "0.13.5",
+  "version": "0.13.6",
   "description": "Playwright automation toolkit for Codex workflows.",
   "author": {
     "name": "provide.io",
