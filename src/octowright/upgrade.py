@@ -40,6 +40,13 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.5": [
+        "Fixes the orphan-browser reaper silently killing Chromium's crash handlers every housekeeping "
+        "cycle: chrome_crashpad_handler lives inside the browser bundle and detaches to ppid 1, so the "
+        "reaper matched it as an orphaned browser and SIGKILLed both handlers of every live browser once a "
+        "minute — which freed nothing and disabled crash reporting for perfectly healthy sessions. "
+        "Crash-reporter helpers are now spared.",
+    ],
     "0.13.4": [
         "Fixes recorded mock_route/unmock_route replay: the recorder and replayer disagreed on the route "
         "pattern's field name, so any macro or recording using route mocking failed on replay with a "
