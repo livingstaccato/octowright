@@ -122,6 +122,45 @@ def test_find_browser_pids_orphaned_empty_when_driver_alive(fake_ps: list[str]) 
     assert process_reaper.find_browser_pids("orphaned") == []
 
 
+# Chromium's crash handler lives under the same ms-playwright/chromium-* path as
+# the browser and is deliberately spawned detached (ppid 1) so it outlives the
+# crashes it reports. Both traits together made the orphan rule kill it once per
+# housekeeping cycle, for every live browser on the box — observed live as a
+# repeating ``reaped_orphan_browsers count=2`` with fresh pids each minute.
+# Reaping it does not close a window (it is not a browser); it just destroys the
+# crash reporting of a perfectly healthy session.
+_CRASHPAD_CMD = (
+    "ms-playwright/chromium-1223/chrome-mac-arm64/Google Chrome for Testing.app/Contents/"
+    "Frameworks/Google Chrome for Testing Framework.framework/Versions/148.0.7778.96/"
+    "Helpers/chrome_crashpad_handler --monitor-self --database=/tmp/Crashpad"
+)
+
+
+def test_find_browser_pids_never_matches_the_crash_handler(fake_ps: list[str]) -> None:
+    fake_ps.append(f"4002 4001 ms-playwright/chromium-1223/chrome-mac-arm64/Google Chrome\n4003 1 {_CRASHPAD_CMD}\n")
+    # The handler is not a browser under any scope — it owns no window.
+    assert process_reaper.find_browser_pids("all") == [4002]
+
+
+def test_find_browser_pids_orphaned_spares_live_browsers_crash_handler(fake_ps: list[str]) -> None:
+    # A fully healthy session: live daemon -> live driver -> live browser, plus
+    # the browser's detached crash handler at ppid 1. Nothing here is orphaned.
+    fake_ps.append(
+        "4000 1 python octowright serve\n"
+        "4001 4000 node playwright driver\n"
+        "4002 4001 ms-playwright/chromium-1223/chrome-mac-arm64/Google Chrome\n"
+        f"4003 1 {_CRASHPAD_CMD}\n"
+    )
+    assert process_reaper.find_browser_pids("orphaned") == []
+
+
+def test_find_browser_pids_orphaned_still_reaps_real_orphans_beside_a_handler(fake_ps: list[str]) -> None:
+    # Sparing the handler must not blunt the sweep: a genuinely reparented
+    # browser sitting next to a handler is still reaped.
+    fake_ps.append(f"4003 1 {_CRASHPAD_CMD}\n2000 1 ms-playwright/chromium-1223/chrome-mac-arm64/Google Chrome\n")
+    assert process_reaper.find_browser_pids("orphaned") == [2000]
+
+
 def test_reap_orphan_browsers_orphaned_scope_reaps_reparented(
     fake_ps: list[str],
     monkeypatch: pytest.MonkeyPatch,
