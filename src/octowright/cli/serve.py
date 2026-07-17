@@ -224,7 +224,10 @@ async def _ensure_leader_or_inline(
         click.echo("octowright: no live leader; spawning daemon", err=True)
         keep_alive = bool(leader_kwargs.get("keep_alive"))
         _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
-    spawned = await _daemon.wait_for_daemon()
+        # Confirm the daemon is up while still holding the election lock, so a
+        # concurrent starter blocks until the leader exists and then adopts it
+        # instead of spawning a competitor on a bumped port (split-brain).
+        spawned = await _daemon.wait_for_daemon()
     if spawned is None:
         # Daemon didn't come up — run leader inline so the user at least gets
         # a working server (browsers die on this process's exit). Surface the
@@ -257,21 +260,31 @@ async def _respawn_if_leader_gone(
     if await _election._probe_alive_leader(_sn) is not None:
         click.echo("octowright: leader still healthy, exiting", err=True)
         return
-    async with _sn.async_election_lock():
-        if await _election._probe_alive_leader(_sn) is not None:
-            click.echo("octowright: leader still healthy, exiting", err=True)
-            return
-        if await _election._canonical_port_serves_octowright(http_host, http_port):
-            click.echo(
-                "octowright: canonical HTTP port already serves a healthy leader; "
-                "not spawning a competing daemon (split-brain guard)",
-                err=True,
-            )
-            return
-        click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
-        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
-    if await _daemon.wait_for_daemon() is None:
-        click.echo("octowright: replacement daemon spawn timed out", err=True)
+    try:
+        async with _sn.async_election_lock():
+            if await _election._probe_alive_leader(_sn) is not None:
+                click.echo("octowright: leader still healthy, exiting", err=True)
+                return
+            if await _election._canonical_port_serves_octowright(http_host, http_port):
+                click.echo(
+                    "octowright: canonical HTTP port already serves a healthy leader; "
+                    "not spawning a competing daemon (split-brain guard)",
+                    err=True,
+                )
+                return
+            click.echo("octowright: leader is gone; spawning replacement daemon", err=True)
+            _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
+            # Hold the election lock until the spawned daemon is confirmed up.
+            # Releasing before it binds would let a racing follower acquire the
+            # lock, still see no leader, and spawn a competitor that port-walks
+            # to a bumped port — split-brain. Holding it makes that follower see
+            # the healthy leader and defer.
+            if await _daemon.wait_for_daemon() is None:
+                click.echo("octowright: replacement daemon spawn timed out", err=True)
+    except TimeoutError:
+        # Another follower already holds the election lock (electing/spawning).
+        # Defer — spawning here would race a second leader onto a bumped port.
+        click.echo("octowright: another instance is electing a leader; deferring", err=True)
 
 
 async def _serve_singleton(
