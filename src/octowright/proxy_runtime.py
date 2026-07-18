@@ -56,14 +56,15 @@ _LEADER_RECOVERY = counter(
     description="Leader-down gaps by outcome (recovered|exhausted)",
 )
 
-# How long the follower keeps retrying a leader that's stopped answering before it
-# gives up and exits (so serve.py can respawn). A leader restart / respawn brings a
-# new leader up in ~1-2s; tolerating a window means `octowright restart` no longer
-# kills connected sessions — the bridge reconnects to the new leader (replaying
-# initialize) and the client's MCP session survives transparently. A leader gone
-# longer than this is treated as gone for good. Lives here (not defaults.py, at its
-# LOC ceiling), mirroring incidents/health. 0 = no grace (immediate exit, legacy).
-BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", "15"))
+# How long the follower keeps retrying an unresponsive leader before it gives up and
+# EXITS — closing the client's stdio (its MCP session dies until reconnect) and
+# letting serve.py respawn a leader. Direct cause of "octowright breaks across ALL
+# clients on a restart": the old 15s default was shorter than a real leader outage
+# (`octowright restart` alone takes 20-30s+ — SIGTERM grace + wait-for-port-free +
+# spawn + health), so every follower exited at once. 180s outlasts a normal restart,
+# so followers WAIT it out and reconnect (replaying initialize) — sessions survive.
+# Trade: a truly-gone leader takes this long before a follower respawns one; tunable.
+BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", "180"))
 
 
 def _within_recovery_window(leader_down_since: float | None, now: float, window: float) -> bool:
