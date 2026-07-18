@@ -40,6 +40,16 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.7": [
+        "A daemon restart no longer disconnects every MCP client at once. Followers retry an unresponsive "
+        "leader for a recovery window that was 15s — shorter than a real restart (20-30s+) — so on every "
+        "restart they all gave up and exited simultaneously, breaking octowright across all clients. The "
+        "window is now 180s, so followers wait out a normal restart and reconnect to the new leader "
+        "transparently (tunable via OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS).",
+        "Embedders can now give each BrowserPool its own recordings root: BrowserPool(recordings_dir=...) "
+        "routes a pool's per-launch artefacts (log, video, HAR, downloads) to a distinct directory, so "
+        "several pools in one process no longer collide on one recordings tree.",
+    ],
     "0.13.6": [
         "Split-brain daemons are closed in both directions. A dying leader no longer leaves two daemons "
         "racing on different ports — the election lock is now held until the replacement is confirmed up, so "
