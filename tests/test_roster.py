@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 
 from octowright.browser_pool import BrowserPool
@@ -185,3 +186,54 @@ async def test_spawn_roster_defaults_applied(monkeypatch: pytest.MonkeyPatch) ->
     assert kw["record_video"] is False
     assert kw["label"] is None
     assert kw["url"] is None
+
+
+# ---------------------------------------------------------------------------
+# spawn_roster — concurrent HEADED launch throttle (window-creation-storm fix)
+# ---------------------------------------------------------------------------
+
+
+def _concurrency_tracking_launch(state: dict[str, int]) -> Any:
+    async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        state["now"] += 1
+        state["max"] = max(state["max"], state["now"])
+        await anyio.sleep(0.02)  # hold the slot so overlap is observable
+        state["now"] -= 1
+        return _launch_result(label=kwargs.get("label"), kind=kwargs.get("kind", "chromium"))
+
+    return _fake_launch
+
+
+@pytest.mark.anyio
+async def test_spawn_roster_throttles_concurrent_headed_launches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """6 headed launches must never run more than the configured limit at once."""
+    from octowright.browser_pool import roster as _roster
+
+    monkeypatch.setattr(_roster, "headed_launch_concurrency", lambda: 2)
+    monkeypatch.setattr(_roster, "enforce_launch_limits", lambda *_a, **_k: None)
+    pool = _make_pool()
+    state = {"now": 0, "max": 0}
+    monkeypatch.setattr(pool, "launch", _concurrency_tracking_launch(state))
+
+    specs = [{"kind": "chromium", "headed": True, "label": str(i)} for i in range(6)]
+    result = await _roster.spawn_roster(pool, specs)
+
+    assert len(result["launched"]) == 6
+    assert state["max"] <= 2, f"headed launches not throttled: peak concurrency {state['max']}"
+
+
+@pytest.mark.anyio
+async def test_spawn_roster_does_not_throttle_headless_launches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Headless is immune to the crash — all 6 must run concurrently, un-gated."""
+    from octowright.browser_pool import roster as _roster
+
+    monkeypatch.setattr(_roster, "headed_launch_concurrency", lambda: 2)
+    monkeypatch.setattr(_roster, "enforce_launch_limits", lambda *_a, **_k: None)
+    pool = _make_pool()
+    state = {"now": 0, "max": 0}
+    monkeypatch.setattr(pool, "launch", _concurrency_tracking_launch(state))
+
+    specs = [{"kind": "chromium", "headed": False, "label": str(i)} for i in range(6)]
+    await _roster.spawn_roster(pool, specs)
+
+    assert state["max"] == 6, f"headless should be unthrottled, peak was {state['max']}"
