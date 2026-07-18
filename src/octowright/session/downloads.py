@@ -39,20 +39,25 @@ def _safe_download_name(suggested: str | None) -> str:
 
 
 async def save_download(session: BrowserSession, download: Any) -> dict[str, Any]:
-    """Save a Playwright Download to disk under RECORDINGS_DIR/downloads/<instance_id>/.
+    """Save a Playwright Download to disk under <recordings_root>/downloads/<instance_id>/.
     Appends the record to session.downloads and signals any pending waiters.
-    Records download_save_error on failure."""
-    from octowright._paths import reject_unsafe_path
-    from octowright.defaults import RECORDINGS_DIR
+    Records download_save_error on failure.
 
-    target_dir = RECORDINGS_DIR / "downloads" / session.instance_id
+    The recordings root is the parent of ``session.log_path`` — i.e. the root
+    the owning pool was configured with (new_log_path writes the JSONL directly
+    under it), so a pool given a custom recordings_dir keeps its downloads
+    beside its recordings instead of leaking into the process-global root."""
+    from octowright._paths import reject_unsafe_path
+
+    recordings_root = session.log_path.parent
+    target_dir = recordings_root / "downloads" / session.instance_id
     target_dir.mkdir(parents=True, exist_ok=True)
     suggested = download.suggested_filename
     target = target_dir / f"{len(session.downloads):03d}-{_safe_download_name(suggested)}"
     try:
         # Belt-and-suspenders: the sanitized basename has no separators, but run
-        # the containment helper so the write provably stays under RECORDINGS_DIR.
-        reject_unsafe_path(target, RECORDINGS_DIR, label="download path")
+        # the containment helper so the write provably stays under the root.
+        reject_unsafe_path(target, recordings_root, label="download path")
         await download.save_as(str(target))
         record = {
             "url": download.url,
