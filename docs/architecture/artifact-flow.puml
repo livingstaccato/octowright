@@ -85,7 +85,11 @@ TESTRUNNER --> JUNIT : pass/fail per [test] or per role
 ' ─── Path defaults ─────────────────────────────────────────────────────
 note bottom of REC
   Default: <octowright-state>/sessions/.
-  OCTOWRIGHT_RECORDINGS overrides.
+  OCTOWRIGHT_RECORDINGS overrides the process-global root.
+  Per-pool: BrowserPool(recordings_dir=...) reroutes the
+  WRITE side (JSONL / video / HAR / downloads) for one pool
+  — the dashboard/discovery/cleanup readers still use the
+  global root. For concurrent-pools-in-one-process embedders.
 end note
 
 note bottom of MAC
