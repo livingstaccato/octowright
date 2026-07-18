@@ -117,6 +117,32 @@ async def test_handle_download_saves_to_downloads_dir(tmp_path: Path, monkeypatc
 
 
 @pytest.mark.anyio
+async def test_download_anchors_on_session_recordings_root_not_global(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-pool routing: downloads land beside the session's own recording
+    (``log_path.parent`` = the owning pool's recordings_dir), NOT the
+    process-global RECORDINGS_DIR. Proves a pool given a custom recordings_dir
+    keeps its downloads under that root."""
+    import octowright.defaults as defs
+
+    global_root = tmp_path / "global"
+    pool_root = tmp_path / "pool-b"
+    pool_root.mkdir()
+    # Global root stays the default; the session lives under a DIFFERENT root.
+    monkeypatch.setattr(defs, "RECORDINGS_DIR", global_root)
+    s = _make_session(pool_root)  # log_path = pool_root / "test.jsonl"
+
+    s._handle_download(FakeDownload(filename="report.csv"))
+    await asyncio.sleep(0)
+
+    saved = Path(s.downloads[0]["path"]).resolve()
+    assert saved.is_relative_to((pool_root / "downloads" / s.instance_id).resolve())
+    # Nothing leaked into the process-global root.
+    assert not (global_root / "downloads").exists()
+
+
+@pytest.mark.anyio
 async def test_handle_download_increments_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import octowright.defaults as defs
 

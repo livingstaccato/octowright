@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
@@ -22,6 +22,11 @@ from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, RECORDIN
 from octowright.personas import engine_profile_dir
 from octowright.recorder import Recorder
 from octowright.session_manifest import record_launch as _manifest_record_launch
+
+if TYPE_CHECKING:
+    # Annotation only — avoids the launch_helpers → options runtime cycle
+    # (options.py imports launch_helpers locally for the same reason).
+    from octowright.browser_pool.options import LaunchOptions
 
 log = get_logger(__name__)
 
@@ -48,13 +53,18 @@ def _build_video_kwargs(
     explicit_size: bool,
     viewport_w: int | None,
     viewport_h: int | None,
+    *,
+    recordings_dir: Path | None = None,
 ) -> tuple[dict[str, Any], Path | None]:
     """Allocate a per-launch videos/ dir and assemble the record_video_*
     context kwargs. Pins video size to the viewport so Playwright doesn't
-    auto-scale to its 800x800 default."""
+    auto-scale to its 800x800 default. ``recordings_dir`` defaults to the
+    process-global root (resolved at call time so monkeypatching works); the
+    pool passes its own so per-pool routing works."""
     if not record_video:
         return {}, None
-    video_dir = RECORDINGS_DIR / "videos" / uuid.uuid4().hex[:8]
+    root = recordings_dir if recordings_dir is not None else RECORDINGS_DIR
+    video_dir = root / "videos" / uuid.uuid4().hex[:8]
     video_dir.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {"record_video_dir": str(video_dir)}
     if headless or explicit_size:
@@ -106,18 +116,22 @@ def _build_har_kwargs(
     har_url_filter: str | None,
     har_content: str | None,
     log_path: Path,
+    recordings_dir: Path | None = None,
 ) -> tuple[Path | None, dict[str, Any]]:
-    """Resolve the HAR output path (relative paths land under RECORDINGS_DIR)
-    and assemble the record_har_* context kwargs."""
+    """Resolve the HAR output path (relative paths land under ``recordings_dir``)
+    and assemble the record_har_* context kwargs. ``recordings_dir`` defaults to
+    the process-global root (resolved at call time so monkeypatching works); the
+    pool passes its own for per-pool routing."""
     if not (har or har_path_opt):
         return None, {}
+    root = recordings_dir if recordings_dir is not None else RECORDINGS_DIR
     har_path = Path(har_path_opt) if har_path_opt else log_path.with_suffix(".har")
     if not har_path.is_absolute():
-        har_path = (RECORDINGS_DIR / har_path).resolve()
+        har_path = (root / har_path).resolve()
     # Both branches (relative-sandboxed and absolute-supplied) must end up
-    # under RECORDINGS_DIR. Previously only the relative path was sandboxed;
+    # under the root. Previously only the relative path was sandboxed;
     # an absolute LLM-supplied path passed straight through.
-    har_path = reject_unsafe_path(har_path, RECORDINGS_DIR, label=f"har_path {str(har_path)!r}")
+    har_path = reject_unsafe_path(har_path, root, label=f"har_path {str(har_path)!r}")
     har_path.parent.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {
         "record_har_path": str(har_path),
@@ -128,6 +142,37 @@ def _build_har_kwargs(
     if har_content:
         out["record_har_content"] = har_content
     return har_path, out
+
+
+def build_recording_kwargs(
+    launch_options: LaunchOptions,
+    *,
+    headless: bool,
+    explicit_size: bool,
+    log_path: Path,
+    recordings_dir: Path,
+) -> tuple[dict[str, Any], Path | None, Path | None, dict[str, Any]]:
+    """Assemble the record_video_* and record_har_* context kwargs for one
+    launch, routing both under ``recordings_dir`` (the owning pool's write
+    root). Returns ``(video_kwargs, video_dir, har_path, har_kwargs)``."""
+    video_kwargs, video_dir = _build_video_kwargs(
+        launch_options.record_video,
+        headless,
+        explicit_size,
+        launch_options.viewport_w,
+        launch_options.viewport_h,
+        recordings_dir=recordings_dir,
+    )
+    har_path, har_kwargs = _build_har_kwargs(
+        har=launch_options.har,
+        har_path_opt=launch_options.har_path,
+        har_mode=launch_options.har_mode,
+        har_url_filter=launch_options.har_url_filter,
+        har_content=launch_options.har_content,
+        log_path=log_path,
+        recordings_dir=recordings_dir,
+    )
+    return video_kwargs, video_dir, har_path, har_kwargs
 
 
 async def _open_browser_context(
