@@ -70,6 +70,10 @@ def _fake_session(tmp_path: Any) -> Any:
     """Build a minimal session-shaped object for download tests."""
     sess = SimpleNamespace()
     sess.instance_id = "inst123"
+    # Downloads anchor on the session's recordings root (log_path.parent), which
+    # for a real session == the owning pool's recordings_dir. Point it at tmp_path
+    # so it matches the monkeypatched RECORDINGS_DIR these tests assert against.
+    sess.log_path = tmp_path / "session.jsonl"
     sess.downloads = []
     sess.download_count = 0
     sess.recorder = MagicMock()
