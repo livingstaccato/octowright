@@ -297,3 +297,15 @@ def test_within_recovery_window() -> None:
     assert runtime._within_recovery_window(100.0, 116.0, 15.0) is False
     # Window 0 = no grace = legacy immediate-exit behavior.
     assert runtime._within_recovery_window(100.0, 100.0, 0.0) is False
+
+
+def test_default_recovery_window_survives_a_normal_restart() -> None:
+    """The default must outlast a real leader restart, or every client's MCP
+    session dies on every `octowright restart` (SIGTERM grace + wait-for-port-free
+    + spawn + health routinely exceeds 20-30s). Guards against regressing to the
+    old 15s default that broke octowright across all clients on restart."""
+    default = runtime.BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS
+    assert default >= 120.0, f"recovery window {default}s is too short to survive a leader restart"
+    # A 30s and a 60s outage (well within a restart's span) must keep retrying, not give up.
+    assert runtime._within_recovery_window(100.0, 130.0, default) is True
+    assert runtime._within_recovery_window(100.0, 160.0, default) is True

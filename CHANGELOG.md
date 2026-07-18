@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.7] - 2026-07-18
+
+### Fixed
+- **A daemon restart no longer disconnects every MCP client at once.** Each
+  MCP client bridges to one shared leader daemon; when the leader goes
+  unresponsive, a follower retries for `BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS`
+  and then exits (closing its client's stdio) so `serve.py` can respawn a
+  leader. The default was **15s** — shorter than a real leader outage
+  (`octowright restart` alone takes 20-30s+; a split-brain/port fight can last
+  minutes), so on every restart all followers blew past the window at the same
+  instant and octowright broke across every client simultaneously. Raised the
+  default to **180s** (`proxy_runtime.py`): followers now wait out a normal
+  restart and reconnect to the new leader transparently. A truly-gone leader
+  takes up to 180s before a follower respawns one — an acceptable trade against
+  a session-killing false-exit on every restart. Still tunable via
+  `OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS`. Follower-side code: it
+  rolls out passively as clients reconnect, not via a daemon restart.
+
+### Added
+- **Per-pool recordings root for concurrent-pools embedders.**
+  `BrowserPool(recordings_dir=...)` routes one pool's per-launch artefacts (the
+  JSONL log, video dir, HAR, and downloads) to a distinct root instead of the
+  process-global `RECORDINGS_DIR`, so several `BrowserPool`s in one process no
+  longer collide on a single recordings tree. The pool threads its root through
+  the new `launch_helpers.build_recording_kwargs` combiner; downloads anchor on
+  `session.log_path.parent`. Defaults to the global root (resolved at call time)
+  — fully back-compatible for the one-pool daemon. Write-side only by design:
+  the dashboard, closed-session discovery and `octowright cleanup` still read
+  the process-global root, so a custom root suits an embedder that consumes the
+  launch-returned paths directly (`video_dir`, `log_path`). Surfaced as the
+  read-only `BrowserPool.recordings_dir` property.
+
 ## [0.13.6] - 2026-07-17
 
 ### Fixed
