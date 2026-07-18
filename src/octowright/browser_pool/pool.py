@@ -24,10 +24,9 @@ from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
 from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.launch_helpers import (
-    _build_har_kwargs,
-    _build_video_kwargs,
     _build_viewport_kwargs,
     _open_browser_context,
+    build_recording_kwargs,
     rotate_har_path,
 )
 from octowright.browser_pool.launch_pipeline import cleanup_failed_launch, post_context_setup
@@ -57,7 +56,9 @@ class BrowserPool:
     # "relaunch" hint in get(); bounded so a long-lived pool can't leak.
     _RECENTLY_EVICTED_CAP = 64
 
-    def __init__(self) -> None:
+    def __init__(self, *, recordings_dir: Path | None = None) -> None:
+        # Per-pool artefact write root (custom root = write-side only); see CLAUDE.md.
+        self._recordings_dir = (recordings_dir if recordings_dir is not None else RECORDINGS_DIR).expanduser()
         self._pw: Playwright | None = None
         self._pw_lock = asyncio.Lock()
         # Count of shared-driver rebuilds after a death (surfaced in status).
@@ -80,6 +81,11 @@ class BrowserPool:
         # lifetime. Keyed by (session_key, kind) so the same label across
         # engines gets independent jars (matching real persistent semantics).
         self._session_profile_dirs: dict[tuple[str, str], Path] = {}
+
+    @property
+    def recordings_dir(self) -> Path:
+        """Root this pool writes per-launch artefacts under (see __init__)."""
+        return self._recordings_dir
 
     async def _ensure_pw(self) -> Playwright:
         async with self._pw_lock:
@@ -158,21 +164,17 @@ class BrowserPool:
         )
         launch_options = replace(launch_options, protected=protected, protected_reason=protected_reason)
         target_url = launch_options.url or get_default_url()
-        log_path = new_log_path(RECORDINGS_DIR, instance_id, label, kind)
+        log_path = new_log_path(self._recordings_dir, instance_id, label, kind)
 
         viewport_kwargs, log_viewport, explicit_size, viewport_info = _build_viewport_kwargs(
             headless, launch_options.viewport_w, launch_options.viewport_h
         )
-        ctx_video_kwargs, video_dir = _build_video_kwargs(
-            launch_options.record_video, headless, explicit_size, launch_options.viewport_w, launch_options.viewport_h
-        )
-        har_path, ctx_har_kwargs = _build_har_kwargs(
-            har=launch_options.har,
-            har_path_opt=launch_options.har_path,
-            har_mode=launch_options.har_mode,
-            har_url_filter=launch_options.har_url_filter,
-            har_content=launch_options.har_content,
+        ctx_video_kwargs, video_dir, har_path, ctx_har_kwargs = build_recording_kwargs(
+            launch_options,
+            headless=headless,
+            explicit_size=explicit_size,
             log_path=log_path,
+            recordings_dir=self._recordings_dir,
         )
         launch_kwargs = await self._build_launch_kwargs(tile=launch_options.tile, kind=kind, headless=headless)
 
