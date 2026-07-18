@@ -14,7 +14,7 @@ from provide.telemetry import get_logger
 from octowright._tracing import set_attrs, span
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
-from octowright.browser_pool.limits import enforce_launch_limits
+from octowright.browser_pool.limits import enforce_launch_limits, headed_launch_concurrency
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
 if TYPE_CHECKING:
@@ -95,7 +95,14 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
     # All-or-nothing: refuse the whole batch before launching any browser.
     enforce_launch_limits(pool, adding=len(specs))
 
-    async def _launch_one(spec: dict[str, Any]) -> dict[str, Any]:
+    # DEFENSIVE cap on simultaneous HEADED launches (not a proven crash fix — the
+    # observed crash reproduces via sequential churn, not this concurrent path; see
+    # limits.headed_launch_concurrency). Bounds window-server/GPU pressure from
+    # firing a big roster's headed launches at the same instant; headless is immune
+    # so it stays fully parallel. Per-call semaphore.
+    headed_gate = asyncio.Semaphore(headed_launch_concurrency())
+
+    async def _do_launch(spec: dict[str, Any]) -> dict[str, Any]:
         return await pool.launch(
             kind=spec.get("kind", "chromium"),
             url=spec.get("url"),
@@ -118,6 +125,14 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
             ephemeral=spec.get("ephemeral", False),
             session=spec.get("session", False),
         )
+
+    async def _launch_one(spec: dict[str, Any]) -> dict[str, Any]:
+        # Headless (headed is False) never storms — launch it unthrottled. Headed
+        # or auto (headed None → resolves headed by default) goes through the gate.
+        if spec.get("headed") is False:
+            return await _do_launch(spec)
+        async with headed_gate:
+            return await _do_launch(spec)
 
     with span("octowright.browser.spawn_roster", roster_size=len(specs)) as sp:
         results = await asyncio.gather(*[_launch_one(s) for s in specs], return_exceptions=True)

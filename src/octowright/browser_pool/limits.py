@@ -20,6 +20,7 @@ rather than adding a new one, and must not be refused when the pool is at cap.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from octowright import defaults as _defaults
@@ -79,3 +80,30 @@ def enforce_launch_limits(pool: BrowserPool, *, adding: int) -> None:
     """The combined admission gate: cap first, then memory floor."""
     enforce_cap(pool, adding=adding)
     enforce_memory(adding=adding)
+
+
+# Default max HEADED launches allowed to run at once inside spawn_roster.
+# DEFENSIVE hardening, not a proven crash fix: many coexisting headed browsers do
+# crash Chromium's browser process under rapid churn (characterised 2026-07-17 via
+# sequential browser_launch churn — headless is immune), but concurrent spawn_roster
+# launches did NOT reproduce it in testing. Bounding simultaneous headed launches is
+# still prudent (window-server / GPU pressure scales with concurrent window creation)
+# and cheap; the exact churn trigger is still under investigation.
+HEADED_LAUNCH_CONCURRENCY_DEFAULT = 3
+
+
+def headed_launch_concurrency() -> int:
+    """Max concurrent HEADED launches inside ``spawn_roster`` (defensive cap).
+
+    Throttles the otherwise-unbounded ``asyncio.gather`` so a big headed
+    roster/scenario launches in small batches rather than creating many windows at
+    the same instant. Headless launches are NOT throttled (immune to the crash).
+    ``OCTOWRIGHT_HEADED_LAUNCH_CONCURRENCY`` overrides; an unparsable value falls
+    back to the default; the floor is 1 (a non-positive value would deadlock).
+    """
+    raw = os.environ.get("OCTOWRIGHT_HEADED_LAUNCH_CONCURRENCY", "")
+    try:
+        value = int(raw)
+    except ValueError:
+        return HEADED_LAUNCH_CONCURRENCY_DEFAULT
+    return max(1, value)
