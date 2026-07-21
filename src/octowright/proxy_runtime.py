@@ -401,18 +401,18 @@ async def run_supervised_proxy(
                     # leader's /mcp guard admits us. Re-read each connect so a
                     # restarted leader's fresh token is picked up.
                     remote_token = resolve_leader_token()
-                    remote_headers = {"X-Octowright-Token": remote_token} if remote_token else None
-                    # Use async with (not manual __aenter__/__aexit__) so the
-                    # context manager's async generator is entered and exited
-                    # in the same coroutine. Python 3.13 finalizes abandoned
-                    # async generators in a separate asyncio task; anyio cancel
-                    # scopes cannot span task boundaries, producing
-                    # "Attempted to exit cancel scope in a different task" on
-                    # teardown when __aexit__ was called manually.
-                    # CancelScope + deadline scopes the timeout to the connect
-                    # handshake only: once inside the async with block the
-                    # deadline is extended to infinity so the read loop is
-                    # unconstrained and long-running sessions aren't killed.
+                    # Self-identify so the leader's per-source new-session rate limit
+                    # buckets THIS follower (old followers share "anonymous"). See mcp_flap_guard.
+                    remote_headers = {"X-Octowright-Follower": str(os.getpid())}
+                    if remote_token:
+                        remote_headers["X-Octowright-Token"] = remote_token
+                    # async with (not manual __aenter__/__aexit__) so the CM's async
+                    # generator enters+exits in one coroutine — Python 3.13 finalizes
+                    # abandoned async generators in a separate task, and anyio cancel
+                    # scopes can't span tasks ("exit cancel scope in a different task").
+                    # CancelScope+deadline scopes the timeout to the connect handshake;
+                    # inside the block the deadline goes to infinity so long-running
+                    # sessions aren't killed.
                     try:
                         _connect_scope = anyio.CancelScope(
                             deadline=anyio.current_time() + BRIDGE_CONNECT_TIMEOUT_SECONDS
