@@ -47,12 +47,24 @@ class McpSessionTracker:
             self._last_seen.pop(session_id, None)
 
     def active_count(self) -> int:
+        return len(self.active_ids())
+
+    def active_ids(self) -> set[str]:
+        """Session ids seen within the TTL (prunes stale entries as a side
+        effect). Used by cap-eviction to tell abandoned sessions from ones a
+        live client is still driving."""
         cutoff = time.monotonic() - self._ttl
         with self._lock:
             stale = [sid for sid, ts in self._last_seen.items() if ts < cutoff]
             for sid in stale:
                 del self._last_seen[sid]
-            return len(self._last_seen)
+            return set(self._last_seen)
+
+    def last_seen_snapshot(self) -> dict[str, float]:
+        """Copy of ``{session_id → last_seen_ts}`` for least-recently-seen
+        eviction ordering."""
+        with self._lock:
+            return dict(self._last_seen)
 
     def reset(self) -> None:
         with self._lock:
