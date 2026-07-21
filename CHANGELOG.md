@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.8] - 2026-07-20
+
+### Fixed
+- **Leader-side protection against a follower reconnect/session storm.** A
+  follower that churns StreamableHTTP sessions — each forwarded RPC opening a
+  fresh session on the leader instead of reusing one — could pile per-session
+  server tasks and transports onto the shared daemon until it was at multiple GB
+  RSS and real tool calls were starved (observed live at **18 GB over 2 days**),
+  making octowright appear to crash across every connected client. Every prior
+  storm defense was *follower*-side, so it only helped once every client
+  upgraded; the leader had no protection of its own. Two leader-side guards, on
+  by default and deployable with a single daemon restart, independent of
+  follower version:
+  - **Per-source new-session rate limit** (`http/mcp_flap_guard`): a
+    session-creating request (`POST /mcp` with no `Mcp-Session-Id`) beyond
+    `OCTOWRIGHT_MCP_NEW_SESSION_MAX` per `OCTOWRIGHT_MCP_NEW_SESSION_WINDOW_SECONDS`
+    (defaults 10 / 10 s) is rejected with `429 + Retry-After`, keyed by the
+    `X-Octowright-Follower` header a current follower now sends. Old followers
+    share one `anonymous` bucket — exactly the storm, collectively throttled.
+    Legit clients create ~1 session and reuse it, so they never approach it.
+  - **Session-table cap** (housekeeping job 4): when the live session table
+    exceeds `OCTOWRIGHT_MCP_MAX_SESSIONS` (default 256), the most-idle sessions
+    (abandoned before recently-active) are evicted back to the cap — a memory
+    bound no follower can defeat. New metrics
+    `octowright_mcp_new_session_throttled_total` and
+    `octowright_mcp_session_evicted_total`.
+
 ## [0.13.7] - 2026-07-18
 
 ### Fixed
