@@ -6,7 +6,7 @@
 """Periodic leader-only housekeeping: reap orphaned browsers + bound the daemon log.
 
 Armed once in the leader (see ``cli.serve._run_leader``) when
-``HOUSEKEEPING_INTERVAL_SECONDS`` is enabled. Four jobs run every interval:
+``HOUSEKEEPING_INTERVAL_SECONDS`` is enabled. Five jobs run every interval:
 
 1. **Reap orphaned browsers.** When a Playwright driver dies — crash, OOM, a
    killed daemon generation, or ``octowright restart`` taking out a previous
@@ -39,7 +39,17 @@ Armed once in the leader (see ``cli.serve._run_leader``) when
    gets terminated immediately, independent of idle time and safe to run
    unconditionally.
 
-4. **Sweep stale bridge-state tmp debris.** ``bridge_state.record_snapshot`` /
+4. **Cap the MCP session table.** Job 3 only reaps sessions whose follower
+   *process* is dead; a follower that's alive but storming (each RPC opening a
+   fresh session instead of reusing one) can still pile sessions up until the
+   leader is at multiple GB. This job is the version-agnostic bound: when the
+   live session table exceeds ``OCTOWRIGHT_MCP_MAX_SESSIONS`` (default 256), it
+   evicts the most-idle sessions back to the cap — abandoned (silent past the
+   tracker TTL) first, a quietly-waiting live session last. Pairs with the
+   leader-side new-session rate limit (``http/mcp_flap_guard``) that stops the
+   storm at the source; this bounds whatever slips through.
+
+5. **Sweep stale bridge-state tmp debris.** ``bridge_state.record_snapshot`` /
    ``remove_followers`` write via a temp-sibling-then-``os.replace``, which
    normally leaves no tmp file behind — but a process killed between the
    write and the replace (crash, SIGKILL, host restart) orphans one
@@ -87,6 +97,16 @@ _reaped_follower_sessions_total = 0
 def get_reaped_follower_session_count() -> int:
     """Total leader MCP sessions reaped by pid-liveness since this leader started."""
     return _reaped_follower_sessions_total
+
+
+# Leader MCP sessions evicted because the live session table exceeded
+# OCTOWRIGHT_MCP_MAX_SESSIONS — the storm-proof memory bound (unlike the
+# pid-liveness reaper, this sheds live-but-abandoned sessions a storming
+# follower left behind, oldest/most-idle first).
+_SESSIONS_EVICTED = counter(
+    "octowright_mcp_session_evicted_total",
+    description="Leader MCP sessions evicted because the session table exceeded OCTOWRIGHT_MCP_MAX_SESSIONS.",
+)
 
 
 def reap_orphan_browsers_at_boot(*, log: Any) -> None:
@@ -155,6 +175,10 @@ async def daemon_housekeeping(*, interval_seconds: float, log: Any) -> None:
             await _reap_dead_follower_sessions_once(log=log)
         except Exception as exc:
             log.warning("octowright.housekeeping.follower_reap_failed", error=repr(exc))
+        try:
+            await _enforce_mcp_session_cap_once(log=log)
+        except Exception as exc:
+            log.warning("octowright.housekeeping.session_cap_failed", error=repr(exc))
         try:
             _sweep_bridge_state_tmp_once(log=log)
         except Exception as exc:
@@ -281,6 +305,60 @@ async def _reap_dead_follower_sessions_once(*, log: Any) -> None:
         _FOLLOWER_SESSIONS_REAPED.add(len(reaped_sessions))
         global _reaped_follower_sessions_total
         _reaped_follower_sessions_total += len(reaped_sessions)
+
+
+async def _enforce_mcp_session_cap_once(*, log: Any) -> None:
+    """Evict leader MCP sessions when the live table exceeds the configured cap.
+
+    The pid-liveness reaper (job 3) only sheds sessions whose follower *process*
+    is dead — it can't touch a follower that's alive but churning sessions in a
+    storm. This is the version-agnostic memory bound: when the manager's session
+    table is over ``OCTOWRIGHT_MCP_MAX_SESSIONS``, evict the most-idle sessions
+    back down to the cap (abandoned-before-active ordering via the tracker), so
+    the table — and the ~54KB/session it costs — can't grow unbounded no matter
+    how a follower misbehaves. No-ops when not the HTTP-MCP leader or when the
+    cap is disabled. See ``http/mcp_flap_guard``.
+    """
+    from octowright.http.mcp_flap_guard import mcp_max_sessions, select_eviction_victims
+    from octowright.server import mcp as _mcp
+
+    cap = mcp_max_sessions()
+    if cap is None:
+        return
+    manager = getattr(_mcp, "_session_manager", None)
+    instances = getattr(manager, "_server_instances", None)
+    if not isinstance(instances, dict):
+        return
+    over = len(instances) - cap
+    if over <= 0:
+        return
+
+    from octowright.http.app import get_mcp_session_tracker
+
+    tracker = get_mcp_session_tracker()
+    recent = tracker.active_ids() if tracker is not None else set()
+    last_seen = tracker.last_seen_snapshot() if tracker is not None else {}
+    instance_ids = [str(sid) for sid in instances]
+    victims = select_eviction_victims(instance_ids, recent, last_seen, over)
+
+    evicted = await _evict_sessions(instances, victims, tracker)
+    if evicted:
+        log.warning("octowright.housekeeping.evicted_over_cap_sessions", count=len(evicted), cap=cap)
+        _SESSIONS_EVICTED.add(len(evicted))
+
+
+async def _evict_sessions(instances: dict[str, Any], victims: list[str], tracker: Any) -> list[str]:
+    """Terminate each victim session's transport; mark it closed in the tracker.
+    Returns the ids actually evicted."""
+    evicted: list[str] = []
+    for session_id in victims:
+        reaped = await _terminate_follower_transport(instances, session_id)
+        if reaped is None:
+            continue
+        evicted.append(reaped)
+        if tracker is not None:
+            tracker.mark_closed(reaped)
+    return evicted
 
 
 def _sweep_bridge_state_tmp_once(*, log: Any) -> None:

@@ -40,6 +40,13 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.8": [
+        "The leader now defends itself against a follower reconnect/session storm — the failure that could "
+        "balloon the shared daemon to many GB of RAM and starve real tool calls until every connected client "
+        "looked broken. A follower churning MCP sessions is now rate-limited (429) and the session table is "
+        "capped, so one misbehaving or outdated client can't take everyone else down. On by default, tunable "
+        "via OCTOWRIGHT_MCP_MAX_SESSIONS / OCTOWRIGHT_MCP_NEW_SESSION_MAX. Deploys with a single daemon restart.",
+    ],
     "0.13.7": [
         "A daemon restart no longer disconnects every MCP client at once. Followers retry an unresponsive "
         "leader for a recovery window that was 15s — shorter than a real restart (20-30s+) — so on every "

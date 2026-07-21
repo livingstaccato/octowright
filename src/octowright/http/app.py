@@ -86,6 +86,24 @@ def _apply_mcp_session_idle_timeout(mcp: Any) -> None:
         log.info("octowright.mcp.session_idle_timeout_set", seconds=seconds)
 
 
+def _wrap_new_session_rate_limit(app: Any) -> Any:
+    """Wrap the /mcp app with the per-source new-session rate limiter, or return
+    it unchanged when the limiter is disabled."""
+    from octowright.http.mcp_flap_guard import (
+        McpNewSessionRateLimitMiddleware,
+        NewSessionRateLimiter,
+        mcp_new_session_rate,
+    )
+
+    rate = mcp_new_session_rate()
+    if rate is None:
+        return app
+    max_n, window = rate
+    limiter = NewSessionRateLimiter(max_n, window)
+    log.info("octowright.mcp.new_session_rate_limit_set", max=max_n, window_seconds=window)
+    return McpNewSessionRateLimitMiddleware(app, limiter, retry_after=window)
+
+
 # Tracker covering active streamable-HTTP MCP sessions; reset on every
 # build_app() so the count belongs to the most recently built leader app.
 # Idle watchdog reads through get_mcp_active_session_count() so it doesn't
@@ -98,6 +116,12 @@ def get_mcp_active_session_count() -> int:
     if _session_tracker is None:
         return 0
     return _session_tracker.active_count()
+
+
+def get_mcp_session_tracker() -> McpSessionTracker | None:
+    """The current leader's session tracker (None outside a leader). Read by the
+    housekeeping cap-eviction job to order eviction by last-seen activity."""
+    return _session_tracker
 
 
 def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: str = "") -> Starlette:
@@ -138,11 +162,17 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
 
         _session_tracker = McpSessionTracker()
         tracked_app = McpSessionTrackingMiddleware(mcp_app, _session_tracker)
+        # Leader-side new-session rate limit: reject a session-creating request
+        # (POST /mcp with no Mcp-Session-Id) beyond the per-source window rate
+        # with 429, BEFORE it reaches the transport/tracker — so a storming
+        # (usually old) follower can't churn sessions and starve the shared
+        # leader. On by default; env-tunable / disable-able. See mcp_flap_guard.
+        limited_app = _wrap_new_session_rate_limit(tracked_app)
         # Extract incoming W3C traceparent so spans the leader opens chain
         # under the follower's bridge span. No-ops when OTel is off.
         from octowright._trace_propagation import TraceContextExtractionMiddleware
 
-        traced_app = TraceContextExtractionMiddleware(tracked_app)
+        traced_app = TraceContextExtractionMiddleware(limited_app)
         # Capability-token auth INSIDE the host/origin guard: host/origin checked
         # first (reject non-loopback before even reading the token), then the
         # token gates the otherwise-unauthenticated /mcp transport. No-op when
