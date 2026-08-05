@@ -19,7 +19,7 @@ from provide.telemetry import get_logger
 from octowright._paths import reject_unsafe_path
 from octowright.browser_pool.viewport import ViewportInfo, ViewportMode
 from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, RECORDINGS_DIR
-from octowright.personas import engine_profile_dir
+from octowright.personas import engine_profile_dir, load_persona
 from octowright.recorder import Recorder
 from octowright.session_manifest import record_launch as _manifest_record_launch
 
@@ -175,6 +175,35 @@ def build_recording_kwargs(
     return video_kwargs, video_dir, har_path, har_kwargs
 
 
+def persona_base_url_kwargs(profile: str | None) -> dict[str, str]:
+    """Playwright ``base_url`` for a persona, so macros can be host-relative.
+
+    A macro is the BEHAVIOUR; the persona is the WHERE. That split already
+    exists here -- ``resolve`` scores a persona against a URL on its
+    ``default_url`` host and ``app.hosts``, and ``scenarios`` falls back to
+    ``default_url`` for a participant with no URL of its own. Contexts were the
+    one place it was not honoured, so a macro that wanted to be portable had to
+    bake an origin into every ``navigate``, and replaying the same behaviour
+    against another deployment meant editing the macro rather than choosing a
+    different persona.
+
+    ``base_url`` is Playwright's own mechanism for exactly this: with it set,
+    ``page.goto("/orders")`` resolves against the persona's origin, and
+    ``expect_url`` accepts the same relative form.
+
+    Silent when there is no persona behind the profile, or it declares no
+    ``default_url``: a profile name is not required to be a saved persona, and
+    an absolute URL in a macro keeps working either way.
+    """
+    if not profile:
+        return {}
+    try:
+        persona = load_persona(profile)
+    except (FileNotFoundError, ValueError):
+        return {}
+    return {"base_url": persona.default_url} if persona.default_url else {}
+
+
 async def _open_browser_context(
     *,
     browser_type: Any,
@@ -194,6 +223,7 @@ async def _open_browser_context(
 
     Returns (browser, context, page, user_data_dir). browser is None for the
     persistent path."""
+    base_url_kwargs = persona_base_url_kwargs(profile)
     if profile or session_user_data_dir:
         if profile:
             pdir = engine_profile_dir(persona=profile, kind=kind)
@@ -205,6 +235,7 @@ async def _open_browser_context(
             user_data_dir,
             headless=headless,
             accept_downloads=True,
+            **base_url_kwargs,
             **viewport_kwargs,
             **ctx_video_kwargs,
             **ctx_har_kwargs,
@@ -216,6 +247,7 @@ async def _open_browser_context(
         browser = await browser_type.launch(headless=headless, **launch_kwargs)
         context = await browser.new_context(
             accept_downloads=True,
+            **base_url_kwargs,
             **viewport_kwargs,
             **ctx_video_kwargs,
             **ctx_har_kwargs,
