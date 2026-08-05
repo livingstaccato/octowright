@@ -17,6 +17,27 @@ runs `octowright serve --profile=core`, add `macros` to the spec
 (`--profile=core,macros`) to keep these visible. See
 [getting-started.md](getting-started.md#slimming-the-llm-tool-surface).
 
+## Keep the origin out of the macro
+
+A macro is the **behaviour**; the persona is the **where**. A macro that hardcodes
+`https://app.example.com/login` can only ever run against that one deployment, so
+proving the same flow on a local stack or a staging tier means a second copy of
+the same behaviour that then drifts from the first.
+
+Write the path and let the persona's `default_url` supply the origin — it becomes
+the context's Playwright `base_url`:
+
+```yaml
+actions:
+  - navigate: "/login"          # not "https://app.example.com/login"
+  - expect_url: "/login"        # relative, same resolution
+```
+
+Now `browser_launch profile=buyer-local` and `profile=buyer-staging` replay the
+identical macro against different origins. See
+[personas.md](personas.md#host-relative-macros). Absolute URLs still work, which
+is what a cross-origin step (an external identity provider, say) actually needs.
+
 ## When to use a macro
 
 - **Login flows** that you want to re-run across multiple personas or sessions.
