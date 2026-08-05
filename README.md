@@ -236,10 +236,12 @@ per engine; dante on WebKit and dante on Firefox are two distinct profile
 dirs under the same persona.
 
 **3. Persona.** A *named identity* that owns profiles across one or more
-engines, plus metadata: display name, `default_url`, `default_macros` to run
-at launch, `credentials` (references to env vars or shell commands —
-secrets themselves are never stored on disk), and an `app` dict for
-free-form domain metadata. Think of a persona as "dante — my Discord power
+engines, plus metadata: display name, `default_url` (which is also the
+context's Playwright `base_url`, so a macro can navigate `/orders` and stay
+portable across deployments), `default_macros` to run at launch,
+`credentials` (references to env vars or shell commands — secrets themselves
+are never stored on disk), and an `app` dict for
+domain metadata. Think of a persona as "dante — my Discord power
 user across all three engines", and a profile as one engine-specific piece
 of that identity. You launch it with `browser_launch profile=dante`;
 the resolver (`browser_suggest_for_url`) works out which persona to reuse
