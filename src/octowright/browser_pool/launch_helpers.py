@@ -175,6 +175,27 @@ def build_recording_kwargs(
     return video_kwargs, video_dir, har_path, har_kwargs
 
 
+def base_url_kwargs(profile: str | None, explicit: str | None = None) -> dict[str, str]:
+    """Playwright ``base_url`` for a launch: explicit wins, else the persona's.
+
+    Explicit exists for callers that drive octowright as a library with no saved
+    persona -- a test replaying a macro against a dev stack, a batch run pointed
+    at one tier. The persona remains the answer for anything launched by name.
+
+    Validated through the same guard every navigation uses. It has to be: a
+    relative navigate is waved through precisely BECAUSE it inherits this
+    origin, so an unchecked base_url would be a way to reach a host the SSRF
+    policy refuses by writing '/' in a macro.
+    """
+    from octowright.session.core_page_mixin import _reject_unsafe_url
+
+    chosen = explicit or persona_base_url_kwargs(profile).get("base_url")
+    if not chosen:
+        return {}
+    _reject_unsafe_url(chosen)
+    return {"base_url": chosen}
+
+
 def persona_base_url_kwargs(profile: str | None) -> dict[str, str]:
     """Playwright ``base_url`` for a persona, so macros can be host-relative.
 
@@ -215,6 +236,7 @@ async def _open_browser_context(
     ctx_video_kwargs: dict[str, Any],
     ctx_har_kwargs: dict[str, Any],
     launch_kwargs: dict[str, Any],
+    base_url: str | None = None,
 ) -> tuple[Any, Any, Any, str | None]:
     """Open a Playwright BrowserContext + Page. Persistent profile and
     session-tmpdir paths both go through launch_persistent_context (no
@@ -223,7 +245,7 @@ async def _open_browser_context(
 
     Returns (browser, context, page, user_data_dir). browser is None for the
     persistent path."""
-    base_url_kwargs = persona_base_url_kwargs(profile)
+    ctx_base_url_kwargs = base_url_kwargs(profile, base_url)
     if profile or session_user_data_dir:
         if profile:
             pdir = engine_profile_dir(persona=profile, kind=kind)
@@ -235,7 +257,7 @@ async def _open_browser_context(
             user_data_dir,
             headless=headless,
             accept_downloads=True,
-            **base_url_kwargs,
+            **ctx_base_url_kwargs,
             **viewport_kwargs,
             **ctx_video_kwargs,
             **ctx_har_kwargs,
@@ -247,7 +269,7 @@ async def _open_browser_context(
         browser = await browser_type.launch(headless=headless, **launch_kwargs)
         context = await browser.new_context(
             accept_downloads=True,
-            **base_url_kwargs,
+            **ctx_base_url_kwargs,
             **viewport_kwargs,
             **ctx_video_kwargs,
             **ctx_har_kwargs,
