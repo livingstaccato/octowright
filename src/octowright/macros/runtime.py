@@ -84,6 +84,12 @@ _ACTION_MAP = {
     "switch_page": "switch_page",
     "close_page": "close_page",
     "reset_frame": "reset_frame",
+    # Frame switching and text reads are user actions with real intent: a macro
+    # that entered an iframe has to enter it again, and one that read a value
+    # asserted on what it found. Both were recorded and then counted as errors
+    # because neither was classified anywhere.
+    "switch_frame": "switch_frame",
+    "get_text_by": "get_text_by",
 }
 
 # Recorded keys that aren't accepted by the session method on replay.
@@ -96,6 +102,14 @@ _REPLAY_DROP_KEYS: dict[str, tuple[str, ...]] = {
     # open_url records the resulting page index alongside the inputs; the
     # method signature only accepts (url, target, width, height).
     "open_url": ("page_index",),
+    # switch_frame records which frame it LANDED on next to the selector that
+    # chose it; replay re-resolves that from the live page.
+    "switch_frame": ("index", "frame_url", "frame_name"),
+    # get_text_by records the text it read. Dropping it matters more here than
+    # elsewhere: the method takes **finders, so a stray `result` would not raise
+    # as an unexpected kwarg -- it would be passed to the locator builder as
+    # though it were a finder.
+    "get_text_by": ("result",),
 }
 
 # Recorded keys that need renaming to match the method's parameter names.

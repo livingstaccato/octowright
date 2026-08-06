@@ -27,7 +27,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from octowright import macros
 from octowright.macros.recording_import import RECORDER_NOISE
 from octowright.macros.runtime import _ACTION_MAP, _REPLAY_PASSIVE, _REPLAY_SKIP
 
@@ -47,13 +51,9 @@ def _statically_recorded_events() -> set[str]:
     return found
 
 
-#: Recorded user actions with no entry in the replay map. Unlike the passive
-#: events above, these should probably become REPLAYABLE rather than stripped --
-#: octowright exposes browser_switch_frame and browser_get_text_by as tools, so a
-#: recording that used them describes real intent. Deciding that is a feature
-#: change, not a strip-list edit, so they are pinned here as a known gap: the
-#: test still fails on any NEW unclassified event.
-KNOWN_UNCLASSIFIED = {"switch_frame", "get_text_by"}
+#: Nothing. switch_frame and get_text_by used to sit here as a known gap; they
+#: are replayable now, which is what they always should have been.
+KNOWN_UNCLASSIFIED: set[str] = set()
 
 
 def test_every_recorded_event_is_either_replayable_or_stripped() -> None:
@@ -87,3 +87,53 @@ def test_recorder_noise_is_derived_from_the_replay_list() -> None:
     """One definition. Two hand-kept copies is how the vocabularies diverged."""
     assert {"user_navigation"} == RECORDER_NOISE - _REPLAY_PASSIVE
     assert _REPLAY_PASSIVE < RECORDER_NOISE
+
+
+@pytest.mark.anyio
+async def test_switch_frame_replays_without_its_observed_landing() -> None:
+    """The selector chose the frame; index/frame_url/frame_name describe where it landed.
+
+    Passing those back would be a TypeError on a method that only takes
+    selector/name/url_pattern -- and replay must re-resolve the frame from the
+    live page anyway, since an index recorded yesterday means nothing today.
+    """
+    session = MagicMock()
+    session.switch_frame = AsyncMock()
+    session.diagnostic_bundle = AsyncMock(return_value={})
+
+    executed, errors = await macros._dispatch_simple(
+        session,
+        {
+            "action": "switch_frame",
+            "selector": "#checkout-iframe",
+            "name": None,
+            "url_pattern": None,
+            "index": 2,
+            "frame_url": "https://provider.test/pay",
+            "frame_name": "pay",
+        },
+    )
+
+    assert (executed, errors) == (1, 0)
+    session.switch_frame.assert_awaited_once_with(selector="#checkout-iframe", name=None, url_pattern=None)
+
+
+@pytest.mark.anyio
+async def test_get_text_by_replays_without_the_text_it_read() -> None:
+    """`result` is the observation, and dropping it matters more here than elsewhere.
+
+    get_text_by takes **finders, so a stray `result` would not raise as an
+    unexpected kwarg -- it would be handed to the locator builder as though it
+    were a finder, and match nothing.
+    """
+    session = MagicMock()
+    session.get_text_by = AsyncMock()
+    session.diagnostic_bundle = AsyncMock(return_value={})
+
+    executed, errors = await macros._dispatch_simple(
+        session,
+        {"action": "get_text_by", "test_id": "order-total", "result": "$49.00"},
+    )
+
+    assert (executed, errors) == (1, 0)
+    session.get_text_by.assert_awaited_once_with(test_id="order-total")

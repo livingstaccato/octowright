@@ -36,8 +36,15 @@ def action_kwargs(action: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in action.items() if key not in RECORDING_NOISE_KEYS}
 
 
+#: Actions whose locator IS the semantic keys, so stripping them would remove
+#: the thing the action matches on. Enumerated rather than inferred, and it has
+#: already been missed once: get_text_by was absent, so replaying one called
+#: session.get_text_by() with no finder at all.
+_SEMANTIC_ACTIONS = {"click", "fill", "click_by", "fill_by", "get_text_by"}
+
+
 def strip_non_aria_noise(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
-    if kind in {"click", "fill", "click_by", "fill_by"}:
+    if kind in _SEMANTIC_ACTIONS:
         return dict(kwargs)
 
     cleaned = dict(kwargs)
