@@ -134,14 +134,19 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/bootstrap-uv
-      - name: Install Playwright browsers (act)
-        if: ${{ env.ACT == 'true' }}
-        run: uv run --active playwright install webkit firefox chromium
-      - name: Install Playwright browsers + Linux deps (github)
-        if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
+      # Linux needs --with-deps: the downloaded browsers link against system
+      # libraries (libgbm.so.1 and friends) that neither a GitHub runner nor an
+      # act container ships. This applies under act too — act runs the same
+      # ubuntu image, as root, so the apt step works there as well. Splitting
+      # act onto a deps-less install produced browsers that installed fine and
+      # then died on launch with "error while loading shared libraries", which
+      # surfaced ~200 lines later as an unrelated-looking "Target page, context
+      # or browser has been closed".
+      - name: Install Playwright browsers + Linux deps
+        if: ${{ runner.os == 'Linux' }}
         run: uv run --active playwright install --with-deps webkit firefox chromium
-      - name: Install Playwright browsers (github)
-        if: ${{ env.ACT != 'true' && runner.os != 'Linux' }}
+      - name: Install Playwright browsers
+        if: ${{ runner.os != 'Linux' }}
         run: uv run --active playwright install webkit firefox chromium
       # Under act, skip tests that need real-display/popup/live-engine support.
       - name: Run unit tests (headless, act-safe subset)
