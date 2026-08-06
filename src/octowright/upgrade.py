@@ -40,6 +40,19 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.9": [
+        "One macro now works against every deployment. A persona's default_url becomes the browser context's "
+        "base_url, so browser_navigate('/orders') resolves per persona — launch the same macro as a different "
+        "persona to replay it against a local stack, staging or production instead of keeping a divergent copy "
+        "per environment. Library callers with no persona can set LaunchOptions.base_url directly. Absolute "
+        "URLs and existing macros are untouched.",
+        "Replaying a recording no longer invents failures. Passive rows the recorder emits — websocket frames, "
+        "dialog/download outcomes — were classified nowhere and each counted as an error, so one captured "
+        "library reported 608 bogus failures on every run. The strip-list is now derived from the recorder "
+        "instead of hand-mirrored, and a test fails on any new unclassified event.",
+        "switch_frame and get_text_by replay for real. Both were recorded but performed by nothing, so a macro "
+        "that entered an iframe or asserted on a value silently did neither.",
+    ],
     "0.13.8": [
         "The leader now defends itself against a follower reconnect/session storm — the failure that could "
         "balloon the shared daemon to many GB of RAM and starve real tool calls until every connected client "
