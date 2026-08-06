@@ -23,11 +23,23 @@ log = get_logger(__name__)
 # Passive observer events (page emits these on its own — not user actions).
 # We strip them in dispatch_simple so a macro built from a raw recording
 # doesn't tally bogus "error" steps for them.
+#
+# This list drifted from the recorder. Sockets are recorded as
+# ``websocket_{direction}`` for Playwright's own "framesent"/"framereceived"
+# (session/core_io_mixin.py), and those two names were never added here — so a
+# macro built from a recording of any socket-backed page tallied one bogus
+# error per FRAME. One captured library carried 608 of them. ``websocket_error``
+# had the same gap. ``websocket_inbound``/``websocket_outbound`` have no emitter
+# at all any more and are kept only so recordings made under the older
+# vocabulary still replay clean.
 _REPLAY_PASSIVE = {
     "console",
     "popup_opened",
     "websocket_opened",
     "websocket_closed",
+    "websocket_framesent",
+    "websocket_framereceived",
+    "websocket_error",
     "websocket_inbound",
     "websocket_outbound",
     "markdown_cached",
@@ -35,6 +47,11 @@ _REPLAY_PASSIVE = {
     "websocket_cache_error",
     "trace_stop_error",
     "dialog_handler_error",
+    # Outcomes of something the harness did, not instructions to redo it.
+    # Same gap as the socket frames: recorded, unclassified, counted as errors.
+    "dialog_handled",
+    "download_saved",
+    "download_save_error",
 }
 _REPLAY_SKIP = {"launch", "close", "snapshot"}
 _ACTION_MAP = {
