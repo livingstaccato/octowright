@@ -39,6 +39,11 @@ class LaunchOptions:
     viewport_w: int | None = None
     viewport_h: int | None = None
     profile: str | None = None
+    #: Origin that relative navigation resolves against (Playwright's context
+    #: ``base_url``). Explicit here for callers that drive octowright as a
+    #: library with no saved persona; otherwise the persona's ``default_url``
+    #: supplies it. Set both and this one wins -- the caller is more specific.
+    base_url: str | None = None
     stabilize: bool = False
     record_video: bool = False
     trace: bool = False
@@ -65,6 +70,7 @@ class LaunchOptions:
             viewport_w=options.get("viewport_w"),
             viewport_h=options.get("viewport_h"),
             profile=options.get("profile"),
+            base_url=options.get("base_url"),
             stabilize=options.get("stabilize", False),
             record_video=options.get("record_video", False),
             trace=options.get("trace", False),

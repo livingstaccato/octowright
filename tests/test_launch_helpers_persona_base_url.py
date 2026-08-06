@@ -141,3 +141,41 @@ async def test_the_ephemeral_path_carries_no_base_url_without_a_persona(
 
     assert browser_type.context_kwargs is not None
     assert "base_url" not in browser_type.context_kwargs
+
+
+async def test_an_explicit_base_url_wins_over_the_persona(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A caller that names an origin is more specific than the persona's default.
+
+    This is the seam for driving octowright as a library with no saved persona
+    at all -- a suite replaying macros against a dev stack, a batch run pinned
+    to one tier.
+    """
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path)
+    _write_persona(tmp_path, "buyer", "name: buyer\ndefault_url: https://proving.account.undef.games/\n")
+
+    assert launch_helpers.base_url_kwargs("buyer", "http://localhost:42173") == {"base_url": "http://localhost:42173"}
+    assert launch_helpers.base_url_kwargs(None, "http://localhost:42175") == {"base_url": "http://localhost:42175"}
+    assert launch_helpers.base_url_kwargs("buyer") == {"base_url": "https://proving.account.undef.games/"}
+    assert launch_helpers.base_url_kwargs(None) == {}
+
+
+def test_a_base_url_is_validated_like_any_navigation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """It has to be. A relative navigate is allowed BECAUSE it inherits this
+    origin, so an unchecked base_url would let '/' in a macro reach a host the
+    navigation guard would otherwise refuse."""
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="scheme"):
+        launch_helpers.base_url_kwargs(None, "javascript:alert(1)")
+    with pytest.raises(ValueError, match="scheme"):
+        launch_helpers.base_url_kwargs(None, "not-a-url")
+
+
+def test_a_relative_path_is_allowed_but_protocol_relative_is_not() -> None:
+    """'/orders' is same-origin by construction; '//evil.test/x' is a different host."""
+    from octowright.session.core_page_mixin import _reject_unsafe_url
+
+    _reject_unsafe_url("/orders")
+    _reject_unsafe_url("/#/admin")
+    with pytest.raises(ValueError, match="scheme"):
+        _reject_unsafe_url("//evil.test/x")
