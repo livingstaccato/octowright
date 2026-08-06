@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.9] - 2026-08-06
+
+### Added
+- **A persona's `default_url` is the browser context's `base_url`.** A macro is
+  the behaviour; the persona is the *where* — but browser contexts were the one
+  place that did not honour that split, so a macro had to bake an origin into
+  every navigate, and proving the same flow against a second deployment meant a
+  second copy of the same behaviour that then drifted from the first.
+  `default_url` now becomes Playwright's `base_url`, so
+  `browser_navigate("/orders")` resolves per persona and the same macro replays
+  against a local stack, a staging tier or production by launching it as a
+  different persona. Deliberately silent when there is nothing to say: a profile
+  name need not be a saved persona and a persona need not declare a
+  `default_url` — both pass no `base_url` at all rather than `None`, so absolute
+  URLs and every existing macro keep working untouched.
+- **Explicit `LaunchOptions.base_url`.** A caller driving octowright as a library
+  has no persona to speak for it — a suite replaying macros against a dev stack,
+  a batch run pinned to one tier. Explicit wins over the persona's `default_url`,
+  because a caller naming an origin is more specific than a default.
+
+### Fixed
+- **`browser_navigate` accepts a relative path.** `_reject_unsafe_url` demanded a
+  scheme, so `/orders` never reached Playwright to be resolved at all. One
+  leading slash is same-origin by construction — no scheme to deny, no new host
+  to check — and is now allowed; **two** slashes is protocol-relative
+  (`//evil.test/x` is a different host) and still goes through the absolute
+  checks. That relaxation is only sound if the inherited origin is itself
+  trusted, so `base_url` is now validated through the same guard every
+  navigation uses — otherwise an unchecked `base_url` would be a way to reach a
+  host the SSRF policy refuses by writing `/` in a macro.
+- **Replay no longer reports failures for the passive rows the recorder emits.**
+  The strip-list had drifted from the recorder with nothing checking it: sockets
+  are recorded as `websocket_{direction}` (Playwright's `framesent` /
+  `framereceived`) but the list still named `websocket_inbound` /
+  `websocket_outbound`, an older vocabulary with no emitter left. Unclassified
+  kinds count as errors in `dispatch_simple`, so one captured macro library
+  carried 608 frames and reported **608 bogus failures on every replay**.
+  `websocket_error`, `dialog_handled`, `download_saved` and
+  `download_save_error` had the same gap — outcomes of something the harness
+  did, not instructions to redo it. The dead `inbound`/`outbound` names are
+  retained so recordings made under the older vocabulary still replay clean, and
+  the two hand-maintained copies of this vocabulary (in `runtime` and
+  `recording_import`, which disagreed with the recorder *and* with each other)
+  are replaced by a derived `RECORDER_NOISE`. A new test pins the missing
+  invariant: every event the recorder emits must be replayable, skipped or
+  stripped, so any NEW unclassified event fails.
+- **`switch_frame` and `get_text_by` are replayable.** Both were recorded and
+  classified nowhere, so `dispatch_simple` counted each as an error rather than
+  performing it — a macro that entered an iframe never re-entered it, and one
+  that read a value never asserted on it. Each records its observation alongside
+  its inputs, so each needed a drop entry: `switch_frame` records the frame it
+  *landed* on (index, url, name) and replay must re-resolve that from the live
+  page, since an index recorded yesterday means nothing today; `get_text_by`
+  records the text it read, and dropping that matters more than usual because
+  the method takes `**finders`, so a stray `result` would not raise as an
+  unexpected kwarg — it would reach the locator builder as though it were a
+  finder. `get_text_by` also needed allowlisting in `strip_non_aria_noise`,
+  which treats the semantic locator keys as noise for every kind except
+  `click`/`fill`/`click_by`/`fill_by`; those keys *are* this action's finders, so
+  replaying one called `session.get_text_by()` with no finder at all. The
+  allowlist enumerated three semantic actions and missed the fourth; it is now a
+  named set.
+
+### Security
+- **`cryptography` floor raised to 50.0.0** (PYSEC-2026-3552). Windows ARM64
+  keeps its existing 46.0.3 pin — upstream ships no `win_arm64` wheels past that
+  — and the pip-audit gate runs on Linux, so the exception does not weaken it.
+
 ## [0.13.8] - 2026-07-20
 
 ### Fixed
