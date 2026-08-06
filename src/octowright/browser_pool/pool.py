@@ -194,6 +194,7 @@ class BrowserPool:
                 ctx_video_kwargs=ctx_video_kwargs,
                 ctx_har_kwargs=ctx_har_kwargs,
                 launch_kwargs=launch_kwargs,
+                base_url=launch_options.base_url,
             )
         except asyncio.CancelledError:
             await cleanup_failed_launch(

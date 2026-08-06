@@ -122,6 +122,14 @@ def _reject_unsafe_url(url: str) -> None:
     if not isinstance(url, str) or not url:
         raise ValueError("navigate url must be a non-empty string")
     stripped = url.strip()
+    # One leading slash is a path on the context's own base_url: same origin by
+    # construction, so there is no scheme to deny and no new host to check. This
+    # is what lets a macro navigate '/orders' and stay portable across
+    # deployments. TWO slashes is protocol-relative -- '//evil.test/x' resolves
+    # to a DIFFERENT host -- so it falls through to the absolute checks below.
+    # The base_url it resolves against is validated where it is set.
+    if stripped.startswith("/") and not stripped.startswith("//"):
+        return
     scheme, sep, _rest = stripped.partition(":")
     if not sep:
         raise ValueError(f"navigate url missing scheme: {url!r}")
