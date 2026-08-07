@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has no persona to speak for it — a suite replaying macros against a dev stack,
   a batch run pinned to one tier. Explicit wins over the persona's `default_url`,
   because a caller naming an origin is more specific than a default.
+- **Concurrency cap on headed launches in `spawn_roster`
+  (`OCTOWRIGHT_HEADED_LAUNCH_CONCURRENCY`, default 3).** A big headed roster or
+  scenario now creates windows in batches instead of firing every launch at the
+  same instant, bounded by a per-call semaphore; **headless is never throttled**
+  and stays fully parallel. This is **defensive hardening, not a proven crash
+  fix**: characterisation of the recurring headed-Chromium crash reproduced it via
+  rapid *sequential* `browser_launch` churn, while concurrent `spawn_roster`
+  launches did *not* reproduce it. Capping simultaneous window creation is still
+  prudent — window-server / GPU pressure scales with it — and cheap. The exact
+  churn trigger remains under investigation. An unparsable value falls back to the
+  default; the floor is 1.
 
 ### Fixed
 - **`browser_navigate` accepts a relative path.** `_reject_unsafe_url` demanded a
@@ -67,6 +78,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replaying one called `session.get_text_by()` with no finder at all. The
   allowlist enumerated three semantic actions and missed the fourth; it is now a
   named set.
+
+- **`make act-test` was unpassable.** The CI test job installed Playwright
+  browsers without `--with-deps` under `act`, so the container downloaded binaries
+  that could not load (`error while loading shared libraries: libgbm.so.1`) and
+  every live-browser test failed. Playwright warned at install time — "Host system
+  is missing dependencies to run browsers" — but the step still exited 0, so the
+  failure surfaced much later as a misleading "Target page, context or browser has
+  been closed". `act` runs the same ubuntu image as root, so the apt step it was
+  avoiding works there; the act-specific branch is gone and the condition is now
+  simply "is this Linux". Contributor tooling only — GitHub CI always passed
+  `--with-deps` and was never affected.
 
 ### Security
 - **`cryptography` floor raised to 50.0.0** (PYSEC-2026-3552). Windows ARM64
