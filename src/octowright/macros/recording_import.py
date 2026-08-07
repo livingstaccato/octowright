@@ -10,28 +10,21 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from octowright.macros.runtime import _REPLAY_PASSIVE
+
 ALWAYS_STRIP = {"close", "snapshot"}
 LIFECYCLE = {"launch"}
 
 # Passive recorder events: observations and cache/lifecycle notices that are not
 # replayable actions. Saving them into a macro only bloats it and inflates replay
 # (e.g. a `user_navigation` to the internal new-tab landing page, or `markdown_cached`
-# entries, are pure noise). Mirrors macros.runtime._REPLAY_PASSIVE plus the
+# entries, are pure noise). This is macros.runtime._REPLAY_PASSIVE plus the
 # user-driven navigation artifact, which has no entry in the replay action map.
-RECORDER_NOISE = {
-    "user_navigation",
-    "console",
-    "popup_opened",
-    "websocket_opened",
-    "websocket_closed",
-    "websocket_inbound",
-    "websocket_outbound",
-    "markdown_cached",
-    "markdown_cache_error",
-    "websocket_cache_error",
-    "trace_stop_error",
-    "dialog_handler_error",
-}
+# Derived, not mirrored. Both lists were maintained by hand and drifted apart
+# from the recorder: sockets are recorded as websocket_framesent /
+# websocket_framereceived, and neither copy had them, so every frame was saved
+# into the macro AND tallied as a bogus error on replay.
+RECORDER_NOISE = _REPLAY_PASSIVE | {"user_navigation"}
 
 
 def iter_macro_actions(

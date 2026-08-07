@@ -44,12 +44,12 @@ dependencies = [
     "anyio>=4.4.0",
     "provide-telemetry[otel]>=0.4.8",
     "click>=8.1",
-    # Security floor: cryptography >=48.0.1 fixes GHSA-537c-gmf6-5ccf everywhere
-    # a wheel exists (Linux, macOS, win-amd64).
-    "cryptography>=48.0.1; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
+    # Security floor: cryptography >=50.0.0 fixes PYSEC-2026-3552 (and the older
+    # GHSA-537c-gmf6-5ccf) everywhere a wheel exists (Linux, macOS, win-amd64).
+    "cryptography>=50.0.0; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
     # Windows ARM64 has no cryptography wheel after 46.0.3 and the runner can't
     # build from source, so it stays on the newest installable release. The
-    # pip-audit gate runs on Linux (patched 49.x), so this exception doesn't
+    # pip-audit gate runs on Linux (patched 50.x), so this exception doesn't
     # weaken it; revisit when upstream resumes win_arm64 wheel coverage.
     "cryptography>=46.0.3,<46.0.4; sys_platform == 'win32' and (platform_machine == 'ARM64' or platform_machine == 'arm64' or platform_machine == 'aarch64')",
     "pyyaml>=6",

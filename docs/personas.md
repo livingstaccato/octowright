@@ -60,11 +60,39 @@ Field reference:
 |---|---|
 | `name` | Slug used for the directory and CLI lookups. Must match the parent dir name. |
 | `display_name` | Human-readable label shown in dashboard cards and window titles. |
-| `default_url` | URL `browser_launch profile=dante` opens when no `url` is given. |
+| `default_url` | URL `browser_launch profile=dante` opens when no `url` is given, **and** the context's Playwright `base_url` — see "Host-relative macros" below. |
 | `default_macros` | List of macro names to run automatically after launch (e.g. login flow). |
 | `emoji` | Override for the auto-picked title-bar persona emoji. |
 | `credentials` | References to env vars (`*_env`) or shell commands (`*_cmd`) — never the secrets themselves. |
-| `app` | Free-form dict for domain metadata (Octowright never reads it; macros and scenarios can). |
+| `app` | Domain metadata for macros and scenarios. Mostly free-form, with one key Octowright reads itself: `app.hosts`, a list that `resolve` scores a persona against when suggesting one for a URL. |
+
+## Host-relative macros
+
+A macro is the **behaviour**; the persona is the **where**. Keep origins out of
+macros and let the persona supply one:
+
+```yaml
+# persona: buyer-proving
+default_url: https://proving.account.undef.games/
+```
+
+```yaml
+# macro: buyer-orders — no origin anywhere in it
+actions:
+  - navigate: "/orders"
+  - expect_url: "/orders"
+```
+
+`default_url` is handed to the browser context as Playwright's `base_url`, so
+`navigate` resolves a relative path against the persona's origin and
+`expect_url` accepts the same relative form. The same macro then replays against
+a local stack, a staging deployment or production by launching it as a different
+persona — no macro edit, no per-environment copies of the same behaviour.
+
+Absolute URLs are unaffected, so existing macros keep working. A profile that is
+not a saved persona, or a persona with no `default_url`, gets no `base_url`;
+relative navigation then fails in Playwright, which is the honest outcome —
+nothing declared where the macro was meant to point.
 
 ## Credentials workflow
 

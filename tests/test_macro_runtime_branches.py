@@ -115,15 +115,22 @@ class TestConstantTables:
             ("switch_page", "switch_page"),
             ("close_page", "close_page"),
             ("reset_frame", "reset_frame"),
+            ("switch_frame", "switch_frame"),
+            ("get_text_by", "get_text_by"),
         ],
     )
     def test_action_map_pins_every_action_to_session_method(self, kind: str, method: str) -> None:
         """_ACTION_MAP must keep its kind→method-name binding stable."""
         assert _ACTION_MAP[kind] == method
 
-    def test_action_map_size_is_exactly_27(self) -> None:
-        """Adding/removing keys to _ACTION_MAP is a contract change — fail loudly."""
-        assert len(_ACTION_MAP) == 27
+    def test_action_map_size_is_exactly_29(self) -> None:
+        """Adding/removing keys to _ACTION_MAP is a contract change — fail loudly.
+
+        Went 27 -> 29 when switch_frame and get_text_by became replayable. Both
+        were already recorded and classified nowhere, so every recording that
+        used them tallied an error instead of replaying the action.
+        """
+        assert len(_ACTION_MAP) == 29
 
     def test_type_kind_maps_to_type_text_not_type(self) -> None:
         """Pin the rename from 'type' kind → session.type_text method (not session.type)."""
