@@ -265,6 +265,20 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
   **ON by default**; `=0` disables. Headless is never auto-protected.
   Outranked by `OCTOWRIGHT_PROTECT_BROWSERS=1` (protect all). Parser/const:
   `defaults.PROTECT_HEADED_DEFAULT`; resolver `browser_pool.options.resolve_protected`.
+- `OCTOWRIGHT_HEADED_LAUNCH_CONCURRENCY` — how many **headed** browsers
+  `spawn_roster` may launch at the same instant (**default 3**), via a per-call
+  `asyncio.Semaphore`. A big headed roster/scenario now starts in batches rather
+  than firing every window creation simultaneously; **headless is never
+  throttled** (`headed is False` bypasses the gate entirely, and `headed=None`
+  resolves headed-by-default so it goes through it). Explicitly **defensive
+  hardening, NOT a proven crash fix** — characterisation of the recurring
+  headed-Chromium crash reproduced it through rapid *sequential* `browser_launch`
+  churn, and concurrent `spawn_roster` launches did *not* reproduce it; bounding
+  simultaneous window creation is merely prudent, since window-server/GPU pressure
+  scales with it. The exact churn trigger is still under investigation. An
+  unparsable value falls back to the default; the floor is 1 (a non-positive value
+  would deadlock). Parser/const: `browser_pool.limits.headed_launch_concurrency` /
+  `HEADED_LAUNCH_CONCURRENCY_DEFAULT`.
 
 ## Telemetry (OpenTelemetry)
 
