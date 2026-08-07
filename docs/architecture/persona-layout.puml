@@ -37,6 +37,15 @@ note right of DANTE
   It owns metadata + arbitrary sidecar files.
 end note
 
+note right of DY
+  `default_url` is also the context's
+  Playwright **base_url**, so a macro can
+  navigate `/orders` rather than an origin.
+  The macro is the BEHAVIOUR; the persona
+  is the WHERE — swap persona to replay the
+  same macro against another deployment.
+end note
+
 note right of DW
   An **engine profile** is `<persona>/<kind>/`.
   This is what Playwright's `user_data_dir`
