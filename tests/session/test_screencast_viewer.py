@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from octowright.session.screencast import ScreencastViewer
+from octowright.session.screencast import ScreencastEnded, ScreencastViewer
 
 
 @pytest.mark.asyncio
@@ -93,6 +93,35 @@ async def test_fps_clamps_to_at_least_one(fps):
     assert await v.get() == b"first"
     assert await v.get() == b"ok"
     assert v.pending() == 0
+
+
+@pytest.mark.asyncio
+async def test_end_wakes_a_blocked_waiter_with_screencast_ended():
+    v = ScreencastViewer(fps=1000)
+    getter = asyncio.create_task(v.get())
+    await asyncio.sleep(0)
+    v.end()
+    with pytest.raises(ScreencastEnded):
+        await getter
+
+
+@pytest.mark.asyncio
+async def test_end_drains_buffered_frames_before_raising():
+    v = ScreencastViewer(fps=1000)
+    v.offer(b"last-frame")
+    v.end()
+    assert await v.get() == b"last-frame"
+    with pytest.raises(ScreencastEnded):
+        await v.get()
+
+
+@pytest.mark.asyncio
+async def test_offer_after_end_is_dropped():
+    v = ScreencastViewer(fps=1000)
+    v.end()
+    v.offer(b"too-late")
+    with pytest.raises(ScreencastEnded):
+        await v.get()
 
 
 @pytest.mark.asyncio
