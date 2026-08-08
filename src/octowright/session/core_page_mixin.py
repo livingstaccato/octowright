@@ -23,6 +23,7 @@ from octowright.defaults import (
     REDACTED_INPUT_PLACEHOLDER,
 )
 from octowright.session._protocols import SessionLike
+from octowright.session.screencast import notify_active_page
 
 log = get_logger(__name__)
 
@@ -175,6 +176,7 @@ class SessionPageMixin(SessionLike):
         if index < 0 or index >= len(self.pages):
             raise IndexError(f"page index {index} out of range (0..{len(self.pages) - 1})")
         self.page = self.pages[index]
+        await notify_active_page(self.instance_id, self.page)
         self.recorder.record("switch_page", index=index, url=self.page.url)
         return {"index": index, "url": self.page.url, "page_count": len(self.pages)}
 
@@ -215,6 +217,8 @@ class SessionPageMixin(SessionLike):
             self.page = sibling
         self.pages.pop(index)
         await target.close()
+        if was_active:
+            await notify_active_page(self.instance_id, self.page)
         self.recorder.record("close_page", index=index, was_active=was_active)
         # Re-derive active_index after the await: a popup _on_page_close
         # listener can fire synchronously during target.close() and mutate

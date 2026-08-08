@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.10] - 2026-08-08
+
+### Fixed
+- **The live preview follows the active tab, and stops the tab it leaves.** The
+  screencast producer was started on whatever page was active when the first
+  viewer connected, but every later decision read `session.page` — and those two
+  drift apart. `page_switch` / `page_close` moved the active page with no rebind,
+  so the dashboard kept showing the old tab while the *final* stop was aimed at a
+  page that had never been started, leaving the original encoder running for the
+  life of that page. The manager now tracks the page it actually bound, both page
+  tools rebind through it, and the release path stops what it started.
+- **A failed rebind wakes its viewers instead of freezing them.** When
+  `screencast.start` failed while moving the producer to a replacement page, the
+  manager cleared its started flag with viewers still attached, so every later
+  rebind returned early and those viewers blocked forever on a stream that could
+  not resume — with no WebSocket close, the dashboard never fell back to
+  screenshot polling either. Viewers are now ended explicitly and the endpoint
+  closes `1011`.
+- **A background-tab crash no longer breaks the preview.** Crash recovery only
+  swaps `session.page` when the *active* page died, yet publishes a
+  session-level recovered event either way, so a background crash rebound the
+  manager onto the page it was already casting — which Playwright refuses
+  (`Screencast is already started`). The manager was left believing it had
+  stopped: the producer leaked and the next viewer failed to attach. Rebinding to
+  the already-bound page is now a no-op.
+- **Closing a session ends its live preview.** `SessionClosedEvent` carries no
+  `outcome`, so the recovery watcher discarded it and a viewer attached at close
+  waited on frames that would never arrive. Session closes now stop the producer
+  and end the viewers. The subscription is also taken *before* the producer
+  starts, and in the caller's step rather than inside the watcher task — the
+  event bus drops events that have no subscriber, so a close landing before the
+  task's first step (or during the Playwright start round-trip) was silently
+  lost, reproducing the same hang.
+- **Screenshot fallback polls one request at a time again.** The screencast
+  rewrite dropped the in-flight guard and error backoff: a fixed 3s interval
+  replaced `img.src` before the previous request had loaded, so a screenshot
+  slower than the interval aborted every frame while the server kept doing the
+  work, failures retried at full rate, and the timestamp advanced at request time
+  rather than on load. The fallback is a self-scheduling chain again — one
+  request in flight, 2× backoff per consecutive failure capped at 30s, and a
+  timestamp that only moves when a frame actually arrives.
+
 ## [0.13.9] - 2026-08-06
 
 ### Added

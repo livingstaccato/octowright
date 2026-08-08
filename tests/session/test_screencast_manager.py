@@ -26,10 +26,16 @@ class FakeScreencast:
     async def start(self, on_frame=None, quality=None):
         if self.fail_start:
             raise RuntimeError("start failed")
+        if self.started:
+            # Mirrors Playwright: a second start on the same page is an error.
+            raise RuntimeError("Screencast is already started")
         self.started = True
         self._on_frame = on_frame
 
     async def stop(self):
+        # Playwright clears its started flag before the channel call, so even a
+        # failing stop leaves the page startable again.
+        self.started = False
         if self.fail_stop:
             raise RuntimeError("stop failed")
         self.stopped = True
