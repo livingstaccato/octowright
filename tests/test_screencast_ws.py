@@ -181,6 +181,41 @@ def test_screencast_websocket_acquire_failure_closes_1011_logs_and_does_not_rele
     ]
 
 
+def test_screencast_websocket_closes_1011_when_the_stream_ends_server_side(
+    app: Starlette,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session close (or a failed rebind) ends the viewer; the endpoint must
+    close the socket so the dashboard drops to screenshot polling."""
+    manager = object()
+    release_calls: list[tuple[object, object]] = []
+
+    class EndedViewer:
+        async def get(self) -> bytes:
+            raise scr.ScreencastEnded("screencast ended")
+
+    viewer = EndedViewer()
+
+    async def fake_acquire_viewer(_session: object, *, fps: int, quality: int) -> tuple[object, EndedViewer]:
+        return manager, viewer
+
+    async def fake_release_viewer(released_manager: object, released_viewer: object) -> None:
+        release_calls.append((released_manager, released_viewer))
+
+    monkeypatch.setattr(scr, "acquire_viewer", fake_acquire_viewer)
+    monkeypatch.setattr(scr, "release_viewer", fake_release_viewer)
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/api/sessions/ws1/screencast") as ws,
+        pytest.raises(WebSocketDisconnect) as excinfo,
+    ):
+        ws.receive_bytes()
+
+    assert excinfo.value.code == 1011
+    assert release_calls == [(manager, viewer)]
+
+
 def test_screencast_websocket_releases_viewer_on_client_disconnect(
     app: Starlette,
     monkeypatch: pytest.MonkeyPatch,

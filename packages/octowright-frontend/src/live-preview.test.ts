@@ -359,6 +359,9 @@ describe("mountLivePreview — live session", () => {
     expect(badge.textContent).toBe("LIVE");
     const firstSrc = img.src;
 
+    // Only a resolved frame releases the in-flight guard and schedules the
+    // next poll (see live-preview-fallback.test.ts).
+    img.dispatchEvent(new Event("load"));
     await vi.advanceTimersByTimeAsync(1200);
     expect(img.src).toContain("/api/sessions/live-fallback/screenshot/now?format=png");
     expect(img.src).not.toBe(firstSrc);
