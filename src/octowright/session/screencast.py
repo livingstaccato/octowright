@@ -9,27 +9,48 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
-from contextlib import suppress
-from typing import Protocol
+from contextlib import AsyncExitStack, suppress
+from typing import Any, Protocol
 
 from provide.telemetry import get_logger
 
 log = get_logger(__name__)
 
+# Stopping the producer on a page that just crashed (or is being torn down) can
+# hang on the Playwright channel; a live preview must not wedge the endpoint's
+# release path waiting for it.
+_STOP_TIMEOUT_SECONDS = 5.0
+
+
+class ScreencastEnded(Exception):
+    """Raised by :meth:`ScreencastViewer.get` when the stream ended server-side.
+
+    The producer is gone for good (the session closed, or a rebind could not
+    reattach it), so the endpoint closes the WebSocket and the dashboard falls
+    back to screenshot polling instead of blocking on frames that never come.
+    """
+
 
 class _PageScreencast(Protocol):
+    # Loosely typed on purpose: Playwright's ``Page.screencast.start`` takes a
+    # ``ScreencastFrame`` TypedDict callback and returns an async context
+    # manager. The manager only ever uses the frame mapping and ignores the
+    # return, so the protocol stays wide enough for a real page to satisfy it.
     async def start(
         self,
         *,
-        on_frame: Callable[[Mapping[str, object]], None],
-        quality: int,
-    ) -> None: ...
+        on_frame: Callable[[Any], Any] | None = None,
+        quality: int | None = None,
+    ) -> Any: ...
 
     async def stop(self) -> None: ...
 
 
 class _ScreencastPage(Protocol):
-    screencast: _PageScreencast
+    # Read-only: Playwright exposes ``Page.screencast`` as a property, so a
+    # settable protocol member would not match a real page.
+    @property
+    def screencast(self) -> _PageScreencast: ...
 
 
 class _ScreencastSession(Protocol):
@@ -46,8 +67,11 @@ class ScreencastViewer:
         self._clock = clock
         self._last_accepted: float | None = None
         self._waiters: deque[asyncio.Future[None]] = deque()
+        self._ended = False
 
     def offer(self, frame: bytes) -> None:
+        if self._ended:
+            return
         try:
             now = self._clock()
             if self._last_accepted is not None and now - self._last_accepted < self._min_gap:
@@ -58,8 +82,22 @@ class ScreencastViewer:
         except Exception:
             return
 
+    def end(self) -> None:
+        """Mark the stream finished and wake every waiter with ``ScreencastEnded``.
+
+        Frames already queued are still delivered — ``get`` only raises once the
+        buffer is drained — so a viewer never loses the last frame it was sent.
+        """
+        self._ended = True
+        while self._waiters:
+            waiter = self._waiters.popleft()
+            if not waiter.done():
+                waiter.set_result(None)
+
     async def get(self) -> bytes:
         while not self._queue:
+            if self._ended:
+                raise ScreencastEnded("screencast stream ended")
             waiter = asyncio.get_running_loop().create_future()
             self._waiters.append(waiter)
             try:
@@ -94,7 +132,16 @@ class ScreencastManager:
         self._viewers: set[ScreencastViewer] = set()
         self._started = False
         self._recovery_task: asyncio.Task[None] | None = None
+        # Bus subscription backing the watcher. Held by the manager (not the
+        # task) so it exists from the moment the first viewer starts the
+        # producer — see _ensure_recovery_watcher_locked.
+        self._recovery_stack: AsyncExitStack | None = None
+        self._recovery_sub: Any = None
         self._instance_id = str(session.instance_id)
+        # The page the producer is actually attached to. NOT the same thing as
+        # ``session.page``: the active page moves on page_switch/page_close and
+        # on crash recovery, and the stop must target whatever we started.
+        self._bound_page: _ScreencastPage | None = None
         self.latest: bytes | None = None
 
     @property
@@ -113,13 +160,37 @@ class ScreencastManager:
             return viewer
 
     async def rebind(self, new_page: _ScreencastPage) -> None:
+        """Move the producer onto ``new_page`` (crash recovery, or a tab switch).
+
+        A rebind to the page we are already casting is a no-op: Playwright
+        refuses a second ``screencast.start`` on the same page, and a
+        session-level recovery event names the unchanged active page whenever a
+        *background* tab was the one that crashed.
+        """
         async with self._lock:
             self._session.page = new_page
             if not self._started or not self._viewers:
                 return
+            if new_page is self._bound_page:
+                return
 
+            await self._stop_bound_locked()
             self._started = False
-            await self._start_locked(new_page)
+            try:
+                await self._start_locked(new_page)
+            except BaseException:
+                # No producer left and no path back: wake the viewers so their
+                # sockets close and the dashboard falls back to polling.
+                self._end_viewers_locked()
+                raise
+
+    async def terminate(self) -> None:
+        """Stop the producer and end every viewer — the session is gone."""
+        async with self._lock:
+            if self._started:
+                self._started = False
+                await self._stop_bound_locked()
+            self._end_viewers_locked()
 
     async def remove_viewer(self, viewer: ScreencastViewer) -> None:
         async with self._lock:
@@ -135,13 +206,15 @@ class ScreencastManager:
                 await self._stop_recovery_watcher_locked()
                 return
 
+            bound = self._bound_page if self._bound_page is not None else self._session.page
             stop_error: BaseException | None = None
             try:
-                await self._session.page.screencast.stop()
+                await bound.screencast.stop()
             except BaseException as exc:
                 stop_error = exc
             finally:
                 self._started = False
+                self._bound_page = None
                 self._viewers.remove(viewer)
                 await self._stop_recovery_watcher_locked()
             if stop_error is not None:
@@ -157,50 +230,109 @@ class ScreencastManager:
             viewer.offer(data)
 
     async def _start_locked(self, page: _ScreencastPage) -> None:
-        await page.screencast.start(
-            on_frame=self._handle_frame,
-            quality=self._quality,
-        )
+        # Subscribe first: ``screencast.start`` awaits the Playwright channel, so
+        # a session close landing during that await would be dropped by the bus
+        # if we only subscribed afterwards.
+        await self._ensure_recovery_watcher_locked()
+        try:
+            await page.screencast.start(
+                on_frame=self._handle_frame,
+                quality=self._quality,
+            )
+        except BaseException:
+            if not self._viewers:
+                await self._stop_recovery_watcher_locked()
+            raise
         self._started = True
-        self._ensure_recovery_watcher_locked()
+        self._bound_page = page
 
-    def _ensure_recovery_watcher_locked(self) -> None:
+    async def _stop_bound_locked(self) -> None:
+        """Best-effort stop of the currently bound producer.
+
+        Called when the producer moves to another page or the session ends, so
+        the old page's encoder does not keep running (and keep pushing frames)
+        for the rest of its life. The page may be crashed or closing, hence the
+        timeout and the swallow.
+        """
+        page = self._bound_page
+        self._bound_page = None
+        if page is None:
+            return
+        try:
+            await asyncio.wait_for(page.screencast.stop(), timeout=_STOP_TIMEOUT_SECONDS)
+        except Exception as exc:
+            log.debug(
+                "octowright.screencast.stop_bound_failed",
+                instance_id=self._instance_id,
+                error=repr(exc),
+            )
+
+    def _end_viewers_locked(self) -> None:
+        for viewer in tuple(self._viewers):
+            viewer.end()
+
+    async def _ensure_recovery_watcher_locked(self) -> None:
+        """Subscribe to the session event bus, then (re)start the watcher task.
+
+        The subscription is taken HERE rather than inside the task: the bus
+        drops events that have no subscriber, and ``create_task`` only
+        *schedules* the task, so a ``SessionClosedEvent`` published before its
+        first step would be lost and the viewers would never be woken. Entering
+        the subscription context reaches no ``await`` that suspends, so it
+        completes in the caller's step — before ``add_viewer`` returns and
+        therefore before any other task can publish.
+        """
+        from octowright.browser_pool.session_event_bus import session_event_bus
+
+        if self._recovery_stack is None:
+            stack = AsyncExitStack()
+            self._recovery_sub = await stack.enter_async_context(session_event_bus.subscribe())
+            self._recovery_stack = stack
         if self._recovery_task is not None and not self._recovery_task.done():
             return
         self._recovery_task = asyncio.create_task(
-            self._watch_recovery(),
+            self._watch_recovery(self._recovery_sub),
             name=f"octowright.screencast.recovery.{self._instance_id}",
         )
 
     async def _stop_recovery_watcher_locked(self) -> None:
         task = self._recovery_task
+        stack = self._recovery_stack
         self._recovery_task = None
-        if task is None or task.done():
-            return
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        self._recovery_stack = None
+        self._recovery_sub = None
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        if stack is not None:
+            with suppress(Exception):
+                await stack.aclose()
 
-    async def _watch_recovery(self) -> None:
-        from octowright.browser_pool.session_event_bus import session_event_bus
+    async def _watch_recovery(self, sub: Any) -> None:
+        from octowright.browser_pool.session_event_bus import SessionClosedEvent
 
-        async with session_event_bus.subscribe() as sub:
-            while True:
-                event = await sub.get()
-                if getattr(event, "instance_id", None) != self._instance_id:
-                    continue
-                if getattr(event, "outcome", None) != "recovered":
-                    continue
-                try:
-                    await self.rebind(self._session.page)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    log.warning(
-                        "octowright.screencast.rebind_failed",
-                        instance_id=self._instance_id,
-                        error=repr(exc),
-                    )
+        while True:
+            event = await sub.get()
+            if getattr(event, "instance_id", None) != self._instance_id:
+                continue
+            if isinstance(event, SessionClosedEvent):
+                # No page left to cast. Stop and wake the viewers rather
+                # than leaving them blocked on a stream that ended.
+                await self.terminate()
+                return
+            if getattr(event, "outcome", None) != "recovered":
+                continue
+            try:
+                await self.rebind(self._session.page)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning(
+                    "octowright.screencast.rebind_failed",
+                    instance_id=self._instance_id,
+                    error=repr(exc),
+                )
 
 
 _registry_lock = asyncio.Lock()
@@ -234,6 +366,28 @@ async def acquire_viewer(
             await _finish_acquire(instance_id, manager, cleanup_empty=True)
         raise
     return manager, viewer
+
+
+async def notify_active_page(instance_id: str, page: _ScreencastPage) -> None:
+    """Follow a session's active-page change with any live screencast.
+
+    Called from ``switch_page`` / ``close_page``: without it the producer stays
+    on the page that was active when the first viewer connected, so the preview
+    shows the wrong tab and the old page's encoder is never stopped. Best-effort
+    — a page switch must not fail because the preview could not follow it.
+    """
+    async with _registry_lock:
+        manager = _managers.get(str(instance_id))
+    if manager is None:
+        return
+    try:
+        await manager.rebind(page)
+    except Exception as exc:
+        log.warning(
+            "octowright.screencast.active_page_rebind_failed",
+            instance_id=str(instance_id),
+            error=repr(exc),
+        )
 
 
 async def release_viewer(manager: ScreencastManager, viewer: ScreencastViewer) -> None:
