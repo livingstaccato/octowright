@@ -17,7 +17,13 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from octowright.http.discovery import _live_session_or_none
 from octowright.http.exposure import sensitive_allowed_for_connection, websocket_origin_allowed
-from octowright.session.screencast import ScreencastManager, ScreencastViewer, acquire_viewer, release_viewer
+from octowright.session.screencast import (
+    ScreencastEnded,
+    ScreencastManager,
+    ScreencastViewer,
+    acquire_viewer,
+    release_viewer,
+)
 from octowright.session.screencast_config import screencast_fps, screencast_quality
 
 log = get_logger(__name__)
@@ -108,6 +114,13 @@ class ScreencastEndpoint(WebSocketEndpoint):
             assert manager is not None  # nosec B101  # narrowed after successful acquire
             assert viewer is not None  # nosec B101  # narrowed after successful acquire
             await _stream_screencast(websocket, viewer)
+        except ScreencastEnded:
+            # The producer is gone (session closed, or a rebind could not
+            # reattach). Close so the dashboard drops to screenshot polling
+            # instead of holding a socket that will never carry another frame.
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1011, reason="screencast ended; use fallback")
+            return
         except WebSocketDisconnect:
             return
         finally:

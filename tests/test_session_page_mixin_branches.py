@@ -59,6 +59,8 @@ def _make_subject(tmp_path: Path) -> SessionPageMixin:
     page.wait_for_load_state = AsyncMock()
     subj.page = page
     subj.pages = [page]
+    # switch_page / close_page notify the screencast registry by instance_id.
+    subj.instance_id = "mixin-subject"
     subj.url = None
     subj.recorder = MagicMock()
     subj.recorder.record = MagicMock()

@@ -162,6 +162,51 @@ async def test_switch_page_is_active_reflects_new_selection(tmp_path: Path) -> N
     assert pages[1]["is_active"] is True
 
 
+@pytest.mark.anyio
+async def test_switch_page_rebinds_a_live_screencast(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A live dashboard preview must follow the active tab, not keep casting the
+    page that happened to be active when the first viewer connected."""
+    from octowright.session import core_page_mixin
+
+    calls: list[tuple[str, object]] = []
+
+    async def fake_notify(instance_id: str, page: object) -> None:
+        calls.append((instance_id, page))
+
+    monkeypatch.setattr(core_page_mixin, "notify_active_page", fake_notify)
+
+    session = _make_session(tmp_path)
+    popup = _make_page("https://popup.octowright.com")
+    session._register_popup(popup)
+
+    await session.switch_page(1)
+
+    assert calls == [("test-abc", popup)]
+
+
+@pytest.mark.anyio
+async def test_close_page_rebinds_a_live_screencast(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.session import core_page_mixin
+
+    calls: list[tuple[str, object]] = []
+
+    async def fake_notify(instance_id: str, page: object) -> None:
+        calls.append((instance_id, page))
+
+    monkeypatch.setattr(core_page_mixin, "notify_active_page", fake_notify)
+
+    session = _make_session(tmp_path)
+    original_page = session.page
+    popup = _make_page("https://popup.octowright.com")
+    session._register_popup(popup)
+    await session.switch_page(1)
+    calls.clear()
+
+    await session.close_page(1)
+
+    assert calls == [("test-abc", original_page)]
+
+
 # ---------------------------------------------------------------------------
 # close_page
 # ---------------------------------------------------------------------------
