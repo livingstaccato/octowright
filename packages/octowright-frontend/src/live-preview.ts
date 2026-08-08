@@ -31,9 +31,25 @@ export interface LivePreviewHandle {
   destroy: () => void;
 }
 
+/** Base cadence for the screenshot fallback when no interval was supplied. */
+const FALLBACK_INTERVAL_MS = 3000;
+/** Ceiling for the consecutive-failure backoff. */
+const FALLBACK_MAX_INTERVAL_MS = 30000;
+/** Failures past this stop lengthening the delay (2^4 × base, capped above). */
+const FALLBACK_MAX_BACKOFF_STEPS = 4;
+
 interface InternalState {
   stream: ScreencastHandle | null;
-  fallbackTimer: ReturnType<typeof setInterval> | null;
+  /** Pending next-tick handle. Null while a request is in flight — use
+   * `fallbackActive` to ask whether the fallback is running. */
+  fallbackTimer: ReturnType<typeof setTimeout> | null;
+  fallbackActive: boolean;
+  /** Set while an <img> fetch is outstanding so a slow screenshot endpoint
+   * can't have ticks stack requests and abort each other's images. */
+  fallbackInflight: boolean;
+  fallbackErrors: number;
+  /** Detaches the in-flight tick's load/error listeners. */
+  fallbackCleanup: (() => void) | null;
   generation: number;
   expectedCloseGeneration: number | null;
   destroyed: boolean;
@@ -73,6 +89,10 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   const state: InternalState = {
     stream: null,
     fallbackTimer: null,
+    fallbackActive: false,
+    fallbackInflight: false,
+    fallbackErrors: 0,
+    fallbackCleanup: null,
     generation: 0,
     expectedCloseGeneration: null,
     destroyed: false,
@@ -207,26 +227,81 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   };
 
   const stopFallbackPoll = (): void => {
-    if (state.fallbackTimer === null) return;
-    clearInterval(state.fallbackTimer);
-    state.fallbackTimer = null;
+    if (state.fallbackTimer !== null) {
+      clearTimeout(state.fallbackTimer);
+      state.fallbackTimer = null;
+    }
+    state.fallbackCleanup?.();
+    state.fallbackActive = false;
+    state.fallbackInflight = false;
+    state.fallbackErrors = 0;
   };
 
-  const updateFallbackFrame = (): void => {
-    if (state.destroyed || state.closed || state.fallbackTimer === null) return;
+  const fallbackBaseIntervalMs = (): number => opts.intervalMs ?? FALLBACK_INTERVAL_MS;
+
+  /** Base interval, doubled per consecutive failure, capped. */
+  const fallbackNextDelayMs = (): number => {
+    const steps = Math.min(state.fallbackErrors, FALLBACK_MAX_BACKOFF_STEPS);
+    return Math.min(FALLBACK_MAX_INTERVAL_MS, fallbackBaseIntervalMs() * 2 ** steps);
+  };
+
+  const scheduleFallbackTick = (delayMs: number): void => {
+    if (!state.fallbackActive || state.destroyed || state.closed) return;
+    if (state.fallbackTimer !== null) clearTimeout(state.fallbackTimer);
+    state.fallbackTimer = setTimeout(fallbackTick, delayMs);
+  };
+
+  function fallbackTick(): void {
+    state.fallbackTimer = null;
+    if (!state.fallbackActive || state.destroyed || state.closed) return;
+    // A screenshot slower than the poll interval must not be replaced mid-flight:
+    // swapping img.src aborts the pending load, so a slow server would abort
+    // every frame forever while the endpoint keeps doing the work.
+    if (state.fallbackInflight) {
+      scheduleFallbackTick(fallbackBaseIntervalMs());
+      return;
+    }
+
+    const cleanup = (): void => {
+      state.fallbackInflight = false;
+      state.fallbackCleanup = null;
+      img.removeEventListener("load", onLoad);
+      img.removeEventListener("error", onError);
+    };
+    const onLoad = (): void => {
+      cleanup();
+      state.fallbackErrors = 0;
+      lastUpdate.textContent = fmtTimestamp(new Date());
+      scheduleFallbackTick(fallbackBaseIntervalMs());
+    };
+    const onError = (): void => {
+      cleanup();
+      state.fallbackErrors += 1;
+      log.warn({
+        event: "live_preview_fallback_error",
+        session_id: opts.sessionId,
+        consecutive_errors: state.fallbackErrors,
+      });
+      scheduleFallbackTick(fallbackNextDelayMs());
+    };
+
+    state.fallbackInflight = true;
+    state.fallbackCleanup = cleanup;
+    img.addEventListener("load", onLoad);
+    img.addEventListener("error", onError);
     img.src = liveScreenshotUrl(opts.sessionId, {
       format: opts.format ?? "png",
       cacheBust: Date.now(),
     });
-    lastUpdate.textContent = fmtTimestamp(new Date());
-    setPlayingUi();
-    showFallbackNotice();
-  };
+  }
 
   const startFallbackPoll = (): void => {
-    if (state.destroyed || state.closed || state.fallbackTimer !== null) return;
-    state.fallbackTimer = setInterval(updateFallbackFrame, opts.intervalMs ?? 3000);
-    updateFallbackFrame();
+    if (state.destroyed || state.closed || state.fallbackActive) return;
+    state.fallbackActive = true;
+    state.fallbackErrors = 0;
+    setPlayingUi();
+    showFallbackNotice();
+    fallbackTick();
   };
 
   const stopActivePreview = (expectedStreamClose: boolean): void => {
@@ -235,7 +310,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   };
 
   const startStream = (): void => {
-    if (state.destroyed || state.closed || state.stream !== null || state.fallbackTimer !== null) return;
+    if (state.destroyed || state.closed || state.stream !== null || state.fallbackActive) return;
     state.generation += 1;
     const generation = state.generation;
     const url = screencastWsUrl(
@@ -295,7 +370,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     },
     stop: () => {
       if (state.destroyed || state.closed) return;
-      const wasRunning = state.stream !== null || state.fallbackTimer !== null;
+      const wasRunning = state.stream !== null || state.fallbackActive;
       stopActivePreview(true);
       setPausedUi();
       clearError();
@@ -335,7 +410,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   };
 
   playBtn.addEventListener("click", () => {
-    if (state.stream !== null || state.fallbackTimer !== null) {
+    if (state.stream !== null || state.fallbackActive) {
       handle.stop();
     } else {
       handle.start();

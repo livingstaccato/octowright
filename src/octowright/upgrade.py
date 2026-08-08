@@ -40,6 +40,16 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.13.10": [
+        "The dashboard's live preview now follows the tab you switch to. It used to keep streaming whichever "
+        "page was active when you opened it, and the tab it left kept encoding frames forever.",
+        "A live preview no longer freezes silently. If the stream can't be re-attached — the page it was "
+        "casting crashed and couldn't be replaced, or the session closed while you were watching — the socket "
+        "now closes and the panel drops to screenshot polling instead of showing a frame that never updates.",
+        "A crash in a background tab stops breaking the preview of the tab you're actually watching.",
+        "Screenshot fallback keeps one request in flight and backs off when the server is slow, so a sluggish "
+        "screenshot endpoint no longer aborts every frame while still doing all the work.",
+    ],
     "0.13.9": [
         "One macro now works against every deployment. A persona's default_url becomes the browser context's "
         "base_url, so browser_navigate('/orders') resolves per persona — launch the same macro as a different "
