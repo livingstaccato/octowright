@@ -212,6 +212,56 @@ async def test_session_closed_event_stops_the_producer_and_ends_viewers() -> Non
 
 
 @pytest.mark.asyncio
+async def test_close_event_published_before_the_watcher_task_runs_is_not_lost() -> None:
+    """The bus drops events with no subscriber, and ``create_task`` only
+    *schedules* the watcher — so subscribing inside the task would lose a close
+    that lands before its first step, leaving the viewer blocked forever.
+
+    Nothing in this test yields between ``acquire_viewer`` and the publish, so
+    the watcher task provably has not run yet.
+    """
+    sess = FakeSession("close-before-watcher-runs")
+    mgr, viewer = await sc.acquire_viewer(sess, fps=1000, quality=70)
+    try:
+        assert mgr._recovery_task is not None
+        assert mgr._recovery_task.done() is False
+        assert session_event_bus.subscriber_count >= 1, "subscription must exist before the task runs"
+
+        session_event_bus.publish_nowait(
+            SessionClosedEvent(
+                instance_id=sess.instance_id,
+                kind="chromium",
+                label=None,
+                profile=None,
+                reason="user_close",
+                log_path="/x/fake.jsonl",  # fake event payload; never opened
+            )
+        )
+
+        with pytest.raises(sc.ScreencastEnded):
+            await asyncio.wait_for(viewer.get(), timeout=2)
+    finally:
+        with suppress(Exception):
+            await sc.release_viewer(mgr, viewer)
+        await _drain_registry(sess.instance_id)
+
+
+@pytest.mark.asyncio
+async def test_release_drops_the_bus_subscription() -> None:
+    """The subscription now outlives the task creation, so the release path must
+    close it or every finished preview leaks a subscriber."""
+    before = session_event_bus.subscriber_count
+    sess = FakeSession("subscription-cleanup")
+    mgr, viewer = await sc.acquire_viewer(sess, fps=1000, quality=70)
+    assert session_event_bus.subscriber_count == before + 1
+
+    await sc.release_viewer(mgr, viewer)
+    await _drain_registry(sess.instance_id)
+
+    assert session_event_bus.subscriber_count == before
+
+
+@pytest.mark.asyncio
 async def test_session_closed_event_for_another_session_is_ignored() -> None:
     sess = FakeSession("other-session-close")
     mgr, viewer = await sc.acquire_viewer(sess, fps=1000, quality=70)
