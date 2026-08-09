@@ -11,7 +11,7 @@ from typing import Any
 import anyio
 import pytest
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCError, JSONRPCMessage
+from mcp.types import JSONRPCError
 
 from octowright import proxy_supervisor as supervisor
 from tests._proxy_supervisor_helpers import (
@@ -73,12 +73,10 @@ async def test_forward_remote_message_records_error_outcome(captured_duration: _
 
     supervisor_obj.track_local_message(_request("tools/call", "rpc-err"))
     error_msg = SessionMessage(
-        JSONRPCMessage(
-            root=JSONRPCError(
-                jsonrpc="2.0",
-                id="rpc-err",
-                error=__import__("mcp.types", fromlist=["ErrorData"]).ErrorData(code=-32000, message="leader bailed"),
-            )
+        JSONRPCError(
+            jsonrpc="2.0",
+            id="rpc-err",
+            error=__import__("mcp.types", fromlist=["ErrorData"]).ErrorData(code=-32000, message="leader bailed"),
         )
     )
     await supervisor_obj.forward_remote_message(error_msg)
@@ -204,7 +202,7 @@ async def test_forward_one_local_message_no_remote_writer_skips_span(monkeypatch
 
     await supervisor_obj.forward_one_local_message(_request("tools/call", "no-leader"), supervisor._RemoteWriteSlot())
     err = await outgoing_recv.receive()
-    assert "leader session unavailable" in err.message.root.error.message
+    assert "leader session unavailable" in err.message.error.message
     assert seen == []
 
 

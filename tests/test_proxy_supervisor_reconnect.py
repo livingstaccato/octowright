@@ -59,7 +59,7 @@ async def test_kill_switch_omits_idempotency_key_but_keeps_progress(monkeypatch:
     await sup.forward_one_local_message(_tools_call("browser_launch", "bl1"), supervisor._RemoteWriteSlot(remote_send))
 
     sent = await remote_recv.receive()
-    meta = sent.message.root.params.get("_meta", {})
+    meta = sent.message.params.get("_meta", {})
     assert "octowrightIdempotencyKey" not in meta
     assert meta.get("progressToken")
     assert sup._in_flight["bl1"].idempotency_key is None
@@ -184,7 +184,7 @@ async def test_remote_failure_fails_in_flight() -> None:
 
     await supervisor_obj.fail_all_in_flight("remote leader stream closed")
     error = await local_out_recv.receive()
-    root = error.message.root
+    root = error.message
     assert isinstance(root, JSONRPCError)
     assert root.id == "lost-id"
     assert "remote leader stream closed" in root.error.message
@@ -206,7 +206,7 @@ async def test_forward_one_local_message_drops_stale_remote_writer_and_fails_req
 
     assert remote_write_slot.write is None
     error = await local_out_recv.receive()
-    root = error.message.root
+    root = error.message
     assert isinstance(root, JSONRPCError)
     assert root.id == "stale-id"
     assert "leader session unavailable" in root.error.message

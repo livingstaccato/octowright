@@ -231,7 +231,7 @@ def _install_fake_session_manager(monkeypatch: pytest.MonkeyPatch, instances: di
     fake_manager = MagicMock()
     fake_manager._server_instances = instances
     fake_mcp = MagicMock()
-    fake_mcp._session_manager = fake_manager
+    fake_mcp.session_manager = fake_manager
     monkeypatch.setattr(server_mod, "mcp", fake_mcp)
 
 
@@ -334,14 +334,14 @@ def test_reap_dead_follower_sessions_pops_already_terminated_transport(
 
 
 def test_reap_dead_follower_sessions_noop_when_not_leader(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """No _session_manager (this process isn't the HTTP-MCP leader) -> quiet no-op."""
+    """No session_manager (this process isn't the HTTP-MCP leader) -> quiet no-op."""
     import octowright.server as server_mod
     from octowright import defaults
     from octowright import housekeeping as _hk
 
     monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", tmp_path / "bridge-state.json")
     fake_mcp = MagicMock()
-    fake_mcp._session_manager = None
+    fake_mcp.session_manager = None
     monkeypatch.setattr(server_mod, "mcp", fake_mcp)
 
     log = MagicMock()

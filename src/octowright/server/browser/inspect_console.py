@@ -29,7 +29,9 @@ def browser_console_messages(
     level: str | None = None,
     since: int | None = None,
     response_mode: str | None = None,
-) -> BrowserConsoleMessagesResult:
+) -> BrowserConsoleMessagesResult | dict[str, Any]:
+    # response_mode='summary' returns browser_console_summary's shape, not the
+    # raw-rows result — declared honestly so callers/type-checkers see both.
     if response_mode == "summary":
         return browser_console_summary(instance_id, since=since, level=level)
     msgs = list(pool.get(instance_id).console)

@@ -50,7 +50,7 @@ def test_notification_has_method_but_no_request_id() -> None:
 
 def test_bridge_error_message_shape() -> None:
     error = supervisor.bridge_error("abc", "remote request timed out")
-    root = error.message.root
+    root = error.message
     assert isinstance(root, JSONRPCError)
     assert root.id == "abc"
     assert root.error.code == -32000
@@ -112,7 +112,7 @@ async def test_request_timeout_returns_bridge_error() -> None:
     async with anyio.create_task_group() as tg:
         tg.start_soon(supervisor_obj.watch_deadlines)
         error = await outgoing_recv.receive()
-        root = error.message.root
+        root = error.message
         assert isinstance(root, JSONRPCError)
         assert root.id == "timeout-id"
         assert "timed out" in root.error.message
@@ -152,7 +152,7 @@ async def test_synthetic_progress_token_injected_on_tools_call() -> None:
     await sup.forward_one_local_message(_tools_call("browser_launch", "bl1"), slot)
 
     sent = await remote_recv.receive()
-    params = sent.message.root.params
+    params = sent.message.params
     token = params["_meta"]["progressToken"]
     assert token  # a synthetic token was injected
     assert token in sup._synthetic_progress_tokens
@@ -232,7 +232,7 @@ async def test_idempotency_key_injected_on_tools_call() -> None:
     await sup.forward_one_local_message(_tools_call("browser_launch", "bl1"), slot)
 
     sent = await remote_recv.receive()
-    key = sent.message.root.params["_meta"]["octowrightIdempotencyKey"]
+    key = sent.message.params["_meta"]["octowrightIdempotencyKey"]
     assert key.startswith("owk-")
     assert sup._in_flight["bl1"].idempotency_key == key
 
@@ -250,7 +250,7 @@ async def test_no_idempotency_key_on_non_tools_call() -> None:
     await sup.forward_one_local_message(_request("tools/list", "tl1"), slot)
 
     sent = await remote_recv.receive()
-    params = sent.message.root.params or {}
+    params = sent.message.params or {}
     assert "octowrightIdempotencyKey" not in params.get("_meta", {})
     assert sup._in_flight["tl1"].idempotency_key is None
 
@@ -289,7 +289,7 @@ async def test_resume_resends_in_flight_with_same_key_on_reconnect() -> None:
 
     await sup.forward_one_local_message(_tools_call("browser_launch", "bl1"), supervisor._RemoteWriteSlot(remote1_send))
     sent1 = await remote1_recv.receive()
-    key = sent1.message.root.params["_meta"]["octowrightIdempotencyKey"]
+    key = sent1.message.params["_meta"]["octowrightIdempotencyKey"]
 
     await sup.fail_or_mark_for_resume("remote leader session reset")
     assert "bl1" in sup._in_flight  # resumable: kept, not failed
@@ -298,8 +298,8 @@ async def test_resume_resends_in_flight_with_same_key_on_reconnect() -> None:
 
     await sup.resume_in_flight(remote2_send)
     sent2 = await remote2_recv.receive()
-    assert sent2.message.root.id == "bl1"
-    assert sent2.message.root.params["_meta"]["octowrightIdempotencyKey"] == key
+    assert sent2.message.id == "bl1"
+    assert sent2.message.params["_meta"]["octowrightIdempotencyKey"] == key
     assert sup._in_flight["bl1"].resume_count == 1
 
 

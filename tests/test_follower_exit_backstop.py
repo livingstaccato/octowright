@@ -66,11 +66,11 @@ async def test_stdin_eof_arms_exit_backstop(monkeypatch: pytest.MonkeyPatch) -> 
         remote_read_send, remote_read_recv = anyio.create_memory_object_stream[Any](10)
         remote_write_send, _remote_write_recv = anyio.create_memory_object_stream[SessionMessage](10)
         try:
-            yield (remote_read_recv, remote_write_send, lambda: "sess")
+            yield (remote_read_recv, remote_write_send)
         finally:
             await remote_read_send.aclose()
 
-    monkeypatch.setattr(runtime, "streamablehttp_client", quiet_client)
+    monkeypatch.setattr(runtime, "streamable_http_client", quiet_client)
 
     local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)

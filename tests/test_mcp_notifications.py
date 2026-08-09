@@ -20,7 +20,7 @@ import asyncio
 
 import pytest
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCNotification
+from mcp.types import JSONRPCNotification
 
 from octowright.browser_pool.events import (
     DriverDiedEvent,
@@ -76,8 +76,8 @@ def test_payload_roundtrip_equals_build_notification() -> None:
     for event in events:
         direct = _build_notification(event)
         reconstructed = payload_to_message(notification_payload(event))
-        assert reconstructed.message.root.method == direct.message.root.method
-        assert reconstructed.message.root.params == direct.message.root.params
+        assert reconstructed.message.method == direct.message.method
+        assert reconstructed.message.params == direct.message.params
 
 
 # ─── _build_notification ──────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ def test_build_notification_method() -> None:
         log_path="/tmp/abc.jsonl",
     )
     msg = _build_notification(event)
-    root = msg.message.root
+    root = msg.message
     assert isinstance(root, JSONRPCNotification)
     assert root.method == "notifications/octowright/session_closed"
 
@@ -110,7 +110,7 @@ def test_build_notification_params_shape() -> None:
         log_path="/recordings/xyz.jsonl",
     )
     msg = _build_notification(event)
-    root = msg.message.root
+    root = msg.message
     assert isinstance(root, JSONRPCNotification)
     params = root.params or {}
     assert params["instance_id"] == "xyz"
@@ -127,7 +127,7 @@ def test_build_notification_shutdown_reason() -> None:
         instance_id="s1", kind="webkit", label=None, profile=None, reason="shutdown", log_path="/tmp/s1.jsonl"
     )
     msg = _build_notification(event)
-    root = msg.message.root
+    root = msg.message
     assert isinstance(root, JSONRPCNotification)
     assert (root.params or {})["reason"] == "shutdown"
 
@@ -145,7 +145,7 @@ def test_build_notification_for_crash_event() -> None:
         log_path="/tmp/c1.jsonl",
     )
     msg = _build_notification(event)
-    root = msg.message.root
+    root = msg.message
     assert isinstance(root, JSONRPCNotification)
     assert root.method == "notifications/octowright/browser_crashed"
     params = root.params or {}
@@ -162,13 +162,13 @@ def test_crash_notification_hint_reflects_auto_recovery() -> None:
 
     recovering = _build_notification(
         SessionCrashedEvent("c1", "chromium", "p", None, "renderer", "/tmp/c1.jsonl", recovering=True)
-    ).message.root.params
+    ).message.params
     assert recovering["recovering"] is True
     assert "recover" in recovering["hint"].lower() and "no action" in recovering["hint"].lower()
 
     off = _build_notification(
         SessionCrashedEvent("c2", "chromium", "p", None, "renderer", "/tmp/c2.jsonl", recovering=False)
-    ).message.root.params
+    ).message.params
     assert off["recovering"] is False
     assert "relaunch" in off["hint"].lower()  # recovery off → relaunch IS needed
 
@@ -180,7 +180,7 @@ def test_recovered_notification_per_outcome() -> None:
 
     def notif(outcome: str) -> dict:
         ev = SessionRecoveredEvent("r1", "chromium", "p", None, outcome, 1, "/tmp/r1.jsonl")  # type: ignore[arg-type]
-        root = _build_notification(ev).message.root
+        root = _build_notification(ev).message
         assert root.method == "notifications/octowright/browser_recovered"
         return root.params
 
@@ -198,7 +198,7 @@ def test_driver_died_notification_per_mode() -> None:
 
     off = _build_notification(
         DriverDiedEvent(restart_count=1, relaunch_mode="off", lost_count=2, lost_instance_ids=("a", "b"))
-    ).message.root
+    ).message
     assert off.method == "notifications/octowright/driver_died"
     assert off.params["lost_count"] == 2
     assert off.params["lost_instance_ids"] == ["a", "b"]
@@ -206,7 +206,7 @@ def test_driver_died_notification_per_mode() -> None:
 
     on = _build_notification(
         DriverDiedEvent(restart_count=2, relaunch_mode="new-id", lost_count=1, lost_instance_ids=("a",))
-    ).message.root
+    ).message
     assert "reopen" in on.params["hint"].lower()  # auto-reopen in progress
 
 
@@ -243,7 +243,7 @@ async def test_run_with_notifications_forwards_event_to_write_stream() -> None:
     await run_with_notifications(_inner(), fake_write)
 
     assert len(written) == 1
-    root = written[0].message.root
+    root = written[0].message
     assert isinstance(root, JSONRPCNotification)
     assert root.method == "notifications/octowright/session_closed"
     assert (root.params or {})["instance_id"] == "n1"
@@ -338,19 +338,17 @@ async def test_bridge_forwards_server_notification_to_local_client() -> None:
     # Construct a raw notification (no request id → treated as notification,
     # forwarded verbatim).
     notification_msg = SessionMessage(
-        JSONRPCMessage(
-            root=JSONRPCNotification(
-                jsonrpc="2.0",
-                method="notifications/octowright/session_closed",
-                params={
-                    "instance_id": "bridge-test",
-                    "kind": "chromium",
-                    "label": None,
-                    "profile": None,
-                    "reason": "user_close",
-                    "log_path": "/tmp/bridge.jsonl",
-                },
-            )
+        JSONRPCNotification(
+            jsonrpc="2.0",
+            method="notifications/octowright/session_closed",
+            params={
+                "instance_id": "bridge-test",
+                "kind": "chromium",
+                "label": None,
+                "profile": None,
+                "reason": "user_close",
+                "log_path": "/tmp/bridge.jsonl",
+            },
         )
     )
 
@@ -359,7 +357,7 @@ async def test_bridge_forwards_server_notification_to_local_client() -> None:
     # ``forward_remote_message`` calls ``local_write.send(message)`` which is
     # ``outgoing_send``.  Retrieve the forwarded message from the recv side.
     forwarded = _outgoing_recv.receive_nowait()
-    root = forwarded.message.root
+    root = forwarded.message
     assert isinstance(root, JSONRPCNotification)
     assert root.method == "notifications/octowright/session_closed"
     assert (root.params or {})["instance_id"] == "bridge-test"

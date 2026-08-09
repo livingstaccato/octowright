@@ -121,16 +121,12 @@ def _remote_app() -> Any:
 
 
 def _install_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _FakeMcpSettings:
-        streamable_http_path = "unchanged"
-
     fake_mcp_app = Starlette(routes=[Route("/", lambda _req: JSONResponse({"mcp": True}))])
+    # MCP 2.0 takes the mount path as a streamable_http_app() kwarg instead of
+    # a mutable settings attribute, so the fake accepts (and ignores) kwargs.
     monkeypatch.setattr(
         "octowright.server.mcp",
-        types.SimpleNamespace(
-            settings=_FakeMcpSettings(),
-            streamable_http_app=lambda: fake_mcp_app,
-        ),
+        types.SimpleNamespace(streamable_http_app=lambda **_kwargs: fake_mcp_app),
     )
 
 

@@ -13,8 +13,8 @@ to the agent as a spurious "Octowright disconnected". This wrapper emits the
 missing heartbeat: while a tool handler runs, it sends progress on the injected
 token so the deadline stays alive as long as the leader event loop is alive.
 
-Driven directly by setting the lowlevel ``request_ctx`` contextvar — no HTTP /
-FastMCP app needed — mirroring ``test_idempotency_cache.py``.
+Driven directly by setting octowright's request contextvar — no HTTP /
+MCP server app needed — mirroring ``test_idempotency_cache.py``.
 """
 
 from __future__ import annotations
@@ -27,10 +27,9 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.server.lowlevel.server import request_ctx
-from mcp.types import RequestParams
 
 from octowright.server import _heartbeat
+from octowright.server import _request_context as _rc
 
 
 @pytest.fixture
@@ -40,15 +39,17 @@ def anyio_backend() -> str:
 
 @contextlib.contextmanager
 def _request_context(progress_token: Any, session: Any) -> Iterator[None]:
-    """Set ``request_ctx`` to a minimal RequestContext carrying ``progress_token``
+    """Set the octowright request contextvar to a minimal RequestContext carrying ``progress_token``
     in _meta (as the follower injects) and owned by ``session``."""
-    meta = RequestParams.Meta.model_validate({"progressToken": progress_token}) if progress_token is not None else None
+    # MCP 2.0 hands handlers a plain dict for _meta, with the spec field
+    # snake_cased (`progress_token`), so build the shape the SDK really passes.
+    meta = {"progress_token": progress_token} if progress_token is not None else None
     ctx = SimpleNamespace(meta=meta, session=session, request_id="r")
-    token = request_ctx.set(ctx)  # type: ignore[arg-type]
+    token = _rc._request_ctx.set(ctx)
     try:
         yield
     finally:
-        request_ctx.reset(token)
+        _rc._request_ctx.reset(token)
 
 
 def _session() -> SimpleNamespace:
@@ -123,7 +124,7 @@ async def test_no_request_context_is_passthrough(monkeypatch: pytest.MonkeyPatch
         await asyncio.sleep(0.05)
         return "ok"
 
-    # request_ctx unset entirely (LookupError path)
+    # no request context at all (outside-a-request path)
     assert await tool() == "ok"
 
 
