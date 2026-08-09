@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-08-09
+
+### Changed
+- **Requires the MCP 2.0 Python SDK (`mcp>=2.0.0`).** The previous floor was
+  `mcp>=1.2.0` with no upper bound, so the moment the SDK published 2.0.0 every
+  fresh install resolved it and the daemon could not start at all:
+  `import octowright.server` raised
+  `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. Octowright is now
+  ported to the 2.x surface rather than pinned behind it. **An environment
+  pinned to `mcp` 1.x must upgrade** — the two versions are not interchangeable.
+- **`httpx2` is a direct dependency.** MCP 2.0's streamable-HTTP client takes a
+  ready-made `httpx2.AsyncClient` instead of the 1.x `httpx_client_factory`, so
+  the follower bridge builds one. The rest of the codebase deliberately stays on
+  `httpx` for now: `server/web.py` reaches into httpx/httpcore private APIs with
+  no guaranteed httpx2 counterpart, and that migration deserves its own change.
+
+### Fixed
+- **The progress heartbeat and idempotent dispatch keep working on 2.x.** Both
+  read the in-flight request ambiently, which 1.x supported through the
+  `request_ctx` contextvar that 2.0 removed — a handler now receives its context
+  only by declaring an injected `Context` argument. Rather than add a `ctx`
+  parameter to ~125 tools (changing every signature, with the risk of the
+  argument surfacing to clients), a `ServerMiddleware` republishes each
+  request's context into an octowright-owned contextvar.
+- **`_meta` is read in its new shape.** MCP 2.0 hands handlers a plain dict
+  instead of a pydantic model: spec fields are snake_cased (`progress_token`,
+  not `progressToken`) and non-spec keys sit inline rather than in
+  `model_extra`. Read the old way it returns nothing on every request, which
+  would have *silently* disabled the heartbeat (reviving the spurious
+  "Octowright disconnected" failure) and idempotent replay protection, with no
+  error anywhere. Both spellings and both shapes are now accepted.
+- **The bridge still records its leader session id.** 2.0's transport no longer
+  yields a `get_session_id` callable, so the id is captured from the
+  `mcp-session-id` response header by a hook on the bridge's own HTTP client.
+  Without it the leader's pid-liveness reaper — which matches sessions by
+  `(follower_pid, remote_session_id)` — would have quietly stopped reclaiming
+  dead followers' sessions.
+- **Two tool return annotations that were wrong all along.** MCP 2.0's
+  `tool()` decorator preserves the handler's callable type instead of erasing it
+  to `Callable[..., Any]`, which surfaced them: `browser_console_messages`
+  returns the summary shape in its `response_mode='summary'` branch, and
+  `views.browser_page_outline` returns the outline TypedDict.
+
 ## [0.13.10] - 2026-08-08
 
 ### Fixed

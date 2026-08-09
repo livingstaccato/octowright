@@ -111,6 +111,7 @@ CLI (Click)
 | `src/octowright/browser_pool/visuals.py` | Emoji badges, title injection, macro-status pill helpers |
 | `src/octowright/browser_pool/_assets/*.js` | Init scripts injected into every page (title tag, corner badge, macro pill) |
 | `src/octowright/session/core.py` | `BrowserSession` dataclass |
+| `src/octowright/server/_request_context.py` | Republishes each MCP request's context into a contextvar via a `ServerMiddleware`. MCP 2.0 removed the SDK's own `request_ctx`, and the progress heartbeat + idempotent dispatch read it *ambiently* (no `ctx` parameter on the ~125 tools, so nothing leaks into the client schema). Also normalizes `_meta`, which 2.0 made a plain dict with snake_cased spec keys. |
 | `src/octowright/server/_state.py` | Shared singletons: `pool`, `mcp` (an `mcp.server.mcpserver.MCPServer` subclass), `scenario_pool`, and `terminal_pool` (`None` unless the `octowright[terminal]` extra is installed) |
 | `src/octowright/server/browser/lifecycle.py` | MCP tools: `browser_launch`, `browser_close`, `browser_navigate` |
 | `src/octowright/terminal/` (package) | **Optional (`octowright[terminal]`).** In-process `provide-uterm` connector driver. `engine.py` runs the poll loop, `pool.py` is `TerminalPool` (mirrors `BrowserPool`'s surface), `session.py` is `TerminalSession`, `translate.py` maps connector messages → JSONL actions, `redact.py` masks recorded input, `availability.py` is the import-light extra-present detector. All uterm imports are quarantined here. |
