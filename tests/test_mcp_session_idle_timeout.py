@@ -63,7 +63,7 @@ def test_mcp_session_idle_seconds_reads_env(monkeypatch: pytest.MonkeyPatch) -> 
 def test_apply_sets_manager_timeout_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS", "77")
     mgr = SimpleNamespace(session_idle_timeout=None)
-    fake_mcp = SimpleNamespace(_session_manager=mgr)
+    fake_mcp = SimpleNamespace(session_manager=mgr)
     _app._apply_mcp_session_idle_timeout(fake_mcp)
     assert mgr.session_idle_timeout == 77.0
 
@@ -71,14 +71,14 @@ def test_apply_sets_manager_timeout_when_enabled(monkeypatch: pytest.MonkeyPatch
 def test_apply_leaves_manager_default_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS", "off")
     mgr = SimpleNamespace(session_idle_timeout=None)
-    fake_mcp = SimpleNamespace(_session_manager=mgr)
+    fake_mcp = SimpleNamespace(session_manager=mgr)
     _app._apply_mcp_session_idle_timeout(fake_mcp)
     assert mgr.session_idle_timeout is None  # untouched → mcp's leaky default (opt-out honored)
 
 
 def test_apply_is_safe_when_manager_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS", "300")
-    # No _session_manager attribute → must not raise (defensive).
+    # No session_manager attribute → must not raise (defensive).
     _app._apply_mcp_session_idle_timeout(SimpleNamespace())
 
 
@@ -89,8 +89,8 @@ def test_build_app_leader_sets_session_idle_timeout(monkeypatch: pytest.MonkeyPa
     from octowright import http as _http
     from octowright.server import mcp as _mcp
 
-    # Fresh manager for this build (FastMCP caches it lazily).
-    _mcp._session_manager = None
+    # The manager is built lazily by streamable_http_app(); before that the
+    # MCP 2.0 property raises rather than returning None.
     _http.build_app(mcp_leader=True)
-    assert _mcp._session_manager is not None
-    assert _mcp._session_manager.session_idle_timeout == 123.0
+    assert _mcp.session_manager is not None
+    assert _mcp.session_manager.session_idle_timeout == 123.0

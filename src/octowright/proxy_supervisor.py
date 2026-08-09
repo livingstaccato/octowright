@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import anyio
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
+from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCRequest
 from provide.telemetry import get_logger
 
 from octowright import defaults
@@ -31,6 +31,7 @@ from octowright._bridge_message_helpers import (
     message_root,
     message_tool_name,
 )
+from octowright._trace_propagation import build_tracing_http_client
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import BRIDGE_TOOL_TIMEOUTS
 
@@ -107,6 +108,22 @@ class InFlightRequest:
     # asyncio tick as deadline expiry produces two outbound frames for one
     # request, which is an MCP protocol violation.
     responded: bool = False
+
+
+def bridge_http_client(headers: dict[str, str], supervisor_obj: Any) -> Any:
+    """The follower's HTTP client for one leader connection.
+
+    MCP 2.0 takes a ready-made client instead of a factory, and its transport no
+    longer exposes ``get_session_id`` — so the session id is captured from the
+    response header here and pushed onto the supervisor, where bridge state (and
+    the leader's pid-liveness reaper) reads it.
+    """
+    supervisor_obj.remote_session_id = None
+
+    def _note_session_id(value: str) -> None:
+        supervisor_obj.remote_session_id = value
+
+    return build_tracing_http_client(headers=headers, on_session_id=_note_session_id)
 
 
 class BridgeSupervisor:
@@ -272,7 +289,7 @@ class BridgeSupervisor:
             meta["progressToken"] = token
         params["_meta"] = meta
         new_root = root.model_copy(update={"params": params})
-        return token, key, SessionMessage(JSONRPCMessage(root=new_root))
+        return token, key, SessionMessage(new_root)
 
     def _progress_token_of(self, message: SessionMessage) -> Any:
         """The progressToken of a ``notifications/progress`` frame, else None."""
@@ -339,7 +356,7 @@ class BridgeSupervisor:
         replay_id = f"octowright-bridge-replay-{next(self._replay_id_counter)}"
         self._internal_replay_ids.add(replay_id)
         replay_request = cached_root.model_copy(update={"id": replay_id})
-        replay_message = SessionMessage(JSONRPCMessage(root=replay_request))
+        replay_message = SessionMessage(replay_request)
         await remote_write.send(replay_message)
         # Complete the handshake on the fresh session: replay the cached
         # notifications/initialized too, or the leader leaves the session

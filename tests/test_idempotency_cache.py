@@ -5,8 +5,8 @@
 
 """Leader-side idempotency cache (``server/_idempotency.py``).
 
-Drives ``_idempotent_dispatch`` directly by setting the lowlevel ``request_ctx``
-contextvar — no HTTP / FastMCP app needed. The follower injects a stable
+Drives ``_idempotent_dispatch`` directly by setting octowright's request
+contextvar — no HTTP / MCP server app needed. The follower injects a stable
 ``octowrightIdempotencyKey`` into each tools/call _meta and re-sends it verbatim
 on reconnect; this cache makes the re-sent call a no-op (cached result / awaited
 in-progress run) instead of a double-execution.
@@ -21,10 +21,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from mcp.server.lowlevel.server import request_ctx
-from mcp.types import RequestParams
 
 from octowright.server import _idempotency
+from octowright.server import _request_context as _rc
 
 
 @pytest.fixture
@@ -41,15 +40,17 @@ def _clean_cache() -> Iterator[None]:
 
 @contextlib.contextmanager
 def _request_context(key: str | None, session: Any) -> Iterator[None]:
-    """Set ``request_ctx`` to a minimal RequestContext carrying ``key`` in _meta
+    """Set the octowright request contextvar to a minimal RequestContext carrying ``key`` in _meta
     and owned by ``session`` (a sentinel object standing in for an MCP session)."""
-    meta = RequestParams.Meta.model_validate({"octowrightIdempotencyKey": key}) if key is not None else None
+    # MCP 2.0 hands handlers a plain dict for _meta; a non-spec key like ours
+    # survives verbatim there instead of landing in a pydantic `model_extra`.
+    meta = {"octowrightIdempotencyKey": key} if key is not None else None
     ctx = SimpleNamespace(meta=meta, session=session, request_id="r")
-    token = request_ctx.set(ctx)  # type: ignore[arg-type]
+    token = _rc._request_ctx.set(ctx)
     try:
         yield
     finally:
-        request_ctx.reset(token)
+        _rc._request_ctx.reset(token)
 
 
 # ─── no key / disabled ───────────────────────────────────────────────────────

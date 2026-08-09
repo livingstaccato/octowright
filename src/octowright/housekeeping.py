@@ -268,10 +268,11 @@ async def _reap_dead_follower_sessions_once(*, log: Any) -> None:
     ``_apply_mcp_session_idle_timeout`` guards the same attribute.
     """
     from octowright import bridge_state, defaults
+    from octowright.http.app import mcp_session_manager
     from octowright.server import mcp as _mcp
     from octowright.singleton import pid_is_alive
 
-    manager = getattr(_mcp, "_session_manager", None)
+    manager = mcp_session_manager(_mcp)
     instances = getattr(manager, "_server_instances", None)
     if not isinstance(instances, dict):
         return
@@ -325,7 +326,9 @@ async def _enforce_mcp_session_cap_once(*, log: Any) -> None:
     cap = mcp_max_sessions()
     if cap is None:
         return
-    manager = getattr(_mcp, "_session_manager", None)
+    from octowright.http.app import mcp_session_manager
+
+    manager = mcp_session_manager(_mcp)
     instances = getattr(manager, "_server_instances", None)
     if not isinstance(instances, dict):
         return

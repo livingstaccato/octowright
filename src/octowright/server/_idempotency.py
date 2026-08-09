@@ -37,10 +37,10 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
-from mcp.server.lowlevel.server import request_ctx
 from provide.telemetry import get_logger
 
 from octowright import defaults
+from octowright.server._request_context import current_meta_value, current_session
 
 log = get_logger(__name__)
 
@@ -72,24 +72,12 @@ _cache: OrderedDict[str, _Entry] = OrderedDict()
 
 
 def _current_key() -> str | None:
-    try:
-        ctx = request_ctx.get()
-    except LookupError:
-        return None
-    meta = getattr(ctx, "meta", None)
-    if meta is None:
-        return None
-    extra = getattr(meta, "model_extra", None) or {}
-    value = extra.get(_META_KEY)
+    value = current_meta_value(_META_KEY)
     return value if isinstance(value, str) else None
 
 
 def _current_owner() -> Any:
-    try:
-        ctx = request_ctx.get()
-    except LookupError:
-        return None
-    return id(getattr(ctx, "session", None))
+    return id(current_session())
 
 
 def _result_size(result: Any) -> int:
@@ -136,7 +124,7 @@ def _idempotent_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap an async tool so a re-sent call (same idempotency key) dedups.
 
     Sync tools and calls with no key pass straight through. ``functools.wraps``
-    preserves the signature/annotations so FastMCP's Context injection and input
+    preserves the signature/annotations so the server's Context injection and input
     schema still resolve through this wrapper.
     """
     if not asyncio.iscoroutinefunction(fn):
