@@ -95,7 +95,7 @@ async def serve_app(
     the preferred port is busy, walks up to ``retries`` ports before giving
     up. On total failure, logs and returns — the MCP server keeps running.
 
-    When ``mcp_leader`` is True, the app also exposes FastMCP's streamable-HTTP
+    When ``mcp_leader`` is True, the app also exposes the MCP server's streamable-HTTP
     transport at ``/mcp`` so follower octowright instances can bridge to it.
     """
     bound = _pick_port(host, port, retries)

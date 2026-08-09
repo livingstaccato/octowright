@@ -202,11 +202,10 @@ async def test_cap_job_evicts_abandoned_down_to_cap(monkeypatch: pytest.MonkeyPa
     from octowright import housekeeping
     from octowright.http import app as http_app
     from octowright.http.mcp_session_tracker import McpSessionTracker
-    from octowright.server import mcp as _mcp
 
     monkeypatch.setenv("OCTOWRIGHT_MCP_MAX_SESSIONS", "2")
     manager = _FakeManager(["s1", "s2", "s3", "s4"])
-    monkeypatch.setattr(_mcp, "_session_manager", manager, raising=False)
+    monkeypatch.setattr("octowright.http.app.mcp_session_manager", lambda _mcp_server: manager, raising=False)
     # s3,s4 are recently active; s1,s2 abandoned.
     tracker = McpSessionTracker()
     tracker.mark_active("s3")
@@ -222,11 +221,10 @@ async def test_cap_job_evicts_abandoned_down_to_cap(monkeypatch: pytest.MonkeyPa
 @pytest.mark.anyio
 async def test_cap_job_noop_under_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     from octowright import housekeeping
-    from octowright.server import mcp as _mcp
 
     monkeypatch.setenv("OCTOWRIGHT_MCP_MAX_SESSIONS", "10")
     manager = _FakeManager(["s1", "s2"])
-    monkeypatch.setattr(_mcp, "_session_manager", manager, raising=False)
+    monkeypatch.setattr("octowright.http.app.mcp_session_manager", lambda _mcp_server: manager, raising=False)
     await housekeeping._enforce_mcp_session_cap_once(log=_QuietLog())
     assert set(manager._server_instances) == {"s1", "s2"}
 
@@ -234,11 +232,10 @@ async def test_cap_job_noop_under_cap(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.anyio
 async def test_cap_job_disabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     from octowright import housekeeping
-    from octowright.server import mcp as _mcp
 
     monkeypatch.setenv("OCTOWRIGHT_MCP_MAX_SESSIONS", "off")
     manager = _FakeManager(["s1", "s2", "s3"])
-    monkeypatch.setattr(_mcp, "_session_manager", manager, raising=False)
+    monkeypatch.setattr("octowright.http.app.mcp_session_manager", lambda _mcp_server: manager, raising=False)
     await housekeeping._enforce_mcp_session_cap_once(log=_QuietLog())
     assert len(manager._server_instances) == 3  # untouched
 

@@ -5,7 +5,7 @@
 
 """MCP server entrypoint.
 
-The shared FastMCP instance and live pools live in ``_state``. Each domain
+The shared ``MCPServer`` instance and live pools live in ``_state``. Each domain
 submodule (`browser`, `personas`, `macros`, `goldens`, `scenarios`) registers
 its tools against that shared instance at import time, so importing this
 package is enough to make every tool callable.

@@ -13,13 +13,13 @@ follower side and on the leader side appear as two disconnected trees — same
 This module adds two seams so the two sides chain via the W3C ``traceparent``
 header:
 
-* :func:`tracing_httpx_client_factory` — returns an ``McpHttpClientFactory``
+* :func:`build_tracing_http_client` — builds the bridge's ``httpx2.AsyncClient``
   that installs a request event hook on the httpx client. Every outbound
   request gets its current OTel context injected (``opentelemetry.propagate``).
 * :class:`TraceContextExtractionMiddleware` — ASGI middleware to wrap the
   leader's ``/mcp`` mount. Extracts the W3C context from incoming headers and
   attaches it for the duration of the request, so any span the leader opens
-  (per-RPC spans on the FastMCP side, per-tool spans inside ``@mcp.tool``
+  (per-RPC spans on the server side, per-tool spans inside ``@mcp.tool``
   handlers) becomes a child of the follower's span.
 
 Both are safe when OTel is not installed — ``propagate`` is a stdlib import in
@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any
 
-import httpx
+import httpx2
 
 from octowright._tracing import _tracer as _tracing_get_tracer
 
@@ -45,7 +45,7 @@ except ImportError:  # pragma: no cover - OTel SDK is a soft dep
     _OTEL_AVAILABLE = False
 
 
-async def _inject_traceparent_hook(request: httpx.Request) -> None:
+async def _inject_traceparent_hook(request: httpx2.Request) -> None:
     """httpx event hook: inject the current OTel context into request headers."""
     if not _OTEL_AVAILABLE:
         return
@@ -59,32 +59,48 @@ async def _inject_traceparent_hook(request: httpx.Request) -> None:
         pass
 
 
-def tracing_httpx_client_factory() -> Callable[..., httpx.AsyncClient]:
-    """Return an MCP httpx-client factory whose clients inject W3C traceparent.
+def build_tracing_http_client(
+    *,
+    headers: dict[str, str] | None = None,
+    on_session_id: Callable[[str], None] | None = None,
+    timeout: float = 30.0,
+) -> httpx2.AsyncClient:
+    """Build the httpx2 client the follower bridge hands to the MCP transport.
 
-    Drop-in replacement for ``mcp.shared._httpx_utils.create_mcp_http_client``
-    matching its signature so callers can pass it as ``httpx_client_factory=``
-    to ``streamablehttp_client``.
+    MCP 2.0's ``streamable_http_client`` takes a ready-made ``httpx2.AsyncClient``
+    instead of the 1.x ``httpx_client_factory``, and no longer yields a
+    ``get_session_id`` callable alongside the streams. Both of the things the
+    bridge needs therefore hang off this client:
+
+    * a request hook injecting W3C ``traceparent`` so leader-side spans chain
+      under the follower's ``bridge.forward_rpc`` span;
+    * a response hook capturing ``mcp-session-id``, which the bridge records in
+      its state file — the leader's pid-liveness reaper matches sessions by
+      ``(follower_pid, remote_session_id)``, so losing it would silently disable
+      that reaper.
+
+    Mirrors ``create_mcp_http_client``'s defaults (follow_redirects, 30s).
     """
 
-    def _factory(
-        headers: dict[str, str] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
-    ) -> httpx.AsyncClient:
-        # Mirror create_mcp_http_client's defaults: follow_redirects=True, 30s timeout.
-        kwargs: dict[str, Any] = {
-            "follow_redirects": True,
-            "timeout": timeout if timeout is not None else httpx.Timeout(30.0),
-            "event_hooks": {"request": [_inject_traceparent_hook]},
-        }
-        if headers is not None:
-            kwargs["headers"] = headers
-        if auth is not None:
-            kwargs["auth"] = auth
-        return httpx.AsyncClient(**kwargs)
+    async def _capture_session_id(response: httpx2.Response) -> None:
+        if on_session_id is None:
+            return
+        try:
+            value = response.headers.get("mcp-session-id")
+        except Exception:
+            return
+        if value:
+            on_session_id(value)
 
-    return _factory
+    response_hooks = [] if on_session_id is None else [_capture_session_id]
+    kwargs: dict[str, Any] = {
+        "follow_redirects": True,
+        "timeout": httpx2.Timeout(timeout),
+        "event_hooks": {"request": [_inject_traceparent_hook], "response": response_hooks},
+    }
+    if headers is not None:
+        kwargs["headers"] = headers
+    return httpx2.AsyncClient(**kwargs)
 
 
 # ASGI middleware (Starlette-compatible) for the leader side.

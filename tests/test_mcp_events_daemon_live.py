@@ -34,9 +34,10 @@ from urllib.request import urlopen
 
 import anyio
 import pytest
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
+from mcp.types import JSONRPCNotification, JSONRPCRequest
 
 from octowright import proxy_runtime
 from octowright.proxy_runtime import consume_leader_notifications
@@ -123,22 +124,18 @@ def _leader_pid(lock_path: Path) -> int | None:
 
 
 async def _send_request(write: Any, read: Any, request_id: int, method: str, params: dict[str, Any]) -> Any:
-    await write.send(
-        SessionMessage(JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params=params)))
-    )
+    await write.send(SessionMessage(JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params=params)))
     async for message in read:
         if isinstance(message, Exception):
             raise message
-        root = message.message.root
+        root = message.message
         if getattr(root, "id", None) == request_id:
             return root
     raise RuntimeError("leader stream closed before response")
 
 
 async def _notify(write: Any, method: str, params: dict[str, Any]) -> None:
-    await write.send(
-        SessionMessage(JSONRPCMessage(root=JSONRPCNotification(jsonrpc="2.0", method=method, params=params)))
-    )
+    await write.send(SessionMessage(JSONRPCNotification(jsonrpc="2.0", method=method, params=params)))
 
 
 def _tool_result(root: Any) -> dict[str, Any]:
@@ -151,7 +148,7 @@ class _Collector:
         self._done = done
 
     async def send(self, message: Any) -> None:
-        method = getattr(message.message.root, "method", "")
+        method = getattr(message.message, "method", "")
         self.methods.append(method)
         if method == "notifications/octowright/session_closed":
             self._done.set()
@@ -164,7 +161,10 @@ async def _run(mcp_url: str, token: str) -> dict[str, Any]:
     # otherwise it would resolve to whatever daemon owns the default lockfile.
     proxy_runtime.resolve_leader_url = lambda _fallback: mcp_url  # type: ignore[assignment]
     headers = {"X-Octowright-Token": token} if token else None
-    async with streamablehttp_client(mcp_url, headers=headers) as (read, write, _sid):
+    async with (
+        create_mcp_http_client(headers=headers) as http_client,
+        streamable_http_client(mcp_url, http_client=http_client) as (read, write),
+    ):
         await _send_request(
             write,
             read,

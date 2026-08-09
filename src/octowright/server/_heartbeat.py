@@ -44,8 +44,9 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from mcp.server.lowlevel.server import request_ctx
 from provide.telemetry import get_logger
+
+from octowright.server._request_context import current_meta_value, current_session
 
 log = get_logger(__name__)
 
@@ -67,22 +68,11 @@ HEARTBEAT_MAX_SECONDS = float(os.environ.get("OCTOWRIGHT_HEARTBEAT_MAX_SECONDS",
 def _current_progress_token() -> Any:
     """The follower-injected ``progressToken`` for the in-flight request, or None
     when there's no request context / no token (nothing to keep alive)."""
-    try:
-        ctx = request_ctx.get()
-    except LookupError:
-        return None
-    meta = getattr(ctx, "meta", None)
-    if meta is None:
-        return None
-    return getattr(meta, "progressToken", None)
+    return current_meta_value("progress_token", "progressToken")
 
 
 def _current_session() -> Any:
-    try:
-        ctx = request_ctx.get()
-    except LookupError:
-        return None
-    return getattr(ctx, "session", None)
+    return current_session()
 
 
 async def _beat(
@@ -124,7 +114,7 @@ async def _beat(
 def _progress_heartbeat(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap an async tool so its in-flight bridge deadline is kept alive by periodic
     MCP progress while it runs. Sync tools and calls without a progressToken/session
-    pass straight through. ``functools.wraps`` preserves the signature so FastMCP's
+    pass straight through. ``functools.wraps`` preserves the signature so the server's
     Context injection and input schema still resolve through this wrapper.
     """
     if not asyncio.iscoroutinefunction(fn):

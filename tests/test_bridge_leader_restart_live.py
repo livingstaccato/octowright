@@ -35,7 +35,7 @@ from typing import Any
 import anyio
 import pytest
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCRequest
+from mcp.types import JSONRPCRequest
 
 pytestmark = pytest.mark.live_browser
 
@@ -105,16 +105,14 @@ def _terminate(proc: subprocess.Popen[Any]) -> None:
 
 
 def _req(rid: int, method: str, params: dict[str, Any] | None = None) -> SessionMessage:
-    return SessionMessage(
-        JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=rid, method=method, params=params or {}))
-    )
+    return SessionMessage(JSONRPCRequest(jsonrpc="2.0", id=rid, method=method, params=params or {}))
 
 
 async def _recv_id(recv: Any, want_id: int, timeout: float) -> Any:
     with anyio.move_on_after(timeout):
         async for msg in recv:
-            if getattr(msg.message.root, "id", None) == want_id:
-                return msg.message.root
+            if getattr(msg.message, "id", None) == want_id:
+                return msg.message
     return None
 
 
