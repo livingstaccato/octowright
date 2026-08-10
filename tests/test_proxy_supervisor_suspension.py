@@ -152,7 +152,7 @@ async def test_watch_deadlines_normal_gap_still_expires() -> None:
     async with anyio.create_task_group() as tg:
         tg.start_soon(lambda: sup.watch_deadlines(0.1, None, monotonic=fake_now, sleep=fake_sleep))
         err = await out_recv.receive()
-        assert "timed out" in err.message.root.error.message
+        assert "timed out" in err.message.error.message
         tg.cancel_scope.cancel()
 
     assert sup.suspensions == 0  # small gaps are not suspensions

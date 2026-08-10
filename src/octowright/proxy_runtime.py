@@ -23,12 +23,11 @@ from typing import Any
 
 import anyio
 import httpx
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.server.stdio import stdio_server
 from provide.telemetry import get_logger
 
 from octowright import bridge_state, singleton
-from octowright._trace_propagation import tracing_httpx_client_factory
 from octowright._tracing import counter
 from octowright.defaults import (
     BRIDGE_CONNECT_TIMEOUT_SECONDS,
@@ -42,6 +41,7 @@ from octowright.proxy_supervisor import (
     BridgeSupervisor,
     _RemoteResetSlot,
     _RemoteWriteSlot,
+    bridge_http_client,
 )
 
 log = get_logger(__name__)
@@ -357,10 +357,6 @@ async def run_supervised_proxy(
 
             async def _remote_supervisor() -> None:
                 attempt = 0
-                # Build the tracing httpx factory once; it's a closure with no
-                # per-connection state, so reusing it across reconnects avoids
-                # an allocation per attempt.
-                httpx_factory = tracing_httpx_client_factory()
 
                 async def _leader_recoverable() -> bool:
                     """True → keep retrying the leader; False → give up so the
@@ -417,24 +413,19 @@ async def run_supervised_proxy(
                         _connect_scope = anyio.CancelScope(
                             deadline=anyio.current_time() + BRIDGE_CONNECT_TIMEOUT_SECONDS
                         )
+                        http_client = bridge_http_client(remote_headers, supervisor_obj)
                         with _connect_scope:
-                            async with streamablehttp_client(
-                                remote_url,
-                                headers=remote_headers,
-                                httpx_client_factory=httpx_factory,
-                            ) as (remote_read, remote_write, get_sid):
+                            async with (
+                                http_client,
+                                streamable_http_client(
+                                    remote_url,
+                                    http_client=http_client,
+                                ) as (remote_read, remote_write),
+                            ):
                                 _connect_scope.deadline = math.inf
                                 connected_at = anyio.current_time()
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
-                                try:
-                                    supervisor_obj.remote_session_id = get_sid()
-                                except Exception as exc:
-                                    # get_sid() may not be implemented on every
-                                    # transport; log so bridge diagnostics aren't
-                                    # silently misleading when the field is null.
-                                    log.debug("octowright.bridge.get_sid_failed", error=repr(exc))
-                                    supervisor_obj.remote_session_id = None
                                 supervisor_obj.reconnect_attempts = attempt
                                 bridge_state.record_snapshot(
                                     path=BRIDGE_STATE_PATH,

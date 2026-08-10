@@ -3,17 +3,20 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Pin-tests for the FastMCP integration surface octowright depends on.
+"""Pin-tests for the MCP server integration surface octowright depends on.
 
 If the upstream `mcp` package changes shape (rename, signature change,
 internal-attribute removal), one of these tests will fail and surface the
 drift before users hit it. The tests are intentionally narrow — they pin
 the *exact* names/signatures we touch in `server/_state.py` and
-`server/registry.py`, not the broader FastMCP API.
+`server/registry.py`, not the broader server API.
 
-When mcp.server.fastmcp upgrades, run this file first; failures here mean
+When the `mcp` package upgrades, run this file first; failures here mean
 either the upstream rename matches our integration (update accordingly) or
-we should pin the `mcp` package version until we adapt.
+we should pin the `mcp` package version until we adapt. MCP 2.0 renamed
+`mcp.server.fastmcp.FastMCP` to `mcp.server.mcpserver.MCPServer` and dropped
+the `request_ctx` contextvar and the client's `get_session_id`; these pins now
+track the 2.x surface.
 """
 
 from __future__ import annotations
@@ -23,37 +26,72 @@ import inspect
 import pytest
 
 
-def test_fastmcp_module_path_unchanged() -> None:
-    """We import `FastMCP` from `mcp.server.fastmcp`."""
-    from mcp.server.fastmcp import FastMCP  # noqa: F401
+def test_mcpserver_module_path_unchanged() -> None:
+    """We import `MCPServer` from `mcp.server.mcpserver`."""
+    from mcp.server.mcpserver import MCPServer  # noqa: F401
+
+
+def test_server_middleware_protocol_available() -> None:
+    """`_request_context.RequestContextMiddleware` is registered as a
+    `ServerMiddleware`; it is how octowright republishes the per-request
+    context that MCP 2.0 stopped exposing through a contextvar."""
+    from mcp.server.context import ServerMiddleware  # noqa: F401
+    from mcp.server.mcpserver import MCPServer
+
+    assert "middleware" in inspect.signature(MCPServer.__init__).parameters
+
+
+def test_server_request_context_exposes_session_and_meta() -> None:
+    """The middleware hands these two fields to the ambient tool wrappers
+    (progress heartbeat + idempotent dispatch)."""
+    from mcp.server.context import ServerRequestContext
+
+    fields = ServerRequestContext.__dataclass_fields__
+    assert "session" in fields
+    assert "meta" in fields
+
+
+def test_streamable_http_client_takes_an_injected_http_client() -> None:
+    """The follower bridge builds its own httpx2 client (traceparent injection
+    + mcp-session-id capture) and hands it to the transport."""
+    from mcp.client.streamable_http import streamable_http_client
+
+    params = inspect.signature(streamable_http_client).parameters
+    assert "http_client" in params, (
+        "streamable_http_client no longer accepts an injected client — "
+        "proxy_runtime builds one via _trace_propagation.build_tracing_http_client."
+    )
+
+
+def test_lowlevel_server_attribute_for_stdio_runner() -> None:
+    """`mcp_notifications.run_stdio_with_notifications` reaches through to the
+    lowlevel server to capture the write stream."""
+    from mcp.server.mcpserver import MCPServer
+
+    low = getattr(MCPServer("contract-pin-test"), "_lowlevel_server", None)
+    assert low is not None, "MCPServer no longer exposes `_lowlevel_server`"
+    assert callable(getattr(low, "run", None))
+    assert callable(getattr(low, "create_initialization_options", None))
 
 
 def test_tool_annotations_module_path_unchanged() -> None:
-    """`ToolAnnotations` lives next to `FastMCP` and is the type our `tool`
-    decorator override forwards."""
-    from mcp.server.fastmcp import FastMCP  # noqa: F401
-
-    # `_state.py` imports ToolAnnotations from one of these two paths
-    # depending on mcp version. Either is fine; both vanishing is not.
-    try:
-        from mcp.server.fastmcp.tools.base import ToolAnnotations
-    except ImportError:
-        from mcp.types import ToolAnnotations  # noqa: F401
+    """`ToolAnnotations` is the type our `tool` decorator override forwards."""
+    from mcp.types import ToolAnnotations  # noqa: F401
 
 
-def test_fastmcp_constructor_accepts_name_and_instructions() -> None:
-    """`_ProfiledFastMCP("octowright", instructions=...)` is the call site
+def test_mcpserver_constructor_accepts_name_and_instructions() -> None:
+    """`_ProfiledMCPServer("octowright", instructions=...)` is the call site
     in server/_state.py."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
-    sig = inspect.signature(FastMCP.__init__)
+    sig = inspect.signature(MCPServer.__init__)
     params = sig.parameters
-    # `name` is positional-or-keyword (FastMCP's first arg).
+    # `name` is positional-or-keyword (the server's first arg).
     # We don't pin the *exact* parameter name because some versions call it
     # `name`, some pass via **kwargs to a base class — but `instructions`
     # has been a stable kwarg.
     assert "instructions" in params, (
-        "FastMCP no longer accepts `instructions=` kwarg — server/_state.py "
+        "MCPServer no longer accepts `instructions=` kwarg — server/_state.py "
         "passes the LLM-orientation string here. Adapt or pin the mcp version."
     )
 
@@ -79,30 +117,30 @@ def test_mcp_instructions_advertise_compact_browsing_workflow() -> None:
     assert "browser_downloads_summary" in instructions
 
 
-def test_fastmcp_tool_decorator_signature() -> None:
+def test_tool_decorator_signature() -> None:
     """`mcp.tool(name=, title=, description=, annotations=)` is the
-    decorator surface our @mcp.tool callers expect. _ProfiledFastMCP's
+    decorator surface our @mcp.tool callers expect. _ProfiledMCPServer's
     override forwards exactly these kwargs."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
-    sig = inspect.signature(FastMCP.tool)
+    sig = inspect.signature(MCPServer.tool)
     params = sig.parameters
     for kw in ("name", "description", "annotations"):
         assert kw in params, (
-            f"FastMCP.tool() no longer accepts `{kw}=` — server/_state.py's "
-            f"_ProfiledFastMCP.tool override forwards this kwarg. Adapt the override."
+            f"MCPServer.tool() no longer accepts `{kw}=` — server/_state.py's "
+            f"_ProfiledMCPServer.tool override forwards this kwarg. Adapt the override."
         )
 
 
-def test_fastmcp_tool_manager_list_tools_returns_named_objects() -> None:
+def test_tool_manager_list_tools_returns_named_objects() -> None:
     """`mcp._tool_manager.list_tools()` is what `registered_tool_names()`
     iterates. We rely on each entry exposing `.name`."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
-    fresh = FastMCP("contract-pin-test")
+    fresh = MCPServer("contract-pin-test")
     tool_manager = getattr(fresh, "_tool_manager", None)
     assert tool_manager is not None, (
-        "FastMCP no longer exposes `_tool_manager` — `registered_tool_names()` "
+        "MCPServer no longer exposes `_tool_manager` — `registered_tool_names()` "
         "in server/registry.py iterates `mcp._tool_manager.list_tools()`."
     )
     list_tools_fn = getattr(tool_manager, "list_tools", None)
@@ -116,18 +154,18 @@ def test_fastmcp_tool_manager_list_tools_returns_named_objects() -> None:
     tools = list_tools_fn()
     assert tools, "expected at least one tool after @mcp.tool registration"
     assert all(hasattr(t, "name") for t in tools), (
-        "FastMCP tool objects no longer expose `.name` — `registered_tool_names()` depends on iterating these."
+        "Tool objects no longer expose `.name` — `registered_tool_names()` depends on iterating these."
     )
     assert "_ping" in {t.name for t in tools}
 
 
 def test_profile_filter_skips_decoration() -> None:
-    """The whole point of `_ProfiledFastMCP`: when `allowed_tools` is set
+    """The whole point of `_ProfiledMCPServer`: when `allowed_tools` is set
     and a tool's name is not in it, the decorator returns the function
-    unmodified and does NOT register with the underlying FastMCP."""
-    from octowright.server._state import _ProfiledFastMCP
+    unmodified and does NOT register with the underlying server."""
+    from octowright.server._state import _ProfiledMCPServer
 
-    fresh = _ProfiledFastMCP("contract-pin-test", allowed_tools={"keep_me"})
+    fresh = _ProfiledMCPServer("contract-pin-test", allowed_tools={"keep_me"})
 
     @fresh.tool()  # type: ignore[misc]
     def keep_me() -> str:
@@ -144,9 +182,9 @@ def test_profile_filter_skips_decoration() -> None:
 
 def test_profile_filter_unset_registers_everything() -> None:
     """`allowed_tools=None` means no filtering (back-compat default)."""
-    from octowright.server._state import _ProfiledFastMCP
+    from octowright.server._state import _ProfiledMCPServer
 
-    fresh = _ProfiledFastMCP("contract-pin-test", allowed_tools=None)
+    fresh = _ProfiledMCPServer("contract-pin-test", allowed_tools=None)
 
     @fresh.tool()  # type: ignore[misc]
     def alpha() -> str:

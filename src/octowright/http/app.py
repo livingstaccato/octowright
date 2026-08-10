@@ -9,7 +9,7 @@ Assembles the API route list (from ``routes/``) plus the SPA frontend mount.
 The frontend goes last so its catchall StaticFiles mount at ``/`` doesn't
 shadow API routes.
 
-When ``mcp_leader=True``, also mounts the FastMCP streamable-HTTP transport at
+When ``mcp_leader=True``, also mounts the MCP server's streamable-HTTP transport at
 ``/mcp`` and delegates lifespan to it so the session manager starts/stops with
 the server. Followers connect to that endpoint instead of spawning their own
 browser pool — see ``octowright.singleton`` and ``cli.serve``.
@@ -74,13 +74,27 @@ def _mcp_session_idle_seconds(raw: str | None = None) -> float | None:
     return value if value > 0 else None
 
 
+def mcp_session_manager(mcp: Any) -> Any:
+    """The leader's StreamableHTTP session manager, or None when there isn't one.
+
+    MCP 2.0 replaced the ``_session_manager`` attribute with a property that
+    *raises* until ``streamable_http_app()`` has built the manager, so callers
+    that used to probe the attribute (idle-timeout setup, the housekeeping
+    reapers) must tolerate the raise rather than assume ``None``.
+    """
+    try:
+        return mcp.session_manager
+    except Exception:
+        return None
+
+
 def _apply_mcp_session_idle_timeout(mcp: Any) -> None:
     """Set the StreamableHTTP session manager's idle timeout after it's built, so
     abandoned/idle sessions get reaped instead of leaking (see build_app)."""
     seconds = _mcp_session_idle_seconds()
     if seconds is None:
         return
-    manager = getattr(mcp, "_session_manager", None)
+    manager = mcp_session_manager(mcp)
     if manager is not None:
         manager.session_idle_timeout = seconds
         log.info("octowright.mcp.session_idle_timeout_set", seconds=seconds)
@@ -127,7 +141,7 @@ def get_mcp_session_tracker() -> McpSessionTracker | None:
 def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: str = "") -> Starlette:
     """Build the Starlette ASGI app. Stateless — safe to call from tests.
 
-    When ``mcp_leader`` is True, mount FastMCP's streamable-HTTP transport at
+    When ``mcp_leader`` is True, mount the MCP server's streamable-HTTP transport at
     ``/mcp`` and inherit its lifespan. Otherwise return the debugger UI alone.
 
     ``host`` is the bind host the dashboard will serve on. It's used by the
@@ -147,8 +161,7 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
 
         # The inner app's own route is at "/" so mounting it at "/mcp" puts the
         # endpoint at "/mcp" exactly (not "/mcp/mcp").
-        _mcp.settings.streamable_http_path = "/"
-        mcp_app = _mcp.streamable_http_app()
+        mcp_app = _mcp.streamable_http_app(streamable_http_path="/")
 
         # Reap abandoned/idle MCP sessions. The mcp session manager defaults
         # session_idle_timeout=None (never reap), so every session's per-session
