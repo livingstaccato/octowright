@@ -11,7 +11,7 @@ from typing import Any
 import anyio
 import pytest
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCRequest, JSONRPCResponse
+from mcp.types import JSONRPCRequest, JSONRPCResponse
 
 from octowright import proxy_runtime as supervisor
 
@@ -30,13 +30,11 @@ class FakeResponse:
 
 
 def _request(method: str, request_id: str = "r1") -> SessionMessage:
-    return SessionMessage(
-        JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params={"x": 1}))
-    )
+    return SessionMessage(JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params={"x": 1}))
 
 
 def _response(request_id: str = "r1") -> SessionMessage:
-    return SessionMessage(JSONRPCMessage(root=JSONRPCResponse(jsonrpc="2.0", id=request_id, result={"ok": True})))
+    return SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=request_id, result={"ok": True}))
 
 
 @pytest.fixture
@@ -128,7 +126,7 @@ async def test_run_supervised_proxy_exits_when_connect_and_health_fail(
     def failing_client(_url: str, **_kwargs: Any) -> FailingClient:
         return FailingClient()
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", failing_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", failing_client)
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
     monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.01)
@@ -181,11 +179,11 @@ async def test_request_timeout_recycles_remote_session(monkeypatch: pytest.Monke
         remote_write_send, _remote_write_recv = anyio.create_memory_object_stream[SessionMessage](10)
         remote_sends.append(remote_read_send)
         try:
-            yield (remote_read_recv, remote_write_send, lambda: f"sess-{len(enters)}")
+            yield (remote_read_recv, remote_write_send)
         finally:
             await remote_read_send.aclose()
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", silent_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", silent_client)
 
     local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
@@ -204,7 +202,7 @@ async def test_request_timeout_recycles_remote_session(monkeypatch: pytest.Monke
         tg.start_soon(run_proxy)
         await local_in_send.send(_request("tools/call", "timeout-1"))
         err = await local_out_recv.receive()
-        assert "timed out while waiting for leader response" in err.message.root.error.message
+        assert "timed out while waiting for leader response" in err.message.error.message
         await anyio.sleep(0.1)
         assert len(enters) >= 2
         tg.cancel_scope.cancel()
@@ -222,9 +220,9 @@ async def test_clean_remote_stream_end_exits_when_health_is_dead(monkeypatch: py
         remote_read_send, remote_read_recv = anyio.create_memory_object_stream[SessionMessage](10)
         remote_write_send, _remote_write_recv = anyio.create_memory_object_stream[SessionMessage](10)
         await remote_read_send.aclose()
-        yield (remote_read_recv, remote_write_send, lambda: "sess-clean-close")
+        yield (remote_read_recv, remote_write_send)
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", closing_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", closing_client)
     monkeypatch.setattr(supervisor, "BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 0.0)
 
     async def health_is_dead(_url: str) -> bool:
@@ -285,11 +283,11 @@ async def test_survives_leader_bounce_within_recovery_window(monkeypatch: pytest
         remote_write_send, remote_write_recv = anyio.create_memory_object_stream[SessionMessage](10)
         remote_write_recvs.append(remote_write_recv)
         try:
-            yield (remote_read_recv, remote_write_send, lambda: "sess-after-bounce")
+            yield (remote_read_recv, remote_write_send)
         finally:
             await remote_read_send.aclose()
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", bouncing_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", bouncing_client)
 
     local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
@@ -360,11 +358,11 @@ async def test_silent_sse_is_unstuck_so_follower_reconnects(monkeypatch: pytest.
         remote_read_send, remote_read_recv = anyio.create_memory_object_stream[Any](10)
         remote_write_send, _ = anyio.create_memory_object_stream[SessionMessage](10)
         try:
-            yield (remote_read_recv, remote_write_send, lambda: f"sess-{connects['n']}")
+            yield (remote_read_recv, remote_write_send)
         finally:
             await remote_read_send.aclose()
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", silent_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", silent_client)
 
     local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
@@ -421,11 +419,11 @@ async def test_reconnects_on_transient_drop_while_leader_healthy(monkeypatch: py
         remote_write_send, _remote_write_recv = anyio.create_memory_object_stream[SessionMessage](10)
         remote_read_sends.append(remote_read_send)
         try:
-            yield (remote_read_recv, remote_write_send, lambda: f"sess-{connects['n']}")
+            yield (remote_read_recv, remote_write_send)
         finally:
             await remote_read_send.aclose()
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", client)
 
     local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
@@ -468,7 +466,7 @@ async def test_exits_after_recovery_window_with_permanently_dead_leader(monkeypa
         connect_attempts["n"] += 1
         return FailingClient()
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", failing_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", failing_client)
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
     monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.02)
@@ -519,11 +517,11 @@ async def test_remote_reader_forwards_messages_and_handles_exception(monkeypatch
         remote_read_sends.append(remote_read_send)
         remote_write_recvs.append(remote_write_recv)
         try:
-            yield (remote_read_recv, remote_write_send, lambda: "sess-controlled")
+            yield (remote_read_recv, remote_write_send)
         finally:
             await remote_read_send.aclose()
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", controllable_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", controllable_client)
 
     local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
@@ -584,9 +582,9 @@ async def test_flapping_session_is_throttled_not_hot_looped(monkeypatch: pytest.
         read_send, read_recv = anyio.create_memory_object_stream[SessionMessage](1)
         await read_send.aclose()
         write_send, _write_recv = anyio.create_memory_object_stream[SessionMessage](10)
-        yield (read_recv, write_send, lambda: "sid")
+        yield (read_recv, write_send)
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", flapping_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", flapping_client)
 
     local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
@@ -648,9 +646,9 @@ async def test_connect_then_abort_storm_is_throttled(monkeypatch: pytest.MonkeyP
         read_send, read_recv = anyio.create_memory_object_stream[Any](1)
         await read_send.send(ConnectionError("session aborted"))
         write_send, _write_recv = anyio.create_memory_object_stream[SessionMessage](10)
-        yield (read_recv, write_send, lambda: "sid")
+        yield (read_recv, write_send)
 
-    monkeypatch.setattr(supervisor, "streamablehttp_client", aborting_client)
+    monkeypatch.setattr(supervisor, "streamable_http_client", aborting_client)
 
     local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
     local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)

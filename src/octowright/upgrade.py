@@ -40,6 +40,15 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.14.0": [
+        "Octowright now runs on the MCP 2.0 Python SDK. Installs had started breaking outright — the SDK's "
+        "2.0 release removed the module octowright imported, and the dependency had no upper bound, so a "
+        "fresh install pulled a version the daemon could not start on. If you pin `mcp` yourself, you now "
+        "need 2.0 or newer.",
+        "The keepalive that stops long tool calls from looking like a dropped connection survived the "
+        "upgrade — MCP 2.0 changed how request metadata reaches a tool, in a way that would have switched "
+        "the keepalive (and duplicate-call protection) off silently rather than loudly.",
+    ],
     "0.13.10": [
         "The dashboard's live preview now follows the tab you switch to. It used to keep streaming whichever "
         "page was active when you opened it, and the tab it left kept encoding frames forever.",

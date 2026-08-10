@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 
 import octowright.macros as macro_mod
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
@@ -142,7 +142,7 @@ async def macro_run(
     slowmo_ms: int | None = None,
     ctx: Context | None = None,
 ) -> MacroRunResult:
-    # ``ctx`` is injected by FastMCP (excluded from the client-facing schema). It
+    # ``ctx`` is injected by the MCP server (excluded from the client-facing schema). It
     # lets a long macro stream MCP progress per step, which the follower bridge
     # uses to keep the call alive past the flat request timeout.
     session = pool.get(instance_id)
@@ -173,7 +173,7 @@ async def macro_run_sequence(
     slowmo_ms: int | None = None,
     ctx: Context | None = None,
 ) -> MacroSequenceResult:
-    # ``ctx`` (FastMCP-injected, hidden from the client schema) streams per-step
+    # ``ctx`` (server-injected, hidden from the client schema) streams per-step
     # progress through the inner macros so a long sequence keeps the bridge alive.
     session = pool.get(instance_id)
     return await macro_mod.run_sequence(

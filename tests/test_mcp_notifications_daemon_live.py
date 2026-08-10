@@ -38,9 +38,10 @@ from urllib.request import urlopen
 
 import anyio
 import pytest
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
+from mcp.types import JSONRPCNotification, JSONRPCRequest
 
 pytestmark = pytest.mark.live_browser
 
@@ -124,22 +125,18 @@ def _leader_pid(lock_path: Path) -> int | None:
 
 
 async def _send_request(write: Any, read: Any, request_id: int, method: str, params: dict[str, Any]) -> Any:
-    await write.send(
-        SessionMessage(JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params=params)))
-    )
+    await write.send(SessionMessage(JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params=params)))
     async for message in read:
         if isinstance(message, Exception):
             raise message
-        root = message.message.root
+        root = message.message
         if getattr(root, "id", None) == request_id:
             return root
     raise RuntimeError("leader stream closed before response")
 
 
 async def _notify(write: Any, method: str, params: dict[str, Any]) -> None:
-    await write.send(
-        SessionMessage(JSONRPCMessage(root=JSONRPCNotification(jsonrpc="2.0", method=method, params=params)))
-    )
+    await write.send(SessionMessage(JSONRPCNotification(jsonrpc="2.0", method=method, params=params)))
 
 
 def _tool_result(root: Any) -> dict[str, Any]:
@@ -155,7 +152,10 @@ async def _probe(mcp_url: str, token: str) -> bool:
     any octowright notification.
     """
     headers = {"X-Octowright-Token": token} if token else None
-    async with streamablehttp_client(mcp_url, headers=headers) as (read, write, _sid):
+    async with (
+        create_mcp_http_client(headers=headers) as http_client,
+        streamable_http_client(mcp_url, http_client=http_client) as (read, write),
+    ):
         await _send_request(
             write,
             read,
@@ -183,13 +183,11 @@ async def _probe(mcp_url: str, token: str) -> bool:
         # agent_close → publishes SessionClosedEvent on the pool's event bus.
         await write.send(
             SessionMessage(
-                JSONRPCMessage(
-                    root=JSONRPCRequest(
-                        jsonrpc="2.0",
-                        id=3,
-                        method="tools/call",
-                        params={"name": "browser_close", "arguments": {"instance_id": instance_id}},
-                    )
+                JSONRPCRequest(
+                    jsonrpc="2.0",
+                    id=3,
+                    method="tools/call",
+                    params={"name": "browser_close", "arguments": {"instance_id": instance_id}},
                 )
             )
         )
@@ -202,7 +200,7 @@ async def _probe(mcp_url: str, token: str) -> bool:
             async for message in read:
                 if isinstance(message, Exception):
                     break
-                root = message.message.root
+                root = message.message
                 method = getattr(root, "method", "")
                 if isinstance(method, str) and method.startswith("notifications/octowright/"):
                     saw_notification = True
@@ -214,7 +212,7 @@ async def _probe(mcp_url: str, token: str) -> bool:
                         async for late in read:
                             if isinstance(late, Exception):
                                 break
-                            lm = getattr(late.message.root, "method", "")
+                            lm = getattr(late.message, "method", "")
                             if isinstance(lm, str) and lm.startswith("notifications/octowright/"):
                                 saw_notification = True
                                 break

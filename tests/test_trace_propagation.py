@@ -17,7 +17,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -73,31 +73,27 @@ def in_memory_tracer(
 
 
 # ---------------------------------------------------------------------------
-# tracing_httpx_client_factory
+# build_tracing_http_client
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_httpx_factory_injects_traceparent_when_inside_span(
+async def test_bridge_client_injects_traceparent_when_inside_span(
     in_memory_tracer: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
-    """An httpx request made inside an OTel span must carry a traceparent header."""
+    """A bridge request made inside an OTel span must carry a traceparent header."""
     _exporter, provider = in_memory_tracer
     tracer = provider.get_tracer("test")
 
-    captured: dict[str, httpx.Headers] = {}
+    captured: dict[str, Any] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["headers"] = request.headers
-        return httpx.Response(200, json={"ok": True})
+        return httpx2.Response(200, json={"ok": True})
 
-    factory = tp.tracing_httpx_client_factory()
+    client = tp.build_tracing_http_client()
     # MockTransport bypasses the network; the event hook still fires.
-    transport = httpx.MockTransport(handler)
-    client = factory()
-    # Swap the transport on the already-built client so the event hook is
-    # preserved. (httpx applies hooks regardless of transport.)
-    client._transport = transport  # type: ignore[attr-defined]
+    client._transport = httpx2.MockTransport(handler)  # type: ignore[attr-defined]
 
     with tracer.start_as_current_span("outer") as outer_span:
         await client.get("http://leader/mcp/")
@@ -109,17 +105,16 @@ async def test_httpx_factory_injects_traceparent_when_inside_span(
 
 
 @pytest.mark.anyio
-async def test_httpx_factory_no_span_still_works() -> None:
-    """Outside a span the factory still produces a working client."""
-    captured: dict[str, httpx.Headers] = {}
+async def test_bridge_client_no_span_still_works() -> None:
+    """Outside a span the builder still produces a working client."""
+    captured: dict[str, Any] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["headers"] = request.headers
-        return httpx.Response(204)
+        return httpx2.Response(204)
 
-    factory = tp.tracing_httpx_client_factory()
-    client = factory(headers={"x-test": "1"}, timeout=httpx.Timeout(5.0), auth=None)
-    client._transport = httpx.MockTransport(handler)  # type: ignore[attr-defined]
+    client = tp.build_tracing_http_client(headers={"x-test": "1"}, timeout=5.0)
+    client._transport = httpx2.MockTransport(handler)  # type: ignore[attr-defined]
 
     resp = await client.get("http://leader/")
     await client.aclose()
@@ -129,23 +124,37 @@ async def test_httpx_factory_no_span_still_works() -> None:
 
 
 @pytest.mark.anyio
-async def test_httpx_factory_passes_auth_through() -> None:
-    """Factory must forward ``auth=`` to AsyncClient (covers the auth branch)."""
-    captured: dict[str, httpx.Headers] = {}
+async def test_bridge_client_captures_mcp_session_id() -> None:
+    """MCP 2.0 dropped the transport's get_session_id, so the bridge reads the
+    id off the response header — the leader's follower reaper keys on it."""
+    seen: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["headers"] = request.headers
-        return httpx.Response(200)
+    def handler(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers={"mcp-session-id": "sess-abc"})
 
-    factory = tp.tracing_httpx_client_factory()
-    auth = httpx.BasicAuth(username="u", password="p")
-    client = factory(auth=auth)
-    client._transport = httpx.MockTransport(handler)  # type: ignore[attr-defined]
-    assert client.auth is auth
+    client = tp.build_tracing_http_client(on_session_id=seen.append)
+    client._transport = httpx2.MockTransport(handler)  # type: ignore[attr-defined]
+
+    await client.post("http://leader/mcp/")
+    await client.aclose()
+
+    assert seen == ["sess-abc"]
+
+
+@pytest.mark.anyio
+async def test_bridge_client_without_session_id_header_is_quiet() -> None:
+    seen: list[str] = []
+
+    def handler(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200)
+
+    client = tp.build_tracing_http_client(on_session_id=seen.append)
+    client._transport = httpx2.MockTransport(handler)  # type: ignore[attr-defined]
+
     await client.get("http://leader/")
     await client.aclose()
-    # BasicAuth produces an Authorization header on the wire.
-    assert captured["headers"].get("authorization", "").startswith("Basic ")
+
+    assert seen == []
 
 
 @pytest.mark.anyio
@@ -157,7 +166,7 @@ async def test_inject_hook_swallows_propagator_errors(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(tp._otel_propagate, "inject", boom)
 
-    request = httpx.Request("GET", "http://leader/")
+    request = httpx2.Request("GET", "http://leader/")
     # Must complete without raising.
     await tp._inject_traceparent_hook(request)
 
@@ -165,7 +174,7 @@ async def test_inject_hook_swallows_propagator_errors(monkeypatch: pytest.Monkey
 @pytest.mark.anyio
 async def test_inject_hook_noop_when_otel_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tp, "_OTEL_AVAILABLE", False)
-    request = httpx.Request("GET", "http://leader/")
+    request = httpx2.Request("GET", "http://leader/")
     await tp._inject_traceparent_hook(request)  # no-ops
 
 

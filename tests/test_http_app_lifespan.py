@@ -39,20 +39,21 @@ def test_get_mcp_active_session_count_returns_tracker_count() -> None:
 
 
 def test_build_app_mcp_leader_mounts_mcp_and_sets_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _FakeMcpSettings:
-        streamable_http_path = "unchanged"
-
     fake_mcp_app = Starlette(routes=[Route("/", lambda _req: JSONResponse({"ok": True}))])
+    app_kwargs: dict[str, object] = {}
 
-    fake_mcp_module = types.SimpleNamespace(
-        settings=_FakeMcpSettings(),
-        streamable_http_app=lambda: fake_mcp_app,
-    )
+    def _streamable_http_app(**kwargs: object) -> Starlette:
+        app_kwargs.update(kwargs)
+        return fake_mcp_app
+
+    fake_mcp_module = types.SimpleNamespace(streamable_http_app=_streamable_http_app)
     monkeypatch.setattr("octowright.server.mcp", fake_mcp_module)
 
     app = _http_app.build_app(mcp_leader=True)
 
-    assert fake_mcp_module.settings.streamable_http_path == "/"
+    # MCP 2.0: the inner route path is a streamable_http_app() kwarg, not a
+    # mutable settings attribute. "/" keeps the endpoint at /mcp, not /mcp/mcp.
+    assert app_kwargs["streamable_http_path"] == "/"
     assert app.router.lifespan_context == fake_mcp_app.router.lifespan_context
     assert any(getattr(route, "path", None) == "/mcp" for route in app.routes)
     # Fresh tracker has no sessions yet — the count rises when middleware sees

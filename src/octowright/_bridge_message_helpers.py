@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.shared.message import SessionMessage
-from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
+from mcp.types import ErrorData, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 
 BRIDGE_ERROR_CODE = -32000
 BRIDGE_ERROR_PREFIX = "Octowright bridge error:"
@@ -30,7 +30,15 @@ BRIDGE_ERROR_GUIDANCE = (
 
 
 def message_root(message: SessionMessage) -> Any:
-    return message.message.root
+    """The JSON-RPC payload carried by a session message.
+
+    MCP 1.x wrapped it in a ``JSONRPCMessage`` RootModel, so readers reached
+    through ``.root``; 2.0 turned ``JSONRPCMessage`` into a plain union, making
+    ``SessionMessage.message`` the payload itself. Accept both — every bridge
+    reader funnels through here, so this one shim covers the whole surface.
+    """
+    inner = message.message
+    return getattr(inner, "root", inner)
 
 
 def message_request_id(message: SessionMessage) -> str | int | None:
@@ -73,14 +81,12 @@ def is_response(message: SessionMessage) -> bool:
 
 def bridge_error(request_id: str | int, reason: str) -> SessionMessage:
     return SessionMessage(
-        JSONRPCMessage(
-            root=JSONRPCError(
-                jsonrpc="2.0",
-                id=request_id,
-                error=ErrorData(
-                    code=BRIDGE_ERROR_CODE,
-                    message=f"{BRIDGE_ERROR_PREFIX} {reason} {BRIDGE_ERROR_GUIDANCE}",
-                ),
-            )
+        JSONRPCError(
+            jsonrpc="2.0",
+            id=request_id,
+            error=ErrorData(
+                code=BRIDGE_ERROR_CODE,
+                message=f"{BRIDGE_ERROR_PREFIX} {reason} {BRIDGE_ERROR_GUIDANCE}",
+            ),
         )
     )

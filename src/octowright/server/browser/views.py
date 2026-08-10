@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from octowright.mcp_types import BrowserPageOutlineResult
 from octowright.server._state import mcp, pool
 from octowright.server.profiles import annotate_next_actions_for_profile
 
 
-async def browser_page_outline(instance_id: str) -> dict[str, Any]:
+async def browser_page_outline(instance_id: str) -> BrowserPageOutlineResult:
     from octowright.server.browser.inspect import browser_page_outline as _browser_page_outline
 
     return await _browser_page_outline(instance_id)

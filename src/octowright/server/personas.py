@@ -130,7 +130,7 @@ def persona_delete(name: str) -> dict[str, Any]:
 )
 async def persona_credentials_check(name: str) -> CredentialCheckReport:
     # check_credentials shells out to each persona's credential helper
-    # (e.g. `op read ...`). FastMCP runs sync tools directly on the event
+    # (e.g. `op read ...`). The MCP server runs sync tools directly on the event
     # loop, so a 30s `op` call would stall every live browser, every WS
     # heartbeat, and every JSONL write. Push the synchronous helper to a
     # worker thread to keep the loop responsive.

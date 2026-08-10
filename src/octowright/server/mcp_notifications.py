@@ -56,7 +56,7 @@ import asyncio
 from typing import Any, cast
 
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCNotification
+from mcp.types import JSONRPCNotification
 from provide.telemetry import get_logger
 
 from octowright.browser_pool.session_event_bus import (
@@ -171,9 +171,7 @@ def payload_to_message(payload: dict[str, Any]) -> SessionMessage:
     as JSON over ``/api/mcp-events``) into the exact ``SessionMessage`` the local
     MCP client expects on its stdio stream.
     """
-    return SessionMessage(
-        JSONRPCMessage(root=JSONRPCNotification(jsonrpc="2.0", method=payload["method"], params=payload["params"]))
-    )
+    return SessionMessage(JSONRPCNotification(jsonrpc="2.0", method=payload["method"], params=payload["params"]))
 
 
 def _build_notification(event: SessionEvent) -> SessionMessage:
@@ -279,14 +277,15 @@ async def run_with_notifications(run_coro: Any, write_stream: Any) -> None:
 async def run_stdio_with_notifications(mcp: Any) -> None:
     """MCP stdio server + session-close notification emitter running together.
 
-    Replicates ``FastMCP.run_stdio_async`` so we can capture the write stream
+    Replicates ``MCPServer.run_stdio_async`` so we can capture the write stream
     and pass it to the notifier, bypassing the request-context contextvar that
     ``ServerSession.send_notification`` requires inside a request handler.
     """
     from mcp.server.stdio import stdio_server
 
     async with stdio_server() as (read_stream, write_stream):
-        server_run = mcp._mcp_server.run(read_stream, write_stream, mcp._mcp_server.create_initialization_options())
+        low = mcp._lowlevel_server
+        server_run = low.run(read_stream, write_stream, low.create_initialization_options())
         await run_with_notifications(server_run, write_stream)
 
 

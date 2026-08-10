@@ -64,7 +64,7 @@ async def test_concurrent_response_and_timeout_emits_single_frame() -> None:
 
     assert len(frames) == 1
     assert supervisor.message_request_id(frames[0]) == request_id
-    assert isinstance(frames[0].message.root, JSONRPCResponse)
+    assert isinstance(frames[0].message, JSONRPCResponse)
 
 
 @pytest.mark.anyio
@@ -99,7 +99,7 @@ async def test_run_supervised_proxy_session_survives_past_connect_timeout(
     """A connected session must not be cancelled at BRIDGE_CONNECT_TIMEOUT_SECONDS.
 
     The bug: ``with anyio.fail_after(...)`` previously wrapped the whole
-    ``async with streamablehttp_client(...)`` block, so the body (the read
+    ``async with streamable_http_client(...)`` block, so the body (the read
     loop, the inner task group) was also subject to the connect deadline.
     Active sessions died every BRIDGE_CONNECT_TIMEOUT_SECONDS and reconnected,
     failing every in-flight request. The fix scopes the deadline to only the
@@ -119,11 +119,11 @@ async def test_run_supervised_proxy_session_survives_past_connect_timeout(
     async def fake_client(_url: str, **_kwargs: Any):  # type: ignore[no-untyped-def]
         enters.append(__import__("time").monotonic())
         try:
-            yield (fake_remote_read_recv, fake_remote_write_send, lambda: "sess-1")
+            yield (fake_remote_read_recv, fake_remote_write_send)
         finally:
             exits.append(__import__("time").monotonic())
 
-    monkeypatch.setattr(runtime, "streamablehttp_client", fake_client)
+    monkeypatch.setattr(runtime, "streamable_http_client", fake_client)
     monkeypatch.setattr(runtime, "resolve_leader_url", lambda url: url)
 
     # No-op snapshot writer to avoid hitting disk.

@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Shared singletons for the MCP server: the FastMCP instance, browser/scenario
+"""Shared singletons for the MCP server: the MCPServer instance, browser/scenario
 pools, and the logger. Submodules import from here to register tools against
 the same `mcp` and to share the same live state."""
 
@@ -12,9 +12,9 @@ from __future__ import annotations
 import functools
 import inspect
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from provide.telemetry import get_logger
 
 from octowright import scenarios_pool as _scenario_pool_mod
@@ -22,6 +22,7 @@ from octowright import terminal as _terminal
 from octowright.browser_pool import BrowserPool
 from octowright.server._heartbeat import _progress_heartbeat
 from octowright.server._idempotency import _idempotent_dispatch
+from octowright.server._request_context import RequestContextMiddleware
 from octowright.server.profiles import active_filter
 
 if TYPE_CHECKING:
@@ -30,6 +31,11 @@ if TYPE_CHECKING:
     from octowright.terminal.pool import TerminalPool
 
 log = get_logger("octowright.server")
+
+# Matches the SDK's own decorator typing: `tool()` hands back the *same*
+# callable type it was given, so `@mcp.tool` never erases a handler's signature
+# for callers or type-checkers.
+_CallableT = TypeVar("_CallableT", bound=Callable[..., Any])
 
 pool = BrowserPool()
 scenario_pool = _scenario_pool_mod.ScenarioPool()
@@ -114,13 +120,13 @@ def _record_advisor_tool_call(tool_name: str) -> None:
         log.debug("octowright.advisor.record_tool_call_failed", tool=tool_name, error=str(exc))
 
 
-class _ProfiledFastMCP(FastMCP):
-    """FastMCP subclass that honours OCTOWRIGHT_PROFILE at decoration time.
+class _ProfiledMCPServer(MCPServer):
+    """MCPServer subclass that honours OCTOWRIGHT_PROFILE at decoration time.
 
     When ``allowed_tools`` is ``None`` (no profile active), behaviour is
     identical to the parent class. When it is a set, ``tool()``-decorated
     functions whose ``__name__`` is not in the set are returned unchanged
-    (and therefore never registered with the underlying FastMCP).
+    (and therefore never registered with the underlying server).
     """
 
     _allowed_tools: set[str] | None
@@ -138,7 +144,7 @@ class _ProfiledFastMCP(FastMCP):
         icons: list[Icon] | None = None,
         meta: dict[str, Any] | None = None,
         structured_output: bool | None = None,
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    ) -> Callable[[_CallableT], _CallableT]:
         decorator = super().tool(
             name=name,
             title=title,
@@ -151,18 +157,21 @@ class _ProfiledFastMCP(FastMCP):
         allowed = self._allowed_tools
         if allowed is None:
 
-            def wrap_all(fn: Callable[..., Any]) -> Callable[..., Any]:
+            def wrap_all(fn: _CallableT) -> _CallableT:
                 # Progress heartbeat wraps OUTERMOST so it also keeps a follower
                 # alive while it awaits an in-progress idempotency entry (resend
                 # race). Idempotency dedup wraps OUTSIDE advisor tracking so a cache
                 # hit skips both re-execution and double-counting; every layer
-                # preserves the signature via functools.wraps, so FastMCP Context
+                # preserves the signature via functools.wraps, so MCPServer Context
                 # injection and the input schema still resolve through them.
-                return decorator(_progress_heartbeat(_idempotent_dispatch(_track_advisor_usage(fn))))
+                wrapped = decorator(_progress_heartbeat(_idempotent_dispatch(_track_advisor_usage(fn))))
+                # functools.wraps keeps the signature; the cast just tells the
+                # type-checker the decorated tool is still the caller's callable.
+                return cast("_CallableT", wrapped)
 
             return wrap_all
 
-        def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
+        def wrap(fn: _CallableT) -> _CallableT:
             # Honour an explicit `@mcp.tool(name="…")` override before falling
             # back to the Python function name. Without this, a tool whose
             # MCP-visible name diverges from `fn.__name__` would silently be
@@ -170,15 +179,18 @@ class _ProfiledFastMCP(FastMCP):
             resolved_name = name if name is not None else getattr(fn, "__name__", "")
             if resolved_name not in allowed:
                 return fn
-            return decorator(_progress_heartbeat(_idempotent_dispatch(_track_advisor_usage(fn))))
+            return cast("_CallableT", decorator(_progress_heartbeat(_idempotent_dispatch(_track_advisor_usage(fn)))))
 
         return wrap
 
 
 _allowed_tools = active_filter()
-mcp = _ProfiledFastMCP(
+mcp = _ProfiledMCPServer(
     "octowright",
     allowed_tools=_allowed_tools,
+    # Republishes each request's context in a contextvar the ambient tool
+    # wrappers read (MCP 2.0 dropped the SDK's own). See _request_context.
+    middleware=[RequestContextMiddleware()],
     instructions=(
         "Launch and drive multiple headed Playwright browsers in parallel. "
         "Each browser has an instance_id; pass it to every per-browser tool. "
