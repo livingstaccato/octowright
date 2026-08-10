@@ -20,23 +20,21 @@ from typing import Any
 import anyio
 import pytest
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
+from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 
 from octowright import proxy_supervisor as supervisor
 
 
 def _request(method: str, request_id: str = "r1") -> SessionMessage:
-    return SessionMessage(
-        JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params={"x": 1}))
-    )
+    return SessionMessage(JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params={"x": 1}))
 
 
 def _notification(method: str) -> SessionMessage:
-    return SessionMessage(JSONRPCMessage(root=JSONRPCNotification(jsonrpc="2.0", method=method, params={"x": 1})))
+    return SessionMessage(JSONRPCNotification(jsonrpc="2.0", method=method, params={"x": 1}))
 
 
 def _response(request_id: str = "r1") -> SessionMessage:
-    return SessionMessage(JSONRPCMessage(root=JSONRPCResponse(jsonrpc="2.0", id=request_id, result={"ok": True})))
+    return SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=request_id, result={"ok": True}))
 
 
 class _CapturingRemoteWrite:
@@ -67,14 +65,14 @@ def anyio_backend() -> str:
 
 
 def _is_bridge_error(message: SessionMessage, *, contains: str | None = None) -> bool:
-    root = message.message.root
+    root = message.message
     if not isinstance(root, JSONRPCError):
         return False
     return not (contains is not None and contains not in root.error.message)
 
 
 def _bridge_error_id(message: SessionMessage) -> str | int | None:
-    root = message.message.root
+    root = message.message
     if isinstance(root, JSONRPCError):
         return root.id
     return None

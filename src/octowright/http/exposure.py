@@ -211,7 +211,7 @@ def guard_sensitive_http(
 
 
 class SensitiveASGIGuard:
-    """ASGI wrapper for sensitive mounted apps such as FastMCP transport.
+    """ASGI wrapper for sensitive mounted apps such as the MCP transport.
 
     The bind host is captured at wrap time because ``scope["app"]`` inside a
     Starlette ``Mount`` resolves to the inner mounted app, not the outer
