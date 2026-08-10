@@ -5,7 +5,7 @@
 
 """Browser-domain MCP tools.
 
-Each submodule registers its tools against the shared FastMCP instance from
+Each submodule registers its tools against the shared MCPServer instance from
 `octowright.server._state` at import time. Importing this package is enough
 to make every browser_* tool callable.
 """

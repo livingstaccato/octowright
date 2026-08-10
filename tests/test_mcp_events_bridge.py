@@ -64,13 +64,13 @@ async def test_forward_sse_delivers_only_valid_notifications() -> None:
         collector,
     )
 
-    methods = [m.message.root.method for m in collector.sent]
+    methods = [m.message.method for m in collector.sent]
     assert methods == [
         "notifications/octowright/session_closed",
         "notifications/octowright/browser_crashed",
     ]
     # params round-trip intact
-    assert collector.sent[0].message.root.params == {"instance_id": "a"}
+    assert collector.sent[0].message.params == {"instance_id": "a"}
 
 
 @pytest.mark.anyio
@@ -97,7 +97,7 @@ async def test_forward_sse_swallows_send_failure_and_continues() -> None:
         ),
         write,
     )
-    assert [m.message.root.params["instance_id"] for m in write.ok] == ["ok"]
+    assert [m.message.params["instance_id"] for m in write.ok] == ["ok"]
 
 
 # ─── leader endpoint: /api/mcp-events ────────────────────────────────────────
