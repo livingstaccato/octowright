@@ -40,6 +40,15 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.14.1": [
+        "A persistent profile no longer breaks when its browser dies badly or when a cache/temp cleanup runs. "
+        "Chromium leaves an in-use marker pointing at a process that is gone, and every later launch of that "
+        "persona failed with 'profile is already in use' until the files were deleted by hand — taking its "
+        "saved logins out of service. Octowright now clears that marker itself, and only when the process that "
+        "left it is confirmed dead.",
+        "Switching tabs records the tab you switched to. A concurrent switch could make an earlier one report "
+        "the wrong page's URL, which then landed in the recording and followed through to replay and export.",
+    ],
     "0.14.0": [
         "Octowright now runs on the MCP 2.0 Python SDK. Installs had started breaking outright — the SDK's "
         "2.0 release removed the module octowright imported, and the dependency had no upper bound, so a "
