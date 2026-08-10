@@ -175,10 +175,12 @@ class SessionPageMixin(SessionLike):
         """Set self.page to self.pages[index]. Raises IndexError if out of bounds."""
         if index < 0 or index >= len(self.pages):
             raise IndexError(f"page index {index} out of range (0..{len(self.pages) - 1})")
-        self.page = self.pages[index]
-        await notify_active_page(self.instance_id, self.page)
-        self.recorder.record("switch_page", index=index, url=self.page.url)
-        return {"index": index, "url": self.page.url, "page_count": len(self.pages)}
+        selected_page = self.pages[index]
+        self.page = selected_page
+        await notify_active_page(self.instance_id, selected_page)
+        selected_url = selected_page.url
+        self.recorder.record("switch_page", index=index, url=selected_url)
+        return {"index": index, "url": selected_url, "page_count": len(self.pages)}
 
     async def close_page(self, index: int) -> dict[str, Any]:
         """Close self.pages[index] and remove it from the list.
