@@ -17,6 +17,14 @@ on:
   # Allow manual runs from the Actions tab.
   workflow_dispatch:
 
+# Supersede an in-flight run when a branch is pushed again: a follow-up
+# commit on an open PR otherwise leaves the previous run to finish against
+# code nobody will merge. Pushes to main are NOT cancelled — those runs
+# gate the release, so the last one must complete on its own commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
