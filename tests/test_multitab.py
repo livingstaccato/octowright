@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -75,8 +77,6 @@ def test_register_popup_records_event(tmp_path: Path) -> None:
 
     log = (tmp_path / "test.jsonl").read_text().splitlines()
     # last recorded line should be the popup_opened event
-    import json
-
     last = json.loads(log[-1])
     assert last["action"] == "popup_opened"
     assert last["page_index"] == 1
@@ -182,6 +182,57 @@ async def test_switch_page_rebinds_a_live_screencast(tmp_path: Path, monkeypatch
     await session.switch_page(1)
 
     assert calls == [("test-abc", popup)]
+
+
+@pytest.mark.anyio
+async def test_overlapping_switches_record_and_return_their_selected_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow screencast rebind must not let a later switch replace the page
+    used in the earlier switch's recording and response."""
+    from octowright.session import core_page_mixin
+
+    first_rebind_started = asyncio.Event()
+    release_first_rebind = asyncio.Event()
+
+    session = _make_session(tmp_path)
+    first_popup = _make_page("https://first-popup.octowright.com")
+    second_popup = _make_page("https://second-popup.octowright.com")
+    session._register_popup(first_popup)
+    session._register_popup(second_popup)
+
+    async def slow_first_notify(_instance_id: str, page: object) -> None:
+        if page is first_popup:
+            first_rebind_started.set()
+            await release_first_rebind.wait()
+
+    monkeypatch.setattr(core_page_mixin, "notify_active_page", slow_first_notify)
+
+    first_switch = asyncio.create_task(session.switch_page(1))
+    await first_rebind_started.wait()
+    second_result = await session.switch_page(2)
+    release_first_rebind.set()
+    first_result = await first_switch
+
+    assert session.page is second_popup
+    assert first_result == {
+        "index": 1,
+        "url": "https://first-popup.octowright.com",
+        "page_count": 3,
+    }
+    assert second_result == {
+        "index": 2,
+        "url": "https://second-popup.octowright.com",
+        "page_count": 3,
+    }
+
+    rows = [json.loads(line) for line in session.log_path.read_text().splitlines()]
+    switches = [row for row in rows if row["action"] == "switch_page"]
+    assert {(row["index"], row["url"]) for row in switches} == {
+        (1, "https://first-popup.octowright.com"),
+        (2, "https://second-popup.octowright.com"),
+    }
 
 
 @pytest.mark.anyio
