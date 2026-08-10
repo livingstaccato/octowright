@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-08-10
+
+### Fixed
+- **A dead browser no longer bricks its persistent profile.** Chromium marks a
+  user-data-dir as in-use with `SingletonLock` / `SingletonSocket` /
+  `SingletonCookie`. A browser that dies without an orderly shutdown leaves them
+  behind — and on macOS the socket they point at lives under
+  `/var/folders/.../T/`, so an ordinary cache or temp sweep deletes it while the
+  profile keeps the dangling lock. Every later launch of that profile then fails
+  with `Opening in existing browser session. This usually means that the profile
+  is already in use by another instance of Chromium`, and stays broken until
+  someone deletes the files by hand — losing, in practice, the saved logins that
+  are the whole point of a persistent profile. The launch path now prunes such a
+  lock, but only when it names a pid **on this host** that is confirmed not
+  running; a live pid, a pid owned by another user, a lock from another hostname
+  (profile on shared storage) and an unreadable target are all left alone,
+  because removing a live lock would let two Chromiums corrupt one profile.
+- **`page_switch` reports the tab it actually selected.** Making the live
+  preview follow the active tab introduced an `await` inside `switch_page`, and
+  the code after it re-read `self.page` — so a second switch landing during that
+  await made the first call record and return the *other* tab's URL. Since it
+  reached the JSONL, replay and export inherited the wrong page too. The
+  selected page and URL are now snapshotted before the await.
+
 ## [0.14.0] - 2026-08-09
 
 ### Changed
