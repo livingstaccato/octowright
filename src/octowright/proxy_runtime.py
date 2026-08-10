@@ -410,10 +410,15 @@ async def run_supervised_proxy(
                     # inside the block the deadline goes to infinity so long-running
                     # sessions aren't killed.
                     try:
+                        # Build the client BEFORE arming the deadline: the first
+                        # httpx2 client in a process pays ~65ms for its SSL
+                        # context and CA bundle, and that is setup, not connect
+                        # time. Arming first spent part of the connect budget
+                        # before a single packet moved.
+                        http_client = bridge_http_client(remote_headers, supervisor_obj)
                         _connect_scope = anyio.CancelScope(
                             deadline=anyio.current_time() + BRIDGE_CONNECT_TIMEOUT_SECONDS
                         )
-                        http_client = bridge_http_client(remote_headers, supervisor_obj)
                         with _connect_scope:
                             async with (
                                 http_client,
