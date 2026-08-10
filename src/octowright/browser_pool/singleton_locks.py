@@ -64,7 +64,13 @@ def _owning_pid(lock: Path) -> int | None:
 
 def _pid_is_running(pid: int) -> bool:
     """True when ``pid`` exists. A permission error means it exists but belongs
-    to another user — still running, so still not ours to prune."""
+    to another user — still running, so still not ours to prune.
+
+    POSIX only. ``os.kill(pid, 0)`` is a liveness probe there, but on Windows
+    any signal other than CTRL_C/CTRL_BREAK routes to ``TerminateProcess`` —
+    the "probe" would kill whatever holds that pid. ``prune_stale_singleton_locks``
+    returns before reaching here on Windows.
+    """
     if pid <= 0:
         return True
     try:
@@ -78,21 +84,13 @@ def _pid_is_running(pid: int) -> bool:
     return True
 
 
-def prune_stale_singleton_locks(user_data_dir: Path) -> list[str]:
-    """Remove Chromium's lock entries when their owning process is gone.
+def _remove_lock_entries(user_data_dir: Path) -> list[str]:
+    """Unlink the Singleton* trio, returning the names actually removed.
 
-    Returns the names removed (empty when nothing was stale). Never raises: a
-    profile that cannot be tidied should still be attempted, so the launch
-    surfaces Chromium's own error rather than ours.
+    A single entry that resists removal is skipped rather than fatal: a
+    partially-cleared lock still lets Chromium reclaim the profile, and the
+    caller would rather attempt the launch than abort over housekeeping.
     """
-    lock = user_data_dir / "SingletonLock"
-    if not lock.is_symlink() and not lock.exists():
-        return []
-
-    pid = _owning_pid(lock)
-    if pid is None or _pid_is_running(pid):
-        return []
-
     removed: list[str] = []
     for name in _LOCK_ENTRIES:
         entry = user_data_dir / name
@@ -104,7 +102,31 @@ def prune_stale_singleton_locks(user_data_dir: Path) -> list[str]:
             log.debug("octowright.profile.lock_unlink_failed", entry=str(entry), error=repr(exc))
             continue
         removed.append(name)
+    return removed
 
+
+def prune_stale_singleton_locks(user_data_dir: Path) -> list[str]:
+    """Remove Chromium's lock entries when their owning process is gone.
+
+    Returns the names removed (empty when nothing was stale). Never raises: a
+    profile that cannot be tidied should still be attempted, so the launch
+    surfaces Chromium's own error rather than ours.
+    """
+    if os.name == "nt":
+        # Chromium only writes this Singleton* trio on POSIX, and the liveness
+        # probe we would need is destructive on Windows (see _pid_is_running),
+        # so there is nothing safe — or necessary — to do here.
+        return []
+
+    lock = user_data_dir / "SingletonLock"
+    if not lock.is_symlink() and not lock.exists():
+        return []
+
+    pid = _owning_pid(lock)
+    if pid is None or _pid_is_running(pid):
+        return []
+
+    removed = _remove_lock_entries(user_data_dir)
     if removed:
         log.info(
             "octowright.profile.stale_lock_pruned",
