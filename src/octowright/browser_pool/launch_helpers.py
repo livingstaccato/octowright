@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._paths import reject_unsafe_path
+from octowright.browser_pool.singleton_locks import prune_stale_singleton_locks
 from octowright.browser_pool.viewport import ViewportInfo, ViewportMode
 from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, RECORDINGS_DIR
 from octowright.personas import engine_profile_dir, load_persona
@@ -251,6 +252,12 @@ async def _open_browser_context(
             pdir = engine_profile_dir(persona=profile, kind=kind)
             pdir.mkdir(parents=True, exist_ok=True)
             user_data_dir: str | None = str(pdir)
+            # A profile whose browser died without cleaning up — or whose lock
+            # socket went with a temp-dir sweep — keeps a lock naming a pid that
+            # no longer exists, and Chromium then refuses the profile ("already
+            # in use") on every future launch. Only a confirmed-dead local owner
+            # is pruned; see singleton_locks.
+            prune_stale_singleton_locks(pdir)
         else:
             user_data_dir = session_user_data_dir
         context = await browser_type.launch_persistent_context(

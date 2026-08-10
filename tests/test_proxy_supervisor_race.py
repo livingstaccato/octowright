@@ -160,3 +160,79 @@ async def test_run_supervised_proxy_session_survives_past_connect_timeout(
     await fake_remote_read_send.aclose()
     await fake_remote_write_recv.aclose()
     await local_in_send.aclose()
+
+
+@pytest.mark.anyio
+async def test_client_construction_does_not_consume_the_connect_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Building the HTTP client is setup, not connect time.
+
+    The first httpx2 client in a process spends ~65ms on its SSL context and CA
+    bundle. While the deadline was armed before that call, those milliseconds
+    came out of the connect budget — enough to cancel a session that had
+    connected fine, which is what made the sibling test above flaky on loaded
+    CI runners. Simulated here with a construction cost deliberately larger than
+    the whole budget, so the ordering is pinned rather than merely fast.
+    """
+    monkeypatch.setattr(runtime, "BRIDGE_CONNECT_TIMEOUT_SECONDS", 0.05)
+
+    read_send, read_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    write_send, _write_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    enters: list[float] = []
+    exits: list[float] = []
+
+    class _SlowToBuildClient:
+        async def __aenter__(self) -> _SlowToBuildClient:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+    def slow_build(_headers: dict[str, str], supervisor_obj: Any) -> _SlowToBuildClient:
+        # Stand-in for SSL-context setup, at 4x the connect budget.
+        import time as _time
+
+        _time.sleep(0.2)
+        supervisor_obj.remote_session_id = None
+        return _SlowToBuildClient()
+
+    @asynccontextmanager
+    async def fake_client(_url: str, **_kwargs: Any):  # type: ignore[no-untyped-def]
+        enters.append(anyio.current_time())
+        try:
+            yield (read_recv, write_send)
+        finally:
+            exits.append(anyio.current_time())
+
+    monkeypatch.setattr(runtime, "bridge_http_client", slow_build)
+    monkeypatch.setattr(runtime, "streamable_http_client", fake_client)
+    monkeypatch.setattr(runtime, "resolve_leader_url", lambda url: url)
+    monkeypatch.setattr(runtime.bridge_state, "record_snapshot", lambda **_kwargs: None)
+
+    local_in_send, local_in_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    local_out_send, _local_out_recv = anyio.create_memory_object_stream[SessionMessage](10)
+
+    @asynccontextmanager
+    async def fake_stdio():  # type: ignore[no-untyped-def]
+        yield (local_in_recv, local_out_send)
+
+    monkeypatch.setattr(runtime, "stdio_server", fake_stdio)
+
+    async with anyio.create_task_group() as tg:
+
+        async def _runner() -> None:
+            await runtime.run_supervised_proxy(leader_mcp_url="http://leader.invalid/mcp")
+
+        tg.start_soon(_runner)
+        await anyio.sleep(0.3)
+
+        assert len(enters) == 1, f"expected one connect, saw {len(enters)}"
+        assert exits == [], f"slow client construction cancelled a live session: {exits}"
+
+        tg.cancel_scope.cancel()
+
+    # Quiet the unused stream warnings.
+    await read_send.aclose()
+    await write_send.aclose()
+    await local_in_send.aclose()
