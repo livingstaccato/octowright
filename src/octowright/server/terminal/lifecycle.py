@@ -22,7 +22,11 @@ from octowright.terminal.connector_config import (
 from octowright.terminal.connector_config import (
     telnet_connector_config as _telnet_connector_config,
 )
-from octowright.terminal.errors import ProtectedTerminalCloseError, TerminalPoolUnavailableError
+from octowright.terminal.errors import (
+    ProtectedTerminalCloseError,
+    TerminalDisconnectedError,
+    TerminalPoolUnavailableError,
+)
 from octowright.terminal.pool import TerminalPool
 
 
@@ -95,7 +99,12 @@ async def terminal_launch(
 @mcp.tool(structured_output=False, description="Send input text (e.g. a command + '\\n') to a terminal session.")
 async def terminal_send_input(instance_id: str, text: str, password: bool = False) -> dict[str, Any]:
     session = _pool().get(instance_id)
-    await session.engine.send_input(text, password=password)
+    try:
+        await session.engine.send_input(text, password=password)
+    except TerminalDisconnectedError as exc:
+        # The connector is gone — the bytes were NOT delivered. Report failure
+        # instead of a misleading {"ok": true}.
+        return {"ok": False, "error": str(exc)}
     return {"ok": True, "event_count": session.recorder.event_count}
 
 

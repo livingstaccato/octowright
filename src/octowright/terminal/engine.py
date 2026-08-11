@@ -28,6 +28,8 @@ from provide.uterm.server.connectors import (
 from octowright._tracing import counter, record_exception, span
 from octowright.recorder import Recorder
 from octowright.terminal import redact
+from octowright.terminal.errors import TerminalDisconnectedError
+from octowright.terminal.supervision import poll_done_reason
 from octowright.terminal.translate import MessageTranslator
 
 log = get_logger("octowright.terminal")
@@ -113,6 +115,11 @@ class TerminalEngine:
                 "terminal_start", connector_type=self._connector_type, cols=self._cols, rows=self._rows
             )
             self._poll_task = asyncio.create_task(self._poll_loop())
+            # Supervise the poll task: without a done-callback a poll/recorder
+            # exception would kill it silently — no stop record, no metric, the
+            # session looking alive while nothing pumps it. Surface an unexpected
+            # death as an 'error' stop.
+            self._poll_task.add_done_callback(self._on_poll_done)
         # Count only successful launches (a raised start() skips this).
         _TERMINAL_LAUNCHED.add(1, attributes={"connector_type": self._connector_type})
 
@@ -128,6 +135,18 @@ class TerminalEngine:
                 return
             await asyncio.sleep(_POLL_IDLE_SLEEP_S)
 
+    def _on_poll_done(self, task: asyncio.Task[None]) -> None:
+        """Done-callback for the poll task. A clean return or a stop()-driven
+        cancellation needs nothing; an unexpected exception is recorded as an
+        'error' stop (once, via ``_record_stop``) so it does not vanish."""
+        if task.cancelled():
+            return
+        reason = poll_done_reason(task.exception())
+        if reason is None:
+            return
+        log.warning("terminal.poll_loop.died", instance_id=self._instance_id, error=repr(task.exception()))
+        self._record_stop(reason)
+
     def _ingest(self, msg: dict[str, Any]) -> None:
         if msg.get("type") == "snapshot":
             self._latest_screen = str(msg.get("screen", ""))
@@ -142,10 +161,11 @@ class TerminalEngine:
             instance_id=self._instance_id,
         ):
             if not self._connector.is_connected():
-                # User-action path: surface (don't silently swallow) input sent to a
-                # dead terminal — the connector would otherwise drop the bytes quietly.
+                # User-action path: the connector would drop the bytes quietly.
+                # Raise so the caller learns the input was NOT delivered instead
+                # of the tool falsely reporting {"ok": true}.
                 log.warning("terminal.send_input.disconnected", instance_id=self._instance_id)
-                return
+                raise TerminalDisconnectedError(f"terminal {self._instance_id} is disconnected; input not delivered")
             masked = redact.should_mask(at_password_prompt=self._at_password_prompt, password_source=password)
             self._recorder.record("terminal_input", **redact.input_fields(text, masked=masked))
             for msg in await self._connector.handle_input(text):
