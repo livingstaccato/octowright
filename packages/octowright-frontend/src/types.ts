@@ -58,8 +58,8 @@ export interface SessionDetail extends SessionSummary {
     quality: number;
     fullscreen_mode: "native" | "panel";
   };
-  /** "pty" | "ssh" for terminal sessions; absent/null for browsers. */
-  connector_type?: "pty" | "ssh" | null;
+  /** "pty" | "ssh" | "telnet" for terminal sessions; absent/null for browsers. */
+  connector_type?: "pty" | "ssh" | "telnet" | null;
 }
 
 export interface RecordingEvent {

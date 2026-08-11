@@ -99,6 +99,9 @@ def test_summarise_recording_classifies_closed_terminal(tmp_path: Path) -> None:
     assert summary["kind"] == "terminal"
     assert summary["live"] is False
     assert summary["id"]  # instance id parsed from the filename
+    # connector_type is in the terminal_start row and must survive to the summary
+    # (the frontend renders pty/ssh/telnet differently).
+    assert summary["connector_type"] == "pty"
 
 
 def test_invalidate_recording_summary_drops_entry(tmp_path: Path) -> None:
