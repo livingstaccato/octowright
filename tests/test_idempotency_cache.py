@@ -123,7 +123,11 @@ async def test_concurrent_in_progress_await_runs_once() -> None:
 
 
 @pytest.mark.anyio
-async def test_in_progress_different_session_takes_over() -> None:
+async def test_in_progress_stuck_producer_reports_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resend that races a still-running producer must NOT double-execute. When
+    the producer's fate can't be established within the window, the resend gets
+    an explicit unknown-outcome error instead of a silent second run."""
+    monkeypatch.setattr(_idempotency.defaults, "IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", 0.05)
     started = asyncio.Event()
     release = asyncio.Event()
     calls: list[int] = []
@@ -131,9 +135,8 @@ async def test_in_progress_different_session_takes_over() -> None:
     @_idempotency._idempotent_dispatch
     async def tool(**_kw: Any) -> dict[str, int]:
         calls.append(1)
-        if len(calls) == 1:
-            started.set()
-            await release.wait()  # the first (abandoned) run blocks
+        started.set()
+        await release.wait()  # the first run blocks past the wait window
         return {"n": len(calls)}
 
     async def first() -> dict[str, int]:
@@ -142,36 +145,56 @@ async def test_in_progress_different_session_takes_over() -> None:
 
     t1 = asyncio.create_task(first())
     await started.wait()
-    # A resend on a DIFFERENT session must take over and run, not await A forever.
-    with _request_context("k1", object()):  # session B
-        r2 = await tool()
-    assert r2 == {"n": 2}
-    assert len(calls) == 2
+    # Session B resend: the stuck producer's outcome is unknown → error, no re-run.
+    with _request_context("k1", object()), pytest.raises(_idempotency.IdempotencyOutcomeUnknownError):
+        await tool()
+    assert len(calls) == 1  # never re-ran
     release.set()
     with contextlib.suppress(Exception):
         await t1
 
 
 @pytest.mark.anyio
-async def test_inprogress_wait_timeout_backstop_takes_over(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A same-session waiter never blocks forever on an entry that never resolves:
-    it times out and takes over."""
+async def test_orphan_in_progress_reports_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A same-key waiter on an entry that never resolves reports unknown rather
+    than silently re-executing a possibly-committed side effect."""
     monkeypatch.setattr(_idempotency.defaults, "IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", 0.05)
     calls: list[int] = []
     sess = object()
-
-    # Pre-seed an in-progress entry that will never resolve (orphaned producer).
-    _idempotency._seed_orphan_in_progress("k1", owner=id(sess))
 
     @_idempotency._idempotent_dispatch
     async def tool(**_kw: Any) -> dict[str, int]:
         calls.append(1)
         return {"n": len(calls)}
 
+    # Seed an orphan under the SAME namespaced key the wrapper computes.
+    key = _idempotency._storage_key("k1", tool, (), {})
+    _idempotency._seed_orphan_in_progress(key, owner=id(sess))
+
+    with _request_context("k1", sess), pytest.raises(_idempotency.IdempotencyOutcomeUnknownError):
+        await tool()
+    assert len(calls) == 0  # the orphan blocked us; we did not re-run
+
+
+@pytest.mark.anyio
+async def test_same_key_different_args_do_not_cross_dedup() -> None:
+    """The idempotency key is namespaced by method + args: a key (buggily) reused
+    across different args must NOT return the other call's cached result."""
+    calls: list[dict[str, Any]] = []
+    sess = object()
+
+    @_idempotency._idempotent_dispatch
+    async def tool(**kw: Any) -> dict[str, Any]:
+        calls.append(kw)
+        return {"n": len(calls), "args": kw}
+
     with _request_context("k1", sess):
-        result = await tool()
-    assert result == {"n": 1}  # took over after the wait timed out
-    assert len(calls) == 1
+        r1 = await tool(x=1)
+    with _request_context("k1", sess):  # SAME key, different args
+        r2 = await tool(x=2)
+    assert r1["args"] == {"x": 1}
+    assert r2["args"] == {"x": 2}  # not r1's cached result
+    assert len(calls) == 2  # both ran
 
 
 # ─── failure handling ────────────────────────────────────────────────────────
