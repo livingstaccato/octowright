@@ -17,6 +17,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from octowright.http.discovery import _live_session_or_none
 from octowright.http.exposure import sensitive_allowed_for_connection, websocket_origin_allowed
+from octowright.http.pairing import dashboard_access_ok
 from octowright.session.screencast import (
     ScreencastEnded,
     ScreencastManager,
@@ -83,6 +84,11 @@ class ScreencastEndpoint(WebSocketEndpoint):
             return
         if not websocket_origin_allowed(websocket):
             await websocket.close(code=1008, reason="cross-origin websocket handshake is blocked")
+            return
+        if not dashboard_access_ok(websocket):
+            # Opt-in pairing gate (see http/pairing.py) — WS mirror of the
+            # guard_sensitive_http check.
+            await websocket.close(code=1008, reason="dashboard pairing required")
             return
 
         await websocket.accept()

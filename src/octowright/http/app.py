@@ -152,6 +152,13 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     """
     global _session_tracker
 
+    # Stamp the capability token on the pairing state: /api/pair/mint requires
+    # it, and dashboard_access_ok accepts it as the header alternative to the
+    # session cookie (see octowright.http.pairing).
+    from octowright.http.pairing import PAIRING
+
+    PAIRING.set_expected_token(mcp_token)
+
     routes: list[Any] = list(all_routes(mcp_token=mcp_token))
 
     lifespan = None
@@ -204,7 +211,10 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     # Host-header check rejects a non-loopback Host. The local browser always reaches
     # it with a loopback Host, so the landing-page UX is unchanged. /otto.svg is an
     # inert logo with no secrets, so it stays public.
-    routes.append(Route("/new-tab", guard_sensitive_http(new_tab), methods=["GET"]))
+    # pairing_exempt: launched browsers land on /new-tab with no pairing cookie;
+    # gating it would break every browser_launch. It leaks only version/uptime/
+    # browser-count — accepted, documented in http/pairing.py.
+    routes.append(Route("/new-tab", guard_sensitive_http(new_tab, pairing_exempt=True), methods=["GET"]))
     routes.append(Route("/otto.svg", otto_svg, methods=["GET"]))
     routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
