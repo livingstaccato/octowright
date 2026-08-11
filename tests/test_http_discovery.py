@@ -255,3 +255,24 @@ def test_resolve_artifact_path_rejects_closed_session_path_outside_recordings(
     )
 
     assert discovery._resolve_artifact_path("artoutsidex1", "video_path") is None
+
+
+def test_recordings_beyond_cache_cap_stay_addressable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With more recordings than the bounded index holds, a recording evicted
+    from the index must STILL resolve — the dashboard lists it, so its detail
+    endpoint must find it too. A saturated-index miss falls through to a
+    targeted disk scan instead of the negative cache returning None."""
+    monkeypatch.setattr(discovery, "DISCOVERY_CACHE_MAX_ENTRIES", 2)
+    discovery.invalidate_recording_index()
+    rec = tmp_path / "recordings"
+    ids = ["aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"]
+    for sid in ids:
+        _write_recording(rec, sid)
+
+    # Cap is 2 but there are 3 recordings — every one must resolve, including
+    # the one evicted from the 2-entry index.
+    for sid in ids:
+        assert discovery._find_recording_for(sid, rec) is not None, sid
+
+    # A genuinely-absent id still resolves to None (no false positives).
+    assert discovery._find_recording_for("zzzzzzzzzzzz", rec) is None
