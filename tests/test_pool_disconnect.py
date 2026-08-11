@@ -375,10 +375,25 @@ async def test_external_close_without_crash_stays_user_close(
     assert "its process died" not in message
 
 
+async def _wait_until(predicate: Any, *, ticks: int = 200) -> None:
+    """Yield to the loop until predicate() is true or ticks are exhausted."""
+    import asyncio
+
+    for _ in range(ticks):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+
+
 @pytest.mark.anyio
-async def test_all_pages_closed_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
-    """If every page on the session reports is_closed() True, that's a strong
-    signal the user shut everything — evict."""
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_all_pages_closed_runs_full_session_close(
+    monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
+) -> None:
+    """Last-page close must run the FULL session close, not a bookkeeping-only
+    eviction. Otherwise the context (and its profile lock + background tasks)
+    survives while the session is gone from the registry — an orphan that
+    close_all() can no longer reach."""
     _install_playwright_stub(monkeypatch)
     pool = BrowserPool()
 
@@ -386,21 +401,25 @@ async def test_all_pages_closed_evicts_session(monkeypatch: pytest.MonkeyPatch, 
         kind="chromium",
         url="https://octowright.com",
         headed=False,
-        label="pages",
+        label="fullclose",
         viewport_w=None,
         viewport_h=None,
     )
     iid = result["instance_id"]
     session = pool._sessions[iid]
-
     page = session.pages[0]
-    handlers = _page_close_handlers(page)
-    assert handlers, "expected page.on('close') handler installed by _wire_listeners"
+    assert _page_close_handlers(page), "expected page.on('close') handler"
 
-    page.mark_closed()  # flips is_closed() True and fires the close event
+    page.mark_closed()  # last page gone → fires page.on('close')
+    # Wait for the full teardown, not just the registry pop (close_browser pops
+    # BEFORE awaiting session.close(), so registry removal races the teardown).
+    await _wait_until(lambda: session.context.close.await_count >= 1)
 
     assert iid not in pool._sessions
-    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
+    # The context was actually torn down (the whole point) — not just popped.
+    assert session.context.close.await_count >= 1
+    # Full close logs the canonical closed line via the lifecycle path.
+    assert any("octowright.browser.closed" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
 @pytest.mark.anyio
