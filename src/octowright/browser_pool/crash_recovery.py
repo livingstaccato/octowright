@@ -223,13 +223,17 @@ async def _replace_crashed_page(session: Any, dead_page: Any, timeout_ms: float,
     from octowright.browser_pool.listeners import _wire_listeners
 
     new_page = await session.context.new_page()
+    # Playwright fires the context "page" event for new_page(), so _register_popup
+    # may have ALREADY appended + wired new_page. _wire_listeners is idempotent
+    # per page, and the pages-list update below is written to converge whether or
+    # not the event ran first: new_page ends up present exactly once, dead_page
+    # removed — no duplicate entry, no double listeners.
     _wire_listeners(session, new_page)
     await new_page.goto(last_url, timeout=timeout_ms)
-    try:
-        idx = session.pages.index(dead_page)
-        session.pages[idx] = new_page
-    except ValueError:
+    if new_page not in session.pages:
         session.pages.append(new_page)
+    if dead_page in session.pages:
+        session.pages.remove(dead_page)
     if session.page is dead_page:
         session.page = new_page
     session.page_count = len(session.pages)
