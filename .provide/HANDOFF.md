@@ -75,6 +75,59 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] **#7** terminal extra marked experimental / source-install-only (pyproject + AGENTS/CLAUDE/README).
 - [x] **#2** SSRF default KEPT OFF (deliberate documented back-compat choice; user confirmed). No code change.
 
+## #1 remaining — dashboard pairing flow (BUILT 2026-08-11, branch `feat/dashboard-pairing`)
+
+Implemented as designed below. Shipped: `http/pairing.py` (store + `dashboard_access_ok`),
+`http/routes/pairing.py` (mint/redeem//pair page), `pairing_exempt` param on
+`guard_sensitive_http` (exempt: pairing routes + `/new-tab`), pairing check mirrored at both
+WS handshakes (tail `events.py`, `screencast.py`), `build_app` stamps the token on `PAIRING`,
+`cli/dashboard.py` (`octowright dashboard`, `--open` via 0700 file:// redirect — no ticket in
+argv), tests `tests/test_dashboard_pairing.py` (29) + `tests/test_cli_dashboard.py` (6),
+AGENTS/CLAUDE docs. Lint EXIT 0. Frontend SPA 403→hint page NOT built (the /pair page itself
+carries the guidance; SPA polish is optional follow-up).
+
+**Decision captured:** opt-in, **OFF by default** — `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`
+(matches #2/#16 back-compat posture). Dashboard is loopback-only anyway; the gap is a
+*different-user / sandboxed* loopback process reading live JSONL / driving persona-macro
+writes. Pairing extends the EXISTING capability-token boundary to the browser dashboard;
+it does NOT defend same-user (unchanged, documented).
+
+**Why in-page token fails:** serving the token in the dashboard HTML lets the hostile
+loopback process `GET /` and scrape it exactly like the browser. Token must reach the
+HUMAN over a channel the hostile process can't observe (the operator's tty).
+
+**Flow (Jupyter-token model):**
+1. `octowright dashboard` CLI (same-user, reads 0600 lockfile → has capability token)
+   → `POST /api/pair/mint` with `X-Octowright-Token` (reuse `bridge_auth.header_token_ok`
+   / `require_token_enabled`). Leader mints a single-use, 60s-TTL, 128-bit ticket (in-mem).
+2. CLI prints `http://127.0.0.1:PORT/pair#<ticket>` to the **terminal** (ticket in the
+   URL **fragment** — not sent on navigation, not in access logs / Referer). Human copies
+   into their browser. A different-user process can't read the tty → can't get the ticket.
+3. `/pair` page JS reads the fragment, `POST /api/pair/redeem {ticket}`. Leader consumes
+   the ticket (single-use) and sets `Set-Cookie: octowright_dash=<bearer>; HttpOnly;
+   SameSite=Strict; Path=/` (bearer in a bounded in-mem LRU), 302 → `/`.
+4. New `dashboard_access_ok(request)` accepts EITHER a valid `octowright_dash` cookie
+   (browser) OR the `X-Octowright-Token` header (follower/programmatic, unchanged) OR
+   gate-disabled → allow. Layer it INSIDE the existing loopback/Host/cross-origin guards
+   (`guard_sensitive_http` / `SensitiveASGIGuard` / `websocket_origin_allowed`), applied to
+   `/api/sessions`, media, `/api/dashboard/events`, `/tail` WS, persona/scenario/macro writes.
+
+**Hostile different-user/sandboxed process blocked:** can't read lockfile → no token →
+mint 403; can't read tty → no ticket URL; can't read HttpOnly cookie jar → no session;
+direct hit with neither cookie nor token → 403.
+
+**Components:** new `http/pairing.py` (~200 LOC ticket+session stores/TTL/LRU + cookie
+helpers), new `http/routes/pairing.py` (`/api/pair/mint`,`/api/pair/redeem`,`/pair`),
+extend `http/exposure.py` (`dashboard_access_ok`) + wire in `registry.py`, new
+`cli/dashboard.py`, frontend `/pair` fragment redeem + 403→"run octowright dashboard" hint,
+tests (pairing unit + routes + CLI + same-user-still-works regression).
+
+**Open sub-decision:** `--open` auto-launch leaks the ticket via world-readable
+`/proc/PID/cmdline` (argv), so it is WEAKER than copy-paste. Default = print URL for manual
+copy; `--open` should write a 0700 temp redirect page rather than put the ticket in argv.
+
+Effort ≈ 1–1.5 days, multi-file (backend + CLI + frontend). Deserves its own branch.
+
 ## (superseded) original Batch C header — architecture/release decisions (OWNER CALL)
 #1 dashboard auth boundary + token bootstrap · #7 publish vs label-experimental terminal extra ·
 #2 SSRF default posture (parked — user deciding later)

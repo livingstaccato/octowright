@@ -36,6 +36,7 @@ from octowright.http.exposure import (
     sensitive_allowed_for_connection,
     websocket_origin_allowed,
 )
+from octowright.http.pairing import dashboard_access_ok
 from octowright.http.routes._common import _paginate, _parse_since
 from octowright.http.session_artifacts import session_artifact_cache
 
@@ -354,6 +355,12 @@ class TailEndpoint(WebSocketEndpoint):
             # origin tried to open the live JSONL stream. Refuse before
             # accept() so the attacker page never receives any data.
             await websocket.close(code=1008, reason="cross-origin websocket handshake is blocked")
+            return
+        if not dashboard_access_ok(websocket):
+            # Opt-in pairing gate (see http/pairing.py) — the WS mirror of the
+            # guard_sensitive_http check; the browser's HttpOnly session cookie
+            # rides the handshake, so a paired dashboard passes untouched.
+            await websocket.close(code=1008, reason="dashboard pairing required")
             return
         await websocket.accept()
         sid = websocket.path_params["id"]
