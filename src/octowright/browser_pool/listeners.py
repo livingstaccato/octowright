@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from weakref import WeakSet
 
 from provide.telemetry import get_logger
 
@@ -39,7 +40,19 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
     a user-initiated navigation respectively. Both attributes are populated by
     ``_wire_close_evictor`` (which runs immediately after the very first
     ``_wire_listeners`` call inside ``BrowserPool.launch``).
+
+    Idempotent per page: crash recovery wires a page that the context "page"
+    event (``_register_popup``) may have already wired, so a second call on the
+    same page must NOT re-register the handlers (each event would then fire
+    twice). Wired pages are tracked in a per-session WeakSet keyed by identity.
     """
+    wired = getattr(session, "_wired_pages", None)
+    if wired is None:
+        wired = WeakSet()
+        session._wired_pages = wired
+    if page in wired:
+        return
+    wired.add(page)
     page.on("dialog", session._handle_dialog)
     page.on("download", session._handle_download)
     page.on("response", session._handle_response)

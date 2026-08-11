@@ -56,7 +56,7 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] **#19** frontend state layer keeps last-known slice data on fetch failure + exposes `DashboardState.errors: Set<DashboardScope>` (was `.catch(()=>empty)` wiping panels on a 500). `dashboard-state.ts`. NOTE: a visible per-panel degraded badge (consuming `.errors` in `dashboard-panels.ts`) is a small follow-up; the silent-disappearance bug itself is fixed.
 - [x] **#20** widened invariant scan to browser emitter roots (session+browser_pool+conditional; terminal excluded as separate replay domain); classified surfaced markers `page_crash`/`page_recovered`/`try_each_succeeded`/`try_each_branch_failed`/`try_suppressed`/`recording_truncated` as `_REPLAY_PASSIVE`; accept `CONDITIONAL_ACTIONS` bucket for `if_selector`. `macros/runtime.py`
 - [ ] **#11** supervise terminal poll task; `send_input` returns typed disconnected error after EOF
-- [ ] **#6** crash-recovery idempotent page registration/wiring
+- [x] **#6** `_wire_listeners` now idempotent per page (per-session `_wired_pages` WeakSet); crash-recovery pages-list update converges (new page present once, dead removed) whether or not the `page` event ran first. `listeners.py`, `crash_recovery.py`, `session/core.py`
 - [ ] **#4** last-page close runs full idempotent session close
 - [ ] **#3** validate launch URL before commit; clean up on post-commit cancel
 
