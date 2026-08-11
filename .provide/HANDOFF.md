@@ -52,7 +52,7 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] **#22** creds helper stderr no longer surfaced to caller (exit code only; length to debug log). `personas.py`
 - [x] **#17** demo `bundle.id` slug/containment validation before path join + rmtree. `scripts/demos/_shared.py` `_safe_child`
 - [x] **#8** CLI scenario builds + passes `terminal_pool` (`_make_terminal_pool`, threaded to start/stop + closed). `cli/scenario.py`
-- [ ] **#13** shutdown closes `terminal_pool` (+ Playwright/tmp teardown)
+- [x] **#13** shutdown closes `terminal_pool` (`_close_terminal_pool_on_shutdown`, best-effort force). `cli/serve.py`. NOTE: browsers were already closed by the reaper (reviewer's browser claim was moot); the residual `pool.shutdown()` driver-stop + tmp-dir cleanup on daemon exit is DEFERRED to Batch B (needs `shutdown_pool` idempotency check).
 - [ ] **#19** frontend keeps last-known data + surfaces degraded/error state
 - [ ] **#20** widen replay-classification test scan to all emitter dirs
 - [ ] **#11** supervise terminal poll task; `send_input` returns typed disconnected error after EOF
