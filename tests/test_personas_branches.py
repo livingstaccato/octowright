@@ -256,16 +256,16 @@ def test_exec_credential_cmd_suppresses_stderr_content(monkeypatch):
     code (diagnostic); drop the stderr text."""
     from octowright import personas as _p
 
-    secret_stderr = "SECRET-" + "X" * 500
+    leak_marker = "LEAKED-" + "X" * 500
 
     def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
-        return SimpleNamespace(returncode=2, stdout="", stderr=secret_stderr)
+        return SimpleNamespace(returncode=2, stdout="", stderr=leak_marker)
 
     monkeypatch.setattr(subprocess, "run", _fake)
     with pytest.raises(_p.MissingCredential) as exc:
         _p._exec_credential_cmd("op read op://x", "dante", "token")
     msg = str(exc.value)
-    assert "SECRET" not in msg
+    assert "LEAKED" not in msg
     assert "X" * 50 not in msg
     assert "cmd exited 2" in msg
 
