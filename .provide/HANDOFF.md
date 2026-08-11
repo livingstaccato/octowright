@@ -63,7 +63,7 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 ## Batch B — design/locking (IN PROGRESS)
 - [x] **#12** `stop()` teardown wrapped in `anyio.CancelScope(shield=True)` (matches `_rollback_start`) so a cancel mid-teardown still closes every participant. `scenarios_pool.py`
 - [x] **#10** `_state_lock` (blocking flock on `.lock` sibling) serializes both read-modify-replace transactions (`record_snapshot`, `remove_followers`); Windows/lock-OSError degrade to pre-fix unlocked. Deterministic barrier test proves both concurrent followers survive. `bridge_state.py`
-- [ ] **#14** discovery index >512 (targeted rescan after bounded-cache miss)
+- [x] **#14** `_build_recording_index` now reports `saturated`; the negative cache is authoritative only for a COMPLETE index, and a saturated miss falls through to a targeted `_scan_disk_for_recording` so a past-cap recording stays addressable. `http/discovery.py`
 - [ ] **#21** commit `package-lock.json` + `npm ci` + audit step
 - [ ] **#18** terminal schema/geometry drift (closed-terminal connector_type, xterm geometry, `telnet` in types)
 - [ ] **#9** idempotency ownership model — NEEDS DECISION (namespace+shared-producer vs explicit unknown-outcome vs durable journal)
