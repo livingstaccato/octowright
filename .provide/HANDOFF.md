@@ -60,10 +60,15 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] **#4** last-page close now schedules the full idempotent `pool.close(force=True)` (context/browser/bg-tasks/lock torn down) instead of bookkeeping-only eviction; context.close/disconnect stay bookkeeping (resource already dead). Close task held off `session._bg_tasks` to avoid drain self-deadlock; racing evict → KeyError swallowed. `listeners.py`
 - [x] **#3** `target_url` now validated in `_launch_impl` BEFORE any allocation (was post-registration → leaked a registered browser on rejection); removed the redundant post-register check; `CancelledError` after registration routes through new `cancel_cleanup_after_register` (pop + close) instead of the registered-skip no-op. `pool.py`, `launch_pipeline.py`
 
-## Batch B — needs design/locking (NOT STARTED)
-#9 idempotency ownership model · #10 bridge-state locking · #12 scenario-stop shield ·
-#14 discovery index >512 · #16 aggregate quotas · #18 terminal schema/geometry ·
-#21 commit lockfile + `npm ci` + audit step
+## Batch B — design/locking (IN PROGRESS)
+- [x] **#12** `stop()` teardown wrapped in `anyio.CancelScope(shield=True)` (matches `_rollback_start`) so a cancel mid-teardown still closes every participant. `scenarios_pool.py`
+- [ ] **#10** bridge-state locking (lost concurrent follower reg)
+- [ ] **#14** discovery index >512 (targeted rescan after bounded-cache miss)
+- [ ] **#21** commit `package-lock.json` + `npm ci` + audit step
+- [ ] **#18** terminal schema/geometry drift (closed-terminal connector_type, xterm geometry, `telnet` in types)
+- [ ] **#9** idempotency ownership model — NEEDS DECISION (namespace+shared-producer vs explicit unknown-outcome vs durable journal)
+- [ ] **#16** aggregate quotas — NEEDS DECISION (limit values + default on/off)
+- [ ] residuals: #13 `pool.shutdown()` driver-stop/tmp cleanup on daemon exit; #11 evict pool entry on poll-death
 
 ## Batch C — architecture/release decisions (OWNER CALL)
 #1 dashboard auth boundary + token bootstrap · #7 publish vs label-experimental terminal extra ·
