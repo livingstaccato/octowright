@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { bootDashboardFromDom, loadState, renderDashboard } from "./dashboard.js";
+import { bootDashboardFromDom, loadState, renderDashboard, updateDashboard } from "./dashboard.js";
 import * as api from "./api.js";
 import type {
   LiveScenario,
@@ -142,6 +142,27 @@ describe("renderDashboard", () => {
     });
     const empties = root.querySelectorAll(".empty");
     expect(empties.length).toBeGreaterThanOrEqual(4);
+  });
+  it("shows an accessible degraded-data notice without hiding healthy panels", () => {
+    const state = {
+      sessions,
+      scenarios,
+      personas,
+      macros,
+      errors: new Set(["sessions", "macros"] as const),
+    };
+    const panels = renderDashboard(root, state);
+
+    const notice = root.querySelector('[data-testid="dashboard-degraded"]');
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.getAttribute("aria-live")).toBe("polite");
+    expect(notice?.textContent).toContain("Sessions");
+    expect(notice?.textContent).toContain("Macros");
+    expect(root.querySelector('[data-testid="panel-live-browsers"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="panel-personas"]')).not.toBeNull();
+
+    updateDashboard(panels, { ...state, errors: new Set() }, null);
+    expect(root.querySelector('[data-testid="dashboard-degraded"]')).toBeNull();
   });
   it("opens a non-mutating macro repair preview", async () => {
     renderDashboard(root, { sessions, scenarios, personas, macros });
