@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 from weakref import WeakSet
 
@@ -29,6 +30,11 @@ if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
 
 log = get_logger(__name__)
+
+# Full-close tasks scheduled from the (sync) last-page-close listener. Held here,
+# NOT on ``session._bg_tasks`` — ``session.close()`` drains that set, and a close
+# task awaiting its own drain would deadlock. Tasks self-remove on completion.
+_PENDING_FULL_CLOSES: set[asyncio.Task[None]] = set()
 
 
 def _wire_listeners(session: BrowserSession, page: Any) -> None:
@@ -179,8 +185,33 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
                 error=repr(exc),
             )
             return
-        if not still_open:
+        if still_open:
+            return
+        # Last page gone, but unlike context.close / browser.disconnected the
+        # context (and its profile lock + background tasks) may still be ALIVE.
+        # A bookkeeping-only eviction here would orphan them while removing the
+        # session from the registry, so run the full idempotent close instead.
+        # The listener is sync; schedule the async close on the running loop.
+        reason: SessionCloseReason = "crashed" if getattr(session, "_crashed", False) else "user_close"
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No asyncio loop (e.g. teardown outside the daemon loop) — fall back
+            # to bookkeeping eviction so the registry at least stops reporting it.
             _evict()
+            return
+
+        async def _do_full_close() -> None:
+            try:
+                await pool.close(instance_id, force=True, _reason=reason)
+            except KeyError:
+                pass  # already evicted by a racing context.close / disconnect
+            except Exception as exc:
+                log.warning("octowright.evict.full_close_failed", instance_id=instance_id, error=repr(exc))
+
+        task = loop.create_task(_do_full_close())
+        _PENDING_FULL_CLOSES.add(task)
+        task.add_done_callback(_PENDING_FULL_CLOSES.discard)
 
     def _on_page_crash(crashed_page: Any = None, *_: Any) -> None:
         # Playwright fires Page 'crash' with the crashing Page as the argument
