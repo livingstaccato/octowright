@@ -9,6 +9,7 @@ import ast
 import base64
 import importlib
 import json
+import os
 import re
 import time
 from datetime import UTC, datetime
@@ -21,6 +22,26 @@ from provide.telemetry import get_logger
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session._protocols import SessionLike
+
+_BYTE_LIMIT_OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", "no"}
+
+
+def _websocket_max_bytes() -> int:
+    """``OCTOWRIGHT_WEBSOCKET_MAX_BYTES`` — per-session WS sidecar byte ceiling.
+
+    OFF (0) by default. A positive value stops appending frames once the sidecar
+    file would exceed it, writing a single ``websocket_truncated`` marker so
+    replay/inspection see the cut. Falsey/unparsable/non-positive keeps it off.
+    """
+    raw = os.environ.get("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", "").strip().lower()
+    if raw in _BYTE_LIMIT_OFF_TOKENS:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return value if value > 0 else 0
+
 
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
@@ -108,7 +129,12 @@ class SessionIOMixin(SessionLike):
             self._websocket_fh = fh
             self._websocket_last_flush_ts = now
             self._websocket_frames_since_flush = 0
-        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            self._websocket_bytes = 0
+            self._websocket_truncated = False
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        if self._ws_over_ceiling(fh, len(line.encode("utf-8"))):
+            return
+        fh.write(line)
         # Both fields are dataclass attributes initialized to 0 / 0.0 and
         # are set to live values in the `fh is None` branch above before we
         # ever reach this point, so direct attribute access is safe. The
@@ -122,6 +148,28 @@ class SessionIOMixin(SessionLike):
             self._websocket_last_flush_ts = now
         else:
             self._websocket_frames_since_flush = frames
+
+    def _ws_over_ceiling(self, fh: Any, line_bytes: int) -> bool:
+        """Enforce ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES``. Return True if this frame
+        must be dropped because the sidecar reached the ceiling, writing a
+        one-time ``websocket_truncated`` marker on the edge. Off → always False."""
+        limit = _websocket_max_bytes()
+        if limit <= 0:
+            return False
+        if self._websocket_truncated:
+            return True
+        if self._websocket_bytes + line_bytes > limit:
+            marker = {
+                "action": "websocket_truncated",
+                "limit_bytes": limit,
+                "bytes_written": self._websocket_bytes,
+            }
+            fh.write(json.dumps(marker) + "\n")
+            fh.flush()
+            self._websocket_truncated = True
+            return True
+        self._websocket_bytes += line_bytes
+        return False
 
     async def _extract_markdown(self, html: str) -> str:
         """Convert HTML to markdown using MarkItDown if available."""
