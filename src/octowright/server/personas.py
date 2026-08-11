@@ -12,6 +12,8 @@ from typing import Any
 from octowright import engine_profiles as profile_mod
 from octowright import personas as persona_mod
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.defaults import SUPPORTED_KINDS
+from octowright.profile_lifecycle import profile_lifecycle_lock, profile_lifecycle_locks
 from octowright.server._state import log, mcp, pool
 from octowright.types import CredentialCheckReport, PersonaListEntry
 
@@ -28,15 +30,16 @@ def profile_list(kind: str | None = None) -> list[dict[str, Any]]:
         "saved logins for that profile). Refuses if a live instance is using it."
     ),
 )
-def profile_delete(kind: str, name: str) -> dict[str, Any]:
-    if pool.profile_in_use(kind, name):
-        live_ids = [s["instance_id"] for s in pool.list_sessions() if s["kind"] == kind and s["profile"] == name]
-        log.warning("octowright.profile.delete_refused", kind=kind, profile=name, reason="in_use")
-        raise RuntimeError(
-            f"profile {kind}/{name} is in use by live browser(s) {live_ids}; "
-            f"close with `browser_close instance_id={live_ids[0]!r}` (or browser_close_all) first"
-        )
-    path = profile_mod.delete_profile(kind, name)
+async def profile_delete(kind: str, name: str) -> dict[str, Any]:
+    async with profile_lifecycle_lock(kind, name):
+        if pool.profile_in_use(kind, name):
+            live_ids = [s["instance_id"] for s in pool.list_sessions() if s["kind"] == kind and s["profile"] == name]
+            log.warning("octowright.profile.delete_refused", kind=kind, profile=name, reason="in_use")
+            raise RuntimeError(
+                f"profile {kind}/{name} is in use by live browser(s) {live_ids}; "
+                f"close with `browser_close instance_id={live_ids[0]!r}` (or browser_close_all) first"
+            )
+        path = profile_mod.delete_profile(kind, name)
     log.info("octowright.profile.deleted", kind=kind, profile=name, path=str(path))
     publish_dashboard_invalidation_nowait("personas")
     return {"deleted": True, "path": str(path)}
@@ -104,14 +107,15 @@ def persona_create(
         "profile is currently in use by a live browser."
     ),
 )
-def persona_delete(name: str) -> dict[str, Any]:
-    for s in pool.list_sessions():
-        if s["profile"] == name:
-            raise RuntimeError(
-                f"persona {name!r} is in use by live instance {s['instance_id']}; "
-                f"close with `browser_close instance_id={s['instance_id']!r}` first"
-            )
-    path = profile_mod.delete_persona(name)
+async def persona_delete(name: str) -> dict[str, Any]:
+    async with profile_lifecycle_locks((kind, name) for kind in SUPPORTED_KINDS):
+        for s in pool.list_sessions():
+            if s["profile"] == name:
+                raise RuntimeError(
+                    f"persona {name!r} is in use by live instance {s['instance_id']}; "
+                    f"close with `browser_close instance_id={s['instance_id']!r}` first"
+                )
+        path = profile_mod.delete_persona(name)
     log.info("octowright.persona.deleted", name=name, path=str(path))
     publish_dashboard_invalidation_nowait("personas")
     return {"deleted": True, "name": name, "path": str(path)}
