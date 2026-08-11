@@ -50,7 +50,7 @@ documented choice, needs an owner decision not a bugfix.
 One commit per finding on this branch. TDD each. `make ci` before hand-off.
 
 - [x] **#22** creds helper stderr no longer surfaced to caller (exit code only; length to debug log). `personas.py`
-- [ ] **#17** demo `bundle.id` slug/containment validation before path join + rmtree
+- [x] **#17** demo `bundle.id` slug/containment validation before path join + rmtree. `scripts/demos/_shared.py` `_safe_child`
 - [ ] **#8** CLI scenario builds + passes `terminal_pool`
 - [ ] **#13** shutdown closes `terminal_pool` (+ Playwright/tmp teardown)
 - [ ] **#19** frontend keeps last-known data + surfaces degraded/error state
