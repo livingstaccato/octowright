@@ -20,6 +20,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
+from octowright.http.pairing import dashboard_access_ok
 
 ResponseT = TypeVar("ResponseT", bound=Response)
 
@@ -188,15 +189,28 @@ def _cross_origin_blocked(request: Request, *, side_effect_get: bool) -> bool:
     )
 
 
+_PAIRING_REQUIRED_BODY = {
+    "error": "dashboard pairing required",
+    "hint": "OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING is enabled. Run `octowright dashboard` and open the printed URL.",
+}
+
+
 def guard_sensitive_http(
     handler: Callable[[Request], Awaitable[ResponseT]],
     *,
     side_effect_get: bool = False,
+    pairing_exempt: bool = False,
 ) -> Callable[[Request], Awaitable[Response]]:
     """Wrap a handler with the bind-host + cross-origin guard. Pass
     ``side_effect_get=True`` at the route definition for GET endpoints that
     drive the live browser; this keeps the policy decision next to the route
-    rather than in a separate path-matcher that can drift."""
+    rather than in a separate path-matcher that can drift.
+
+    ``pairing_exempt=True`` skips the opt-in dashboard-pairing check (see
+    ``octowright.http.pairing``) — reserved for the pairing bootstrap routes
+    themselves and for ``/new-tab``, which launched browsers must reach with
+    no cookie. Everything else gets the pairing gate automatically, so a new
+    route can't silently opt out."""
 
     @functools.wraps(handler)
     async def guarded(request: Request) -> Response:
@@ -204,6 +218,8 @@ def guard_sensitive_http(
             return JSONResponse(_REMOTE_DISABLED_BODY, status_code=403)
         if _cross_origin_blocked(request, side_effect_get=side_effect_get):
             return JSONResponse({"error": "cross-origin dashboard request is blocked"}, status_code=403)
+        if not pairing_exempt and not dashboard_access_ok(request):
+            return JSONResponse(_PAIRING_REQUIRED_BODY, status_code=403)
         return await handler(request)
 
     cast(_SensitiveGuardedHandler, guarded).__octowright_sensitive_guard__ = True

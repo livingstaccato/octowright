@@ -18,6 +18,7 @@ from __future__ import annotations
 # Subcommand imports trigger @cli.command / @cli.group registration via
 # decorator side effects. Order does not matter; F401 ignored intentionally.
 from octowright.cli import cleanup as _cleanup  # noqa: F401
+from octowright.cli import dashboard as _dashboard  # noqa: F401
 from octowright.cli import init_cmd as _init_cmd  # noqa: F401
 from octowright.cli import persona as _persona  # noqa: F401
 from octowright.cli import restart as _restart  # noqa: F401
