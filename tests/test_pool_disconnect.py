@@ -207,6 +207,72 @@ def _page_crash_handlers(page: Any) -> list[Any]:
 
 
 @pytest.mark.anyio
+async def test_launch_with_unsafe_url_leaves_no_registered_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unsafe target URL must be rejected BEFORE the session is registered,
+    so a raised launch leaves nothing live in the pool. Previously the URL was
+    validated after registration and the cleanup path skipped a registered
+    session — a leaked browser the caller never got an instance_id for."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+
+    with pytest.raises(ValueError):
+        await pool.launch(
+            kind="chromium",
+            url="file:///etc/passwd",
+            headed=False,
+            label="unsafe",
+            viewport_w=None,
+            viewport_h=None,
+        )
+
+    assert pool._sessions == {}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_launch_cancelled_during_nav_leaves_no_registered_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cancelling a launch mid-navigation (after registration) must remove and
+    close the session — not leave a live browser the caller never received."""
+    import asyncio
+
+    _install_playwright_stub(monkeypatch)
+    started = asyncio.Event()
+    orig_init = _FakePage.__init__
+
+    def _patched_init(self: _FakePage) -> None:
+        orig_init(self)
+
+        async def _hang(*_a: Any, **_k: Any) -> None:
+            started.set()
+            await asyncio.sleep(3600)
+
+        self.goto = _hang  # type: ignore[method-assign,assignment]
+
+    monkeypatch.setattr(_FakePage, "__init__", _patched_init)
+    pool = BrowserPool()
+
+    task = asyncio.create_task(
+        pool.launch(
+            kind="chromium",
+            url="https://octowright.com",
+            headed=False,
+            label="cancel",
+            viewport_w=None,
+            viewport_h=None,
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=2.0)
+    # Registration precedes goto, so the session is live in the pool right now.
+    assert len(pool._sessions) == 1
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert pool._sessions == {}
+
+
+@pytest.mark.anyio
 async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """Synthesize a context 'close' event and verify the session is evicted +
     the eviction log line is emitted."""
