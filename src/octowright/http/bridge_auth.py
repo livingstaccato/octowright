@@ -40,6 +40,19 @@ def require_token_enabled() -> bool:
     return os.environ.get("OCTOWRIGHT_BRIDGE_REQUIRE_TOKEN", "on").strip().lower() not in _REQUIRE_OFF
 
 
+def header_token_ok(header_value: str | None, expected_token: str) -> bool:
+    """Constant-time check that ``header_value`` matches ``expected_token``.
+
+    Shared by the /mcp ASGI guard and the follower-only ``/api/mcp-events`` SSE
+    route, which carries the same follower→leader trust as /mcp and so is gated
+    by the same capability token (and the same ``OCTOWRIGHT_BRIDGE_REQUIRE_TOKEN``
+    knob). The browser dashboard never calls /api/mcp-events, so this gate is
+    safe on by default."""
+    if header_value is None:
+        return False
+    return hmac.compare_digest(header_value.encode(), expected_token.encode())
+
+
 class BridgeTokenGuard:
     """ASGI wrapper that rejects /mcp requests lacking a matching token."""
 

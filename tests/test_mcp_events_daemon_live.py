@@ -160,6 +160,10 @@ async def _run(mcp_url: str, token: str) -> dict[str, Any]:
     # This test process does not, so pin resolution to the known test leader —
     # otherwise it would resolve to whatever daemon owns the default lockfile.
     proxy_runtime.resolve_leader_url = lambda _fallback: mcp_url  # type: ignore[assignment]
+    # The leader now gates /api/mcp-events with the capability token; the follower
+    # presents it via resolve_leader_token(). This test process lacks the
+    # follower's isolated lockfile env, so pin the token the same way as the URL.
+    proxy_runtime.resolve_leader_token = lambda: token  # type: ignore[assignment]
     headers = {"X-Octowright-Token": token} if token else None
     async with (
         create_mcp_http_client(headers=headers) as http_client,
