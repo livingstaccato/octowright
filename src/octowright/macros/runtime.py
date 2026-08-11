@@ -52,6 +52,18 @@ _REPLAY_PASSIVE = {
     "dialog_handled",
     "download_saved",
     "download_save_error",
+    # Crash-recovery + conditional-flow observation markers (emitted from
+    # browser_pool/crash_recovery.py, browser_pool/listeners.py and
+    # conditional.py). Pure outcomes — replaying one is meaningless and counting
+    # it is the 608-bogus-errors bug. See test_replay_passive_covers_recorder.
+    "page_crash",
+    "page_recovered",
+    "try_each_succeeded",
+    "try_each_branch_failed",
+    "try_suppressed",
+    # The recorder's own byte-ceiling marker (recorder.py); a truncated recording
+    # carries it and it must not tally as a failed step on replay.
+    "recording_truncated",
 }
 _REPLAY_SKIP = {"launch", "close", "snapshot"}
 _ACTION_MAP = {
