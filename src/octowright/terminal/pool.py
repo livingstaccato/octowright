@@ -128,12 +128,20 @@ class TerminalPool:
             self._sessions.pop(instance_id, None)
 
     async def close_all(self, *, force: bool = False) -> None:
+        failures: list[tuple[str, Exception]] = []
         for instance_id in list(self._sessions):
             session = self._sessions.get(instance_id)
             if session is None:
                 continue
             if session.protected and not force:
                 continue
-            await session.close()
+            try:
+                await session.close()
+            except Exception as exc:
+                failures.append((instance_id, exc))
+                continue
             async with self._lock:
                 self._sessions.pop(instance_id, None)
+        if failures:
+            detail = "; ".join(f"{instance_id}: {type(exc).__name__}: {exc}" for instance_id, exc in failures)
+            raise RuntimeError(f"failed to close {len(failures)} terminal session(s): {detail}") from failures[0][1]
