@@ -64,7 +64,7 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] **#12** `stop()` teardown wrapped in `anyio.CancelScope(shield=True)` (matches `_rollback_start`) so a cancel mid-teardown still closes every participant. `scenarios_pool.py`
 - [x] **#10** `_state_lock` (blocking flock on `.lock` sibling) serializes both read-modify-replace transactions (`record_snapshot`, `remove_followers`); Windows/lock-OSError degrade to pre-fix unlocked. Deterministic barrier test proves both concurrent followers survive. `bridge_state.py`
 - [x] **#14** `_build_recording_index` now reports `saturated`; the negative cache is authoritative only for a COMPLETE index, and a saturated miss falls through to a targeted `_scan_disk_for_recording` so a past-cap recording stays addressable. `http/discovery.py`
-- [ ] **#21** commit `package-lock.json` + `npm ci` + audit step
+- [x] **#21** CORRECTION: a root `package-lock.json` was ALREADY tracked (reviewer's "no lockfile" premise was wrong; the workspace lockfile lives at repo root, not the sub-package). Real fixes applied: `npm audit fix` patched the 4 high advisories (vite/nanoid/postcss/undici) -> 0 vulns; CI/release switched from `npm install` to root `npm ci --workspace` + a `npm audit --audit-level=high` gate; stale "no lockfile" comment removed. Verified locally: npm ci + build + 352 vitest + typecheck + lint green.
 - [ ] **#18** terminal schema/geometry drift (closed-terminal connector_type, xterm geometry, `telnet` in types)
 - [ ] **#9** idempotency ownership model — NEEDS DECISION (namespace+shared-producer vs explicit unknown-outcome vs durable journal)
 - [ ] **#16** aggregate quotas — NEEDS DECISION (limit values + default on/off)
