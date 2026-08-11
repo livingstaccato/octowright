@@ -54,7 +54,7 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] **#8** CLI scenario builds + passes `terminal_pool` (`_make_terminal_pool`, threaded to start/stop + closed). `cli/scenario.py`
 - [x] **#13** shutdown closes `terminal_pool` (`_close_terminal_pool_on_shutdown`, best-effort force). `cli/serve.py`. NOTE: browsers were already closed by the reaper (reviewer's browser claim was moot); the residual `pool.shutdown()` driver-stop + tmp-dir cleanup on daemon exit is DEFERRED to Batch B (needs `shutdown_pool` idempotency check).
 - [ ] **#19** frontend keeps last-known data + surfaces degraded/error state
-- [ ] **#20** widen replay-classification test scan to all emitter dirs
+- [x] **#20** widened invariant scan to browser emitter roots (session+browser_pool+conditional; terminal excluded as separate replay domain); classified surfaced markers `page_crash`/`page_recovered`/`try_each_succeeded`/`try_each_branch_failed`/`try_suppressed`/`recording_truncated` as `_REPLAY_PASSIVE`; accept `CONDITIONAL_ACTIONS` bucket for `if_selector`. `macros/runtime.py`
 - [ ] **#11** supervise terminal poll task; `send_input` returns typed disconnected error after EOF
 - [ ] **#6** crash-recovery idempotent page registration/wiring
 - [ ] **#4** last-page close runs full idempotent session close
