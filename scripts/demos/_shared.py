@@ -7,9 +7,16 @@ from __future__ import annotations
 
 # ruff: noqa: E402
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
+
+# A demo bundle id flows into rmtree/copytree targets and export filenames. It
+# comes from a checked-in demo.yaml, but a malformed/poisoned id like
+# `../../bundles` would escape demo/tutorial-export on copy or delete. Constrain
+# it to a single safe path component.
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = REPO_ROOT / "src"
@@ -90,8 +97,21 @@ def _bundle_artifacts_dir(bundle: DemoBundle) -> Path:
     return bundle.root / "artifacts"
 
 
+def _safe_child(root: Path, name: str) -> Path:
+    """Return ``root / name`` after proving ``name`` is a single safe path
+    component contained under ``root``. Raises ``ValueError`` on a
+    traversal/absolute/multi-segment name."""
+    if name in {".", ".."} or not _SAFE_ID_RE.match(name):
+        raise ValueError(f"unsafe demo bundle id {name!r}: must match [A-Za-z0-9][A-Za-z0-9._-]*")
+    child = (root / name).resolve()
+    root_resolved = root.resolve()
+    if child != root_resolved and root_resolved not in child.parents:
+        raise ValueError(f"demo bundle id {name!r} escapes export root {root_resolved}")
+    return root / name
+
+
 def _sync_bundle_artifacts(bundle: DemoBundle, *, destination_root: Path) -> Path:
-    target_dir = destination_root / bundle.id
+    target_dir = _safe_child(destination_root, bundle.id)
     shutil.rmtree(target_dir, ignore_errors=True)
     source_dir = _bundle_artifacts_dir(bundle)
     if source_dir.exists():
@@ -116,7 +136,7 @@ def sync_tutorial_exports(bundles: list[DemoBundle], *, heroes_only: bool = Fals
     payload_paths: list[Path] = []
     index_rows: list[dict[str, object]] = []
     for bundle in selected:
-        payload_path = heroes_dir / f"{bundle.id}.json"
+        payload_path = _safe_child(heroes_dir, f"{bundle.id}.json")
         mirrored_artifacts_dir = _sync_bundle_artifacts(bundle, destination_root=artifacts_dir)
         payload = build_tutorial_export(
             bundle,
