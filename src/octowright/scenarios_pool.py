@@ -335,28 +335,33 @@ class ScenarioPool:
     async def stop(
         self, *, scenario_id: str, browser_pool: Any, terminal_pool: Any | None = None
     ) -> ScenarioStopResult:
-        async with self._live_lock:
-            live = self._live.pop(scenario_id, None)
-        if live is None:
-            raise KeyError(self._missing_scenario_message(scenario_id))
-        summary: ScenarioStopResult = {"scenario_id": scenario_id, "teardown_errors": [], "closed": []}
-        if live.spec.teardown_macro:
-            from octowright import macros as _macros
+        # Shield the whole teardown: the scenario is popped from the registry
+        # up front, so a cancel mid-teardown would strand live participants with
+        # no scenario_id left to retry. Matching _rollback_start, the pop + macro
+        # + closes run to completion even under cancellation.
+        with anyio.CancelScope(shield=True):
+            async with self._live_lock:
+                live = self._live.pop(scenario_id, None)
+            if live is None:
+                raise KeyError(self._missing_scenario_message(scenario_id))
+            summary: ScenarioStopResult = {"scenario_id": scenario_id, "teardown_errors": [], "closed": []}
+            if live.spec.teardown_macro:
+                from octowright import macros as _macros
 
+                for p in live.participants:
+                    if p.get("kind") == "terminal":
+                        continue  # teardown macros are Playwright-only; terminals are skipped
+                    try:
+                        session = browser_pool.get(p["instance_id"])
+                        await _macros.run_macro(session=session, name=live.spec.teardown_macro, args={})
+                    except Exception as e:
+                        summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
             for p in live.participants:
-                if p.get("kind") == "terminal":
-                    continue  # teardown macros are Playwright-only; terminals are skipped
                 try:
-                    session = browser_pool.get(p["instance_id"])
-                    await _macros.run_macro(session=session, name=live.spec.teardown_macro, args={})
+                    await self._pool_for(p, browser_pool, terminal_pool).close(p["instance_id"], force=True)
+                    summary["closed"].append(p["instance_id"])
                 except Exception as e:
                     summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
-        for p in live.participants:
-            try:
-                await self._pool_for(p, browser_pool, terminal_pool).close(p["instance_id"], force=True)
-                summary["closed"].append(p["instance_id"])
-            except Exception as e:
-                summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
         return summary
 
     def tail(self, *, scenario_id: str, since_cursors: dict[str, int] | None = None) -> ScenarioTailResult:
