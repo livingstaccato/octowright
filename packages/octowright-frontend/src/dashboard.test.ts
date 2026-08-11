@@ -224,10 +224,10 @@ describe("loadState", () => {
 
     const state = await loadState();
 
-    expect(state).toEqual({ sessions, scenarios, personas, macros });
+    expect(state).toEqual({ sessions, scenarios, personas, macros, errors: new Set() });
   });
 
-  it("falls back to empty state when dashboard loaders fail", async () => {
+  it("keeps loaded slices, empties failed ones, and flags their errors", async () => {
     vi.mocked(api.getSessions).mockResolvedValueOnce(sessions);
     vi.mocked(api.getScenarios).mockRejectedValueOnce(new Error("boom"));
     vi.mocked(api.getPersonas).mockRejectedValueOnce(new Error("boom"));
@@ -240,6 +240,7 @@ describe("loadState", () => {
       scenarios: { live: [] },
       personas: [],
       macros: [],
+      errors: new Set(["scenarios", "personas", "macros"]),
     });
   });
 });
