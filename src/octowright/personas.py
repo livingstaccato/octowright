@@ -383,9 +383,19 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     except subprocess.TimeoutExpired as e:
         raise MissingCredential(f"persona {persona_name!r} field {cred_name!r}: cmd timed out after 30s") from e
     if result.returncode != 0:
+        # Do NOT surface stderr content to the caller: a credential helper can
+        # print a secret there, and this message flows into structured MCP
+        # errors. Keep the exit code (diagnostic); log only the stderr length.
+        log.debug(
+            "persona.cred.cmd_failed",
+            persona=persona_name,
+            field=cred_name,
+            returncode=result.returncode,
+            stderr_len=len(result.stderr),
+        )
         raise MissingCredential(
-            f"persona {persona_name!r} field {cred_name!r}: "
-            f"cmd exited {result.returncode}; stderr: {result.stderr[:200]}"
+            f"persona {persona_name!r} field {cred_name!r}: cmd exited {result.returncode} "
+            "(stderr suppressed; see debug log for length)"
         )
     return result.stdout.strip()
 
