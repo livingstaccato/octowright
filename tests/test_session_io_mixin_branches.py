@@ -638,3 +638,33 @@ class TestHandleWebsocket:
         entry = json.loads(subj.websocket_path.read_text(encoding="utf-8").splitlines()[-1])
         assert entry["payload_b64"] == base64.b64encode(b"\x00\x01abc").decode("ascii")
         assert "payload_text" not in entry
+
+
+class TestAppendWebsocketCacheByteCeiling:
+    """OCTOWRIGHT_WEBSOCKET_MAX_BYTES bounds the per-session WS sidecar file so a
+    firehose page can't fill the disk. OFF by default."""
+
+    def test_off_by_default_writes_all_frames(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", raising=False)
+        subj = _make_subject(tmp_path)
+        for i in range(20):
+            subj._append_websocket_cache(
+                direction="framesent", id_=i, url="ws://x", payload="z" * 100, payload_size=100
+            )
+        subj._websocket_fh.flush()
+        lines = subj.websocket_path.read_text().splitlines()
+        assert len(lines) == 20
+        assert not any("websocket_truncated" in ln for ln in lines)
+
+    def test_ceiling_stops_appending_and_marks_truncated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", "300")
+        subj = _make_subject(tmp_path)
+        for i in range(50):
+            subj._append_websocket_cache(
+                direction="framesent", id_=i, url="ws://x", payload="z" * 100, payload_size=100
+            )
+        subj._websocket_fh.flush()
+        text = subj.websocket_path.read_text()
+        assert any("websocket_truncated" in ln for ln in text.splitlines())
+        # Bounded: data frames stop at the limit; only a single marker line follows.
+        assert len(text.encode("utf-8")) <= 300 + 200
