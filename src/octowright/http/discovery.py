@@ -96,6 +96,7 @@ def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
         return {
             "id": instance_id,
             "kind": "terminal",
+            "connector_type": opening.get("connector_type"),
             "label": None,
             "profile": None,
             "url": None,
