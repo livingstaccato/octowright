@@ -58,7 +58,7 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [ ] **#11** supervise terminal poll task; `send_input` returns typed disconnected error after EOF
 - [x] **#6** `_wire_listeners` now idempotent per page (per-session `_wired_pages` WeakSet); crash-recovery pages-list update converges (new page present once, dead removed) whether or not the `page` event ran first. `listeners.py`, `crash_recovery.py`, `session/core.py`
 - [x] **#4** last-page close now schedules the full idempotent `pool.close(force=True)` (context/browser/bg-tasks/lock torn down) instead of bookkeeping-only eviction; context.close/disconnect stay bookkeeping (resource already dead). Close task held off `session._bg_tasks` to avoid drain self-deadlock; racing evict → KeyError swallowed. `listeners.py`
-- [ ] **#3** validate launch URL before commit; clean up on post-commit cancel
+- [x] **#3** `target_url` now validated in `_launch_impl` BEFORE any allocation (was post-registration → leaked a registered browser on rejection); removed the redundant post-register check; `CancelledError` after registration routes through new `cancel_cleanup_after_register` (pop + close) instead of the registered-skip no-op. `pool.py`, `launch_pipeline.py`
 
 ## Batch B — needs design/locking (NOT STARTED)
 #9 idempotency ownership model · #10 bridge-state locking · #12 scenario-stop shield ·
