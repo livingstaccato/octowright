@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import octowright.browser_pool.launch_execution as launch_execution_module
 import octowright.browser_pool.pool as pool_module
 from octowright.browser_pool import BrowserPool
 
@@ -226,6 +227,71 @@ async def test_launch_with_unsafe_url_leaves_no_registered_session(monkeypatch: 
         )
 
     assert pool._sessions == {}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize(
+    "unsafe_options",
+    [
+        {"url": "file:///etc/passwd"},
+        {"url": "https://octowright.com", "base_url": "file:///etc/passwd"},
+    ],
+)
+async def test_unsafe_launch_allocates_no_session_driver_or_recording(
+    monkeypatch: pytest.MonkeyPatch, unsafe_options: dict[str, str]
+) -> None:
+    """URL rejection is a pure preflight: no temp dir, driver, or log file."""
+    calls: list[str] = []
+    pool = BrowserPool()
+
+    async def resolve_session_dir(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("session_dir")
+
+    async def ensure_pw() -> None:
+        calls.append("playwright")
+
+    def log_path(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("recording")
+
+    monkeypatch.setattr(pool, "_resolve_session_dir", resolve_session_dir)
+    monkeypatch.setattr(pool, "_ensure_pw", ensure_pw)
+    monkeypatch.setattr(launch_execution_module, "new_log_path", log_path)
+
+    with pytest.raises(ValueError):
+        await pool.launch(kind="chromium", session=True, **unsafe_options)
+
+    assert calls == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_persistent_launch_waits_for_profile_lifecycle_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from octowright.profile_lifecycle import profile_lifecycle_lock
+
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+    allocation_started = asyncio.Event()
+    original_resolve = pool._resolve_session_dir
+
+    async def tracked_resolve(*args: Any, **kwargs: Any) -> Any:
+        allocation_started.set()
+        return await original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(pool, "_resolve_session_dir", tracked_resolve)
+
+    async with profile_lifecycle_lock("chromium", "cosmo"):
+        launch_task = asyncio.create_task(
+            pool.launch(kind="chromium", profile="cosmo", url="https://octowright.com", headed=False)
+        )
+        await asyncio.sleep(0)
+        assert not allocation_started.is_set()
+
+    result = await launch_task
+    assert allocation_started.is_set()
+    await pool.close(result["instance_id"], force=True)
 
 
 @pytest.mark.anyio

@@ -43,17 +43,17 @@ def test_persona_get_maps_fields(_patch_deps: dict[str, MagicMock]) -> None:
     assert out["credentials"]["email_env"] == "COSMO_EMAIL"
 
 
-def test_profile_delete_refuses_when_in_use(_patch_deps: dict[str, MagicMock]) -> None:
+async def test_profile_delete_refuses_when_in_use(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["pool"].profile_in_use.return_value = True
     _patch_deps["pool"].list_sessions.return_value = [{"instance_id": "i-1", "kind": "webkit", "profile": "cosmo"}]
     with pytest.raises(RuntimeError):
-        _personas.profile_delete("webkit", "cosmo")
+        await _personas.profile_delete("webkit", "cosmo")
 
 
-def test_profile_delete_success(_patch_deps: dict[str, MagicMock]) -> None:
+async def test_profile_delete_success(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["pool"].profile_in_use.return_value = False
     _patch_deps["profile"].delete_profile.return_value = "/tmp/prof"
-    out = _personas.profile_delete("chromium", "ziggy")
+    out = await _personas.profile_delete("chromium", "ziggy")
     assert out["deleted"] is True
 
 
@@ -69,16 +69,50 @@ def test_persona_create_success(_patch_deps: dict[str, MagicMock]) -> None:
     assert out["created"] is True
 
 
-def test_persona_delete_refuses_live_instance(_patch_deps: dict[str, MagicMock]) -> None:
+async def test_persona_delete_refuses_live_instance(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["pool"].list_sessions.return_value = [{"instance_id": "i-2", "profile": "cosmo"}]
     with pytest.raises(RuntimeError):
-        _personas.persona_delete("cosmo")
+        await _personas.persona_delete("cosmo")
 
 
-def test_persona_delete_success(_patch_deps: dict[str, MagicMock]) -> None:
+async def test_persona_delete_success(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["pool"].list_sessions.return_value = []
     _patch_deps["profile"].delete_persona.return_value = "/tmp/cosmo"
-    out = _personas.persona_delete("cosmo")
+    out = await _personas.persona_delete("cosmo")
+    assert out["deleted"] is True
+
+
+async def test_profile_delete_waits_for_profile_lifecycle_lock(_patch_deps: dict[str, MagicMock]) -> None:
+    import asyncio
+
+    from octowright.profile_lifecycle import profile_lifecycle_lock
+
+    _patch_deps["pool"].profile_in_use.return_value = False
+    _patch_deps["profile"].delete_profile.return_value = "/tmp/prof"
+
+    async with profile_lifecycle_lock("chromium", "cosmo"):
+        delete_task = asyncio.create_task(_personas.profile_delete("chromium", "cosmo"))
+        await asyncio.sleep(0)
+        _patch_deps["profile"].delete_profile.assert_not_called()
+
+    out = await delete_task
+    assert out["deleted"] is True
+
+
+async def test_persona_delete_waits_for_every_engine_profile_lock(_patch_deps: dict[str, MagicMock]) -> None:
+    import asyncio
+
+    from octowright.profile_lifecycle import profile_lifecycle_lock
+
+    _patch_deps["pool"].list_sessions.return_value = []
+    _patch_deps["profile"].delete_persona.return_value = "/tmp/cosmo"
+
+    async with profile_lifecycle_lock("firefox", "cosmo"):
+        delete_task = asyncio.create_task(_personas.persona_delete("cosmo"))
+        await asyncio.sleep(0)
+        _patch_deps["profile"].delete_persona.assert_not_called()
+
+    out = await delete_task
     assert out["deleted"] is True
 
 
