@@ -70,7 +70,12 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] **#16** DECISION: all quotas OFF-by-default opt-in knobs. Added `OCTOWRIGHT_MAX_REQUEST_BODY_BYTES` (streaming 413 cap) + `OCTOWRIGHT_WEBSOCKET_MAX_BYTES` (WS sidecar ceiling + truncation marker); recording JSONL limit already existed. Docs in AGENTS.md.
 - [ ] residuals: #13 `pool.shutdown()` driver-stop/tmp cleanup on daemon exit; #11 evict pool entry on poll-death
 
-## Batch C — architecture/release decisions (OWNER CALL)
+## Batch C — architecture/release decisions
+- [~] **#1** PARTIAL: gated the follower-only `/api/mcp-events` SSE channel with the capability token (reuses `OCTOWRIGHT_BRIDGE_REQUIRE_TOKEN`, on by default, dashboard-safe since no browser calls it); follower now presents the token. `bridge_auth.header_token_ok`, `routes/mcp_events._require_token`, `proxy_runtime`. DECISION: token-by-default. REMAINING (needs a browser pairing flow — embedding the token in the served page leaks it to any loopback fetcher): gate the browser-facing `/api/sessions`, media, `/api/dashboard/events`, `/tail` WS, persona/scenario/macro writes. Documented as follow-up in the Bridge-capability-token section.
+- [x] **#7** terminal extra marked experimental / source-install-only (pyproject + AGENTS/CLAUDE/README).
+- [x] **#2** SSRF default KEPT OFF (deliberate documented back-compat choice; user confirmed). No code change.
+
+## (superseded) original Batch C header — architecture/release decisions (OWNER CALL)
 #1 dashboard auth boundary + token bootstrap · #7 publish vs label-experimental terminal extra ·
 #2 SSRF default posture (parked — user deciding later)
 
