@@ -164,10 +164,8 @@ class BrowserPool:
         )
         launch_options = replace(launch_options, protected=protected, protected_reason=protected_reason)
         target_url = launch_options.url or get_default_url()
-        # Validate the target URL BEFORE allocating any Playwright/profile/
-        # recording resources. A rejected URL must fail the launch cleanly with
-        # nothing left behind — not after the session is registered, where the
-        # cleanup path skips a registered session and leaks the browser.
+        # Reject an unsafe URL BEFORE allocating anything — post-registration the
+        # cleanup path skips the session and leaks the browser (see launch_pipeline).
         from octowright.session.core_page_mixin import _reject_unsafe_url
 
         _reject_unsafe_url(target_url)
