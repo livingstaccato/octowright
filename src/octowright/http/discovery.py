@@ -275,25 +275,37 @@ def invalidate_recording_index(recordings_dir: Path | None = None) -> None:
             _recording_index.pop(recordings_dir, None)
 
 
+def _cache_lookup(session_id: str, recordings_dir: Path, current_mtime: int | None) -> tuple[Path | None, str]:
+    """Consult the cached index (caller holds ``_cache_lock``). Returns
+    ``(path, action)`` where action is ``"return"`` (path is authoritative),
+    ``"scan"`` (miss on an unchanged-but-saturated dir → targeted disk scan), or
+    ``"rebuild"`` (no/stale cache → walk + republish)."""
+    cached = _recording_index.get(recordings_dir)
+    if cached is None:
+        return None, "rebuild"
+    cached_mtime, index, saturated = cached
+    hit = index.get(session_id)
+    if hit is not None and hit.exists():
+        index.move_to_end(session_id)
+        return hit, "return"
+    if hit is not None:
+        # Cached path was deleted out-of-band; fall through to rebuild.
+        del index[session_id]
+    # Negative-cache: an unchanged dir means a complete index is authoritative
+    # (absent), but a saturated one may have evicted this id, so scan disk.
+    if current_mtime is not None and current_mtime == cached_mtime:
+        return None, ("scan" if saturated else "return")
+    return None, "rebuild"
+
+
 def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
     current_mtime = _dir_mtime_ns(recordings_dir)
     with _cache_lock:
-        cached = _recording_index.get(recordings_dir)
-        if cached is not None:
-            cached_mtime, index, saturated = cached
-            hit = index.get(session_id)
-            if hit is not None and hit.exists():
-                index.move_to_end(session_id)
-                return hit
-            if hit is not None:
-                # Cached path was deleted out-of-band; fall through to rebuild.
-                del index[session_id]
-            # Skip rebuild for unknown ids when the dir hasn't changed since we
-            # last walked it — protects against repeated bad-id lookups
-            # (negative-cache via dir mtime). Only valid when the index is
-            # COMPLETE; a saturated index may have evicted this id, so scan disk.
-            if current_mtime is not None and current_mtime == cached_mtime:
-                return _scan_disk_for_recording(session_id, recordings_dir) if saturated else None
+        path, action = _cache_lookup(session_id, recordings_dir, current_mtime)
+    if action == "return":
+        return path
+    if action == "scan":  # disk walk OUTSIDE the lock
+        return _scan_disk_for_recording(session_id, recordings_dir)
     # Rebuild outside the lock (filesystem walk) and then publish atomically.
     rebuilt, saturated = _build_recording_index(recordings_dir)
     with _cache_lock:
