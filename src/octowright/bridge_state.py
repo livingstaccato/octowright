@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import json
+import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,46 @@ from typing import Any
 # after a follower crash + OS PID recycle) so two writers can't collide on a
 # single tmp filename and one silently overwrite the other's contents.
 _TMP_COUNTER = itertools.count(1)
+
+
+@contextlib.contextmanager
+def _state_lock(path: Path) -> Iterator[None]:
+    """Exclusive cross-process lock for one read-modify-replace transaction.
+
+    The atomic tmp-then-``os.replace`` write prevents torn JSON but NOT lost
+    updates: two followers that both ``read_state`` before either writes will
+    have the second write erase the first's registration (verified live — the
+    dead-follower reaper then never learns about that follower). A blocking
+    ``flock`` on a ``.lock`` sibling serializes the whole transaction.
+
+    Windows has no ``fcntl``; there the lock degrades to a no-op — matching the
+    advisory-lock posture of ``singleton.py`` — which is the pre-fix behavior,
+    not a regression. Any lock-file OSError also degrades to unlocked so a
+    read-only or broken filesystem can't take the bridge heartbeat down.
+    """
+    if sys.platform == "win32":
+        yield
+        return
+    import fcntl
+
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_path, "a")  # noqa: SIM115 - explicit handle for flock lifetime
+    except OSError:
+        yield
+        return
+    try:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            yield
+            return
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
 
 
 def _empty_state() -> dict[str, Any]:
@@ -168,18 +210,19 @@ def record_snapshot(
         "reconnect_attempts": reconnect_attempts,
         "request_timeouts": request_timeouts,
     }
-    state = read_state(path)
-    state["followers"][str(follower_pid)] = snapshot
-    state["followers"] = _prune_dead_followers(state["followers"], keep_pid=follower_pid)
-    state["events"].append(snapshot)
-    state["events"] = state["events"][-max_events:]
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + f".{follower_pid}.{next(_TMP_COUNTER)}.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
-        return
+    with _state_lock(path):
+        state = read_state(path)
+        state["followers"][str(follower_pid)] = snapshot
+        state["followers"] = _prune_dead_followers(state["followers"], keep_pid=follower_pid)
+        state["events"].append(snapshot)
+        state["events"] = state["events"][-max_events:]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + f".{follower_pid}.{next(_TMP_COUNTER)}.tmp")
+            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            return
 
 
 # A live write's tmp sibling exists for microseconds (write, then os.replace).
@@ -229,15 +272,16 @@ def remove_followers(path: Path, pids: Iterable[int]) -> None:
     keys = {str(pid) for pid in pids}
     if not keys:
         return
-    state = read_state(path)
-    followers = state.get("followers", {})
-    if not any(key in followers for key in keys):
-        return
-    state["followers"] = {key: snap for key, snap in followers.items() if key not in keys}
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + f".reaper.{next(_TMP_COUNTER)}.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
-        return
+    with _state_lock(path):
+        state = read_state(path)
+        followers = state.get("followers", {})
+        if not any(key in followers for key in keys):
+            return
+        state["followers"] = {key: snap for key, snap in followers.items() if key not in keys}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + f".reaper.{next(_TMP_COUNTER)}.tmp")
+            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            return
