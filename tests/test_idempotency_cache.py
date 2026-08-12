@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from mcp.server.mcpserver import Context
 
 from octowright.server import _idempotency
 from octowright.server import _request_context as _rc
@@ -155,6 +157,160 @@ async def test_in_progress_stuck_producer_reports_unknown(monkeypatch: pytest.Mo
 
 
 @pytest.mark.anyio
+async def test_aged_live_producer_is_retained_across_repeated_resends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Age-based cleanup must retain a live producer and its authoritative slot.
+
+    Repeated same-key resends report ambiguity without cancelling or executing
+    the producer twice.
+    """
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(_idempotency, "_now", lambda: clock["t"])
+    monkeypatch.setattr(_idempotency.defaults, "IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", 0.02)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[int] = []
+
+    @_idempotency._idempotent_dispatch
+    async def tool(**_kw: Any) -> dict[str, int]:
+        calls.append(1)
+        if len(calls) > 1:
+            return {"n": len(calls)}
+        started.set()
+        await release.wait()
+        return {"n": 1}
+
+    async def first() -> dict[str, int]:
+        with _request_context("k1", object()):
+            return await tool()
+
+    producer = asyncio.create_task(first())
+    try:
+        await started.wait()
+        clock["t"] += _idempotency._abandon_threshold_seconds() + 1
+
+        for _ in range(2):
+            with _request_context("k1", object()), pytest.raises(_idempotency.IdempotencyOutcomeUnknownError):
+                await tool()
+
+        assert not producer.cancelled()
+        assert not producer.done()
+        assert len(calls) == 1
+
+        release.set()
+        assert await producer == {"n": 1}
+        with _request_context("k1", object()):
+            assert await tool() == {"n": 1}
+        assert len(calls) == 1
+    finally:
+        release.set()
+        if not producer.done():
+            producer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await producer
+
+
+@pytest.mark.anyio
+async def test_aged_live_producer_is_never_cancelled_into_a_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Age cannot prove whether a live producer already committed its side effect."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(_idempotency, "_now", lambda: clock["t"])
+    monkeypatch.setattr(_idempotency.defaults, "IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", 0.02)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[int] = []
+
+    @_idempotency._idempotent_dispatch
+    async def tool(**_kw: Any) -> dict[str, int]:
+        calls.append(1)  # model a side effect that lands before the final await
+        started.set()
+        await release.wait()
+        return {"n": len(calls)}
+
+    async def first() -> dict[str, int]:
+        with _request_context("k1", object()):
+            return await tool()
+
+    producer = asyncio.create_task(first())
+    try:
+        await started.wait()
+        clock["t"] += _idempotency._abandon_threshold_seconds() + 1
+
+        with _request_context("k1", object()), pytest.raises(_idempotency.IdempotencyOutcomeUnknownError):
+            await tool()
+
+        assert not producer.cancelled()
+        assert not producer.done()
+        assert calls == [1]
+        release.set()
+        assert await producer == {"n": 1}
+    finally:
+        release.set()
+        if not producer.done():
+            producer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await producer
+
+
+@pytest.mark.anyio
+async def test_capacity_refuses_a_fresh_key_without_displacing_live_producers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A full cache cannot grow by admitting another distinct live producer.
+
+    Existing keys remain authoritative at capacity: a same-key caller awaits
+    the original producer and receives its result without running the handler
+    again.
+    """
+    monkeypatch.setattr(_idempotency.defaults, "IDEMPOTENCY_MAX_ENTRIES", 2)
+    release = asyncio.Event()
+    started = {"one": asyncio.Event(), "two": asyncio.Event()}
+    calls: list[str] = []
+
+    @_idempotency._idempotent_dispatch
+    async def tool(label: str) -> str:
+        if label == "fresh":
+            raise AssertionError("a fresh handler ran after the idempotency cache reached capacity")
+        calls.append(label)
+        started[label].set()
+        await release.wait()
+        return label
+
+    async def call(key: str, label: str) -> str:
+        with _request_context(key, object()):
+            return await tool(label)
+
+    producer_one = asyncio.create_task(call("k-one", "one"))
+    await started["one"].wait()
+    producer_two = asyncio.create_task(call("k-two", "two"))
+    await started["two"].wait()
+
+    try:
+        with pytest.raises(_idempotency.IdempotencyCapacityError, match="idempotency cache is at capacity"):
+            await call("k-fresh", "fresh")
+
+        assert calls == ["one", "two"]
+        assert _idempotency._cache_size() == 2
+
+        same_key_waiter = asyncio.create_task(call("k-one", "one"))
+        await asyncio.sleep(0)
+        assert not same_key_waiter.done()
+
+        release.set()
+        assert await asyncio.gather(producer_one, producer_two, same_key_waiter) == ["one", "two", "one"]
+        assert calls == ["one", "two"]
+    finally:
+        release.set()
+        for task in (producer_one, producer_two):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(producer_one, producer_two, return_exceptions=True)
+
+
+@pytest.mark.anyio
 async def test_orphan_in_progress_reports_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     """A same-key waiter on an entry that never resolves reports unknown rather
     than silently re-executing a possibly-committed side effect."""
@@ -201,7 +357,7 @@ async def test_same_key_different_args_do_not_cross_dedup() -> None:
 
 
 @pytest.mark.anyio
-async def test_exception_evicts_entry_so_resend_reruns() -> None:
+async def test_exception_retains_unknown_outcome_so_resend_does_not_rerun() -> None:
     calls: list[int] = []
     sess = object()
 
@@ -214,23 +370,24 @@ async def test_exception_evicts_entry_so_resend_reruns() -> None:
 
     with _request_context("k1", sess), pytest.raises(ValueError):
         await tool()
-    with _request_context("k1", sess):
-        result = await tool()  # resend re-runs (failure was not cached)
-    assert result == {"n": 2}
-    assert len(calls) == 2
+    with _request_context("k1", sess), pytest.raises(_idempotency.IdempotencyOutcomeUnknownError):
+        await tool()
+    assert len(calls) == 1
 
 
 @pytest.mark.anyio
-async def test_cancellation_evicts_entry() -> None:
+async def test_session_cancellation_does_not_cancel_or_reexecute_producer() -> None:
     started = asyncio.Event()
     block = asyncio.Event()
     sess = object()
+    commits: list[int] = []
 
     @_idempotency._idempotent_dispatch
     async def tool(**_kw: Any) -> dict[str, int]:
+        commits.append(1)  # side effect may land before request teardown
         started.set()
         await block.wait()
-        return {"n": 1}
+        return {"n": len(commits)}
 
     async def call() -> dict[str, int]:
         with _request_context("k1", sess):
@@ -241,8 +398,54 @@ async def test_cancellation_evicts_entry() -> None:
     t.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await t
-    # The cancelled run must have evicted its entry — the key is no longer cached.
-    assert _idempotency._cache_size() == 0
+    # Request/session teardown cancels the caller, not the authoritative
+    # producer: it may already have committed and must finish into the cache.
+    assert _idempotency._cache_size() == 1
+    assert commits == [1]
+
+    block.set()
+    for _ in range(20):
+        await asyncio.sleep(0)
+        with _idempotency._lock:
+            if next(iter(_idempotency._cache.values())).done:
+                break
+
+    with _request_context("k1", sess):
+        assert await tool() == {"n": 1}
+    assert commits == [1]
+
+
+@pytest.mark.anyio
+async def test_producer_cancellation_leaves_unknown_tombstone() -> None:
+    """Even direct producer loss cannot authorize an automatic mutation retry."""
+    started = asyncio.Event()
+    block = asyncio.Event()
+    calls: list[int] = []
+    sess = object()
+
+    @_idempotency._idempotent_dispatch
+    async def tool(**_kw: Any) -> dict[str, int]:
+        calls.append(1)
+        started.set()
+        await block.wait()
+        return {"n": len(calls)}
+
+    async def call() -> dict[str, int]:
+        with _request_context("k1", sess):
+            return await tool()
+
+    caller = asyncio.create_task(call())
+    await started.wait()
+    with _idempotency._lock:
+        producer = next(iter(_idempotency._cache.values())).producer_task
+    assert producer is not None
+    producer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    with _request_context("k1", sess), pytest.raises(_idempotency.IdempotencyOutcomeUnknownError):
+        await tool()
+    assert calls == [1]
 
 
 # ─── eviction & memory ───────────────────────────────────────────────────────
@@ -270,7 +473,7 @@ async def test_ttl_eviction_reruns(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_oversize_result_not_cached_but_resend_reruns(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_oversize_result_resend_fails_closed_without_rerunning(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_idempotency.defaults, "IDEMPOTENCY_MAX_RESULT_BYTES", 16)
     calls: list[int] = []
     sess = object()
@@ -282,6 +485,72 @@ async def test_oversize_result_not_cached_but_resend_reruns(monkeypatch: pytest.
 
     with _request_context("k1", sess):
         await tool()
-    with _request_context("k1", sess):
+    with _request_context("k1", sess), pytest.raises(_idempotency.IdempotencyResultUnavailableError, match="too large"):
         await tool()
-    assert len(calls) == 2  # over-cap result stored as a marker → resend re-ran
+    assert len(calls) == 1
+
+
+def test_result_size_counts_utf8_bytes_not_unicode_codepoints() -> None:
+    assert _idempotency._result_size("🚀") == len(repr("🚀").encode("utf-8"))
+    assert _idempotency._result_size("🚀") > len(repr("🚀"))
+
+
+@pytest.mark.anyio
+async def test_sync_mutation_resend_uses_cached_result_without_rerunning() -> None:
+    calls: list[str] = []
+    sess = object()
+    execution_threads: list[int] = []
+
+    @_idempotency._idempotent_dispatch
+    def tool(value: str) -> dict[str, int]:
+        execution_threads.append(threading.get_ident())
+        calls.append(value)
+        return {"calls": len(calls)}
+
+    with _request_context("sync-k1", sess):
+        first = await tool("write")
+    with _request_context("sync-k1", object()):
+        second = await tool("write")
+
+    assert first == second == {"calls": 1}
+    assert calls == ["write"]
+    assert execution_threads[0] != threading.get_ident()
+
+
+@pytest.mark.anyio
+async def test_reconnect_context_identity_is_excluded_from_storage_key() -> None:
+    calls: list[int] = []
+
+    @_idempotency._idempotent_dispatch
+    async def tool(value: str, ctx: Context | None = None) -> dict[str, int]:
+        del value, ctx
+        calls.append(1)
+        return {"calls": len(calls)}
+
+    with _request_context("context-key", object()):
+        first = await tool("same-wire-value", ctx=object())  # type: ignore[arg-type]
+    with _request_context("context-key", object()):
+        second = await tool("same-wire-value", ctx=object())  # type: ignore[arg-type]
+
+    assert first == second == {"calls": 1}
+    assert calls == [1]
+
+
+@pytest.mark.anyio
+async def test_blocking_sync_tool_does_not_stall_event_loop() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    @_idempotency._idempotent_dispatch
+    def tool() -> str:
+        entered.set()
+        release.wait(timeout=1.0)
+        return "done"
+
+    with _request_context("sync-blocking", object()):
+        call = asyncio.create_task(tool())
+    assert await asyncio.to_thread(entered.wait, 0.5)
+    await asyncio.wait_for(asyncio.sleep(0.01), timeout=0.1)
+    assert not call.done()
+    release.set()
+    assert await call == "done"

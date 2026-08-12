@@ -1,9 +1,13 @@
 /** Origin-scoped dashboard bearer lifecycle. No cookies or localStorage. */
 
+import { clearDashboardMediaAuth } from "./dashboard-media-auth.js";
+
 export const DASHBOARD_AUTH_STORAGE_KEY = "octowright.dashboard.auth.v1";
 export const DASHBOARD_AUTH_REQUIRED_EVENT = "octowright:dashboard-auth-required";
 export const DASHBOARD_WS_PROTOCOL = "octowright.dashboard";
 export const DASHBOARD_WS_BEARER_PREFIX = `${DASHBOARD_WS_PROTOCOL}.bearer.`;
+export const DASHBOARD_AUTH_EXPIRED_REASON = "dashboard pairing expired";
+const DASHBOARD_AUTH_REQUIRED_REASON = "dashboard pairing required";
 const DASHBOARD_TAB_LOCK_PREFIX = "octowright.dashboard.tab-auth.v1.";
 
 export interface DashboardBearerGrant {
@@ -108,6 +112,7 @@ function currentSessionStorage(storage?: Storage): Storage | null {
 export function clearDashboardBearer(storage?: Storage): void {
   tabOwnsBearer = false;
   releaseHeldTabLock();
+  clearDashboardMediaAuth();
   try {
     currentSessionStorage(storage)?.removeItem(DASHBOARD_AUTH_STORAGE_KEY);
   } catch {
@@ -198,6 +203,7 @@ export function disposeDashboardTabIsolation(): void {
   releaseHeldTabLock();
   activeTabId = null;
   tabOwnsBearer = false;
+  clearDashboardMediaAuth();
 }
 
 export function dashboardAuthHeaders(initial?: HeadersInit, storage?: Storage): Headers {
@@ -221,6 +227,19 @@ export function handleDashboardUnauthorized(storage?: Storage): boolean {
   return hadBearer;
 }
 
+export function isDashboardAuthClose(event: Pick<CloseEvent, "code" | "reason">): boolean {
+  return (
+    event.code === 1008 &&
+    (event.reason === DASHBOARD_AUTH_EXPIRED_REASON || event.reason === DASHBOARD_AUTH_REQUIRED_REASON)
+  );
+}
+
+export function handleDashboardStreamAuthClose(event: Pick<CloseEvent, "code" | "reason">): boolean {
+  if (!isDashboardAuthClose(event)) return false;
+  handleDashboardUnauthorized();
+  return true;
+}
+
 /** Fetch protected dashboard media without putting its bearer in the URL. */
 export async function fetchDashboardMediaObjectUrl(
   path: string,
@@ -228,6 +247,7 @@ export async function fetchDashboardMediaObjectUrl(
 ): Promise<string> {
   const response = await (options.fetchFn ?? fetch)(path, {
     method: "GET",
+    cache: "no-store",
     headers: dashboardAuthHeaders(),
     ...(options.signal ? { signal: options.signal } : {}),
   });

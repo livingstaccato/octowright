@@ -11,9 +11,11 @@ from typing import Any
 
 import pytest
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState, dashboard_access_ok
 from octowright.http.routes import screencast as scr
 
 
@@ -63,6 +65,32 @@ class LogCapture:
 
     def warning(self, event: str, **kwargs: Any) -> None:
         self.warning_calls.append((event, kwargs))
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _paired_request(state: DashboardPairingState, bearer: str) -> Request:
+    app = Starlette()
+    setattr(app.state, DASHBOARD_STATE_ATTR, state)
+    scope: dict[str, Any] = {
+        "type": "http",
+        "method": "GET",
+        "headers": [(b"authorization", f"Bearer {bearer}".encode())],
+        "query_string": b"",
+        "path": "/api/sessions/ws1/screencast",
+        "app": app,
+    }
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return Request(scope, receive)
 
 
 @pytest.fixture
@@ -268,7 +296,13 @@ async def test_screencast_endpoint_releases_viewer_when_streaming_fails(
     async def fake_release_viewer(released_manager: object, released_viewer: OneFrameViewer) -> None:
         release_calls.append((released_manager, released_viewer))
 
-    async def fake_stream_screencast(_websocket: object, _viewer: OneFrameViewer) -> None:
+    async def fake_stream_screencast(
+        _websocket: object,
+        _viewer: OneFrameViewer,
+        *,
+        lease: object | None = None,
+    ) -> None:
+        assert lease is None
         raise RuntimeError("send failed")
 
     monkeypatch.setattr(scr, "sensitive_allowed_for_connection", lambda _websocket: True)
@@ -286,3 +320,49 @@ async def test_screencast_endpoint_releases_viewer_when_streaming_fails(
     assert websocket.accepted is True
     assert websocket.closed is None
     assert release_calls == [(manager, viewer)]
+
+
+@pytest.mark.asyncio
+async def test_screencast_stream_closes_1008_when_established_bearer_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
+    clock = _Clock()
+    state = DashboardPairingState(expected_token="token", monotonic_clock=clock, session_ttl=5.0)
+    grant = state.redeem_code(state.mint_code())
+    assert grant is not None
+    request = _paired_request(state, grant.bearer)
+    assert dashboard_access_ok(request)
+
+    class BlockingViewer:
+        async def get(self) -> bytes:
+            clock.now += 6.0
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.closed: tuple[int, str] | None = None
+
+        async def receive(self) -> dict[str, Any]:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        async def send_bytes(self, _frame: bytes) -> None:
+            raise AssertionError("expired stream must not send a frame")
+
+        async def close(self, *, code: int, reason: str) -> None:
+            self.closed = (code, reason)
+
+    monkeypatch.setattr(scr, "DASHBOARD_STREAM_AUTH_CHECK_SECONDS", 0.01, raising=False)
+    websocket = FakeWebSocket()
+    await asyncio.wait_for(
+        scr._stream_screencast(
+            websocket,  # type: ignore[arg-type]
+            BlockingViewer(),  # type: ignore[arg-type]
+            lease=request.state.dashboard_stream_lease,
+        ),
+        timeout=0.2,
+    )
+
+    assert websocket.closed == (1008, "dashboard pairing expired")

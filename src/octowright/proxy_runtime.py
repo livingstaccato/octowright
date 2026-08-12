@@ -436,7 +436,7 @@ async def run_supervised_proxy(
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
                                 supervisor_obj.reconnect_attempts = attempt
-                                bridge_state.record_snapshot(
+                                await bridge_state.record_snapshot_async(
                                     path=BRIDGE_STATE_PATH,
                                     follower_pid=__import__("os").getpid(),
                                     remote_url=remote_url,
@@ -490,7 +490,7 @@ async def run_supervised_proxy(
                         _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
                         await supervisor_obj.fail_or_mark_for_resume(f"remote leader session reset: {exc!r}")
                         supervisor_obj.last_error = repr(exc)
-                        bridge_state.record_snapshot(
+                        await bridge_state.record_snapshot_async(
                             path=BRIDGE_STATE_PATH,
                             follower_pid=__import__("os").getpid(),
                             remote_url=remote_url,
