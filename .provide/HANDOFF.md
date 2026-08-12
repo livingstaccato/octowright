@@ -22,7 +22,7 @@ documented choice, needs an owner decision not a bugfix.
 | 4 | Last-page close evicts from registry but skips full `_close_impl` → orphan context/process/lock | **TRUE** | `browser_pool/listeners.py:99,139-140`; `pool.py:413` dict pop; full close `session/core_ops_mixin.py:429-498` |
 | 5 | Persona delete races pre-register profile mkdir/open; no shared lock | **TRUE** | `server/personas.py:32` check-then-rmtree; `browser_pool/launch_helpers.py:253,263` mkdir/open before register (`launch_pipeline.py:360`); `engine_profiles.py:47-52` |
 | 6 | Crash recovery double-wires page (explicit `_wire_listeners` + context `page` event); no dedup | **TRUE** | `browser_pool/crash_recovery.py:225-226`; `launch_pipeline.py:331` `context.on("page", ...)`; `listeners.py:33-61` no idempotency guard |
-| 7 | `[terminal]` extra deps path-pinned; wheel strips → `pip install ...[terminal]` 404s externally | **TRUE** | `pyproject.toml:80-84` deps; `:73-76` path sources; `:77-79` comment admits "aren't on PyPI yet" | 
+| 7 | `[terminal]` extra deps path-pinned; wheel strips → `pip install ...[terminal]` 404s externally | **TRUE** | `pyproject.toml:80-84` deps; `:73-76` path sources; `:77-79` comment admits "aren't on PyPI yet" |
 | 8 | CLI `scenario start` builds no `terminal_pool` → raises for terminal participants | **TRUE** | `cli/scenario.py:55,58`; `scenarios_pool.py:186-190` raises when `terminal_pool is None` |
 
 ### Medium
