@@ -20,7 +20,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
-from octowright.http.pairing import dashboard_access_ok
+from octowright.http.pairing import dashboard_access_ok, pairing_required
 
 ResponseT = TypeVar("ResponseT", bound=Response)
 
@@ -218,13 +218,25 @@ def guard_sensitive_http(
             return JSONResponse(_REMOTE_DISABLED_BODY, status_code=403)
         if _cross_origin_blocked(request, side_effect_get=side_effect_get):
             return JSONResponse({"error": "cross-origin dashboard request is blocked"}, status_code=403)
+        # Successful admission also attaches the digest-only stream lease used
+        # by long-lived SSE handlers to revalidate after this wrapper returns.
         if not pairing_exempt and not dashboard_access_ok(request):
             return JSONResponse(
                 _PAIRING_REQUIRED_BODY,
                 status_code=401,
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        return await handler(request)
+        response = await handler(request)
+        if pairing_required():
+            # Every admitted response is authorization-scoped. Chromium's
+            # private cache is shared by same-origin tabs, so a bare
+            # FileResponse could otherwise be replayed to an unpaired tab
+            # without another request reaching this guard.
+            response.headers["Cache-Control"] = "private, no-store"
+            vary = {item.strip() for item in response.headers.get("Vary", "").split(",") if item.strip()}
+            vary.update({"Authorization", "X-Octowright-Token"})
+            response.headers["Vary"] = ", ".join(sorted(vary))
+        return response
 
     cast(_SensitiveGuardedHandler, guarded).__octowright_sensitive_guard__ = True
     return guarded
