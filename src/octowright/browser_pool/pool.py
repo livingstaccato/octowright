@@ -28,7 +28,7 @@ from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
 from octowright.browser_pool.visuals import _tile_args_for_chromium
 from octowright.defaults import RECORDINGS_DIR, get_default_url
-from octowright.profile_lifecycle import profile_lifecycle_lock
+from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
 from octowright.session import BrowserSession
 
 log = get_logger(__name__)
@@ -305,7 +305,7 @@ class BrowserPool:
             }
 
     def profile_in_use(self, kind: str, profile: str) -> bool:
-        return any(s.kind == kind and s.profile == profile for s in tuple(self._sessions.values()))
+        return any(s.kind == kind and profile_names_match(s.profile, profile) for s in tuple(self._sessions.values()))
 
     def _evict_session_nowait(self, instance_id: str) -> BrowserSession | None:
         # Called from synchronous Playwright event callbacks (page.close,

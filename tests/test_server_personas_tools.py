@@ -50,6 +50,15 @@ async def test_profile_delete_refuses_when_in_use(_patch_deps: dict[str, MagicMo
         await _personas.profile_delete("webkit", "cosmo")
 
 
+async def test_profile_delete_refusal_matches_slug_alias(_patch_deps: dict[str, MagicMock]) -> None:
+    _patch_deps["pool"].profile_in_use.return_value = True
+    _patch_deps["pool"].list_sessions.return_value = [
+        {"instance_id": "i-alias", "kind": "webkit", "profile": "cosmo one"}
+    ]
+    with pytest.raises(RuntimeError, match="i-alias"):
+        await _personas.profile_delete("webkit", "cosmo-one")
+
+
 async def test_profile_delete_success(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["pool"].profile_in_use.return_value = False
     _patch_deps["profile"].delete_profile.return_value = "/tmp/prof"
@@ -73,6 +82,12 @@ async def test_persona_delete_refuses_live_instance(_patch_deps: dict[str, Magic
     _patch_deps["pool"].list_sessions.return_value = [{"instance_id": "i-2", "profile": "cosmo"}]
     with pytest.raises(RuntimeError):
         await _personas.persona_delete("cosmo")
+
+
+async def test_persona_delete_refuses_live_slug_alias(_patch_deps: dict[str, MagicMock]) -> None:
+    _patch_deps["pool"].list_sessions.return_value = [{"instance_id": "i-alias", "profile": "cosmo one"}]
+    with pytest.raises(RuntimeError, match="i-alias"):
+        await _personas.persona_delete("cosmo-one")
 
 
 async def test_persona_delete_success(_patch_deps: dict[str, MagicMock]) -> None:

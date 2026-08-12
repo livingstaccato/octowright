@@ -24,6 +24,18 @@ _registry_guard = threading.Lock()
 _registry: dict[tuple[str, str], _LockEntry] = {}
 
 
+def profile_names_match(left: str | None, right: str | None) -> bool:
+    """Return whether two profile labels resolve to the same on-disk slug."""
+    if left is None or right is None:
+        return left is right
+
+    # Keep the import lazy: personas imports browser-pool state during normal
+    # server startup, while this module is imported by the pool itself.
+    from octowright.personas import _slug
+
+    return _slug(left) == _slug(right)
+
+
 @contextlib.asynccontextmanager
 async def profile_lifecycle_lock(kind: str, name: str | None) -> AsyncIterator[None]:
     """Serialize launch/delete transitions for one engine profile.
