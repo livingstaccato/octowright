@@ -60,7 +60,7 @@ def _statically_recorded_events() -> set[str]:
     for root in _EMITTER_ROOTS:
         paths = root.rglob("*.py") if root.is_dir() else [root]
         for path in paths:
-            found.update(re.findall(r'recorder\.record\(\s*"([a-z_]+)"', path.read_text()))
+            found.update(re.findall(r'recorder\.record\(\s*"([a-z_]+)"', path.read_text(encoding="utf-8")))
     return found
 
 

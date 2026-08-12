@@ -279,3 +279,77 @@ def test_recordings_beyond_cache_cap_stay_addressable(tmp_path: Path, monkeypatc
 
     # A genuinely-absent id still resolves to None (no false positives).
     assert discovery._find_recording_for("zzzzzzzzzzzz", rec) is None
+
+
+def test_saturated_index_caches_repeated_disk_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(discovery, "DISCOVERY_CACHE_MAX_ENTRIES", 2)
+    rec = tmp_path / "recordings"
+    for sid in ("aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"):
+        _write_recording(rec, sid)
+
+    scans = 0
+    real_scan = discovery._scan_disk_for_recording
+
+    def counting_scan(session_id: str, recordings_dir: Path) -> Path | None:
+        nonlocal scans
+        scans += 1
+        return real_scan(session_id, recordings_dir)
+
+    monkeypatch.setattr(discovery, "_scan_disk_for_recording", counting_scan)
+    for _ in range(3):
+        assert discovery._find_recording_for("aaaaaaaaaaaa", rec) is not None
+
+    assert scans == 1
+
+
+def test_saturated_index_caches_repeated_negative_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(discovery, "DISCOVERY_CACHE_MAX_ENTRIES", 2)
+    rec = tmp_path / "recordings"
+    for sid in ("aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"):
+        _write_recording(rec, sid)
+
+    scans = 0
+    real_scan = discovery._scan_disk_for_recording
+
+    def counting_scan(session_id: str, recordings_dir: Path) -> Path | None:
+        nonlocal scans
+        scans += 1
+        return real_scan(session_id, recordings_dir)
+
+    monkeypatch.setattr(discovery, "_scan_disk_for_recording", counting_scan)
+    for _ in range(3):
+        assert discovery._find_recording_for("missingxxxxx", rec) is None
+
+    assert scans == 1
+
+
+def test_saturated_negative_cache_invalidates_on_directory_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    monkeypatch.setattr(discovery, "DISCOVERY_CACHE_MAX_ENTRIES", 2)
+    rec = tmp_path / "recordings"
+    for sid in ("aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"):
+        _write_recording(rec, sid)
+    assert discovery._find_recording_for("newsessionxx", rec) is None
+
+    created = _write_recording(rec, "newsessionxx")
+    new_mtime = rec.stat().st_mtime_ns + 1_000_000_000
+    os.utime(rec, ns=(new_mtime, new_mtime))
+
+    assert discovery._find_recording_for("newsessionxx", rec) == created
+
+
+def test_saturated_overflow_cache_is_lru_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(discovery, "DISCOVERY_CACHE_MAX_ENTRIES", 2)
+    rec = tmp_path / "recordings"
+    for sid in ("aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"):
+        _write_recording(rec, sid)
+
+    for sid in ("missing00001", "missing00002", "missing00003"):
+        assert discovery._find_recording_for(sid, rec) is None
+
+    _mtime, _index, saturated, overflow = discovery._recording_index[rec]
+    assert saturated is True
+    assert list(overflow) == ["missing00002", "missing00003"]

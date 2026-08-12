@@ -224,7 +224,10 @@ def _closed_sessions(recordings_dir: Path, live_log_paths: set[str]) -> list[dic
 # ``DISCOVERY_CACHE_MAX_ENTRIES`` evicts least-recently-looked-up entries
 # rather than holding everything in memory; the outer dict has at most one
 # entry per active recordings dir so it doesn't need a bound.
-_recording_index: dict[Path, tuple[int, OrderedDict[str, Path], bool]] = {}
+_recording_index: dict[
+    Path,
+    tuple[int, OrderedDict[str, Path], bool, OrderedDict[str, Path | None]],
+] = {}
 
 
 def _dir_mtime_ns(recordings_dir: Path) -> int | None:
@@ -275,6 +278,18 @@ def invalidate_recording_index(recordings_dir: Path | None = None) -> None:
             _recording_index.pop(recordings_dir, None)
 
 
+def _overflow_lookup(session_id: str, overflow: OrderedDict[str, Path | None]) -> tuple[Path | None, bool]:
+    """Return ``(path, authoritative)`` and discard stale positive entries."""
+    if session_id not in overflow:
+        return None, False
+    hit = overflow[session_id]
+    if hit is not None and not hit.exists():
+        del overflow[session_id]
+        return None, False
+    overflow.move_to_end(session_id)
+    return hit, True
+
+
 def _cache_lookup(session_id: str, recordings_dir: Path, current_mtime: int | None) -> tuple[Path | None, str]:
     """Consult the cached index (caller holds ``_cache_lock``). Returns
     ``(path, action)`` where action is ``"return"`` (path is authoritative),
@@ -283,7 +298,7 @@ def _cache_lookup(session_id: str, recordings_dir: Path, current_mtime: int | No
     cached = _recording_index.get(recordings_dir)
     if cached is None:
         return None, "rebuild"
-    cached_mtime, index, saturated = cached
+    cached_mtime, index, saturated, overflow = cached
     hit = index.get(session_id)
     if hit is not None and hit.exists():
         index.move_to_end(session_id)
@@ -292,10 +307,34 @@ def _cache_lookup(session_id: str, recordings_dir: Path, current_mtime: int | No
         # Cached path was deleted out-of-band; fall through to rebuild.
         del index[session_id]
     # Negative-cache: an unchanged dir means a complete index is authoritative
-    # (absent), but a saturated one may have evicted this id, so scan disk.
+    # (absent). A saturated index also has a bounded overflow LRU containing
+    # authoritative past-cap hits and misses from targeted scans.
     if current_mtime is not None and current_mtime == cached_mtime:
+        overflow_hit, authoritative = _overflow_lookup(session_id, overflow)
+        if authoritative:
+            return overflow_hit, "return"
         return None, ("scan" if saturated else "return")
     return None, "rebuild"
+
+
+def _remember_overflow_result(
+    session_id: str,
+    recordings_dir: Path,
+    cache_mtime: int,
+    result: Path | None,
+) -> None:
+    """Cache one saturated-index scan if its directory generation is current."""
+    with _cache_lock:
+        cached = _recording_index.get(recordings_dir)
+        if cached is None:
+            return
+        cached_mtime, _index, saturated, overflow = cached
+        if not saturated or cached_mtime != cache_mtime:
+            return
+        overflow[session_id] = result
+        overflow.move_to_end(session_id)
+        while len(overflow) > DISCOVERY_CACHE_MAX_ENTRIES:
+            overflow.popitem(last=False)
 
 
 def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
@@ -305,17 +344,23 @@ def _find_recording_for(session_id: str, recordings_dir: Path) -> Path | None:
     if action == "return":
         return path
     if action == "scan":  # disk walk OUTSIDE the lock
-        return _scan_disk_for_recording(session_id, recordings_dir)
+        scanned = _scan_disk_for_recording(session_id, recordings_dir)
+        if current_mtime is not None:
+            _remember_overflow_result(session_id, recordings_dir, current_mtime, scanned)
+        return scanned
     # Rebuild outside the lock (filesystem walk) and then publish atomically.
     rebuilt, saturated = _build_recording_index(recordings_dir)
+    cache_mtime = current_mtime if current_mtime is not None else 0
     with _cache_lock:
-        _recording_index[recordings_dir] = (current_mtime if current_mtime is not None else 0, rebuilt, saturated)
+        _recording_index[recordings_dir] = (cache_mtime, rebuilt, saturated, OrderedDict())
         hit = rebuilt.get(session_id)
         if hit is not None:
             rebuilt.move_to_end(session_id)
     if hit is None and saturated:
         # Past-cap recording: absent from the bounded index but on disk.
-        return _scan_disk_for_recording(session_id, recordings_dir)
+        scanned = _scan_disk_for_recording(session_id, recordings_dir)
+        _remember_overflow_result(session_id, recordings_dir, cache_mtime, scanned)
+        return scanned
     return hit
 
 
