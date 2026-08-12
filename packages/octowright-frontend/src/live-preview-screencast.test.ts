@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { screencastWsUrl } from "./api.js";
-import { setDashboardBearer } from "./dashboard-auth.js";
+import { DASHBOARD_AUTH_REQUIRED_EVENT, getDashboardBearer, setDashboardBearer } from "./dashboard-auth.js";
 import { openScreencast } from "./live-preview-screencast.js";
 
 class FakeWS {
@@ -150,6 +150,54 @@ describe("openScreencast", () => {
     ws.emit("close", closeEvent);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears auth and enters the re-pair state on an established-stream auth close", () => {
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "expired-cast-secret", expires_at: Date.now() / 1000 + 60 });
+    const authRequired = vi.fn();
+    window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
+    const instances: FakeWS[] = [];
+    openScreencast("ws://x", {
+      onFrame: () => {},
+      webSocketCtor: webSocketCtorRecording(instances),
+    });
+    const closeEvent = new Event("close") as CloseEvent;
+    Object.defineProperties(closeEvent, {
+      code: { value: 1008 },
+      reason: { value: "dashboard pairing expired" },
+      wasClean: { value: true },
+    });
+
+    instances[0]?.emit("close", closeEvent);
+
+    expect(getDashboardBearer()).toBeNull();
+    expect(authRequired).toHaveBeenCalledOnce();
+    window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
+  });
+
+  it("enters the re-pair state when initial admission closes with an observable auth reason", () => {
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "rejected-cast-secret", expires_at: Date.now() / 1000 + 60 });
+    const authRequired = vi.fn();
+    window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
+    const instances: FakeWS[] = [];
+    openScreencast("ws://x", {
+      onFrame: () => {},
+      webSocketCtor: webSocketCtorRecording(instances),
+    });
+    const closeEvent = new Event("close") as CloseEvent;
+    Object.defineProperties(closeEvent, {
+      code: { value: 1008 },
+      reason: { value: "dashboard pairing required" },
+      wasClean: { value: true },
+    });
+
+    instances[0]?.emit("close", closeEvent);
+
+    expect(getDashboardBearer()).toBeNull();
+    expect(authRequired).toHaveBeenCalledOnce();
+    window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
   });
 });
 

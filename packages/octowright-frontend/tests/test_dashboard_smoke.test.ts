@@ -62,6 +62,7 @@ describe("vite build artifacts", () => {
   it("emits index.html and session.html at outDir root", () => {
     expect(existsSync(resolve(OUT_DIR, "index.html"))).toBe(true);
     expect(existsSync(resolve(OUT_DIR, "session.html"))).toBe(true);
+    expect(existsSync(resolve(OUT_DIR, "dashboard-media-sw.js"))).toBe(true);
   });
 
   it("emits at least one .js file per HTML entry, plus a CSS file", () => {

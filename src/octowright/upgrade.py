@@ -40,6 +40,14 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.14.3": [
+        "Dashboard pairing now expires everywhere it should: already-open SSE and WebSocket streams close "
+        "when their bearer expires, while protected recordings keep Range requests and progressive playback "
+        "instead of buffering the complete video in memory.",
+        "The follow-up correctness pass closes the remaining duplicate-mutation, keep-id browser replacement, "
+        "bridge and launch-manifest lost-update races. Credential-helper stderr stays out of logs, and daemon "
+        "logs are private even when upgrading a legacy installation.",
+    ],
     "0.14.2": [
         "Opt-in dashboard pairing now protects the browser-facing control plane end to end: a one-use "
         "fragment becomes an origin-scoped bearer for APIs, SSE, WebSockets and protected media, and cloned "

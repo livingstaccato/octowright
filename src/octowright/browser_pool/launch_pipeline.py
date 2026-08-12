@@ -149,14 +149,46 @@ async def cancel_cleanup_after_register(pool: Any, instance_id: str) -> None:
         return  # a racing external-close eviction already removed it
     try:
         from octowright.session_manifest import remove_session as _manifest_remove_session
+        from octowright.session_manifest import run_manifest_transaction_async
 
-        _manifest_remove_session(instance_id)
+        await run_manifest_transaction_async(_manifest_remove_session, instance_id)
     except Exception as exc:
         log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
     try:
         await session.close()
     except Exception as exc:
         log.warning("octowright.launch.cancel_close_failed", instance_id=instance_id, error=repr(exc))
+
+
+async def cancel_cleanup_launch(
+    *,
+    registered: bool,
+    pool: Any,
+    instance_id: str,
+    context: Any,
+    browser: Any,
+    video_dir: Path | None,
+    recorder: Recorder | None,
+) -> None:
+    """Complete launch rollback despite level or repeated cancellation."""
+    from octowright.session_manifest import wait_task_after_cancellation
+
+    if (current := asyncio.current_task()) is not None:
+        current.uncancel()
+    if registered:
+        cleanup_task = asyncio.create_task(cancel_cleanup_after_register(pool, instance_id))
+    else:
+        cleanup_task = asyncio.create_task(
+            cleanup_failed_launch(
+                registered=False,
+                context=context,
+                browser=browser,
+                video_dir=video_dir,
+                recorder=recorder,
+                pre_register=False,
+            )
+        )
+    await wait_task_after_cancellation(cleanup_task)
 
 
 def build_launch_result(
@@ -380,7 +412,11 @@ async def post_context_setup(
         # but the instance stays alive and usable.
         async with pool._sessions_lock:
             pool._sessions[instance_id] = new_session
-        _safe_manifest_record(
+        # From this point cancellation must take the registered-session cleanup
+        # path. The manifest transaction is awaited off-thread and can be the
+        # first cancellation checkpoint after registry insertion.
+        registered = True
+        await _safe_manifest_record(
             instance_id=instance_id,
             kind=kind,
             label=label,
@@ -388,7 +424,6 @@ async def post_context_setup(
             user_data_dir=user_data_dir,
             log_path=log_path,
         )
-        registered = True
         LAUNCHED.add(1, attributes={"kind": kind})
         LAUNCH_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind})
         log.info(
@@ -447,17 +482,18 @@ async def post_context_setup(
             result["nav_warning"] = nav_error
         return result
     except asyncio.CancelledError:
-        if registered:
-            await cancel_cleanup_after_register(pool, instance_id)
-        else:
-            await cleanup_failed_launch(
-                registered=registered,
-                context=context,
-                browser=browser,
-                video_dir=video_dir,
-                recorder=recorder,
-                pre_register=False,
-            )
+        # Join a detached rollback task despite persistent AnyIO cancellation
+        # or a second direct Task.cancel (for example request teardown followed
+        # by daemon shutdown). Never leave a popped session unclosed.
+        await cancel_cleanup_launch(
+            registered=registered,
+            pool=pool,
+            instance_id=instance_id,
+            context=context,
+            browser=browser,
+            video_dir=video_dir,
+            recorder=recorder,
+        )
         raise
     except Exception as exc:
         await cleanup_failed_launch(

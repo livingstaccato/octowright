@@ -42,6 +42,9 @@ DASHBOARD_STATE_ATTR = "dashboard_pairing"
 CAPABILITY_TOKEN_HEADER = "x-octowright-token"  # nosec B105  # header name
 DASHBOARD_WS_PROTOCOL = "octowright.dashboard"
 DASHBOARD_WS_BEARER_PREFIX = f"{DASHBOARD_WS_PROTOCOL}.bearer."
+DASHBOARD_STREAM_LEASE_ATTR = "dashboard_stream_lease"
+DASHBOARD_STREAM_AUTH_CHECK_SECONDS = 1.0
+DASHBOARD_AUTH_EXPIRED_REASON = "dashboard pairing expired"
 _BASE64URL_TOKEN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -138,10 +141,21 @@ class DashboardPairingState:
         )
 
     def bearer_ok(self, bearer: str) -> bool:
+        return self._validated_bearer_digest(bearer) is not None
+
+    def _validated_bearer_digest(self, bearer: str) -> bytes | None:
         self._prune_expired()
         if not bearer:
-            return False
+            return None
         match = self._constant_time_key_match(self._sessions, self._digest(bearer))
+        if match is None:
+            return None
+        self._sessions.move_to_end(match)
+        return match
+
+    def _bearer_digest_ok(self, digest: bytes) -> bool:
+        self._prune_expired()
+        match = self._constant_time_key_match(self._sessions, digest)
         if match is None:
             return False
         self._sessions.move_to_end(match)
@@ -158,6 +172,62 @@ class DashboardPairingState:
             for digest, expiry in list(store.items()):
                 if expiry <= now:
                     del store[digest]
+
+
+@dataclass(frozen=True)
+class DashboardStreamLease:
+    """Digest-only authorization captured when a dashboard stream is admitted."""
+
+    _pairing_state: DashboardPairingState | None = field(default=None, repr=False)
+    _bearer_digest: bytes | None = field(default=None, repr=False)
+    _bypass: bool = field(default=False, repr=False)
+
+    @classmethod
+    def bypass(cls) -> DashboardStreamLease:
+        return cls(_bypass=True)
+
+    @classmethod
+    def for_bearer(cls, pairing_state: DashboardPairingState, bearer_digest: bytes) -> DashboardStreamLease:
+        return cls(_pairing_state=pairing_state, _bearer_digest=bearer_digest)
+
+    @property
+    def revalidatable(self) -> bool:
+        return not self._bypass
+
+    def valid(self) -> bool:
+        if self._bypass:
+            return True
+        if self._pairing_state is None or self._bearer_digest is None:
+            return False
+        return self._pairing_state._bearer_digest_ok(self._bearer_digest)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(bypass={self._bypass}, digest_configured={self._bearer_digest is not None})"
+
+
+def _attach_dashboard_stream_lease(connection: HTTPConnection, lease: DashboardStreamLease) -> None:
+    try:
+        setattr(connection.state, DASHBOARD_STREAM_LEASE_ATTR, lease)
+    except (AttributeError, KeyError):
+        # Small route-unit-test fakes may implement only the headers/app surface.
+        # Real Starlette HTTPConnection instances always expose mutable state.
+        return
+
+
+def dashboard_stream_lease(connection: HTTPConnection) -> DashboardStreamLease | None:
+    """Return the lease attached by admission, if this is a real connection."""
+    try:
+        lease = getattr(connection.state, DASHBOARD_STREAM_LEASE_ATTR, None)
+    except (AttributeError, KeyError):
+        return None
+    return lease if isinstance(lease, DashboardStreamLease) else None
+
+
+def dashboard_stream_lease_valid(lease: DashboardStreamLease | None) -> bool:
+    """Revalidate a captured lease; direct unguarded test calls bypass only when pairing is off."""
+    if lease is None:
+        return not pairing_required()
+    return lease.valid()
 
 
 def dashboard_pairing_state(connection: HTTPConnection) -> DashboardPairingState | None:
@@ -184,19 +254,30 @@ def authorization_bearer(connection: HTTPConnection) -> str | None:
 def dashboard_access_ok(connection: HTTPConnection) -> bool:
     """Authorize a guarded HTTP request using bearer or capability token."""
     if not pairing_required():
+        _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
         return True
     state = dashboard_pairing_state(connection)
     if state is None:
         return False
     if state.capability_token_ok(connection.headers.get(CAPABILITY_TOKEN_HEADER)):
+        _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
         return True
     bearer = authorization_bearer(connection)
-    return bearer is not None and state.bearer_ok(bearer)
+    if bearer is None:
+        return False
+    digest = state._validated_bearer_digest(bearer)
+    if digest is None:
+        return False
+    _attach_dashboard_stream_lease(connection, DashboardStreamLease.for_bearer(state, digest))
+    return True
 
 
 def _websocket_protocols(connection: HTTPConnection) -> list[str]:
     protocols: list[str] = []
-    for value in connection.headers.getlist("sec-websocket-protocol"):
+    headers = getattr(connection, "headers", None)
+    if headers is None:
+        return protocols
+    for value in headers.getlist("sec-websocket-protocol"):
         protocols.extend(part.strip() for part in value.split(",") if part.strip())
     return protocols
 
@@ -221,16 +302,22 @@ def dashboard_websocket_auth(connection: HTTPConnection) -> tuple[bool, str | No
     credential protocol. The secret-bearing value is validated but never
     selected or echoed in the handshake response.
     """
+    protocols = _websocket_protocols(connection)
+    public_protocol = DASHBOARD_WS_PROTOCOL if DASHBOARD_WS_PROTOCOL in protocols else None
     if not pairing_required():
-        return True, None
+        _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
+        return True, public_protocol
     state = dashboard_pairing_state(connection)
     if state is None:
-        return False, None
+        return False, public_protocol
     if state.capability_token_ok(connection.headers.get(CAPABILITY_TOKEN_HEADER)):
-        protocols = _websocket_protocols(connection)
-        selected = DASHBOARD_WS_PROTOCOL if DASHBOARD_WS_PROTOCOL in protocols else None
-        return True, selected
+        _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
+        return True, public_protocol
     bearer = _websocket_bearer(connection)
-    if bearer is None or not state.bearer_ok(bearer):
-        return False, None
+    if bearer is None:
+        return False, public_protocol
+    digest = state._validated_bearer_digest(bearer)
+    if digest is None:
+        return False, public_protocol
+    _attach_dashboard_stream_lease(connection, DashboardStreamLease.for_bearer(state, digest))
     return True, DASHBOARD_WS_PROTOCOL

@@ -204,6 +204,7 @@ describe("fetchDashboardMediaObjectUrl", () => {
     vi.stubGlobal("URL", { ...URL, createObjectURL });
     const fetchFn = vi.fn(async (_path: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer media-secret");
+      expect(init?.cache).toBe("no-store");
       return new Response("media", { status: 200 });
     });
     await expect(fetchDashboardMediaObjectUrl("/api/media", { fetchFn })).resolves.toBe("blob:protected-media");

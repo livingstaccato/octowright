@@ -24,6 +24,7 @@ from octowright.http.discovery import (
     _resolve_log_path,
 )
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.pairing import pairing_required
 from octowright.http.routes._common import _parse_bool
 
 # Production session ids are ``uuid.uuid4().hex[:12]`` (12 lower-case hex
@@ -102,8 +103,23 @@ async def session_video(request: Request) -> Response:
             {"error": "no video recorded for this session"},
             status_code=404,
         )
-    # Starlette's FileResponse handles HTTP Range automatically.
-    return FileResponse(path=str(video_path), media_type="video/webm", filename=video_path.name)
+    # Starlette's FileResponse handles HTTP Range automatically. When pairing
+    # is enabled, however, the bytes are authorization-scoped: neither a
+    # browser cache nor an intermediary may reuse one tab's authenticated
+    # 200/206 response for an unpaired caller. Keep pairing-off playback
+    # cacheable for backwards-compatible local performance.
+    headers = None
+    if pairing_required():
+        headers = {
+            "Cache-Control": "private, no-store",
+            "Vary": "Authorization, X-Octowright-Token",
+        }
+    return FileResponse(
+        path=str(video_path),
+        media_type="video/webm",
+        filename=video_path.name,
+        headers=headers,
+    )
 
 
 async def session_trace(request: Request) -> Response:
