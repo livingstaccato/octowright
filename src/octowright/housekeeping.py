@@ -125,23 +125,33 @@ def reap_orphan_browsers_at_boot(*, log: Any) -> None:
         summary = reap_orphan_browsers(scope="orphaned")
     except Exception as exc:
         log.warning("octowright.boot.orphan_reap_failed", error=repr(exc))
-        return
-    if summary["killed"]:
-        log.warning(
-            "octowright.boot.reaped_orphan_browsers",
-            count=len(summary["killed"]),
-            pids=summary["killed"],
-        )
+    else:
+        if summary["killed"]:
+            log.warning(
+                "octowright.boot.reaped_orphan_browsers",
+                count=len(summary["killed"]),
+                pids=summary["killed"],
+            )
+        if summary["still_alive"] or summary["errors"]:
+            log.warning(
+                "octowright.boot.orphan_reap_incomplete",
+                still_alive=summary["still_alive"],
+                errors=summary["errors"],
+            )
+        if summary["still_alive"]:
+            # Preserve the manifest as the only session-level diagnostic for
+            # browsers the reaper confirmed are still present.
+            return
     _prune_dead_daemon_manifest_entries(log=log)
 
 
 def _prune_dead_daemon_manifest_entries(*, log: Any) -> None:
     """Drop launch-manifest entries stranded by a dead daemon generation.
 
-    Runs right after the orphan-browser reap, so by this point the browsers
-    those entries describe are provably gone. Without it the entries accumulate
-    forever — ``remove_session`` only fires on a graceful close, so every
-    SIGKILL (``octowright restart``, a crash) strands the whole open set."""
+    This is independently guarded from process enumeration, while a confirmed
+    surviving browser keeps its manifest diagnostic. Without pruning, entries
+    accumulate forever because ``remove_session`` only fires on graceful close.
+    """
     from octowright.session_manifest import prune_dead_daemon_entries
 
     try:
@@ -315,7 +325,7 @@ async def _reap_dead_follower_sessions_once(*, log: Any) -> None:
             reaped_sessions.append(reaped_session_id)
 
     if dead_pids:
-        bridge_state.remove_followers(defaults.BRIDGE_STATE_PATH, dead_pids)
+        await bridge_state.remove_followers_async(defaults.BRIDGE_STATE_PATH, dead_pids)
     if reaped_sessions:
         log.warning(
             "octowright.housekeeping.reaped_dead_follower_sessions",

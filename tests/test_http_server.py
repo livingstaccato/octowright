@@ -667,6 +667,43 @@ def test_session_video_returns_file(client: TestClient, isolated_recordings: Pat
     r = client.get("/api/sessions/videxists01/video")
     assert r.status_code == 200
     assert r.content == b"WEBMDATA"
+    assert "cache-control" not in r.headers
+
+
+def test_paired_session_video_is_not_cacheable_and_still_supports_range(
+    client: TestClient,
+    isolated_recordings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video = isolated_recordings / "videos" / "paired.webm"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"0123456789")
+    name = "20260101T000000Z-chromium-vidpaired001.jsonl"
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {"action": "close", "video_path": str(video)},
+    ]
+    (isolated_recordings / name).write_text("".join(json.dumps(row) + "\n" for row in rows))
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
+    pairing = client.app.state.dashboard_pairing
+    grant = pairing.redeem_code(pairing.mint_code())
+    assert grant is not None
+
+    response = client.get(
+        "/api/sessions/vidpaired001/video",
+        headers={
+            "Authorization": f"Bearer {grant.bearer}",
+            "Range": "bytes=2-5",
+        },
+    )
+
+    assert response.status_code == 206
+    assert response.content == b"2345"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert {item.strip().lower() for item in response.headers["vary"].split(",")} == {
+        "authorization",
+        "x-octowright-token",
+    }
 
 
 def test_session_markdown_returns_file(client: TestClient, isolated_recordings: Path) -> None:
@@ -812,6 +849,32 @@ def test_session_trace_returns_file(client: TestClient, isolated_recordings: Pat
     r = client.get("/api/sessions/tracehas01x0/trace")
     assert r.status_code == 200
     assert r.content.startswith(b"PK")
+
+
+def test_pairing_protected_non_video_files_are_not_cache_reusable(
+    client: TestClient, isolated_recordings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = "20260101T000000Z-chromium-pairedfiles01"
+    (isolated_recordings / f"{name}.jsonl").write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    (isolated_recordings / f"{name}.trace.zip").write_bytes(b"PK\x03\x04PAIR")
+    (isolated_recordings / "pairedfiles01-shot.png").write_bytes(_TINY_PNG)
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
+    pairing = client.app.state.dashboard_pairing
+    grant = pairing.redeem_code(pairing.mint_code())
+    assert grant is not None
+    headers = {"Authorization": f"Bearer {grant.bearer}"}
+
+    for path in (
+        "/api/sessions/pairedfiles01/trace",
+        "/api/sessions/pairedfiles01/screenshots/pairedfiles01-shot.png",
+    ):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "private, no-store"
+        assert {item.strip().lower() for item in response.headers["vary"].split(",")} == {
+            "authorization",
+            "x-octowright-token",
+        }
 
 
 def test_screenshots_listing(client: TestClient, isolated_recordings: Path) -> None:

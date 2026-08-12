@@ -364,7 +364,7 @@ async def _run_leader(
     _reap_orphan_session_dirs(no_singleton)
     # Sweep browsers orphaned by a previous (dead) leader generation before this
     # leader brings its own pool up.
-    reap_orphan_browsers_at_boot(log=_log)
+    await _asyncio.to_thread(reap_orphan_browsers_at_boot, log=_log)
 
     # First run after an update: announce "what's new" (octowright.upgrade) — records
     # the notice for octowright_status and echoes a banner (human terminal inline, log otherwise).

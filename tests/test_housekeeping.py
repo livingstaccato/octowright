@@ -18,6 +18,14 @@ import pytest
 from octowright import housekeeping
 
 
+@pytest.fixture(autouse=True)
+def _isolate_session_manifest(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Boot-cleanup tests must never prune the developer's real manifest."""
+    from octowright import session_manifest
+
+    monkeypatch.setattr(session_manifest, "SESSION_MANIFEST_PATH", tmp_path / "session-manifest.json")
+
+
 def _reaper_returning(monkeypatch: pytest.MonkeyPatch, summary: dict) -> None:
     from octowright import process_reaper
 
@@ -46,10 +54,38 @@ def test_reap_at_boot_swallows_reaper_failure(monkeypatch: pytest.MonkeyPatch) -
         raise RuntimeError("ps blew up")
 
     monkeypatch.setattr(process_reaper, "reap_orphan_browsers", _boom)
+    prune = MagicMock()
+    monkeypatch.setattr(housekeeping, "_prune_dead_daemon_manifest_entries", prune)
     log = MagicMock()
     housekeeping.reap_orphan_browsers_at_boot(log=log)  # must not raise
     log.warning.assert_called_once()
     assert log.warning.call_args.args[0] == "octowright.boot.orphan_reap_failed"
+    prune.assert_called_once_with(log=log)
+
+
+def test_reap_at_boot_keeps_manifest_diagnostic_for_surviving_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reaper_returning(
+        monkeypatch,
+        {
+            "killed": [],
+            "still_alive": [2000],
+            "errors": [{"pid": "2000", "stage": "sigkill", "error": "denied"}],
+        },
+    )
+    prune = MagicMock()
+    monkeypatch.setattr(housekeeping, "_prune_dead_daemon_manifest_entries", prune)
+    log = MagicMock()
+
+    housekeeping.reap_orphan_browsers_at_boot(log=log)
+
+    prune.assert_not_called()
+    log.warning.assert_called_once_with(
+        "octowright.boot.orphan_reap_incomplete",
+        still_alive=[2000],
+        errors=[{"pid": "2000", "stage": "sigkill", "error": "denied"}],
+    )
 
 
 def test_start_housekeeping_task_disabled_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
