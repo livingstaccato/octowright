@@ -61,7 +61,10 @@ vi.mock("./live-preview.js", () => ({
 // but we don't need to inspect their output here.
 vi.mock("./console-panel.js", () => ({ renderConsolePanel: vi.fn() }));
 vi.mock("./downloads-panel.js", () => ({ renderDownloadsPanel: vi.fn() }));
-vi.mock("./screenshots-panel.js", () => ({ renderScreenshotsPanel: vi.fn() }));
+vi.mock("./screenshots-panel.js", () => ({
+  disposeScreenshotsPanel: vi.fn(),
+  renderScreenshotsPanel: vi.fn(),
+}));
 vi.mock("./timeline.js", () => ({
   renderTimeline: vi.fn(),
   appendTimelineEvents: vi.fn(),
@@ -370,7 +373,13 @@ describe("bootSession — closed session", () => {
     const getSession = await getMockedGetSession();
     getSession.mockResolvedValueOnce(makeDetail());
     const { mountLivePreview } = await import("./live-preview.js");
-    const livePreviewHandle = { start: vi.fn(), stop: vi.fn(), destroy: vi.fn(), markClosed: vi.fn(), setInterval: vi.fn() };
+    const livePreviewHandle = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      destroy: vi.fn(),
+      markClosed: vi.fn(),
+      setInterval: vi.fn(),
+    };
     (mountLivePreview as ReturnType<typeof vi.fn>).mockReturnValueOnce(livePreviewHandle);
 
     await bootSession(root, "sess-unload");
@@ -439,8 +448,7 @@ describe("bootSession — live session", () => {
     const { mountLivePreview } = await import("./live-preview.js");
 
     // Capture the onMessage callback so we can drive it.
-    let capturedOnMessage: ((msg: { events: unknown[]; cursor: number; complete?: boolean }) => void) | null =
-      null;
+    let capturedOnMessage: ((msg: { events: unknown[]; cursor: number; complete?: boolean }) => void) | null = null;
     (openTail as ReturnType<typeof vi.fn>).mockImplementationOnce(
       (_url: string, opts: { onMessage: typeof capturedOnMessage }) => {
         capturedOnMessage = opts.onMessage;
@@ -448,7 +456,13 @@ describe("bootSession — live session", () => {
       },
     );
 
-    const livePreviewHandle = { start: vi.fn(), stop: vi.fn(), destroy: vi.fn(), markClosed: vi.fn(), setInterval: vi.fn() };
+    const livePreviewHandle = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      destroy: vi.fn(),
+      markClosed: vi.fn(),
+      setInterval: vi.fn(),
+    };
     (mountLivePreview as ReturnType<typeof vi.fn>).mockReturnValueOnce(livePreviewHandle);
 
     await bootSession(root, "sess-live2", {});
@@ -548,7 +562,9 @@ describe("bootSession — live session", () => {
     const { openTail } = await import("./tail.js");
 
     await bootSession(root, "sess-live4", {});
-    const tailHandle = (openTail as ReturnType<typeof vi.fn>).mock.results.at(-1)?.value as { close: ReturnType<typeof vi.fn> };
+    const tailHandle = (openTail as ReturnType<typeof vi.fn>).mock.results.at(-1)?.value as {
+      close: ReturnType<typeof vi.fn>;
+    };
     window.dispatchEvent(new Event("beforeunload"));
 
     expect(tailHandle.close).toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { screencastWsUrl } from "./api.js";
+import { setDashboardBearer } from "./dashboard-auth.js";
 import { openScreencast } from "./live-preview-screencast.js";
 
 class FakeWS {
@@ -7,7 +8,10 @@ class FakeWS {
   binaryType: BinaryType = "arraybuffer";
   close = vi.fn();
 
-  constructor(readonly url = "") {}
+  constructor(
+    readonly url = "",
+    readonly protocols?: string | string[],
+  ) {}
 
   addEventListener(type: string, cb: EventListener) {
     const listeners = this.listeners[type] ?? [];
@@ -23,8 +27,8 @@ class FakeWS {
 
 function webSocketCtorRecording(instances: FakeWS[]): typeof WebSocket {
   return class extends FakeWS {
-    constructor(url: string) {
-      super(url);
+    constructor(url: string, protocols?: string | string[]) {
+      super(url, protocols);
       instances.push(this);
     }
   } as unknown as typeof WebSocket;
@@ -57,6 +61,19 @@ describe("openScreencast", () => {
       webSocketCtor: webSocketCtorRecording(instances),
     });
     expect(instances[0]?.binaryType).toBe("blob");
+  });
+
+  it("passes stable and credential protocols without putting the bearer in the URL", () => {
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "cast-secret", expires_at: Date.now() / 1000 + 60 });
+    const instances: FakeWS[] = [];
+    openScreencast("ws://x/screencast", {
+      onFrame: () => {},
+      webSocketCtor: webSocketCtorRecording(instances),
+    });
+    expect(instances[0]?.url).not.toContain("cast-secret");
+    expect(instances[0]?.protocols).toEqual(["octowright.dashboard", "octowright.dashboard.bearer.cast-secret"]);
+    sessionStorage.clear();
   });
 
   it("delivers binary frames as Blobs", () => {
