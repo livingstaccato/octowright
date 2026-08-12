@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Pairing endpoints: mint (token-authed), redeem (ticket → cookie), /pair page.
+"""Pairing endpoints: mint, one-time-code redemption, and SPA bootstrap.
 
 See ``octowright.http.pairing`` for the threat model and full flow. These
 routes are ``pairing_exempt`` (they *are* the bootstrap) but still sit behind
@@ -12,80 +12,66 @@ the loopback/Host/cross-origin guard like every sensitive route.
 
 from __future__ import annotations
 
-import json
-
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from octowright.http.bridge_auth import header_token_ok
+from octowright.http import state
 from octowright.http.exposure import guard_sensitive_http
-from octowright.http.pairing import PAIRING, SESSION_COOKIE, TICKET_TTL_SECONDS
-
-_PAIR_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>octowright — pair</title></head>
-<body style="font-family:system-ui;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0">
-<div id="msg" style="max-width:38rem;text-align:center;line-height:1.5">Pairing&hellip;</div>
-<script>
-const t = location.hash.slice(1);
-const msg = document.getElementById("msg");
-// Scrub the ticket from the address bar immediately, success or fail.
-history.replaceState(null, "", "/pair");
-if (!t) {
-  msg.textContent = "No pairing ticket in the URL fragment. Run `octowright dashboard` " +
-    "and open the FULL printed URL (including everything after the #).";
-} else {
-  fetch("/api/pair/redeem", {
-    method: "POST",
-    headers: {"content-type": "application/json"},
-    body: JSON.stringify({ticket: t}),
-  }).then((r) => {
-    if (r.ok) { location.replace("/"); return; }
-    msg.textContent = "Pairing failed (" + r.status + "). Tickets are single-use and expire " +
-      "quickly — run `octowright dashboard` again for a fresh URL.";
-  }).catch((e) => { msg.textContent = "Pairing failed: " + e; });
-}
-</script>
-</body></html>
-"""
+from octowright.http.pairing import PAIR_CODE_TTL_SECONDS, dashboard_pairing_state
+from octowright.http.routes._common import _read_json_body
 
 
 async def pair_mint(request: Request) -> Response:
     """Mint a single-use pairing ticket. Requires the capability token — the
     same credential the follower presents on /mcp — so only a process that can
     read the 0600 lockfile (the `octowright dashboard` CLI) can mint."""
-    expected = PAIRING.expected_token
-    if not expected:
+    pairing = dashboard_pairing_state(request)
+    if pairing is None or not pairing.token_configured:
         # Inline (--no-singleton) leader: no lockfile, no token — there is no
         # authenticated minter, so refuse rather than fail open.
         return JSONResponse(
             {"error": "pairing unavailable: this leader has no capability token (inline/--no-singleton mode)"},
             status_code=503,
         )
-    if not header_token_ok(request.headers.get("x-octowright-token"), expected):
+    if not pairing.capability_token_ok(request.headers.get("x-octowright-token")):
         return JSONResponse({"error": "missing or invalid X-Octowright-Token"}, status_code=403)
-    ticket = PAIRING.mint_ticket()
-    return JSONResponse({"ok": True, "ticket": ticket, "expires_in": int(TICKET_TTL_SECONDS)})
+    code = pairing.mint_code()
+    return JSONResponse(
+        {"code": code, "expires_in": int(PAIR_CODE_TTL_SECONDS)},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def pair_redeem(request: Request) -> Response:
-    """Consume a ticket and set the HttpOnly session cookie."""
-    try:
-        body = json.loads(await request.body())
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-    ticket = body.get("ticket") if isinstance(body, dict) else None
-    bearer = PAIRING.redeem_ticket(ticket) if isinstance(ticket, str) and ticket else None
-    if bearer is None:
-        return JSONResponse({"error": "invalid or expired ticket"}, status_code=403)
-    response = JSONResponse({"ok": True})
-    # No Secure flag: the dashboard is plain-HTTP on loopback by design.
-    response.set_cookie(SESSION_COOKIE, bearer, httponly=True, samesite="strict", path="/")
-    return response
+    """Consume a code and return an origin-scoped browser bearer once."""
+    body, error = await _read_json_body(request)
+    if error is not None:
+        return error
+    code = body.get("code") if isinstance(body, dict) else None
+    pairing = dashboard_pairing_state(request)
+    grant = pairing.redeem_code(code) if pairing is not None and isinstance(code, str) else None
+    if grant is None:
+        return JSONResponse(
+            {"error": "invalid or expired pairing code"},
+            status_code=403,
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        {"bearer": grant.bearer, "expires_at": grant.expires_at},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def pair_page(_request: Request) -> Response:
-    return HTMLResponse(_PAIR_HTML)
+    target = state.FRONTEND_DIR / "index.html"
+    if not target.exists():
+        return HTMLResponse(
+            "<!doctype html><meta charset=utf-8><title>octowright pairing</title>"
+            "<p>Dashboard frontend not bundled. Run <code>npm run build</code>.</p>",
+            headers={"Cache-Control": "no-store"},
+        )
+    return FileResponse(str(target), media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 def routes() -> list[Route]:

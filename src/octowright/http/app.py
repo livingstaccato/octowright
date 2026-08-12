@@ -152,12 +152,11 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     """
     global _session_tracker
 
-    # Stamp the capability token on the pairing state: /api/pair/mint requires
-    # it, and dashboard_access_ok accepts it as the header alternative to the
-    # session cookie (see octowright.http.pairing).
-    from octowright.http.pairing import PAIRING
+    # Pairing credentials belong to this app instance. A new leader/app gets a
+    # fresh state and therefore invalidates every prior code and bearer.
+    from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState
 
-    PAIRING.set_expected_token(mcp_token)
+    dashboard_pairing = DashboardPairingState(expected_token=mcp_token)
 
     routes: list[Any] = list(all_routes(mcp_token=mcp_token))
 
@@ -219,6 +218,7 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.octowright_http_host = host
+    setattr(app.state, DASHBOARD_STATE_ATTR, dashboard_pairing)
     # provide.telemetry's ASGI middleware handles HTTP observability uniformly with
     # the rest of octowright: RED metrics (http.requests/errors/duration), request-id
     # / session-id log correlation, W3C trace propagation, and cardinality-safe route
