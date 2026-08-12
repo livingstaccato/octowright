@@ -101,17 +101,21 @@ def remove_session(session_id: str, path: Path | None = None) -> bool:
 
 
 def _pid_alive(pid: int) -> bool:
-    """True if a process with ``pid`` exists (signal 0 probes without killing)."""
+    """True if the OS still has a process with this PID.
+
+    Delegates to :func:`octowright.singleton.pid_is_alive`, which handles the
+    Windows case properly: there ``os.kill(pid, 0)`` raises ``OSError``
+    (WinError 87) for a dead PID rather than ``ProcessLookupError``, so a naive
+    probe reports every dead daemon as alive and nothing is ever pruned.
+    Failing closed (treating an unknown PID as alive) keeps a stale entry,
+    which is the harmless direction.
+    """
+    from octowright.singleton import pid_is_alive
+
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Exists but owned by another user — alive for our purposes.
+        return pid_is_alive(pid)
+    except Exception:
         return True
-    except OSError:
-        return True
-    return True
 
 
 def prune_dead_daemon_entries(current_pid: int | None = None, path: Path | None = None) -> list[str]:
