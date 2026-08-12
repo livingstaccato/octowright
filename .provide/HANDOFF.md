@@ -226,8 +226,15 @@ H4b/H4a default OFF, so default behavior is unchanged except: status now exposes
 - [ ] (Optional) To exercise H4a live: `OCTOWRIGHT_DRIVER_RELAUNCH=new-id`, kill the driver
       (`await pool._pw.stop()` / the chaos test), confirm lost sessions reopen + `status.pool.lost_sessions`
       maps old→new. keep-id: confirm the original id still resolves after self-heal.
-- [ ] Minor (pre-existing, not from this round): stale manifest entries in status (`uwarp-*`, old demos)
-      clear with `octowright cleanup`; validate `OCTOWRIGHT_MAX_BROWSERS=32` against peak load.
+- [x] Stale manifest entries DONE (2026-08-12). NOTE: the claim that `octowright cleanup` clears them was
+      WRONG — cleanup prunes recording FILES by age and never touches session-manifest.json. Root cause:
+      `remove_session` only runs on graceful close, so every SIGKILL (`octowright restart`, crash) strands
+      the whole open set; observed 16 entries, 10 from five dead daemons. Fixed by
+      `session_manifest.prune_dead_daemon_entries`, called at leader boot right after the orphan-browser
+      reap (`housekeeping._prune_dead_daemon_manifest_entries`). Orphanhood keys on the recorded
+      `daemon_pid` being provably dead, NOT on pool-absence (the pool is empty at boot, so that would flag
+      everything); conservative — an unknown/alive pid keeps the entry.
+- [ ] Validate `OCTOWRIGHT_MAX_BROWSERS=32` against peak multi-client load; raise if launches start refusing.
 - All P0–P5 + H1/H2/H3/H5a + H4a/H4b/H5b are now done. No deferred hardening items remain.
 
 ---
