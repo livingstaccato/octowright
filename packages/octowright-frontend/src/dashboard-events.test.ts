@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DashboardEventStreamOptions } from "./dashboard-events.js";
 import type { SessionListResponse, SessionSummary } from "./types.js";
 
 const emptySessions = { live: [], closed: [] };
@@ -20,16 +21,33 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("./api.js", () => apiMocks);
 
+const dashboardEventMocks = vi.hoisted(() => ({
+  openDashboardEventStream: vi.fn(),
+}));
+
+vi.mock("./dashboard-events.js", () => dashboardEventMocks);
+
 const dashboard = await import("./dashboard.js");
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   listeners: Record<string, ((event: MessageEvent) => void)[]> = {};
-  onerror: ((event: Event) => void) | null = null;
+  onerror: ((event: Event) => void) | null;
   close = vi.fn();
+  readonly url = "/api/dashboard/events";
 
-  constructor(readonly url: string) {
+  constructor(
+    readonly options: DashboardEventStreamOptions,
+    open = true,
+  ) {
     FakeEventSource.instances.push(this);
+    this.listeners.invalidate = [
+      (event: MessageEvent) => {
+        this.options.onInvalidate(event?.data);
+      },
+    ];
+    this.onerror = (event) => this.options.onError?.(event);
+    if (open) this.options.onOpen?.();
   }
 
   addEventListener(type: string, listener: (event: MessageEvent) => void): void {
@@ -81,6 +99,9 @@ describe("bootDashboard dashboard invalidation stream", () => {
     vi.useFakeTimers();
     resetApiMocks();
     FakeEventSource.instances = [];
+    dashboardEventMocks.openDashboardEventStream
+      .mockReset()
+      .mockImplementation((options: DashboardEventStreamOptions) => new FakeEventSource(options));
     root = document.createElement("div");
     document.body.append(root);
   });
@@ -92,12 +113,12 @@ describe("bootDashboard dashboard invalidation stream", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens the dashboard event stream when EventSource exists", async () => {
+  it("opens the authenticated fetch dashboard event stream", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
 
     await dashboard.bootDashboard(root);
 
-    expect(apiMocks.dashboardEventsUrl).toHaveBeenCalledTimes(1);
+    expect(dashboardEventMocks.openDashboardEventStream).toHaveBeenCalledTimes(1);
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0]?.url).toBe("/api/dashboard/events");
     expect(vi.getTimerCount()).toBe(0);
@@ -259,9 +280,7 @@ describe("bootDashboard dashboard invalidation stream", () => {
 
   it("rebuilds the live-browsers body on a sessions-scoped invalidation", async () => {
     // Counterpart to the test above: the matching scope's body IS replaced.
-    apiMocks.getSessions
-      .mockResolvedValueOnce(emptySessions)
-      .mockResolvedValueOnce(sessionsWith("s1"));
+    apiMocks.getSessions.mockResolvedValueOnce(emptySessions).mockResolvedValueOnce(sessionsWith("s1"));
     vi.stubGlobal("EventSource", FakeEventSource);
     await dashboard.bootDashboard(root);
 
@@ -352,8 +371,10 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(apiMocks.getMacros).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps polling when EventSource is missing", async () => {
-    vi.stubGlobal("EventSource", undefined);
+  it("keeps polling until the fetch event stream opens", async () => {
+    dashboardEventMocks.openDashboardEventStream.mockImplementationOnce(
+      (options: DashboardEventStreamOptions) => new FakeEventSource(options, false),
+    );
     await dashboard.bootDashboard(root);
     expect(apiMocks.getSessions).toHaveBeenCalledTimes(1);
 
@@ -362,7 +383,7 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
   });
 
-  it("closes a failed EventSource and continues polling", async () => {
+  it("keeps the reconnecting fetch stream open and polls after an error", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     await dashboard.bootDashboard(root);
     const source = FakeEventSource.instances[0];
@@ -370,7 +391,7 @@ describe("bootDashboard dashboard invalidation stream", () => {
     source?.onerror?.(new Event("error"));
     await vi.advanceTimersByTimeAsync(5000);
 
-    expect(source?.close).toHaveBeenCalledTimes(1);
+    expect(source?.close).toHaveBeenCalledTimes(0);
     expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
   });
 

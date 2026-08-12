@@ -7,16 +7,14 @@
 // macro-editor, macro-renderers, macro-list, session-table,
 // scenario-panels, persona-grid, dashboard-state, dashboard-panels).
 
-import { dashboardEventsUrl, deleteRecording, getPersonaSizes, relaunchSession, startScenario } from "./api.js";
-import { mountPanels, updatePanels } from "./dashboard-panels.js";
+import { deleteRecording, getPersonaSizes, relaunchSession, startScenario } from "./api.js";
+import { bootstrapDashboardAuth, DASHBOARD_AUTH_REQUIRED_EVENT } from "./dashboard-auth.js";
+import type { DashboardEventStreamHandle } from "./dashboard-events.js";
+import { openDashboardEventStream } from "./dashboard-events.js";
 import type { PanelDef, PanelInstance } from "./dashboard-panels.js";
-import {
-  EMPTY_STATE,
-  loadState,
-  parseInvalidateScopes,
-  refreshScopedState,
-} from "./dashboard-state.js";
+import { mountPanels, updatePanels } from "./dashboard-panels.js";
 import type { DashboardScope, DashboardState } from "./dashboard-state.js";
+import { EMPTY_STATE, loadState, parseInvalidateScopes, refreshScopedState } from "./dashboard-state.js";
 import { openMacroEditor, openMacroRepairPreview } from "./macro-editor.js";
 import { renderMacroList } from "./macro-list.js";
 import { openPersonaEditor } from "./persona-editor.js";
@@ -40,15 +38,15 @@ const DASHBOARD_SCOPE_LABELS: ReadonlyArray<[DashboardScope, string]> = [
 export type DashboardDisposer = () => void;
 export type DashboardPanel = PanelInstance<DashboardScope, DashboardState>;
 
+export type { DashboardScope, DashboardState } from "./dashboard-state.js";
+export { loadState } from "./dashboard-state.js";
+export { formatBytes } from "./format.js";
+export { openMacroRepairPreview } from "./macro-editor.js";
+export { openPersonaEditor } from "./persona-editor.js";
 // ─── re-exports for the public package surface ───────────────────────────────
 // These aren't shims; they're the dashboard-package barrel. Each implementation
 // lives in its own per-concern module above.
 export { showSnackbar } from "./snackbar.js";
-export { openPersonaEditor } from "./persona-editor.js";
-export { openMacroRepairPreview } from "./macro-editor.js";
-export { formatBytes } from "./format.js";
-export { loadState } from "./dashboard-state.js";
-export type { DashboardScope, DashboardState } from "./dashboard-state.js";
 
 // ─── persona-size cache (used by the persona panel) ──────────────────────────
 
@@ -159,8 +157,7 @@ const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
     scope: "scenarios",
     testid: "saved-scenarios",
     title: "Saved scenarios",
-    buildBody: (s) =>
-      renderSavedScenarios(s.scenarios.saved ?? [], (name) => void startSavedScenario(name)),
+    buildBody: (s) => renderSavedScenarios(s.scenarios.saved ?? [], (name) => void startSavedScenario(name)),
   },
   {
     scope: "sessions",
@@ -240,9 +237,10 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   dashboardRoot = root;
   log.info({ event: "dashboard_boot_start" });
   initTelemetry({ pageName: "dashboard" });
+  await bootstrapDashboardAuth();
   loadPersonaSizes();
   let disposed = false;
-  let source: EventSource | null = null;
+  let source: DashboardEventStreamHandle | null = null;
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
   dashboardCurrentState = EMPTY_STATE;
   let streamHealthy = false;
@@ -276,13 +274,15 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   };
 
   const tick = (scopes: ReadonlySet<DashboardScope> | null = null): Promise<void> => {
-    pendingTick = pendingTick.then(() => runTick(scopes)).catch((err: unknown) => {
-      log.warn({ event: "dashboard_tick_failed", error: String(err) });
-      if (!refreshErrorShown) {
-        showSnackbar(`Dashboard refresh failed: ${String(err)}`, true);
-        refreshErrorShown = true;
-      }
-    });
+    pendingTick = pendingTick
+      .then(() => runTick(scopes))
+      .catch((err: unknown) => {
+        log.warn({ event: "dashboard_tick_failed", error: String(err) });
+        if (!refreshErrorShown) {
+          showSnackbar(`Dashboard refresh failed: ${String(err)}`, true);
+          refreshErrorShown = true;
+        }
+      });
     return pendingTick;
   };
 
@@ -301,25 +301,29 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
     }, REFRESH_MS);
   };
 
+  const authRequired = (): void => {
+    showSnackbar("Dashboard pairing expired. Run `octowright dashboard` and open the new URL.", true);
+  };
+  window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
+
   await tick();
-  if (typeof EventSource !== "undefined") {
-    source = new EventSource(dashboardEventsUrl());
-    streamHealthy = true;
-    const refreshFromStream = (event?: MessageEvent) => {
-      const scopes = parseInvalidateScopes(event?.data);
+  source = openDashboardEventStream({
+    onOpen: () => {
+      streamHealthy = true;
+      stopPolling();
+    },
+    onInvalidate: (data) => {
+      const scopes = parseInvalidateScopes(data);
       tick(scopes).catch((err: unknown) => {
         log.warn({ event: "dashboard_stream_refresh_failed", error: String(err) });
       });
-    };
-    source.addEventListener("invalidate", refreshFromStream);
-    source.onerror = () => {
+    },
+    onError: () => {
       log.warn({ event: "dashboard_stream_error" });
-      source?.close();
-      source = null;
       streamHealthy = false;
       startPolling();
-    };
-  }
+    },
+  });
   if (!streamHealthy) {
     startPolling();
   }
@@ -329,6 +333,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
     source?.close();
     source = null;
     stopPolling();
+    window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
     if (dashboardRoot === root) {
       dashboardRoot = null;
       dashboardPanels = null;

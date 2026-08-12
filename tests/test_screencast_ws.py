@@ -255,7 +255,8 @@ async def test_screencast_endpoint_releases_viewer_when_streaming_fails(
             self.accepted = False
             self.closed: tuple[int, str] | None = None
 
-        async def accept(self) -> None:
+        async def accept(self, *, subprotocol: str | None = None) -> None:
+            assert subprotocol is None
             self.accepted = True
 
         async def close(self, *, code: int = 1000, reason: str | None = None) -> None:

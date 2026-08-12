@@ -3,16 +3,16 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Opt-in dashboard pairing: ticket/session store, access decision, routes.
+"""Opt-in dashboard pairing: code/bearer store, access decision, routes.
 
 The browser-facing dashboard surface (/api/sessions, media, events, /tail WS,
 persona/scenario/macro writes) is loopback-Host-gated only — a *different-user*
 or *sandboxed* loopback process can read live JSONL and drive writes. Embedding
 the capability token in the served page would leak it to any loopback fetcher,
 so the token instead reaches the human out-of-band: `octowright dashboard`
-(same-user, reads the 0600 lockfile) mints a single-use short-TTL ticket and
-prints ``/pair#<ticket>`` to the tty; the /pair page redeems the ticket for an
-HttpOnly session cookie. ``OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`` is OFF by
+(same-user, reads the 0600 lockfile) mints a single-use short-TTL code and
+prints ``/pair#<code>`` to the tty; the /pair page redeems the code for an
+origin-scoped bearer held in sessionStorage. ``OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`` is OFF by
 default (back-compat); everything here must be a no-op when it is off.
 """
 
@@ -73,7 +73,7 @@ def _request(
     return Request(scope, receive)
 
 
-# --- ticket / session store ---------------------------------------------------
+# --- code / bearer store ------------------------------------------------------
 
 
 class _Clock:
@@ -430,7 +430,7 @@ def test_dashboard_websockets_negotiate_only_stable_protocol(
 
 
 def test_new_tab_exempt_from_pairing(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Launched browsers land on /new-tab with no cookie; pairing must not break them.
+    # Launched browsers land on /new-tab with no bearer; pairing must not break them.
     monkeypatch.setenv(_ENV, "1")
     with _client() as client:
         assert client.get("/new-tab").status_code == 200

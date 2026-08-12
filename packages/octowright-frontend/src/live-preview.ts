@@ -1,6 +1,7 @@
 // Live preview panel: streams live browser frames over a single WebSocket.
 
 import { liveScreenshotUrl, screencastWsUrl } from "./api.js";
+import { fetchDashboardMediaObjectUrl, getDashboardBearer } from "./dashboard-auth.js";
 import { attachFullscreen, type FullscreenMode } from "./live-preview-fullscreen.js";
 import { openScreencast, type ScreencastHandle } from "./live-preview-screencast.js";
 import { getLogger } from "./telemetry.js";
@@ -16,6 +17,8 @@ export interface LivePreviewOptions {
   fullscreenMode?: FullscreenMode;
   /** Inject a WebSocket constructor for tests. */
   webSocketCtor?: typeof WebSocket;
+  /** Inject fetch for authenticated screenshot fallback requests. */
+  mediaFetch?: typeof fetch;
   /** Deprecated compatibility option ignored by the screencast stream. */
   intervalMs?: number;
   /** Deprecated compatibility option ignored by the screencast stream. */
@@ -50,6 +53,7 @@ interface InternalState {
   fallbackErrors: number;
   /** Detaches the in-flight tick's load/error listeners. */
   fallbackCleanup: (() => void) | null;
+  fallbackAbort: AbortController | null;
   generation: number;
   expectedCloseGeneration: number | null;
   destroyed: boolean;
@@ -93,6 +97,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     fallbackInflight: false,
     fallbackErrors: 0,
     fallbackCleanup: null,
+    fallbackAbort: null,
     generation: 0,
     expectedCloseGeneration: null,
     destroyed: false,
@@ -168,6 +173,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   const errorIndicator = document.createElement("span");
   errorIndicator.className = "live-preview__error";
   errorIndicator.setAttribute("data-testid", "live-preview-error");
+  errorIndicator.setAttribute("role", "status");
   errorIndicator.style.display = "none";
 
   toolbar.append(playBtn, fullscreenBtn, lastUpdate, errorIndicator, badge);
@@ -231,7 +237,9 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       clearTimeout(state.fallbackTimer);
       state.fallbackTimer = null;
     }
+    state.fallbackAbort?.abort();
     state.fallbackCleanup?.();
+    state.fallbackAbort = null;
     state.fallbackActive = false;
     state.fallbackInflight = false;
     state.fallbackErrors = 0;
@@ -265,6 +273,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     const cleanup = (): void => {
       state.fallbackInflight = false;
       state.fallbackCleanup = null;
+      state.fallbackAbort = null;
       img.removeEventListener("load", onLoad);
       img.removeEventListener("error", onError);
     };
@@ -289,10 +298,45 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     state.fallbackCleanup = cleanup;
     img.addEventListener("load", onLoad);
     img.addEventListener("error", onError);
-    img.src = liveScreenshotUrl(opts.sessionId, {
+    const screenshotUrl = liveScreenshotUrl(opts.sessionId, {
       format: opts.format ?? "png",
       cacheBust: Date.now(),
     });
+    if (getDashboardBearer() === null) {
+      img.src = screenshotUrl;
+      return;
+    }
+
+    const controller = new AbortController();
+    state.fallbackAbort = controller;
+    void fetchDashboardMediaObjectUrl(screenshotUrl, {
+      signal: controller.signal,
+      ...(opts.mediaFetch ? { fetchFn: opts.mediaFetch } : {}),
+    })
+      .then((nextUrl) => {
+        if (!state.fallbackActive || state.destroyed || state.closed || controller.signal.aborted) {
+          URL.revokeObjectURL(nextUrl);
+          cleanup();
+          return;
+        }
+        revokeObjectUrl(state);
+        state.objectUrl = nextUrl;
+        img.src = nextUrl;
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        cleanup();
+        state.fallbackErrors += 1;
+        errorIndicator.style.display = "";
+        errorIndicator.textContent = "screenshot fallback unavailable; keeping last frame";
+        log.warn({
+          event: "live_preview_fallback_fetch_error",
+          session_id: opts.sessionId,
+          consecutive_errors: state.fallbackErrors,
+          error: String(error),
+        });
+        scheduleFallbackTick(fallbackNextDelayMs());
+      });
   }
 
   const startFallbackPoll = (): void => {
@@ -313,10 +357,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     if (state.destroyed || state.closed || state.stream !== null || state.fallbackActive) return;
     state.generation += 1;
     const generation = state.generation;
-    const url = screencastWsUrl(
-      opts.sessionId,
-      opts.fps === undefined ? {} : { fps: opts.fps },
-    );
+    const url = screencastWsUrl(opts.sessionId, opts.fps === undefined ? {} : { fps: opts.fps });
     state.stream = openScreencast(url, {
       onFrame: (blob) => {
         if (state.destroyed || state.closed || state.generation !== generation) return;

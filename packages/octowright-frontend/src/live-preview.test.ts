@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setDashboardBearer } from "./dashboard-auth.js";
 import { mountLivePreview } from "./live-preview.js";
 
 class FakeWebSocket {
@@ -10,7 +11,10 @@ class FakeWebSocket {
   });
   readonly listeners = new Map<string, EventListener[]>();
 
-  constructor(readonly url: string) {
+  constructor(
+    readonly url: string,
+    readonly protocols?: string | string[],
+  ) {
     FakeWebSocket.instances.push(this);
   }
 
@@ -130,9 +134,7 @@ describe("mountLivePreview — live session", () => {
       fullscreenMode: "panel",
       webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
     });
-    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
-      '[data-testid="live-preview-fullscreen"]',
-    );
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-fullscreen"]');
     if (!fullscreenBtn) throw new Error("fullscreen button missing");
 
     fullscreenBtn.click();
@@ -149,9 +151,7 @@ describe("mountLivePreview — live session", () => {
       fullscreenMode: "panel",
       webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
     });
-    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
-      '[data-testid="live-preview-fullscreen"]',
-    );
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-fullscreen"]');
     if (!fullscreenBtn) throw new Error("fullscreen button missing");
 
     fullscreenBtn.click();
@@ -177,9 +177,7 @@ describe("mountLivePreview — live session", () => {
       fullscreenMode: "native",
       webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
     });
-    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
-      '[data-testid="live-preview-fullscreen"]',
-    );
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-fullscreen"]');
     if (!fullscreenBtn) throw new Error("fullscreen button missing");
 
     fullscreenBtn.click();
@@ -369,6 +367,33 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
   });
 
+  it("authenticates screenshot fallback, swaps blob URLs, and revokes on destroy", async () => {
+    vi.useFakeTimers();
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "frame-secret", expires_at: Date.now() / 1000 + 60 });
+    const fetchFn = vi.fn(async (_path: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer frame-secret");
+      return new Response(new Blob(["frame"]), { status: 200 });
+    });
+    const handle = mountLivePreview(container, {
+      sessionId: "live-auth-fallback",
+      isLive: true,
+      intervalMs: 1000,
+      mediaFetch: fetchFn,
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    handle.start();
+    FakeWebSocket.instances[0]?.emitClose(1011, "fallback", false);
+    await vi.runAllTicks();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(img?.src).toBe("blob:frame-1"));
+
+    handle.destroy();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:frame-1");
+    sessionStorage.clear();
+  });
+
   it("ignores late message and error callbacks after an unexpected close", () => {
     const handle = mountLive("live-stale-after-close");
     handle.start();
@@ -412,9 +437,7 @@ describe("mountLivePreview — live session", () => {
     handle.start();
     const ws = FakeWebSocket.instances[0];
     const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
-    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
-      '[data-testid="live-preview-fullscreen"]',
-    );
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-fullscreen"]');
     const badge = container.querySelector('[data-testid="live-preview-badge"]');
     const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
     if (!ws || !playBtn || !fullscreenBtn || !badge || !error) throw new Error("missing elements");
@@ -443,9 +466,7 @@ describe("mountLivePreview — live session", () => {
     const ws = FakeWebSocket.instances[0];
     const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
     const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
-    const fullscreenBtn = container.querySelector<HTMLButtonElement>(
-      '[data-testid="live-preview-fullscreen"]',
-    );
+    const fullscreenBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-fullscreen"]');
     const badge = container.querySelector('[data-testid="live-preview-badge"]');
     const timestamp = container.querySelector('[data-testid="live-preview-timestamp"]');
     const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');

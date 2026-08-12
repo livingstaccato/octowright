@@ -1,3 +1,4 @@
+import { dashboardWebSocketProtocols } from "./dashboard-auth.js";
 import { getLogger, wsConnectsCounter, wsMessagesCounter } from "./telemetry.js";
 import type { RecordingEvent } from "./types.js";
 
@@ -23,7 +24,8 @@ export interface TailOptions {
 
 export function openTail(url: string, opts: TailOptions): TailHandle {
   const Ctor = opts.webSocketCtor ?? WebSocket;
-  const ws = new Ctor(url);
+  const protocols = dashboardWebSocketProtocols();
+  const ws = protocols.length > 0 ? new Ctor(url, protocols) : new Ctor(url);
   log.info({ event: "ws_connecting", url });
   ws.addEventListener("open", () => {
     wsConnectsCounter.add(1, { kind: "tail" });

@@ -23,7 +23,7 @@ from octowright.http.routes._common import _read_json_body
 
 
 async def pair_mint(request: Request) -> Response:
-    """Mint a single-use pairing ticket. Requires the capability token — the
+    """Mint a single-use pairing code. Requires the capability token — the
     same credential the follower presents on /mcp — so only a process that can
     read the 0600 lockfile (the `octowright dashboard` CLI) can mint."""
     pairing = dashboard_pairing_state(request)

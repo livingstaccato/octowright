@@ -209,7 +209,7 @@ def guard_sensitive_http(
     ``pairing_exempt=True`` skips the opt-in dashboard-pairing check (see
     ``octowright.http.pairing``) — reserved for the pairing bootstrap routes
     themselves and for ``/new-tab``, which launched browsers must reach with
-    no cookie. Everything else gets the pairing gate automatically, so a new
+    no bearer. Everything else gets the pairing gate automatically, so a new
     route can't silently opt out."""
 
     @functools.wraps(handler)
