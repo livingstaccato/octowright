@@ -7,12 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from octowright.http.routes import events, health, mcp_events, media, meta, scenarios, screencast, sessions
+from octowright.http.routes import events, health, mcp_events, media, meta, pairing, scenarios, screencast, sessions
 
 
 def all_routes(*, mcp_token: str = "") -> list[Any]:
     routes: list[Any] = []
     routes.extend(health.routes())
+    routes.extend(pairing.routes())
     routes.extend(sessions.routes())
     routes.extend(events.routes())
     routes.extend(mcp_events.routes(mcp_token=mcp_token))

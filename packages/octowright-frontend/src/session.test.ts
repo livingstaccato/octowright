@@ -18,17 +18,19 @@ vi.mock("./api.js", async (importOriginal) => ({
   getEvents: getEventsMock,
 }));
 
+import { setDashboardBearer } from "./dashboard-auth.js";
 import {
   bootSession,
   buildLayout,
+  loadProtectedVideo,
+  renderCachePanel,
   renderFooter,
   renderHeader,
+  renderMarkdownPanel,
   renderTraceControls,
   renderVideo,
   sessionIdFromPath,
   setActiveTab,
-  renderMarkdownPanel,
-  renderCachePanel,
 } from "./session.js";
 import type { SessionDetail } from "./types.js";
 
@@ -77,6 +79,7 @@ function makeDetail(overrides: Partial<SessionDetail> = {}): SessionDetail {
 
 let root: HTMLDivElement;
 beforeEach(() => {
+  sessionStorage.clear();
   root = document.createElement("div");
   document.body.append(root);
 });
@@ -187,6 +190,35 @@ describe("renderVideo", () => {
     expect(v).not.toBeNull();
     expect(v?.src).toContain("/api/sessions/sess-1/video");
   });
+  it("does not expose the protected video URL when a dashboard bearer is active", () => {
+    setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
+    const refs = buildLayout(root);
+    const video = renderVideo(refs.videoSlot, makeDetail({ video_path: "/x.webm" }));
+    expect(video?.src).toBe("");
+  });
+  it("loads closed-session video through authenticated fetch and returns cleanup", async () => {
+    const refs = buildLayout(root);
+    const video = renderVideo(refs.videoSlot, makeDetail({ video_path: "/x.webm" }));
+    if (!video) throw new Error("video missing");
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:video"),
+      revokeObjectURL: vi.fn(),
+    });
+    const fetchFn = vi.fn(async () => new Response("video", { status: 200 }));
+    const cleanup = await loadProtectedVideo(refs.videoSlot, video, "sess-1", { fetchFn });
+    expect(video.src).toBe("blob:video");
+    cleanup();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:video");
+  });
+  it("renders an accessible error and preserves the element when video fetch fails", async () => {
+    const refs = buildLayout(root);
+    const video = renderVideo(refs.videoSlot, makeDetail({ video_path: "/x.webm" }));
+    if (!video) throw new Error("video missing");
+    const fetchFn = vi.fn(async () => new Response("no", { status: 500 }));
+    await expect(loadProtectedVideo(refs.videoSlot, video, "sess-1", { fetchFn })).rejects.toThrow();
+    expect(refs.videoSlot.querySelector('[role="alert"]')?.textContent).toContain("Video unavailable");
+  });
 });
 
 describe("renderTraceControls", () => {
@@ -215,8 +247,15 @@ describe("renderMarkdownPanel", () => {
   it("shows markdown download link when available", () => {
     const refs = buildLayout(root);
     renderMarkdownPanel(refs.markdownPanel, makeDetail({ markdown_path: "/tmp/session.md" }));
-    const link = refs.markdownPanel.querySelector("a[target='_blank']");
+    const link = refs.markdownPanel.querySelector("a[download]");
     expect(link?.getAttribute("href")).toBe("/api/sessions/sess-1/markdown");
+  });
+
+  it("does not expose a protected markdown URL to direct navigation", () => {
+    setDashboardBearer({ bearer: "markdown-secret", expires_at: Date.now() / 1000 + 60 });
+    const refs = buildLayout(root);
+    renderMarkdownPanel(refs.markdownPanel, makeDetail({ markdown_path: "/tmp/session.md" }));
+    expect(refs.markdownPanel.querySelector("a[download]")?.getAttribute("href")).toBe("#");
   });
 });
 
