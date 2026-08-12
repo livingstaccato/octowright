@@ -10,6 +10,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 from octowright_demos.models import DemoBundle
 
 
@@ -351,3 +352,23 @@ def test_regenerate_website_heroes_records_rewrites_and_syncs(monkeypatch, tmp_p
     }
     assert "website hero bundles regenerated: 1" in captured.out
     assert f"tutorial export root: {tutorial_root}" in captured.out
+
+
+def test_sync_bundle_artifacts_rejects_traversal_id(monkeypatch, tmp_path: Path) -> None:
+    """A demo bundle id that escapes the destination root via `..` must be
+    rejected before it reaches shutil.rmtree/copytree — otherwise a poisoned
+    demo.yaml id could delete/overwrite outside demo/tutorial-export."""
+    shared = _load_script(monkeypatch, "_shared")
+    dest = tmp_path / "tutorial-export" / "artifacts"
+    dest.mkdir(parents=True)
+    canary = tmp_path / "canary_dir"
+    canary.mkdir()
+    (canary / "keep.txt").write_text("do not delete", encoding="utf-8")
+
+    bundle = DemoBundle(id="../../canary_dir", title="Evil", root=tmp_path / "bundle")
+    (bundle.root / "artifacts").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="demo bundle id"):
+        shared._sync_bundle_artifacts(bundle, destination_root=dest)
+
+    assert (canary / "keep.txt").exists()

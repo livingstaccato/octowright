@@ -137,6 +137,28 @@ async def cleanup_failed_launch(
         )
 
 
+async def cancel_cleanup_after_register(pool: Any, instance_id: str) -> None:
+    """Cancellation AFTER the session was registered: atomically remove it from
+    the pool and tear it down. A registered session owns its resources, so the
+    ``registered``-gated cleanup skips it — but a cancelled launch never returns
+    the instance_id to the caller, so without this the live browser is an
+    orphan the caller can't address. Best-effort; logs but does not raise."""
+    async with pool._sessions_lock:
+        session = pool._sessions.pop(instance_id, None)
+    if session is None:
+        return  # a racing external-close eviction already removed it
+    try:
+        from octowright.session_manifest import remove_session as _manifest_remove_session
+
+        _manifest_remove_session(instance_id)
+    except Exception as exc:
+        log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
+    try:
+        await session.close()
+    except Exception as exc:
+        log.warning("octowright.launch.cancel_close_failed", instance_id=instance_id, error=repr(exc))
+
+
 def build_launch_result(
     *,
     instance_id: str,
@@ -380,10 +402,10 @@ async def post_context_setup(
             log_path=str(log_path),
         )
 
-        from octowright.session.core_page_mixin import _reject_unsafe_url
-
+        # target_url is validated before allocation in BrowserPool._launch_impl,
+        # so by here it is known-safe; a goto failure is a real navigation error
+        # (logged + returned as nav_warning), not a policy rejection.
         nav_error: str | None = None
-        _reject_unsafe_url(target_url)
         try:
             await page.goto(target_url)
         except Exception as _nav_exc:
@@ -425,14 +447,17 @@ async def post_context_setup(
             result["nav_warning"] = nav_error
         return result
     except asyncio.CancelledError:
-        await cleanup_failed_launch(
-            registered=registered,
-            context=context,
-            browser=browser,
-            video_dir=video_dir,
-            recorder=recorder,
-            pre_register=False,
-        )
+        if registered:
+            await cancel_cleanup_after_register(pool, instance_id)
+        else:
+            await cleanup_failed_launch(
+                registered=registered,
+                context=context,
+                browser=browser,
+                video_dir=video_dir,
+                recorder=recorder,
+                pre_register=False,
+            )
         raise
     except Exception as exc:
         await cleanup_failed_launch(

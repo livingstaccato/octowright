@@ -250,22 +250,24 @@ def test_resolve_credential_no_refs_message_mentions_persona_yaml_path(monkeypat
 # ---------------------------------------------------------------------------
 
 
-def test_exec_credential_cmd_truncates_stderr_at_200_chars(monkeypatch):
-    """Mutation: removing or growing the [:200] slice would change error length."""
+def test_exec_credential_cmd_suppresses_stderr_content(monkeypatch):
+    """A failing cmd's stderr must NOT appear in the error — it can carry a
+    secret and this message flows into structured MCP errors. Keep the exit
+    code (diagnostic); drop the stderr text."""
     from octowright import personas as _p
 
-    long_stderr = "X" * 500
+    leak_marker = "LEAKED-" + "X" * 500
 
     def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
-        return SimpleNamespace(returncode=2, stdout="", stderr=long_stderr)
+        return SimpleNamespace(returncode=2, stdout="", stderr=leak_marker)
 
     monkeypatch.setattr(subprocess, "run", _fake)
     with pytest.raises(_p.MissingCredential) as exc:
         _p._exec_credential_cmd("op read op://x", "dante", "token")
     msg = str(exc.value)
-    # Truncated to 200 X's, not the full 500.
-    assert "X" * 200 in msg
-    assert "X" * 201 not in msg
+    assert "LEAKED" not in msg
+    assert "X" * 50 not in msg
+    assert "cmd exited 2" in msg
 
 
 def test_exec_credential_cmd_strips_stdout(monkeypatch):

@@ -32,10 +32,20 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright import macros
+from octowright.conditional import CONDITIONAL_ACTIONS
 from octowright.macros.recording_import import RECORDER_NOISE
 from octowright.macros.runtime import _ACTION_MAP, _REPLAY_PASSIVE, _REPLAY_SKIP
 
 SRC = Path(__file__).parents[1] / "src" / "octowright"
+
+#: Directories whose ``recorder.record`` calls emit events into a BROWSER
+#: session recording — the recordings that ``dispatch_simple`` replays. Scanning
+#: only ``session/`` missed real emitters: crash recovery (``page_recovered``),
+#: the page listeners (``page_crash``/``user_navigation``) and the conditional
+#: helper (``try_each_succeeded``), all in ``browser_pool``/``conditional.py``.
+#: ``terminal/`` is deliberately excluded — terminal recordings are a separate
+#: replay domain and never flow through the browser macro dispatch maps.
+_EMITTER_ROOTS = (SRC / "session", SRC / "browser_pool", SRC / "conditional.py")
 
 #: Recorder calls whose event name is built at runtime, with the values the
 #: surrounding code can pass. A static scan cannot resolve an f-string, and
@@ -44,10 +54,13 @@ DYNAMIC_RECORDER_EVENTS = {"websocket_framesent", "websocket_framereceived"}
 
 
 def _statically_recorded_events() -> set[str]:
-    """Every literal event name passed to ``recorder.record``."""
+    """Every literal event name passed to ``recorder.record`` across the browser
+    emitter roots."""
     found: set[str] = set()
-    for path in (SRC / "session").rglob("*.py"):
-        found.update(re.findall(r'recorder\.record\(\s*"([a-z_]+)"', path.read_text()))
+    for root in _EMITTER_ROOTS:
+        paths = root.rglob("*.py") if root.is_dir() else [root]
+        for path in paths:
+            found.update(re.findall(r'recorder\.record\(\s*"([a-z_]+)"', path.read_text(encoding="utf-8")))
     return found
 
 
@@ -66,10 +79,19 @@ def test_every_recorded_event_is_either_replayable_or_stripped() -> None:
     recorded = _statically_recorded_events() | DYNAMIC_RECORDER_EVENTS
     assert recorded, "found no recorder.record calls — the scan broke, not the code"
 
+    # A valid classification is: replayable (_ACTION_MAP), a conditional action
+    # dispatched via the conditional evaluator (CONDITIONAL_ACTIONS — e.g.
+    # if_selector), passive/skip at dispatch (_REPLAY_PASSIVE/_REPLAY_SKIP), or
+    # stripped at import so it never reaches dispatch (RECORDER_NOISE — e.g.
+    # user_navigation).
     unclassified = {
         event
         for event in recorded
-        if event not in _ACTION_MAP and event not in _REPLAY_PASSIVE and event not in _REPLAY_SKIP
+        if event not in _ACTION_MAP
+        and event not in CONDITIONAL_ACTIONS
+        and event not in _REPLAY_PASSIVE
+        and event not in _REPLAY_SKIP
+        and event not in RECORDER_NOISE
     }
     assert unclassified <= KNOWN_UNCLASSIFIED, (
         "these recorder events are neither replayable nor stripped, so a recording "

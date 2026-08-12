@@ -155,6 +155,17 @@ code, .mono { font-family: var(--mono); }
   padding: var(--gap);
 }
 
+.dashboard-degraded {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 8%, var(--bg-1));
+  color: var(--fg-2);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
 /* ── Panels ────────────────────────────────────────────── */
 
 .panel {

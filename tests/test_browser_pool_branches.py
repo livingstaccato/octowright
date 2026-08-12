@@ -291,9 +291,10 @@ class TestProfileInUse:
     def test_match_on_kind_and_profile(self) -> None:
         """profile_in_use is True only when BOTH kind and profile match."""
         pool = BrowserPool()
-        pool._sessions["a"] = _fake_session(instance_id="a", kind="webkit", profile="cosmo")
-        assert pool.profile_in_use(kind="webkit", profile="cosmo") is True
-        assert pool.profile_in_use(kind="chromium", profile="cosmo") is False
+        pool._sessions["a"] = _fake_session(instance_id="a", kind="webkit", profile="cosmo one")
+        assert pool.profile_in_use(kind="webkit", profile="cosmo one") is True
+        assert pool.profile_in_use(kind="webkit", profile="cosmo-one") is True
+        assert pool.profile_in_use(kind="chromium", profile="cosmo-one") is False
         assert pool.profile_in_use(kind="webkit", profile="ziggy") is False
 
     def test_empty_pool_returns_false(self) -> None:
