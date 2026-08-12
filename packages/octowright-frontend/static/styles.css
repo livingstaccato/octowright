@@ -201,6 +201,24 @@ code, .mono { font-family: var(--mono); }
   flex-shrink: 0;
 }
 
+/* Stale marker: the panel's last refresh failed, so its data is the most
+   recent successfully-fetched copy rather than current. The state layer keeps
+   that data (a 500 no longer blanks the panel), so without this badge a stale
+   panel is indistinguishable from a fresh one. */
+.panel__stale {
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  color: var(--warn);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .panel--macros { grid-column: 1 / -1; }
 .panel--sessions { grid-column: 1 / -1; }
 

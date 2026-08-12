@@ -314,6 +314,25 @@ def reap_orphan_browsers(
     )
 
 
+async def shutdown_browser_pool_on_shutdown(pool: Any, *, log: Any) -> None:
+    """Tear the browser POOL down on leader exit, after the process reaper.
+
+    ``reap_descendant_browsers_on_shutdown`` kills the browser processes but
+    leaves the pool itself standing: the shared Playwright driver (a node
+    process the pool owns) kept running past daemon exit, and every per-session
+    tmpdir stayed on disk. ``pool.shutdown`` stops the driver and removes them.
+
+    Best-effort by design — this runs from a ``finally`` on the exit path, so a
+    failure here must not block the lockfile removal that follows it.
+    """
+    if pool is None:
+        return
+    try:
+        await pool.shutdown()
+    except Exception as exc:  # best-effort teardown; don't block daemon exit
+        log.debug("shutdown.browser_pool_shutdown_failed", error=repr(exc))
+
+
 async def reap_descendant_browsers_on_shutdown(pool: Any, *, log: Any) -> None:
     """Daemon shutdown hook. Close pool sessions, then sweep descendants.
 

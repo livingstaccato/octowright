@@ -153,3 +153,84 @@ describe("mountPanels / updatePanels", () => {
     expect((panels[0].root.children[1] as HTMLElement).dataset.count).toBe("42");
   });
 });
+
+describe("degraded panels", () => {
+  // The state layer already keeps last-known data when a fetch fails (so a 500
+  // no longer blanks a panel), but that made a stale panel indistinguishable
+  // from a fresh one — the user silently reads old data as current. These
+  // cover the visible marker.
+  interface ErrState extends FakeState {
+    failing: Set<Scope>;
+  }
+
+  const errDefs: ReadonlyArray<PanelDef<Scope, ErrState>> = [
+    {
+      scope: "alpha",
+      testid: "alpha",
+      title: "Alpha",
+      buildBody: (s) => makeBody("alpha", s.alphaCount),
+      isDegraded: (s) => s.failing.has("alpha"),
+    },
+    {
+      scope: "beta",
+      testid: "beta",
+      title: "Beta",
+      buildBody: (s) => makeBody("beta", s.betaCount),
+      isDegraded: (s) => s.failing.has("beta"),
+    },
+  ];
+
+  let root: HTMLDivElement;
+
+  beforeEach(() => {
+    root = document.createElement("div");
+    document.body.append(root);
+  });
+
+  afterEach(() => {
+    root.remove();
+  });
+
+  const state = (failing: Scope[]): ErrState => ({
+    alphaCount: 1,
+    betaCount: 2,
+    gammaCount: 3,
+    failing: new Set(failing),
+  });
+
+  function panelEl(testid: string): HTMLElement {
+    const el = root.querySelector<HTMLElement>(`[data-testid="panel-${testid}"]`);
+    if (el === null) throw new Error(`missing panel ${testid}`);
+    return el;
+  }
+
+  it("marks a panel degraded at mount when its scope is failing", () => {
+    mountPanels(root, errDefs, state(["alpha"]));
+    expect(panelEl("alpha").dataset.degraded).toBe("true");
+    expect(panelEl("beta").dataset.degraded).toBeUndefined();
+    expect(panelEl("alpha").querySelector(".panel__stale")).not.toBeNull();
+  });
+
+  it("adds the marker when a scope starts failing", () => {
+    const panels = mountPanels(root, errDefs, state([]));
+    expect(panelEl("alpha").dataset.degraded).toBeUndefined();
+    updatePanels(panels, state(["alpha"]), null);
+    expect(panelEl("alpha").dataset.degraded).toBe("true");
+  });
+
+  it("clears the marker when the scope recovers", () => {
+    const panels = mountPanels(root, errDefs, state(["alpha"]));
+    updatePanels(panels, state([]), null);
+    expect(panelEl("alpha").dataset.degraded).toBeUndefined();
+    expect(panelEl("alpha").querySelector(".panel__stale")).toBeNull();
+  });
+
+  it("updates the marker even for panels outside the changed-scope set", () => {
+    // A failing fetch does not put its scope in the changed set (the data did
+    // not change) — so a scope-filtered update must still refresh staleness,
+    // or a panel that just started failing would never show it.
+    const panels = mountPanels(root, errDefs, state([]));
+    updatePanels(panels, state(["beta"]), new Set<Scope>(["alpha"]));
+    expect(panelEl("beta").dataset.degraded).toBe("true");
+  });
+});
