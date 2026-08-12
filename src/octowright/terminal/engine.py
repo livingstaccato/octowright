@@ -99,6 +99,7 @@ class TerminalEngine:
         self._poll_task: asyncio.Task[None] | None = None
         self._stop_evt = asyncio.Event()
         self._stop_recorded = False
+        self._poll_error: BaseException | None = None
 
     async def start(self) -> None:
         with span(
@@ -141,10 +142,12 @@ class TerminalEngine:
         'error' stop (once, via ``_record_stop``) so it does not vanish."""
         if task.cancelled():
             return
-        reason = poll_done_reason(task.exception())
+        error = task.exception()
+        reason = poll_done_reason(error)
         if reason is None:
             return
-        log.warning("terminal.poll_loop.died", instance_id=self._instance_id, error=repr(task.exception()))
+        self._poll_error = error
+        log.warning("terminal.poll_loop.died", instance_id=self._instance_id, error=repr(error))
         self._record_stop(reason)
 
     def _ingest(self, msg: dict[str, Any]) -> None:
@@ -203,7 +206,18 @@ class TerminalEngine:
     def _record_stop(self, reason: str) -> None:
         if not self._stop_recorded:
             self._stop_recorded = True
-            self._recorder.record("terminal_stop", reason=reason)
+            try:
+                self._recorder.record("terminal_stop", reason=reason)
+            except Exception as exc:
+                # This method runs from an asyncio done-callback as well as
+                # explicit teardown. A recorder failure must not escape the
+                # callback and obscure the causal connector/poll exception.
+                log.warning(
+                    "terminal.stop_record.failed",
+                    instance_id=self._instance_id,
+                    reason=reason,
+                    error=repr(exc),
+                )
             # Count the terminal-ended event once, whichever path got here first
             # (explicit stop() or the poll loop's EOF detection).
             _TERMINAL_CLOSED.add(1, attributes={"connector_type": self._connector_type})

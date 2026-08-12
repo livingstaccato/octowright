@@ -154,16 +154,16 @@ class _Collector:
             self._done.set()
 
 
-async def _run(mcp_url: str, token: str) -> dict[str, Any]:
+async def _run(mcp_url: str, token: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     # In production the FOLLOWER process holds the isolated lockfile env, so
     # consume_leader_notifications' resolve_leader_url() finds the right leader.
     # This test process does not, so pin resolution to the known test leader —
     # otherwise it would resolve to whatever daemon owns the default lockfile.
-    proxy_runtime.resolve_leader_url = lambda _fallback: mcp_url  # type: ignore[assignment]
+    monkeypatch.setattr(proxy_runtime, "resolve_leader_url", lambda _fallback: mcp_url)
     # The leader now gates /api/mcp-events with the capability token; the follower
     # presents it via resolve_leader_token(). This test process lacks the
     # follower's isolated lockfile env, so pin the token the same way as the URL.
-    proxy_runtime.resolve_leader_token = lambda: token  # type: ignore[assignment]
+    monkeypatch.setattr(proxy_runtime, "resolve_leader_token", lambda: token)
     headers = {"X-Octowright-Token": token} if token else None
     async with (
         create_mcp_http_client(headers=headers) as http_client,
@@ -205,7 +205,9 @@ async def _run(mcp_url: str, token: str) -> dict[str, Any]:
         return {"skip": False, "delivered": done.is_set(), "methods": collector.methods}
 
 
-def test_notifications_delivered_via_follower_bridge_in_daemon_mode(tmp_path: Path) -> None:
+def test_notifications_delivered_via_follower_bridge_in_daemon_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     pytest.importorskip("playwright")
     octowright_bin = Path(sys.executable).with_name("octowright")
     if not octowright_bin.exists():
@@ -231,7 +233,7 @@ def test_notifications_delivered_via_follower_bridge_in_daemon_mode(tmp_path: Pa
 
         lock_info = _sn.read_lock(lock_path)
         token = lock_info.token if lock_info is not None else ""
-        outcome = anyio.run(_run, mcp_url, token)
+        outcome = anyio.run(_run, mcp_url, token, monkeypatch)
     finally:
         if follower.stdin:
             with contextlib.suppress(OSError):
