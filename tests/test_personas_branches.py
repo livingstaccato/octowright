@@ -270,6 +270,40 @@ def test_exec_credential_cmd_suppresses_stderr_content(monkeypatch):
     assert "cmd exited 2" in msg
 
 
+def test_exec_credential_cmd_never_logs_stderr_content(monkeypatch):
+    """Helper stderr is secret-bearing input, including in DEBUG telemetry."""
+    from octowright import personas as _p
+
+    leak_marker = "SECRET_LEAK_TOKEN=hunter2"
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    def _fake(*_a: Any, **_kw: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=2, stdout="", stderr=leak_marker)
+
+    monkeypatch.setattr(subprocess, "run", _fake)
+    monkeypatch.setattr(
+        _p,
+        "log",
+        SimpleNamespace(debug=lambda event, **fields: events.append((event, fields))),
+    )
+
+    with pytest.raises(_p.MissingCredential):
+        _p._exec_credential_cmd("op read op://x", "dante", "token")
+
+    assert events == [
+        (
+            "persona.cred.cmd_failed",
+            {
+                "persona": "dante",
+                "field": "token",
+                "returncode": 2,
+                "stderr_len": len(leak_marker),
+            },
+        )
+    ]
+    assert leak_marker not in repr(events)
+
+
 def test_exec_credential_cmd_strips_stdout(monkeypatch):
     """Mutation: dropping ``.strip()`` would leak trailing whitespace into the secret."""
     from octowright import personas as _p
