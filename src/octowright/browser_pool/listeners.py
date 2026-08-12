@@ -37,6 +37,30 @@ log = get_logger(__name__)
 _PENDING_FULL_CLOSES: set[asyncio.Task[None]] = set()
 
 
+async def _run_deferred_full_close(pool: Any, instance_id: str, session: Any, reason: SessionCloseReason) -> None:
+    """Full-close ``session``, but only if the registry still holds exactly it.
+
+    The "last page is gone" decision is made in the SYNC page-close callback;
+    this task runs later, and ``pool.close(instance_id, force=True)`` would
+    close whatever the registry holds under that id at THAT moment.
+    ``OCTOWRIGHT_DRIVER_RELAUNCH=keep-id`` deliberately rebinds the original
+    instance_id to a fresh live session, so without an identity re-check a
+    stale task could force-close an unrelated — possibly protected — browser
+    (``force=True`` skips the protection refusal by design, for the case where
+    the user already closed the window).
+    """
+    if pool.maybe_get(instance_id) is not session:
+        # Rebound to a new session, or already evicted by a racing
+        # context.close / browser.disconnected. Either way, not ours to close.
+        return
+    try:
+        await pool.close(instance_id, force=True, _reason=reason)
+    except KeyError:
+        pass  # evicted between the identity check and the close
+    except Exception as exc:
+        log.warning("octowright.evict.full_close_failed", instance_id=instance_id, error=repr(exc))
+
+
 def _wire_listeners(session: BrowserSession, page: Any) -> None:
     """Attach per-page listeners (dialog, download, close, framenavigated) to a page.
     Called for both the initial page at launch AND any popup page opened mid-session.
@@ -201,15 +225,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             _evict()
             return
 
-        async def _do_full_close() -> None:
-            try:
-                await pool.close(instance_id, force=True, _reason=reason)
-            except KeyError:
-                pass  # already evicted by a racing context.close / disconnect
-            except Exception as exc:
-                log.warning("octowright.evict.full_close_failed", instance_id=instance_id, error=repr(exc))
-
-        task = loop.create_task(_do_full_close())
+        task = loop.create_task(_run_deferred_full_close(pool, instance_id, session, reason))
         _PENDING_FULL_CLOSES.add(task)
         task.add_done_callback(_PENDING_FULL_CLOSES.discard)
 
