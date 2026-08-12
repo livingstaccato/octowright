@@ -21,6 +21,16 @@ export interface PanelDef<Scope, State> {
   defaultOpen?: boolean;
   /** Build the panel's body element from the current state. */
   buildBody: (state: State) => HTMLElement;
+  /**
+   * True when this panel's data could not be refreshed and is therefore stale.
+   *
+   * The state layer keeps the last-known slice when a fetch fails (so a backend
+   * 500 no longer blanks the panel), but without a marker a stale panel looks
+   * exactly like a fresh one and the user reads old data as current. Optional:
+   * a panel that does not supply it is never marked. Kept as a predicate over
+   * State so this module stays ignorant of DashboardState/DashboardScope.
+   */
+  isDegraded?: (state: State) => boolean;
 }
 
 export interface PanelInstance<Scope, State> {
@@ -29,6 +39,28 @@ export interface PanelInstance<Scope, State> {
   /** The <section> or <details> element. Stable across updates. */
   root: HTMLElement;
   buildBody: (state: State) => HTMLElement;
+  isDegraded?: (state: State) => boolean;
+}
+
+const STALE_CLASS = "panel__stale";
+const STALE_TEXT = "stale — refresh failed";
+
+/** Toggle the "data could not be refreshed" marker on a panel wrapper. */
+function applyDegraded(root: HTMLElement, degraded: boolean): void {
+  const existing = root.querySelector(`.${STALE_CLASS}`);
+  if (!degraded) {
+    delete root.dataset.degraded;
+    existing?.remove();
+    return;
+  }
+  root.dataset.degraded = "true";
+  if (existing !== null) return;
+  const badge = document.createElement("span");
+  badge.className = STALE_CLASS;
+  badge.textContent = STALE_TEXT;
+  badge.title = "The last refresh of this panel failed; showing the most recent data received.";
+  // Inside the heading so it reads with the title and survives body swaps.
+  root.firstElementChild?.append(badge);
 }
 
 function panelSection(
@@ -62,7 +94,17 @@ function buildPanelInstance<Scope, State>(
     opts.collapsible = def.collapsible;
   }
   const wrapper = panelSection(def.title, def.testid, def.buildBody(state), opts);
-  return { scope: def.scope, testid: def.testid, root: wrapper, buildBody: def.buildBody };
+  const instance: PanelInstance<Scope, State> = {
+    scope: def.scope,
+    testid: def.testid,
+    root: wrapper,
+    buildBody: def.buildBody,
+  };
+  if (def.isDegraded !== undefined) {
+    instance.isDegraded = def.isDegraded;
+    applyDegraded(wrapper, def.isDegraded(state));
+  }
+  return instance;
 }
 
 /**
@@ -101,6 +143,13 @@ export function updatePanels<Scope, State>(
   scopes: ReadonlySet<Scope> | null,
 ): void {
   for (const panel of panels) {
+    // Staleness is refreshed for EVERY panel, even one outside the changed set:
+    // a failed fetch leaves the data unchanged (so its scope is not in
+    // ``scopes``), and skipping it here would mean a panel that just started
+    // failing never shows the marker.
+    if (panel.isDegraded !== undefined) {
+      applyDegraded(panel.root, panel.isDegraded(state));
+    }
     if (scopes !== null && !scopes.has(panel.scope)) continue;
     const newBody = panel.buildBody(state);
     const oldBody = panel.root.children[1];
