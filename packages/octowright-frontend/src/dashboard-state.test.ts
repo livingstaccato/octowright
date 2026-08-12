@@ -49,6 +49,26 @@ describe("loadState", () => {
     const state = await loadState();
     expect([...state.errors]).toEqual([]);
   });
+
+  it("keeps last-known slices when a full refresh partially fails", async () => {
+    apiMocks.getSessions.mockRejectedValueOnce(new Error("sessions"));
+    apiMocks.getMacros.mockRejectedValueOnce(new Error("macros"));
+    const current = {
+      sessions: { live: [{ id: "stale-session" }], closed: [] },
+      scenarios: { live: [{ name: "stale-scenario" }] },
+      personas: [{ name: "stale-persona" }],
+      macros: [{ name: "stale-macro" }],
+      errors: new Set(["personas"]),
+    } as never;
+
+    const state = await loadState(current);
+
+    expect(state.sessions.live[0]?.id).toBe("stale-session");
+    expect(state.macros[0]?.name).toBe("stale-macro");
+    expect(state.scenarios.live[0]?.name).toBe("scenario");
+    expect(state.personas[0]?.name).toBe("persona");
+    expect([...state.errors].sort()).toEqual(["macros", "sessions"]);
+  });
 });
 
 describe("refreshScopedState", () => {

@@ -27,25 +27,45 @@ export const EMPTY_STATE: DashboardState = {
   errors: new Set(),
 };
 
-export async function loadState(): Promise<DashboardState> {
-  const errors = new Set<DashboardScope>();
+export async function loadState(current: DashboardState = EMPTY_STATE): Promise<DashboardState> {
+  const errors = new Set<DashboardScope>(current.errors);
   const [sessions, scenarios, personas, macros] = await Promise.all([
-    getSessions().catch(() => {
-      errors.add("sessions");
-      return EMPTY_STATE.sessions;
-    }),
-    getScenarios().catch(() => {
-      errors.add("scenarios");
-      return EMPTY_STATE.scenarios;
-    }),
-    getPersonas().catch(() => {
-      errors.add("personas");
-      return EMPTY_STATE.personas;
-    }),
-    getMacros().catch(() => {
-      errors.add("macros");
-      return EMPTY_STATE.macros;
-    }),
+    getSessions()
+      .then((value) => {
+        errors.delete("sessions");
+        return value;
+      })
+      .catch(() => {
+        errors.add("sessions");
+        return current.sessions;
+      }),
+    getScenarios()
+      .then((value) => {
+        errors.delete("scenarios");
+        return value;
+      })
+      .catch(() => {
+        errors.add("scenarios");
+        return current.scenarios;
+      }),
+    getPersonas()
+      .then((value) => {
+        errors.delete("personas");
+        return value;
+      })
+      .catch(() => {
+        errors.add("personas");
+        return current.personas;
+      }),
+    getMacros()
+      .then((value) => {
+        errors.delete("macros");
+        return value;
+      })
+      .catch(() => {
+        errors.add("macros");
+        return current.macros;
+      }),
   ]);
   return { sessions, scenarios, personas, macros, errors };
 }

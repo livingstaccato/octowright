@@ -7,37 +7,28 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
-import uuid
 from collections.abc import Iterable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
-from octowright._tracing import set_attrs, span
+from octowright._tracing import span
 from octowright.browser_pool import driver_health, driver_relaunch
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
-from octowright.browser_pool.errors import maybe_wrap_playwright_error
 from octowright.browser_pool.events import SessionCloseReason
-from octowright.browser_pool.launch_helpers import (
-    _build_viewport_kwargs,
-    _open_browser_context,
-    build_recording_kwargs,
-    rotate_har_path,
-)
-from octowright.browser_pool.launch_pipeline import cleanup_failed_launch, post_context_setup
+from octowright.browser_pool.launch_execution import launch_profile_locked
+from octowright.browser_pool.launch_helpers import rotate_har_path
 from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
-from octowright.browser_pool.options import LaunchOptions, resolve_protected
+from octowright.browser_pool.options import LaunchOptions
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
 from octowright.browser_pool.visuals import _tile_args_for_chromium
-from octowright.defaults import HEADLESS_DEFAULT, RECORDINGS_DIR, get_default_url
-from octowright.recorder import new_log_path
+from octowright.defaults import RECORDINGS_DIR, get_default_url
+from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
 from octowright.session import BrowserSession
 
 log = get_logger(__name__)
@@ -135,117 +126,24 @@ class BrowserPool:
     async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:
         launch_options = LaunchOptions.from_mapping(options)
         kind = launch_options.kind
-        headed = launch_options.headed
-        label = launch_options.label
-        session = launch_options.session
-
-        instance_id = uuid.uuid4().hex[:12]
-        t0 = time.perf_counter()
-
         # Promote: a named launch (label given, no explicit profile, not ephemeral
         # and not session-scoped) gets a persistent profile by default. The whole
         # reason for naming a browser is so you can come back to it; ephemeral
         # and session are the explicit exceptions.
         profile = launch_options.promoted_profile()
-
-        session_user_data_dir = await self._resolve_session_dir(session, launch_options, instance_id, kind)
-        set_attrs(_sp, instance_id=instance_id, profile=profile, label=label, session=session)
-        pw = await self._ensure_pw()
-        browser_type = getattr(pw, kind)
-        headless = not headed if headed is not None else HEADLESS_DEFAULT
-        # Decide the effective protected flag now that headed is resolved
-        # (the tool layer passes None to mean "pool decides"). Headed,
-        # non-ephemeral browsers protect by default so a reflex browser_close
-        # can't destroy a window the user is watching. LaunchOptions is
-        # frozen, so rebind the local via dataclasses.replace rather than
-        # assigning the fields in place.
-        protected, protected_reason = resolve_protected(
-            launch_options.protected, headed=not headless, ephemeral=launch_options.ephemeral
-        )
-        launch_options = replace(launch_options, protected=protected, protected_reason=protected_reason)
         target_url = launch_options.url or get_default_url()
-        # Reject an unsafe URL BEFORE allocating anything — post-registration the
-        # cleanup path skips the session and leaks the browser (see launch_pipeline).
+        # Target validation is a pure preflight. In particular it must happen
+        # before session tempdirs, Playwright, or recording files are allocated.
         from octowright.session.core_page_mixin import _reject_unsafe_url
 
         _reject_unsafe_url(target_url)
-        log_path = new_log_path(self._recordings_dir, instance_id, label, kind)
 
-        viewport_kwargs, log_viewport, explicit_size, viewport_info = _build_viewport_kwargs(
-            headless, launch_options.viewport_w, launch_options.viewport_h
-        )
-        ctx_video_kwargs, video_dir, har_path, ctx_har_kwargs = build_recording_kwargs(
-            launch_options,
-            headless=headless,
-            explicit_size=explicit_size,
-            log_path=log_path,
-            recordings_dir=self._recordings_dir,
-        )
-        launch_kwargs = await self._build_launch_kwargs(tile=launch_options.tile, kind=kind, headless=headless)
-
-        browser: Any | None = None
-        context: Any | None = None
-        page: Any | None = None
-        user_data_dir: str | None = None
-
-        try:
-            browser, context, page, user_data_dir = await _open_browser_context(
-                browser_type=browser_type,
-                kind=kind,
-                profile=profile,
-                session_user_data_dir=session_user_data_dir,
-                headless=headless,
-                viewport_kwargs=viewport_kwargs,
-                ctx_video_kwargs=ctx_video_kwargs,
-                ctx_har_kwargs=ctx_har_kwargs,
-                launch_kwargs=launch_kwargs,
-                base_url=launch_options.base_url,
-            )
-        except asyncio.CancelledError:
-            await cleanup_failed_launch(
-                registered=False,
-                context=context,
-                browser=browser,
-                video_dir=video_dir,
-                recorder=None,
-                pre_register=True,
-            )
-            raise
-        except Exception as exc:
-            await cleanup_failed_launch(
-                registered=False,
-                context=context,
-                browser=browser,
-                video_dir=video_dir,
-                recorder=None,
-                pre_register=True,
-            )
-            wrapped = maybe_wrap_playwright_error(exc, kind=kind)
-            if wrapped is exc:
-                raise
-            raise wrapped from exc
-
-        return await post_context_setup(
-            self,
-            launch_options=launch_options,
-            instance_id=instance_id,
-            t0=t0,
-            profile=profile,
-            kind=kind,
-            label=label,
-            target_url=target_url,
-            headless=headless,
-            log_path=log_path,
-            viewport_info=viewport_info,
-            log_viewport=log_viewport,
-            video_dir=video_dir,
-            har_path=har_path,
-            browser=browser,
-            context=context,
-            page=page,
-            user_data_dir=user_data_dir,
-            session=session,
-        )
+        # Deletion takes this same key before its in-use check. Holding it from
+        # persona/default-url resolution through registration closes both race
+        # windows: delete cannot remove a directory while Playwright opens it,
+        # and cannot slip between context creation and pool registration.
+        async with profile_lifecycle_lock(kind, profile):
+            return await launch_profile_locked(self, launch_options, _sp, profile, target_url)
 
     def get(self, instance_id: str) -> BrowserSession:
         """Return the live session for ``instance_id`` or raise KeyError.
@@ -407,7 +305,7 @@ class BrowserPool:
             }
 
     def profile_in_use(self, kind: str, profile: str) -> bool:
-        return any(s.kind == kind and s.profile == profile for s in tuple(self._sessions.values()))
+        return any(s.kind == kind and profile_names_match(s.profile, profile) for s in tuple(self._sessions.values()))
 
     def _evict_session_nowait(self, instance_id: str) -> BrowserSession | None:
         # Called from synchronous Playwright event callbacks (page.close,
