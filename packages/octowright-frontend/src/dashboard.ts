@@ -30,6 +30,13 @@ const REFRESH_MS = 5000;
 
 const log = getLogger("octowright.frontend.dashboard");
 
+const DASHBOARD_SCOPE_LABELS: ReadonlyArray<[DashboardScope, string]> = [
+  ["sessions", "Sessions"],
+  ["scenarios", "Scenarios"],
+  ["personas", "Personas"],
+  ["macros", "Macros"],
+];
+
 export type DashboardDisposer = () => void;
 export type DashboardPanel = PanelInstance<DashboardScope, DashboardState>;
 
@@ -63,6 +70,7 @@ function loadPersonaSizes(): void {
 
 let dashboardRoot: HTMLElement | null = null;
 let dashboardPanels: DashboardPanel[] | null = null;
+let dashboardCurrentState: DashboardState = EMPTY_STATE;
 let activeDashboardDisposer: DashboardDisposer | null = null;
 
 /**
@@ -73,7 +81,8 @@ let activeDashboardDisposer: DashboardDisposer | null = null;
  */
 export async function refreshDashboardNow(): Promise<void> {
   if (!dashboardRoot) return;
-  const state = await loadState();
+  const state = await loadState(dashboardCurrentState);
+  dashboardCurrentState = state;
   if (dashboardPanels === null) {
     dashboardPanels = renderDashboard(dashboardRoot, state);
   } else {
@@ -182,7 +191,9 @@ const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
  * registry. Open <details> state from any prior mount is preserved.
  */
 export function renderDashboard(root: HTMLElement, state: DashboardState): DashboardPanel[] {
-  return mountPanels(root, PANEL_DEFS, state);
+  const panels = mountPanels(root, PANEL_DEFS, state);
+  updateDegradedNotice(root, state);
+  return panels;
 }
 
 /**
@@ -196,6 +207,26 @@ export function updateDashboard(
   scopes: ReadonlySet<DashboardScope> | null,
 ): void {
   updatePanels(panels, state, scopes);
+  const root = panels[0]?.root.parentElement;
+  if (root) updateDegradedNotice(root, state);
+}
+
+function updateDegradedNotice(root: HTMLElement, state: DashboardState): void {
+  const existing = root.querySelector<HTMLElement>('[data-testid="dashboard-degraded"]');
+  const errors = state.errors ?? new Set<DashboardScope>();
+  if (errors.size === 0) {
+    existing?.remove();
+    return;
+  }
+
+  const labels = DASHBOARD_SCOPE_LABELS.filter(([scope]) => errors.has(scope)).map(([, label]) => label);
+  const notice = existing ?? document.createElement("div");
+  notice.className = "dashboard-degraded";
+  notice.setAttribute("data-testid", "dashboard-degraded");
+  notice.setAttribute("role", "status");
+  notice.setAttribute("aria-live", "polite");
+  notice.textContent = `Some dashboard data is unavailable or stale: ${labels.join(", ")}. Retrying automatically.`;
+  if (!existing) root.insertBefore(notice, root.firstChild);
 }
 
 // ─── boot ────────────────────────────────────────────────────────────────────
@@ -213,7 +244,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   let disposed = false;
   let source: EventSource | null = null;
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
-  let currentState = EMPTY_STATE;
+  dashboardCurrentState = EMPTY_STATE;
   let streamHealthy = false;
   let refreshErrorShown = false;
   // Serialize tick() so concurrent SSE invalidations don't lose updates.
@@ -221,9 +252,11 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
 
   const runTick = async (scopes: ReadonlySet<DashboardScope> | null): Promise<void> => {
     if (disposed) return;
-    const state = scopes ? await refreshScopedState(currentState, scopes) : await loadState();
+    const state = scopes
+      ? await refreshScopedState(dashboardCurrentState, scopes)
+      : await loadState(dashboardCurrentState);
     if (disposed) return;
-    currentState = state;
+    dashboardCurrentState = state;
     if (dashboardPanels === null) {
       dashboardPanels = renderDashboard(root, state);
     } else if (scopes === null) {
@@ -299,6 +332,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
     if (dashboardRoot === root) {
       dashboardRoot = null;
       dashboardPanels = null;
+      dashboardCurrentState = EMPTY_STATE;
     }
     if (activeDashboardDisposer === dispose) {
       activeDashboardDisposer = null;
