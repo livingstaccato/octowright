@@ -50,14 +50,18 @@ def _write(path: Path, entries: dict[str, dict[str, object]]) -> None:
 
 
 def _dead_pid() -> int:
-    """A pid that is almost certainly not running (very high, unallocated)."""
+    """A pid that is provably not running.
+
+    Probes through ``singleton.pid_is_alive`` rather than ``os.kill(pid, 0)``
+    directly: on Windows a dead pid raises ``OSError`` (WinError 87) instead of
+    ``ProcessLookupError``, so a raw probe both crashes this helper and would
+    mask the very bug these tests exist to catch.
+    """
+    from octowright.singleton import pid_is_alive
+
     for candidate in range(4_194_300, 4_194_000, -1):
-        try:
-            os.kill(candidate, 0)
-        except ProcessLookupError:
+        if not pid_is_alive(candidate):
             return candidate
-        except PermissionError:
-            continue
     pytest.skip("could not find a provably-dead pid")
     raise AssertionError  # unreachable
 
@@ -123,3 +127,40 @@ def test_no_write_when_nothing_to_prune(tmp_path: Path) -> None:
 
 def test_missing_manifest_is_a_noop(tmp_path: Path) -> None:
     assert sm.prune_dead_daemon_entries(path=tmp_path / "absent.json") == []
+
+
+def test_liveness_probe_routes_through_the_canonical_helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guards the Windows break: an ad-hoc ``os.kill(pid, 0)`` probe reports a
+    dead pid as ALIVE on Windows (it raises OSError/WinError 87, not
+    ProcessLookupError), so nothing would ever be pruned there. Asserting we go
+    through ``singleton.pid_is_alive`` catches that on any platform."""
+    import octowright.singleton as singleton_mod
+
+    calls: list[int] = []
+
+    def fake_pid_is_alive(pid: int) -> bool:
+        calls.append(pid)
+        return False
+
+    monkeypatch.setattr(singleton_mod, "pid_is_alive", fake_pid_is_alive)
+    path = tmp_path / "manifest.json"
+    _write(path, {"s": _entry("s", 424242)})
+
+    assert sm.prune_dead_daemon_entries(path=path) == ["s"]
+    assert calls == [424242], "liveness was not probed via singleton.pid_is_alive"
+
+
+def test_unprobeable_pid_is_treated_as_alive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If liveness can't be determined, keep the entry — a stale entry is
+    harmless, deleting a live one is not."""
+    import octowright.singleton as singleton_mod
+
+    def boom(_pid: int) -> bool:
+        raise OSError("cannot probe")
+
+    monkeypatch.setattr(singleton_mod, "pid_is_alive", boom)
+    path = tmp_path / "manifest.json"
+    _write(path, {"s": _entry("s", 424242)})
+
+    assert sm.prune_dead_daemon_entries(path=path) == []
+    assert "s" in sm.read_manifest(path)["sessions"]
