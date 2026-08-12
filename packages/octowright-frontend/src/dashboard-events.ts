@@ -106,7 +106,10 @@ export function openDashboardEventStream(options: DashboardEventStreamOptions): 
         headers: dashboardAuthHeaders({ Accept: "text/event-stream" }),
         signal: controller.signal,
       });
-      if (response.status === 401) handleDashboardUnauthorized();
+      if (response.status === 401) {
+        handleDashboardUnauthorized();
+        return;
+      }
       if (!response.ok || !response.body) {
         throw new Error(`dashboard event stream failed (${response.status})`);
       }

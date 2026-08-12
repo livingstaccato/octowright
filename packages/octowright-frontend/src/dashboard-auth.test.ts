@@ -5,10 +5,12 @@ import {
   DASHBOARD_AUTH_REQUIRED_EVENT,
   dashboardAuthHeaders,
   dashboardWebSocketProtocols,
+  disposeDashboardTabIsolation,
   downloadDashboardMedia,
   fetchDashboardMediaObjectUrl,
   getDashboardBearer,
   handleDashboardUnauthorized,
+  isolateDashboardTabAuth,
   setDashboardBearer,
 } from "./dashboard-auth.js";
 
@@ -31,6 +33,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  disposeDashboardTabIsolation();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -65,7 +68,7 @@ describe("dashboard bearer storage", () => {
     expect(dashboardWebSocketProtocols()).toEqual(["octowright.dashboard", "octowright.dashboard.bearer.abc_DEF-123"]);
   });
 
-  it("clears an authenticated bearer and emits one re-pair event after 401", () => {
+  it("clears auth and emits a re-pair event for every 401-capable boot", () => {
     setDashboardBearer({ bearer: "secret-bearer", expires_at: nowSeconds + 60 });
     const listener = vi.fn();
     window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, listener);
@@ -73,7 +76,66 @@ describe("dashboard bearer storage", () => {
     expect(getDashboardBearer()).toBeNull();
     expect(listener).toHaveBeenCalledTimes(1);
     expect(handleDashboardUnauthorized()).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(2);
     window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, listener);
+  });
+
+  it("emits a re-pair event for a 401 when no live bearer remains", () => {
+    const listener = vi.fn();
+    window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, listener);
+    expect(handleDashboardUnauthorized()).toBe(false);
+    expect(listener).toHaveBeenCalledOnce();
+    window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, listener);
+  });
+
+  it("keeps a bearer after claiming its exclusive per-tab lock", async () => {
+    setDashboardBearer({ bearer: "owned-secret", expires_at: nowSeconds + 60 });
+    const lockManager = {
+      request: vi.fn(
+        async (
+          _name: string,
+          _options: { ifAvailable: true; mode: "exclusive" },
+          callback: (lock: object | null) => Promise<void>,
+        ) => callback({}),
+      ),
+    };
+
+    await expect(isolateDashboardTabAuth({ lockManager })).resolves.toBe(false);
+    expect(getDashboardBearer()).toBe("owned-secret");
+    expect(lockManager.request).toHaveBeenCalledOnce();
+    expect(lockManager.request.mock.calls[0]?.[0]).not.toContain("owned-secret");
+  });
+
+  it("clears a cloned bearer when another tab owns its lock", async () => {
+    setDashboardBearer({ bearer: "cloned-secret", expires_at: nowSeconds + 60 });
+    const clonedRecord = sessionStorage.getItem("octowright.dashboard.auth.v1");
+    disposeDashboardTabIsolation();
+    if (!clonedRecord) throw new Error("missing stored auth");
+    sessionStorage.setItem("octowright.dashboard.auth.v1", clonedRecord);
+
+    const lockManager = {
+      request: vi.fn(
+        async (
+          _name: string,
+          _options: { ifAvailable: true; mode: "exclusive" },
+          callback: (lock: object | null) => Promise<void>,
+        ) => callback(null),
+      ),
+    };
+
+    await expect(isolateDashboardTabAuth({ lockManager })).resolves.toBe(true);
+    expect(getDashboardBearer()).toBeNull();
+  });
+
+  it("fails closed for a cloned bearer when Web Locks are unavailable", async () => {
+    setDashboardBearer({ bearer: "cloned-secret", expires_at: nowSeconds + 60 });
+    const clonedRecord = sessionStorage.getItem("octowright.dashboard.auth.v1");
+    disposeDashboardTabIsolation();
+    if (!clonedRecord) throw new Error("missing stored auth");
+    sessionStorage.setItem("octowright.dashboard.auth.v1", clonedRecord);
+
+    await expect(isolateDashboardTabAuth({ lockManager: null })).resolves.toBe(true);
+    expect(getDashboardBearer()).toBeNull();
   });
 });
 
