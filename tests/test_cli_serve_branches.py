@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright import process_reaper as _reaper
 from octowright.cli import _leader_runtime as _lr
 from octowright.cli import serve as _serve
 
@@ -916,6 +917,39 @@ class TestRespawnProbeOutsideLock:
         await _serve._respawn_if_leader_gone(http_host=None, http_port=None, idle_grace=None)
         spawn.assert_not_called()
         assert any("still healthy" in line for line in captured)
+
+
+# ─── _shutdown_browser_pool_on_shutdown ──────────────────────────────────────
+
+
+class TestShutdownBrowserPoolOnShutdown:
+    """Leader shutdown reaped browser PROCESSES but never tore the pool down, so
+    the shared Playwright driver (a node process) kept running and every
+    session tmpdir stayed on disk after the daemon exited.
+
+    Lives in process_reaper (next to the browser-process reaper it complements)
+    because cli/serve.py is at its 550-LOC ceiling."""
+
+    @pytest.mark.anyio
+    async def test_shuts_the_pool_down(self) -> None:
+        pool = MagicMock()
+        pool.shutdown = AsyncMock()
+        await _reaper.shutdown_browser_pool_on_shutdown(pool, log=MagicMock())
+        pool.shutdown.assert_awaited_once_with()
+
+    @pytest.mark.anyio
+    async def test_none_pool_is_noop(self) -> None:
+        await _reaper.shutdown_browser_pool_on_shutdown(None, log=MagicMock())
+
+    @pytest.mark.anyio
+    async def test_swallows_shutdown_error(self) -> None:
+        # Best-effort: the browsers were already reaped, so a failure here must
+        # not block daemon exit (or strand the lockfile removal that follows).
+        pool = MagicMock()
+        pool.shutdown = AsyncMock(side_effect=RuntimeError("driver already gone"))
+        log = MagicMock()
+        await _reaper.shutdown_browser_pool_on_shutdown(pool, log=log)  # must not raise
+        log.debug.assert_called_once()
 
 
 # ─── _close_terminal_pool_on_shutdown ────────────────────────────────────────

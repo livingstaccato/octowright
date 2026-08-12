@@ -127,6 +127,7 @@ async function startSavedScenario(name: string): Promise<void> {
 const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
   {
     scope: "sessions",
+    isDegraded: (s) => s.errors?.has("sessions") ?? false,
     testid: "live-browsers",
     // "Live sessions" (not "browsers"): the live pool now also holds terminal
     // sessions (octowright[terminal] extra). testid stays for existing tests.
@@ -139,12 +140,14 @@ const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
   },
   {
     scope: "scenarios",
+    isDegraded: (s) => s.errors?.has("scenarios") ?? false,
     testid: "live-scenarios",
     title: "Live scenarios",
     buildBody: (s) => renderScenarioList(s.scenarios.live),
   },
   {
     scope: "personas",
+    isDegraded: (s) => s.errors?.has("personas") ?? false,
     testid: "personas",
     title: "Personas",
     buildBody: (s) =>
@@ -155,12 +158,14 @@ const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
   },
   {
     scope: "scenarios",
+    isDegraded: (s) => s.errors?.has("scenarios") ?? false,
     testid: "saved-scenarios",
     title: "Saved scenarios",
     buildBody: (s) => renderSavedScenarios(s.scenarios.saved ?? [], (name) => void startSavedScenario(name)),
   },
   {
     scope: "sessions",
+    isDegraded: (s) => s.errors?.has("sessions") ?? false,
     testid: "closed-sessions",
     title: "Recent closed sessions",
     buildBody: (s) =>
@@ -171,6 +176,7 @@ const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
   },
   {
     scope: "macros",
+    isDegraded: (s) => s.errors?.has("macros") ?? false,
     testid: "macros",
     title: "Macros",
     collapsible: true,
