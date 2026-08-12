@@ -40,6 +40,16 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.14.2": [
+        "Opt-in dashboard pairing now protects the browser-facing control plane end to end: a one-use "
+        "fragment becomes an origin-scoped bearer for APIs, SSE, WebSockets and protected media, and cloned "
+        "tabs must pair independently. It stays off by default; the loopback daemon and same-user 0600 "
+        "lockfile remain the trust boundary, and remote exposure still requires its separate explicit opt-in.",
+        "The correctness review closes lifecycle and concurrency gaps across browser launch/close, persona "
+        "deletion, bridge snapshots, idempotent dispatch, scenario and terminal teardown, saturated recording "
+        "discovery, replay classification, and dashboard degradation. Frontend installs/builds are now "
+        "lockfile-deterministic and dependency-audited too.",
+    ],
     "0.14.1": [
         "A persistent profile no longer breaks when its browser dies badly or when a cache/temp cleanup runs. "
         "Chromium leaves an in-use marker pointing at a process that is gone, and every later launch of that "
