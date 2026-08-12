@@ -446,12 +446,13 @@ async def _run_leader(
     finally:
         _uninstall_leader_signal_handlers(loop, installed_signals, installed_signal_handlers)
         await _cancel_and_collect_tasks(sidecars, watch_task, mcp_task, housekeeping_task)
-        from octowright.process_reaper import reap_descendant_browsers_on_shutdown
+        from octowright.process_reaper import reap_descendant_browsers_on_shutdown, shutdown_browser_pool_on_shutdown
 
         await reap_descendant_browsers_on_shutdown(pool, log=_log)
         from octowright.server import _state as _st
 
         await _close_terminal_pool_on_shutdown(_st.terminal_pool, log=_log)
+        await shutdown_browser_pool_on_shutdown(pool, log=_log)
         if not no_singleton:
             _sn.remove_lock()
 
