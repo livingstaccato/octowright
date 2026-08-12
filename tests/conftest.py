@@ -98,6 +98,30 @@ def _loopback_dashboard_testclient(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_starlette_testclient.TestClient, "websocket_connect", _websocket_connect)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_canonical_http_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the CANONICAL dashboard port away from any real local daemon.
+
+    ``_leader_election._canonical_port_serves_octowright`` is the split-brain
+    guard: before spawning a replacement daemon it probes the *canonical* port
+    (``defaults.HTTP_PORT``, normally 6286) and refuses to spawn if octowright
+    already answers there. That probe ignores whatever port a test picked, so a
+    developer running ``octowright serve`` on 6286 silently flipped the guard
+    ON for the whole suite and every "should spawn a replacement" assertion
+    failed — a false red that only appears on a machine with a live daemon.
+
+    Repointing it at an OS-assigned free port makes the suite hermetic. The
+    guard's logic is unchanged and still exercised: tests that need it to fire
+    stub the probe explicitly, and the probe's own classification tests stub
+    the HTTP layer, so neither depends on this port. Even if something did bind
+    the port, only a real octowright ``/api/health`` (``ok: true``) trips the
+    guard, so an unrelated listener still reads as free.
+    """
+    from octowright import defaults as _defaults
+
+    monkeypatch.setattr(_defaults, "HTTP_PORT", _free_port(), raising=False)
+
+
 def _free_port() -> int:
     """Return an OS-assigned free TCP port on 127.0.0.1.
 
