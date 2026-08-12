@@ -63,6 +63,10 @@ SENSITIVE_HTTP_ROUTES = [
 ]
 
 SENSITIVE_ROUTE_PATTERNS = {
+    # Pairing bootstrap: host/origin-guarded like everything else, but
+    # pairing_exempt (they ARE the bootstrap; mint is token-authed itself).
+    ("POST", "/api/pair/mint"),
+    ("POST", "/api/pair/redeem"),
     ("GET", "/api/sessions"),
     ("POST", "/api/sessions"),
     ("GET", "/api/sessions/{id}"),
