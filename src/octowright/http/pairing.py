@@ -3,140 +3,234 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Opt-in dashboard pairing: ticket/session store + the access decision.
+"""Origin-scoped dashboard pairing credentials and access decisions.
 
-The browser-facing dashboard surface is loopback-Host-gated only, so a
-*different-user* or *sandboxed* loopback process can read live JSONL and drive
-persona/scenario/macro writes. The capability token can't simply be embedded in
-the served page — any loopback fetcher could scrape it exactly like the real
-browser. Pairing routes the token to the HUMAN over a channel a hostile
-process can't observe (the operator's tty):
+Pairing is opt-in. A lockfile-authenticated CLI mints a one-time code, the
+browser redeems it for a short-lived bearer, and the SPA keeps that bearer in
+origin-scoped ``sessionStorage``. Raw codes and bearer values are never stored
+server-side: one Starlette app owns one bounded, digest-only state machine.
 
-1. ``octowright dashboard`` (same-user; reads the 0600 lockfile so it holds the
-   capability token) POSTs ``/api/pair/mint`` with ``X-Octowright-Token`` and
-   receives a single-use, short-TTL ticket.
-2. The CLI prints ``http://127.0.0.1:PORT/pair#<ticket>`` — ticket in the URL
-   *fragment*, so it is never sent on navigation, never logged, never in
-   Referer. The human copies it into their browser.
-3. The ``/pair`` page redeems the ticket for an HttpOnly, SameSite=Strict
-   session cookie; every guarded route then accepts EITHER that cookie
-   (browser) or the ``X-Octowright-Token`` header (follower/programmatic).
-
-``OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`` is **OFF by default** (back-compat:
-the type-the-URL dashboard UX stays). Same-user processes are NOT defended —
-they can read the lockfile and mint their own ticket; the lockfile remains the
-same-user trust boundary, matching the /mcp token's honest limits.
-
-All state is in-memory and per-leader: a restart invalidates every ticket and
-session, which is the safe direction.
+The same-user lockfile boundary remains explicit. A process that can read the
+leader token can mint its own code; pairing protects against other local users
+and sandboxed loopback processes, not the daemon owner's processes.
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import math
 import os
+import re
 import secrets
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from starlette.requests import HTTPConnection
 
 PAIRING_REQUIRE_ENV = "OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING"
-# Opt-IN knob (unlike the opt-out gates): only these tokens enable it.
 _ENABLED_TOKENS = frozenset({"1", "on", "true", "yes"})
 
-SESSION_COOKIE = "octowright_dash"
-TICKET_TTL_SECONDS = 60.0
-# Bounded LRU of live browser sessions; far above real use (a handful of tabs),
-# far below memory concern. Oldest evicted first.
-MAX_SESSIONS = 32
-_TOKEN_HEADER = "x-octowright-token"  # nosec B105  # header NAME, not a credential
+PAIR_CODE_TTL_SECONDS = 60.0
+DASHBOARD_SESSION_TTL_SECONDS = 8 * 60 * 60.0
+MAX_PAIR_CODES = 32
+MAX_DASHBOARD_SESSIONS = 32
+DASHBOARD_STATE_ATTR = "dashboard_pairing"
+
+CAPABILITY_TOKEN_HEADER = "x-octowright-token"  # nosec B105  # header name
+DASHBOARD_WS_PROTOCOL = "octowright.dashboard"
+DASHBOARD_WS_BEARER_PREFIX = f"{DASHBOARD_WS_PROTOCOL}.bearer."
+_BASE64URL_TOKEN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def pairing_required() -> bool:
-    """Whether dashboard pairing is enforced. OFF by default; enable with
-    ``OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`` set to a truthy token."""
+    """Return whether the opt-in browser dashboard credential gate is on."""
     return os.environ.get(PAIRING_REQUIRE_ENV, "").strip().lower() in _ENABLED_TOKENS
 
 
-class PairingState:
-    """In-memory single-use tickets + bounded LRU of session bearers.
+@dataclass(frozen=True)
+class DashboardBearerGrant:
+    """A bearer returned once to the browser; its repr deliberately redacts it."""
 
-    ``clock`` is injectable for TTL tests; everything else is deterministic.
-    Lookups run constant-time compares over the (small, bounded) stores so a
-    wrong ticket/bearer can't be probed by timing.
-    """
+    bearer: str = field(repr=False)
+    expires_at: int
 
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
-        self._clock = clock
-        self._tickets: OrderedDict[str, float] = OrderedDict()  # ticket -> expiry
-        self._sessions: OrderedDict[str, float] = OrderedDict()  # bearer -> created
-        self._expected_token = ""  # nosec B105  # empty sentinel, not a credential
 
-    # -- capability token (the header alternative) ----------------------------
+class DashboardPairingState:
+    """One app's bounded one-time-code and dashboard-session stores."""
 
-    def set_expected_token(self, token: str) -> None:
-        self._expected_token = token
+    def __init__(
+        self,
+        *,
+        expected_token: str,
+        monotonic_clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
+        code_ttl: float = PAIR_CODE_TTL_SECONDS,
+        session_ttl: float = DASHBOARD_SESSION_TTL_SECONDS,
+        max_codes: int = MAX_PAIR_CODES,
+        max_sessions: int = MAX_DASHBOARD_SESSIONS,
+    ) -> None:
+        self._monotonic_clock = monotonic_clock
+        self._wall_clock = wall_clock
+        self._code_ttl = code_ttl
+        self._session_ttl = session_ttl
+        self._max_codes = max(1, max_codes)
+        self._max_sessions = max(1, max_sessions)
+        self._codes: OrderedDict[bytes, float] = OrderedDict()
+        self._sessions: OrderedDict[bytes, float] = OrderedDict()
+        self._expected_token_digest = self._digest(expected_token) if expected_token else None
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(codes={len(self._codes)}, "
+            f"sessions={len(self._sessions)}, token_configured={self._expected_token_digest is not None})"
+        )
+
+    @staticmethod
+    def _digest(value: str) -> bytes:
+        return hashlib.sha256(value.encode("utf-8")).digest()
+
+    @staticmethod
+    def _constant_time_key_match(store: OrderedDict[bytes, float], candidate: bytes) -> bytes | None:
+        return next((known for known in store if hmac.compare_digest(known, candidate)), None)
 
     @property
-    def expected_token(self) -> str:
-        return self._expected_token
+    def token_configured(self) -> bool:
+        return self._expected_token_digest is not None
 
-    # -- tickets ---------------------------------------------------------------
+    def capability_token_ok(self, candidate: str | None) -> bool:
+        if not candidate or self._expected_token_digest is None:
+            return False
+        return hmac.compare_digest(self._digest(candidate), self._expected_token_digest)
 
-    def mint_ticket(self) -> str:
-        self._prune()
-        ticket = secrets.token_urlsafe(16)
-        self._tickets[ticket] = self._clock() + TICKET_TTL_SECONDS
-        return ticket
+    def mint_code(self) -> str:
+        self._prune_expired()
+        while True:
+            code = secrets.token_urlsafe(24)
+            digest = self._digest(code)
+            if digest not in self._codes:
+                break
+        self._codes[digest] = self._monotonic_clock() + self._code_ttl
+        self._trim(self._codes, self._max_codes)
+        return code
 
-    def redeem_ticket(self, ticket: str) -> str | None:
-        """Consume ``ticket`` (single-use) and mint a session bearer, or None."""
-        self._prune()
-        match = next((known for known in self._tickets if hmac.compare_digest(known, ticket)), None)
+    def redeem_code(self, code: str) -> DashboardBearerGrant | None:
+        self._prune_expired()
+        if not code:
+            return None
+        match = self._constant_time_key_match(self._codes, self._digest(code))
         if match is None:
             return None
-        del self._tickets[match]
-        bearer = secrets.token_urlsafe(32)
-        self._sessions[bearer] = self._clock()
-        while len(self._sessions) > MAX_SESSIONS:
-            self._sessions.popitem(last=False)
-        return bearer
+        del self._codes[match]
 
-    def session_ok(self, bearer: str) -> bool:
-        return any(hmac.compare_digest(known, bearer) for known in self._sessions)
+        while True:
+            bearer = secrets.token_urlsafe(32)
+            digest = self._digest(bearer)
+            if digest not in self._sessions:
+                break
+        self._sessions[digest] = self._monotonic_clock() + self._session_ttl
+        self._trim(self._sessions, self._max_sessions)
+        return DashboardBearerGrant(
+            bearer=bearer,
+            expires_at=math.ceil(self._wall_clock() + self._session_ttl),
+        )
 
-    def reset(self) -> None:
-        """Test hook: drop all tickets/sessions and the expected token."""
-        self._tickets.clear()
-        self._sessions.clear()
-        self._expected_token = ""  # nosec B105  # empty sentinel, not a credential
+    def bearer_ok(self, bearer: str) -> bool:
+        self._prune_expired()
+        if not bearer:
+            return False
+        match = self._constant_time_key_match(self._sessions, self._digest(bearer))
+        if match is None:
+            return False
+        self._sessions.move_to_end(match)
+        return True
 
-    def _prune(self) -> None:
-        now = self._clock()
-        for ticket, expiry in list(self._tickets.items()):
-            if expiry <= now:
-                del self._tickets[ticket]
+    @staticmethod
+    def _trim(store: OrderedDict[bytes, float], limit: int) -> None:
+        while len(store) > limit:
+            store.popitem(last=False)
+
+    def _prune_expired(self) -> None:
+        now = self._monotonic_clock()
+        for store in (self._codes, self._sessions):
+            for digest, expiry in list(store.items()):
+                if expiry <= now:
+                    del store[digest]
 
 
-# Per-process singleton; build_app() stamps the leader's capability token on it.
-PAIRING = PairingState()
+def dashboard_pairing_state(connection: HTTPConnection) -> DashboardPairingState | None:
+    """Return the state attached to this connection's Starlette app."""
+    try:
+        return getattr(connection.app.state, DASHBOARD_STATE_ATTR, None)
+    except (AttributeError, KeyError):
+        return None
+
+
+def authorization_bearer(connection: HTTPConnection) -> str | None:
+    """Parse one unambiguous ``Authorization: Bearer <opaque>`` value."""
+    values = connection.headers.getlist("authorization")
+    if len(values) != 1:
+        return None
+    scheme, separator, bearer = values[0].partition(" ")
+    if scheme.casefold() != "bearer" or separator != " " or not bearer:
+        return None
+    if any(char.isspace() for char in bearer):
+        return None
+    return bearer
 
 
 def dashboard_access_ok(connection: HTTPConnection) -> bool:
-    """The pairing access decision for a guarded HTTP request or WebSocket.
-
-    True when pairing is disabled (default), when the connection carries a
-    valid session cookie (paired browser), or when it presents the capability
-    token header (follower / programmatic caller — unchanged behavior). Layered
-    INSIDE the loopback/Host/cross-origin guards, never instead of them.
-    """
+    """Authorize a guarded HTTP request using bearer or capability token."""
     if not pairing_required():
         return True
-    cookie = connection.cookies.get(SESSION_COOKIE)
-    if cookie and PAIRING.session_ok(cookie):
+    state = dashboard_pairing_state(connection)
+    if state is None:
+        return False
+    if state.capability_token_ok(connection.headers.get(CAPABILITY_TOKEN_HEADER)):
         return True
-    expected = PAIRING.expected_token
-    header = connection.headers.get(_TOKEN_HEADER)
-    return bool(expected and header is not None and hmac.compare_digest(header.encode(), expected.encode()))
+    bearer = authorization_bearer(connection)
+    return bearer is not None and state.bearer_ok(bearer)
+
+
+def _websocket_protocols(connection: HTTPConnection) -> list[str]:
+    protocols: list[str] = []
+    for value in connection.headers.getlist("sec-websocket-protocol"):
+        protocols.extend(part.strip() for part in value.split(",") if part.strip())
+    return protocols
+
+
+def _websocket_bearer(connection: HTTPConnection) -> str | None:
+    protocols = _websocket_protocols(connection)
+    if DASHBOARD_WS_PROTOCOL not in protocols:
+        return None
+    credentials = [value for value in protocols if value.startswith(DASHBOARD_WS_BEARER_PREFIX)]
+    if len(credentials) != 1:
+        return None
+    bearer = credentials[0][len(DASHBOARD_WS_BEARER_PREFIX) :]
+    if not bearer or _BASE64URL_TOKEN.fullmatch(bearer) is None:
+        return None
+    return bearer
+
+
+def dashboard_websocket_auth(connection: HTTPConnection) -> tuple[bool, str | None]:
+    """Authorize a dashboard WebSocket and choose a non-secret protocol.
+
+    Browser clients propose both the stable public protocol and a private
+    credential protocol. The secret-bearing value is validated but never
+    selected or echoed in the handshake response.
+    """
+    if not pairing_required():
+        return True, None
+    state = dashboard_pairing_state(connection)
+    if state is None:
+        return False, None
+    if state.capability_token_ok(connection.headers.get(CAPABILITY_TOKEN_HEADER)):
+        protocols = _websocket_protocols(connection)
+        selected = DASHBOARD_WS_PROTOCOL if DASHBOARD_WS_PROTOCOL in protocols else None
+        return True, selected
+    bearer = _websocket_bearer(connection)
+    if bearer is None or not state.bearer_ok(bearer):
+        return False, None
+    return True, DASHBOARD_WS_PROTOCOL
