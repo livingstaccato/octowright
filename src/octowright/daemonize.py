@@ -61,11 +61,19 @@ def _resolve_daemon_entrypoint() -> list[str]:
 
 
 def _open_daemon_log() -> IO[bytes]:
-    """Open the daemon-stderr log file, truncating if it's grown too large."""
+    """Open the private daemon-stderr log, repairing legacy permissions."""
     _DAEMON_LOG.parent.mkdir(parents=True, exist_ok=True)
     if _DAEMON_LOG.exists() and _DAEMON_LOG.stat().st_size > _DAEMON_LOG_MAX_BYTES:
         _DAEMON_LOG.unlink()
-    return _DAEMON_LOG.open("ab")
+    fd = os.open(_DAEMON_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        # ``mode`` only applies to a newly created file. Tighten pre-existing
+        # logs too before the daemon can append potentially sensitive output.
+        os.chmod(_DAEMON_LOG, 0o600)
+        return os.fdopen(fd, "ab")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def spawn_daemon(
