@@ -97,15 +97,20 @@ lockfile. Remote dashboard binding still requires `OCTOWRIGHT_ALLOW_REMOTE_DASHB
    existing remote opt-in), then POSTs `/api/pair/mint` with `X-Octowright-Token`.
 2. The leader stores only a digest of a one-use, 60-second code. The CLI prints
    `http://HOST:PORT/pair#<code>`; the fragment is not sent in HTTP, logs, or Referer. `--open`
-   uses a redirect page in a 0700 temporary directory, keeping the code out of browser argv.
+   uses a redirect page in a 0700 temporary directory, keeping the code out of browser argv,
+   then removes that directory after a short cold-browser read grace period.
 3. The SPA removes the fragment from history before its first await, redeems the code through
    the shared streaming request-body cap, receives JSON `{bearer, expires_at}`, and stores it
-   under a versioned `sessionStorage` key. No cookie or `localStorage` credential exists.
+   under a versioned `sessionStorage` key. It also claims an origin-wide exclusive Web Lock for
+   that stored tab ID. A duplicated/opener-cloned dashboard or session-debugger tab cannot claim
+   the same lock, clears the cloned bearer, and must pair independently; if Web Locks are
+   unavailable, a credential not created in the current document fails closed. No cookie or
+   `localStorage` credential exists.
 4. Shared JSON APIs, streaming-fetch SSE, protected screenshots/video/downloads, and both
    WebSockets authenticate. HTTP uses `Authorization: Bearer`; WebSockets offer a private
    credential subprotocol but the server selects only stable `octowright.dashboard`, so the
    secret is never echoed as the negotiated protocol. A 401 clears local auth and raises the
-   dashboard's re-pair prompt.
+   dashboard's terminal re-pair state: SSE reconnect and polling both stop until a fresh pairing.
 
 ### State and route architecture
 
@@ -121,16 +126,22 @@ lockfile. Remote dashboard binding still requires `OCTOWRIGHT_ALLOW_REMOTE_DASHB
 - Static SPA bootstrap, `/pair`, `/api/health`, and `/new-tab` remain available to the local
   bootstrap flow. Dashboard data, controls, events, recordings, media, downloads, tail, and
   screencast stay protected when pairing is enabled.
+- Protected closed-session video loads no longer block debugger boot. Their fetch receives an
+  `AbortSignal`; navigation aborts it and any late object URL is revoked rather than attached.
+- Paired screenshot previews load only near the viewport, with at most three authenticated blob
+  fetches in flight. Leaving the viewport, rerender, and teardown abort pending work and revoke
+  full-size blob URLs, bounding request bursts and retained memory for long recordings.
 
 ### Verification evidence
 
 - Backend pairing/exposure suite: 143 focused tests pass.
-- CLI host/code suite: 13 focused tests pass, including IPv6, injection rejection, remote opt-in
+- CLI host/code suite: 14 focused tests pass, including IPv6, injection rejection, remote opt-in
   denial, leader errors, and private browser-open behavior.
-- Frontend: 382 tests pass with 95.69% statements / 89.22% branches; TypeScript checking and the
+- Frontend under Node 20: 394 tests pass with 95.00% statements / 87.68% branches; TypeScript checking and the
   production Vite build pass. Coverage includes fragment scrubbing, sessionStorage expiry, 401
   clearing, authenticated API/SSE/WS/media paths, stream chunk boundaries/reconnect, blob URL
-  cleanup, and preservation of the default unpaired behavior.
+  cleanup, exclusive per-tab ownership, bounded lazy screenshots, non-blocking video teardown,
+  terminal re-pair behavior, and preservation of the default unpaired behavior.
 - Full repository `make ci` passes: all lint/type/security/dependency/complexity checks and the
   complete Python suite are green at 88.65% coverage (83% required).
 

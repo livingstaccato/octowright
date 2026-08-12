@@ -8,7 +8,7 @@
 // scenario-panels, persona-grid, dashboard-state, dashboard-panels).
 
 import { deleteRecording, getPersonaSizes, relaunchSession, startScenario } from "./api.js";
-import { bootstrapDashboardAuth, DASHBOARD_AUTH_REQUIRED_EVENT } from "./dashboard-auth.js";
+import { bootstrapDashboardAuth, DASHBOARD_AUTH_REQUIRED_EVENT, isolateDashboardTabAuth } from "./dashboard-auth.js";
 import type { DashboardEventStreamHandle } from "./dashboard-events.js";
 import { openDashboardEventStream } from "./dashboard-events.js";
 import type { PanelDef, PanelInstance } from "./dashboard-panels.js";
@@ -237,13 +237,12 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   dashboardRoot = root;
   log.info({ event: "dashboard_boot_start" });
   initTelemetry({ pageName: "dashboard" });
-  await bootstrapDashboardAuth();
-  loadPersonaSizes();
   let disposed = false;
   let source: DashboardEventStreamHandle | null = null;
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
   dashboardCurrentState = EMPTY_STATE;
   let streamHealthy = false;
+  let authBlocked = false;
   let refreshErrorShown = false;
   // Serialize tick() so concurrent SSE invalidations don't lose updates.
   let pendingTick: Promise<void> = Promise.resolve();
@@ -302,11 +301,37 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   };
 
   const authRequired = (): void => {
+    if (authBlocked) return;
+    authBlocked = true;
+    source?.close();
+    source = null;
+    stopPolling();
     showSnackbar("Dashboard pairing expired. Run `octowright dashboard` and open the new URL.", true);
   };
   window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
 
+  const newlyPaired = await bootstrapDashboardAuth();
+  if (newlyPaired) authBlocked = false;
+  await isolateDashboardTabAuth();
+
   await tick();
+  if (authBlocked) {
+    const dispose = (): void => {
+      if (disposed) return;
+      disposed = true;
+      stopPolling();
+      window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
+      if (dashboardRoot === root) {
+        dashboardRoot = null;
+        dashboardPanels = null;
+        dashboardCurrentState = EMPTY_STATE;
+      }
+      if (activeDashboardDisposer === dispose) activeDashboardDisposer = null;
+    };
+    activeDashboardDisposer = dispose;
+    return dispose;
+  }
+  loadPersonaSizes();
   source = openDashboardEventStream({
     onOpen: () => {
       streamHealthy = true;
