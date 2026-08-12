@@ -1,5 +1,27 @@
 import { screenshotUrl } from "./api.js";
+import { fetchDashboardMediaObjectUrl, getDashboardBearer } from "./dashboard-auth.js";
 import type { ScreenshotEntry } from "./types.js";
+
+interface ScreenshotsPanelOptions {
+  fetchFn?: typeof fetch;
+}
+
+interface ScreenshotsPanelResources {
+  active: boolean;
+  controllers: AbortController[];
+  objectUrls: string[];
+}
+
+const panelResources = new WeakMap<HTMLElement, ScreenshotsPanelResources>();
+
+export function disposeScreenshotsPanel(container: HTMLElement): void {
+  const resources = panelResources.get(container);
+  if (!resources) return;
+  resources.active = false;
+  for (const controller of resources.controllers) controller.abort();
+  for (const objectUrl of resources.objectUrls) URL.revokeObjectURL(objectUrl);
+  panelResources.delete(container);
+}
 
 function formatHms(epochSeconds: number): string {
   if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return "";
@@ -16,7 +38,9 @@ export function renderScreenshotsPanel(
   container: HTMLElement,
   sessionId: string,
   screenshots: ScreenshotEntry[],
+  options: ScreenshotsPanelOptions = {},
 ): void {
+  disposeScreenshotsPanel(container);
   container.innerHTML = "";
   container.classList.add("screenshots-panel");
   container.setAttribute("data-testid", "screenshots-panel");
@@ -30,6 +54,10 @@ export function renderScreenshotsPanel(
     return;
   }
 
+  const resources: ScreenshotsPanelResources = { active: true, controllers: [], objectUrls: [] };
+  panelResources.set(container, resources);
+  const paired = getDashboardBearer() !== null;
+
   const grid = document.createElement("div");
   grid.className = "screenshots-panel__grid";
   grid.setAttribute("data-testid", "screenshots-grid");
@@ -41,14 +69,14 @@ export function renderScreenshotsPanel(
 
     const href = screenshotUrl(sessionId, shot.filename);
     const link = document.createElement("a");
-    link.href = href;
+    if (!paired) link.href = href;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.setAttribute("data-testid", "screenshot-link");
 
     const img = document.createElement("img");
     img.className = "screenshots-panel__img";
-    img.src = href;
+    if (!paired) img.src = href;
     img.alt = shot.filename;
     img.loading = "lazy";
     link.append(img);
@@ -60,6 +88,34 @@ export function renderScreenshotsPanel(
 
     cell.append(link, caption);
     grid.append(cell);
+
+    if (paired) {
+      link.setAttribute("aria-disabled", "true");
+      const controller = new AbortController();
+      resources.controllers.push(controller);
+      void fetchDashboardMediaObjectUrl(href, {
+        signal: controller.signal,
+        ...(options.fetchFn ? { fetchFn: options.fetchFn } : {}),
+      })
+        .then((objectUrl) => {
+          if (!resources.active || controller.signal.aborted) {
+            URL.revokeObjectURL(objectUrl);
+            return;
+          }
+          resources.objectUrls.push(objectUrl);
+          img.src = objectUrl;
+          link.href = objectUrl;
+          link.removeAttribute("aria-disabled");
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted || !resources.active) return;
+          const failure = document.createElement("span");
+          failure.className = "screenshots-panel__error";
+          failure.setAttribute("role", "status");
+          failure.textContent = `preview unavailable: ${(error as Error).message}`;
+          cell.append(failure);
+        });
+    }
   }
 
   container.append(grid);

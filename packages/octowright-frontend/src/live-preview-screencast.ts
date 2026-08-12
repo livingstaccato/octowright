@@ -1,3 +1,4 @@
+import { dashboardWebSocketProtocols } from "./dashboard-auth.js";
 import { getLogger, wsConnectsCounter, wsMessagesCounter } from "./telemetry.js";
 
 const log = getLogger("octowright.frontend.screencast");
@@ -16,7 +17,8 @@ export interface ScreencastOptions {
 
 export function openScreencast(url: string, opts: ScreencastOptions): ScreencastHandle {
   const Ctor = opts.webSocketCtor ?? WebSocket;
-  const ws = new Ctor(url);
+  const protocols = dashboardWebSocketProtocols();
+  const ws = protocols.length > 0 ? new Ctor(url, protocols) : new Ctor(url);
   ws.binaryType = "blob";
 
   log.info({ event: "ws_connecting", kind: "screencast", url });

@@ -66,7 +66,7 @@ Do not use a browser cookie for the dashboard bearer. Cookies do not isolate
 ports, so a service on another loopback port can receive a bearer issued by the
 Octowright port.
 
-The pairing page redeems its single-use fragment ticket and receives a random
+The pairing page redeems its single-use fragment code and receives a random
 dashboard bearer in the JSON response. It stores that bearer in `sessionStorage`,
 which is scoped to the exact scheme, host, and port, then redirects to the
 dashboard. A new tab must pair independently; a leader restart invalidates all
@@ -92,8 +92,8 @@ valid bearer or capability token is supplied.
 ### State and request boundaries
 
 Pairing state belongs to one Starlette app instance rather than a process-global
-singleton. Replacing a leader token creates a fresh state. Tickets and sessions
-remain bounded, ticket comparison remains constant-time, and session access
+singleton. Replacing a leader token creates a fresh state. Codes and sessions
+remain bounded, code comparison remains constant-time, and session access
 updates true LRU order. Pairing redemption uses the shared capped JSON reader so
 `OCTOWRIGHT_MAX_REQUEST_BODY_BYTES` applies to the unauthenticated bootstrap.
 
