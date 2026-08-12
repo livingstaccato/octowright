@@ -69,7 +69,7 @@ describe("renderScreenshotsPanel", () => {
     vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
     const fetchFn = vi.fn(async (_path: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer shot-secret");
-      return new Response(new Blob(["shot"]), { status: 200 });
+      return new Response("shot", { status: 200 });
     });
 
     renderScreenshotsPanel(container, "sess-1", SAMPLE.slice(0, 1), { fetchFn });
