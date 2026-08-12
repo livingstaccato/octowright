@@ -11,6 +11,7 @@ from pathlib import Path
 from octowright.version import VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+RELEASE_VERSION = "0.14.2"
 
 
 def _version_file_value() -> str:
@@ -21,6 +22,25 @@ def test_runtime_version_matches_version_file() -> None:
     """``octowright.version.VERSION`` must reflect the top-level VERSION file
     (single source of truth across the provide-io ecosystem)."""
     assert _version_file_value() == VERSION
+
+
+def test_release_metadata_is_synchronized() -> None:
+    """Every user-visible version consumer must carry the release version."""
+    import json
+
+    assert _version_file_value() == RELEASE_VERSION
+    assert VERSION == RELEASE_VERSION
+    for manifest in (
+        ".antigravity-plugin/plugin.json",
+        ".claude-plugin/plugin.json",
+        ".codex-plugin/plugin.json",
+    ):
+        data = json.loads((REPO_ROOT / manifest).read_text(encoding="utf-8"))
+        assert data["version"] == RELEASE_VERSION, manifest
+
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    first_release_heading = next(line for line in changelog.splitlines() if line.startswith("## ["))
+    assert first_release_heading.startswith(f"## [{RELEASE_VERSION}]")
 
 
 def test_pyproject_declares_dynamic_version_from_version_file() -> None:

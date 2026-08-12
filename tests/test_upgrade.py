@@ -157,3 +157,11 @@ def test_current_version_has_curated_highlights() -> None:
         "add a curated highlights list when bumping VERSION (src/octowright/upgrade.py)."
     )
     assert upgrade.HIGHLIGHTS[VERSION], f"highlights for {VERSION!r} must be non-empty"
+
+
+def test_release_highlights_are_newest_and_synchronized() -> None:
+    """The newest curated notice must describe the current release."""
+    from octowright.version import VERSION
+
+    assert VERSION == "0.14.2"
+    assert next(iter(upgrade.HIGHLIGHTS)) == VERSION
