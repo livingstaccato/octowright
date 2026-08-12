@@ -7,13 +7,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from octowright import engine_profiles as profile_mod
 from octowright import personas as persona_mod
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import SUPPORTED_KINDS
-from octowright.profile_lifecycle import profile_lifecycle_lock, profile_lifecycle_locks
+from octowright.profile_lifecycle import profile_lifecycle_lock, profile_lifecycle_locks, profile_names_match
 from octowright.server._state import log, mcp, pool
 from octowright.types import CredentialCheckReport, PersonaListEntry
 
@@ -33,13 +34,17 @@ def profile_list(kind: str | None = None) -> list[dict[str, Any]]:
 async def profile_delete(kind: str, name: str) -> dict[str, Any]:
     async with profile_lifecycle_lock(kind, name):
         if pool.profile_in_use(kind, name):
-            live_ids = [s["instance_id"] for s in pool.list_sessions() if s["kind"] == kind and s["profile"] == name]
+            live_ids = [
+                s["instance_id"]
+                for s in pool.list_sessions()
+                if s["kind"] == kind and profile_names_match(s["profile"], name)
+            ]
             log.warning("octowright.profile.delete_refused", kind=kind, profile=name, reason="in_use")
             raise RuntimeError(
                 f"profile {kind}/{name} is in use by live browser(s) {live_ids}; "
                 f"close with `browser_close instance_id={live_ids[0]!r}` (or browser_close_all) first"
             )
-        path = profile_mod.delete_profile(kind, name)
+        path = await asyncio.to_thread(profile_mod.delete_profile, kind, name)
     log.info("octowright.profile.deleted", kind=kind, profile=name, path=str(path))
     publish_dashboard_invalidation_nowait("personas")
     return {"deleted": True, "path": str(path)}
@@ -110,12 +115,12 @@ def persona_create(
 async def persona_delete(name: str) -> dict[str, Any]:
     async with profile_lifecycle_locks((kind, name) for kind in SUPPORTED_KINDS):
         for s in pool.list_sessions():
-            if s["profile"] == name:
+            if profile_names_match(s["profile"], name):
                 raise RuntimeError(
                     f"persona {name!r} is in use by live instance {s['instance_id']}; "
                     f"close with `browser_close instance_id={s['instance_id']!r}` first"
                 )
-        path = profile_mod.delete_persona(name)
+        path = await asyncio.to_thread(profile_mod.delete_persona, name)
     log.info("octowright.persona.deleted", name=name, path=str(path))
     publish_dashboard_invalidation_nowait("personas")
     return {"deleted": True, "name": name, "path": str(path)}
@@ -138,7 +143,5 @@ async def persona_credentials_check(name: str) -> CredentialCheckReport:
     # loop, so a 30s `op` call would stall every live browser, every WS
     # heartbeat, and every JSONL write. Push the synchronous helper to a
     # worker thread to keep the loop responsive.
-    import asyncio
-
     persona = persona_mod.load_persona(name)
     return await asyncio.to_thread(persona_mod.check_credentials, persona)
