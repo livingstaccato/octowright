@@ -383,6 +383,20 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
   });
 
+  it("enters a terminal re-pair state instead of opening retry transports after 401", async () => {
+    apiMocks.getSessions.mockImplementationOnce(async () => {
+      window.dispatchEvent(new Event("octowright:dashboard-auth-required"));
+      throw new Error("pairing required");
+    });
+
+    await dashboard.bootDashboard(root);
+
+    expect(dashboardEventMocks.openDashboardEventStream).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Dashboard pairing expired");
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(apiMocks.getSessions).toHaveBeenCalledOnce();
+  });
+
   it("keeps the reconnecting fetch stream open and polls after an error", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     await dashboard.bootDashboard(root);

@@ -12,6 +12,7 @@
  *   - seek closure
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { disposeDashboardTabIsolation, getDashboardBearer, setDashboardBearer } from "./dashboard-auth.js";
 import {
   appendForTest,
   bootSession,
@@ -136,11 +137,15 @@ async function getMockedPanelLoaders() {
 
 let root: HTMLDivElement;
 beforeEach(() => {
+  disposeDashboardTabIsolation();
+  sessionStorage.clear();
   root = document.createElement("div");
   document.body.append(root);
 });
 afterEach(() => {
+  disposeDashboardTabIsolation();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
 
@@ -272,6 +277,20 @@ describe("renderTraceControls click handler", () => {
 // bootSession — closed session
 // ---------------------------------------------------------------------------
 describe("bootSession — closed session", () => {
+  it("rejects sessionStorage auth cloned into a new debugger tab", async () => {
+    setDashboardBearer({ bearer: "cloned-secret", expires_at: Date.now() / 1000 + 60 });
+    const clonedRecord = sessionStorage.getItem("octowright.dashboard.auth.v1");
+    disposeDashboardTabIsolation();
+    if (!clonedRecord) throw new Error("missing stored auth");
+    sessionStorage.setItem("octowright.dashboard.auth.v1", clonedRecord);
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ live: false }));
+
+    await bootSession(root, "sess-cloned-tab");
+
+    expect(getDashboardBearer()).toBeNull();
+  });
+
   it("renders header, video slot, trace slot, and footer", async () => {
     const getSession = await getMockedGetSession();
     getSession.mockResolvedValueOnce(makeDetail({ video_path: "/v.webm", trace_path: "/t.zip" }));
@@ -386,6 +405,53 @@ describe("bootSession — closed session", () => {
     window.dispatchEvent(new Event("beforeunload"));
 
     expect(livePreviewHandle.destroy).toHaveBeenCalled();
+  });
+
+  it("finishes boot while a protected video request is still pending", async () => {
+    setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
+    const fetchFn = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchFn);
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ video_path: "/v.webm" }));
+    const api = await import("./api.js");
+
+    const boot = bootSession(root, "sess-pending-video");
+
+    await vi.waitFor(() => expect(api.getEvents).toHaveBeenCalledWith("sess-pending-video", 0));
+    await boot;
+    expect(root.querySelector("[data-testid='session-footer']")).not.toBeNull();
+    window.dispatchEvent(new Event("beforeunload"));
+  });
+
+  it("aborts a pending protected video request and revokes a late object URL on beforeunload", async () => {
+    setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
+    let resolveFetch!: (response: Response) => void;
+    const fetchFn = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+    const createObjectURL = vi.fn(() => "blob:late-video");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ video_path: "/v.webm" }));
+    const api = await import("./api.js");
+
+    const boot = bootSession(root, "sess-pending-video-unload");
+    await vi.waitFor(() => expect(api.getEvents).toHaveBeenCalledWith("sess-pending-video-unload", 0));
+    await boot;
+    const request = fetchFn.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(request?.signal).toBeInstanceOf(AbortSignal);
+
+    window.dispatchEvent(new Event("beforeunload"));
+
+    expect(request?.signal?.aborted).toBe(true);
+    resolveFetch(new Response("video", { status: 200 }));
+    await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:late-video"));
+    expect(root.querySelector("[data-testid='video-player']")?.hasAttribute("src")).toBe(false);
   });
 });
 

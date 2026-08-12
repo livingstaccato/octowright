@@ -88,6 +88,26 @@ describe("openDashboardEventStream", () => {
     handle.close();
   });
 
+  it("stops permanently on 401 and asks the page to re-pair", async () => {
+    const callbacks: Array<() => void> = [];
+    const listener = vi.fn();
+    window.addEventListener("octowright:dashboard-auth-required", listener);
+    const handle = openDashboardEventStream({
+      fetchFn: vi.fn(async () => new Response("denied", { status: 401 })),
+      onInvalidate: () => {},
+      onError: vi.fn(),
+      setTimeoutFn: (callback) => {
+        callbacks.push(callback);
+        return callbacks.length as unknown as ReturnType<typeof setTimeout>;
+      },
+    });
+    await flush();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(callbacks).toHaveLength(0);
+    handle.close();
+    window.removeEventListener("octowright:dashboard-auth-required", listener);
+  });
+
   it("reconnects with exponential delay capped at the configured maximum", async () => {
     const delays: number[] = [];
     const callbacks: Array<() => void> = [];

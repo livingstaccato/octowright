@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+from pathlib import Path
 from typing import Any
 
 import click
@@ -82,14 +83,46 @@ def test_dashboard_tokenless_leader_falls_back_to_plain_url(monkeypatch: pytest.
 def test_dashboard_open_uses_redirect_file_not_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("octowright.singleton.read_lock", lambda *a, **k: _leader())
     monkeypatch.setattr(dash_mod, "_mint_code", lambda base, token: "CODE123")
+    monkeypatch.setattr(dash_mod, "sleep", lambda seconds: None)
     opened: list[str] = []
-    monkeypatch.setattr(dash_mod.webbrowser, "open", lambda target: opened.append(target) or True)
+
+    def fake_open(target: str) -> bool:
+        opened.append(target)
+        return True
+
+    monkeypatch.setattr(dash_mod.webbrowser, "open", fake_open)
     result = CliRunner().invoke(dash_mod.dashboard, ["--open"])
     assert result.exit_code == 0
     assert len(opened) == 1
     # The browser gets a file:// path, never the code-bearing URL in argv.
     assert opened[0].startswith("file://")
     assert "CODE123" not in opened[0]
+
+
+def test_open_redirect_file_waits_before_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    redirect_dir = tmp_path / "redirect"
+    redirect_dir.mkdir()
+    redirect = redirect_dir / "pair.html"
+    slept: list[float] = []
+
+    monkeypatch.setattr(dash_mod.tempfile, "mkdtemp", lambda *, prefix: str(redirect_dir))
+
+    def fake_open(target: str) -> bool:
+        assert target == redirect.as_uri()
+        assert "CODE123" in redirect.read_text(encoding="utf-8")
+        return True
+
+    def fake_sleep(seconds: float) -> None:
+        assert redirect.exists()
+        slept.append(seconds)
+
+    monkeypatch.setattr(dash_mod.webbrowser, "open", fake_open)
+    monkeypatch.setattr(dash_mod, "sleep", fake_sleep)
+
+    dash_mod._open_via_redirect_file("http://127.0.0.1:6286/pair#CODE123")
+
+    assert slept == [dash_mod._REDIRECT_CLEANUP_DELAY_SECONDS]
+    assert not redirect_dir.exists()
 
 
 def test_mint_code_success(monkeypatch: pytest.MonkeyPatch) -> None:
