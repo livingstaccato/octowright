@@ -97,6 +97,54 @@ def test_safe_url_prefers_page_url_then_session() -> None:
     assert crash_recovery._safe_url(crashed, s) == "https://example.com"  # falls back to session.url
 
 
+async def test_replace_crashed_page_no_duplicate_when_page_event_already_appended() -> None:
+    """Real Playwright fires the context 'page' event for ``context.new_page()``,
+    so ``_register_popup`` has already appended the fresh page by the time
+    recovery runs. Recovery must not append/replace it a SECOND time — the fresh
+    page must appear exactly once and the dead page must be gone (else the pages
+    list carries a duplicate and page_count is wrong)."""
+    dead = MagicMock(name="dead")
+    dead.url = "https://example.com"
+    dead.close = AsyncMock()
+    fresh = MagicMock(name="fresh")
+    fresh.goto = AsyncMock()
+    fresh.screenshot = AsyncMock()
+    context = MagicMock()
+    s = SimpleNamespace(
+        instance_id="abc123",
+        kind="chromium",
+        label=None,
+        profile=None,
+        log_path=Path("/tmp/x.jsonl"),
+        url="https://example.com",
+        _crashed=True,
+        _crash_recoveries=0,
+        _last_crash_monotonic=0.0,
+        _bg_tasks=set(),
+        recorder=MagicMock(),
+        context=context,
+        page=dead,
+        pages=[dead],
+        page_count=1,
+    )
+
+    async def _new_page_fires_popup() -> MagicMock:
+        # Mimic _register_popup appending on the context 'page' event.
+        s.pages.append(fresh)
+        s.page_count = len(s.pages)
+        return fresh
+
+    context.new_page = AsyncMock(side_effect=_new_page_fires_popup)
+
+    ok = await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0, url="https://example.com")
+
+    assert ok is True
+    assert s.pages == [fresh]
+    assert s.page is fresh
+    assert s.page_count == 1
+    dead.close.assert_awaited_once()
+
+
 async def test_recover_publishes_recovered_event(monkeypatch: pytest.MonkeyPatch) -> None:
     from octowright.browser_pool import session_event_bus as _bus
 

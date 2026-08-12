@@ -9,6 +9,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -89,14 +90,45 @@ async def test_engine_masks_password_source_input(tmp_path: Path, monkeypatch: p
     assert masked["byte_count"] == len(b"s3cret\n")
 
 
-async def test_engine_send_input_on_dead_terminal_is_noop(tmp_path: Path) -> None:
+async def test_engine_send_input_on_dead_terminal_raises(tmp_path: Path) -> None:
+    from octowright.terminal.errors import TerminalDisconnectedError
+
     recorder = Recorder(tmp_path / "t.jsonl")
     engine = TerminalEngine("eng-4", "cat", "pty", {"command": "/bin/cat"}, recorder)
     await engine.start()
     await engine.stop()  # connector now disconnected
-    # Sending to a dead terminal records no phantom input (and logs a warning).
-    await engine.send_input("ignored\n")
+    # Sending to a dead terminal must RAISE (input not delivered), not silently
+    # succeed — and it records no phantom terminal_input.
+    with pytest.raises(TerminalDisconnectedError):
+        await engine.send_input("ignored\n")
     recorder.close()
 
     actions = _read_actions(tmp_path / "t.jsonl")
     assert not any(a["action"] == "terminal_input" for a in actions)
+
+
+async def test_poll_done_preserves_original_error_when_stop_record_fails() -> None:
+    class FailingRecorder:
+        def record(self, *_args: Any, **_kwargs: Any) -> None:
+            raise OSError("recording disk failed")
+
+    async def fail_poll() -> None:
+        raise RuntimeError("connector poll failed")
+
+    engine = object.__new__(TerminalEngine)
+    engine._instance_id = "eng-failed"
+    engine._connector_type = "pty"
+    engine._recorder = FailingRecorder()
+    engine._stop_recorded = False
+    engine._poll_error = None
+
+    task = asyncio.create_task(fail_poll())
+    with pytest.raises(RuntimeError, match="connector poll failed"):
+        await task
+
+    # asyncio invokes this as a done-callback: it must consume recorder errors,
+    # retain the causal poll exception, and make the stop transition exactly once.
+    engine._on_poll_done(task)
+    assert isinstance(engine._poll_error, RuntimeError)
+    assert str(engine._poll_error) == "connector poll failed"
+    assert engine._stop_recorded is True

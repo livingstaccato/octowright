@@ -28,15 +28,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.defaults import DASHBOARD_DISCONNECT_POLL_SECONDS, DASHBOARD_HEARTBEAT_SECONDS
+from octowright.http.bridge_auth import header_token_ok, require_token_enabled
 from octowright.http.exposure import guard_sensitive_http
 from octowright.server.mcp_notifications import notification_payload
 
@@ -104,5 +107,27 @@ async def mcp_events_endpoint(request: Request) -> StreamingResponse:
     )
 
 
-def routes() -> list[Route]:
-    return [Route("/api/mcp-events", guard_sensitive_http(mcp_events_endpoint), methods=["GET"])]
+def _require_token(
+    handler: Callable[[Request], Awaitable[Response]], expected_token: str
+) -> Callable[[Request], Awaitable[Response]]:
+    """Gate the follower-only mcp-events channel with the capability token, so a
+    different-user/sandboxed process that can't read the 0600 lockfile can't
+    subscribe to the leader's crash/close/driver event stream. No-op when no
+    token is configured or ``OCTOWRIGHT_BRIDGE_REQUIRE_TOKEN`` disables it."""
+    if not expected_token:
+        return handler
+
+    @functools.wraps(handler)
+    async def guarded(request: Request) -> Response:
+        if require_token_enabled() and not header_token_ok(request.headers.get("x-octowright-token"), expected_token):
+            return JSONResponse({"error": "missing or invalid X-Octowright-Token"}, status_code=403)
+        return await handler(request)
+
+    return guarded
+
+
+def routes(*, mcp_token: str = "") -> list[Route]:
+    # Host/origin guard OUTSIDE (reject non-loopback first), token check INSIDE —
+    # matching the /mcp guard ordering.
+    endpoint = guard_sensitive_http(_require_token(mcp_events_endpoint, mcp_token))
+    return [Route("/api/mcp-events", endpoint, methods=["GET"])]

@@ -10,12 +10,12 @@ from typing import Any
 from octowright.http.routes import events, health, mcp_events, media, meta, scenarios, screencast, sessions
 
 
-def all_routes() -> list[Any]:
+def all_routes(*, mcp_token: str = "") -> list[Any]:
     routes: list[Any] = []
     routes.extend(health.routes())
     routes.extend(sessions.routes())
     routes.extend(events.routes())
-    routes.extend(mcp_events.routes())
+    routes.extend(mcp_events.routes(mcp_token=mcp_token))
     routes.extend(screencast.routes())
     routes.extend(media.routes())
     routes.extend(scenarios.routes())

@@ -265,10 +265,14 @@ async def consume_leader_notifications(
     attempt = 0
     while True:
         events_url = _events_url_from_mcp(resolve_leader_url(fallback_mcp_url))
+        # Present the same capability token the follower uses on /mcp — the
+        # leader gates /api/mcp-events with it (see http/routes/mcp_events).
+        token = resolve_leader_token()
+        headers = {"X-Octowright-Token": token} if token else {}
         try:
             async with (
                 httpx.AsyncClient(timeout=timeout) as client,
-                client.stream("GET", events_url) as response,
+                client.stream("GET", events_url, headers=headers) as response,
             ):
                 if response.status_code != 200:
                     raise RuntimeError(f"mcp-events stream returned HTTP {response.status_code}")

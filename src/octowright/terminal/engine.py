@@ -28,6 +28,8 @@ from provide.uterm.server.connectors import (
 from octowright._tracing import counter, record_exception, span
 from octowright.recorder import Recorder
 from octowright.terminal import redact
+from octowright.terminal.errors import TerminalDisconnectedError
+from octowright.terminal.supervision import poll_done_reason
 from octowright.terminal.translate import MessageTranslator
 
 log = get_logger("octowright.terminal")
@@ -97,6 +99,7 @@ class TerminalEngine:
         self._poll_task: asyncio.Task[None] | None = None
         self._stop_evt = asyncio.Event()
         self._stop_recorded = False
+        self._poll_error: BaseException | None = None
 
     async def start(self) -> None:
         with span(
@@ -113,6 +116,11 @@ class TerminalEngine:
                 "terminal_start", connector_type=self._connector_type, cols=self._cols, rows=self._rows
             )
             self._poll_task = asyncio.create_task(self._poll_loop())
+            # Supervise the poll task: without a done-callback a poll/recorder
+            # exception would kill it silently — no stop record, no metric, the
+            # session looking alive while nothing pumps it. Surface an unexpected
+            # death as an 'error' stop.
+            self._poll_task.add_done_callback(self._on_poll_done)
         # Count only successful launches (a raised start() skips this).
         _TERMINAL_LAUNCHED.add(1, attributes={"connector_type": self._connector_type})
 
@@ -128,6 +136,20 @@ class TerminalEngine:
                 return
             await asyncio.sleep(_POLL_IDLE_SLEEP_S)
 
+    def _on_poll_done(self, task: asyncio.Task[None]) -> None:
+        """Done-callback for the poll task. A clean return or a stop()-driven
+        cancellation needs nothing; an unexpected exception is recorded as an
+        'error' stop (once, via ``_record_stop``) so it does not vanish."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        reason = poll_done_reason(error)
+        if reason is None:
+            return
+        self._poll_error = error
+        log.warning("terminal.poll_loop.died", instance_id=self._instance_id, error=repr(error))
+        self._record_stop(reason)
+
     def _ingest(self, msg: dict[str, Any]) -> None:
         if msg.get("type") == "snapshot":
             self._latest_screen = str(msg.get("screen", ""))
@@ -142,10 +164,11 @@ class TerminalEngine:
             instance_id=self._instance_id,
         ):
             if not self._connector.is_connected():
-                # User-action path: surface (don't silently swallow) input sent to a
-                # dead terminal — the connector would otherwise drop the bytes quietly.
+                # User-action path: the connector would drop the bytes quietly.
+                # Raise so the caller learns the input was NOT delivered instead
+                # of the tool falsely reporting {"ok": true}.
                 log.warning("terminal.send_input.disconnected", instance_id=self._instance_id)
-                return
+                raise TerminalDisconnectedError(f"terminal {self._instance_id} is disconnected; input not delivered")
             masked = redact.should_mask(at_password_prompt=self._at_password_prompt, password_source=password)
             self._recorder.record("terminal_input", **redact.input_fields(text, masked=masked))
             for msg in await self._connector.handle_input(text):
@@ -183,7 +206,18 @@ class TerminalEngine:
     def _record_stop(self, reason: str) -> None:
         if not self._stop_recorded:
             self._stop_recorded = True
-            self._recorder.record("terminal_stop", reason=reason)
+            try:
+                self._recorder.record("terminal_stop", reason=reason)
+            except Exception as exc:
+                # This method runs from an asyncio done-callback as well as
+                # explicit teardown. A recorder failure must not escape the
+                # callback and obscure the causal connector/poll exception.
+                log.warning(
+                    "terminal.stop_record.failed",
+                    instance_id=self._instance_id,
+                    reason=reason,
+                    error=repr(exc),
+                )
             # Count the terminal-ended event once, whichever path got here first
             # (explicit stop() or the poll loop's EOF detection).
             _TERMINAL_CLOSED.add(1, attributes={"connector_type": self._connector_type})

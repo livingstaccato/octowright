@@ -97,25 +97,24 @@ jobs:
   frontend:
     name: 🧪 Frontend tests
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: packages/octowright-frontend
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
-      # No lockfile in the workspace — use `npm install` (slightly slower,
-      # but reproducible enough for the test job). Switch to `npm ci` once a
-      # package-lock.json is committed.
+      # Reproducible install from the committed root package-lock.json. The
+      # frontend is an npm workspace, so npm ci + the scripts run from the repo
+      # root and target the package via --workspace.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+      - name: Audit dependencies (fail on high)
+        run: npm audit --audit-level=high
       - name: Typecheck
-        run: npm run typecheck
+        run: npm run typecheck --workspace=packages/octowright-frontend
       - name: Lint
-        run: npm run lint
+        run: npm run lint --workspace=packages/octowright-frontend
       - name: Tests (vitest with coverage)
-        run: npm test
+        run: npm test --workspace=packages/octowright-frontend
 
   select-test-matrix:
     name: 🧭 Select test matrix
@@ -227,8 +226,7 @@ jobs:
         with:
           node-version: "20"
       - name: Build frontend SPA
-        working-directory: packages/octowright-frontend
-        run: npm install && npm run build
+        run: npm ci && npm run build --workspace=packages/octowright-frontend
       - name: Build wheel + sdist
         run: uv run --active python -m build --wheel --sdist
       - name: Verify packaged assets in wheel

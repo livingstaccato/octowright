@@ -454,3 +454,49 @@ async def test_launch_terminals_raises_when_pool_missing_but_specs_present() -> 
     specs = [(0, SimpleNamespace(persona="ops"))]
     with pytest.raises(TerminalPoolUnavailableError):
         await ScenarioPool._launch_terminals(None, specs, {}, [])
+
+
+@pytest.mark.anyio
+async def test_stop_completes_teardown_even_when_cancelled() -> None:
+    """Cancelling stop() mid-teardown must not strand participants: the scenario
+    is already popped from the registry, so an interrupted teardown would leave
+    live browsers with no scenario_id to retry. The teardown is shielded, so a
+    cancel of the surrounding scope still closes every participant."""
+    import anyio
+
+    started = anyio.Event()
+    release = anyio.Event()
+
+    class _GatedPool:
+        def __init__(self) -> None:
+            self.closed: list[str] = []
+
+        async def close(self, instance_id: str, *, force: bool = False) -> None:
+            if instance_id == "b":
+                started.set()
+                await release.wait()
+            self.closed.append(instance_id)
+
+    sp = ScenarioPool()
+    live = LiveScenario(
+        scenario_id="cx",
+        name="cx",
+        spec=_Spec("cx", [], fixtures={}, teardown_macro=None),
+        participants=[
+            {"instance_id": "b", "persona": "d", "role": "player", "kind": "chromium", "log_path": "b.log"},
+            {"instance_id": "c", "persona": "d", "role": "player", "kind": "chromium", "log_path": "c.log"},
+        ],
+    )
+    sp._live[live.scenario_id] = live
+    pool = _GatedPool()
+
+    async def _run() -> None:
+        await sp.stop(scenario_id="cx", browser_pool=pool)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_run)
+        await started.wait()
+        tg.cancel_scope.cancel()  # cancel the scope while closing participant "b"
+        release.set()
+
+    assert pool.closed == ["b", "c"]

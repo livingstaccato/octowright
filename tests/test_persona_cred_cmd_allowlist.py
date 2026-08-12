@@ -136,6 +136,33 @@ def test_path_prefixed_allowlisted_cmd_resolves_via_basename(tmp_path, fresh_per
     assert captured["argv"] == ["/opt/homebrew/bin/op", "read", "op://vault/x"]
 
 
+def test_failed_cmd_error_does_not_leak_stderr_content(tmp_path, fresh_personas, monkeypatch):
+    """A credential helper that exits non-zero must not have its stderr content
+    surfaced in the caller-facing error — stderr can carry a secret. The message
+    keeps the exit code (diagnostic) but not the stderr text."""
+    import subprocess
+
+    def _fail_run(*args, **kwargs):
+        return SimpleNamespace(returncode=7, stdout="", stderr="SECRET_LEAK_TOKEN=hunter2")
+
+    monkeypatch.setattr(subprocess, "run", _fail_run)
+    _write_persona(
+        tmp_path,
+        "u",
+        {
+            "name": "u",
+            "credentials": {"token_cmd": "op read op://vault/x"},
+        },
+    )
+    p = fresh_personas.load_persona("u")
+    with pytest.raises(fresh_personas.MissingCredential) as excinfo:
+        fresh_personas.resolve_credential(p, "token")
+    msg = str(excinfo.value)
+    assert "SECRET_LEAK_TOKEN" not in msg
+    assert "hunter2" not in msg
+    assert "7" in msg  # exit code retained for diagnosis
+
+
 def test_empty_argv_raises_validation_error_not_permission_error(tmp_path, fresh_personas, monkeypatch):
     """An empty/whitespace-only cmd must surface as a parse/validation error,
     not as a misleading "not on the allowlist" permission failure.

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -75,3 +77,24 @@ async def test_close_refuses_protected_without_force() -> None:
     finally:
         await pool.close(iid, force=True)
     assert pool.maybe_get(iid) is None
+
+
+async def test_close_all_attempts_every_session_and_aggregates_failures() -> None:
+    pool = TerminalPool()
+    sessions = {
+        "first": SimpleNamespace(protected=False, close=AsyncMock(side_effect=RuntimeError("first failed"))),
+        "second": SimpleNamespace(protected=False, close=AsyncMock()),
+        "third": SimpleNamespace(protected=False, close=AsyncMock(side_effect=OSError("third failed"))),
+    }
+    pool._sessions.update(sessions)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await pool.close_all(force=True)
+
+    for session in sessions.values():
+        session.close.assert_awaited_once()
+    assert list(pool._sessions) == ["first", "third"]
+    message = str(exc_info.value)
+    assert message.index("first") < message.index("third")
+    assert "first failed" in message
+    assert "third failed" in message

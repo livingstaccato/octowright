@@ -12,6 +12,14 @@ class ProtectedTerminalCloseError(ValueError):
     """Raised when closing a protected terminal session requires force=True."""
 
 
+class TerminalDisconnectedError(RuntimeError):
+    """Raised by ``TerminalEngine.send_input`` when the connector is no longer
+    connected, so the input was NOT delivered. The ``terminal_send_input`` tool
+    maps it to ``{"ok": False, "error": ...}`` instead of falsely reporting
+    success — a distinct type lets callers catch delivery failure specifically.
+    """
+
+
 class TerminalPoolUnavailableError(RuntimeError):
     """Raised when terminal code is reached without a wired ``terminal_pool``.
 

@@ -7,10 +7,50 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from octowright import bridge_state
+
+
+def test_windows_state_lock_locks_one_byte_and_unlocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "bridge-state.json"
+    calls: list[tuple[int, int, int]] = []
+    fake_msvcrt = SimpleNamespace(
+        LK_LOCK=1,
+        LK_UNLCK=2,
+        locking=lambda fd, mode, size: calls.append((fd, mode, size)),
+    )
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(bridge_state.sys, "platform", "win32")
+
+    with bridge_state._state_lock(path):
+        assert calls[-1][1:] == (fake_msvcrt.LK_LOCK, 1)
+
+    assert [mode for _fd, mode, _size in calls] == [fake_msvcrt.LK_LOCK, fake_msvcrt.LK_UNLCK]
+    assert all(size == 1 for _fd, _mode, size in calls)
+    assert path.with_suffix(".json.lock").read_bytes()
+
+
+def test_windows_state_lock_unlocks_when_transaction_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "bridge-state.json"
+    modes: list[int] = []
+    fake_msvcrt = SimpleNamespace(
+        LK_LOCK=1,
+        LK_UNLCK=2,
+        locking=lambda _fd, mode, _size: modes.append(mode),
+    )
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(bridge_state.sys, "platform", "win32")
+
+    with pytest.raises(RuntimeError, match="transaction failed"), bridge_state._state_lock(path):
+        raise RuntimeError("transaction failed")
+
+    assert modes == [fake_msvcrt.LK_LOCK, fake_msvcrt.LK_UNLCK]
 
 
 def test_record_snapshot_writes_latest_by_pid(tmp_path: Path) -> None:
@@ -387,3 +427,55 @@ def test_sweep_stale_tmp_files_swallows_unlink_race(tmp_path: Path, monkeypatch)
 
     removed = bridge_state.sweep_stale_tmp_files(path, max_age_seconds=300.0)  # must not raise
     assert removed == []
+
+
+def test_concurrent_record_snapshot_keeps_both_followers(tmp_path: Path, monkeypatch) -> None:
+    """Two followers writing concurrently must BOTH survive: the read-modify-
+    replace is serialized by an exclusive file lock. Without it, both read the
+    same pre-state and the second write erases the first registration (the
+    dead-follower reaper then never learns about that follower).
+
+    The barrier forces the interleaving: both threads pass read_state before
+    either writes. Only cross-process/thread locking makes this pass."""
+    import contextlib
+    import threading
+
+    path = tmp_path / "bridge-state.json"
+    # Short-timeout barrier: WITHOUT a lock both writers reach it concurrently,
+    # pass instantly and both write the same pre-state (lost update). WITH the
+    # lock the second writer is blocked before its read, so the first's barrier
+    # simply times out (suppressed) and the writes serialize correctly.
+    barrier = threading.Barrier(2, timeout=0.5)
+    orig_read = bridge_state.read_state
+
+    def _barriered_read(p: Path):
+        state = orig_read(p)
+        with contextlib.suppress(threading.BrokenBarrierError):
+            barrier.wait()
+        return state
+
+    monkeypatch.setattr(bridge_state, "read_state", _barriered_read)
+    # keep_pid protects each writer's own entry; other pids must look alive.
+    monkeypatch.setattr(bridge_state, "_pid_alive", lambda _pid: True)
+
+    def _write(pid: int) -> None:
+        bridge_state.record_snapshot(
+            path=path,
+            follower_pid=pid,
+            remote_url=f"http://127.0.0.1:8765/mcp/{pid}",
+            remote_session_id=f"sid-{pid}",
+            last_error=None,
+            in_flight=0,
+            reconnect_attempts=0,
+            request_timeouts=0,
+        )
+
+    t1 = threading.Thread(target=_write, args=(111,))
+    t2 = threading.Thread(target=_write, args=(222,))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    data = json.loads(path.read_text())
+    assert set(data["followers"]) == {"111", "222"}

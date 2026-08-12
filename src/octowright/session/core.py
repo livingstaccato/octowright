@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from weakref import WeakSet
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
@@ -89,6 +90,10 @@ class BrowserSession(
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)
     _bg_tasks: set[Any] = field(default_factory=set, repr=False)
+    # Pages already wired by _wire_listeners, keyed by identity, so crash
+    # recovery re-wiring a page the context "page" event already wired is a
+    # no-op instead of a duplicate-handler bug. WeakSet: a closed page drops out.
+    _wired_pages: WeakSet[Page] = field(default_factory=WeakSet, repr=False)
     markdown_path: Path | None = None
     _last_markdown_capture_url: str | None = None
     _last_markdown_capture_key: str | None = None
@@ -104,6 +109,10 @@ class BrowserSession(
     # CACHE_FLUSH_FRAMES / SECONDS for the policy.
     _websocket_frames_since_flush: int = field(default=0, repr=False)
     _websocket_last_flush_ts: float = field(default=0.0, repr=False)
+    # WS sidecar byte accounting for the OCTOWRIGHT_WEBSOCKET_MAX_BYTES ceiling
+    # (off by default). Once _websocket_truncated flips, no more frames append.
+    _websocket_bytes: int = field(default=0, repr=False)
+    _websocket_truncated: bool = field(default=False, repr=False)
     _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
     _network_requests_dropped: int = 0
     _last_mcp_navigation: str | None = None

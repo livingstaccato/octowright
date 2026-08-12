@@ -164,7 +164,9 @@ def test_check_credentials_cmd_nonzero_exit_reports_error(monkeypatch: pytest.Mo
     c = report["checked"][0]
     assert c["ok"] is False
     assert "cmd exited 1" in c["error"]
-    assert "not authorized" in c["error"]
+    # stderr content is suppressed (it can carry a secret); only the exit code
+    # is surfaced. See the credential-helper stderr-leak fix.
+    assert "not authorized" not in c["error"]
 
 
 def test_check_credentials_cmd_wins_when_both_set(monkeypatch: pytest.MonkeyPatch) -> None:
