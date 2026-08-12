@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from weakref import WeakSet
 
@@ -35,6 +36,33 @@ log = get_logger(__name__)
 # NOT on ``session._bg_tasks`` — ``session.close()`` drains that set, and a close
 # task awaiting its own drain would deadlock. Tasks self-remove on completion.
 _PENDING_FULL_CLOSES: set[asyncio.Task[None]] = set()
+_PENDING_MANIFEST_REMOVALS: set[asyncio.Task[None]] = set()
+
+
+async def _run_manifest_remove(instance_id: str, remove: Callable[[str], object]) -> None:
+    """Run manifest locking/I/O away from the shared leader event loop."""
+    try:
+        from octowright.session_manifest import run_manifest_transaction_async
+
+        await run_manifest_transaction_async(remove, instance_id)
+    except Exception as exc:
+        log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
+
+
+def _schedule_manifest_remove(instance_id: str, remove: Callable[[str], object]) -> None:
+    """Schedule best-effort manifest cleanup from a synchronous listener."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # A teardown callback outside the daemon loop cannot block that loop.
+        try:
+            remove(instance_id)
+        except Exception as exc:
+            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
+        return
+    task = loop.create_task(_run_manifest_remove(instance_id, remove))
+    _PENDING_MANIFEST_REMOVALS.add(task)
+    task.add_done_callback(_PENDING_MANIFEST_REMOVALS.discard)
 
 
 async def _run_deferred_full_close(pool: Any, instance_id: str, session: Any, reason: SessionCloseReason) -> None:
@@ -49,14 +77,10 @@ async def _run_deferred_full_close(pool: Any, instance_id: str, session: Any, re
     (``force=True`` skips the protection refusal by design, for the case where
     the user already closed the window).
     """
-    if pool.maybe_get(instance_id) is not session:
-        # Rebound to a new session, or already evicted by a racing
-        # context.close / browser.disconnected. Either way, not ours to close.
-        return
     try:
-        await pool.close(instance_id, force=True, _reason=reason)
+        await pool.close(instance_id, force=True, _reason=reason, _expected_session=session)
     except KeyError:
-        pass  # evicted between the identity check and the close
+        pass  # already evicted or rebound; either way, not ours to close
     except Exception as exc:
         log.warning("octowright.evict.full_close_failed", instance_id=instance_id, error=repr(exc))
 
@@ -126,9 +150,11 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
        the context alive after the last page closes and wait for an idle
        timeout; we don't want to wait.
 
-    The three signals coexist via the idempotent ``_evict`` callback —
-    ``pool._sessions.pop(instance_id, None)`` returns ``None`` on the second
-    and subsequent calls and the handler bails silently.
+    The three signals coexist via the idempotent ``_evict`` callback. It passes
+    the session identity along with its current id so a delayed callback cannot
+    evict a keep-id replacement now registered under the same id, while the
+    replacement's own callbacks follow its rekey. Second/subsequent callbacks
+    and identity mismatches return ``None`` and bail silently.
 
     Idempotent — safe if the session was already explicitly closed via
     ``pool.close(id)``. In the explicit-close path, ``pool.close`` removes
@@ -136,10 +162,10 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
     fires its event, so the ``pop`` call below returns ``None`` and this
     handler bails silently (no double-log, no double-close on the recorder).
     """
-    instance_id = session.instance_id
 
     def _evict(*_: Any) -> None:
-        existing = pool._evict_session_nowait(instance_id)
+        instance_id = session.instance_id
+        existing = pool._evict_session_nowait(instance_id, expected_session=session)
         if existing is None:
             # Already removed by an explicit pool.close — that path logs
             # "octowright.browser.closed" itself. Stay silent.
@@ -147,7 +173,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         try:
             from octowright.session_manifest import remove_session as _manifest_remove_session
 
-            _manifest_remove_session(instance_id)
+            _schedule_manifest_remove(instance_id, _manifest_remove_session)
         except Exception as exc:
             log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
         _EVICTED.add(1, attributes={"kind": session.kind})
@@ -192,6 +218,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
             )
 
     def _on_page_close(*_: Any) -> None:
+        instance_id = session.instance_id
         # Cascade to full eviction only when no page on the session is still
         # open. Single-page-of-many close (e.g. a popup being dismissed by
         # the user) is not a session death.
@@ -230,6 +257,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         task.add_done_callback(_PENDING_FULL_CLOSES.discard)
 
     def _on_page_crash(crashed_page: Any = None, *_: Any) -> None:
+        instance_id = session.instance_id
         # Playwright fires Page 'crash' with the crashing Page as the argument
         # (renderer process died — "Aw, Snap" / Target.crashed). Fall back to the
         # session's primary page if the arg is ever absent. The browser process

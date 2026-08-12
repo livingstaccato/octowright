@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setDashboardBearer } from "./dashboard-auth.js";
+import { DASHBOARD_AUTH_REQUIRED_EVENT, getDashboardBearer, setDashboardBearer } from "./dashboard-auth.js";
 import { openTail } from "./tail.js";
 
 interface Listener {
@@ -164,5 +164,49 @@ describe("openTail", () => {
       ws.emit("error", new Event("error"));
       ws.emit("close", { code: 1006, reason: "gone", wasClean: false });
     }).not.toThrow();
+  });
+
+  it("clears auth and enters the re-pair state on an established-stream auth close", () => {
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "expired-tail-secret", expires_at: Date.now() / 1000 + 60 });
+    const authRequired = vi.fn();
+    window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
+    FakeWebSocket.instances = [];
+    openTail("ws://test/x", {
+      onMessage: () => {},
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    FakeWebSocket.instances[0]!.emit("close", {
+      code: 1008,
+      reason: "dashboard pairing expired",
+      wasClean: true,
+    });
+
+    expect(getDashboardBearer()).toBeNull();
+    expect(authRequired).toHaveBeenCalledOnce();
+    window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
+  });
+
+  it("enters the re-pair state when initial admission closes with an observable auth reason", () => {
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "rejected-tail-secret", expires_at: Date.now() / 1000 + 60 });
+    const authRequired = vi.fn();
+    window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
+    FakeWebSocket.instances = [];
+    openTail("ws://test/x", {
+      onMessage: () => {},
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    FakeWebSocket.instances[0]!.emit("close", {
+      code: 1008,
+      reason: "dashboard pairing required",
+      wasClean: true,
+    });
+
+    expect(getDashboardBearer()).toBeNull();
+    expect(authRequired).toHaveBeenCalledOnce();
+    window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
   });
 });

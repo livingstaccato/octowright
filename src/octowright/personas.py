@@ -385,22 +385,14 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     if result.returncode != 0:
         # Do NOT surface stderr content to the caller: a credential helper can
         # print a secret there, and this message flows into structured MCP
-        # errors. Keep the exit code in the raised error; the stderr text goes
-        # to the DEBUG log only (never across the tool boundary) so an ordinary
-        # misconfiguration stays diagnosable.
+        # errors or logs. Credential helpers are allowed to emit secret values
+        # on stderr, so even DEBUG telemetry records only its length.
         log.debug(
             "persona.cred.cmd_failed",
             persona=persona_name,
             field=cred_name,
             returncode=result.returncode,
             stderr_len=len(result.stderr),
-            # The MCP error deliberately carries no stderr (a helper can echo a
-            # secret on failure, and that error reaches the LLM). But dropping
-            # the text entirely made an ordinary misconfiguration — binary not
-            # on PATH, keychain locked — undiagnosable without re-running the
-            # helper by hand. Keep it in the DEBUG log only, where it never
-            # crosses the tool boundary, and cap it.
-            stderr_excerpt=result.stderr[:200],
         )
         raise MissingCredential(
             f"persona {persona_name!r} field {cred_name!r}: cmd exited {result.returncode} "

@@ -16,6 +16,7 @@ from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReaso
 from octowright.browser_pool.launch_helpers import rotate_har_path
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session_manifest import remove_session as remove_manifest_session
+from octowright.session_manifest import run_manifest_transaction_async
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
@@ -36,24 +37,43 @@ def _protected_close_message(instance_id: str, reason: str) -> str:
     )
 
 
+def _resolve_close_target(pool: BrowserPool, instance_id: str, expected_session: Any | None) -> tuple[str, Any]:
+    """Resolve an identity-aware close target while the caller holds the lock."""
+    if expected_session is None:
+        session = pool._sessions.get(instance_id)
+        if session is None:
+            raise KeyError(pool._missing_session_message(instance_id))
+        return instance_id, session
+    current = next(
+        ((current_id, candidate) for current_id, candidate in pool._sessions.items() if candidate is expected_session),
+        None,
+    )
+    if current is None:
+        raise KeyError(f"browser instance_id={instance_id!r} was evicted or rebound before close")
+    return current
+
+
 async def close_browser(
     pool: BrowserPool,
     instance_id: str,
     *,
     force: bool = False,
     _reason: SessionCloseReason = "agent_close",
+    _expected_session: Any | None = None,
 ) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    if getattr(session, "protected", False) and not force:
-        raise ProtectedBrowserCloseError(
-            _protected_close_message(instance_id, getattr(session, "protected_reason", "explicit"))
-        )
-    # Remove from the registry before awaiting session.close(); that call fires
-    # close events wired by listeners, which should then no-op.
+    # Identity resolution, protection check, and pop form one transaction. A
+    # deferred last-page close passes the session it observed; keep-id relaunch
+    # takes this same lock while re-keying, so object identity remains
+    # authoritative even if the id captured before an await has changed.
     async with pool._sessions_lock:
-        if instance_id not in pool._sessions:
-            raise KeyError(pool._missing_session_message(instance_id))
-        session = pool._sessions.pop(instance_id)
+        instance_id, session = _resolve_close_target(pool, instance_id, _expected_session)
+        if getattr(session, "protected", False) and not force:
+            raise ProtectedBrowserCloseError(
+                _protected_close_message(instance_id, getattr(session, "protected_reason", "explicit"))
+            )
+        # Remove before awaiting session.close(); that call fires close events
+        # wired by listeners, which should then no-op.
+        pool._sessions.pop(instance_id)
     # Always run manifest cleanup even if session.close() raises (e.g. a
     # hung browser process) — the session is already evicted from the pool,
     # so the manifest entry would otherwise be orphaned. The session's own
@@ -62,7 +82,7 @@ async def close_browser(
         await session.close()
     finally:
         try:
-            remove_manifest_session(instance_id)
+            await run_manifest_transaction_async(remove_manifest_session, instance_id)
         except Exception as exc:
             log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
     log.info(
