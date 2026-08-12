@@ -51,6 +51,12 @@ def _frontend_routes(*, host: str = "127.0.0.1") -> list[Any]:
         return []
     static_app = StaticFiles(directory=str(state.FRONTEND_DIR), html=True)
     return [
-        Route("/sessions/{id:path}", guard_sensitive_http(_serve_session_html), methods=["GET"]),
+        # HTML/static bootstrap stays public under the loopback Host/origin
+        # boundary. Data and media requests made by the SPA carry the bearer.
+        Route(
+            "/sessions/{id:path}",
+            guard_sensitive_http(_serve_session_html, pairing_exempt=True),
+            methods=["GET"],
+        ),
         Mount("/", app=guard_sensitive_asgi_app(static_app, host=host), name="frontend"),
     ]

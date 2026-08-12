@@ -219,7 +219,11 @@ def guard_sensitive_http(
         if _cross_origin_blocked(request, side_effect_get=side_effect_get):
             return JSONResponse({"error": "cross-origin dashboard request is blocked"}, status_code=403)
         if not pairing_exempt and not dashboard_access_ok(request):
-            return JSONResponse(_PAIRING_REQUIRED_BODY, status_code=403)
+            return JSONResponse(
+                _PAIRING_REQUIRED_BODY,
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return await handler(request)
 
     cast(_SensitiveGuardedHandler, guarded).__octowright_sensitive_guard__ = True
