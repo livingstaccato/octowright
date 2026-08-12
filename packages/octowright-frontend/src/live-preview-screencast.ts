@@ -1,4 +1,4 @@
-import { dashboardWebSocketProtocols } from "./dashboard-auth.js";
+import { dashboardWebSocketProtocols, handleDashboardStreamAuthClose } from "./dashboard-auth.js";
 import { getLogger, wsConnectsCounter, wsMessagesCounter } from "./telemetry.js";
 
 const log = getLogger("octowright.frontend.screencast");
@@ -39,6 +39,7 @@ export function openScreencast(url: string, opts: ScreencastOptions): Screencast
   });
   ws.addEventListener("close", (e) => {
     const ce = e as CloseEvent;
+    handleDashboardStreamAuthClose(ce);
     log.info({
       event: "ws_close",
       kind: "screencast",

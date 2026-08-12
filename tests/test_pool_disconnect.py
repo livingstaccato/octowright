@@ -545,7 +545,12 @@ async def test_all_pages_closed_runs_full_session_close(
     page.mark_closed()  # last page gone → fires page.on('close')
     # Wait for the full teardown, not just the registry pop (close_browser pops
     # BEFORE awaiting session.close(), so registry removal races the teardown).
-    await _wait_until(lambda: session.context.close.await_count >= 1)
+    await _wait_until(
+        lambda: (
+            session.context.close.await_count >= 1
+            and any("octowright.browser.closed" in message for message in listeners_log.messages())
+        )
+    )
 
     assert iid not in pool._sessions
     # The context was actually torn down (the whole point) — not just popped.

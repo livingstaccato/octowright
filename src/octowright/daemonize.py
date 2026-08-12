@@ -69,7 +69,16 @@ def _open_daemon_log() -> IO[bytes]:
     try:
         # ``mode`` only applies to a newly created file. Tighten pre-existing
         # logs too before the daemon can append potentially sensitive output.
-        os.chmod(_DAEMON_LOG, 0o600)
+        # Prefer the open descriptor to avoid a path race. Keep a fallback for
+        # platforms/filesystems without useful fchmod semantics; permission
+        # repair remains best-effort and cannot prevent daemon startup.
+        try:
+            os.fchmod(fd, 0o600)
+        except (AttributeError, OSError):
+            try:
+                os.chmod(_DAEMON_LOG, 0o600)
+            except OSError:
+                pass
         return os.fdopen(fd, "ab")
     except BaseException:
         os.close(fd)

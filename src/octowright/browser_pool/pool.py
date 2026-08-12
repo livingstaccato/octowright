@@ -307,12 +307,20 @@ class BrowserPool:
     def profile_in_use(self, kind: str, profile: str) -> bool:
         return any(s.kind == kind and profile_names_match(s.profile, profile) for s in tuple(self._sessions.values()))
 
-    def _evict_session_nowait(self, instance_id: str) -> BrowserSession | None:
+    def _evict_session_nowait(
+        self,
+        instance_id: str,
+        *,
+        expected_session: BrowserSession | None = None,
+    ) -> BrowserSession | None:
         # Called from synchronous Playwright event callbacks (page.close,
         # context.close, browser.disconnected). Can't `await` a lock from a
-        # sync callback, but CPython dict.pop is GIL-atomic and asyncio is
-        # single-threaded — so this and the locked pop in close_browser
-        # cannot interleave in flight. Idempotent: returns None on miss.
+        # sync callback, but there is no await between the identity check and
+        # pop, and these callbacks run on the asyncio thread. ``expected_session``
+        # protects keep-id replacements from late callbacks owned by the old
+        # session. Idempotent: returns None on miss or identity mismatch.
+        if expected_session is not None and self._sessions.get(instance_id) is not expected_session:
+            return None
         session = self._sessions.pop(instance_id, None)
         if session is not None:
             # Remember it died externally (crash / OS close), and whether a crash
@@ -331,8 +339,15 @@ class BrowserPool:
         *,
         force: bool = False,
         _reason: SessionCloseReason = "agent_close",
+        _expected_session: BrowserSession | None = None,
     ) -> dict[str, Any]:
-        return await close_browser(self, instance_id, force=force, _reason=_reason)
+        return await close_browser(
+            self,
+            instance_id,
+            force=force,
+            _reason=_reason,
+            _expected_session=_expected_session,
+        )
 
     async def close_all(
         self,

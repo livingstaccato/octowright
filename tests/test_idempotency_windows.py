@@ -15,11 +15,10 @@ Two review findings against the batch-B idempotency rework:
    re-issue a mutation, which is exactly the double-execute this module exists
    to prevent. The window must cover any call the heartbeat would sustain.
 
-2. Nothing reclaims an in-progress entry whose producer never resolves:
-   ``_evict_expired_locked`` only evicts done entries and ``_enforce_bound_locked``
-   deliberately skips in-progress ones. A handler wedged in an uncancellable
-   await therefore pins its slot forever, so every resend of that key returns
-   "unknown" with no recovery path and the cache grows past its bound.
+2. A taskless synthetic in-progress orphan has no producer that could still
+   commit a side effect, so it must remain reclaimable after the abandon
+   threshold. A real producer task is different: age alone cannot prove it has
+   terminated, and reclaiming its slot would permit duplicate execution.
 """
 
 from __future__ import annotations
@@ -39,8 +38,8 @@ def test_wait_window_covers_the_heartbeat_ceiling() -> None:
     )
 
 
-def test_abandoned_in_progress_entry_is_reclaimed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An in-progress slot older than the abandon threshold must be evictable."""
+def test_taskless_orphan_in_progress_entry_is_reclaimed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A taskless synthetic orphan remains evictable after the threshold."""
     clock = {"now": 1000.0}
     monkeypatch.setattr(_idempotency, "_now", lambda: clock["now"])
     _idempotency._cache.clear()
@@ -53,7 +52,7 @@ def test_abandoned_in_progress_entry_is_reclaimed(monkeypatch: pytest.MonkeyPatc
     _idempotency._evict_expired_locked()
     assert "k" in _idempotency._cache
 
-    # Past it → the producer is definitively gone; reclaim the slot.
+    # Past it → no producer task exists, so reclaim the synthetic orphan.
     clock["now"] += _idempotency._abandon_threshold_seconds()
     _idempotency._evict_expired_locked()
     assert "k" not in _idempotency._cache, "wedged in-progress entry pinned the cache forever"

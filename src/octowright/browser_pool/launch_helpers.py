@@ -23,6 +23,7 @@ from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, RECORDIN
 from octowright.personas import engine_profile_dir, load_persona
 from octowright.recorder import Recorder
 from octowright.session_manifest import record_launch as _manifest_record_launch
+from octowright.session_manifest import run_manifest_transaction_async
 
 if TYPE_CHECKING:
     # Annotation only — avoids the launch_helpers → options runtime cycle
@@ -340,7 +341,7 @@ def _record_launch_event(
     )
 
 
-def _safe_manifest_record(
+async def _safe_manifest_record(
     *,
     instance_id: str,
     kind: str,
@@ -350,9 +351,14 @@ def _safe_manifest_record(
     log_path: Path,
 ) -> None:
     """Best-effort manifest write. The manifest is purely an out-of-band
-    convenience for the dashboard; a write failure must not block the launch."""
+    convenience for the dashboard; a write failure must not block the launch.
+
+    The cross-process lock polls synchronously, so keep it off the leader's
+    asyncio thread while a split leader or frozen peer owns the manifest.
+    """
     try:
-        _manifest_record_launch(
+        await run_manifest_transaction_async(
+            _manifest_record_launch,
             session_id=instance_id,
             kind=kind,
             label=label,

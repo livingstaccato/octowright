@@ -8,13 +8,18 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from octowright.dashboard_events import DashboardEventBus
+from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState, dashboard_access_ok
+from octowright.http.routes import events as event_routes
 from octowright.http.routes.events import dashboard_events_endpoint
 
 
@@ -26,6 +31,54 @@ class _FakeRequest:
     async def is_disconnected(self) -> bool:
         self.disconnect_checks += 1
         return self.disconnected
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _redeem(state: DashboardPairingState) -> str:
+    grant = state.redeem_code(state.mint_code())
+    assert grant is not None
+    return grant.bearer
+
+
+def _paired_request(state: DashboardPairingState, bearer: str) -> Request:
+    app = Starlette()
+    setattr(app.state, DASHBOARD_STATE_ATTR, state)
+    scope: dict[str, Any] = {
+        "type": "http",
+        "method": "GET",
+        "headers": [(b"authorization", f"Bearer {bearer}".encode())],
+        "query_string": b"",
+        "path": "/api/dashboard/events",
+        "app": app,
+    }
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return Request(scope, receive)
+
+
+class _TailWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.closed: tuple[int | None, str | None] | None = None
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        self.sent.append(payload)
+
+    async def close(self, code: int | None = None, reason: str | None = None) -> None:
+        self.closed = (code, reason)
+
+    async def receive(self) -> dict[str, Any]:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
 
 
 @pytest.mark.asyncio
@@ -78,6 +131,84 @@ async def test_dashboard_events_stream_cleans_up_idle_disconnected_subscriber(
         await asyncio.wait_for(anext(body), timeout=0.2)
 
     assert bus.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_events_stream_stops_when_established_bearer_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
+    bus = DashboardEventBus()
+    monkeypatch.setattr(event_routes, "dashboard_events", bus)
+    clock = _Clock()
+    state = DashboardPairingState(expected_token="token", monotonic_clock=clock, session_ttl=5.0)
+    request = _paired_request(state, _redeem(state))
+    assert dashboard_access_ok(request)
+    response = await dashboard_events_endpoint(request)
+    body = cast(AsyncGenerator[bytes, None], response.body_iterator)
+
+    assert (await anext(body)).startswith(b"event: hello")
+    clock.now += 6.0
+    await bus.publish("sessions")
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(body), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_events_stream_stops_when_established_bearer_is_lru_evicted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
+    bus = DashboardEventBus()
+    monkeypatch.setattr(event_routes, "dashboard_events", bus)
+    state = DashboardPairingState(expected_token="token", max_sessions=1)
+    request = _paired_request(state, _redeem(state))
+    assert dashboard_access_ok(request)
+    response = await dashboard_events_endpoint(request)
+    body = cast(AsyncGenerator[bytes, None], response.body_iterator)
+
+    assert (await anext(body)).startswith(b"event: hello")
+    _redeem(state)
+    await bus.publish("sessions")
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(body), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_tail_stream_closes_1008_when_established_bearer_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
+    clock = _Clock()
+    state = DashboardPairingState(expected_token="token", monotonic_clock=clock, session_ttl=5.0)
+    request = _paired_request(state, _redeem(state))
+    assert dashboard_access_ok(request)
+    websocket = _TailWebSocket()
+
+    monkeypatch.setattr(event_routes, "_tail_jsonl", lambda _path, cursor: {"events": [], "cursor": cursor})
+    monkeypatch.setattr(event_routes, "_live_session_or_none", lambda _sid: object())
+
+    async def advance_clock(_websocket: object, _seconds: float) -> bool:
+        clock.now += 6.0
+        return True
+
+    monkeypatch.setattr(event_routes, "_sleep_or_disconnect", advance_clock)
+
+    await asyncio.wait_for(
+        event_routes._stream_tail(
+            websocket,  # type: ignore[arg-type]
+            "session",
+            Path("/tmp/session.jsonl"),
+            0,
+            lease=request.state.dashboard_stream_lease,
+        ),
+        timeout=0.2,
+    )
+
+    assert websocket.closed == (1008, "dashboard pairing expired")
+    assert websocket.sent == []
 
 
 @pytest.mark.asyncio

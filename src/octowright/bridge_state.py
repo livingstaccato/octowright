@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import errno
 import itertools
 import json
 import sys
@@ -45,16 +47,19 @@ _THREAD_LOCKS: dict[str, _ThreadLockEntry] = {}
 
 
 @contextlib.contextmanager
-def _thread_state_lock(path: Path) -> Iterator[None]:
-    """Serialize same-process threads before taking the OS file lock."""
+def _thread_state_lock(path: Path, *, timeout: float | None = None) -> Iterator[bool]:
+    """Boundedly serialize same-process threads before the OS file lock."""
     key = str(path.expanduser().absolute())
     with _THREAD_LOCKS_GUARD:
         entry = _THREAD_LOCKS.setdefault(key, _ThreadLockEntry())
         entry.users += 1
+    acquired = False
     try:
-        with entry.lock:
-            yield
+        acquired = entry.lock.acquire(timeout=STATE_LOCK_TIMEOUT_SECONDS if timeout is None else max(0.0, timeout))
+        yield acquired
     finally:
+        if acquired:
+            entry.lock.release()
         with _THREAD_LOCKS_GUARD:
             entry.users -= 1
             if entry.users == 0 and _THREAD_LOCKS.get(key) is entry:
@@ -71,7 +76,7 @@ def _prepare_windows_lock_file(fh: Any) -> None:
 
 
 @contextlib.contextmanager
-def _state_lock(path: Path) -> Iterator[None]:
+def _state_lock(path: Path) -> Iterator[bool]:
     """Exclusive cross-process lock for one read-modify-replace transaction.
 
     The atomic tmp-then-``os.replace`` write prevents torn JSON but NOT lost
@@ -82,25 +87,34 @@ def _state_lock(path: Path) -> Iterator[None]:
 
     POSIX uses ``flock`` and Windows locks byte zero with ``msvcrt.locking``.
     A same-process thread lock is also required because Windows byte-range
-    locks are process-scoped. Lock-file failures retain thread serialization
-    and are logged, but do not take the bridge heartbeat down.
+    locks are process-scoped. The yielded boolean is true only while the OS
+    lock is owned; callers must skip their transaction on timeout/open failure.
     """
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with _thread_state_lock(lock_path):
+    deadline = time.monotonic() + STATE_LOCK_TIMEOUT_SECONDS
+    with _thread_state_lock(lock_path, timeout=deadline - time.monotonic()) as thread_locked:
+        if not thread_locked:
+            log.warning(
+                "octowright.bridge_state.thread_lock_timeout",
+                path=str(lock_path),
+                waited_seconds=STATE_LOCK_TIMEOUT_SECONDS,
+            )
+            yield False
+            return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             fh = open(lock_path, "a+b")  # noqa: SIM115 - handle owns lock lifetime
         except OSError as exc:
             log.warning("octowright.bridge_state.lock_open_failed", path=str(lock_path), error=repr(exc))
-            yield
+            yield False
             return
         locked = False
         try:
             try:
-                locked = _acquire_bounded(fh, lock_path)
+                locked = _acquire_bounded(fh, lock_path, deadline=deadline)
             except OSError as exc:
                 log.warning("octowright.bridge_state.lock_failed", path=str(lock_path), error=repr(exc))
-            yield
+            yield locked
         finally:
             if locked:
                 with contextlib.suppress(OSError):
@@ -116,7 +130,7 @@ def _state_lock(path: Path) -> Iterator[None]:
             fh.close()
 
 
-def _acquire_bounded(fh: Any, lock_path: Path) -> bool:
+def _acquire_bounded(fh: Any, lock_path: Path, *, deadline: float | None = None) -> bool:
     """Try to take the cross-process lock, giving up after a bounded wait.
 
     A *blocking* ``LOCK_EX`` here was a wedge: both callers run this
@@ -127,12 +141,12 @@ def _acquire_bounded(fh: Any, lock_path: Path) -> bool:
     other process's event loop for the length of the freeze. Before this lock
     existed, writes were wait-free and no process could block another.
 
-    So the lock is best-effort: poll non-blocking until the deadline, then
-    proceed WITHOUT it. Losing the lock only reopens the (rare, pre-existing)
-    lost-update window that the lock closes in the normal uncontended case; it
-    never trades that for an unbounded stall of unrelated processes.
+    Poll non-blocking until the deadline, then return ``False`` so the caller
+    skips that snapshot/removal. A later heartbeat or housekeeping pass retries
+    naturally, preserving responsiveness without reopening the lost-update
+    window this lock exists to close.
     """
-    deadline = time.monotonic() + STATE_LOCK_TIMEOUT_SECONDS
+    deadline = time.monotonic() + STATE_LOCK_TIMEOUT_SECONDS if deadline is None else deadline
     if sys.platform == "win32":
         import msvcrt
 
@@ -146,8 +160,11 @@ def _acquire_bounded(fh: Any, lock_path: Path) -> bool:
             else:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return True
-        except OSError:
-            # Held by another process (EWOULDBLOCK / EACCES on Windows).
+        except OSError as exc:
+            # Retry only real contention. Unsupported/broken filesystems must
+            # fail immediately instead of blocking an event loop every pass.
+            if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}:
+                raise
             if time.monotonic() >= deadline:
                 log.warning(
                     "octowright.bridge_state.lock_timeout",
@@ -156,6 +173,16 @@ def _acquire_bounded(fh: Any, lock_path: Path) -> bool:
                 )
                 return False
             time.sleep(STATE_LOCK_POLL_SECONDS)
+
+
+async def record_snapshot_async(**kwargs: Any) -> None:
+    """Offload the bounded synchronous lock transaction from an event loop."""
+    await asyncio.to_thread(record_snapshot, **kwargs)
+
+
+async def remove_followers_async(path: Path, pids: Iterable[int]) -> None:
+    """Offload follower removal and materialize ``pids`` before the worker."""
+    await asyncio.to_thread(remove_followers, path, tuple(pids))
 
 
 def _empty_state() -> dict[str, Any]:
@@ -308,7 +335,9 @@ def record_snapshot(
         "reconnect_attempts": reconnect_attempts,
         "request_timeouts": request_timeouts,
     }
-    with _state_lock(path):
+    with _state_lock(path) as locked:
+        if not locked:
+            return
         state = read_state(path)
         state["followers"][str(follower_pid)] = snapshot
         state["followers"] = _prune_dead_followers(state["followers"], keep_pid=follower_pid)
@@ -370,7 +399,9 @@ def remove_followers(path: Path, pids: Iterable[int]) -> None:
     keys = {str(pid) for pid in pids}
     if not keys:
         return
-    with _state_lock(path):
+    with _state_lock(path) as locked:
+        if not locked:
+            return
         state = read_state(path)
         followers = state.get("followers", {})
         if not any(key in followers for key in keys):
