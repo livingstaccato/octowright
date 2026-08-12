@@ -68,7 +68,16 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [~] **#18** PARTIAL: closed-terminal discovery now carries `connector_type` (`http/discovery.py`, matches the live summary); frontend `types.ts` union now includes `telnet`. DEFERRED (b): xterm 80×25 is a DELIBERATE documented choice (BBS/ANSI art authored for 80 cols; FitAddon would stretch it) — honoring recorded PTY geometry means a PTY-vs-telnet branch, a behavior change best done as its own focused change.
 - [x] **#9** DECISION: namespacing + honest unknown-outcome (durable journal rejected — browsers die with the leader, so a journaled result is stale; and it would write tool results to disk). Cache key now `_storage_key` = sha256(follower_key+method+canonical_args) (kills wrong-result reuse); in-progress entries are awaited regardless of owner (dedup a still-running producer instead of double-executing), and a bounded-await timeout raises `IdempotencyOutcomeUnknownError` instead of silently re-executing. `server/_idempotency.py`
 - [x] **#16** DECISION: all quotas OFF-by-default opt-in knobs. Added `OCTOWRIGHT_MAX_REQUEST_BODY_BYTES` (streaming 413 cap) + `OCTOWRIGHT_WEBSOCKET_MAX_BYTES` (WS sidecar ceiling + truncation marker); recording JSONL limit already existed. Docs in AGENTS.md.
-- [ ] residuals: #13 `pool.shutdown()` driver-stop/tmp cleanup on daemon exit; #11 evict pool entry on poll-death
+- [x] residual #13 DONE: leader shutdown now calls `pool.shutdown()` (`cli/serve._shutdown_browser_pool_on_shutdown`)
+      so the shared Playwright driver is stopped and session tmpdirs are removed on daemon exit — the reaper only
+      killed browser *processes*.
+- [ ] residual #11 STILL OPEN: evict the pool entry on terminal poll-death (engine holds no pool ref; needs the extra to test)
+- [x] residual #19 DONE: panels now render a per-panel `stale — refresh failed` badge driven by
+      `DashboardState.errors` (`PanelDef.isDegraded`, `dashboard-panels.applyDegraded`). NOTE: a global
+      `dashboard-degraded` banner already existed; the badge is complementary — the banner summarizes
+      WHICH scopes failed, the badge marks the stale data at the point of use.
+- [ ] #18b STILL OPEN: xterm hardcodes 80x25 (`terminal-view.ts`). DELIBERATE for telnet/BBS art;
+      honoring recorded PTY cols/rows needs a PTY-vs-telnet branch, so it stays its own change.
 
 ## Batch C — architecture/release decisions
 - [x] **#1** COMPLETE: the follower-only `/api/mcp-events` channel remains capability-token gated, and PR #101 adds opt-in origin-scoped pairing for the browser-facing sessions/media/events/tail/screencast/write surface. See the remediation report below.
@@ -210,8 +219,7 @@ H4b/H4a default OFF, so default behavior is unchanged except: status now exposes
 
 ## Checklist for next session
 
-- [ ] **Activate**: `uv run octowright restart` (disconnects every client) when Tim is ready —
-      the deferred-hardening behavior is in committed code but not yet in the running daemon.
+- [x] **Activate** DONE (2026-08-12): daemon restarted onto 0.14.2; this behavior is live.
 - [ ] (Optional) To exercise H4b live: `OCTOWRIGHT_MIN_FREE_MEMORY_MB=<mb>` and confirm launches
       refuse with `MemoryPressureError` under that floor; verify the macOS available-memory read is
       sane on Tim's Mac (it should report several GB, not "almost none").
@@ -373,14 +381,12 @@ tests mocked `page.reload()`. Hardening to prevent / catch / articulate, all TDD
 
 ## Checklist for next session
 
-- [ ] **Activate**: the running daemon is OLD code. ALL of this turn's behavior needs a daemon
-      restart (disconnects every client) — do it when Tim is ready: `uv run octowright restart`.
+- [x] **Activate** DONE (2026-08-12): daemon restarted onto 0.14.2; this behavior is live.
 - [x] ~~Decide a recommended `OCTOWRIGHT_MAX_BROWSERS`.~~ DONE — defaults to 32, configurable.
 - [x] ~~Clear the pre-existing bandit B101 asserts.~~ DONE.
 - [x] ~~Surface live browser count + cap in `octowright_status`.~~ DONE (pool.browser_cap, crash, driver_restarts).
-- [ ] **P3 follow-up (deferred, needs design sign-off):** after driver self-heal, optionally
-      auto-relaunch the sessions that were lost to their last URL+profile. Deferred because it
-      changes instance_ids / re-runs navigation across every client — a product decision.
+- [x] **P3 follow-up** SHIPPED as `OCTOWRIGHT_DRIVER_RELAUNCH` (`off` default / `new-id` / `keep-id`) —
+      the design question was answered by making the behavior opt-in per mode. See AGENTS.md.
 - [ ] Validate 32 is the right cap for Tim's peak multi-client load; raise if launches start refusing.
 
 ---
@@ -473,7 +479,7 @@ so the raw exit signal (SIGTRAP) genuinely can't be read — but the crash event
       navigates to `chrome://crash`, and asserts the crash is detected + the proactive event fires.
       Stub-based tests in `test_pool_disconnect.py` cover the evict-reason upgrade + crash message;
       `_build_notification` crash branch in `test_mcp_notifications.py`. Full suite green (90.5% cov).
-- [ ] NOT possible via Playwright Python: capturing the child exit signal (SIGTRAP/SIGSEGV) — the
+- NOTE (limitation, not a task) — NOT possible via Playwright Python: capturing the child exit signal (SIGTRAP/SIGSEGV) — the
       managed Chrome is a grandchild of the node driver and `Browser.process` is unexposed. A pure
       hard-kill that fires NO `page.on("crash")` stays honestly `user_close` (best achievable).
 
@@ -530,22 +536,22 @@ restores today's fail-safe wire format + behaviour exactly.
       browser_read_markdown / browser_brief / a scoped selector, instead of hanging. New fields on
       `BrowserSnapshotResult`. Test: `test_server_browser_inspect_tools.py::test_snapshot_degrades_on_timeout`.
 
-Original diagnosis (kept for context):
-- [ ] `src/octowright/server/browser/inspect.py` → `browser_snapshot` (~L61) routes through
+Original diagnosis (kept for context — NOT open work; the fix above shipped):
+- `src/octowright/server/browser/inspect.py` → `browser_snapshot` (~L61) routes through
       `session.snapshot(selector="body")` → Playwright `locator(...).aria_snapshot()`. The
       tree generation has **no internal timeout or size bound**; on a large DOM (e.g. the
       developer.microsoft.com / M365 dashboard) it runs long enough to hit the MCP **transport
       timeout**, which an agent **cannot distinguish from a disconnect**. The `max_chars` cap
       only trims the result *after* the expensive tree is built. (`browser_capture_and_close`
       ~L217 uses the even heavier `locator("html").aria_snapshot()`.)
-- [ ] Wrap `aria_snapshot` in `asyncio.wait_for(...)`; on timeout return a **typed degraded
+- Wrap `aria_snapshot` in `asyncio.wait_for(...)`; on timeout return a **typed degraded
       result** (`{snapshot_timed_out: true, hint: "heavy DOM — use browser_read_markdown or a
       scoped selector"}`) and/or auto-fall back to `browser_read_markdown` / a body-or-region
       scope, instead of hanging until the transport gives up.
-- [ ] Independently reproduced on a SECOND Octowright (v0.3.0, health `:8765`) during an M365
+- Independently reproduced on a SECOND Octowright (v0.3.0, health `:8765`) during an M365
       signup-macro recording — so it generalizes, not just our degraded leader. Today agents
       must rediscover `browser_brief` / `browser_read_markdown` / JS-extract fallbacks by hand.
-- [ ] Test: snapshot of a synthetic huge DOM returns a degraded/typed result within the bound,
+- Test: snapshot of a synthetic huge DOM returns a degraded/typed result within the bound,
       not a transport timeout.
 
 ### P1 — macro replay: save-hygiene + progress-pill locator collision
