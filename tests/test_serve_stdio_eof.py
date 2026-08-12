@@ -82,6 +82,14 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> _Stubs:
     # Replace idle_watchdog at the module level (imported with `from x import y`).
     monkeypatch.setattr(_watchdog_mod, "idle_watchdog", fake_watchdog)
 
+    # Leader startup now offloads boot orphan cleanup before it creates the
+    # long-running tasks under test.  Keep this orchestration fixture isolated
+    # from host process probes, which can exceed its two-second deadline on
+    # loaded Windows runners.
+    from octowright import housekeeping as _housekeeping_mod
+
+    monkeypatch.setattr(_housekeeping_mod, "reap_orphan_browsers_at_boot", lambda **_kwargs: None)
+
     return s
 
 
