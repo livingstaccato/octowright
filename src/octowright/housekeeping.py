@@ -132,6 +132,25 @@ def reap_orphan_browsers_at_boot(*, log: Any) -> None:
             count=len(summary["killed"]),
             pids=summary["killed"],
         )
+    _prune_dead_daemon_manifest_entries(log=log)
+
+
+def _prune_dead_daemon_manifest_entries(*, log: Any) -> None:
+    """Drop launch-manifest entries stranded by a dead daemon generation.
+
+    Runs right after the orphan-browser reap, so by this point the browsers
+    those entries describe are provably gone. Without it the entries accumulate
+    forever — ``remove_session`` only fires on a graceful close, so every
+    SIGKILL (``octowright restart``, a crash) strands the whole open set."""
+    from octowright.session_manifest import prune_dead_daemon_entries
+
+    try:
+        removed = prune_dead_daemon_entries()
+    except Exception as exc:  # diagnostics only; never block startup
+        log.warning("octowright.boot.manifest_prune_failed", error=repr(exc))
+        return
+    if removed:
+        log.info("octowright.boot.pruned_manifest_entries", count=len(removed), session_ids=removed)
 
 
 def start_housekeeping_task(log: Any) -> asyncio.Task[None] | None:

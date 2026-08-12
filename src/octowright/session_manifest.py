@@ -100,6 +100,54 @@ def remove_session(session_id: str, path: Path | None = None) -> bool:
     return removed
 
 
+def _pid_alive(pid: int) -> bool:
+    """True if a process with ``pid`` exists (signal 0 probes without killing)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Exists but owned by another user — alive for our purposes.
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def prune_dead_daemon_entries(current_pid: int | None = None, path: Path | None = None) -> list[str]:
+    """Drop entries stranded by a daemon generation that is gone. Returns the ids.
+
+    ``remove_session`` only runs on a graceful close, so every entry that was
+    open when a daemon was SIGKILLed (``octowright restart``, a crash, an OOM
+    kill) is stranded permanently — nothing else reaps them, and they surface as
+    phantom sessions in diagnostics.
+
+    Orphanhood is decided by the recorded ``daemon_pid``, NOT by absence from
+    the live pool: this runs at leader boot when the pool is empty, so
+    pool-absence alone would flag every entry, including ones a concurrently
+    live daemon owns. Conservative by construction — an entry is removed only
+    when its owning pid is *provably* gone, so a recycled pid or a missing
+    ``daemon_pid`` (pre-schema entries) leaves a stale entry rather than
+    deleting a live one.
+    """
+    manifest = read_manifest(path)
+    current_pid = os.getpid() if current_pid is None else current_pid
+    removed: list[str] = []
+    for session_id, raw in sorted(manifest["sessions"].items()):
+        if not isinstance(raw, dict):
+            continue
+        pid = raw.get("daemon_pid")
+        if not isinstance(pid, int) or pid == current_pid or _pid_alive(pid):
+            continue
+        removed.append(session_id)
+    if not removed:
+        return []
+    for session_id in removed:
+        del manifest["sessions"][session_id]
+    write_manifest(manifest, path)
+    return removed
+
+
 def stale_entries(
     *,
     live_session_ids: set[str],
