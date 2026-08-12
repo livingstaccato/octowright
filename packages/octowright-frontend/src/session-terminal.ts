@@ -3,7 +3,7 @@
 // stays untouched. Slim layout: header + xterm screen + action timeline.
 
 import { getEvents, tailWebSocketUrl } from "./api.js";
-import { renderFooter, renderHeader } from "./session.js";
+import { installDashboardAuthRequiredNotice, renderFooter, renderHeader } from "./session.js";
 import { openTail } from "./tail.js";
 import { getLogger } from "./telemetry.js";
 import { mountTerminalView, type TerminalFactory } from "./terminal-view.js";
@@ -56,6 +56,8 @@ export async function bootTerminalSession(
 ): Promise<void> {
   log.info({ event: "terminal_boot_start", session_id: sessionId, live: detail.live });
   const refs = buildTerminalLayout(root);
+  const removeAuthRequiredNotice = installDashboardAuthRequiredNotice(root);
+  window.addEventListener("beforeunload", removeAuthRequiredNotice, { once: true });
   renderHeader(refs.header, detail);
   renderFooter(refs.footer, detail);
 

@@ -245,6 +245,37 @@ def test_bearer_is_local_to_one_app_state(monkeypatch: pytest.MonkeyPatch) -> No
     assert not dashboard_access_ok(_request({"authorization": f"Bearer {bearer}"}, pairing=second))
 
 
+def test_bearer_admission_attaches_a_digest_only_revalidatable_stream_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_ENV, "1")
+    clock = _Clock()
+    state = DashboardPairingState(expected_token=_TOKEN, monotonic_clock=clock, session_ttl=5.0)
+    bearer = _redeem(state)
+    request = _request({"authorization": f"Bearer {bearer}"}, pairing=state)
+
+    assert dashboard_access_ok(request)
+    lease = request.state.dashboard_stream_lease
+    assert lease.valid()
+    assert bearer not in repr(lease)
+
+    clock.now += 6.0
+    assert not lease.valid()
+
+
+def test_capability_and_pairing_disabled_admissions_attach_nonexpiring_stream_leases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disabled_request = _request()
+    assert dashboard_access_ok(disabled_request)
+    assert disabled_request.state.dashboard_stream_lease.valid()
+
+    monkeypatch.setenv(_ENV, "1")
+    capability_request = _request({"x-octowright-token": _TOKEN})
+    assert dashboard_access_ok(capability_request)
+    assert capability_request.state.dashboard_stream_lease.valid()
+
+
 # --- routes (end-to-end through the real app) ---------------------------------
 
 
@@ -390,22 +421,58 @@ def test_dashboard_websockets_require_private_bearer_protocol(
 ) -> None:
     monkeypatch.setenv(_ENV, "1")
     with TestClient(_app()) as client:
-        with (
-            pytest.raises(WebSocketDisconnect) as missing,
-            client.websocket_connect(path, subprotocols=[DASHBOARD_WS_PROTOCOL]),
-        ):
-            pass
-        assert missing.value.code == 1008
+        with client.websocket_connect(path, subprotocols=[DASHBOARD_WS_PROTOCOL]) as websocket:
+            assert websocket.accepted_subprotocol == DASHBOARD_WS_PROTOCOL
+            with pytest.raises(WebSocketDisconnect) as missing:
+                websocket.receive_json()
+            assert missing.value.code == 1008
+            assert missing.value.reason == "dashboard pairing required"
 
-        with (
-            pytest.raises(WebSocketDisconnect) as wrong,
-            client.websocket_connect(
-                path,
-                subprotocols=[DASHBOARD_WS_PROTOCOL, f"{DASHBOARD_WS_BEARER_PREFIX}wrong"],
-            ),
-        ):
-            pass
-        assert wrong.value.code == 1008
+        with client.websocket_connect(
+            path,
+            subprotocols=[DASHBOARD_WS_PROTOCOL, f"{DASHBOARD_WS_BEARER_PREFIX}wrong"],
+        ) as websocket:
+            assert websocket.accepted_subprotocol == DASHBOARD_WS_PROTOCOL
+            with pytest.raises(WebSocketDisconnect) as wrong:
+                websocket.receive_json()
+            assert wrong.value.code == 1008
+            assert wrong.value.reason == "dashboard pairing required"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/sessions/missing/tail", "/api/sessions/missing/screencast"],
+)
+def test_dashboard_websocket_denial_selects_no_unoffered_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    monkeypatch.setenv(_ENV, "1")
+    with TestClient(_app()) as client, client.websocket_connect(path) as websocket:
+        assert websocket.accepted_subprotocol is None
+        with pytest.raises(WebSocketDisconnect) as denied:
+            websocket.receive_json()
+        assert denied.value.code == 1008
+        assert denied.value.reason == "dashboard pairing required"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/sessions/missing/tail", "/api/sessions/missing/screencast"],
+)
+def test_pairing_disabled_websocket_echoes_offered_stable_protocol(path: str) -> None:
+    with (
+        TestClient(_app()) as client,
+        client.websocket_connect(
+            path,
+            subprotocols=[DASHBOARD_WS_PROTOCOL, f"{DASHBOARD_WS_BEARER_PREFIX}stale"],
+        ) as websocket,
+    ):
+        assert websocket.accepted_subprotocol == DASHBOARD_WS_PROTOCOL
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+        assert closed.value.code == 1008
+        assert "session" in closed.value.reason
 
 
 @pytest.mark.parametrize(

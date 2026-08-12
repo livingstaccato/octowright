@@ -12,11 +12,13 @@ import {
 } from "./api.js";
 import { renderConsolePanel } from "./console-panel.js";
 import {
+  DASHBOARD_AUTH_REQUIRED_EVENT,
   downloadDashboardMedia,
-  fetchDashboardMediaObjectUrl,
   getDashboardBearer,
+  handleDashboardUnauthorized,
   isolateDashboardTabAuth,
 } from "./dashboard-auth.js";
+import { clearDashboardMediaAuth, configureDashboardMediaAuth } from "./dashboard-media-auth.js";
 import { renderDownloadsPanel } from "./downloads-panel.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
@@ -426,8 +428,9 @@ export function renderVideo(target: HTMLElement, detail: SessionDetail): HTMLVid
 }
 
 interface ProtectedVideoOptions {
-  fetchFn?: typeof fetch;
   signal?: AbortSignal;
+  configureMediaAuth?: typeof configureDashboardMediaAuth;
+  clearMediaAuth?: typeof clearDashboardMediaAuth;
 }
 
 export async function loadProtectedVideo(
@@ -436,14 +439,55 @@ export async function loadProtectedVideo(
   sessionId: string,
   options: ProtectedVideoOptions = {},
 ): Promise<() => void> {
+  const path = videoUrl(sessionId);
+  const bearer = getDashboardBearer();
+  const clearMediaAuth = options.clearMediaAuth ?? clearDashboardMediaAuth;
+  let cleaned = false;
+  let authRequired = false;
+  const onAuthRequired = (): void => {
+    if (cleaned || authRequired) return;
+    authRequired = true;
+    video.removeAttribute("src");
+    window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, onAuthRequired);
+    const note = document.createElement("p");
+    note.className = "note note--missing";
+    note.setAttribute("role", "alert");
+    note.textContent =
+      "Dashboard pairing expired. Run `octowright dashboard` and open the new URL to resume video.";
+    target.append(note);
+  };
+  if (bearer !== null) {
+    window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, onAuthRequired);
+  }
   try {
-    const objectUrl = await fetchDashboardMediaObjectUrl(videoUrl(sessionId), options);
-    video.src = objectUrl;
+    if (bearer !== null) {
+      const configureMediaAuth = options.configureMediaAuth ?? configureDashboardMediaAuth;
+      await configureMediaAuth(bearer, {
+        ...(options.signal ? { signal: options.signal } : {}),
+        onRecovered: () => {
+          if (!cleaned && !authRequired && !options.signal?.aborted) video.load();
+        },
+        onRecoveryFailed: () => handleDashboardUnauthorized(),
+        onUnauthorized: () => handleDashboardUnauthorized(),
+      });
+      if (options.signal?.aborted) {
+        clearMediaAuth();
+        throw new DOMException("video load aborted", "AbortError");
+      }
+    }
+    if (!authRequired) video.src = path;
     return () => {
+      if (cleaned) return;
+      cleaned = true;
+      window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, onAuthRequired);
       video.removeAttribute("src");
-      URL.revokeObjectURL(objectUrl);
+      if (bearer !== null) clearMediaAuth();
     };
   } catch (error) {
+    window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, onAuthRequired);
+    video.removeAttribute("src");
+    clearMediaAuth();
+    if (options.signal?.aborted) throw error;
     const note = document.createElement("p");
     note.className = "note note--missing";
     note.setAttribute("role", "alert");
@@ -503,6 +547,21 @@ export function renderFooter(target: HTMLElement, detail: SessionDetail): void {
   } else {
     target.textContent = `Closed at ${formatDateTime(detail.started_at)}`;
   }
+}
+
+export function installDashboardAuthRequiredNotice(root: HTMLElement): () => void {
+  const onAuthRequired = (): void => {
+    if (root.querySelector('[data-testid="dashboard-auth-required"]')) return;
+    const note = document.createElement("p");
+    note.className = "note note--missing";
+    note.setAttribute("role", "alert");
+    note.setAttribute("data-testid", "dashboard-auth-required");
+    note.textContent =
+      "Dashboard pairing expired. Run `octowright dashboard` and open the new URL to reconnect this session.";
+    root.prepend(note);
+  };
+  window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, onAuthRequired);
+  return () => window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, onAuthRequired);
 }
 
 interface BootOptions {
@@ -581,6 +640,11 @@ async function refreshPanels(
 
 export async function bootSession(root: HTMLElement, sessionId: string, opts: BootOptions = {}): Promise<void> {
   log.info({ event: "session_boot_start", session_id: sessionId });
+  // Install before tab isolation and the first guarded fetch: both can clear a
+  // missing/expired bearer synchronously, and the actionable state must not be
+  // lost behind the entrypoint's generic load-error fallback.
+  const removeAuthRequiredNotice = installDashboardAuthRequiredNotice(root);
+  window.addEventListener("beforeunload", removeAuthRequiredNotice, { once: true });
   await isolateDashboardTabAuth();
   const detail = await getSession(sessionId);
   log.info({
@@ -628,7 +692,8 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   const disposeVideo = (): void => {
     videoDisposed = true;
     videoAbort?.abort();
-    videoCleanup?.();
+    if (videoCleanup) videoCleanup();
+    else clearDashboardMediaAuth();
     videoCleanup = null;
   };
   renderTraceControls(refs.traceSlot, detail);
@@ -729,6 +794,11 @@ export function appendForTest(events: RecordingEvent[], target: HTMLElement, bas
   appendTimelineEvents(target, events, baseIso);
 }
 
+export function renderSessionBootError(root: HTMLElement, error: unknown): void {
+  if (root.querySelector('[data-testid="dashboard-auth-required"]')) return;
+  root.textContent = `Session failed to load: ${(error as Error).message}`;
+}
+
 if (typeof document !== "undefined") {
   initTelemetry({ pageName: "session" });
   const root = document.getElementById("app");
@@ -746,7 +816,7 @@ if (typeof document !== "undefined") {
       });
       bootSession(root, id).catch((err: unknown) => {
         log.error({ event: "session_boot_failed", session_id: id, error: String(err) });
-        root.textContent = `Session failed to load: ${(err as Error).message}`;
+        renderSessionBootError(root, err);
       });
     }
   } else {

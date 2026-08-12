@@ -32,6 +32,7 @@ export default defineConfig({
       input: {
         index: resolve(__dirname, "static/index.html"),
         session: resolve(__dirname, "static/session.html"),
+        "dashboard-media-sw": resolve(__dirname, "static/dashboard-media-sw.js"),
       },
       output: {
         entryFileNames: "[name].js",

@@ -164,10 +164,13 @@ class _ProfiledMCPServer(MCPServer):
                 # hit skips both re-execution and double-counting; every layer
                 # preserves the signature via functools.wraps, so MCPServer Context
                 # injection and the input schema still resolve through them.
-                wrapped = decorator(_progress_heartbeat(_idempotent_dispatch(_track_advisor_usage(fn))))
+                tracked = _track_advisor_usage(fn)
+                wrapped = decorator(_progress_heartbeat(_idempotent_dispatch(tracked)))
                 # functools.wraps keeps the signature; the cast just tells the
                 # type-checker the decorated tool is still the caller's callable.
-                return cast("_CallableT", wrapped)
+                # For a sync tool, register its async idempotency adapter but
+                # preserve the module's historical directly-callable sync API.
+                return cast("_CallableT", tracked if not inspect.iscoroutinefunction(fn) else wrapped)
 
             return wrap_all
 
@@ -179,7 +182,9 @@ class _ProfiledMCPServer(MCPServer):
             resolved_name = name if name is not None else getattr(fn, "__name__", "")
             if resolved_name not in allowed:
                 return fn
-            return cast("_CallableT", decorator(_progress_heartbeat(_idempotent_dispatch(_track_advisor_usage(fn)))))
+            tracked = _track_advisor_usage(fn)
+            wrapped = decorator(_progress_heartbeat(_idempotent_dispatch(tracked)))
+            return cast("_CallableT", tracked if not inspect.iscoroutinefunction(fn) else wrapped)
 
         return wrap
 

@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +18,41 @@ from types import SimpleNamespace
 import pytest
 
 from octowright import bridge_state
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX flock semantics")
+def test_permanent_state_lock_error_fails_immediately(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import fcntl
+
+    monkeypatch.setattr(bridge_state, "STATE_LOCK_TIMEOUT_SECONDS", 0.2)
+
+    def _unsupported(*_args: object) -> None:
+        raise OSError(errno.ENOTSUP, "locking unsupported")
+
+    monkeypatch.setattr(fcntl, "flock", _unsupported)
+    started = time.monotonic()
+    with bridge_state._state_lock(tmp_path / "state.json") as acquired:
+        assert acquired is False
+    assert time.monotonic() - started < 0.1
+
+
+@pytest.mark.asyncio
+async def test_async_state_transactions_keep_event_loop_responsive(monkeypatch: pytest.MonkeyPatch) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_record(**_kwargs: object) -> None:
+        entered.set()
+        release.wait(timeout=1.0)
+
+    monkeypatch.setattr(bridge_state, "record_snapshot", _blocking_record)
+    transaction = asyncio.create_task(bridge_state.record_snapshot_async(path=Path("ignored")))
+    assert await asyncio.to_thread(entered.wait, 0.5)
+    ticker = asyncio.create_task(asyncio.sleep(0.01))
+    await asyncio.wait_for(ticker, timeout=0.1)
+    assert not transaction.done()
+    release.set()
+    await transaction
 
 
 def test_windows_state_lock_locks_one_byte_and_unlocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -29,7 +67,8 @@ def test_windows_state_lock_locks_one_byte_and_unlocks(tmp_path: Path, monkeypat
     monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
     monkeypatch.setattr(bridge_state.sys, "platform", "win32")
 
-    with bridge_state._state_lock(path):
+    with bridge_state._state_lock(path) as acquired:
+        assert acquired is True
         assert calls[-1][1:] == (fake_msvcrt.LK_NBLCK, 1)
 
     assert [mode for _fd, mode, _size in calls] == [fake_msvcrt.LK_NBLCK, fake_msvcrt.LK_UNLCK]
@@ -49,10 +88,37 @@ def test_windows_state_lock_unlocks_when_transaction_raises(tmp_path: Path, monk
     monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
     monkeypatch.setattr(bridge_state.sys, "platform", "win32")
 
-    with pytest.raises(RuntimeError, match="transaction failed"), bridge_state._state_lock(path):
+    with pytest.raises(RuntimeError, match="transaction failed"), bridge_state._state_lock(path) as acquired:
+        assert acquired is True
         raise RuntimeError("transaction failed")
 
     assert modes == [fake_msvcrt.LK_NBLCK, fake_msvcrt.LK_UNLCK]
+
+
+def test_same_process_state_lock_wait_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "bridge-state.json"
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    monkeypatch.setattr(bridge_state, "STATE_LOCK_TIMEOUT_SECONDS", 0.05)
+    held = threading.Event()
+    release = threading.Event()
+
+    def _holder() -> None:
+        with bridge_state._thread_state_lock(lock_path):
+            held.set()
+            release.wait(timeout=2)
+
+    thread = threading.Thread(target=_holder)
+    thread.start()
+    assert held.wait(1)
+    try:
+        started = time.monotonic()
+        with bridge_state._state_lock(path) as acquired:
+            assert acquired is False
+        assert time.monotonic() - started < 0.5
+    finally:
+        release.set()
+        thread.join(timeout=2)
+    assert not thread.is_alive()
 
 
 def test_record_snapshot_writes_latest_by_pid(tmp_path: Path) -> None:
@@ -74,6 +140,38 @@ def test_record_snapshot_writes_latest_by_pid(tmp_path: Path) -> None:
     assert data["followers"]["123"]["remote_session_id"] == "sid-1"
     assert data["followers"]["123"]["in_flight"] == 0
     assert data["events"][-1]["event"] == "snapshot"
+
+
+def test_record_snapshot_skips_when_lock_file_open_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "bridge-state.json"
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=123,
+        remote_url="http://127.0.0.1:8765/mcp/",
+        remote_session_id="before-open-failure",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+    before = path.read_text()
+
+    def _fail_lock_open(*_args, **_kwargs):
+        raise OSError("lock directory unavailable")
+
+    monkeypatch.setattr(bridge_state, "open", _fail_lock_open, raising=False)
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=123,
+        remote_url="http://127.0.0.1:8765/mcp/",
+        remote_session_id="must-be-skipped",
+        last_error="lock open failed",
+        in_flight=1,
+        reconnect_attempts=1,
+        request_timeouts=1,
+    )
+
+    assert path.read_text() == before
 
 
 def test_record_snapshot_bounds_events(tmp_path: Path) -> None:
@@ -265,6 +363,29 @@ def test_remove_followers_drops_specified_pids(tmp_path: Path) -> None:
     data = json.loads(path.read_text())
     assert "111" not in data["followers"]
     assert "222" in data["followers"]
+
+
+def test_remove_followers_skips_when_lock_file_open_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "bridge-state.json"
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=111,
+        remote_url="http://a/mcp/",
+        remote_session_id="sid-a",
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+    before = path.read_text()
+
+    def _fail_lock_open(*_args, **_kwargs):
+        raise OSError("lock directory unavailable")
+
+    monkeypatch.setattr(bridge_state, "open", _fail_lock_open, raising=False)
+    bridge_state.remove_followers(path, [111])
+
+    assert path.read_text() == before
 
 
 def test_remove_followers_noop_when_no_match(tmp_path: Path) -> None:

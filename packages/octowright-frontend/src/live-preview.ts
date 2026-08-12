@@ -1,7 +1,7 @@
 // Live preview panel: streams live browser frames over a single WebSocket.
 
 import { liveScreenshotUrl, screencastWsUrl } from "./api.js";
-import { fetchDashboardMediaObjectUrl, getDashboardBearer } from "./dashboard-auth.js";
+import { fetchDashboardMediaObjectUrl, getDashboardBearer, isDashboardAuthClose } from "./dashboard-auth.js";
 import { attachFullscreen, type FullscreenMode } from "./live-preview-fullscreen.js";
 import { openScreencast, type ScreencastHandle } from "./live-preview-screencast.js";
 import { getLogger } from "./telemetry.js";
@@ -58,6 +58,8 @@ interface InternalState {
   expectedCloseGeneration: number | null;
   destroyed: boolean;
   closed: boolean;
+  authBlocked: boolean;
+  pairingExpected: boolean;
   objectUrl: string | null;
 }
 
@@ -102,6 +104,8 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     expectedCloseGeneration: null,
     destroyed: false,
     closed: false,
+    authBlocked: false,
+    pairingExpected: getDashboardBearer() !== null,
     objectUrl: null,
   };
 
@@ -203,6 +207,22 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
     errorIndicator.textContent = "screencast unavailable; using screenshot fallback";
   };
 
+  const showAuthRequired = (): void => {
+    errorIndicator.style.display = "";
+    errorIndicator.setAttribute("role", "alert");
+    errorIndicator.textContent = "dashboard pairing expired; re-pair to resume live preview";
+  };
+
+  const enterAuthBlocked = (): void => {
+    state.authBlocked = true;
+    stopFallbackPoll();
+    setPausedUi();
+    playBtn.disabled = true;
+    playBtn.setAttribute("aria-label", "Dashboard pairing expired");
+    showAuthRequired();
+    log.warn({ event: "live_preview_auth_required", session_id: opts.sessionId });
+  };
+
   const clearError = (): void => {
     errorIndicator.style.display = "none";
     errorIndicator.textContent = "";
@@ -302,10 +322,19 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       format: opts.format ?? "png",
       cacheBust: Date.now(),
     });
-    if (getDashboardBearer() === null) {
+    const bearer = getDashboardBearer();
+    if (bearer === null) {
+      // A preview that began paired must not downgrade to direct image polling
+      // when its grant expires locally between fallback ticks.
+      if (state.authBlocked || state.pairingExpected) {
+        cleanup();
+        enterAuthBlocked();
+        return;
+      }
       img.src = screenshotUrl;
       return;
     }
+    state.pairingExpected = true;
 
     const controller = new AbortController();
     state.fallbackAbort = controller;
@@ -326,6 +355,10 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         cleanup();
+        if (getDashboardBearer() === null) {
+          enterAuthBlocked();
+          return;
+        }
         state.fallbackErrors += 1;
         errorIndicator.style.display = "";
         errorIndicator.textContent = "screenshot fallback unavailable; keeping last frame";
@@ -354,7 +387,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
   };
 
   const startStream = (): void => {
-    if (state.destroyed || state.closed || state.stream !== null || state.fallbackActive) return;
+    if (state.destroyed || state.closed || state.authBlocked || state.stream !== null || state.fallbackActive) return;
     state.generation += 1;
     const generation = state.generation;
     const url = screencastWsUrl(opts.sessionId, opts.fps === undefined ? {} : { fps: opts.fps });
@@ -382,6 +415,10 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
         }
         state.stream = null;
         state.generation += 1;
+        if (isDashboardAuthClose(event)) {
+          enterAuthBlocked();
+          return;
+        }
         startFallbackPoll();
         log.warn({
           event: "live_preview_stream_closed",
@@ -399,6 +436,7 @@ export function mountLivePreview(container: HTMLElement, opts: LivePreviewOption
 
   const handle: LivePreviewHandle = {
     start: () => {
+      if (state.authBlocked) return;
       const wasRunning = state.stream !== null;
       startStream();
       if (!wasRunning && state.stream !== null) {

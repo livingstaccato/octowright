@@ -314,6 +314,12 @@ async def test_survives_leader_bounce_within_recovery_window(monkeypatch: pytest
         # And a request now round-trips to the reconnected leader.
         await local_in_send.send(_request("tools/call", "after-bounce"))
         await remote_write_recvs[0].receive()
+        # The stream becomes writable before the off-thread bridge-state
+        # snapshot and recovery accounting finish.  Await the metric instead
+        # of assuming those later steps complete in the same scheduler turn.
+        with anyio.fail_after(2.0):
+            while recovery.attrs_for("outcome") != ["recovered"]:
+                await anyio.sleep(0.01)
         assert recovery.attrs_for("outcome") == ["recovered"]  # the survival was metered
         tg.cancel_scope.cancel()
 

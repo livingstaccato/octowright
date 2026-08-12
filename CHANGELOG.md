@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] - 2026-08-12
+
+### Fixed
+- **Paired dashboard access now expires on live connections too.** Established
+  event, recording-tail, and screencast streams revalidate their bearer lease
+  and close when it expires or is evicted. Protected recordings retain HTTP
+  Range and progressive playback through a client-scoped authenticated service
+  worker instead of downloading the entire video into a Blob first. Paired
+  artifact and API responses cannot be replayed from a shared browser cache to
+  an unpaired tab, and expired streams show actionable re-pair guidance.
+- **Mutation and browser lifecycle races no longer execute or close the wrong
+  work.** Idempotency producers survive request cancellation, failed/unknown
+  outcomes and oversize responses cannot be blindly replayed, synchronous and
+  async tools share one deduplication boundary, and a saturated cache refuses
+  fresh work before execution. Deferred or late browser-close callbacks verify
+  identity atomically with keep-id replacement.
+- **Cross-process state updates fail closed.** Bridge snapshots are skipped when
+  their bounded lock cannot be acquired, while every launch-manifest
+  read-modify-write uses a stable cross-platform lock and collision-free temp
+  file without blocking the leader event loop. Boot cleanup remains independent
+  after process-enumeration failures but retains the manifest diagnostic for a
+  browser confirmed still alive.
+- **Credential failures stay private.** Credential-helper stderr is never
+  persisted in telemetry, and daemon logs are created or repaired with `0600`
+  permissions.
+
 ## [0.14.2] - 2026-08-11
 
 ### Added

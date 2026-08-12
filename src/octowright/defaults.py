@@ -291,8 +291,8 @@ IDEMPOTENCY_ENABLED = os.environ.get("OCTOWRIGHT_IDEMPOTENCY", "1").strip().lowe
 # you retune the bridge timeouts above.
 IDEMPOTENCY_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_TTL_SECONDS", "180"))
 IDEMPOTENCY_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_MAX_ENTRIES", "256"))
-# Results larger than this are not cached (a DONE-marker is stored instead so a
-# resend re-runs the cheap, idempotent read) — bounds memory for big snapshots.
+# Oversize UTF-8 representations leave an authoritative no-rerun terminal marker,
+# bounding retained result memory without repeating a possibly side-effectful tool.
 IDEMPOTENCY_MAX_RESULT_BYTES = int(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_MAX_RESULT_BYTES", "1048576"))
 # Resend wait on an in-progress producer before its outcome is called UNKNOWN. MUST
 # exceed the longest call the heartbeat sustains (_heartbeat.HEARTBEAT_MAX_SECONDS).

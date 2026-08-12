@@ -147,4 +147,22 @@ describe("bootTerminalSession", () => {
     });
     expect(fakeTerm.writes).toEqual(["boot", "live-delta"]); // live delta appended
   });
+
+  it("shows re-pair guidance when an established tail lease expires", async () => {
+    getEvents.mockResolvedValue({ events: [], cursor: 0, total_bytes: 0, complete: false });
+    await bootTerminalSession(root, "term-0", makeDetail({ live: true }), {
+      terminalFactory: () => ({ terminal: fakeTerm, fit: () => {} }),
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    FakeWebSocket.instances[0]?.emit("close", {
+      code: 1008,
+      reason: "dashboard pairing expired",
+      wasClean: true,
+    });
+
+    expect(root.querySelector('[data-testid="dashboard-auth-required"]')?.textContent).toContain(
+      "octowright dashboard",
+    );
+  });
 });

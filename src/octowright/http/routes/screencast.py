@@ -17,7 +17,14 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from octowright.http.discovery import _live_session_or_none
 from octowright.http.exposure import sensitive_allowed_for_connection, websocket_origin_allowed
-from octowright.http.pairing import dashboard_websocket_auth
+from octowright.http.pairing import (
+    DASHBOARD_AUTH_EXPIRED_REASON,
+    DASHBOARD_STREAM_AUTH_CHECK_SECONDS,
+    DashboardStreamLease,
+    dashboard_stream_lease,
+    dashboard_stream_lease_valid,
+    dashboard_websocket_auth,
+)
 from octowright.session.screencast import (
     ScreencastEnded,
     ScreencastManager,
@@ -61,10 +68,30 @@ async def _next_frame_or_disconnect(websocket: WebSocket, viewer: ScreencastView
                     await task
 
 
-async def _stream_screencast(websocket: WebSocket, viewer: ScreencastViewer) -> None:
+async def _stream_screencast(
+    websocket: WebSocket,
+    viewer: ScreencastViewer,
+    *,
+    lease: DashboardStreamLease | None = None,
+) -> None:
     while True:
-        frame = await _next_frame_or_disconnect(websocket, viewer)
+        if not dashboard_stream_lease_valid(lease):
+            await websocket.close(code=1008, reason=DASHBOARD_AUTH_EXPIRED_REASON)
+            return
+        try:
+            if lease is not None and lease.revalidatable:
+                frame = await asyncio.wait_for(
+                    _next_frame_or_disconnect(websocket, viewer),
+                    timeout=DASHBOARD_STREAM_AUTH_CHECK_SECONDS,
+                )
+            else:
+                frame = await _next_frame_or_disconnect(websocket, viewer)
+        except TimeoutError:
+            continue
         if frame is None:
+            return
+        if not dashboard_stream_lease_valid(lease):
+            await websocket.close(code=1008, reason=DASHBOARD_AUTH_EXPIRED_REASON)
             return
         await websocket.send_bytes(frame)
 
@@ -87,8 +114,15 @@ class ScreencastEndpoint(WebSocketEndpoint):
             return
         pairing_ok, selected_protocol = dashboard_websocket_auth(websocket)
         if not pairing_ok:
+            # A pre-accept rejection is exposed by Chromium as 1006 with an
+            # empty reason. Accept without selecting the private credential
+            # protocol. Select only the stable public protocol, then close
+            # before any frame/session lookup so the
+            # client receives the actionable pairing close reason.
+            await websocket.accept(subprotocol=selected_protocol)
             await websocket.close(code=1008, reason="dashboard pairing required")
             return
+        lease = dashboard_stream_lease(websocket)
 
         await websocket.accept(subprotocol=selected_protocol)
         sid = websocket.path_params["id"]
@@ -118,7 +152,7 @@ class ScreencastEndpoint(WebSocketEndpoint):
         try:
             assert manager is not None  # nosec B101  # narrowed after successful acquire
             assert viewer is not None  # nosec B101  # narrowed after successful acquire
-            await _stream_screencast(websocket, viewer)
+            await _stream_screencast(websocket, viewer, lease=lease)
         except ScreencastEnded:
             # The producer is gone (session closed, or a rebind could not
             # reattach). Close so the dashboard drops to screenshot polling

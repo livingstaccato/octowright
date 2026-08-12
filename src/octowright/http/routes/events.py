@@ -36,7 +36,13 @@ from octowright.http.exposure import (
     sensitive_allowed_for_connection,
     websocket_origin_allowed,
 )
-from octowright.http.pairing import dashboard_websocket_auth
+from octowright.http.pairing import (
+    DASHBOARD_AUTH_EXPIRED_REASON,
+    DashboardStreamLease,
+    dashboard_stream_lease,
+    dashboard_stream_lease_valid,
+    dashboard_websocket_auth,
+)
 from octowright.http.routes._common import _paginate, _parse_since
 from octowright.http.session_artifacts import session_artifact_cache
 
@@ -58,8 +64,12 @@ async def _wait_for_dashboard_disconnect(request: Request) -> None:
 
 
 async def dashboard_events_endpoint(request: Request) -> StreamingResponse:
+    lease = dashboard_stream_lease(request)
+
     async def stream() -> Any:
         async with dashboard_events.subscribe() as subscription:
+            if not dashboard_stream_lease_valid(lease):
+                return
             yield _sse_frame("hello", {"ok": True})
             disconnect_task = asyncio.create_task(_wait_for_dashboard_disconnect(request))
             event_task: asyncio.Task[Any] | None = None
@@ -77,11 +87,15 @@ async def dashboard_events_endpoint(request: Request) -> StreamingResponse:
                             await event_task
                         break
                     if event_task in done:
+                        if not dashboard_stream_lease_valid(lease):
+                            break
                         yield _sse_frame("invalidate", event_task.result())
                         continue
                     event_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await event_task
+                    if not dashboard_stream_lease_valid(lease):
+                        break
                     yield _sse_comment("heartbeat")
             finally:
                 if event_task is not None and not event_task.done():
@@ -280,7 +294,14 @@ async def _sleep_or_disconnect(websocket: WebSocket, seconds: float) -> bool:
     return True
 
 
-async def _stream_tail(websocket: WebSocket, sid: str, log_path: Path, cursor: int) -> None:
+async def _stream_tail(
+    websocket: WebSocket,
+    sid: str,
+    log_path: Path,
+    cursor: int,
+    *,
+    lease: DashboardStreamLease | None = None,
+) -> None:
     """Live-tail loop. Sends only when there's something new (events arrived
     or the session transitioned live→closed); a TAIL_HEARTBEAT_SECONDS-bounded
     keepalive frame goes out during quiet periods so the client can detect a
@@ -289,6 +310,9 @@ async def _stream_tail(websocket: WebSocket, sid: str, log_path: Path, cursor: i
     ticks_since_heartbeat = 0
     heartbeat_every = max(1, int(state.TAIL_HEARTBEAT_SECONDS / state.TAIL_POLL_SECONDS))
     while True:
+        if not dashboard_stream_lease_valid(lease):
+            await websocket.close(code=1008, reason=DASHBOARD_AUTH_EXPIRED_REASON)
+            return
         # to_thread so JSONL seek+read doesn't block the event loop when N
         # dashboards are tailing concurrently.
         snapshot = await asyncio.to_thread(_tail_jsonl, log_path, cursor)
@@ -296,6 +320,9 @@ async def _stream_tail(websocket: WebSocket, sid: str, log_path: Path, cursor: i
         still_live = _live_session_or_none(sid) is not None
         ticks_since_heartbeat += 1
         if snapshot["events"] or (not still_live) or ticks_since_heartbeat >= heartbeat_every:
+            if not dashboard_stream_lease_valid(lease):
+                await websocket.close(code=1008, reason=DASHBOARD_AUTH_EXPIRED_REASON)
+                return
             await websocket.send_json({"events": snapshot["events"], "cursor": cursor, "complete": (not still_live)})
             ticks_since_heartbeat = 0
         if not still_live:
@@ -358,8 +385,15 @@ class TailEndpoint(WebSocketEndpoint):
             return
         pairing_ok, selected_protocol = dashboard_websocket_auth(websocket)
         if not pairing_ok:
+            # Browsers surface a pre-handshake rejection as the synthetic
+            # 1006 code with no server reason. Complete the same-origin
+            # handshake selecting only the already-offered public protocol,
+            # then close before sending data so the dashboard reliably sees
+            # the actionable 1008 pairing reason.
+            await websocket.accept(subprotocol=selected_protocol)
             await websocket.close(code=1008, reason="dashboard pairing required")
             return
+        lease = dashboard_stream_lease(websocket)
         await websocket.accept(subprotocol=selected_protocol)
         sid = websocket.path_params["id"]
         live_session = _live_session_or_none(sid)
@@ -370,7 +404,7 @@ class TailEndpoint(WebSocketEndpoint):
         log_path = Path(live_session.log_path)
         cursor = _parse_since_cursor(websocket.query_params.get("since"))
         try:
-            await _stream_tail(websocket, sid, log_path, cursor)
+            await _stream_tail(websocket, sid, log_path, cursor, lease=lease)
         except WebSocketDisconnect:
             return
 
@@ -384,7 +418,7 @@ def routes() -> list[Route | WebSocketRoute]:
         # WS routes have no route-level guard wrapper analogous to
         # guard_sensitive_http; the exposure check lives inside
         # TailEndpoint.on_connect via sensitive_allowed_for_connection,
-        # which closes with code 1008 before websocket.accept(). Keep the
+        # which rejects before websocket.accept(). Keep the
         # in-handler check authoritative — if you refactor the endpoint
         # class, that check must move with it.
         WebSocketRoute("/api/sessions/{id}/tail", TailEndpoint),

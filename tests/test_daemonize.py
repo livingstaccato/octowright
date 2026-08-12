@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -196,3 +197,36 @@ class TestResolveDaemonEntrypoint:
         monkeypatch.setattr(_daemon.subprocess, "Popen", fake_popen)
         _daemon.spawn_daemon(http_host=None, http_port=None, idle_grace=None)
         assert captured["args"][:5] == ["/usr/bin/python3", "-m", "octowright", "serve", "--daemon-mode"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission-bit assertion")
+def test_open_daemon_log_repairs_legacy_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-existing permissive daemon log must not keep exposing secrets."""
+    log_path = tmp_path / "octowright-daemon.log"
+    log_path.write_bytes(b"legacy\n")
+    log_path.chmod(0o644)
+    monkeypatch.setattr(_daemon, "_DAEMON_LOG", log_path)
+
+    handle = _daemon._open_daemon_log()
+    handle.close()
+
+    assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+
+
+def test_open_daemon_log_chmod_failure_does_not_block_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unsupported chmod semantics must not take down daemon startup."""
+    log_path = tmp_path / "octowright-daemon.log"
+    monkeypatch.setattr(_daemon, "_DAEMON_LOG", log_path)
+    monkeypatch.setattr(
+        _daemon.os,
+        "fchmod",
+        lambda *_args: (_ for _ in ()).throw(OSError("unsupported")),
+        raising=False,
+    )
+    monkeypatch.setattr(_daemon.os, "chmod", lambda *_args: (_ for _ in ()).throw(OSError("unsupported")))
+
+    handle = _daemon._open_daemon_log()
+    handle.write(b"still starts\n")
+    handle.close()
+
+    assert log_path.read_bytes() == b"still starts\n"

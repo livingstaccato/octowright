@@ -335,6 +335,32 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
   });
 
+  it("stops protected retries and shows re-pair state after an auth close", () => {
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "expired-preview-secret", expires_at: Date.now() / 1000 + 60 });
+    const mediaFetch = vi.fn();
+    const handle = mountLivePreview(container, {
+      sessionId: "live-auth-expired",
+      isLive: true,
+      mediaFetch,
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    handle.start();
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    if (!playBtn || !error) throw new Error("missing preview controls");
+
+    FakeWebSocket.instances[0]?.emitClose(1008, "dashboard pairing expired", true);
+
+    expect(mediaFetch).not.toHaveBeenCalled();
+    expect(playBtn.disabled).toBe(true);
+    expect(error.getAttribute("role")).toBe("alert");
+    expect(error.textContent).toContain("pairing expired");
+    handle.start();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    handle.destroy();
+  });
+
   it("falls back to screenshot polling after an unexpected screencast close", async () => {
     vi.useFakeTimers();
     const handle = mountLivePreview(container, {
@@ -392,6 +418,65 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:frame-1");
     sessionStorage.clear();
+  });
+
+  it("stops screenshot fallback after an authenticated 401 clears pairing", async () => {
+    vi.useFakeTimers();
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "expired-frame-secret", expires_at: Date.now() / 1000 + 60 });
+    const fetchFn = vi.fn(async () => new Response("denied", { status: 401 }));
+    const handle = mountLivePreview(container, {
+      sessionId: "live-auth-fallback-expired",
+      isLive: true,
+      intervalMs: 10,
+      mediaFetch: fetchFn,
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    handle.start();
+    FakeWebSocket.instances[0]?.emitClose(1011, "fallback", false);
+    await vi.runAllTicks();
+
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(playBtn?.disabled).toBe(true));
+    expect(error?.textContent).toContain("pairing expired");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    handle.start();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    handle.destroy();
+  });
+
+  it("does not downgrade to direct image polling when pairing expires between fallback ticks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "soon-expired", expires_at: Date.now() / 1000 + 1 });
+    const fetchFn = vi.fn(async () => new Response("frame", { status: 200 }));
+    const handle = mountLivePreview(container, {
+      sessionId: "live-local-expiry",
+      isLive: true,
+      intervalMs: 1500,
+      mediaFetch: fetchFn,
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    handle.start();
+    FakeWebSocket.instances[0]?.emitClose(1011, "fallback", false);
+    await vi.runAllTicks();
+    const img = container.querySelector<HTMLImageElement>('[data-testid="live-preview-img"]');
+    await vi.waitFor(() => expect(img?.src).toBe("blob:frame-1"));
+    img?.dispatchEvent(new Event("load"));
+
+    await vi.advanceTimersByTimeAsync(1500);
+
+    const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
+    const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(img?.src).toBe("blob:frame-1");
+    expect(playBtn?.disabled).toBe(true);
+    expect(error?.textContent).toContain("pairing expired");
+    handle.destroy();
   });
 
   it("ignores late message and error callbacks after an unexpected close", () => {

@@ -18,15 +18,17 @@ vi.mock("./api.js", async (importOriginal) => ({
   getEvents: getEventsMock,
 }));
 
-import { setDashboardBearer } from "./dashboard-auth.js";
+import { getDashboardBearer, setDashboardBearer } from "./dashboard-auth.js";
 import {
   bootSession,
   buildLayout,
   loadProtectedVideo,
+  installDashboardAuthRequiredNotice,
   renderCachePanel,
   renderFooter,
   renderHeader,
   renderMarkdownPanel,
+  renderSessionBootError,
   renderTraceControls,
   renderVideo,
   sessionIdFromPath,
@@ -139,6 +141,25 @@ describe("buildLayout", () => {
   });
 });
 
+describe("installDashboardAuthRequiredNotice", () => {
+  it("renders one actionable re-pair alert for a stream expiry", () => {
+    const dispose = installDashboardAuthRequiredNotice(root);
+    window.dispatchEvent(new Event("octowright:dashboard-auth-required"));
+    window.dispatchEvent(new Event("octowright:dashboard-auth-required"));
+    expect(root.querySelectorAll('[data-testid="dashboard-auth-required"]')).toHaveLength(1);
+    expect(root.textContent).toContain("octowright dashboard");
+    dispose();
+  });
+
+  it("preserves re-pair guidance instead of replacing it with a generic boot error", () => {
+    installDashboardAuthRequiredNotice(root);
+    window.dispatchEvent(new Event("octowright:dashboard-auth-required"));
+    renderSessionBootError(root, new Error("401"));
+    expect(root.textContent).toContain("octowright dashboard");
+    expect(root.textContent).not.toContain("Session failed to load");
+  });
+});
+
 describe("setActiveTab", () => {
   it("toggles active class + visibility across the three panels", () => {
     const refs = buildLayout(root);
@@ -196,27 +217,97 @@ describe("renderVideo", () => {
     const video = renderVideo(refs.videoSlot, makeDetail({ video_path: "/x.webm" }));
     expect(video?.src).toBe("");
   });
-  it("loads closed-session video through authenticated fetch and returns cleanup", async () => {
+  it("loads paired video through the normal URL after worker auth without buffering a blob", async () => {
+    setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
     const refs = buildLayout(root);
     const video = renderVideo(refs.videoSlot, makeDetail({ video_path: "/x.webm" }));
     if (!video) throw new Error("video missing");
-    vi.stubGlobal("URL", {
-      ...URL,
-      createObjectURL: vi.fn(() => "blob:video"),
-      revokeObjectURL: vi.fn(),
+    const configureMediaAuth = vi.fn(async () => undefined);
+    const clearMediaAuth = vi.fn();
+    const fetchFn = vi.fn(() => {
+      throw new Error("video must not be fetched into page memory");
     });
-    const fetchFn = vi.fn(async () => new Response("video", { status: 200 }));
-    const cleanup = await loadProtectedVideo(refs.videoSlot, video, "sess-1", { fetchFn });
-    expect(video.src).toBe("blob:video");
+    vi.stubGlobal("fetch", fetchFn);
+    const blob = vi.spyOn(Response.prototype, "blob");
+
+    const cleanup = await loadProtectedVideo(refs.videoSlot, video, "sess-1", {
+      configureMediaAuth,
+      clearMediaAuth,
+    });
+
+    expect(configureMediaAuth).toHaveBeenCalledWith("video-secret", expect.any(Object));
+    expect(video.src).toContain("/api/sessions/sess-1/video");
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(blob).not.toHaveBeenCalled();
     cleanup();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:video");
+    expect(video.hasAttribute("src")).toBe(false);
+    expect(clearMediaAuth).toHaveBeenCalledOnce();
   });
-  it("renders an accessible error and preserves the element when video fetch fails", async () => {
+  it("reloads native video after the worker restores this page's lost authorization", async () => {
+    setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
     const refs = buildLayout(root);
     const video = renderVideo(refs.videoSlot, makeDetail({ video_path: "/x.webm" }));
     if (!video) throw new Error("video missing");
-    const fetchFn = vi.fn(async () => new Response("no", { status: 500 }));
-    await expect(loadProtectedVideo(refs.videoSlot, video, "sess-1", { fetchFn })).rejects.toThrow();
+    const load = vi.spyOn(video, "load").mockImplementation(() => undefined);
+    let onRecovered: (() => void) | undefined;
+    const configureMediaAuth = vi.fn(
+      async (_bearer: string, options: { onRecovered?: () => void }) => {
+        onRecovered = options.onRecovered;
+      },
+    );
+
+    const cleanup = await loadProtectedVideo(refs.videoSlot, video, "sess-1", {
+      configureMediaAuth: configureMediaAuth as never,
+    });
+    expect(onRecovered).toBeTypeOf("function");
+
+    onRecovered?.();
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(getDashboardBearer()).toBe("video-secret");
+    cleanup();
+  });
+  it.each([401, 403])("clears paired video and shows terminal re-pair UX after native status %s", async (status) => {
+    setDashboardBearer({ bearer: "expired-secret", expires_at: Date.now() / 1000 + 60 });
+    const refs = buildLayout(root);
+    const video = renderVideo(refs.videoSlot, makeDetail({ video_path: "/x.webm" }));
+    if (!video) throw new Error("video missing");
+    let onUnauthorized: ((status: 401 | 403) => void) | undefined;
+    const configureMediaAuth = vi.fn(
+      async (_bearer: string, options: { onUnauthorized?: (status: 401 | 403) => void }) => {
+        onUnauthorized = options.onUnauthorized;
+      },
+    );
+    const clearMediaAuth = vi.fn();
+    const cleanup = await loadProtectedVideo(refs.videoSlot, video, "sess-1", {
+      configureMediaAuth: configureMediaAuth as never,
+      clearMediaAuth,
+    });
+    expect(onUnauthorized).toBeTypeOf("function");
+
+    onUnauthorized?.(status as 401 | 403);
+    onUnauthorized?.(status as 401 | 403);
+
+    expect(getDashboardBearer()).toBeNull();
+    expect(video.hasAttribute("src")).toBe(false);
+    expect(configureMediaAuth).toHaveBeenCalledOnce();
+    const alert = refs.videoSlot.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Dashboard pairing expired");
+    expect(alert?.textContent).toContain("octowright dashboard");
+    expect(refs.videoSlot.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    cleanup();
+    expect(clearMediaAuth).toHaveBeenCalledOnce();
+  });
+  it("renders an accessible bounded error when worker control is unavailable", async () => {
+    setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
+    const refs = buildLayout(root);
+    const video = renderVideo(refs.videoSlot, makeDetail({ video_path: "/x.webm" }));
+    if (!video) throw new Error("video missing");
+    const configureMediaAuth = vi.fn(async () => {
+      throw new Error("service worker could not take control");
+    });
+    await expect(loadProtectedVideo(refs.videoSlot, video, "sess-1", { configureMediaAuth })).rejects.toThrow();
+    expect(video.src).toBe("");
     expect(refs.videoSlot.querySelector('[role="alert"]')?.textContent).toContain("Video unavailable");
   });
 });

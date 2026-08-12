@@ -507,14 +507,22 @@ async def test_external_close_without_crash_stays_user_close(
     assert "its process died" not in message
 
 
-async def _wait_until(predicate: Any, *, ticks: int = 200) -> None:
-    """Yield to the loop until predicate() is true or ticks are exhausted."""
+async def _wait_until(predicate: Any, *, timeout: float = 5.0) -> None:
+    """Wait for an async condition without assuming a number of loop turns.
+
+    Full close includes an off-thread manifest transaction.  A fixed number of
+    ``sleep(0)`` yields can expire before that worker is scheduled on a loaded
+    CI runner even though teardown is progressing normally.
+    """
     import asyncio
 
-    for _ in range(ticks):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
         if predicate():
             return
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"condition was not met within {timeout:.1f}s")
 
 
 @pytest.mark.anyio
@@ -545,7 +553,12 @@ async def test_all_pages_closed_runs_full_session_close(
     page.mark_closed()  # last page gone → fires page.on('close')
     # Wait for the full teardown, not just the registry pop (close_browser pops
     # BEFORE awaiting session.close(), so registry removal races the teardown).
-    await _wait_until(lambda: session.context.close.await_count >= 1)
+    await _wait_until(
+        lambda: (
+            session.context.close.await_count >= 1
+            and any("octowright.browser.closed" in message for message in listeners_log.messages())
+        )
+    )
 
     assert iid not in pool._sessions
     # The context was actually torn down (the whole point) — not just popped.

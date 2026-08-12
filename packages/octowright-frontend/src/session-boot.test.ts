@@ -12,6 +12,16 @@
  *   - seek closure
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mediaAuthMocks = vi.hoisted(() => ({
+  clear: vi.fn(),
+  configure: vi.fn(async () => undefined),
+}));
+vi.mock("./dashboard-media-auth.js", () => ({
+  clearDashboardMediaAuth: mediaAuthMocks.clear,
+  configureDashboardMediaAuth: mediaAuthMocks.configure,
+}));
+
 import { disposeDashboardTabIsolation, getDashboardBearer, setDashboardBearer } from "./dashboard-auth.js";
 import {
   appendForTest,
@@ -138,6 +148,9 @@ async function getMockedPanelLoaders() {
 let root: HTMLDivElement;
 beforeEach(() => {
   disposeDashboardTabIsolation();
+  mediaAuthMocks.clear.mockClear();
+  mediaAuthMocks.configure.mockReset();
+  mediaAuthMocks.configure.mockResolvedValue(undefined);
   sessionStorage.clear();
   root = document.createElement("div");
   document.body.append(root);
@@ -407,10 +420,15 @@ describe("bootSession — closed session", () => {
     expect(livePreviewHandle.destroy).toHaveBeenCalled();
   });
 
-  it("finishes boot while a protected video request is still pending", async () => {
+  it("finishes boot while service-worker control for protected video is still pending", async () => {
     setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
-    const fetchFn = vi.fn(() => new Promise<Response>(() => undefined));
-    vi.stubGlobal("fetch", fetchFn);
+    let resolveConfigure!: () => void;
+    mediaAuthMocks.configure.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfigure = resolve;
+        }),
+    );
     const getSession = await getMockedGetSession();
     getSession.mockResolvedValueOnce(makeDetail({ video_path: "/v.webm" }));
     const api = await import("./api.js");
@@ -421,21 +439,20 @@ describe("bootSession — closed session", () => {
     await boot;
     expect(root.querySelector("[data-testid='session-footer']")).not.toBeNull();
     window.dispatchEvent(new Event("beforeunload"));
+    resolveConfigure();
   });
 
-  it("aborts a pending protected video request and revokes a late object URL on beforeunload", async () => {
+  it("aborts pending worker control and clears the client credential on beforeunload", async () => {
     setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
-    let resolveFetch!: (response: Response) => void;
-    const fetchFn = vi.fn(
-      () =>
-        new Promise<Response>((resolve) => {
-          resolveFetch = resolve;
+    let resolveConfigure!: () => void;
+    let signal: AbortSignal | undefined;
+    mediaAuthMocks.configure.mockImplementationOnce(
+      (_bearer: string, options: { signal?: AbortSignal }) =>
+        new Promise<void>((resolve) => {
+          signal = options.signal;
+          resolveConfigure = resolve;
         }),
     );
-    vi.stubGlobal("fetch", fetchFn);
-    const createObjectURL = vi.fn(() => "blob:late-video");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
     const getSession = await getMockedGetSession();
     getSession.mockResolvedValueOnce(makeDetail({ video_path: "/v.webm" }));
     const api = await import("./api.js");
@@ -443,15 +460,35 @@ describe("bootSession — closed session", () => {
     const boot = bootSession(root, "sess-pending-video-unload");
     await vi.waitFor(() => expect(api.getEvents).toHaveBeenCalledWith("sess-pending-video-unload", 0));
     await boot;
-    const request = fetchFn.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(request?.signal).toBeInstanceOf(AbortSignal);
+    expect(signal).toBeInstanceOf(AbortSignal);
 
     window.dispatchEvent(new Event("beforeunload"));
 
-    expect(request?.signal?.aborted).toBe(true);
-    resolveFetch(new Response("video", { status: 200 }));
-    await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:late-video"));
+    expect(signal?.aborted).toBe(true);
+    expect(mediaAuthMocks.clear).toHaveBeenCalled();
+    resolveConfigure();
+    await Promise.resolve();
     expect(root.querySelector("[data-testid='video-player']")?.hasAttribute("src")).toBe(false);
+  });
+
+  it("assigns the normal video URL after worker auth without page fetch or blob buffering", async () => {
+    setDashboardBearer({ bearer: "video-secret", expires_at: Date.now() / 1000 + 60 });
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ video_path: "/v.webm" }));
+
+    await bootSession(root, "sess-range-video");
+    await vi.waitFor(() => {
+      expect(root.querySelector<HTMLVideoElement>("[data-testid='video-player']")?.src).toContain(
+        "/api/sessions/sess-1/video",
+      );
+    });
+
+    expect(mediaAuthMocks.configure).toHaveBeenCalledWith("video-secret", expect.any(Object));
+    expect(fetchFn).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(mediaAuthMocks.clear).toHaveBeenCalled();
   });
 });
 
