@@ -1,4 +1,4 @@
-import { dashboardWebSocketProtocols } from "./dashboard-auth.js";
+import { dashboardWebSocketProtocols, handleDashboardStreamAuthClose } from "./dashboard-auth.js";
 import { getLogger, wsConnectsCounter, wsMessagesCounter } from "./telemetry.js";
 import type { RecordingEvent } from "./types.js";
 
@@ -58,6 +58,7 @@ export function openTail(url: string, opts: TailOptions): TailHandle {
   });
   ws.addEventListener("close", (e) => {
     const ce = e as CloseEvent;
+    handleDashboardStreamAuthClose(ce);
     log.info({ event: "ws_close", url, code: ce.code, reason: ce.reason, was_clean: ce.wasClean });
     if (opts.onClose) opts.onClose(ce);
   });

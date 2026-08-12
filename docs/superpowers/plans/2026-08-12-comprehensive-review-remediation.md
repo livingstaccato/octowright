@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status (2026-08-12):** This file preserves the pre-execution plan and its
+> original unchecked task template. Implementation and local review are
+> complete; authoritative results are recorded in
+> `docs/reviews/2026-08-12-comprehensive-code-review.md` and the release PR.
+> Push, exact-head GitHub Actions, merge, and local-main synchronization remain
+> delivery gates until the PR records them.
+
 **Goal:** Close all eight verified review findings and release the corrected repository as version 0.14.3.
 
 **Architecture:** Safety-sensitive operations become ownership- or lock-guarded transactions that fail closed. Dashboard streams carry a revalidatable bearer lease, while paired video moves from full-file blobs to client-scoped service-worker header injection so native Range requests remain intact. Each behavior is developed red-green and verified independently before the combined release.
@@ -31,7 +38,7 @@ async def test_abandon_threshold_never_reclaims_a_live_producer(monkeypatch):
     monkeypatch.setattr(_idempotency.defaults, "IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", 0.05)
     clock = {"now": 0.0}
     monkeypatch.setattr(_idempotency, "_now", lambda: clock["now"])
-    # The tool suppresses cancellation and stays live; a same-key call must not run it twice.
+    # The tool stays live; age must neither cancel it nor run it twice.
 ```
 
 - [ ] **Step 2: Run RED**
@@ -40,13 +47,12 @@ Run: `uv run pytest tests/test_idempotency_cache.py::test_abandon_threshold_neve
 
 Expected: FAIL because the aged entry is deleted and the call count becomes two.
 
-- [ ] **Step 3: Track and cancel, but never age-delete, the producer task**
+- [ ] **Step 3: Track, but never age-cancel or age-delete, the producer task**
 
-Add `producer_task` and a cancellation-request marker to `_Entry`. Populate it
-from `asyncio.current_task()` when a fresh producer claims the slot. At the age
-threshold, request cancellation once when the task is still running and retain
-the entry. Reclaim directly only when the recorded task is confirmed done; the
-wrapper's existing exception path remains the normal cancellation cleanup.
+Add `producer_task` to `_Entry` and populate it from `asyncio.current_task()`
+when a fresh producer claims the slot. At the age threshold, retain a running
+producer without cancelling it. Reclaim directly only when the recorded task is
+confirmed done.
 
 - [ ] **Step 4: Update the taskless-orphan test deliberately**
 
@@ -58,7 +64,40 @@ producer is assumed dead.”
 
 Run: `uv run pytest tests/test_idempotency_cache.py tests/test_idempotency_windows.py -q --no-cov`
 
-Expected: PASS with one mutation in the cancellation-resistant regression.
+Expected: PASS with one mutation and no age-driven cancellation.
+
+- [ ] **Step 6: Keep the cache hard-bounded without displacing producers**
+
+Set `IDEMPOTENCY_MAX_ENTRIES` to two, occupy both slots with live producers,
+then call a fresh distinct key. Assert the fresh call raises
+`IdempotencyCapacityError` before its handler runs and the cache remains at two
+entries. Start a same-key caller against one occupied slot, release the original
+producer, and assert both callers receive the original result from one handler
+execution.
+
+Run: `uv run pytest tests/test_idempotency_cache.py::test_capacity_refuses_a_fresh_key_without_displacing_live_producers -q --no-cov`
+
+Expected: PASS with two authoritative producers, zero execution of the refused
+handler, and no cache growth beyond the configured bound.
+
+- [ ] **Step 7: Isolate the producer from request cancellation**
+
+Run the handler in a shielded internal task. Cancelling the request waiter must
+leave that producer alive to finish into the cache. If the producer itself
+fails or is cancelled, retain an unknown-outcome tombstone so the same key is
+never executed automatically while its prior outcome may have committed.
+
+Run: `uv run pytest tests/test_idempotency_cache.py -q --no-cov`
+
+Expected: request cancellation does not cancel or duplicate the producer, and
+producer failure/cancellation makes a resend report unknown outcome.
+
+- [ ] **Step 8: Fail closed when a successful result is too large to cache**
+
+Set the result-size limit below a successful tool response. Assert the first
+caller receives the response, a same-key resend raises
+`IdempotencyResultUnavailableError`, and the handler execution count remains
+one.
 
 ### Task 2: Make browser close and keep-id rekey one identity transaction
 
@@ -185,6 +224,11 @@ POSIX/Windows cross-process acquisition. Wrap the complete read/modify/replace
 transactions in `record_launch`, `remove_session`, and
 `prune_dead_daemon_entries`. Use collision-safe temporary siblings.
 
+Run async leader call sites through a cancellation-ordered worker-thread
+adapter so lock polling never stalls MCP heartbeats or dashboard streams.
+Differentiate contention from permanent lock errors, and release ref-counted
+per-path thread-lock entries when idle.
+
 - [ ] **Step 6: Decouple boot cleanup**
 
 Run browser reaping and manifest pruning in separate guarded paths. A reaper
@@ -234,6 +278,13 @@ their existing poll/receive race and close with `1008` as soon as invalidation i
 observed. Frontend close handlers dispatch the existing auth-required event and
 stop reconnecting for that close code/reason.
 
+For a same-origin socket rejected by pairing at initial admission, accept the
+handshake selecting the stable public protocol if and only if the client
+offered it (never select the private bearer protocol), then immediately close
+`1008` before any session lookup or data emission. Accept with no subprotocol
+when none was offered. This makes Chromium expose the pairing reason instead of
+synthetic `1006`; keep Host/Origin rejection pre-accept.
+
 - [ ] **Step 5: Run GREEN**
 
 Run the backend command from Step 2 and the affected Vitest files with
@@ -245,6 +296,8 @@ Run the backend command from Step 2 and the affected Vitest files with
 - Create: `packages/octowright-frontend/static/dashboard-media-sw.js`
 - Create: `packages/octowright-frontend/src/dashboard-media-auth.ts`
 - Create: `packages/octowright-frontend/src/dashboard-media-auth.test.ts`
+- Modify: `src/octowright/http/routes/media.py`
+- Modify: `tests/test_http_server.py`
 - Modify: `packages/octowright-frontend/src/dashboard-auth.ts`
 - Modify: `packages/octowright-frontend/src/session.ts`
 - Modify: `packages/octowright-frontend/src/session.test.ts`
@@ -260,6 +313,11 @@ Test that another client ID has no bearer, clearing auth removes the mapping, an
 paired `loadProtectedVideo` assigns the normal `/video` URL without calling
 `response.blob()`.
 
+Add route coverage showing pairing-off video retains ordinary caching while a
+pairing-protected `206` response is `private, no-store`, varies on
+`Authorization` and `X-Octowright-Token`, and retains correct Range bytes. Add
+worker coverage showing every forwarded video request bypasses stale caches.
+
 - [ ] **Step 2: Run RED**
 
 Run: `cd packages/octowright-frontend && npm run test:nocov -- --run src/dashboard-media-auth.test.ts src/session.test.ts src/session-boot.test.ts`
@@ -271,15 +329,22 @@ Expected: worker coordinator is absent and paired session video still becomes a 
 The page registers `/dashboard-media-sw.js`, waits for control, and posts only
 the current tab's bearer. The worker keys it by `event.source.id`, intercepts
 only same-origin `GET /api/sessions/<id>/video`, clones request headers, sets
-Authorization, and calls `fetch()` with the original method/mode/cache/
-credentials/redirect/referrer/integrity and signal semantics preserved by a
-`new Request(original, {headers})` clone.
+Authorization, forces same-origin/no-store forwarding, and preserves Range and
+credentials semantics with a `new Request(original, {...})` clone.
+
+Keep worker credentials memory-only. A matching request with a missing client
+entry notifies only that `Client.id`; the page coordinator re-sends its own
+bearer, waits for acknowledgement, and reloads video once. Reauthorize on
+`controllerchange` through the same path. If an authenticated fetch returns
+`401` or `403`, notify only the originating client, clear dashboard auth, remove
+the video source, surface the existing re-pair UX, and do not recover/retry.
 
 - [ ] **Step 4: Wire lifecycle and fail boundedly**
 
 Paired session boot configures worker auth before assigning `video.src`.
-Teardown/401 posts a clear message. If worker control is unavailable, render an
-accessible error and do not fall back to an unbounded blob download.
+Teardown and terminal auth denial post a clear message. If worker control is
+unavailable, render an accessible error and do not fall back to an unbounded
+blob download.
 
 - [ ] **Step 5: Verify worker output and GREEN**
 

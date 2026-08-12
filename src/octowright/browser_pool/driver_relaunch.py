@@ -112,6 +112,7 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
     """Capture + record + evict the sessions lost with the dead driver. Sessions
     this module previously relaunched are skipped (loop guard)."""
     descriptors: list[dict[str, Any]] = []
+    evictions: list[tuple[str, Any]] = []
     for session in pool.iter_sessions():
         if getattr(session, "_auto_relaunched", False):
             continue
@@ -128,8 +129,9 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
         _LOST.append(record)
         _DRIVER_LOST.add(1, attributes={"outcome": "surfaced", "kind": desc["kind"]})
         descriptors.append({**desc, "lost_record": record})
-    for desc in descriptors:
-        pool._evict_session_nowait(desc["instance_id"])
+        evictions.append((desc["instance_id"], session))
+    for instance_id, session in evictions:
+        pool._evict_session_nowait(instance_id, expected_session=session)
     return descriptors
 
 
@@ -211,10 +213,11 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     )
     new_id = result["instance_id"]
     old_id = desc["instance_id"]
-    final_id = _finalize_id(pool, new_id, old_id, mode)
+    final_id = await _finalize_id(pool, new_id, old_id, mode)
     fresh = pool.maybe_get(final_id)
-    if fresh is not None:
-        fresh._auto_relaunched = True
+    if fresh is None:
+        raise RuntimeError(f"replacement session {final_id!r} closed before relaunch completed")
+    fresh._auto_relaunched = True
     desc["lost_record"]["relaunched_to"] = final_id
     _DRIVER_LOST.add(1, attributes={"outcome": "relaunched", "kind": desc["kind"]})
     incidents.record(
@@ -228,18 +231,63 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     log.info("octowright.driver_relaunch.relaunched", old_instance_id=old_id, new_instance_id=final_id, mode=mode)
 
 
-def _finalize_id(pool: Any, new_id: str, old_id: str, mode: str) -> str:
+async def _finalize_id(pool: Any, new_id: str, old_id: str, mode: str) -> str:
     """For keep-id, re-key the fresh session back to the original instance_id so
     existing client handles keep resolving; return the client-facing id."""
     if mode != "keep-id" or new_id == old_id:
         return new_id
-    session = pool.maybe_get(new_id)
-    if session is None:
-        return new_id
-    # Atomic-enough pop+set (no await between), matching the lockless eviction
-    # path. The recording file stays under new_id — a documented keep-id wart.
-    session.instance_id = old_id
-    pool._sessions.pop(new_id, None)
-    pool._sessions[old_id] = session
-    pool._recently_evicted.pop(old_id, None)
+    cancelled: asyncio.CancelledError | None = None
+    async with pool._sessions_lock:
+        session = pool._sessions.get(new_id)
+        if session is None:
+            return new_id
+        # Share the close transaction's lock: a deferred close that expects the
+        # old session either evicts it first or observes this completed re-key
+        # and skips, but can never pop the replacement halfway through.
+        try:
+            from octowright.session_manifest import rekey_session as _manifest_rekey_session
+            from octowright.session_manifest import run_manifest_transaction_async
+
+            try:
+                await run_manifest_transaction_async(_manifest_rekey_session, new_id, old_id)
+            except asyncio.CancelledError as exc:
+                # The helper waits for the worker before surfacing cancellation.
+                # Complete the paired registry rekey so disk and memory cannot
+                # diverge, then propagate after releasing the registry lock.
+                cancelled = exc
+        except Exception as exc:
+            log.warning(
+                "octowright.session_manifest.rekey_failed",
+                old_instance_id=old_id,
+                new_instance_id=new_id,
+                error=repr(exc),
+            )
+        # Synchronous Playwright close callbacks can evict without awaiting
+        # this lock. Revalidate after the off-thread manifest transaction; if
+        # the replacement closed meanwhile, remove the just-rekeyed disk row
+        # and do not resurrect it in memory.
+        if pool._sessions.get(new_id) is not session:
+            try:
+                from octowright.session_manifest import remove_session as _manifest_remove_session
+                from octowright.session_manifest import (
+                    run_manifest_transaction_async as _run_manifest_transaction_async,
+                )
+
+                await _run_manifest_transaction_async(_manifest_remove_session, old_id)
+            except Exception as exc:
+                log.warning(
+                    "octowright.session_manifest.rekey_closed_cleanup_failed",
+                    old_instance_id=old_id,
+                    new_instance_id=new_id,
+                    error=repr(exc),
+                )
+            if cancelled is not None:
+                raise cancelled
+            raise RuntimeError(f"replacement session {new_id!r} closed while it was being rebound to {old_id!r}")
+        session.instance_id = old_id
+        pool._sessions.pop(new_id, None)
+        pool._sessions[old_id] = session
+        pool._recently_evicted.pop(old_id, None)
+    if cancelled is not None:
+        raise cancelled
     return old_id

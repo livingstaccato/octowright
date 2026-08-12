@@ -211,3 +211,17 @@ def test_open_daemon_log_repairs_legacy_permissions(tmp_path: Path, monkeypatch:
     handle.close()
 
     assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+
+
+def test_open_daemon_log_chmod_failure_does_not_block_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unsupported chmod semantics must not take down daemon startup."""
+    log_path = tmp_path / "octowright-daemon.log"
+    monkeypatch.setattr(_daemon, "_DAEMON_LOG", log_path)
+    monkeypatch.setattr(_daemon.os, "fchmod", lambda *_args: (_ for _ in ()).throw(OSError("unsupported")))
+    monkeypatch.setattr(_daemon.os, "chmod", lambda *_args: (_ for _ in ()).throw(OSError("unsupported")))
+
+    handle = _daemon._open_daemon_log()
+    handle.write(b"still starts\n")
+    handle.close()
+
+    assert log_path.read_bytes() == b"still starts\n"

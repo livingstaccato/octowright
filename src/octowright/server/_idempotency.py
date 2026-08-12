@@ -12,9 +12,11 @@ in-progress run — instead of double-executing a side-effectful tool.
 
 Safety properties (each independently sufficient; kept together as belt-and-suspenders):
 
-* **Success-only caching.** Any exception (including the ``CancelledError`` raised
-  when a reconnect kills the old session's tool coroutine) evicts the entry, so a
-  resend re-runs rather than replaying a stale failure.
+* **Cancellation-isolated production.** The handler runs in a shielded producer
+  task, so teardown of the request/session stops only that caller. The producer
+  continues and records its result. If the producer itself terminates with any
+  exception, its slot becomes an unknown-outcome tombstone instead of allowing a
+  blind resend of a side effect that may already have committed.
 * **Await-any-owner, then honest-unknown.** An in-progress entry is awaited
   regardless of which session created it, so a resend that races a still-running
   producer dedups on that producer's result instead of launching a second side
@@ -26,11 +28,18 @@ Safety properties (each independently sufficient; kept together as belt-and-susp
   the method name and canonical args (``_storage_key``), so a key that is reused
   across different calls can't return another call's cached result. A legitimate
   resend — same key, method and args — still resolves to the same slot.
+* **Fail-closed capacity.** A fresh distinct key is refused before its handler
+  runs when every bounded slot is still authoritative. Existing same-key callers
+  continue to await or reuse their slot; live producers are never displaced.
+* **Oversize results fail closed.** A successful result too large to retain
+  leaves an authoritative terminal marker. A resend reports that the result is
+  unavailable instead of executing the tool again.
 
-Scoped to async tools (octowright's side-effectful tools are all async); sync tools
-pass through untouched. The cache is process-global, lock-guarded, TTL- and
-size-bounded, and never caches results larger than ``IDEMPOTENCY_MAX_RESULT_BYTES``
-(it stores a DONE-marker instead, so a resend re-runs the cheap idempotent read).
+Async handlers run directly and synchronous handlers preserve the MCP SDK's
+worker-thread scheduling, while both kinds share the same at-most-once
+boundary. The cache is process-global,
+lock-guarded, TTL- and size-bounded, and never caches results larger than
+``IDEMPOTENCY_MAX_RESULT_BYTES``.
 """
 
 from __future__ import annotations
@@ -38,11 +47,12 @@ from __future__ import annotations
 import asyncio
 import functools
 import hashlib
+import inspect
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Any
+from typing import Any, get_args
 
 from provide.telemetry import get_logger
 
@@ -65,6 +75,24 @@ class IdempotencyOutcomeUnknownError(RuntimeError):
     """
 
 
+class IdempotencyCapacityError(RuntimeError):
+    """Raised before execution when no bounded cache slot can safely be reused.
+
+    A capacity refusal has a known outcome: this call's handler did not run.
+    This is deliberately distinct from :class:`IdempotencyOutcomeUnknownError`,
+    which means an earlier same-key producer may already have committed.
+    """
+
+
+class IdempotencyResultUnavailableError(RuntimeError):
+    """Raised when a successful prior result was too large to cache.
+
+    The prior handler definitely ran, so re-executing it would violate the
+    at-most-once contract. The caller must verify state or retry a pure read
+    with a fresh key.
+    """
+
+
 def _storage_key(raw_key: str, fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     """Namespace the follower-supplied idempotency key by method + canonical
     args. A key that is (buggily) reused across different calls then lands in
@@ -74,11 +102,34 @@ def _storage_key(raw_key: str, fn: Callable[..., Any], args: tuple[Any, ...], kw
     credential-substituted arg is not exposed here."""
     method = getattr(fn, "__name__", "?")
     try:
-        argsig = repr((args, sorted(kwargs.items())))
+        signature = inspect.signature(fn)
+        annotations = inspect.get_annotations(fn, eval_str=True)
+        bound = signature.bind_partial(*args, **kwargs)
+        wire_arguments = tuple(
+            (name, value)
+            for name, value in bound.arguments.items()
+            if not _is_mcp_context_annotation(annotations.get(name))
+        )
+        argsig = repr(wire_arguments)
     except Exception:  # pragma: no cover — tool args repr/sort reliably
-        argsig = repr(id(kwargs))
+        argsig = repr((args, sorted(kwargs.items())))
     digest = hashlib.sha256(f"{raw_key}\x00{method}\x00{argsig}".encode()).hexdigest()
     return digest
+
+
+def _is_mcp_context_annotation(annotation: Any) -> bool:
+    """True only for the SDK-injected Context type (including Optional/Union).
+
+    Context is request-local transport state, not a wire tool argument. A
+    reconnect necessarily creates a fresh object, so hashing it would bypass
+    same-key deduplication. Parameter names alone are insufficient because a
+    user tool may legitimately expose a wire argument named ``ctx``.
+    """
+    if getattr(annotation, "__name__", None) == "Context" and getattr(annotation, "__module__", "").startswith(
+        "mcp.server.mcpserver"
+    ):
+        return True
+    return any(_is_mcp_context_annotation(member) for member in get_args(annotation))
 
 
 def _now() -> float:
@@ -90,18 +141,32 @@ class _Entry:
     """A cache slot: an in-progress producer's completion event plus, once done,
     its (optionally cached) result."""
 
-    __slots__ = ("done", "done_at", "event", "has_result", "owner", "result", "started_at")
+    __slots__ = (
+        "abandon_reported",
+        "done",
+        "done_at",
+        "event",
+        "has_result",
+        "outcome_unknown",
+        "owner",
+        "producer_task",
+        "result",
+        "started_at",
+    )
 
-    def __init__(self, owner: Any) -> None:
+    def __init__(self, owner: Any, producer_task: asyncio.Task[Any] | None = None) -> None:
         self.event = asyncio.Event()
         self.owner = owner  # identity of the session that created this entry
+        self.producer_task = producer_task
+        self.abandon_reported = False
+        self.outcome_unknown = False
         self.done = False  # True once the producer stored a successful result
         self.result: Any = None
-        self.has_result = False  # False for an over-cap DONE-marker
+        self.has_result = False  # False for an oversize terminal marker
         self.done_at = 0.0
-        # When the producer claimed this slot. An entry that is STILL in
-        # progress long past the abandon threshold has a producer that will
-        # never resolve, so the slot can be reclaimed (see _evict_expired_locked).
+        # When the producer claimed this slot. Once the abandon threshold is
+        # reached, cleanup cannot cancel or reclaim a live producer because its
+        # side effect may already have committed (see _evict_expired_locked).
         self.started_at = _now()
 
 
@@ -120,7 +185,7 @@ def _current_owner() -> Any:
 
 def _result_size(result: Any) -> int:
     try:
-        return len(repr(result))
+        return len(repr(result).encode("utf-8"))
     except Exception:  # pragma: no cover — repr should never raise for tool results
         return defaults.IDEMPOTENCY_MAX_RESULT_BYTES + 1
 
@@ -134,16 +199,14 @@ def _resume_window_seconds() -> float:
 
 
 def _abandon_threshold_seconds() -> float:
-    """Age past which a STILL-in-progress entry is treated as abandoned.
+    """Age past which a taskless in-progress orphan can be reclaimed.
 
     A producer is expected to finish, fail, or be cancelled — all of which
-    resolve the slot. One that has done none of those well past the resend wait
-    window is wedged in an uncancellable await and will never resolve. Without
-    reclamation its slot is immortal: ``_enforce_bound_locked`` deliberately
-    skips in-progress entries, so the cache grows past its bound and every
-    resend of that key returns unknown-outcome forever. The margin over the
-    wait window keeps a merely-slow producer safe — a waiter gives up before
-    this fires, so reclaiming here never races a live resend.
+    resolve the slot. A taskless synthetic orphan can be reclaimed at this
+    point, but a real producer may already have committed a side effect. Its
+    slot remains authoritative until the task is confirmed terminated. The
+    margin over the wait window keeps a merely-slow producer out of the orphan
+    recovery path — a waiter gives up before the threshold is reached.
     """
     return defaults.IDEMPOTENCY_INPROGRESS_WAIT_SECONDS * 2
 
@@ -152,18 +215,28 @@ def _evict_expired_locked() -> None:
     ttl = defaults.IDEMPOTENCY_TTL_SECONDS
     abandon = _abandon_threshold_seconds()
     now = _now()
-    stale = [
-        k
-        for k, e in _cache.items()
-        if (e.done and (now - e.done_at) > ttl) or (not e.done and (now - e.started_at) > abandon)
-    ]
-    for key in stale:
-        entry = _cache[key]
-        if not entry.done:
-            log.warning(
-                "octowright.idempotency.abandoned_entry_reclaimed",
-                age_seconds=round(now - entry.started_at, 1),
-            )
+    for key, entry in list(_cache.items()):
+        if entry.done or entry.outcome_unknown:
+            if (now - entry.done_at) > ttl:
+                del _cache[key]
+            continue
+        if (now - entry.started_at) <= abandon:
+            continue
+
+        producer_task = entry.producer_task
+        if producer_task is not None and not producer_task.done():
+            if not entry.abandon_reported:
+                entry.abandon_reported = True
+                log.warning(
+                    "octowright.idempotency.abandoned_producer_retained",
+                    age_seconds=round(now - entry.started_at, 1),
+                )
+            continue
+
+        log.warning(
+            "octowright.idempotency.abandoned_entry_reclaimed",
+            age_seconds=round(now - entry.started_at, 1),
+        )
         del _cache[key]
 
 
@@ -179,29 +252,114 @@ def _enforce_bound_locked() -> None:
         if len(_cache) <= bound:
             break
         entry = _cache[key]
-        if entry.done and (now - entry.done_at) > window:
+        if (entry.done or entry.outcome_unknown) and (now - entry.done_at) > window:
             del _cache[key]
     if len(_cache) > bound:
         log.warning("octowright.idempotency.over_bound", size=len(_cache), bound=bound)
 
 
+def _make_room_for_key_locked(key: str) -> bool:
+    """Return whether ``key`` can claim a slot without exceeding the bound.
+
+    Replacing an over-size DONE marker for the same key does not grow the cache.
+    For a distinct key, safely reusable completed entries are evicted
+    oldest-first. Live producers and reconnect-visible results remain
+    authoritative, so exhaustion refuses admission instead of displacing them.
+    """
+    if key in _cache:
+        return True
+
+    bound = defaults.IDEMPOTENCY_MAX_ENTRIES
+    if bound <= 0:
+        return False
+    if len(_cache) < bound:
+        return True
+
+    window = _resume_window_seconds()
+    now = _now()
+    for candidate_key in list(_cache.keys()):
+        entry = _cache[candidate_key]
+        if (entry.done or entry.outcome_unknown) and (now - entry.done_at) > window:
+            del _cache[candidate_key]
+            if len(_cache) < bound:
+                return True
+    return False
+
+
+def _unknown_outcome_error() -> IdempotencyOutcomeUnknownError:
+    return IdempotencyOutcomeUnknownError(
+        "a prior call with the same idempotency key ended without a confirmed result; its outcome is unknown. "
+        "Retry a read with a fresh key, or verify state before re-issuing a mutation."
+    )
+
+
+def _observe_producer_completion(task: asyncio.Task[Any]) -> None:
+    """Retrieve detached producer errors after a request waiter is cancelled."""
+    try:
+        task.exception()
+    except asyncio.CancelledError:
+        pass
+
+
+async def _run_producer(
+    fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any], key: str, entry: _Entry
+) -> Any:
+    """Execute and resolve one authoritative producer independently of callers."""
+    try:
+        if asyncio.iscoroutinefunction(fn):
+            result = await fn(*args, **kwargs)
+        else:
+            result = await asyncio.to_thread(fn, *args, **kwargs)
+    except BaseException:
+        # A handler can commit a mutation before failing or being cancelled.
+        # Preserve an explicit unknown tombstone so a reconnect cannot blindly
+        # execute it again. It remains subject to the cache's normal TTL/resume
+        # horizon and capacity policy.
+        with _lock:
+            if _cache.get(key) is entry:
+                entry.outcome_unknown = True
+                entry.done_at = _now()
+                entry.producer_task = None
+                _enforce_bound_locked()
+        entry.event.set()
+        raise
+
+    with _lock:
+        if _cache.get(key) is entry:
+            entry.done = True
+            entry.done_at = _now()
+            entry.producer_task = None
+            if _result_size(result) <= defaults.IDEMPOTENCY_MAX_RESULT_BYTES:
+                entry.result = result
+                entry.has_result = True
+            # Else retain an authoritative terminal marker. The handler ran
+            # successfully, so a later resend must never execute it again.
+            _enforce_bound_locked()
+    entry.event.set()
+    return result
+
+
 def _idempotent_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap an async tool so a re-sent call (same idempotency key) dedups.
 
-    Sync tools and calls with no key pass straight through. ``functools.wraps``
-    preserves the signature/annotations so the server's Context injection and input
-    schema still resolve through this wrapper.
+    Calls with no key still execute through the async wrapper; synchronous tools
+    preserve the SDK's worker scheduling while receiving the same authoritative
+    slot when a key is present.
+    ``functools.wraps`` preserves the signature/annotations so the server's
+    Context injection and input schema still resolve through this wrapper.
     """
-    if not asyncio.iscoroutinefunction(fn):
-        return fn
 
     @functools.wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         if not defaults.IDEMPOTENCY_ENABLED:
-            return await fn(*args, **kwargs)
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(*args, **kwargs)
+            return await asyncio.to_thread(fn, *args, **kwargs)
         raw_key = _current_key()
         if raw_key is None:
-            return await fn(*args, **kwargs)
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(*args, **kwargs)
+            return await asyncio.to_thread(fn, *args, **kwargs)
         key = _storage_key(raw_key, fn, args, kwargs)
         owner = _current_owner()
 
@@ -210,15 +368,33 @@ def _idempotent_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
             with _lock:
                 _evict_expired_locked()
                 entry = _cache.get(key)
+                if entry is not None and entry.outcome_unknown:
+                    _cache.move_to_end(key)
+                    raise _unknown_outcome_error()
                 if entry is not None and entry.done:
                     _cache.move_to_end(key)
                     if entry.has_result:
                         return entry.result
-                    entry = None  # over-cap DONE-marker → re-run as a fresh producer
+                    raise IdempotencyResultUnavailableError(
+                        "a prior call with the same idempotency key succeeded, but its result was too large "
+                        "to cache; the call was not executed again. Verify state, or retry a pure read with "
+                        "a fresh key."
+                    )
                 if entry is None:
                     # Fresh (or the prior producer already evicted after failing)
                     # → we produce.
-                    mine = _Entry(owner)
+                    if not _make_room_for_key_locked(key):
+                        bound = defaults.IDEMPOTENCY_MAX_ENTRIES
+                        log.warning(
+                            "octowright.idempotency.capacity_refused",
+                            size=len(_cache),
+                            bound=bound,
+                        )
+                        raise IdempotencyCapacityError(
+                            f"the idempotency cache is at capacity ({bound} entries); this call was not executed. "
+                            "Retry after an in-progress call completes or a cached result expires."
+                        )
+                    mine = _Entry(owner, producer_task=asyncio.current_task())
                     _cache[key] = mine
                     _cache.move_to_end(key)
                     break
@@ -240,28 +416,14 @@ def _idempotent_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
                 ) from None
             continue
 
-        try:
-            result = await fn(*args, **kwargs)
-        except BaseException:
-            # Evict on ANY failure (incl. CancelledError from session teardown) so
-            # a resend re-runs instead of replaying a stale/partial failure.
-            with _lock:
-                if _cache.get(key) is mine:
-                    del _cache[key]
-            mine.event.set()
-            raise
-
+        producer = asyncio.create_task(_run_producer(fn, args, kwargs, key, mine))
+        producer.add_done_callback(_observe_producer_completion)
         with _lock:
             if _cache.get(key) is mine:
-                mine.done = True
-                mine.done_at = _now()
-                if _result_size(result) <= defaults.IDEMPOTENCY_MAX_RESULT_BYTES:
-                    mine.result = result
-                    mine.has_result = True
-                # else: DONE-marker — dedup an in-flight resend, but a later resend re-runs.
-                _enforce_bound_locked()
-        mine.event.set()
-        return result
+                mine.producer_task = producer
+        # A request/session teardown cancels this waiter, not the mutation. The
+        # detached producer finishes into the shared slot for a reconnect.
+        return await asyncio.shield(producer)
 
     return wrapper
 

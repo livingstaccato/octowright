@@ -25,9 +25,12 @@ from tests._metric_recorders import RecordingCounter
 
 
 @pytest.fixture(autouse=True)
-def _reset() -> None:
+def _reset(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import session_manifest
+
     driver_relaunch.reset()
     incidents.reset()
+    monkeypatch.setattr(session_manifest, "SESSION_MANIFEST_PATH", tmp_path / "session-manifest.json")
 
 
 def _session(instance_id: str, **over: Any) -> SimpleNamespace:
@@ -46,6 +49,7 @@ def _session(instance_id: str, **over: Any) -> SimpleNamespace:
 class _FakePool:
     def __init__(self, sessions: list[SimpleNamespace]) -> None:
         self._sessions = {s.instance_id: s for s in sessions}
+        self._sessions_lock = asyncio.Lock()
         self._recently_evicted: dict[str, bool] = {}
         self._driver_restarts = 1
         self.launched: list[dict[str, Any]] = []
@@ -57,7 +61,14 @@ class _FakePool:
     def maybe_get(self, instance_id: str) -> SimpleNamespace | None:
         return self._sessions.get(instance_id)
 
-    def _evict_session_nowait(self, instance_id: str) -> None:
+    def _evict_session_nowait(
+        self,
+        instance_id: str,
+        *,
+        expected_session: SimpleNamespace | None = None,
+    ) -> None:
+        if expected_session is not None and self._sessions.get(instance_id) is not expected_session:
+            return
         self._sessions.pop(instance_id, None)
         self._recently_evicted[instance_id] = False
 
@@ -294,8 +305,12 @@ def test_already_relaunched_sessions_are_not_recaptured(monkeypatch: pytest.Monk
 
 def test_finalize_id_keep_id_missing_session_returns_new_id() -> None:
     # Defensive: the fresh session vanished before re-keying — fall back to new id.
-    pool = SimpleNamespace(maybe_get=lambda _id: None)
-    assert driver_relaunch._finalize_id(pool, "new1", "a", "keep-id") == "new1"
+    pool = SimpleNamespace(_sessions={}, _sessions_lock=asyncio.Lock())
+
+    async def _run() -> str:
+        return await driver_relaunch._finalize_id(pool, "new1", "a", "keep-id")
+
+    assert asyncio.run(_run()) == "new1"
 
 
 def test_relaunch_tolerates_vanished_fresh_session(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,10 +326,11 @@ def test_relaunch_tolerates_vanished_fresh_session(monkeypatch: pytest.MonkeyPat
         await driver_relaunch.on_driver_reset(pool, reason="x")
 
     asyncio.run(_run())
-    # No crash; the relaunch still happened and the lost record still maps over.
+    # The launch happened, but a vanished replacement must not be advertised as
+    # a successful recovery with a dead id.
     assert len(pool.launched) == 1
     rec = next(r for r in driver_relaunch.recent_lost() if r["instance_id"] == "a")
-    assert rec["relaunched_to"] == "new1"
+    assert rec["relaunched_to"] is None
 
 
 def test_schedule_relaunch_without_running_loop_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
