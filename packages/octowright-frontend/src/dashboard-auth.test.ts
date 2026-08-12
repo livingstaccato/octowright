@@ -142,7 +142,7 @@ describe("fetchDashboardMediaObjectUrl", () => {
     vi.stubGlobal("URL", { ...URL, createObjectURL });
     const fetchFn = vi.fn(async (_path: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer media-secret");
-      return new Response(new Blob(["media"]), { status: 200 });
+      return new Response("media", { status: 200 });
     });
     await expect(fetchDashboardMediaObjectUrl("/api/media", { fetchFn })).resolves.toBe("blob:protected-media");
     expect(createObjectURL).toHaveBeenCalledTimes(1);
@@ -168,7 +168,7 @@ describe("downloadDashboardMedia", () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     const fetchFn = vi.fn(async (_path: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer download-secret");
-      return new Response(new Blob(["download"]), { status: 200 });
+      return new Response("download", { status: 200 });
     });
 
     await downloadDashboardMedia("/api/export", "session.zip", { fetchFn });
