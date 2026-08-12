@@ -11,18 +11,18 @@ import {
   videoUrl,
 } from "./api.js";
 import { renderConsolePanel } from "./console-panel.js";
+import {
+  downloadDashboardMedia,
+  fetchDashboardMediaObjectUrl,
+  getDashboardBearer,
+  isolateDashboardTabAuth,
+} from "./dashboard-auth.js";
 import { renderDownloadsPanel } from "./downloads-panel.js";
-import { renderScreenshotsPanel } from "./screenshots-panel.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
+import { disposeScreenshotsPanel, renderScreenshotsPanel } from "./screenshots-panel.js";
 import { openTail } from "./tail.js";
-import {
-  bindContext,
-  getLogger,
-  initTelemetry,
-  tabSwitchesCounter,
-  userActionsCounter,
-} from "./telemetry.js";
+import { bindContext, getLogger, initTelemetry, tabSwitchesCounter, userActionsCounter } from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
 import type {
   CacheComponent,
@@ -35,6 +35,38 @@ import type {
 } from "./types.js";
 
 const log = getLogger("octowright.frontend.session");
+
+function safeDownloadName(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+function bindProtectedDownload(
+  link: HTMLAnchorElement,
+  path: string,
+  filename: string,
+  statusTarget: HTMLElement,
+): void {
+  if (getDashboardBearer() === null) {
+    link.href = path;
+    return;
+  }
+  link.href = "#";
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (link.getAttribute("aria-busy") === "true") return;
+    link.setAttribute("aria-busy", "true");
+    statusTarget.textContent = "preparing download…";
+    void downloadDashboardMedia(path, filename)
+      .then(() => {
+        statusTarget.textContent = "download ready";
+      })
+      .catch((error: unknown) => {
+        statusTarget.setAttribute("role", "alert");
+        statusTarget.textContent = `download failed: ${(error as Error).message}`;
+      })
+      .finally(() => link.removeAttribute("aria-busy"));
+  });
+}
 
 type CacheRow =
   | { kind: "list"; label: string; component: CacheComponentList }
@@ -263,12 +295,13 @@ export function renderMarkdownPanel(target: HTMLElement, detail: SessionDetail):
   }
 
   const link = document.createElement("a");
-  link.href = markdownUrl(detail.id);
   link.className = "btn btn--secondary";
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
-  link.textContent = "Open markdown export";
-  details.append(link);
+  link.setAttribute("download", "");
+  link.textContent = "Download markdown export";
+  const status = document.createElement("span");
+  status.className = "markdown-status";
+  bindProtectedDownload(link, markdownUrl(detail.id), `${safeDownloadName(detail.id)}.md`, status);
+  details.append(link, status);
 }
 
 export function renderCachePanel(target: HTMLElement, detail: SessionDetail): void {
@@ -387,9 +420,37 @@ export function renderVideo(target: HTMLElement, detail: SessionDetail): HTMLVid
   video.setAttribute("controls", "");
   video.setAttribute("preload", "metadata");
   video.setAttribute("data-testid", "video-player");
-  video.src = videoUrl(detail.id);
+  if (getDashboardBearer() === null) video.src = videoUrl(detail.id);
   target.append(video);
   return video;
+}
+
+interface ProtectedVideoOptions {
+  fetchFn?: typeof fetch;
+  signal?: AbortSignal;
+}
+
+export async function loadProtectedVideo(
+  target: HTMLElement,
+  video: HTMLVideoElement,
+  sessionId: string,
+  options: ProtectedVideoOptions = {},
+): Promise<() => void> {
+  try {
+    const objectUrl = await fetchDashboardMediaObjectUrl(videoUrl(sessionId), options);
+    video.src = objectUrl;
+    return () => {
+      video.removeAttribute("src");
+      URL.revokeObjectURL(objectUrl);
+    };
+  } catch (error) {
+    const note = document.createElement("p");
+    note.className = "note note--missing";
+    note.setAttribute("role", "alert");
+    note.textContent = `Video unavailable: ${(error as Error).message}`;
+    target.append(note);
+    throw error;
+  }
 }
 
 export function renderTraceControls(target: HTMLElement, detail: SessionDetail): void {
@@ -428,10 +489,10 @@ export function renderTraceControls(target: HTMLElement, detail: SessionDetail):
       });
   });
   const dl = document.createElement("a");
-  dl.href = traceDownloadUrl(detail.id);
   dl.className = "btn btn--secondary";
   dl.textContent = "Download .zip";
   dl.setAttribute("download", "");
+  bindProtectedDownload(dl, traceDownloadUrl(detail.id), `${safeDownloadName(detail.id)}-trace.zip`, status);
   target.append(open, status, dl);
 }
 
@@ -520,6 +581,7 @@ async function refreshPanels(
 
 export async function bootSession(root: HTMLElement, sessionId: string, opts: BootOptions = {}): Promise<void> {
   log.info({ event: "session_boot_start", session_id: sessionId });
+  await isolateDashboardTabAuth();
   const detail = await getSession(sessionId);
   log.info({
     event: "session_detail_loaded",
@@ -547,6 +609,28 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   const refs = buildLayout(root);
   renderHeader(refs.header, detail);
   const videoEl = renderVideo(refs.videoSlot, detail);
+  let videoCleanup: (() => void) | null = null;
+  let videoAbort: AbortController | null = null;
+  let videoDisposed = false;
+  if (videoEl && getDashboardBearer() !== null) {
+    videoAbort = new AbortController();
+    void loadProtectedVideo(refs.videoSlot, videoEl, detail.id, { signal: videoAbort.signal })
+      .then((cleanup) => {
+        if (videoDisposed) cleanup();
+        else videoCleanup = cleanup;
+      })
+      .catch((error: unknown) => {
+        if (!videoAbort?.signal.aborted) {
+          log.warn({ event: "session_video_load_failed", session_id: detail.id, error: String(error) });
+        }
+      });
+  }
+  const disposeVideo = (): void => {
+    videoDisposed = true;
+    videoAbort?.abort();
+    videoCleanup?.();
+    videoCleanup = null;
+  };
   renderTraceControls(refs.traceSlot, detail);
   renderFooter(refs.footer, detail);
 
@@ -559,7 +643,11 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     ...(detail.screencast ? { fps: detail.screencast.fps } : {}),
   });
   livePreview.start();
-  window.addEventListener("beforeunload", () => livePreview.destroy());
+  window.addEventListener("beforeunload", () => {
+    livePreview.destroy();
+    disposeVideo();
+    disposeScreenshotsPanel(refs.screenshotsPanel);
+  });
 
   const data: PanelData = { console: [], downloads: [], screenshots: [] };
 

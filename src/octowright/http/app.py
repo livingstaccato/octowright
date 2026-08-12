@@ -152,6 +152,12 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     """
     global _session_tracker
 
+    # Pairing credentials belong to this app instance. A new leader/app gets a
+    # fresh state and therefore invalidates every prior code and bearer.
+    from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState
+
+    dashboard_pairing = DashboardPairingState(expected_token=mcp_token)
+
     routes: list[Any] = list(all_routes(mcp_token=mcp_token))
 
     lifespan = None
@@ -204,11 +210,15 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     # Host-header check rejects a non-loopback Host. The local browser always reaches
     # it with a loopback Host, so the landing-page UX is unchanged. /otto.svg is an
     # inert logo with no secrets, so it stays public.
-    routes.append(Route("/new-tab", guard_sensitive_http(new_tab), methods=["GET"]))
+    # pairing_exempt: launched browsers land on /new-tab with no dashboard bearer;
+    # gating it would break every browser_launch. It leaks only version/uptime/
+    # browser-count — accepted, documented in http/pairing.py.
+    routes.append(Route("/new-tab", guard_sensitive_http(new_tab, pairing_exempt=True), methods=["GET"]))
     routes.append(Route("/otto.svg", otto_svg, methods=["GET"]))
     routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.octowright_http_host = host
+    setattr(app.state, DASHBOARD_STATE_ATTR, dashboard_pairing)
     # provide.telemetry's ASGI middleware handles HTTP observability uniformly with
     # the rest of octowright: RED metrics (http.requests/errors/duration), request-id
     # / session-id log correlation, W3C trace propagation, and cardinality-safe route

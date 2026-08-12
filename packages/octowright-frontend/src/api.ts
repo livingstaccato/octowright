@@ -1,29 +1,25 @@
-import {
-  apiErrorsCounter,
-  apiLatencyHistogram,
-  apiRequestsCounter,
-  getLogger,
-} from "./telemetry.js";
+import { dashboardAuthHeaders, handleDashboardUnauthorized } from "./dashboard-auth.js";
+import { apiErrorsCounter, apiLatencyHistogram, apiRequestsCounter, getLogger } from "./telemetry.js";
 import type {
   ConsoleListResponse,
   DownloadListResponse,
   EventsResponse,
   HealthResponse,
   MacroDetail,
-  MacroUpdateResponse,
   MacroRepairPreview,
-  MacroValidationResponse,
   MacroSummary,
+  MacroUpdateResponse,
+  MacroValidationResponse,
   PersonaDetail,
   PersonaSummary,
   ScenarioListResponse,
   ScenarioParticipant,
   ScreenshotListResponse,
+  SelectorValidationResponse,
   SessionDetail,
   SessionListResponse,
   SessionSummary,
   TraceOpenResponse,
-  SelectorValidationResponse,
 } from "./types.js";
 
 const log = getLogger("octowright.frontend.api");
@@ -43,6 +39,7 @@ export interface FetchJsonOptions {
   method?: "GET" | "POST" | "DELETE" | "PATCH" | "PUT";
   body?: unknown;
   signal?: AbortSignal;
+  headers?: HeadersInit;
 }
 
 /**
@@ -94,11 +91,12 @@ export async function fetchJson<T>(path: string, opts: FetchJsonOptions = {}): P
   const tmpl = pathTemplate(path);
   const init: RequestInit = {
     method,
-    headers: { Accept: "application/json" },
+    headers: dashboardAuthHeaders(opts.headers),
   };
+  (init.headers as Headers).set("Accept", "application/json");
   if (opts.body !== undefined) {
     init.body = JSON.stringify(opts.body);
-    init.headers = { ...init.headers, "Content-Type": "application/json" };
+    (init.headers as Headers).set("Content-Type", "application/json");
   }
   if (opts.signal) {
     init.signal = opts.signal;
@@ -113,6 +111,7 @@ export async function fetchJson<T>(path: string, opts: FetchJsonOptions = {}): P
     const statusStr = String(res.status);
     apiLatencyHistogram.record(duration, { method, path: tmpl, status: statusStr });
     if (!res.ok) {
+      if (res.status === 401) handleDashboardUnauthorized();
       const message = await responseErrorMessage(res);
       apiErrorsCounter.add(1, { method, path: tmpl, status: statusStr });
       log.warn({
@@ -197,10 +196,7 @@ export function updateMacro(name: string, macro: unknown): Promise<MacroUpdateRe
   });
 }
 
-export function validateSessionSelector(
-  sessionId: string,
-  selector: string,
-): Promise<SelectorValidationResponse> {
+export function validateSessionSelector(sessionId: string, selector: string): Promise<SelectorValidationResponse> {
   return fetchJson<SelectorValidationResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/selector/validate`, {
     method: "POST",
     body: { selector },
@@ -245,9 +241,7 @@ export function updatePersonaYaml(name: string, yaml: string): Promise<{ ok: boo
   });
 }
 
-export function deleteRecording(
-  id: string,
-): Promise<{ deleted: boolean; session_id: string; files_removed: number }> {
+export function deleteRecording(id: string): Promise<{ deleted: boolean; session_id: string; files_removed: number }> {
   return fetchJson<{ deleted: boolean; session_id: string; files_removed: number }>(
     `/api/sessions/${encodeURIComponent(id)}/recording`,
     { method: "DELETE" },
