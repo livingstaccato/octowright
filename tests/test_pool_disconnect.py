@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import octowright.browser_pool.launch_execution as launch_execution_module
 import octowright.browser_pool.pool as pool_module
 from octowright.browser_pool import BrowserPool
 
@@ -207,6 +208,137 @@ def _page_crash_handlers(page: Any) -> list[Any]:
 
 
 @pytest.mark.anyio
+async def test_launch_with_unsafe_url_leaves_no_registered_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unsafe target URL must be rejected BEFORE the session is registered,
+    so a raised launch leaves nothing live in the pool. Previously the URL was
+    validated after registration and the cleanup path skipped a registered
+    session — a leaked browser the caller never got an instance_id for."""
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+
+    with pytest.raises(ValueError):
+        await pool.launch(
+            kind="chromium",
+            url="file:///etc/passwd",
+            headed=False,
+            label="unsafe",
+            viewport_w=None,
+            viewport_h=None,
+        )
+
+    assert pool._sessions == {}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize(
+    "unsafe_options",
+    [
+        {"url": "file:///etc/passwd"},
+        {"url": "https://octowright.com", "base_url": "file:///etc/passwd"},
+    ],
+)
+async def test_unsafe_launch_allocates_no_session_driver_or_recording(
+    monkeypatch: pytest.MonkeyPatch, unsafe_options: dict[str, str]
+) -> None:
+    """URL rejection is a pure preflight: no temp dir, driver, or log file."""
+    calls: list[str] = []
+    pool = BrowserPool()
+
+    async def resolve_session_dir(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("session_dir")
+
+    async def ensure_pw() -> None:
+        calls.append("playwright")
+
+    def log_path(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("recording")
+
+    monkeypatch.setattr(pool, "_resolve_session_dir", resolve_session_dir)
+    monkeypatch.setattr(pool, "_ensure_pw", ensure_pw)
+    monkeypatch.setattr(launch_execution_module, "new_log_path", log_path)
+
+    with pytest.raises(ValueError):
+        await pool.launch(kind="chromium", session=True, **unsafe_options)
+
+    assert calls == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_persistent_launch_waits_for_profile_lifecycle_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from octowright.profile_lifecycle import profile_lifecycle_lock
+
+    _install_playwright_stub(monkeypatch)
+    pool = BrowserPool()
+    allocation_started = asyncio.Event()
+    original_resolve = pool._resolve_session_dir
+
+    async def tracked_resolve(*args: Any, **kwargs: Any) -> Any:
+        allocation_started.set()
+        return await original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(pool, "_resolve_session_dir", tracked_resolve)
+
+    async with profile_lifecycle_lock("chromium", "cosmo"):
+        launch_task = asyncio.create_task(
+            pool.launch(kind="chromium", profile="cosmo", url="https://octowright.com", headed=False)
+        )
+        await asyncio.sleep(0)
+        assert not allocation_started.is_set()
+
+    result = await launch_task
+    assert allocation_started.is_set()
+    await pool.close(result["instance_id"], force=True)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_launch_cancelled_during_nav_leaves_no_registered_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cancelling a launch mid-navigation (after registration) must remove and
+    close the session — not leave a live browser the caller never received."""
+    import asyncio
+
+    _install_playwright_stub(monkeypatch)
+    started = asyncio.Event()
+    orig_init = _FakePage.__init__
+
+    def _patched_init(self: _FakePage) -> None:
+        orig_init(self)
+
+        async def _hang(*_a: Any, **_k: Any) -> None:
+            started.set()
+            await asyncio.sleep(3600)
+
+        self.goto = _hang  # type: ignore[method-assign,assignment]
+
+    monkeypatch.setattr(_FakePage, "__init__", _patched_init)
+    pool = BrowserPool()
+
+    task = asyncio.create_task(
+        pool.launch(
+            kind="chromium",
+            url="https://octowright.com",
+            headed=False,
+            label="cancel",
+            viewport_w=None,
+            viewport_h=None,
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=2.0)
+    # Registration precedes goto, so the session is live in the pool right now.
+    assert len(pool._sessions) == 1
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert pool._sessions == {}
+
+
+@pytest.mark.anyio
 async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """Synthesize a context 'close' event and verify the session is evicted +
     the eviction log line is emitted."""
@@ -375,10 +507,25 @@ async def test_external_close_without_crash_stays_user_close(
     assert "its process died" not in message
 
 
+async def _wait_until(predicate: Any, *, ticks: int = 200) -> None:
+    """Yield to the loop until predicate() is true or ticks are exhausted."""
+    import asyncio
+
+    for _ in range(ticks):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+
+
 @pytest.mark.anyio
-async def test_all_pages_closed_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
-    """If every page on the session reports is_closed() True, that's a strong
-    signal the user shut everything — evict."""
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_all_pages_closed_runs_full_session_close(
+    monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
+) -> None:
+    """Last-page close must run the FULL session close, not a bookkeeping-only
+    eviction. Otherwise the context (and its profile lock + background tasks)
+    survives while the session is gone from the registry — an orphan that
+    close_all() can no longer reach."""
     _install_playwright_stub(monkeypatch)
     pool = BrowserPool()
 
@@ -386,21 +533,25 @@ async def test_all_pages_closed_evicts_session(monkeypatch: pytest.MonkeyPatch, 
         kind="chromium",
         url="https://octowright.com",
         headed=False,
-        label="pages",
+        label="fullclose",
         viewport_w=None,
         viewport_h=None,
     )
     iid = result["instance_id"]
     session = pool._sessions[iid]
-
     page = session.pages[0]
-    handlers = _page_close_handlers(page)
-    assert handlers, "expected page.on('close') handler installed by _wire_listeners"
+    assert _page_close_handlers(page), "expected page.on('close') handler"
 
-    page.mark_closed()  # flips is_closed() True and fires the close event
+    page.mark_closed()  # last page gone → fires page.on('close')
+    # Wait for the full teardown, not just the registry pop (close_browser pops
+    # BEFORE awaiting session.close(), so registry removal races the teardown).
+    await _wait_until(lambda: session.context.close.await_count >= 1)
 
     assert iid not in pool._sessions
-    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
+    # The context was actually torn down (the whole point) — not just popped.
+    assert session.context.close.await_count >= 1
+    # Full close logs the canonical closed line via the lifecycle path.
+    assert any("octowright.browser.closed" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
 @pytest.mark.anyio

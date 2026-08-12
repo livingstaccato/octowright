@@ -5,17 +5,112 @@
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import json
+import sys
+import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from provide.telemetry import get_logger
+
+log = get_logger(__name__)
 
 # Monotonic counter disambiguates concurrent snapshots (and survives PID reuse
 # after a follower crash + OS PID recycle) so two writers can't collide on a
 # single tmp filename and one silently overwrite the other's contents.
 _TMP_COUNTER = itertools.count(1)
+
+
+@dataclass
+class _ThreadLockEntry:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    users: int = 0
+
+
+_THREAD_LOCKS_GUARD = threading.Lock()
+_THREAD_LOCKS: dict[str, _ThreadLockEntry] = {}
+
+
+@contextlib.contextmanager
+def _thread_state_lock(path: Path) -> Iterator[None]:
+    """Serialize same-process threads before taking the OS file lock."""
+    key = str(path.expanduser().absolute())
+    with _THREAD_LOCKS_GUARD:
+        entry = _THREAD_LOCKS.setdefault(key, _ThreadLockEntry())
+        entry.users += 1
+    try:
+        with entry.lock:
+            yield
+    finally:
+        with _THREAD_LOCKS_GUARD:
+            entry.users -= 1
+            if entry.users == 0 and _THREAD_LOCKS.get(key) is entry:
+                del _THREAD_LOCKS[key]
+
+
+def _prepare_windows_lock_file(fh: Any) -> None:
+    """Ensure byte zero exists because ``msvcrt.locking`` locks byte ranges."""
+    fh.seek(0, 2)
+    if fh.tell() == 0:
+        fh.write(b"\0")
+        fh.flush()
+    fh.seek(0)
+
+
+@contextlib.contextmanager
+def _state_lock(path: Path) -> Iterator[None]:
+    """Exclusive cross-process lock for one read-modify-replace transaction.
+
+    The atomic tmp-then-``os.replace`` write prevents torn JSON but NOT lost
+    updates: two followers that both ``read_state`` before either writes will
+    have the second write erase the first's registration (verified live — the
+    dead-follower reaper then never learns about that follower). A blocking
+    ``flock`` on a ``.lock`` sibling serializes the whole transaction.
+
+    POSIX uses ``flock`` and Windows locks byte zero with ``msvcrt.locking``.
+    A same-process thread lock is also required because Windows byte-range
+    locks are process-scoped. Lock-file failures retain thread serialization
+    and are logged, but do not take the bridge heartbeat down.
+    """
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with _thread_state_lock(lock_path):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(lock_path, "a+b")  # noqa: SIM115 - handle owns lock lifetime
+        except OSError as exc:
+            log.warning("octowright.bridge_state.lock_open_failed", path=str(lock_path), error=repr(exc))
+            yield
+            return
+        locked = False
+        try:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    _prepare_windows_lock_file(fh)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                locked = True
+            except OSError as exc:
+                log.warning("octowright.bridge_state.lock_failed", path=str(lock_path), error=repr(exc))
+            yield
+        finally:
+            if locked:
+                with contextlib.suppress(OSError):
+                    if sys.platform == "win32":
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fh.close()
 
 
 def _empty_state() -> dict[str, Any]:
@@ -168,18 +263,19 @@ def record_snapshot(
         "reconnect_attempts": reconnect_attempts,
         "request_timeouts": request_timeouts,
     }
-    state = read_state(path)
-    state["followers"][str(follower_pid)] = snapshot
-    state["followers"] = _prune_dead_followers(state["followers"], keep_pid=follower_pid)
-    state["events"].append(snapshot)
-    state["events"] = state["events"][-max_events:]
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + f".{follower_pid}.{next(_TMP_COUNTER)}.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
-        return
+    with _state_lock(path):
+        state = read_state(path)
+        state["followers"][str(follower_pid)] = snapshot
+        state["followers"] = _prune_dead_followers(state["followers"], keep_pid=follower_pid)
+        state["events"].append(snapshot)
+        state["events"] = state["events"][-max_events:]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + f".{follower_pid}.{next(_TMP_COUNTER)}.tmp")
+            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            return
 
 
 # A live write's tmp sibling exists for microseconds (write, then os.replace).
@@ -229,15 +325,16 @@ def remove_followers(path: Path, pids: Iterable[int]) -> None:
     keys = {str(pid) for pid in pids}
     if not keys:
         return
-    state = read_state(path)
-    followers = state.get("followers", {})
-    if not any(key in followers for key in keys):
-        return
-    state["followers"] = {key: snap for key, snap in followers.items() if key not in keys}
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + f".reaper.{next(_TMP_COUNTER)}.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
-        return
+    with _state_lock(path):
+        state = read_state(path)
+        followers = state.get("followers", {})
+        if not any(key in followers for key in keys):
+            return
+        state["followers"] = {key: snap for key, snap in followers.items() if key not in keys}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + f".reaper.{next(_TMP_COUNTER)}.tmp")
+            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            return
