@@ -45,7 +45,7 @@ documented choice, needs an owner decision not a bugfix.
 
 ---
 
-## Batch A — bounded correctness fixes (IN PROGRESS)
+## Batch A — bounded correctness fixes (MERGED IN PR #100)
 
 One commit per finding on this branch. TDD each. `make ci` before hand-off.
 
@@ -60,7 +60,7 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] **#4** last-page close now schedules the full idempotent `pool.close(force=True)` (context/browser/bg-tasks/lock torn down) instead of bookkeeping-only eviction; context.close/disconnect stay bookkeeping (resource already dead). Close task held off `session._bg_tasks` to avoid drain self-deadlock; racing evict → KeyError swallowed. `listeners.py`
 - [x] **#3** `target_url` now validated in `_launch_impl` BEFORE any allocation (was post-registration → leaked a registered browser on rejection); removed the redundant post-register check; `CancelledError` after registration routes through new `cancel_cleanup_after_register` (pop + close) instead of the registered-skip no-op. `pool.py`, `launch_pipeline.py`
 
-## Batch B — design/locking (IN PROGRESS)
+## Batch B — design/locking (MERGED IN PR #100)
 - [x] **#12** `stop()` teardown wrapped in `anyio.CancelScope(shield=True)` (matches `_rollback_start`) so a cancel mid-teardown still closes every participant. `scenarios_pool.py`
 - [x] **#10** `_state_lock` (blocking flock on `.lock` sibling) serializes both read-modify-replace transactions (`record_snapshot`, `remove_followers`); Windows/lock-OSError degrade to pre-fix unlocked. Deterministic barrier test proves both concurrent followers survive. `bridge_state.py`
 - [x] **#14** `_build_recording_index` now reports `saturated`; the negative cache is authoritative only for a COMPLETE index, and a saturated miss falls through to a targeted `_scan_disk_for_recording` so a past-cap recording stays addressable. `http/discovery.py`
@@ -71,62 +71,68 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [ ] residuals: #13 `pool.shutdown()` driver-stop/tmp cleanup on daemon exit; #11 evict pool entry on poll-death
 
 ## Batch C — architecture/release decisions
-- [~] **#1** PARTIAL: gated the follower-only `/api/mcp-events` SSE channel with the capability token (reuses `OCTOWRIGHT_BRIDGE_REQUIRE_TOKEN`, on by default, dashboard-safe since no browser calls it); follower now presents the token. `bridge_auth.header_token_ok`, `routes/mcp_events._require_token`, `proxy_runtime`. DECISION: token-by-default. REMAINING (needs a browser pairing flow — embedding the token in the served page leaks it to any loopback fetcher): gate the browser-facing `/api/sessions`, media, `/api/dashboard/events`, `/tail` WS, persona/scenario/macro writes. Documented as follow-up in the Bridge-capability-token section.
+- [x] **#1** COMPLETE: the follower-only `/api/mcp-events` channel remains capability-token gated, and PR #101 adds opt-in origin-scoped pairing for the browser-facing sessions/media/events/tail/screencast/write surface. See the remediation report below.
 - [x] **#7** terminal extra marked experimental / source-install-only (pyproject + AGENTS/CLAUDE/README).
 - [x] **#2** SSRF default KEPT OFF (deliberate documented back-compat choice; user confirmed). No code change.
 
-## #1 remaining — dashboard pairing flow (BUILT 2026-08-11, branch `feat/dashboard-pairing`)
+## #1 remaining — dashboard pairing flow (REMEDIATED 2026-08-11, branch `feat/dashboard-pairing`)
 
-Implemented as designed below. Shipped: `http/pairing.py` (store + `dashboard_access_ok`),
-`http/routes/pairing.py` (mint/redeem//pair page), `pairing_exempt` param on
-`guard_sensitive_http` (exempt: pairing routes + `/new-tab`), pairing check mirrored at both
-WS handshakes (tail `events.py`, `screencast.py`), `build_app` stamps the token on `PAIRING`,
-`cli/dashboard.py` (`octowright dashboard`, `--open` via 0700 file:// redirect — no ticket in
-argv), tests `tests/test_dashboard_pairing.py` (29) + `tests/test_cli_dashboard.py` (6),
-AGENTS/CLAUDE docs. Lint EXIT 0. Frontend SPA 403→hint page NOT built (the /pair page itself
-carries the guidance; SPA polish is optional follow-up).
+### Review verdict and redesign
 
-**Decision captured:** opt-in, **OFF by default** — `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`
-(matches #2/#16 back-compat posture). Dashboard is loopback-only anyway; the gap is a
-*different-user / sandboxed* loopback process reading live JSONL / driving persona-macro
-writes. Pairing extends the EXISTING capability-token boundary to the browser dashboard;
-it does NOT defend same-user (unchanged, documented).
+The original PR correctly identified the unauthenticated loopback dashboard as a real boundary
+gap, but its cookie transport was rejected during review. Cookies are scoped to host/domain,
+not port: a bearer cookie issued by Octowright on one loopback port could be sent to an
+unrelated service on another port. The replacement is an origin-scoped bearer held only in
+`sessionStorage`; scheme + host + port therefore all participate in isolation.
 
-**Why in-page token fails:** serving the token in the dashboard HTML lets the hostile
-loopback process `GET /` and scrape it exactly like the browser. Token must reach the
-HUMAN over a channel the hostile process can't observe (the operator's tty).
+Pairing remains opt-in and **OFF by default** through
+`OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`. It protects against a different local user or sandbox
+that can reach loopback but cannot read the 0600 leader lockfile or the operator's terminal.
+It deliberately does not defend against a same-user process that can read/replace that
+lockfile. Remote dashboard binding still requires `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1`.
 
-**Flow (Jupyter-token model):**
-1. `octowright dashboard` CLI (same-user, reads 0600 lockfile → has capability token)
-   → `POST /api/pair/mint` with `X-Octowright-Token` (reuse `bridge_auth.header_token_ok`
-   / `require_token_enabled`). Leader mints a single-use, 60s-TTL, 128-bit ticket (in-mem).
-2. CLI prints `http://127.0.0.1:PORT/pair#<ticket>` to the **terminal** (ticket in the
-   URL **fragment** — not sent on navigation, not in access logs / Referer). Human copies
-   into their browser. A different-user process can't read the tty → can't get the ticket.
-3. `/pair` page JS reads the fragment, `POST /api/pair/redeem {ticket}`. Leader consumes
-   the ticket (single-use) and sets `Set-Cookie: octowright_dash=<bearer>; HttpOnly;
-   SameSite=Strict; Path=/` (bearer in a bounded in-mem LRU), 302 → `/`.
-4. New `dashboard_access_ok(request)` accepts EITHER a valid `octowright_dash` cookie
-   (browser) OR the `X-Octowright-Token` header (follower/programmatic, unchanged) OR
-   gate-disabled → allow. Layer it INSIDE the existing loopback/Host/cross-origin guards
-   (`guard_sensitive_http` / `SensitiveASGIGuard` / `websocket_origin_allowed`), applied to
-   `/api/sessions`, media, `/api/dashboard/events`, `/tail` WS, persona/scenario/macro writes.
+### Final credential and transport flow
 
-**Hostile different-user/sandboxed process blocked:** can't read lockfile → no token →
-mint 403; can't read tty → no ticket URL; can't read HttpOnly cookie jar → no session;
-direct hit with neither cookie nor token → 403.
+1. `octowright dashboard` validates the lockfile host/port (including bracketed IPv6 and the
+   existing remote opt-in), then POSTs `/api/pair/mint` with `X-Octowright-Token`.
+2. The leader stores only a digest of a one-use, 60-second code. The CLI prints
+   `http://HOST:PORT/pair#<code>`; the fragment is not sent in HTTP, logs, or Referer. `--open`
+   uses a redirect page in a 0700 temporary directory, keeping the code out of browser argv.
+3. The SPA removes the fragment from history before its first await, redeems the code through
+   the shared streaming request-body cap, receives JSON `{bearer, expires_at}`, and stores it
+   under a versioned `sessionStorage` key. No cookie or `localStorage` credential exists.
+4. Shared JSON APIs, streaming-fetch SSE, protected screenshots/video/downloads, and both
+   WebSockets authenticate. HTTP uses `Authorization: Bearer`; WebSockets offer a private
+   credential subprotocol but the server selects only stable `octowright.dashboard`, so the
+   secret is never echoed as the negotiated protocol. A 401 clears local auth and raises the
+   dashboard's re-pair prompt.
 
-**Components:** new `http/pairing.py` (~200 LOC ticket+session stores/TTL/LRU + cookie
-helpers), new `http/routes/pairing.py` (`/api/pair/mint`,`/api/pair/redeem`,`/pair`),
-extend `http/exposure.py` (`dashboard_access_ok`) + wire in `registry.py`, new
-`cli/dashboard.py`, frontend `/pair` fragment redeem + 403→"run octowright dashboard" hint,
-tests (pairing unit + routes + CLI + same-user-still-works regression).
+### State and route architecture
 
-**Open sub-decision:** `--open` auto-launch leaks the ticket via world-readable
-`/proc/PID/cmdline` (argv), so it is WEAKER than copy-paste. Default = print URL for manual
-copy; `--open` should write a 0700 temp redirect page rather than put the ticket in argv.
+- `DashboardPairingState` is attached to each Starlette app, so a new leader/token receives a
+  fresh state rather than inheriting a process singleton.
+- Pair-code and bearer stores contain SHA-256 digests only, enforce expiry, have hard caps, and
+  use true LRU ordering for bearer access. Invalid bearer probes do not perturb LRU order.
+- `/api/pair/redeem` uses `_read_json_body`, so misleading/missing `Content-Length` cannot bypass
+  `OCTOWRIGHT_MAX_REQUEST_BODY_BYTES`.
+- The local Host/Origin boundary stays outermost. Guarded HTTP routes accept exactly one Bearer
+  value or the capability token; cookies and query credentials are rejected. WebSocket tail and
+  screencast mirror the same authorization decision.
+- Static SPA bootstrap, `/pair`, `/api/health`, and `/new-tab` remain available to the local
+  bootstrap flow. Dashboard data, controls, events, recordings, media, downloads, tail, and
+  screencast stay protected when pairing is enabled.
 
-Effort ≈ 1–1.5 days, multi-file (backend + CLI + frontend). Deserves its own branch.
+### Verification evidence
+
+- Backend pairing/exposure suite: 143 focused tests pass.
+- CLI host/code suite: 13 focused tests pass, including IPv6, injection rejection, remote opt-in
+  denial, leader errors, and private browser-open behavior.
+- Frontend: 382 tests pass with 95.69% statements / 89.22% branches; TypeScript checking and the
+  production Vite build pass. Coverage includes fragment scrubbing, sessionStorage expiry, 401
+  clearing, authenticated API/SSE/WS/media paths, stream chunk boundaries/reconnect, blob URL
+  cleanup, and preservation of the default unpaired behavior.
+- Full repository `make ci` passes: all lint/type/security/dependency/complexity checks and the
+  complete Python suite are green at 88.65% coverage (83% required).
 
 ## (superseded) original Batch C header — architecture/release decisions (OWNER CALL)
 #1 dashboard auth boundary + token bootstrap · #7 publish vs label-experimental terminal extra ·

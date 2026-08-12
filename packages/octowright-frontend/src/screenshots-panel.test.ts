@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { renderScreenshotsPanel } from "./screenshots-panel.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setDashboardBearer } from "./dashboard-auth.js";
+import { disposeScreenshotsPanel, renderScreenshotsPanel } from "./screenshots-panel.js";
 import type { ScreenshotEntry } from "./types.js";
 
 const SAMPLE: ScreenshotEntry[] = [
@@ -19,8 +20,15 @@ const SAMPLE: ScreenshotEntry[] = [
 
 let container: HTMLDivElement;
 beforeEach(() => {
+  sessionStorage.clear();
   container = document.createElement("div");
   document.body.append(container);
+});
+
+afterEach(() => {
+  disposeScreenshotsPanel(container);
+  sessionStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 describe("renderScreenshotsPanel", () => {
@@ -52,6 +60,27 @@ describe("renderScreenshotsPanel", () => {
     expect(imgs.length).toBe(2);
     expect(imgs[0]?.loading).toBe("lazy");
     expect(imgs[0]?.alt).toBe("shot-001.png");
+  });
+
+  it("loads paired thumbnails with bearer auth and revokes them on rerender", async () => {
+    setDashboardBearer({ bearer: "shot-secret", expires_at: Date.now() / 1000 + 60 });
+    const createObjectURL = vi.fn(() => "blob:shot");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+    const fetchFn = vi.fn(async (_path: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer shot-secret");
+      return new Response(new Blob(["shot"]), { status: 200 });
+    });
+
+    renderScreenshotsPanel(container, "sess-1", SAMPLE.slice(0, 1), { fetchFn });
+    const img = container.querySelector<HTMLImageElement>(".screenshots-panel__img");
+    const link = container.querySelector<HTMLAnchorElement>('[data-testid="screenshot-link"]');
+    expect(img?.getAttribute("src")).toBeNull();
+    await vi.waitFor(() => expect(img?.src).toBe("blob:shot"));
+    expect(link?.href).toBe("blob:shot");
+
+    renderScreenshotsPanel(container, "sess-1", []);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:shot");
   });
 
   it("renders caption with timestamp and filename", () => {

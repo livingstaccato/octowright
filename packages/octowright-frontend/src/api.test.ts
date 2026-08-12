@@ -1,39 +1,40 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  dashboardEventsUrl,
   deleteRecording,
   fetchJson,
   frameUrl,
-  getPersonaDetail,
-  getPersonaSizes,
   getConsole,
   getDownloads,
   getEvents,
   getHealth,
   getMacro,
-  getMacros,
   getMacroRepairPreview,
-  validateMacro,
-  updateMacro,
-  validateSessionSelector,
+  getMacros,
+  getPersonaDetail,
+  getPersonaSizes,
   getPersonas,
   getScenarios,
   getScreenshots,
   getSession,
   getSessions,
-  dashboardEventsUrl,
   liveScreenshotUrl,
-  openTrace,
   markdownUrl,
+  openTrace,
   pathTemplate,
   relaunchSession,
   screenshotUrl,
   startScenario,
   tailWebSocketUrl,
   traceDownloadUrl,
+  updateMacro,
   updatePersonaYaml,
+  validateMacro,
+  validateSessionSelector,
   videoUrl,
 } from "./api.js";
+import { getDashboardBearer, setDashboardBearer } from "./dashboard-auth.js";
 
 interface MockCall {
   url: string;
@@ -56,6 +57,7 @@ function installFetch(payload: unknown, status = 200): MockCall[] {
 }
 
 afterEach(() => {
+  sessionStorage.clear();
   vi.unstubAllGlobals();
 });
 
@@ -121,6 +123,25 @@ describe("fetchJson", () => {
     const ac = new AbortController();
     await fetchJson("/api/x", { signal: ac.signal });
     expect(calls[0]?.init?.signal).toBe(ac.signal);
+  });
+  it("attaches a live bearer while preserving caller headers", async () => {
+    setDashboardBearer({ bearer: "dash-secret", expires_at: Date.now() / 1000 + 60 });
+    const calls = installFetch({ ok: true });
+    await fetchJson("/api/x", { headers: { "X-Custom": "present" } });
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer dash-secret");
+    expect(headers.get("X-Custom")).toBe("present");
+  });
+  it("leaves unpaired requests without Authorization", async () => {
+    const calls = installFetch({ ok: true });
+    await fetchJson("/api/x");
+    expect(new Headers(calls[0]?.init?.headers).has("Authorization")).toBe(false);
+  });
+  it("clears a bearer after an authenticated 401", async () => {
+    setDashboardBearer({ bearer: "dash-secret", expires_at: Date.now() / 1000 + 60 });
+    installFetch({ error: "pairing required" }, 401);
+    await expect(fetchJson("/api/x")).rejects.toBeInstanceOf(ApiError);
+    expect(getDashboardBearer()).toBeNull();
   });
 });
 
@@ -268,9 +289,7 @@ describe("typed wrappers", () => {
 describe("url helpers", () => {
   it("pathTemplate strips queries and templates dynamic ids", () => {
     expect(pathTemplate("/api/sessions/abc/events?since=1")).toBe("/api/sessions/{id}/events");
-    expect(pathTemplate("/api/sessions/abc/screenshots/shot 1.png")).toBe(
-      "/api/sessions/{id}/screenshots/{file}",
-    );
+    expect(pathTemplate("/api/sessions/abc/screenshots/shot 1.png")).toBe("/api/sessions/{id}/screenshots/{file}");
     expect(pathTemplate("/api/sessions/abc/screenshot/now")).toBe("/api/sessions/{id}/screenshot/now");
     expect(pathTemplate("/api/sessions/abc/frame")).toBe("/api/sessions/{id}/frame");
   });

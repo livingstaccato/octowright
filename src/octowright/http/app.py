@@ -210,7 +210,7 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     # Host-header check rejects a non-loopback Host. The local browser always reaches
     # it with a loopback Host, so the landing-page UX is unchanged. /otto.svg is an
     # inert logo with no secrets, so it stays public.
-    # pairing_exempt: launched browsers land on /new-tab with no pairing cookie;
+    # pairing_exempt: launched browsers land on /new-tab with no dashboard bearer;
     # gating it would break every browser_launch. It leaks only version/uptime/
     # browser-count — accepted, documented in http/pairing.py.
     routes.append(Route("/new-tab", guard_sensitive_http(new_tab, pairing_exempt=True), methods=["GET"]))
