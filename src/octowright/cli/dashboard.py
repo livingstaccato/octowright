@@ -25,11 +25,13 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import tempfile
 import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
+from time import sleep
 
 import click
 
@@ -42,6 +44,7 @@ _HOSTNAME_RE = re.compile(
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$"
 )
 _PAIR_CODE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_REDIRECT_CLEANUP_DELAY_SECONDS = 5.0
 
 
 def _invalid_dashboard_host() -> click.ClickException:
@@ -120,11 +123,17 @@ def _open_via_redirect_file(url: str) -> None:
     hand the browser only the ``file://`` path."""
     redirect_dir = Path(tempfile.mkdtemp(prefix="octowright-pair-"))
     redirect = redirect_dir / "pair.html"
-    redirect.write_text(
-        f'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url={html.escape(url, quote=True)}">',
-        encoding="utf-8",
-    )
-    webbrowser.open(redirect.as_uri())
+    try:
+        redirect.write_text(
+            f'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url={html.escape(url, quote=True)}">',
+            encoding="utf-8",
+        )
+        webbrowser.open(redirect.as_uri())
+        # ``webbrowser.open`` can return before a cold-starting browser reads
+        # the file, so leave a short grace period before removing the secret.
+        sleep(_REDIRECT_CLEANUP_DELAY_SECONDS)
+    finally:
+        shutil.rmtree(redirect_dir, ignore_errors=True)
 
 
 @cli.command()

@@ -11,7 +11,12 @@ import {
   videoUrl,
 } from "./api.js";
 import { renderConsolePanel } from "./console-panel.js";
-import { downloadDashboardMedia, fetchDashboardMediaObjectUrl, getDashboardBearer } from "./dashboard-auth.js";
+import {
+  downloadDashboardMedia,
+  fetchDashboardMediaObjectUrl,
+  getDashboardBearer,
+  isolateDashboardTabAuth,
+} from "./dashboard-auth.js";
 import { renderDownloadsPanel } from "./downloads-panel.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
@@ -576,6 +581,7 @@ async function refreshPanels(
 
 export async function bootSession(root: HTMLElement, sessionId: string, opts: BootOptions = {}): Promise<void> {
   log.info({ event: "session_boot_start", session_id: sessionId });
+  await isolateDashboardTabAuth();
   const detail = await getSession(sessionId);
   log.info({
     event: "session_detail_loaded",
@@ -604,13 +610,27 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   renderHeader(refs.header, detail);
   const videoEl = renderVideo(refs.videoSlot, detail);
   let videoCleanup: (() => void) | null = null;
+  let videoAbort: AbortController | null = null;
+  let videoDisposed = false;
   if (videoEl && getDashboardBearer() !== null) {
-    try {
-      videoCleanup = await loadProtectedVideo(refs.videoSlot, videoEl, detail.id);
-    } catch (error) {
-      log.warn({ event: "session_video_load_failed", session_id: detail.id, error: String(error) });
-    }
+    videoAbort = new AbortController();
+    void loadProtectedVideo(refs.videoSlot, videoEl, detail.id, { signal: videoAbort.signal })
+      .then((cleanup) => {
+        if (videoDisposed) cleanup();
+        else videoCleanup = cleanup;
+      })
+      .catch((error: unknown) => {
+        if (!videoAbort?.signal.aborted) {
+          log.warn({ event: "session_video_load_failed", session_id: detail.id, error: String(error) });
+        }
+      });
   }
+  const disposeVideo = (): void => {
+    videoDisposed = true;
+    videoAbort?.abort();
+    videoCleanup?.();
+    videoCleanup = null;
+  };
   renderTraceControls(refs.traceSlot, detail);
   renderFooter(refs.footer, detail);
 
@@ -625,7 +645,7 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   livePreview.start();
   window.addEventListener("beforeunload", () => {
     livePreview.destroy();
-    videoCleanup?.();
+    disposeVideo();
     disposeScreenshotsPanel(refs.screenshotsPanel);
   });
 
