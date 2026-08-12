@@ -90,7 +90,7 @@ class _Entry:
     """A cache slot: an in-progress producer's completion event plus, once done,
     its (optionally cached) result."""
 
-    __slots__ = ("done", "done_at", "event", "has_result", "owner", "result")
+    __slots__ = ("done", "done_at", "event", "has_result", "owner", "result", "started_at")
 
     def __init__(self, owner: Any) -> None:
         self.event = asyncio.Event()
@@ -99,6 +99,10 @@ class _Entry:
         self.result: Any = None
         self.has_result = False  # False for an over-cap DONE-marker
         self.done_at = 0.0
+        # When the producer claimed this slot. An entry that is STILL in
+        # progress long past the abandon threshold has a producer that will
+        # never resolve, so the slot can be reclaimed (see _evict_expired_locked).
+        self.started_at = _now()
 
 
 _lock = threading.Lock()
@@ -129,10 +133,37 @@ def _resume_window_seconds() -> float:
     )
 
 
+def _abandon_threshold_seconds() -> float:
+    """Age past which a STILL-in-progress entry is treated as abandoned.
+
+    A producer is expected to finish, fail, or be cancelled — all of which
+    resolve the slot. One that has done none of those well past the resend wait
+    window is wedged in an uncancellable await and will never resolve. Without
+    reclamation its slot is immortal: ``_enforce_bound_locked`` deliberately
+    skips in-progress entries, so the cache grows past its bound and every
+    resend of that key returns unknown-outcome forever. The margin over the
+    wait window keeps a merely-slow producer safe — a waiter gives up before
+    this fires, so reclaiming here never races a live resend.
+    """
+    return defaults.IDEMPOTENCY_INPROGRESS_WAIT_SECONDS * 2
+
+
 def _evict_expired_locked() -> None:
     ttl = defaults.IDEMPOTENCY_TTL_SECONDS
+    abandon = _abandon_threshold_seconds()
     now = _now()
-    for key in [k for k, e in _cache.items() if e.done and (now - e.done_at) > ttl]:
+    stale = [
+        k
+        for k, e in _cache.items()
+        if (e.done and (now - e.done_at) > ttl) or (not e.done and (now - e.started_at) > abandon)
+    ]
+    for key in stale:
+        entry = _cache[key]
+        if not entry.done:
+            log.warning(
+                "octowright.idempotency.abandoned_entry_reclaimed",
+                age_seconds=round(now - entry.started_at, 1),
+            )
         del _cache[key]
 
 
