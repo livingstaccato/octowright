@@ -70,6 +70,7 @@ function loadPersonaSizes(): void {
 
 let dashboardRoot: HTMLElement | null = null;
 let dashboardPanels: DashboardPanel[] | null = null;
+let dashboardCurrentState: DashboardState = EMPTY_STATE;
 let activeDashboardDisposer: DashboardDisposer | null = null;
 
 /**
@@ -80,7 +81,8 @@ let activeDashboardDisposer: DashboardDisposer | null = null;
  */
 export async function refreshDashboardNow(): Promise<void> {
   if (!dashboardRoot) return;
-  const state = await loadState();
+  const state = await loadState(dashboardCurrentState);
+  dashboardCurrentState = state;
   if (dashboardPanels === null) {
     dashboardPanels = renderDashboard(dashboardRoot, state);
   } else {
@@ -242,7 +244,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   let disposed = false;
   let source: EventSource | null = null;
   let intervalId: ReturnType<typeof window.setInterval> | null = null;
-  let currentState = EMPTY_STATE;
+  dashboardCurrentState = EMPTY_STATE;
   let streamHealthy = false;
   let refreshErrorShown = false;
   // Serialize tick() so concurrent SSE invalidations don't lose updates.
@@ -250,9 +252,11 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
 
   const runTick = async (scopes: ReadonlySet<DashboardScope> | null): Promise<void> => {
     if (disposed) return;
-    const state = scopes ? await refreshScopedState(currentState, scopes) : await loadState();
+    const state = scopes
+      ? await refreshScopedState(dashboardCurrentState, scopes)
+      : await loadState(dashboardCurrentState);
     if (disposed) return;
-    currentState = state;
+    dashboardCurrentState = state;
     if (dashboardPanels === null) {
       dashboardPanels = renderDashboard(root, state);
     } else if (scopes === null) {
@@ -328,6 +332,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
     if (dashboardRoot === root) {
       dashboardRoot = null;
       dashboardPanels = null;
+      dashboardCurrentState = EMPTY_STATE;
     }
     if (activeDashboardDisposer === dispose) {
       activeDashboardDisposer = null;
