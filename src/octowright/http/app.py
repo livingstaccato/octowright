@@ -152,7 +152,7 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     """
     global _session_tracker
 
-    routes: list[Any] = list(all_routes())
+    routes: list[Any] = list(all_routes(mcp_token=mcp_token))
 
     lifespan = None
     _session_tracker = None

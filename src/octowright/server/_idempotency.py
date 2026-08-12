@@ -15,11 +15,17 @@ Safety properties (each independently sufficient; kept together as belt-and-susp
 * **Success-only caching.** Any exception (including the ``CancelledError`` raised
   when a reconnect kills the old session's tool coroutine) evicts the entry, so a
   resend re-runs rather than replaying a stale failure.
-* **Session-identity takeover.** An in-progress entry owned by a *different*
-  (now-dead) session is abandoned and re-executed — the primary resume path, since
-  every reconnect is a fresh leader session.
-* **Bounded await.** A waiter on an in-progress entry never blocks longer than
-  ``IDEMPOTENCY_INPROGRESS_WAIT_SECONDS`` before taking over.
+* **Await-any-owner, then honest-unknown.** An in-progress entry is awaited
+  regardless of which session created it, so a resend that races a still-running
+  producer dedups on that producer's result instead of launching a second side
+  effect. If the producer neither completes nor evicts within
+  ``IDEMPOTENCY_INPROGRESS_WAIT_SECONDS``, its fate is genuinely unknown, so the
+  resend raises ``IdempotencyOutcomeUnknownError`` rather than silently
+  re-executing a possibly-committed mutation.
+* **Namespaced key.** The follower's ``octowrightIdempotencyKey`` is hashed with
+  the method name and canonical args (``_storage_key``), so a key that is reused
+  across different calls can't return another call's cached result. A legitimate
+  resend — same key, method and args — still resolves to the same slot.
 
 Scoped to async tools (octowright's side-effectful tools are all async); sync tools
 pass through untouched. The cache is process-global, lock-guarded, TTL- and
@@ -31,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import threading
 import time
 from collections import OrderedDict
@@ -45,6 +52,33 @@ from octowright.server._request_context import current_meta_value, current_sessi
 log = get_logger(__name__)
 
 _META_KEY = "octowrightIdempotencyKey"
+
+
+class IdempotencyOutcomeUnknownError(RuntimeError):
+    """Raised when a re-sent call meets an in-progress producer whose fate can't
+    be established within the wait window — the prior producer neither completed
+    nor evicted, so whether its side effect committed is genuinely unknown.
+
+    Reporting this (instead of silently re-executing) is the honest answer: a
+    blind re-run could double-execute a committed side effect. The caller can
+    retry a pure read with a fresh key, or surface the ambiguity for a mutation.
+    """
+
+
+def _storage_key(raw_key: str, fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    """Namespace the follower-supplied idempotency key by method + canonical
+    args. A key that is (buggily) reused across different calls then lands in
+    different cache slots instead of returning another call's result. A legit
+    resend — same key, method and args — still hashes to the same slot, so
+    dedup is unchanged. Arg VALUES are hashed, never stored, so a
+    credential-substituted arg is not exposed here."""
+    method = getattr(fn, "__name__", "?")
+    try:
+        argsig = repr((args, sorted(kwargs.items())))
+    except Exception:  # pragma: no cover — tool args repr/sort reliably
+        argsig = repr(id(kwargs))
+    digest = hashlib.sha256(f"{raw_key}\x00{method}\x00{argsig}".encode()).hexdigest()
+    return digest
 
 
 def _now() -> float:
@@ -134,9 +168,10 @@ def _idempotent_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         if not defaults.IDEMPOTENCY_ENABLED:
             return await fn(*args, **kwargs)
-        key = _current_key()
-        if key is None:
+        raw_key = _current_key()
+        if raw_key is None:
             return await fn(*args, **kwargs)
+        key = _storage_key(raw_key, fn, args, kwargs)
         owner = _current_owner()
 
         while True:
@@ -149,20 +184,29 @@ def _idempotent_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
                     if entry.has_result:
                         return entry.result
                     entry = None  # over-cap DONE-marker → re-run as a fresh producer
-                if entry is None or entry.owner != owner:
-                    # Fresh, or abandoned by a now-dead session → we produce.
+                if entry is None:
+                    # Fresh (or the prior producer already evicted after failing)
+                    # → we produce.
                     mine = _Entry(owner)
                     _cache[key] = mine
                     _cache.move_to_end(key)
                     break
-                wait_entry = entry  # same-session in-progress → await it (below)
+                # In-progress — await it REGARDLESS of owner. A resend that races
+                # a still-running producer must dedup on that producer's result,
+                # not launch a second side effect (the double-execute bug).
+                wait_entry = entry
 
             try:
                 await asyncio.wait_for(wait_entry.event.wait(), timeout=defaults.IDEMPOTENCY_INPROGRESS_WAIT_SECONDS)
             except TimeoutError:
-                with _lock:
-                    if _cache.get(key) is wait_entry and not wait_entry.done:
-                        del _cache[key]  # abandoned: re-create as producer next loop
+                # The producer neither completed nor evicted within the window,
+                # so whether its side effect committed is unknown. Do NOT
+                # silently re-execute — report the ambiguity honestly.
+                raise IdempotencyOutcomeUnknownError(
+                    "a prior in-progress call with the same idempotency key did not complete within "
+                    f"{defaults.IDEMPOTENCY_INPROGRESS_WAIT_SECONDS}s; its outcome is unknown. Retry a "
+                    "read with a fresh key, or verify state before re-issuing a mutation."
+                ) from None
             continue
 
         try:

@@ -73,10 +73,14 @@ dependencies = [
 # PTY shell + SSH), recorded to the same JSONL format as browsers. See AGENTS.md
 # "Terminal Sessions (optional)". Core never imports uterm; without this extra the
 # terminal_* tools simply don't register. `provide-uterm-server[gateway]` brings
-# asyncssh for the SSH connector. These provide-io ecosystem packages aren't on
-# PyPI yet; until they publish, [tool.uv.sources] resolves them from a sibling
-# checkout for local dev (uv strips those overrides from the built wheel, so
-# end users installing octowright[terminal] get them from PyPI).
+# asyncssh for the SSH connector.
+#
+# EXPERIMENTAL / not yet installable from PyPI: the provide-uterm packages below
+# are NOT published, so `pip install octowright[terminal]` currently FAILS (404).
+# [tool.uv.sources] resolves them from a sibling ../provide-uterm checkout for
+# local dev only; uv strips those overrides from the built wheel. Until the
+# packages are published, the extra works only from a source checkout — see the
+# "Terminal Sessions (optional)" section in AGENTS.md/README.
 terminal = [
     "provide-uterm>=0.4.0",
     "provide-uterm-platform>=0.4.0",

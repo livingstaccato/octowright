@@ -241,6 +241,22 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(liveRows[0]?.textContent).toContain("after-sse");
   });
 
+  it("keeps last-known panel data when a full action refresh partially fails", async () => {
+    apiMocks.getSessions
+      .mockResolvedValueOnce(sessionsWith("before-failure"))
+      .mockRejectedValueOnce(new Error("sessions unavailable"));
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+
+    await dashboard.refreshDashboardNow();
+    await flushPromises();
+
+    const liveRows = root.querySelectorAll('[data-testid="panel-live-browsers"] tbody tr');
+    expect(liveRows).toHaveLength(1);
+    expect(liveRows[0]?.textContent).toContain("before-failure");
+    expect(root.querySelector('[data-testid="dashboard-degraded"]')?.textContent).toContain("Sessions");
+  });
+
   it("rebuilds the live-browsers body on a sessions-scoped invalidation", async () => {
     // Counterpart to the test above: the matching scope's body IS replaced.
     apiMocks.getSessions
