@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { renderScreenshotsPanel } from "./screenshots-panel.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setDashboardBearer } from "./dashboard-auth.js";
+import { disposeScreenshotsPanel, renderScreenshotsPanel } from "./screenshots-panel.js";
 import type { ScreenshotEntry } from "./types.js";
 
 const SAMPLE: ScreenshotEntry[] = [
@@ -18,9 +19,43 @@ const SAMPLE: ScreenshotEntry[] = [
 ];
 
 let container: HTMLDivElement;
+
+interface FakeIntersectionObserver {
+  callback: IntersectionObserverCallback;
+  disconnect: ReturnType<typeof vi.fn>;
+  observe: ReturnType<typeof vi.fn>;
+  unobserve: ReturnType<typeof vi.fn>;
+}
+
+function stubIntersectionObserver(): FakeIntersectionObserver[] {
+  const observers: FakeIntersectionObserver[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      callback: IntersectionObserverCallback;
+      disconnect = vi.fn();
+      observe = vi.fn();
+      unobserve = vi.fn();
+
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+    },
+  );
+  return observers;
+}
+
 beforeEach(() => {
+  sessionStorage.clear();
   container = document.createElement("div");
   document.body.append(container);
+});
+
+afterEach(() => {
+  disposeScreenshotsPanel(container);
+  sessionStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 describe("renderScreenshotsPanel", () => {
@@ -52,6 +87,92 @@ describe("renderScreenshotsPanel", () => {
     expect(imgs.length).toBe(2);
     expect(imgs[0]?.loading).toBe("lazy");
     expect(imgs[0]?.alt).toBe("shot-001.png");
+  });
+
+  it("loads paired thumbnails with bearer auth and revokes them on rerender", async () => {
+    setDashboardBearer({ bearer: "shot-secret", expires_at: Date.now() / 1000 + 60 });
+    const createObjectURL = vi.fn(() => "blob:shot");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+    const fetchFn = vi.fn(async (_path: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer shot-secret");
+      return new Response("shot", { status: 200 });
+    });
+
+    renderScreenshotsPanel(container, "sess-1", SAMPLE.slice(0, 1), { fetchFn });
+    const img = container.querySelector<HTMLImageElement>(".screenshots-panel__img");
+    const link = container.querySelector<HTMLAnchorElement>('[data-testid="screenshot-link"]');
+    expect(img?.getAttribute("src")).toBeNull();
+    await vi.waitFor(() => expect(img?.src).toBe("blob:shot"));
+    expect(link?.href).toBe("blob:shot");
+
+    renderScreenshotsPanel(container, "sess-1", []);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:shot");
+  });
+
+  it("loads paired thumbnails only while their cells intersect", async () => {
+    setDashboardBearer({ bearer: "shot-secret", expires_at: Date.now() / 1000 + 60 });
+    const observers = stubIntersectionObserver();
+    const createObjectURL = vi.fn(() => "blob:shot");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+    const fetchFn = vi.fn(async () => new Response("shot", { status: 200 }));
+
+    renderScreenshotsPanel(container, "sess-1", SAMPLE, { fetchFn });
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(observers).toHaveLength(1);
+    const observer = observers[0]!;
+    const firstCell = container.querySelector<HTMLElement>('[data-testid="screenshot-cell"]')!;
+    observer.callback(
+      [{ isIntersecting: true, target: firstCell } as IntersectionObserverEntry],
+      observer as unknown as IntersectionObserver,
+    );
+
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    const firstImage = firstCell.querySelector<HTMLImageElement>(".screenshots-panel__img")!;
+    await vi.waitFor(() => expect(firstImage.src).toBe("blob:shot"));
+
+    observer.callback(
+      [{ isIntersecting: false, target: firstCell } as IntersectionObserverEntry],
+      observer as unknown as IntersectionObserver,
+    );
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:shot");
+    expect(firstImage.getAttribute("src")).toBeNull();
+    expect(firstCell.querySelector("a")?.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("limits fallback paired screenshot fetching to three concurrent requests", async () => {
+    setDashboardBearer({ bearer: "shot-secret", expires_at: Date.now() / 1000 + 60 });
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const resolveResponses: Array<(response: Response) => void> = [];
+    const fetchFn = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveResponses.push(resolve);
+        }),
+    );
+    const screenshots = Array.from({ length: 6 }, (_, index) => ({
+      ...SAMPLE[0]!,
+      filename: `shot-${index}.png`,
+    }));
+
+    renderScreenshotsPanel(container, "sess-1", screenshots, { fetchFn });
+
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    resolveResponses[0]!(new Response("shot", { status: 200 }));
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(4));
+  });
+
+  it("disconnects its observer when disposed", () => {
+    setDashboardBearer({ bearer: "shot-secret", expires_at: Date.now() / 1000 + 60 });
+    const observers = stubIntersectionObserver();
+
+    renderScreenshotsPanel(container, "sess-1", SAMPLE, { fetchFn: vi.fn() });
+    disposeScreenshotsPanel(container);
+
+    expect(observers[0]?.disconnect).toHaveBeenCalledOnce();
   });
 
   it("renders caption with timestamp and filename", () => {

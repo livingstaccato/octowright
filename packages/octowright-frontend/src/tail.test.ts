@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setDashboardBearer } from "./dashboard-auth.js";
 import { openTail } from "./tail.js";
 
 interface Listener {
@@ -11,7 +12,10 @@ class FakeWebSocket {
   listeners: Listener[] = [];
   readyState = 1;
   closed = false;
-  constructor(readonly url: string) {
+  constructor(
+    readonly url: string,
+    readonly protocols?: string | string[],
+  ) {
     FakeWebSocket.instances.push(this);
   }
   addEventListener(type: string, handler: (e: unknown) => void): void {
@@ -46,6 +50,22 @@ describe("openTail", () => {
       webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
     });
     expect(() => FakeWebSocket.instances[0]!.emit("open", new Event("open"))).not.toThrow();
+  });
+
+  it("passes stable and credential protocols without putting the bearer in the URL", () => {
+    sessionStorage.clear();
+    setDashboardBearer({ bearer: "tail-secret", expires_at: Date.now() / 1000 + 60 });
+    FakeWebSocket.instances = [];
+    openTail("ws://test/api/sessions/x/tail", {
+      onMessage: () => {},
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    expect(FakeWebSocket.instances[0]?.url).not.toContain("tail-secret");
+    expect(FakeWebSocket.instances[0]?.protocols).toEqual([
+      "octowright.dashboard",
+      "octowright.dashboard.bearer.tail-secret",
+    ]);
+    sessionStorage.clear();
   });
 
   it("invokes onMessage with parsed payload", () => {
