@@ -20,6 +20,14 @@ from provide.telemetry import get_logger
 
 log = get_logger(__name__)
 
+# Bound on the cross-process state-lock wait. Both callers run the locked
+# transaction on an asyncio event loop, so an unbounded wait lets one frozen
+# peer wedge every other process (see _acquire_bounded). Consts live here
+# rather than defaults.py, which is at its LOC ceiling — the same convention
+# recorder/sysresources/_heartbeat follow for their own knobs.
+STATE_LOCK_TIMEOUT_SECONDS = 2.0
+STATE_LOCK_POLL_SECONDS = 0.01
+
 # Monotonic counter disambiguates concurrent snapshots (and survives PID reuse
 # after a follower crash + OS PID recycle) so two writers can't collide on a
 # single tmp filename and one silently overwrite the other's contents.
@@ -89,16 +97,7 @@ def _state_lock(path: Path) -> Iterator[None]:
         locked = False
         try:
             try:
-                if sys.platform == "win32":
-                    import msvcrt
-
-                    _prepare_windows_lock_file(fh)
-                    msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-                locked = True
+                locked = _acquire_bounded(fh, lock_path)
             except OSError as exc:
                 log.warning("octowright.bridge_state.lock_failed", path=str(lock_path), error=repr(exc))
             yield
@@ -106,11 +105,57 @@ def _state_lock(path: Path) -> Iterator[None]:
             if locked:
                 with contextlib.suppress(OSError):
                     if sys.platform == "win32":
+                        import msvcrt
+
                         fh.seek(0)
                         msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
                     else:
+                        import fcntl
+
                         fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
             fh.close()
+
+
+def _acquire_bounded(fh: Any, lock_path: Path) -> bool:
+    """Try to take the cross-process lock, giving up after a bounded wait.
+
+    A *blocking* ``LOCK_EX`` here was a wedge: both callers run this
+    synchronously on an asyncio event loop (the follower's reconnect coroutine
+    and the leader's housekeeping job), and ``flock`` is NOT released when a
+    process is SIGSTOPped — exactly what an MCP client does to a follower during
+    compaction. One frozen peer mid-transaction would therefore block every
+    other process's event loop for the length of the freeze. Before this lock
+    existed, writes were wait-free and no process could block another.
+
+    So the lock is best-effort: poll non-blocking until the deadline, then
+    proceed WITHOUT it. Losing the lock only reopens the (rare, pre-existing)
+    lost-update window that the lock closes in the normal uncontended case; it
+    never trades that for an unbounded stall of unrelated processes.
+    """
+    deadline = time.monotonic() + STATE_LOCK_TIMEOUT_SECONDS
+    if sys.platform == "win32":
+        import msvcrt
+
+        _prepare_windows_lock_file(fh)
+    else:
+        import fcntl
+    while True:
+        try:
+            if sys.platform == "win32":
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            # Held by another process (EWOULDBLOCK / EACCES on Windows).
+            if time.monotonic() >= deadline:
+                log.warning(
+                    "octowright.bridge_state.lock_timeout",
+                    path=str(lock_path),
+                    waited_seconds=STATE_LOCK_TIMEOUT_SECONDS,
+                )
+                return False
+            time.sleep(STATE_LOCK_POLL_SECONDS)
 
 
 def _empty_state() -> dict[str, Any]:

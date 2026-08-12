@@ -22,6 +22,7 @@ def test_windows_state_lock_locks_one_byte_and_unlocks(tmp_path: Path, monkeypat
     calls: list[tuple[int, int, int]] = []
     fake_msvcrt = SimpleNamespace(
         LK_LOCK=1,
+        LK_NBLCK=3,
         LK_UNLCK=2,
         locking=lambda fd, mode, size: calls.append((fd, mode, size)),
     )
@@ -29,9 +30,9 @@ def test_windows_state_lock_locks_one_byte_and_unlocks(tmp_path: Path, monkeypat
     monkeypatch.setattr(bridge_state.sys, "platform", "win32")
 
     with bridge_state._state_lock(path):
-        assert calls[-1][1:] == (fake_msvcrt.LK_LOCK, 1)
+        assert calls[-1][1:] == (fake_msvcrt.LK_NBLCK, 1)
 
-    assert [mode for _fd, mode, _size in calls] == [fake_msvcrt.LK_LOCK, fake_msvcrt.LK_UNLCK]
+    assert [mode for _fd, mode, _size in calls] == [fake_msvcrt.LK_NBLCK, fake_msvcrt.LK_UNLCK]
     assert all(size == 1 for _fd, _mode, size in calls)
     assert path.with_suffix(".json.lock").read_bytes()
 
@@ -41,6 +42,7 @@ def test_windows_state_lock_unlocks_when_transaction_raises(tmp_path: Path, monk
     modes: list[int] = []
     fake_msvcrt = SimpleNamespace(
         LK_LOCK=1,
+        LK_NBLCK=3,
         LK_UNLCK=2,
         locking=lambda _fd, mode, _size: modes.append(mode),
     )
@@ -50,7 +52,7 @@ def test_windows_state_lock_unlocks_when_transaction_raises(tmp_path: Path, monk
     with pytest.raises(RuntimeError, match="transaction failed"), bridge_state._state_lock(path):
         raise RuntimeError("transaction failed")
 
-    assert modes == [fake_msvcrt.LK_LOCK, fake_msvcrt.LK_UNLCK]
+    assert modes == [fake_msvcrt.LK_NBLCK, fake_msvcrt.LK_UNLCK]
 
 
 def test_record_snapshot_writes_latest_by_pid(tmp_path: Path) -> None:
