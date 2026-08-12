@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] - 2026-08-11
+
+### Added
+- **Opt-in, origin-scoped dashboard pairing.** Set
+  `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING=1`, then run `octowright dashboard` to
+  mint a single-use fragment code that becomes a short-lived bearer held only
+  in the exact origin's `sessionStorage`. HTTP APIs, streaming SSE, tail and
+  screencast WebSockets, recordings, screenshots, video, downloads, and write
+  controls all enforce the bearer. Dashboard and debugger tabs claim exclusive
+  per-tab browser locks so a cloned tab must pair independently. This protects
+  against another local user or sandbox that can reach loopback but cannot read
+  the 0600 leader lockfile; it does **not** protect against a same-user process
+  that can read or replace daemon state. Pairing remains off by default, and
+  remote dashboard exposure still requires `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1`.
+
+### Fixed
+- **Browser and profile lifecycle failures now clean up deterministically.** URL
+  policy rejection happens before allocation; cancellation after registration
+  closes the session; last-page close performs full teardown; crash-recovery
+  listeners are idempotent; and persona deletion is serialized against launch.
+- **Concurrent control paths no longer lose or misattribute state.** Bridge
+  snapshots use locked read-modify-write (including Windows), idempotency keys
+  include follower/method/arguments and return an honest unknown outcome on a
+  bounded wait, and scenario stop is shielded through participant teardown.
+- **Dashboard and discovery failures stay bounded and visible.** Saturated
+  recording indexes fall back to targeted lookup, failed dashboard slices keep
+  their last-known data with a degraded notice, paired screenshot loading is
+  viewport-lazy with three-request concurrency, and protected video loading is
+  cancellable without blocking debugger boot.
+- **Terminal, replay, and shutdown correctness.** Terminal poll failure is
+  supervised, disconnected input reports failure, daemon shutdown closes the
+  optional terminal pool, CLI scenarios construct terminal support, and the
+  replay-classification invariant scans all browser event emitters.
+- **Deterministic frontend and supply-chain gates.** CI/release use the tracked
+  lockfile with `npm ci`, audit high-severity advisories, and build explicit SPA
+  outputs; vulnerable transitive frontend dependencies were updated.
+
+### Changed
+- **The optional terminal extra is explicitly experimental and source-only.**
+  Its unpublished `provide-uterm` dependencies are documented instead of being
+  presented as a working external wheel extra.
+
 ## [0.14.1] - 2026-08-10
 
 ### Fixed
