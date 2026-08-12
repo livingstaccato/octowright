@@ -294,9 +294,9 @@ IDEMPOTENCY_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_MAX_ENTRIES
 # Results larger than this are not cached (a DONE-marker is stored instead so a
 # resend re-runs the cheap, idempotent read) — bounds memory for big snapshots.
 IDEMPOTENCY_MAX_RESULT_BYTES = int(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_MAX_RESULT_BYTES", "1048576"))
-# Backstop: a waiter on an in-progress entry never blocks longer than this before
-# treating it as abandoned and taking over. Just above BROWSER_LAUNCH_TIMEOUT_SECONDS.
-IDEMPOTENCY_INPROGRESS_WAIT_SECONDS = float(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", "95"))
+# Resend wait on an in-progress producer before its outcome is called UNKNOWN. MUST
+# exceed the longest call the heartbeat sustains (_heartbeat.HEARTBEAT_MAX_SECONDS).
+IDEMPOTENCY_INPROGRESS_WAIT_SECONDS = float(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", "630"))
 
 # Per-action delay applied to macros, useful for visually following execution.
 # Sleep happens AFTER pushing status to the pill and BEFORE dispatching the

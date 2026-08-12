@@ -230,10 +230,20 @@ async def _replace_crashed_page(session: Any, dead_page: Any, timeout_ms: float,
     # removed — no duplicate entry, no double listeners.
     _wire_listeners(session, new_page)
     await new_page.goto(last_url, timeout=timeout_ms)
-    if new_page not in session.pages:
-        session.pages.append(new_page)
+    # Put the replacement in the DEAD page's slot rather than at the end, so
+    # page indices stay stable across a recovery. Agents hold indices from
+    # page_list/page_switch; appending would shift every index at or after the
+    # crashed slot and silently retarget later page-indexed operations.
     if dead_page in session.pages:
-        session.pages.remove(dead_page)
+        dead_index = session.pages.index(dead_page)
+        if new_page in session.pages:
+            # The context "page" event already appended it — move, don't dup.
+            session.pages.remove(new_page)
+            # Removing an earlier element shifts the dead page's slot left.
+            dead_index = session.pages.index(dead_page)
+        session.pages[dead_index] = new_page
+    elif new_page not in session.pages:
+        session.pages.append(new_page)
     if session.page is dead_page:
         session.page = new_page
     session.page_count = len(session.pages)
