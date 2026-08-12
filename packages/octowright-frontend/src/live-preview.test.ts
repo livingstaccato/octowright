@@ -373,7 +373,7 @@ describe("mountLivePreview — live session", () => {
     setDashboardBearer({ bearer: "frame-secret", expires_at: Date.now() / 1000 + 60 });
     const fetchFn = vi.fn(async (_path: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer frame-secret");
-      return new Response(new Blob(["frame"]), { status: 200 });
+      return new Response("frame", { status: 200 });
     });
     const handle = mountLivePreview(container, {
       sessionId: "live-auth-fallback",

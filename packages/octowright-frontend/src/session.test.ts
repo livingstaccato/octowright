@@ -205,7 +205,7 @@ describe("renderVideo", () => {
       createObjectURL: vi.fn(() => "blob:video"),
       revokeObjectURL: vi.fn(),
     });
-    const fetchFn = vi.fn(async () => new Response(new Blob(["video"]), { status: 200 }));
+    const fetchFn = vi.fn(async () => new Response("video", { status: 200 }));
     const cleanup = await loadProtectedVideo(refs.videoSlot, video, "sess-1", { fetchFn });
     expect(video.src).toBe("blob:video");
     cleanup();
