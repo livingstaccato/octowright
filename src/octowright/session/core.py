@@ -183,7 +183,7 @@ class BrowserSession(
         self,
         operation_name: LiteralString,
         *,
-        wait_timeout_seconds: float | None | UseDefault = USE_DEFAULT,
+        wait_timeout_seconds: float | UseDefault | None = USE_DEFAULT,
     ) -> AbstractAsyncContextManager[None]:
         return self._operation_gate.operation(operation_name, wait_timeout_seconds=wait_timeout_seconds)
 
