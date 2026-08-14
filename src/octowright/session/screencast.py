@@ -173,8 +173,12 @@ class ScreencastManager:
             return await self._add_viewer_locked(fps=fps)
 
     async def _add_viewer_locked(self, *, fps: int | None = None) -> ScreencastViewer:
-        if not self._started:
-            await self._start_owned_locked(self._session.page)
+        # Sole caller (add_viewer) already holds this lease; re-enters it
+        # (same task, Task 2 reentrancy) since a nested method is its own
+        # scope for this scanner's purposes.
+        async with self._session.operation("screencast_start"):
+            if not self._started:
+                await self._start_owned_locked(self._session.page)
 
         viewer = ScreencastViewer(fps=self._fps if fps is None else fps)
         if self.latest is not None:
@@ -283,17 +287,21 @@ class ScreencastManager:
             await self._stop_recovery_watcher_locked()
             return
 
-        bound = self._bound_page if self._bound_page is not None else self._session.page
-        stop_error: BaseException | None = None
-        try:
-            await bound.screencast.stop()
-        except BaseException as exc:
-            stop_error = exc
-        finally:
-            self._started = False
-            self._bound_page = None
-            self._viewers.remove(viewer)
-            await self._stop_recovery_watcher_locked()
+        # Sole caller (remove_viewer) already holds this lease; re-enters it
+        # (same task, Task 2 reentrancy) since a nested method is its own
+        # scope for this scanner's purposes.
+        async with self._session.operation("screencast_stop"):
+            bound = self._bound_page if self._bound_page is not None else self._session.page
+            stop_error: BaseException | None = None
+            try:
+                await bound.screencast.stop()
+            except BaseException as exc:
+                stop_error = exc
+            finally:
+                self._started = False
+                self._bound_page = None
+                self._viewers.remove(viewer)
+                await self._stop_recovery_watcher_locked()
         if stop_error is not None:
             raise stop_error
 

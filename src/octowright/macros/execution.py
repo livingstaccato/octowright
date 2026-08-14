@@ -189,9 +189,6 @@ async def _push_status(
     `done=True` freezes the elapsed counter and disables the pill's
     auto-hide so the final state stays on screen.
     """
-    page = session.page
-    if page is None:
-        return
     payload: dict[str, Any] = {"visible": visible}
     if text is not None:
         payload["text"] = text
@@ -200,6 +197,9 @@ async def _push_status(
     if done:
         payload["done"] = True
     async with session.operation("macro_status"):
+        page = session.page
+        if page is None:
+            return
         try:
             await page.evaluate(_STATUS_PUSH_JS, payload)
         except Exception as exc:
