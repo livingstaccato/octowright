@@ -54,7 +54,7 @@ async def test_popup_page_dialog_listener_fires(tmp_path, monkeypatch):
         profile=None,
     )
     s = pool.get(r["instance_id"])
-    s.set_dialog_policy("accept")
+    await s.set_dialog_policy("accept")
 
     # Open a popup (without setting content yet — we want listeners wired first).
     await s.evaluate("window._p = window.open('about:blank', '_blank');")
