@@ -19,7 +19,6 @@ from octowright.defaults import RECORDINGS_DIR, SNAPSHOT_TIMEOUT_SECONDS
 from octowright.export import export_script as _export_script
 from octowright.mcp_types import (
     BrowserBriefResult,
-    BrowserCaptureAndCloseResult,
     BrowserEvaluateResult,
     BrowserOkResult,
     BrowserPathResult,
@@ -42,6 +41,7 @@ from octowright.server.browser.inspect_assertions import (
     browser_expect_text,
     browser_expect_url,
 )
+from octowright.server.browser.inspect_capture import browser_capture_and_close
 from octowright.server.browser.inspect_console import browser_console_messages, browser_console_summary
 from octowright.server.browser.inspect_recording import browser_tail_recording
 from octowright.server.browser.network import browser_network_summary
@@ -54,6 +54,7 @@ SNAPSHOT_TIMEOUT_S = SNAPSHOT_TIMEOUT_SECONDS
 
 __all__ = [
     "_outline_next_actions",
+    "browser_capture_and_close",
     "browser_console_messages",
     "browser_console_summary",
     "browser_expect_js",
@@ -241,73 +242,6 @@ async def browser_wait_for(
 @mcp.tool(structured_output=False, description="Path to the JSONL action log for an instance.")
 def browser_recording_path(instance_id: str) -> BrowserPathResult:
     return {"path": str(pool.get(instance_id).log_path)}
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "ONE-SHOT TEARDOWN: Captures a screenshot and page title, then closes the browser. "
-        "Use this as the final step of a task to ensure resources are freed. "
-        "If snapshot=True, also includes an aria-tree snapshot. "
-        "If the browser is protected, pass force=True to confirm before any capture side effects run. "
-        "Returns {title, url, screenshot_path, aria (optional), closed: true}; protected refusal returns {error}."
-    ),
-)
-async def browser_capture_and_close(
-    instance_id: str,
-    screenshot_path: str | None = None,
-    snapshot: bool = True,
-    force: bool = False,
-) -> BrowserCaptureAndCloseResult:
-    session = pool.get(instance_id)
-    if getattr(session, "protected", False) and not force:
-        return {
-            "error": (
-                f"browser {instance_id!r} is protected; pass force=True to capture and close it. "
-                "Protected browsers are meant to stay open for the user."
-            )
-        }
-    title = await session.page.title()
-    # url + aria follow the active frame (like browser_snapshot); the screenshot
-    # stays page-level since it captures the rendered viewport, and title is page-only.
-    frame_target = session._target()
-    url = frame_target.url
-
-    # Screenshot — MCP-supplied path is confined to RECORDINGS_DIR.
-    target = Path(screenshot_path) if screenshot_path else session.log_path.with_suffix(".png")
-    target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"screenshot_path {str(target)!r}")
-    await session.screenshot(target)
-
-    # Optional Snapshot
-    aria = None
-    snapshot_timeout: BrowserSnapshotResult | None = None
-    if snapshot:
-        try:
-            aria_full = await asyncio.wait_for(
-                frame_target.locator("html").aria_snapshot(),
-                timeout=SNAPSHOT_TIMEOUT_S,
-            )
-            aria = aria_full[:DEFAULT_PREVIEW_CHARS]
-        except TimeoutError:
-            snapshot_timeout = _snapshot_timeout_result(instance_id)
-
-    # Close
-    await pool.close(instance_id, force=force)
-
-    res: BrowserCaptureAndCloseResult = {
-        "title": title,
-        "url": url,
-        "screenshot_path": str(target),
-        "closed": True,
-    }
-    if aria:
-        res["aria"] = aria
-    if snapshot_timeout is not None:
-        res["snapshot_timed_out"] = True
-        res["timeout_s"] = snapshot_timeout["timeout_s"]
-        res["hint"] = snapshot_timeout["hint"]
-        res["actions"] = snapshot_timeout["actions"]
-    return res
 
 
 @mcp.tool(

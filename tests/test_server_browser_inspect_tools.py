@@ -8,16 +8,22 @@ from __future__ import annotations
 import asyncio
 import math
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright.browser_pool import BrowserPool
+from octowright.browser_pool import close_helpers as _close_helpers
 from octowright.server.browser import discovery as _discovery
 from octowright.server.browser import discovery_links as _discovery_links
 from octowright.server.browser import inspect as _inspect
 from octowright.server.browser import inspect_assertions as _inspect_assertions
+from octowright.server.browser import inspect_capture as _inspect_capture
 from octowright.server.browser import inspect_console as _inspect_console
 from octowright.server.browser import inspect_recording as _inspect_recording
+from octowright.session.operation_gate import SessionClosingError
+from tests._pool_invariants import wait_for_active, wait_for_state
 
 
 @pytest.fixture(autouse=True)
@@ -67,6 +73,43 @@ def _session(log_root: Path | None = None) -> MagicMock:
     s.console = [{"level": "info", "text": "x"}, {"level": "error", "text": "boom"}]
     s.recorder = MagicMock()
     return s
+
+
+def _capture_session(log_root: Path | None = None, *, instance_id: str = "i", kind: str = "chromium") -> MagicMock:
+    """Like ``_session()`` but with a REAL ``SessionOperationGate``: Task 8's
+    capture-and-close runs its capture as a preparation callback INSIDE the
+    pool's close coordinator, which drives ``_operation_gate``/
+    ``session.operation(...)`` directly -- an unspecced MagicMock's
+    auto-mocked (non-awaitable) methods can't stand in for those."""
+    from octowright.session.operation_gate import SessionOperationGate
+
+    s = _session(log_root)
+    s.instance_id = instance_id
+    s.kind = kind
+    s.video_path = None
+    s.trace_path = None
+    s._teardown_after_close_cutoff = AsyncMock()
+    gate = SessionOperationGate(instance_id, kind)
+    s._operation_gate = gate
+    s.operation = gate.operation
+    s.operation_snapshot = gate.snapshot
+    return s
+
+
+@pytest.fixture
+def capture_pool(monkeypatch: pytest.MonkeyPatch, recordings_dir: Path) -> BrowserPool:
+    """A REAL ``BrowserPool`` wired into ``inspect_capture.pool``.
+
+    ``browser_capture_and_close`` (Task 8) runs its capture as a preparation
+    callback INSIDE the pool's close coordinator (``_sessions_lock``,
+    ``_closing_sessions``, the session's real gate) -- a fully-mocked pool
+    can't provide any of that, unlike every OTHER inspect tool in this file.
+    """
+    pool = BrowserPool()
+    monkeypatch.setattr(_inspect_capture, "pool", pool)
+    monkeypatch.setattr(_inspect_capture, "RECORDINGS_DIR", recordings_dir)
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    return pool
 
 
 @pytest.mark.anyio
@@ -314,7 +357,6 @@ async def test_wait_recording_capture_export_and_expects(
 
     waited = await _inspect.browser_wait_for("i", selector="#a", timeout_ms=1)
     rec_path = _inspect.browser_recording_path("i")
-    cap = await _inspect.browser_capture_and_close("i", snapshot=False)
     exported = _inspect.browser_export_script("i", format="python")
     url_ok = await _inspect.browser_expect_url("i", "example")
     text_ok = await _inspect.browser_expect_text("i", "#x", "hello")
@@ -324,7 +366,6 @@ async def test_wait_recording_capture_export_and_expects(
 
     assert waited["ok"] is True
     assert rec_path["path"].endswith("rec.jsonl")
-    assert cap["closed"] is True
     assert exported["path"] == str(Path("/tmp/out.py"))
     assert url_ok["ok"] and text_ok["ok"] and sel_ok["ok"] and js_ok["ok"]
     assert tail["complete"] is True and tail["cursor"] == 10
@@ -630,28 +671,26 @@ def test_top_level_server_exports_browser_read_markdown() -> None:
 
 
 @pytest.mark.anyio
-async def test_browser_capture_and_close_with_snapshot(_patch_pool: MagicMock, recordings_dir: Path) -> None:
-    s = _session(recordings_dir)
-    _patch_pool.get.return_value = s
-    _patch_pool.close = AsyncMock()
-    out = await _inspect.browser_capture_and_close("i", snapshot=True)
+async def test_browser_capture_and_close_with_snapshot(capture_pool: BrowserPool, recordings_dir: Path) -> None:
+    s = _capture_session(recordings_dir)
+    capture_pool._sessions["i"] = s
+    out = await _inspect_capture.browser_capture_and_close("i", snapshot=True)
     assert out["closed"] is True
     assert out["aria"] == "aria-content"
-    _patch_pool.close.assert_awaited_once_with("i", force=False)
+    s._teardown_after_close_cutoff.assert_awaited_once()
 
 
 @pytest.mark.anyio
-async def test_browser_capture_and_close_uses_active_frame(_patch_pool: MagicMock, recordings_dir: Path) -> None:
+async def test_browser_capture_and_close_uses_active_frame(capture_pool: BrowserPool, recordings_dir: Path) -> None:
     """With a frame active, the captured aria + url come from the frame, not the top page."""
-    s = _session(recordings_dir)
+    s = _capture_session(recordings_dir)
     frame = MagicMock()
     frame.url = "https://widget.octowright.com/inner"
     frame.locator.return_value.aria_snapshot = AsyncMock(return_value="frame-html-aria")
     s._target.return_value = frame
-    _patch_pool.get.return_value = s
-    _patch_pool.close = AsyncMock()
+    capture_pool._sessions["i"] = s
 
-    out = await _inspect.browser_capture_and_close("i", snapshot=True)
+    out = await _inspect_capture.browser_capture_and_close("i", snapshot=True)
 
     assert out["url"] == "https://widget.octowright.com/inner"
     assert out["aria"] == "frame-html-aria"
@@ -661,22 +700,21 @@ async def test_browser_capture_and_close_uses_active_frame(_patch_pool: MagicMoc
 
 @pytest.mark.anyio
 async def test_browser_capture_and_close_snapshot_timeout_still_closes(
-    _patch_pool: MagicMock,
+    capture_pool: BrowserPool,
     recordings_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    s = _session(recordings_dir)
+    s = _capture_session(recordings_dir)
 
     async def slow_snapshot() -> str:
         await asyncio.sleep(10)
         return "late aria"
 
     s.page.locator.return_value.aria_snapshot = AsyncMock(side_effect=slow_snapshot)
-    _patch_pool.get.return_value = s
-    _patch_pool.close = AsyncMock(return_value={"closed": True})
-    monkeypatch.setattr(_inspect, "SNAPSHOT_TIMEOUT_S", 0.01)
+    capture_pool._sessions["i"] = s
+    monkeypatch.setattr(_inspect_capture, "SNAPSHOT_TIMEOUT_S", 0.01)
 
-    out = await _inspect.browser_capture_and_close("i", snapshot=True)
+    out = await _inspect_capture.browser_capture_and_close("i", snapshot=True)
 
     assert out["closed"] is True
     assert out["snapshot_timed_out"] is True
@@ -688,7 +726,56 @@ async def test_browser_capture_and_close_snapshot_timeout_still_closes(
         {"tool": "browser_snapshot", "args": {"instance_id": "i", "selector": "main"}},
     ]
     s.screenshot.assert_awaited_once()
-    _patch_pool.close.assert_awaited_once_with("i", force=False)
+    s._teardown_after_close_cutoff.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_browser_capture_and_close_and_closed(capture_pool: BrowserPool, recordings_dir: Path) -> None:
+    """The `cap = await _inspect.browser_capture_and_close(...)` slice split
+    out of test_wait_recording_capture_export_and_expects: that combined
+    test's session/pool are fully mocked (no real gate), which capture-and-
+    close's Task 8 preparation-at-ticket machinery can no longer accept."""
+    s = _capture_session(recordings_dir)
+    capture_pool._sessions["i"] = s
+
+    cap = await _inspect_capture.browser_capture_and_close("i", snapshot=False)
+
+    assert cap["closed"] is True
+
+
+@pytest.mark.anyio
+async def test_capture_and_close_preparation_runs_at_close_ticket(
+    capture_pool: BrowserPool, recordings_dir: Path
+) -> None:
+    """A navigation racing the close ticket must be captured by the
+    preparation callback -- the reported url reflects the FINAL navigated
+    url (read only once the ticket owns the gate), not a pre-close read a
+    concurrent navigation could have raced past. A later manual op attempted
+    after the ticket is accepted is rejected with SessionClosingError."""
+    s = _capture_session(recordings_dir)
+    capture_pool._sessions["i"] = s
+
+    release_navigation = asyncio.Event()
+
+    async def _navigate() -> None:
+        async with s.operation("browser_navigate"):
+            s.page.url = "https://final.test"
+            await release_navigation.wait()
+
+    navigation = asyncio.create_task(_navigate())
+    await wait_for_active(s._operation_gate, "browser_navigate")
+
+    capture = asyncio.create_task(_inspect_capture.browser_capture_and_close("i", force=True))
+    await wait_for_state(s._operation_gate, "closing")
+    with pytest.raises(SessionClosingError):
+        async with s.operation("late_action"):
+            pass
+
+    release_navigation.set()
+    await navigation
+    result = await capture
+    assert result["url"] == "https://final.test"
+    assert result["closed"] is True
 
 
 @pytest.mark.anyio
@@ -710,38 +797,40 @@ async def test_browser_read_markdown_url_uses_active_frame(_patch_pool: MagicMoc
 
 @pytest.mark.anyio
 async def test_browser_capture_and_close_refuses_protected_before_side_effects(
-    _patch_pool: MagicMock,
+    capture_pool: BrowserPool,
     recordings_dir: Path,
 ) -> None:
-    s = _session(recordings_dir)
+    s = _capture_session(recordings_dir)
     s.protected = True
-    _patch_pool.get.return_value = s
-    _patch_pool.close = AsyncMock()
+    capture_pool._sessions["i"] = s
 
-    out = await _inspect.browser_capture_and_close("i", snapshot=True)
+    out = await _inspect_capture.browser_capture_and_close("i", snapshot=True)
 
     assert "error" in out
     assert "force=True" in out["error"]
     s.screenshot.assert_not_awaited()
     s.page.locator.assert_not_called()
-    _patch_pool.close.assert_not_awaited()
+    s._teardown_after_close_cutoff.assert_not_awaited()
+    # The protection check IS the reservation preflight: a refusal never
+    # even reserves the close cutoff, so the session stays fully live.
+    assert "i" in capture_pool._sessions
+    assert s.operation_snapshot()["state"] == "open"
 
 
 @pytest.mark.anyio
 async def test_browser_capture_and_close_force_closes_protected(
-    _patch_pool: MagicMock,
+    capture_pool: BrowserPool,
     recordings_dir: Path,
 ) -> None:
-    s = _session(recordings_dir)
+    s = _capture_session(recordings_dir)
     s.protected = True
-    _patch_pool.get.return_value = s
-    _patch_pool.close = AsyncMock(return_value={"closed": True})
+    capture_pool._sessions["i"] = s
 
-    out = await _inspect.browser_capture_and_close("i", snapshot=False, force=True)
+    out = await _inspect_capture.browser_capture_and_close("i", snapshot=False, force=True)
 
     assert out["closed"] is True
     s.screenshot.assert_awaited_once()
-    _patch_pool.close.assert_awaited_once_with("i", force=True)
+    s._teardown_after_close_cutoff.assert_awaited_once()
 
 
 # ─── path-traversal regression for screenshot/capture ────────────────────────
@@ -763,16 +852,19 @@ async def test_browser_screenshot_rejects_path_outside_recordings(
 
 @pytest.mark.anyio
 async def test_browser_capture_and_close_rejects_path_outside_recordings(
-    _patch_pool: MagicMock, recordings_dir: Path, tmp_path: Path
+    capture_pool: BrowserPool, recordings_dir: Path, tmp_path: Path
 ) -> None:
-    """browser_capture_and_close also confines screenshot_path."""
-    s = _session(recordings_dir)
-    _patch_pool.get.return_value = s
-    _patch_pool.close = AsyncMock()
+    """browser_capture_and_close also confines screenshot_path -- pure
+    validation that runs BEFORE any close reservation, so a rejected path
+    has zero side effects (the session is never touched)."""
+    s = _capture_session(recordings_dir)
+    capture_pool._sessions["i"] = s
     outside = tmp_path.parent / "escape" / "evil.png"
     with pytest.raises(ValueError, match="resolves outside"):
-        await _inspect.browser_capture_and_close("i", screenshot_path=str(outside))
+        await _inspect_capture.browser_capture_and_close("i", screenshot_path=str(outside))
     s.screenshot.assert_not_called()
+    assert "i" in capture_pool._sessions
+    assert s.operation_snapshot()["state"] == "open"
 
 
 @pytest.mark.anyio
@@ -798,7 +890,6 @@ async def test_browser_snapshot_records_event_in_jsonl(_patch_pool: MagicMock, t
     """
     import json
     from types import SimpleNamespace
-    from typing import Any
 
     from octowright.recorder import Recorder
     from octowright.session.core import BrowserSession

@@ -34,11 +34,21 @@ def _patch_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
     return {"pool": fake_pool, "resolve": fake_resolve}
 
 
-def _stub_session(method_name: str, return_value: object) -> MagicMock:
-    """Build a session-like mock whose `method_name` is an AsyncMock."""
+def _gated_session(*, instance_id: str = "inst-1", kind: str = "chromium") -> MagicMock:
+    """Session double carrying a REAL ``SessionOperationGate``: capture-and-
+    close/handoff/relaunch (Task 8) drive ``_operation_gate`` and
+    ``session.operation(...)`` directly from inside the pool's close
+    coordinator, so a bare unspecced MagicMock (auto-mocked, non-awaitable
+    methods) cannot stand in for the session anymore."""
+    from octowright.session.operation_gate import SessionOperationGate
+
     session = MagicMock()
+    session.instance_id = instance_id
+    session.kind = kind
     session.protected = False
     session.log_path = Path("/tmp/test.jsonl")
+    session.video_path = None
+    session.trace_path = None
     session.page = MagicMock()
     session.page.url = "https://octowright.com"
     session.page.title = AsyncMock(return_value="Example Title")
@@ -50,9 +60,13 @@ def _stub_session(method_name: str, return_value: object) -> MagicMock:
     # _target() defaults to the page when no frame is switched (capture_and_close
     # reads url + aria through it).
     session._target.return_value = session.page
+    session.screenshot = AsyncMock(return_value=Path("/tmp/test.png"))
+    session._teardown_after_close_cutoff = AsyncMock()
 
-    if method_name:
-        setattr(session, method_name, AsyncMock(return_value=return_value))
+    gate = SessionOperationGate(instance_id, kind)
+    session._operation_gate = gate
+    session.operation = gate.operation
+    session.operation_snapshot = gate.snapshot
     return session
 
 
@@ -188,32 +202,40 @@ async def test_browser_launch_outline_mode_returns_page_outline(
 
 
 @pytest.mark.anyio
-async def test_browser_capture_and_close(
-    _patch_state: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    pool = _patch_state["pool"]
+async def test_browser_capture_and_close(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """browser_capture_and_close now routes through the REAL close
+    coordinator (Task 8: capture runs as a preparation callback inside the
+    close ticket), so this needs a real BrowserPool + a session double with
+    a real gate rather than a fully-mocked pool/session pair."""
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.server.browser import inspect_capture as _inspect_capture
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
     # Pin RECORDINGS_DIR so the default screenshot path (derived from
     # session.log_path) passes the path-containment guard.
-    monkeypatch.setattr(_inspect, "RECORDINGS_DIR", tmp_path)
-    session = _stub_session("screenshot", tmp_path / "test.png")
+    monkeypatch.setattr(_inspect_capture, "RECORDINGS_DIR", tmp_path)
+    pool = BrowserPool()
+    monkeypatch.setattr(_inspect_capture, "pool", pool)
+    session = _gated_session(instance_id="inst-1")
     session.log_path = tmp_path / "test.jsonl"
-    pool.get = MagicMock(return_value=session)
-    pool.close = AsyncMock(return_value={"closed": True})
+    pool._sessions["inst-1"] = session
 
-    result = await _inspect.browser_capture_and_close("inst-1")
+    result = await _inspect_capture.browser_capture_and_close("inst-1")
 
     assert result["title"] == "Example Title"
     assert result["closed"] is True
     assert "aria" in result
     session.screenshot.assert_awaited_once()
-    pool.close.assert_awaited_once_with("inst-1", force=False)
+    session._teardown_after_close_cutoff.assert_awaited_once()
 
 
 @pytest.mark.anyio
-async def test_browser_relaunch_fluid_preserves_state_without_viewport() -> None:
+async def test_browser_relaunch_fluid_preserves_state_without_viewport(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.browser_pool import close_helpers as _close_helpers
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
     pool = BrowserPool()
-    session = MagicMock()
-    session.kind = "chromium"
+    session = _gated_session(instance_id="old-id")
     session.label = "player"
     session.profile = "profile-a"
     session.stabilize = True
@@ -221,15 +243,13 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport() -> None
     session.har_path = None
     session.user_data_dir = None
     session.url = "https://octowright.com/original"
-    session.page = MagicMock()
     session.page.url = "https://octowright.com/current"
     pool._sessions["old-id"] = session
-    pool.close = AsyncMock(return_value={"closed": True})
     pool.launch = AsyncMock(return_value={"instance_id": "new-id"})
 
     result = await pool.relaunch_fluid("old-id")
 
-    pool.close.assert_awaited_once_with("old-id", force=True)
+    session._teardown_after_close_cutoff.assert_awaited_once()
     pool.launch.assert_awaited_once()
     _, kwargs = pool.launch.call_args
     assert kwargs["url"] == "https://octowright.com/current"

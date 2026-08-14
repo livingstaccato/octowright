@@ -14,21 +14,19 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
-from octowright._tracing import span
 from octowright.browser_pool import driver_health, driver_relaunch
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.launch_execution import launch_profile_locked
-from octowright.browser_pool.launch_helpers import rotate_har_path
 from octowright.browser_pool.lifecycle import (
     ClosingSession,
     accept_external_close_nowait,
     close_browser,
-    handoff_browser,
     shutdown_pool,
 )
 from octowright.browser_pool.options import LaunchOptions
+from octowright.browser_pool.relaunch import handoff_browser, relaunch_fluid_browser
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
@@ -277,79 +275,11 @@ class BrowserPool:
         await expose_binding("__octowright_viewport_action", _viewport_action)
 
     async def relaunch_fluid(self, instance_id: str) -> dict[str, Any]:
-        source = self.get(instance_id)
-        # Snapshot every field we need BEFORE awaiting close. A Playwright
-        # external-close eviction can fire between pool.get() and pool.close(),
-        # popping the session and turning close() into a KeyError. We treat
-        # that race as "already closed" and still launch the replacement so
-        # the user isn't left with no browser.
-        source_kind = source.kind
-        source_label = source.label
-        source_profile = source.profile
-        source_user_data_dir = source.user_data_dir
-        source_stabilize = source.stabilize
-        source_trace = source.trace
-        source_har_path = source.har_path
-        source_protected = getattr(source, "protected", False)
-        source_protected_reason = getattr(source, "protected_reason", "explicit")
-        target_url = getattr(source.page, "url", None) or source.url
-        # Wrap close+launch under a parent span so the child browser.close /
-        # browser.launch spans nest underneath as one fluid-mode round-trip.
-        with span("octowright.browser.relaunch_fluid", instance_id=instance_id, kind=source_kind):
-            session_scoped = source_profile is None and source_user_data_dir is not None
-            stateless = source_profile is None and source_user_data_dir is None
-            # Don't overwrite the prior HAR — relaunch gets a sibling path.
-            next_har = rotate_har_path(source_har_path)
-            try:
-                # force=True: relaunch_fluid closes the source only to reopen
-                # the same logical browser immediately after (state/profile
-                # preserved) — it is not a destructive agent close, so a
-                # protected (e.g. headed-by-default) source must not refuse
-                # here the way an explicit browser_close would.
-                close_result: dict[str, Any] | None = await self.close(instance_id, force=True)
-            except KeyError:
-                log.warning(
-                    "octowright.browser.relaunch_fluid.close_raced_eviction",
-                    instance_id=instance_id,
-                    kind=source_kind,
-                )
-                close_result = None
-            result = await self.launch(
-                kind=source_kind,
-                url=target_url,
-                headed=True,
-                label=source_label,
-                profile=source_profile,
-                stabilize=source_stabilize,
-                trace=source_trace,
-                har=bool(source_har_path),
-                har_path=str(next_har) if next_har else None,
-                badge=True,
-                ephemeral=stateless,
-                session=session_scoped,
-                protected=source_protected,
-            )
-            # resolve_protected() always stamps reason="explicit" whenever an
-            # explicit (non-None) protected value is passed in — which we just
-            # did with source_protected above, to carry the boolean across the
-            # relaunch. That correctly preserves the protected bit but loses
-            # the ORIGINAL reason (e.g. "headed_default"), which the tailored
-            # close-refusal message keys off. Restore it post-hoc now that the
-            # new session is registered in the pool. Use maybe_get (not get):
-            # some unit tests stub out ``launch`` entirely, so there may be no
-            # real session behind the returned instance_id — nothing to patch
-            # in that case.
-            new_session = self.maybe_get(result["instance_id"])
-            if new_session is not None:
-                new_session.protected_reason = source_protected_reason
-            return {
-                "ok": True,
-                "old_instance_id": instance_id,
-                "new_instance_id": result["instance_id"],
-                "old_closed": bool(close_result and close_result.get("closed")),
-                "mode": "fluid",
-                "launch": result,
-            }
+        # Body lives in browser_pool.relaunch (Task 8): the URL/profile
+        # snapshot used to build the replacement launch must be taken INSIDE
+        # the close ticket, after it owns the gate -- see
+        # ``relaunch_fluid_browser`` / ``RelaunchSnapshot``.
+        return await relaunch_fluid_browser(self, instance_id)
 
     def profile_in_use(self, kind: str, profile: str) -> bool:
         return any(s.kind == kind and profile_names_match(s.profile, profile) for s in tuple(self._sessions.values()))
