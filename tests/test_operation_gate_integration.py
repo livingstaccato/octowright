@@ -290,3 +290,94 @@ def test_pool_default_operation_timeout_resolves_from_env(
     assert pool.operation_queue_timeout_seconds == 42.0
     session = build_session_for_test(pool, fake_launch_parts)
     assert session.operation_snapshot()["queue_timeout_seconds"] == 42.0
+
+
+# ─── close_with_preparation (Task 8): preparation runs at the close ticket ──
+
+
+def _real_pool_session(instance_id: str, tmp_path: Path) -> BrowserSession:
+    context = MagicMock()
+    context.close = AsyncMock()
+    context.tracing = MagicMock()
+    context.on = MagicMock()
+    page = MagicMock()
+    return BrowserSession(
+        instance_id=instance_id,
+        kind="chromium",
+        label=None,
+        url="https://octowright.com",
+        browser=None,
+        context=context,
+        page=page,
+        recorder=MagicMock(),
+        log_path=tmp_path / f"{instance_id}.jsonl",
+    )
+
+
+@pytest.mark.asyncio
+async def test_close_with_preparation_keeps_reservation_name_as_observable_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preparation callback re-enters ``session.operation(...)`` under
+    the SAME literal name as the close reservation's own ``operation_name``
+    -- exact-task reentrancy (Task 2) admits it without queueing, and the
+    snapshot's ``active_operation`` stays that reservation's root the whole
+    time it runs, proving a direct outside caller could never observe (or
+    piggyback on) a different root by racing the ticket."""
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.browser_pool.lifecycle import close_with_preparation
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session("root-check", tmp_path)
+    pool._sessions[session.instance_id] = session
+
+    seen_root: list[str | None] = []
+
+    async def _preparation(prepared_session: BrowserSession) -> str:
+        async with prepared_session.operation("browser_capture_and_close"):
+            seen_root.append(prepared_session.operation_snapshot()["active_operation"])
+            return "prepared"
+
+    outcome = await close_with_preparation(
+        pool,
+        session.instance_id,
+        force=True,
+        reason="agent_close",
+        operation_name="browser_capture_and_close",
+        preparation=_preparation,
+    )
+
+    assert seen_root == ["browser_capture_and_close"]
+    assert outcome.prepared == "prepared"
+    assert outcome.response["closed"] is True
+    assert session.instance_id not in pool._closing_sessions
+
+
+@pytest.mark.asyncio
+async def test_reserve_close_browser_require_fresh_rejects_shared_ticket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``require_fresh=True`` refuses to coalesce onto a close cutoff
+    another caller already accepted -- a compound helper cannot retroactively
+    attach its own preparation to a ticket it does not own."""
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.browser_pool.lifecycle import reserve_close_browser
+    from octowright.session.operation_gate import SessionClosingError
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session("fresh-check", tmp_path)
+    pool._sessions[session.instance_id] = session
+
+    first = await reserve_close_browser(pool, session.instance_id, force=True, reason="agent_close")
+    with pytest.raises(SessionClosingError):
+        await reserve_close_browser(
+            pool,
+            session.instance_id,
+            force=True,
+            reason="agent_close",
+            operation_name="browser_capture_and_close",
+            require_fresh=True,
+        )
+    await first.reservation.wait()
