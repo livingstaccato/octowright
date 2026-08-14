@@ -209,15 +209,20 @@ async def _coordinate_close(
 ) -> None:
     """Run exactly once per ``entry``: admit under the gate (or take the bare
     teardown-only path), teardown, publish, and resolve the shared outcome.
-    Owns the ``octowright.session.close`` span + closed-total counter -- the
-    only place either fires now that ``SessionOpsMixin.close()`` no longer
-    runs for a production close."""
+    Owns the ``octowright.session.close`` span (every close, explicit or
+    external -- spans aren't summed, so there's no partition to protect) and
+    the closed-total counter (explicit closes ONLY, via
+    ``close_helpers.is_external_reason`` -- it stays disjoint from
+    ``octowright_browser_evicted_total`` so ``launched - closed - evicted``
+    keeps meaning "still live"). Neither fired for a production close before
+    this method owned them, since ``SessionOpsMixin.close()`` no longer runs
+    for one."""
     session = entry.session
     prepared: object | None = None
     error: BaseException | None = None
     response: dict[str, Any] | None = None
     recorder_reason = close_helpers.recorder_close_reason(reason)
-    with span("octowright.session.close", instance_id=instance_id, kind=session.kind):
+    with span("octowright.session.close", instance_id=instance_id, kind=session.kind, reason=reason):
         try:
             try:
                 async with session._operation_gate.close_operation(entry.reservation):
@@ -238,7 +243,8 @@ async def _coordinate_close(
             if error is None:
                 error = exc
         finally:
-            _SESSION_CLOSED.add(1, attributes={"kind": session.kind})
+            if not close_helpers.is_external_reason(reason):
+                _SESSION_CLOSED.add(1, attributes={"kind": session.kind})
             await close_helpers.remove_manifest_best_effort(instance_id)
             close_helpers.publish_close_once(session, instance_id, reason)
             async with pool._sessions_lock:

@@ -38,6 +38,17 @@ EVICTED = counter(
 )
 
 
+def is_external_reason(reason: SessionCloseReason) -> bool:
+    """True for a close whose origin was Playwright/the browser itself
+    (crash, user_close, external_disconnect) rather than an explicit
+    ``pool.close()`` (agent_close, shutdown). Single shared predicate for
+    every place that needs to keep the explicit/external partition disjoint
+    -- ``publish_close_once``'s log/metric branch and the coordinator's
+    ``octowright_browser_closed_total`` gate both call this rather than each
+    hard-coding the same reason tuple."""
+    return reason in ("user_close", "external_disconnect", "crashed")
+
+
 def recorder_close_reason(reason: SessionCloseReason) -> str | None:
     if reason == "crashed":
         return "crashed"
@@ -110,7 +121,7 @@ def publish_close_once(session: BrowserSession, instance_id: str, reason: Sessio
     explicit close keeps ``octowright.browser.closed``; an external-origin
     reason is ``octowright.browser.evicted_externally`` plus the eviction
     counter -- what the listeners used to emit directly before this task."""
-    if reason in ("user_close", "external_disconnect", "crashed"):
+    if is_external_reason(reason):
         EVICTED.add(1, attributes={"kind": session.kind})
         log.info(
             "octowright.browser.evicted_externally",
