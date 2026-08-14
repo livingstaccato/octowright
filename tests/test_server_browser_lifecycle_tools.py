@@ -97,6 +97,23 @@ async def test_browser_navigate_brief_mode_degrades_when_brief_times_out(
     assert "timed out" in out["brief_warning"]
 
 
+@pytest.mark.anyio
+async def test_browser_set_protected_routes_through_set_protected_state(
+    _patch_pool_lifecycle: MagicMock,
+) -> None:
+    """browser_set_protected must mutate through session.set_protected_state
+    (the gate's control_update path), not a bare attribute assignment, so
+    Task 7's close-race linearization covers this mutation too."""
+    s = MagicMock()
+    _patch_pool_lifecycle.get.return_value = s
+    s.set_protected_state = AsyncMock(return_value={"instance_id": "i", "protected": True})
+
+    out = await _lifecycle.browser_set_protected("i", True)
+
+    s.set_protected_state.assert_awaited_once_with(True)
+    assert out == {"instance_id": "i", "protected": True}
+
+
 def test_browser_list_summary_mode_bounds_rows_and_adds_actions(_patch_pool_lifecycle: MagicMock) -> None:
     _patch_pool_lifecycle.list_sessions.return_value = [
         {
