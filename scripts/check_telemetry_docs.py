@@ -22,10 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "octowright"
 DOCS = ROOT / "AGENTS.md"
 
-# Instrument names are quoted literals passed to counter()/histogram(); the
-# octowright_* convention ends in _total (counter), _seconds (histogram), or
-# _bytes (the RSS gauge-as-histogram).
-_METRIC_RE = re.compile(r'"(octowright_[a-z_]+_(?:total|seconds|bytes))"')
+# Instrument names are quoted literals passed to counter()/histogram()/gauge();
+# the octowright_* convention ends in _total (counter), _seconds (histogram),
+# _bytes (the RSS gauge-as-histogram), or _depth (the operation-gate queue
+# depth gauge).
+_METRIC_RE = re.compile(r'"(octowright_[a-z_]+_(?:total|seconds|bytes|depth))"')
 _NOTIF_RE = re.compile(r"notifications/octowright/([a-z_]+)")
 
 
