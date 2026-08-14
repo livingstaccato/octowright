@@ -297,6 +297,42 @@ class TestHandleDialog:
         assert len(session._bg_tasks) >= before
         await _drain(session)
 
+    @pytest.mark.anyio
+    async def test_dialog_callback_unblocks_while_a_different_task_holds_the_root_operation(
+        self, tmp_path: Path
+    ) -> None:
+        """Dialog accept/dismiss is an event-critical callback: it must run even
+        while another task holds the session's operation lease, because the
+        admitted Playwright call that lease belongs to (e.g. a click()) may
+        itself be blocked waiting for the dialog response. If a regression ever
+        added gate acquisition here, this callback would queue behind the
+        holder and this test would hang/timeout instead of observing the
+        dismiss while the lease is still held."""
+        session = _make_session(tmp_path)
+        await session.set_dialog_policy("dismiss")
+        dialog = _FakeDialog(dtype="confirm")
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _hold() -> None:
+            async with session.operation("browser_click"):
+                entered.set()
+                await release.wait()
+
+        holder = asyncio.create_task(_hold())
+        await entered.wait()
+
+        session._handle_dialog(dialog)
+        async with asyncio.timeout(2):
+            while not dialog.dismissed:
+                await asyncio.sleep(0)
+        assert dialog.dismissed is True
+
+        release.set()
+        await holder
+        await _drain(session)
+
 
 # ─── _handle_download ────────────────────────────────────────────────────────
 
@@ -497,6 +533,37 @@ class TestMockRoute:
         session = _make_session(tmp_path, page=page)
         result = await session.mock_route("**/foo", status=418)
         assert result == {"ok": True, "pattern": "**/foo", "status": 418}
+
+    @pytest.mark.anyio
+    async def test_route_handler_fulfills_while_a_different_task_holds_the_root_operation(self, tmp_path: Path) -> None:
+        """Route fulfill is an event-critical callback like dialog accept/
+        dismiss: it must run without acquiring the session's operation lease,
+        because the admitted navigation/click that triggered the request may
+        itself be blocked waiting for the response. Proven with a SEPARATE
+        task holding the lease -- a same-task call would trivially re-enter
+        and would not catch a regression that added gate acquisition here."""
+        page = _FakePageWithRoutes()
+        session = _make_session(tmp_path, page=page)
+        await session.mock_route("**/api/x", status=200)
+        handler = page.route.call_args[0][1]
+        route = _FakeRoute()
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _hold() -> None:
+            async with session.operation("browser_navigate"):
+                entered.set()
+                await release.wait()
+
+        holder = asyncio.create_task(_hold())
+        await entered.wait()
+
+        await asyncio.wait_for(handler(route), timeout=1.0)
+        assert route.fulfilled is not None
+
+        release.set()
+        await holder
 
 
 class TestUnmockRoute:

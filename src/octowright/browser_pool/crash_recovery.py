@@ -28,13 +28,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.events import RecoveryOutcome
+from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import (
+    OperationGateInvariantError,
+    SessionClosedError,
+    SessionClosingError,
+)
+
+if TYPE_CHECKING:
+    from octowright.session.core import BrowserSession
 
 log = get_logger(__name__)
 
@@ -148,9 +157,28 @@ def schedule_recovery(session: Any, page: Any) -> Any | None:
 
 
 async def _recover(session: Any, page: Any, reload_timeout_ms: float, url: str) -> bool:
+    """Durable system operation: no ordinary queue timeout, so recovery waits
+    behind whatever operation was running when the renderer crashed rather
+    than racing/timing out against it. Invalidated (not retried) if the
+    session closes or the gate breaks before this ticket is admitted --
+    there is nothing left to recover."""
+    try:
+        async with session.operation("crash_recovery", wait_timeout_seconds=None):
+            return await _recover_owned(session, page, reload_timeout_ms, url)
+    except (SessionClosingError, SessionClosedError, OperationGateInvariantError):
+        log.info("octowright.crash.recovery_invalidated", instance_id=session.instance_id)
+        return False
+
+
+async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url: str) -> bool:
     """Replace the crashed page. On success clear ``_crashed`` and count it; on
     failure leave ``_crashed`` set so the session still reports as crashed. Either
-    way an incident record is appended so the outcome is visible in status."""
+    way an incident record is appended so the outcome is visible in status.
+
+    Runs entirely inside ``_recover``'s ``crash_recovery`` lease; only this
+    function publishes the recovered/failed outcome, so a recovery invalidated
+    before admission (session closing/closed) never claims to have repaired a
+    browser it never touched."""
     session._crash_recoveries += 1
     iid = session.instance_id
     try:
@@ -185,14 +213,19 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float, url: str) 
     return True
 
 
-async def _capture_recovery_screenshot(session: Any) -> str | None:
+async def _capture_recovery_screenshot(session: SessionLike) -> str | None:
     """Best-effort screenshot of the recovered page for postmortem. Writes next to
     the session recording (already under RECORDINGS_DIR, so disk-write containment
-    holds). Returns the path or None; never raises."""
+    holds). Returns the path or None; never raises.
+
+    Enters its own ``crash_recovery`` lease around the direct ``page.screenshot``
+    call: called from ``_recover_owned`` it re-enters the same task's existing
+    lease for free, but it stays safe if a test or embedder calls it directly."""
     try:
-        path = session.log_path.with_suffix(f".recovery-{session._crash_recoveries}.png")
-        await session.page.screenshot(path=str(path))
-        return str(path)
+        async with session.operation("crash_recovery", wait_timeout_seconds=None):
+            path = session.log_path.with_suffix(f".recovery-{session._crash_recoveries}.png")
+            await session.page.screenshot(path=str(path))
+            return str(path)
     except Exception as exc:
         log.debug("octowright.crash.recovery_screenshot_failed", instance_id=session.instance_id, error=repr(exc))
         return None
@@ -210,7 +243,7 @@ def _record_incident(session: Any, url: str, outcome: str, *, screenshot: str | 
     )
 
 
-async def _replace_crashed_page(session: Any, dead_page: Any, timeout_ms: float, last_url: str) -> None:
+async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms: float, last_url: str) -> None:
     """Recover by replacing the dead page, NOT reloading it.
 
     A crashed renderer cannot be reloaded — Playwright keeps raising
@@ -219,35 +252,41 @@ async def _replace_crashed_page(session: Any, dead_page: Any, timeout_ms: float,
     the same context, navigated to the dead page's URL, restores a working session
     under the same instance_id. The new page is wired with the same listeners
     (so a re-crash recovers too) and swapped in as the session's active page; the
-    dead page is closed best-effort."""
+    dead page is closed best-effort.
+
+    Enters its own ``crash_recovery`` lease around this direct Playwright/
+    active-target access: called from ``_recover_owned`` it re-enters the same
+    task's existing lease for free, but it stays safe if a test or embedder
+    calls it directly."""
     from octowright.browser_pool.listeners import _wire_listeners
 
-    new_page = await session.context.new_page()
-    # Playwright fires the context "page" event for new_page(), so _register_popup
-    # may have ALREADY appended + wired new_page. _wire_listeners is idempotent
-    # per page, and the pages-list update below is written to converge whether or
-    # not the event ran first: new_page ends up present exactly once, dead_page
-    # removed — no duplicate entry, no double listeners.
-    _wire_listeners(session, new_page)
-    await new_page.goto(last_url, timeout=timeout_ms)
-    # Put the replacement in the DEAD page's slot rather than at the end, so
-    # page indices stay stable across a recovery. Agents hold indices from
-    # page_list/page_switch; appending would shift every index at or after the
-    # crashed slot and silently retarget later page-indexed operations.
-    if dead_page in session.pages:
-        dead_index = session.pages.index(dead_page)
-        if new_page in session.pages:
-            # The context "page" event already appended it — move, don't dup.
-            session.pages.remove(new_page)
-            # Removing an earlier element shifts the dead page's slot left.
+    async with session.operation("crash_recovery", wait_timeout_seconds=None):
+        new_page = await session.context.new_page()
+        # Playwright fires the context "page" event for new_page(), so _register_popup
+        # may have ALREADY appended + wired new_page. _wire_listeners is idempotent
+        # per page, and the pages-list update below is written to converge whether or
+        # not the event ran first: new_page ends up present exactly once, dead_page
+        # removed — no duplicate entry, no double listeners.
+        _wire_listeners(cast("BrowserSession", session), new_page)
+        await new_page.goto(last_url, timeout=timeout_ms)
+        # Put the replacement in the DEAD page's slot rather than at the end, so
+        # page indices stay stable across a recovery. Agents hold indices from
+        # page_list/page_switch; appending would shift every index at or after the
+        # crashed slot and silently retarget later page-indexed operations.
+        if dead_page in session.pages:
             dead_index = session.pages.index(dead_page)
-        session.pages[dead_index] = new_page
-    elif new_page not in session.pages:
-        session.pages.append(new_page)
-    if session.page is dead_page:
-        session.page = new_page
-    session.page_count = len(session.pages)
-    try:
-        await dead_page.close()
-    except Exception as exc:
-        log.debug("octowright.crash.dead_page_close_failed", instance_id=session.instance_id, error=repr(exc))
+            if new_page in session.pages:
+                # The context "page" event already appended it — move, don't dup.
+                session.pages.remove(new_page)
+                # Removing an earlier element shifts the dead page's slot left.
+                dead_index = session.pages.index(dead_page)
+            session.pages[dead_index] = new_page
+        elif new_page not in session.pages:
+            session.pages.append(new_page)
+        if session.page is dead_page:
+            session.page = new_page
+        session.page_count = len(session.pages)
+        try:
+            await dead_page.close()
+        except Exception as exc:
+            log.debug("octowright.crash.dead_page_close_failed", instance_id=session.instance_id, error=repr(exc))

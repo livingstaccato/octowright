@@ -212,6 +212,41 @@ async def test_session_closed_event_stops_the_producer_and_ends_viewers() -> Non
 
 
 @pytest.mark.asyncio
+async def test_session_closed_event_terminates_even_when_the_gate_is_already_closed() -> None:
+    """``terminate()`` must not try to acquire the session operation gate: by
+    the time an external close reaches here the gate itself may already be
+    ``closed``, and entering it would raise instead of releasing the
+    screencast producer and waking the viewers -- exactly the one thing this
+    path must still do."""
+    sess = FakeSession("gate-already-closed")
+    mgr, viewer = await sc.acquire_viewer(sess, fps=1000, quality=70)
+    bound = sess.page
+    try:
+        await _await_watcher_subscription()
+        sess._test_operation_gate.mark_closed_external()
+
+        session_event_bus.publish_nowait(
+            SessionClosedEvent(
+                instance_id=sess.instance_id,
+                kind="chromium",
+                label=None,
+                profile=None,
+                reason="user_close",
+                log_path="/x/fake.jsonl",  # fake event payload; never opened
+            )
+        )
+        with pytest.raises(sc.ScreencastEnded):
+            await asyncio.wait_for(viewer.get(), timeout=2)
+
+        assert mgr._started is False
+        assert bound.screencast.stopped is True
+    finally:
+        with suppress(Exception):
+            await sc.release_viewer(mgr, viewer)
+        await _drain_registry(sess.instance_id)
+
+
+@pytest.mark.asyncio
 async def test_close_event_published_before_the_watcher_task_runs_is_not_lost() -> None:
     """The bus drops events with no subscriber, and ``create_task`` only
     *schedules* the watcher — so subscribing inside the task would lose a close

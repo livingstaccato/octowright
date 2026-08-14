@@ -55,6 +55,11 @@ class SessionLike(Protocol):
     _last_markdown_capture_url: str | None
     _last_markdown_capture_key: str | None
     _pending_markdown_capture: Any | None
+    # Crash-recovery bookkeeping (browser_pool.crash_recovery): needed here so
+    # ``_capture_recovery_screenshot`` can be typed against ``SessionLike``
+    # (Task 6) instead of ``Any`` while still naming a postmortem screenshot
+    # file after the current attempt count.
+    _crash_recoveries: int
 
     def _target(self) -> Any: ...
 
