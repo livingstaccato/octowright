@@ -1735,6 +1735,78 @@ class TestCompoundCloseOperations:
         assert pool.launch.call_args.kwargs["badge"] is True
 
     @pytest.mark.anyio
+    async def test_handoff_falls_back_when_external_close_wins_admission(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SECOND eviction window (distinct from the KeyError/
+        SessionClosingError window above): our OWN close ticket is
+        successfully reserved (require_fresh=True succeeded), but an
+        external close then wins the race for the GATE ITSELF while our
+        ticket is still queued behind a busy operation. This surfaces as
+        SessionClosedError from entry.reservation.wait() -- NOT from
+        reserve_close_browser -- and must fall back identically, or the
+        whole handoff aborts with no replacement launched (the exact
+        regression this test pins)."""
+        from octowright.browser_pool import close_helpers as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        pool.launch = AsyncMock(return_value={"instance_id": "new-handoff", "har_path": None})  # type: ignore[method-assign]
+
+        release = asyncio.Event()
+        holder = asyncio.create_task(hold_operation(session, "long_action", release))
+        await wait_for_active(session._operation_gate, "long_action")
+
+        handoff_task = asyncio.create_task(handoff_browser(pool, session.instance_id, accept_stateless=True))
+        await wait_for_state(session._operation_gate, "closing")
+
+        # Our own close ticket is registered but still queued behind
+        # long_action -- an external close now wins the race for the gate.
+        won = pool._accept_external_close_nowait(session.instance_id, expected_session=session, reason="user_close")
+        assert won is pool._closing_sessions[session.instance_id]
+
+        release.set()
+        await holder
+        result = await handoff_task
+
+        assert result["ok"] is True
+        assert result["old_closed"] is False
+        assert result["new_instance_id"] == "new-handoff"
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+    @pytest.mark.anyio
+    async def test_relaunch_fluid_falls_back_when_external_close_wins_admission(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same second window as the handoff test above, for relaunch_fluid
+        -- the LIVE production path (browser_relaunch_fluid)."""
+        from octowright.browser_pool import close_helpers as _lc
+        from octowright.browser_pool.relaunch import relaunch_fluid_browser
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        session.profile = None
+        session.user_data_dir = None
+        pool.launch = AsyncMock(return_value={"instance_id": "new-fluid", "har_path": None})  # type: ignore[method-assign]
+
+        release = asyncio.Event()
+        holder = asyncio.create_task(hold_operation(session, "long_action", release))
+        await wait_for_active(session._operation_gate, "long_action")
+
+        relaunch_task = asyncio.create_task(relaunch_fluid_browser(pool, session.instance_id))
+        await wait_for_state(session._operation_gate, "closing")
+
+        won = pool._accept_external_close_nowait(session.instance_id, expected_session=session, reason="user_close")
+        assert won is pool._closing_sessions[session.instance_id]
+
+        release.set()
+        await holder
+        result = await relaunch_task
+
+        assert result["ok"] is True
+        assert result["old_closed"] is False
+        assert result["new_instance_id"] == "new-fluid"
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+    @pytest.mark.anyio
     async def test_nonclosing_handoff_uses_one_ordinary_source_lease(
         self, pool: BrowserPool, session: BrowserSession
     ) -> None:
