@@ -383,16 +383,16 @@ async def session_navigate(request: Request) -> JSONResponse:
 
     pool = state.pool
     if not pool.has_session(sid):
-        return JSONResponse(
-            {"error": f"no live session with id {sid!r}"},
-            status_code=404,
-        )
-    session = pool.get(sid)
+        return JSONResponse({"error": f"no live session with id {sid!r}"}, status_code=404)
     try:
+        # In the try: a mid-drain session passes has_session but pool.get raises -- 409, not 500.
+        session = pool.get(sid)
         await session.navigate(url)
     except ValueError as e:
         # Bad input (e.g. disallowed url scheme) — 400, not 500.
         return JSONResponse({"error": str(e)}, status_code=400)
+    except (SessionClosingError, SessionClosedError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:
         state.log.exception("octowright.http.session_navigate_failed", instance_id=sid, url=url)
         return JSONResponse({"error": f"navigate failed: {e}"}, status_code=500)
@@ -416,9 +416,9 @@ async def session_selector_validate(request: Request) -> JSONResponse:
     pool = state.pool
     if not pool.has_session(sid):
         return JSONResponse({"error": f"no live session with id {sid!r}"}, status_code=404)
-    session = pool.get(sid)
     timeout = _dashboard_operation_timeout_seconds()
     try:
+        session = pool.get(sid)  # in the try for session_navigate's reason: 409, not 500
         async with session.operation("dashboard_selector_validate", wait_timeout_seconds=timeout):
             count = await session.page.locator(selector).count()
     except (SessionClosingError, SessionClosedError) as e:

@@ -18,6 +18,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,6 +32,8 @@ import pytest
 from octowright.browser_pool import BrowserPool
 from octowright.browser_pool.launch_pipeline import _build_session_object
 from octowright.browser_pool.options import LaunchOptions
+from octowright.server import _idempotency
+from octowright.server import _request_context as _rc
 from octowright.session import BrowserSession
 from tests._operation_gate_fakes import OperationAwareFake
 
@@ -425,6 +430,71 @@ async def test_reserve_close_browser_require_fresh_rejects_shared_ticket(
     await first.reservation.wait()
 
 
+def _json_route_request(sid: str, payload: dict[str, Any]) -> SimpleNamespace:
+    """Minimal fake Starlette ``Request`` for calling a session route directly.
+
+    ``TestClient`` doesn't mix cleanly with a background task holding a
+    session's gate open in the same event loop, so the drain-window test below
+    calls the route coroutines by hand (same approach as
+    ``tests/test_http_routes_sessions_branches.py``)."""
+
+    async def _body() -> bytes:
+        return json.dumps(payload).encode()
+
+    return SimpleNamespace(
+        path_params={"id": sid},
+        headers={"content-type": "application/json"},
+        body=_body,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_routes_answer_409_inside_the_close_drain_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session mid-drain is deliberately visible in BOTH ``_sessions`` and
+    ``_closing_sessions``, so ``has_session`` says yes while ``pool.get``
+    raises. The dashboard's navigate / selector-validate routes must answer
+    that race with a clean 409 instead of letting the gate error escape as an
+    uncaught Starlette 500."""
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.http.routes import sessions as _session_routes
+    from octowright.server import _state as _server_state
+    from tests._pool_invariants import wait_until
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session("drain-window", tmp_path)
+    sid = session.instance_id
+    pool._sessions[sid] = session
+    monkeypatch.setattr(_server_state, "pool", pool)
+
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with session.operation("held_work"):
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await wait_until(lambda: session.operation_snapshot()["active_operation"] == "held_work")
+
+    closing = asyncio.create_task(pool.close(sid, force=True))
+    # The close ticket is accepted (state -> closing, entry registered) but
+    # queued behind the held operation: the drain window this test is about.
+    await wait_until(lambda: sid in pool._closing_sessions)
+    assert pool.has_session(sid)
+
+    navigate = await _session_routes.session_navigate(_json_route_request(sid, {"url": "https://octowright.com/next"}))
+    selector = await _session_routes.session_selector_validate(_json_route_request(sid, {"selector": ".btn"}))
+
+    assert navigate.status_code == 409
+    assert selector.status_code == 409
+
+    release.set()
+    await holder
+    await closing
+
+
 # ─── Task 9: macro replay holds one root lease per logical invocation ──────
 #
 # run_macro/run_sequence/run_macro_artifact each wrap their ENTIRE body in a
@@ -642,6 +712,76 @@ async def test_browser_click_outline_is_one_root_operation(monkeypatch: pytest.M
     # was still the gate's root -- one observable operation, not two.
     assert tool_session.observed_roots
     assert all(root == "browser_click" for root in tool_session.observed_roots)
+
+
+@contextlib.contextmanager
+def _keyed_request_context(key: str) -> Iterator[None]:
+    """Set the request contextvar carrying an ``octowrightIdempotencyKey``.
+
+    The test above runs with NO request context, so ``_idempotent_dispatch``
+    takes its no-key fast path and never exercises production dispatch. The
+    follower bridge injects a key into EVERY ``tools/call``, so the keyed path
+    below is the real deployment. Mirrors
+    ``tests/test_idempotency_cache.py::_request_context``.
+    """
+    ctx = SimpleNamespace(meta={"octowrightIdempotencyKey": key}, session=object(), request_id="r")
+    token = _rc._request_ctx.set(ctx)
+    try:
+        yield
+    finally:
+        _rc._request_ctx.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_keyed_composite_tools_do_not_deadlock_on_nested_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A composite tool calling another tool by its module-level (fully
+    wrapped) name must not hop that nested call into a second producer task.
+
+    With a key present, ``_idempotent_dispatch`` runs the tool in a detached
+    producer task. A nested call has a different storage key, so it would claim
+    its own task -- one that does NOT hold the parent's gate lease. The gate's
+    exact-task reentrancy rule then (correctly) queues it behind the lease the
+    parent is holding while awaiting it: deadlock until the queue timeout. The
+    bounded waits below fail fast instead of hanging if that regresses.
+    """
+    from octowright.server.browser import discovery as _discovery
+    from octowright.server.browser import input as _input
+    from octowright.server.browser import inspect as _inspect
+
+    tool_session = ToolGateFake()
+    fake_pool = MagicMock()
+    fake_pool.get.return_value = tool_session
+    monkeypatch.setattr(_input, "pool", fake_pool)
+    monkeypatch.setattr(_discovery, "pool", fake_pool)
+    monkeypatch.setattr(_inspect, "pool", fake_pool)
+
+    _idempotency._reset_for_tests()
+    try:
+        with _keyed_request_context("observe-key"):
+            observed = await asyncio.wait_for(
+                _inspect.browser_observe(
+                    tool_session.instance_id,
+                    include_console=False,
+                    include_network=False,
+                ),
+                timeout=5.0,
+            )
+        assert "outline" in observed
+
+        with _keyed_request_context("click-outline-key"):
+            clicked = await asyncio.wait_for(
+                _input.browser_click(tool_session.instance_id, selector="#buy", response_mode="outline"),
+                timeout=5.0,
+            )
+        assert clicked["ok"] is True
+        assert "outline" in clicked
+    finally:
+        _idempotency._reset_for_tests()
+
+    # The nested sub-calls ran inline under their parent's root operation, so
+    # the gate never saw a second root -- same one-observable-operation contract
+    # the no-key test above pins.
+    assert set(tool_session.observed_roots) == {"browser_observe", "browser_click"}
 
 
 class CaptureGateFake(OperationAwareFake):
