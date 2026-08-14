@@ -26,11 +26,40 @@ async def test_viewport_pill_script_is_injected() -> None:
         viewport_mode="fixed",
         viewport_width=1280,
         viewport_height=800,
+        viewport_frame_inset_w=8,
+        viewport_frame_inset_h=85,
     )
 
     scripts = [call.kwargs["script"] for call in context.add_init_script.await_args_list]
     assert any("__octowright_viewport_status__" in script for script in scripts)
     assert any('"fixed"' in script and "1280" in script and "800" in script for script in scripts)
+    # The pill subtracts the same launch-measured chrome the Python side does.
+    # Without it in the payload the in-page badge would have to guess, which is
+    # what made it warn on every headed session.
+    assert any('"inset_w": 8' in script and '"inset_h": 85' in script for script in scripts)
+
+
+@pytest.mark.anyio
+async def test_viewport_pill_carries_a_null_inset_when_it_was_not_measured() -> None:
+    """No measurement means the pill is told so, rather than told a guess."""
+    context = type("Context", (), {"add_init_script": AsyncMock()})()
+
+    await wire_init_scripts(
+        context,
+        profile=None,
+        label="player",
+        instance_id="abc123",
+        kind="chromium",
+        badge=False,
+        badge_position="bottom-right",
+        stabilize=False,
+        viewport_mode="fixed",
+        viewport_width=1280,
+        viewport_height=800,
+    )
+
+    scripts = [call.kwargs["script"] for call in context.add_init_script.await_args_list]
+    assert any('"inset_w": null' in script and '"inset_h": null' in script for script in scripts)
 
 
 @pytest.mark.asyncio

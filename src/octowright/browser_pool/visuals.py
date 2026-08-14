@@ -295,6 +295,8 @@ async def wire_init_scripts(
     viewport_mode: str = "unknown",
     viewport_width: int | None = None,
     viewport_height: int | None = None,
+    viewport_frame_inset_w: int | None = None,
+    viewport_frame_inset_h: int | None = None,
 ) -> None:
     """Inject title-tag, badge, macro-pill, and (optional) stabilize scripts."""
     import json as _json
@@ -340,6 +342,12 @@ async def wire_init_scripts(
         "mode": viewport_mode,
         "width": viewport_width,
         "height": viewport_height,
+        # The chrome measured at launch, so the in-page pill can subtract the
+        # same baseline the Python side does and reach the same verdict.
+        # null when unmeasured, which the pill reads as "cannot see the
+        # window" — it then shows the size and never the mismatch warning.
+        "inset_w": viewport_frame_inset_w,
+        "inset_h": viewport_frame_inset_h,
     }
     viewport_script = _viewport_pill_script().replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
     await context.add_init_script(script=viewport_script)
