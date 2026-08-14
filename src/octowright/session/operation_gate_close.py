@@ -74,8 +74,14 @@ class _CloseGateMixin:
         operation_name: LiteralString,
         mutator: Callable[[], _T],
     ) -> _T:
-        validate_operation_name(operation_name)
+        name = validate_operation_name(operation_name)
         async with self._admission_lock:
+            # A control-plane mutation is still a mutation of session state, so
+            # it must lose to a close that already committed: once
+            # ``reserve_close`` has moved the gate to CLOSING (or it is CLOSED /
+            # BROKEN), the caller gets the same terminal error an ordinary
+            # operation would, instead of silently mutating a dying session.
+            self._raise_if_not_open(name)
             return mutator()
 
     def _new_close_reservation(self, name: str, *, ready: bool, teardown_only: bool) -> CloseReservation:

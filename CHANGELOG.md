@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python callers; tear a session down through `BrowserPool.close()` rather
   than closing the underlying Playwright objects directly so the new close
   drain/reject semantics apply.
+- **Driver-death session loss is now accounted for like any other external
+  close.** Each session lost to a shared-driver death additionally increments
+  `octowright_browser_evicted_total` and emits its own
+  `notifications/octowright/session_closed` (with the recorder getting a
+  terminal `close` row), alongside the existing `octowright_driver_lost_total`
+  and the single `driver_died` notification.
 
 ### Fixed
 - **Paired dashboard access now expires on live connections too.** Established

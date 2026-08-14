@@ -45,6 +45,7 @@ lock-guarded, TTL- and size-bounded, and never caches results larger than
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import hashlib
 import inspect
@@ -172,6 +173,29 @@ class _Entry:
 
 _lock = threading.Lock()
 _cache: OrderedDict[str, _Entry] = OrderedDict()
+
+# True only while a producer task is running its own handler. Set by
+# ``_run_producer`` before it calls the handler and read by ``wrapper`` as its
+# very first action.
+#
+# Every async tool's module-level name is the FULLY WRAPPED function, so a
+# composite tool that calls another tool by name (``browser_observe`` ->
+# ``browser_page_outline``, or any ``response_mode="outline"`` follow-up) re-enters
+# this dispatcher from inside its own session-gate lease. Without this flag the
+# nested call — a different method name, so a different storage key — would spawn
+# a SECOND producer task. That task is not the task holding the lease, so the
+# gate's exact-task reentrancy rule correctly refuses it: it queues behind a lease
+# its own awaiter holds, and the composite deadlocks until the queue timeout.
+# Running the nested call inline in the SAME task keeps it reentrant.
+#
+# It is also the semantically correct cache behaviour: a client's idempotency key
+# describes the top-level call only, so a sub-call no resend will ever target
+# independently must not claim a slot of its own.
+#
+# No reset is needed. ``_run_producer`` is the entire body of its own task and
+# asyncio gives each task a copied ``Context``, so the value can never leak back
+# into the caller's context or into a sibling task.
+_in_producer: contextvars.ContextVar[bool] = contextvars.ContextVar("octowright_idempotency_in_producer", default=False)
 
 
 def _current_key() -> str | None:
@@ -305,6 +329,10 @@ async def _run_producer(
     fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any], key: str, entry: _Entry
 ) -> Any:
     """Execute and resolve one authoritative producer independently of callers."""
+    # Mark this task as "inside a producer" so a nested tool call made by this
+    # handler runs inline here instead of hopping into a second task (see
+    # _in_producer). Never reset: this task's context is its own copy.
+    _in_producer.set(True)
     try:
         if asyncio.iscoroutinefunction(fn):
             result = await fn(*args, **kwargs)
@@ -351,6 +379,13 @@ def _idempotent_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if _in_producer.get():
+            # Nested call from inside a composite tool's own handler: run it
+            # inline, in this same task, with no slot of its own (see
+            # _in_producer for why a second producer task would deadlock).
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(*args, **kwargs)
+            return await asyncio.to_thread(fn, *args, **kwargs)
         if not defaults.IDEMPOTENCY_ENABLED:
             if asyncio.iscoroutinefunction(fn):
                 return await fn(*args, **kwargs)
