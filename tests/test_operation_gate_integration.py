@@ -533,6 +533,143 @@ async def test_session_navigate_answers_503_when_gate_is_busy(tmp_path: Path, mo
     await holder
 
 
+@pytest.mark.asyncio
+async def test_close_route_coalesces_instead_of_404_during_post_removal_drain_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once a close coordinator is admitted, it pops the session from
+    ``pool._sessions`` (``close_helpers.remove_active_identity``) BEFORE
+    teardown finishes -- a session mid-teardown is absent from ``_sessions``
+    but still present in ``_closing_sessions`` for the whole teardown
+    duration, not just a microsecond race. The DELETE /api/sessions/{id}
+    route must not 404 a genuine concurrent duplicate close in that window:
+    ``pool.close()`` itself coalesces onto the in-flight coordinator and
+    returns a normal response, so the route has to reach ``pool.close()``
+    rather than pre-checking ``has_session`` (which only reflects the
+    pre-admission registry)."""
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.http.routes import sessions as _session_routes
+    from octowright.server import _state as _server_state
+    from tests._pool_invariants import wait_until
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session("dup-close-drain", tmp_path)
+    sid = session.instance_id
+    pool._sessions[sid] = session
+    monkeypatch.setattr(_server_state, "pool", pool)
+
+    teardown_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_teardown(*, reason: str | None = None) -> None:
+        teardown_started.set()
+        await release.wait()
+
+    session._teardown_after_close_cutoff = _fake_teardown
+
+    first = asyncio.create_task(pool.close(sid, force=True))
+    await wait_until(teardown_started.is_set)
+
+    # The window this test is about: gone from _sessions, still draining.
+    assert pool.has_session(sid) is False
+    assert sid in pool._closing_sessions
+
+    second = asyncio.create_task(_session_routes._close_browser_session(sid, force=False))
+    await asyncio.sleep(0)
+    release.set()
+
+    second_response = await second
+    first_result = await first
+
+    assert second_response.status_code == 200
+    assert first_result["closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_handoff_close_fallback_awaits_in_flight_external_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When ``reserve_close_browser`` can't get its own ticket because another
+    coordinator already owns the close (``SessionClosingError``), the
+    fallback path must wait for THAT coordinator to finish tearing down
+    before the caller launches a replacement -- otherwise a
+    persistent-profile relaunch/handoff can fire a new launch on the same
+    profile directory while the old process is still releasing it (e.g.
+    Chrome's SingletonLock)."""
+    from octowright.browser_pool import relaunch
+    from octowright.session.operation_gate import SessionClosingError
+
+    async def _raise_closing(*args: object, **kwargs: object) -> None:
+        raise SessionClosingError("already closing")
+
+    monkeypatch.setattr(relaunch, "reserve_close_browser", _raise_closing)
+
+    awaited: list[tuple[object, str]] = []
+
+    async def _fake_await_in_flight_close(pool: object, instance_id: str) -> None:
+        awaited.append((pool, instance_id))
+
+    monkeypatch.setattr(relaunch, "_await_in_flight_close", _fake_await_in_flight_close)
+
+    source = SimpleNamespace(
+        kind="chromium",
+        label="l",
+        profile=None,
+        user_data_dir=None,
+        stabilize=False,
+        trace=False,
+        har_path=None,
+        protected=False,
+        protected_reason="explicit",
+        page=None,
+        url="https://octowright.com",
+    )
+    pool_stub = object()
+
+    async def _preparation(_session: object) -> object:
+        return None
+
+    close_result, snapshot = await relaunch._close_with_fallback_snapshot(
+        pool_stub,
+        "iid-race",
+        operation_name="browser_handoff",
+        preparation=_preparation,
+        source=source,
+        warning_event="test.handoff.close_raced_eviction",
+    )
+
+    assert awaited == [(pool_stub, "iid-race")]
+    assert close_result is None
+    assert snapshot.kind == "chromium"
+
+
+@pytest.mark.asyncio
+async def test_await_in_flight_close_waits_only_when_an_entry_exists() -> None:
+    """No entry in ``_closing_sessions`` -> no-op. An entry present -> its
+    reservation is awaited, and a failure from that OTHER coordinator is
+    swallowed -- we already committed to the fallback snapshot, so it isn't
+    ours to raise."""
+    from octowright.browser_pool.relaunch import _await_in_flight_close
+
+    class _FakePool:
+        def __init__(self) -> None:
+            self._sessions_lock = asyncio.Lock()
+            self._closing_sessions: dict[str, object] = {}
+
+    pool = _FakePool()
+    await _await_in_flight_close(pool, "missing")  # no entry: returns immediately
+
+    waited = asyncio.Event()
+
+    class _FakeReservation:
+        async def wait(self) -> None:
+            waited.set()
+            raise RuntimeError("peer coordinator failed")
+
+    pool._closing_sessions["present"] = SimpleNamespace(reservation=_FakeReservation())
+    await _await_in_flight_close(pool, "present")  # must not propagate the RuntimeError
+    assert waited.is_set()
+
+
 # ─── Task 9: macro replay holds one root lease per logical invocation ──────
 #
 # run_macro/run_sequence/run_macro_artifact each wrap their ENTIRE body in a

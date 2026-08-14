@@ -19,6 +19,7 @@ DIFFERENT exception handling here -- see ``_close_with_fallback_snapshot``.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, LiteralString, cast
 
@@ -38,6 +39,23 @@ if TYPE_CHECKING:
     from octowright.session import BrowserSession
 
 log = get_logger(__name__)
+
+
+async def _await_in_flight_close(pool: BrowserPool, instance_id: str) -> None:
+    """Best-effort: if another coordinator (an external-close eviction that
+    won the race for our ticket) is still mid-teardown for ``instance_id``,
+    wait for it to finish before the caller launches a replacement. Without
+    this, a persistent-profile relaunch/handoff can fire off a new launch on
+    the same profile directory while the old process is still releasing it
+    (e.g. Chrome's SingletonLock), risking a launch failure or concurrent
+    profile use. Any failure surfaced by that OTHER coordinator is not ours
+    to raise -- we already committed to the pre-close fallback snapshot."""
+    async with pool._sessions_lock:
+        existing = pool._closing_sessions.get(instance_id)
+    if existing is None:
+        return
+    with contextlib.suppress(Exception):
+        await existing.reservation.wait()
 
 
 def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot:
@@ -149,6 +167,7 @@ async def _close_with_fallback_snapshot(
         )
     except (KeyError, SessionClosingError):
         log.warning(warning_event, instance_id=instance_id, kind=source.kind)
+        await _await_in_flight_close(pool, instance_id)
         return None, _relaunch_snapshot_from_session(source)
 
     try:
