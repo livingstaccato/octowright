@@ -16,8 +16,9 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum, StrEnum
-from typing import Any, Literal, LiteralString, TypedDict
+from typing import Any, Literal, LiteralString, TypedDict, TypeVar
 
+import anyio
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter, gauge, histogram
@@ -111,20 +112,32 @@ def _elapsed_ms(now: float, since: float | None) -> int | None:
     return max(0, round((now - since) * 1000))
 
 
-async def _join_after_cancellation(task: asyncio.Task[object]) -> None:
+_T = TypeVar("_T")
+
+
+async def _join_after_cancellation(task: asyncio.Task[_T]) -> _T:
     """Join ``task`` despite the joining task being cancelled again mid-join.
 
     Local re-implementation of ``session_manifest.wait_task_after_cancellation``:
     duplicated rather than imported so this session-layer primitive never
-    depends on the higher-level manifest module built on top of it.
+    depends on the higher-level manifest module built on top of it. The
+    ``anyio.CancelScope(shield=True)`` matters even though the outer
+    ``asyncio.shield`` already protects ``task`` from being cancelled itself:
+    it protects *this join* from anyio-level re-cancellation (the MCP server
+    runs under anyio, whose cancel scopes keep re-delivering ``CancelledError``
+    at every checkpoint until their ``with`` block exits) so the loop below
+    reliably reaches ``task.done()`` instead of degrading into a spin that
+    merely re-arms on each iteration.
     """
     current = asyncio.current_task()
     while not task.done():
         try:
-            await asyncio.shield(task)
+            with anyio.CancelScope(shield=True):
+                await asyncio.shield(task)
         except asyncio.CancelledError:
             if current is not None:
                 current.uncancel()
+    return task.result()
 
 
 async def _run_shielded(coro: Coroutine[Any, Any, None]) -> None:
@@ -255,6 +268,13 @@ class SessionOperationGate:
     def _break_locked(self, reason: str) -> None:
         self._state = OperationGateState.BROKEN
         self._invariant_reason = reason
+        log.error(
+            "octowright.operation.invariant_broken",
+            instance_id=self.instance_id,
+            kind=self.kind,
+            state=self._state.value,
+            reason=reason,
+        )
 
     def _invariant_message(self) -> str:
         return f"operation gate for session {self.instance_id!r} ({self.kind}) is broken: {self._invariant_reason}"
@@ -336,6 +356,15 @@ class SessionOperationGate:
             )
             raise SessionBusyTimeoutError(self._busy_timeout_message(waiter)) from None
         except asyncio.CancelledError:
+            await self._remove_or_release_waiter(waiter, "cancelled")
+            raise
+        except BaseException:
+            # Not a timeout, not a plain cancellation -- e.g. GeneratorExit
+            # from an abandoned async-generator finalization. Reachability
+            # through the intended API is essentially nil, but leaving this
+            # waiter queued would eventually make ``_grant_next_locked`` hand
+            # ownership to a task that will never run its body and never
+            # release, wedging the gate for everyone behind it.
             await self._remove_or_release_waiter(waiter, "cancelled")
             raise
         return _LeaseToken(task, name)
