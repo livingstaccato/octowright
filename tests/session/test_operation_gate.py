@@ -944,6 +944,12 @@ async def test_unobserved_close_outcome_exception_does_not_reach_loop_handler() 
         gate.fail_close(reservation, RuntimeError("boom"))
         outcome = reservation.outcome
         del reservation
+        # gate._close_reservation is the only other strong reference to the
+        # reservation (and therefore to `outcome`) -- without clearing it too,
+        # the future is never actually eligible for collection below, so
+        # gc.collect() is a no-op and the test can't tell a working
+        # _observe_future_exception from a deleted one.
+        gate._close_reservation = None
         await asyncio.sleep(0)
         del outcome
         gc.collect()
