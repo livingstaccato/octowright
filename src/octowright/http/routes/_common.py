@@ -138,3 +138,25 @@ def _parse_bool(raw: str) -> bool | None:
     if s in {"0", "false", "no", "off"}:
         return False
     return None
+
+
+# Default cap on how long a dashboard read (session-detail aria capture, live
+# screenshot, selector validate) waits for a busy session's operation gate.
+# An MCP tool call inherits the gate's much longer default queue timeout
+# (300s) because an agent is willing to wait for a real in-flight action to
+# finish; a human staring at the dashboard needs a fast, legible failure
+# instead of an unexplained multi-minute stall. These are best-effort
+# troubleshooting reads with no side effects worth queuing for.
+_DEFAULT_DASHBOARD_OPERATION_TIMEOUT_SECONDS = 8.0
+
+
+def _dashboard_operation_timeout_seconds() -> float:
+    """``OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS`` override. A
+    non-positive / unparsable value falls back to the 8s default rather than
+    going unbounded."""
+    raw = os.environ.get("OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_DASHBOARD_OPERATION_TIMEOUT_SECONDS
+    return value if value > 0 else _DEFAULT_DASHBOARD_OPERATION_TIMEOUT_SECONDS

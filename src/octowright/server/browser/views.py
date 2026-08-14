@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from octowright.mcp_types import BrowserPageOutlineResult
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
 
 
@@ -145,8 +146,9 @@ def _frame_summary_row(instance_id: str, frame: dict[str, Any]) -> dict[str, Any
         "bounded rows with page_switch/page_close action payloads."
     ),
 )
-def page_list(instance_id: str, response_mode: str | None = None, limit: int = 20) -> Any:
-    pages = pool.get(instance_id).list_pages()
+async def page_list(instance_id: str, response_mode: str | None = None, limit: int = 20) -> Any:
+    async with browser_operation(pool, instance_id, "page_list") as session:
+        pages = await session.list_pages()
     if response_mode != "summary":
         return pages
     capped = _clean_limit(limit)
@@ -168,8 +170,9 @@ def page_list(instance_id: str, response_mode: str | None = None, limit: int = 2
     ),
 )
 async def page_switch(instance_id: str, index: int, response_mode: str | None = None) -> dict[str, Any]:
-    res = await pool.get(instance_id).switch_page(index)
-    return await _with_outline(instance_id, dict(res), response_mode)
+    async with browser_operation(pool, instance_id, "page_switch") as session:
+        res = await session.switch_page(index)
+        return await _with_outline(instance_id, dict(res), response_mode)
 
 
 @mcp.tool(
@@ -180,7 +183,8 @@ async def page_switch(instance_id: str, index: int, response_mode: str | None = 
     ),
 )
 async def page_close(instance_id: str, index: int) -> dict[str, Any]:
-    return await pool.get(instance_id).close_page(index)
+    async with browser_operation(pool, instance_id, "page_close") as session:
+        return await session.close_page(index)
 
 
 @mcp.tool(
@@ -199,12 +203,13 @@ async def browser_switch_frame(
     url_pattern: str | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
-    res = await pool.get(instance_id).switch_frame(
-        selector=selector,
-        name=name,
-        url_pattern=url_pattern,
-    )
-    return await _with_outline(instance_id, dict(res), response_mode)
+    async with browser_operation(pool, instance_id, "browser_switch_frame") as session:
+        res = await session.switch_frame(
+            selector=selector,
+            name=name,
+            url_pattern=url_pattern,
+        )
+        return await _with_outline(instance_id, dict(res), response_mode)
 
 
 @mcp.tool(
@@ -215,8 +220,9 @@ async def browser_switch_frame(
     ),
 )
 async def browser_reset_frame(instance_id: str, response_mode: str | None = None) -> dict[str, Any]:
-    res = await pool.get(instance_id).reset_frame()
-    return await _with_outline(instance_id, dict(res), response_mode)
+    async with browser_operation(pool, instance_id, "browser_reset_frame") as session:
+        res = await session.reset_frame()
+        return await _with_outline(instance_id, dict(res), response_mode)
 
 
 @mcp.tool(
@@ -226,8 +232,9 @@ async def browser_reset_frame(instance_id: str, response_mode: str | None = None
         "for bounded rows with browser_switch_frame/browser_reset_frame action payloads."
     ),
 )
-def browser_list_frames(instance_id: str, response_mode: str | None = None, limit: int = 20) -> Any:
-    frames = pool.get(instance_id).list_frames()
+async def browser_list_frames(instance_id: str, response_mode: str | None = None, limit: int = 20) -> Any:
+    async with browser_operation(pool, instance_id, "browser_list_frames") as session:
+        frames = await session.list_frames()
     if response_mode != "summary":
         return frames
     capped = _clean_limit(limit)

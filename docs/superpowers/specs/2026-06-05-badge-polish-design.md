@@ -121,10 +121,7 @@ Existing 4 corners unchanged.
 async def _redirect() -> None:
     # Wait for either a navigated event or a timeout
     try:
-        await new_page.wait_for_url(
-            lambda url: url not in _BLANK_URLS or ...,
-            timeout=1000
-        )
+        await new_page.wait_for_url(lambda url: url not in _BLANK_URLS or ..., timeout=1000)
     except Exception:
         pass
     # After settling, redirect if still on a blank/newtab URL

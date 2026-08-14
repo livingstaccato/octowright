@@ -8,11 +8,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from playwright.async_api import Frame, Locator, Page
+    from playwright.async_api import Locator
+
+    from octowright.session._protocols import SessionLike
 
 
-def build_locator(
-    target: Page | Frame,
+async def build_locator(
+    session: SessionLike,
     *,
     role: str | None = None,
     role_name: str | None = None,
@@ -24,15 +26,21 @@ def build_locator(
     provided = [k for k, v in (("role", role), ("label", label), ("text", text), ("test_id", test_id)) if v is not None]
     if len(provided) != 1:
         raise ValueError(f"exactly one of role/label/text/test_id must be set; got: {provided}")
-    if role is not None:
-        kwargs: dict[str, Any] = {}
-        if role_name is not None:
-            kwargs["name"] = role_name
-            kwargs["exact"] = role_exact
-        return target.get_by_role(cast(Any, role), **kwargs)
-    if label is not None:
-        return target.get_by_label(label)
-    if text is not None:
-        return target.get_by_text(text)
-    assert test_id is not None  # nosec B101
-    return target.get_by_test_id(test_id)
+    # Target selection (active_frame vs. top-level page) is mutable session
+    # state, so it must be resolved under the same lease direct callers of
+    # this helper would otherwise bypass -- not just inside the already-gated
+    # public click_by/fill_by/get_text_by methods.
+    async with session.operation("session_locator_resolve"):
+        target = session._target()
+        if role is not None:
+            kwargs: dict[str, Any] = {}
+            if role_name is not None:
+                kwargs["name"] = role_name
+                kwargs["exact"] = role_exact
+            return target.get_by_role(cast(Any, role), **kwargs)
+        if label is not None:
+            return target.get_by_label(label)
+        if text is not None:
+            return target.get_by_text(text)
+        assert test_id is not None  # nosec B101
+        return target.get_by_test_id(test_id)
