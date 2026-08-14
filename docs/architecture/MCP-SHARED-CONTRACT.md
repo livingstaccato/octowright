@@ -22,7 +22,7 @@ GET    /api/sessions/{id}                        → SessionDetail
 DELETE /api/sessions/{id}                        → SessionCloseResponse (200); 404 if not in live pool.  
   SessionCloseResponse: {"closed": true, "instance_id": str, "log_path": str, "video_path": str|null, "trace_path": str|null, "cache": CacheReport}
 DELETE /api/sessions/{id}/recording              → {"deleted": true, "session_id": str, "files_removed": int} (200); 404 if no recording on disk; 409 if the session is still live
-POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed
+POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS (this route does not use the shorter dashboard timeout)
 POST   /api/sessions/{id}/selector/validate      → {"ok": true, "count": int} (200) — CSS selector match count against the live page, bounded by OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS. 400 if selector missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past the dashboard timeout
 POST   /api/sessions/{id}/relaunch                → SessionSummary (201) for a NEW instance_id launched with the same kind/profile/label/url/viewport as the original. 404 if no recording on disk; 409 if the session is still live; 422 if the JSONL has no parseable launch record.
 GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
@@ -149,6 +149,16 @@ SessionSummary = {
     "live": bool,
     "protected": bool,  # true if browser_close/close_all refuse this session without force=True
     "log_path": str,
+    "operation_gate"?: OperationGateSnapshot,  # browser sessions only; absent for terminal sessions
+}
+
+OperationGateSnapshot = {
+    "state": "open" | "closing" | "closed" | "broken",
+    "active_operation": str | None,
+    "active_for_ms": int | None,
+    "queue_depth": int,
+    "oldest_wait_ms": int | None,
+    "queue_timeout_seconds": float,
 }
 ```
 
