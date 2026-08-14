@@ -52,28 +52,29 @@ async def save_download(session: BrowserSession, download: Any) -> dict[str, Any
     recordings_root = session.log_path.parent
     target_dir = recordings_root / "downloads" / session.instance_id
     target_dir.mkdir(parents=True, exist_ok=True)
-    suggested = download.suggested_filename
-    target = target_dir / f"{len(session.downloads):03d}-{_safe_download_name(suggested)}"
-    try:
-        # Belt-and-suspenders: the sanitized basename has no separators, but run
-        # the containment helper so the write provably stays under the root.
-        reject_unsafe_path(target, recordings_root, label="download path")
-        await download.save_as(str(target))
-        record = {
-            "url": download.url,
-            "suggested_filename": suggested,
-            "path": str(target),
-            "timestamp": _timestamp(),
-        }
-        session.downloads.append(record)
-        session.download_count += 1
-        session.recorder.record("download_saved", **record)
-        for event in session._pending_download_events:
-            event.set()
-        session._pending_download_events.clear()
-        return record
-    except Exception as e:
-        session.recorder.record("download_save_error", error=repr(e), url=download.url)
+    async with session.operation("download_save"):
+        suggested = download.suggested_filename
+        target = target_dir / f"{len(session.downloads):03d}-{_safe_download_name(suggested)}"
+        try:
+            # Belt-and-suspenders: the sanitized basename has no separators, but run
+            # the containment helper so the write provably stays under the root.
+            reject_unsafe_path(target, recordings_root, label="download path")
+            await download.save_as(str(target))
+            record = {
+                "url": download.url,
+                "suggested_filename": suggested,
+                "path": str(target),
+                "timestamp": _timestamp(),
+            }
+            session.downloads.append(record)
+            session.download_count += 1
+            session.recorder.record("download_saved", **record)
+            for event in session._pending_download_events:
+                event.set()
+            session._pending_download_events.clear()
+            return record
+        except Exception as e:
+            session.recorder.record("download_save_error", error=repr(e), url=download.url)
     return {}
 
 

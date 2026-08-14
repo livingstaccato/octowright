@@ -8,6 +8,7 @@ import asyncio
 import pytest
 
 from octowright.session import screencast as sc
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 class FakePage:
@@ -45,10 +46,11 @@ class FakeScreencast:
         self._on_frame({"data": data, "viewportWidth": 800, "viewportHeight": 600})
 
 
-class FakeSession:
+class FakeSession(OperationAwareFake):
     def __init__(self, instance_id="b1"):
         self.instance_id = instance_id
         self.kind = "chromium"
+        super().__init__()
         self.page = FakePage()
 
 
@@ -170,3 +172,112 @@ async def test_release_drops_manager_when_final_stop_fails():
     new_manager, new_viewer = await sc.acquire_viewer(sess, fps=10, quality=70)
     assert new_manager is not manager
     await sc.release_viewer(new_manager, new_viewer)
+
+
+# ─── operation-gate serialization (Task 6) ──────────────────────────────────
+
+
+async def wait_for_queue_depth(sess, depth):
+    async with asyncio.timeout(1):
+        while sess.operation_snapshot()["queue_depth"] != depth:
+            await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_frame_delivery_does_not_acquire_the_operation_gate():
+    """Delivery of frames from an already-started producer must not acquire
+    the session operation gate -- it runs on every frame, and gating it would
+    serialize video delivery against arbitrary other session work."""
+    sess = FakeSession("frame-delivery")
+    mgr = sc.ScreencastManager(sess, fps=1000, quality=70)
+    viewer = sc.ScreencastViewer(fps=1000)
+    mgr._viewers.add(viewer)
+
+    mgr._handle_frame({"data": b"jpeg"})
+
+    assert await viewer.get() == b"jpeg"
+    assert sess.operation_snapshot()["queue_depth"] == 0
+    assert sess.operation_snapshot()["state"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_add_viewer_queues_behind_an_active_session_operation():
+    sess = FakeSession("screencast-start-serializes")
+    mgr = sc.ScreencastManager(sess, fps=1000, quality=70)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold():
+        async with sess.operation("browser_click"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await entered.wait()
+
+    add_task = asyncio.create_task(mgr.add_viewer())
+    await wait_for_queue_depth(sess, 1)
+    assert sess.page.screencast.started is False
+
+    release.set()
+    await holder
+    viewer = await add_task
+    assert sess.page.screencast.started is True
+    await mgr.remove_viewer(viewer)
+
+
+@pytest.mark.asyncio
+async def test_remove_viewer_last_stop_queues_behind_an_active_session_operation():
+    sess = FakeSession("screencast-stop-serializes")
+    mgr = sc.ScreencastManager(sess, fps=1000, quality=70)
+    viewer = await mgr.add_viewer()
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold():
+        async with sess.operation("browser_click"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await entered.wait()
+
+    remove_task = asyncio.create_task(mgr.remove_viewer(viewer))
+    await wait_for_queue_depth(sess, 1)
+    assert sess.page.screencast.stopped is False
+
+    release.set()
+    await holder
+    await remove_task
+    assert sess.page.screencast.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_rebind_queues_behind_an_active_session_operation():
+    sess = FakeSession("screencast-rebind-serializes")
+    mgr = sc.ScreencastManager(sess, fps=1000, quality=70)
+    viewer = await mgr.add_viewer()
+    new_page = FakePage()
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold():
+        async with sess.operation("browser_click"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await entered.wait()
+
+    rebind_task = asyncio.create_task(mgr.rebind(new_page))
+    await wait_for_queue_depth(sess, 1)
+    assert new_page.screencast.started is False
+
+    release.set()
+    await holder
+    await rebind_task
+    assert new_page.screencast.started is True
+    await mgr.remove_viewer(viewer)
