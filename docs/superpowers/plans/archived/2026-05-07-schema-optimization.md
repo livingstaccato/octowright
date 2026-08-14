@@ -103,12 +103,13 @@ git commit -m "feat: add browser_brief primitive"
 
 ```python
 # Assume test file is tests/test_server_browser_input_tools.py
-# If tests for input.py exist in another file, adapt. 
+# If tests for input.py exist in another file, adapt.
 # Let's check `tests/test_consolidated_tools.py` or similar. We will just test browser_click.
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 from octowright.server.browser import input as _input
 from octowright.server.browser import inspect as _inspect
+
 
 @pytest.fixture(autouse=True)
 def _patch_pool_input(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
@@ -116,15 +117,16 @@ def _patch_pool_input(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     monkeypatch.setattr(_input, "pool", fake_pool)
     return fake_pool
 
+
 @pytest.mark.anyio
 async def test_browser_click_brief_mode(_patch_pool_input: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
     s = MagicMock()
     _patch_pool_input.get.return_value = s
     s.click = AsyncMock(return_value={"ok": True})
-    
+
     # Mock browser_brief
     monkeypatch.setattr(_input, "browser_brief", AsyncMock(return_value={"url": "test", "elements": "none"}))
-    
+
     out = await _input.browser_click("i", "button", response_mode="brief")
     assert out["brief"]["url"] == "test"
 ```
@@ -142,15 +144,12 @@ Change `browser_click`:
 ```python
 from octowright.server.browser.inspect import browser_brief
 
+
 @mcp.tool(
     structured_output=False,
     description="Click an element by CSS selector.",
 )
-async def browser_click(
-    instance_id: str, 
-    selector: str, 
-    response_mode: str | None = None
-) -> dict[str, Any]:
+async def browser_click(instance_id: str, selector: str, response_mode: str | None = None) -> dict[str, Any]:
     session = pool.get(instance_id)
     res = await session.click(selector)
     if response_mode == "brief":
@@ -185,14 +184,23 @@ Modify `src/octowright/server/browser/__init__.py` to categorize `__all__` into 
 ```python
 PROFILES = {
     "core": [
-        "browser_click", "browser_type", "browser_fill", "browser_launch", 
-        "browser_close", "browser_navigate", "browser_brief", "browser_wait_for",
-        "browser_read_markdown"
+        "browser_click",
+        "browser_type",
+        "browser_fill",
+        "browser_launch",
+        "browser_close",
+        "browser_navigate",
+        "browser_brief",
+        "browser_wait_for",
+        "browser_read_markdown",
     ],
     "advanced": [
-        "browser_snapshot", "browser_evaluate", "browser_console_messages",
-        "browser_expect_text", "browser_expect_url"
-    ]
+        "browser_snapshot",
+        "browser_evaluate",
+        "browser_console_messages",
+        "browser_expect_text",
+        "browser_expect_url",
+    ],
 }
 # Keeping __all__ as the flat list for backward compatibility
 ```

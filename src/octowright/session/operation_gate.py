@@ -271,7 +271,7 @@ class SessionOperationGate(_CloseGateMixin):
     async def _acquire(
         self,
         operation_name: str,
-        wait_timeout_seconds: float | None | UseDefault,
+        wait_timeout_seconds: float | UseDefault | None,
     ) -> _LeaseToken:
         name = validate_operation_name(operation_name)
         task = self._current_task()
@@ -437,7 +437,7 @@ class SessionOperationGate(_CloseGateMixin):
         self,
         operation_name: LiteralString,
         *,
-        wait_timeout_seconds: float | None | UseDefault = USE_DEFAULT,
+        wait_timeout_seconds: float | UseDefault | None = USE_DEFAULT,
     ) -> AsyncIterator[None]:
         lease = await self._acquire(operation_name, wait_timeout_seconds)
         outcome: Literal["ok", "error", "cancelled"] = "ok"

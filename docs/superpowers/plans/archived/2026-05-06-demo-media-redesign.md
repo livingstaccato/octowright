@@ -172,8 +172,7 @@ def _parse_presentation(raw: Any) -> DemoPresentationConfig:
     validate_presentation_mode(mode)
     return DemoPresentationConfig(
         mode=mode,
-        primary_asset=_optional_string("presentation.primary_asset", presentation.get("primary_asset"))
-        or "hero_video",
+        primary_asset=_optional_string("presentation.primary_asset", presentation.get("primary_asset")) or "hero_video",
         overlay=_parse_overlay(presentation.get("overlay")),
         timing=_parse_timing(presentation.get("timing")),
         sync_groups=_parse_sync_groups(presentation.get("sync_groups")),
