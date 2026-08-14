@@ -644,6 +644,27 @@ async def test_control_update_and_close_preflight_have_one_winner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_control_update_after_close_reservation_is_rejected() -> None:
+    """The other direction of the same race: once the close reservation has
+    committed and moved the gate to ``closing``, a protection change loses --
+    it must raise ``SessionClosingError`` rather than silently mutating a
+    session whose teardown is already in flight (design spec Sec 7.1)."""
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    mutated = False
+
+    def protect() -> None:
+        nonlocal mutated
+        mutated = True
+
+    await gate.reserve_close("browser_close", preflight=lambda: None)
+    assert gate.snapshot()["state"] == "closing"
+
+    with pytest.raises(SessionClosingError):
+        await gate.control_update("browser_set_protected", protect)
+    assert mutated is False
+
+
+@pytest.mark.asyncio
 async def test_duplicate_reserve_close_returns_retained_object() -> None:
     gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
     calls = 0
