@@ -13,7 +13,7 @@ built in — so this module is a thin re-export that keeps the
 ``octowright._tracing`` import path stable for existing call sites::
 
     from octowright._tracing import span, set_attrs, record_exception
-    from octowright._tracing import counter, histogram
+    from octowright._tracing import counter, gauge, histogram
 
 Span-name convention is unchanged: ``octowright.<area>.<verb>`` — e.g.
 ``octowright.browser.launch``, ``octowright.macro.run_sequence``.
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from provide.telemetry import (
     counter,
+    gauge,
     get_tracer,
     histogram,
     record_exception,
@@ -38,6 +39,7 @@ _tracer = get_tracer
 __all__ = [
     "_tracer",
     "counter",
+    "gauge",
     "get_tracer",
     "histogram",
     "record_exception",
