@@ -640,7 +640,7 @@ class TestCloseBrowser:
         sess = _fake_session(protected=True)
         pool._sessions[sess.instance_id] = sess
 
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         with pytest.raises(ValueError, match=r"protected.*force=True"):
@@ -656,7 +656,7 @@ class TestCloseBrowser:
         sess = _fake_session(protected=True)
         pool._sessions[sess.instance_id] = sess
 
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         result = await pool.close(sess.instance_id, force=True)
@@ -674,7 +674,7 @@ class TestCloseBrowser:
         pool._sessions[sess.instance_id] = sess
 
         # Stub manifest removal so it doesn't touch real config.
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
 
@@ -689,7 +689,7 @@ class TestCloseBrowser:
         sess = _fake_session()
         pool._sessions[sess.instance_id] = sess
 
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         def boom(_id: str) -> None:
             raise OSError("manifest write failed")
@@ -710,7 +710,7 @@ class TestCloseBrowser:
         sess.trace_path = trace
         pool._sessions[sess.instance_id] = sess
 
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         result = await close_browser(pool, sess.instance_id)
@@ -726,7 +726,7 @@ class TestCloseBrowser:
         sess = _fake_session(har_path=None)
         pool._sessions[sess.instance_id] = sess
 
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         result = await close_browser(pool, sess.instance_id)
@@ -787,7 +787,7 @@ class TestCloseAll:
     async def test_closes_each_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Every live session is reserved and torn down through the real
         two-stage coordinator (reserve-all, then await-all)."""
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()
@@ -805,7 +805,7 @@ class TestCloseAll:
     @pytest.mark.anyio
     async def test_force_passed_to_each_close(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """close_all(force=True) intentionally overrides protected sessions."""
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()
@@ -819,7 +819,7 @@ class TestCloseAll:
     @pytest.mark.anyio
     async def test_skips_protected_without_force(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """close_all reports protected sessions skipped from the owner-layer guard."""
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()
@@ -836,7 +836,7 @@ class TestCloseAll:
     @pytest.mark.anyio
     async def test_reports_non_protected_close_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """close_all returns failures so callers can distinguish them from an empty pool."""
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()
@@ -1222,7 +1222,7 @@ class TestSessionsLock:
         # Stub manifest removal.
         from unittest.mock import patch
 
-        from octowright.browser_pool import lifecycle as _lc
+        from octowright.browser_pool import close_helpers as _lc
 
         with patch.object(_lc, "remove_manifest_session", lambda _id: None):
             # If the lock weren't acquired, parallel pop would race; here we
@@ -1448,7 +1448,7 @@ class TestDurableCloseCoordinator:
         context.close() or are replayed afterward."""
         from octowright.browser_pool.listeners import _wire_close_evictor
 
-        monkeypatch.setattr("octowright.browser_pool.lifecycle.remove_manifest_session", lambda _id: None)
+        monkeypatch.setattr("octowright.browser_pool.close_helpers.remove_manifest_session", lambda _id: None)
         events: list[Any] = []
         monkeypatch.setattr(session_event_bus, "publish_nowait", events.append)
 
@@ -1470,3 +1470,88 @@ class TestDurableCloseCoordinator:
         assert len(closed_events) == 1, closed_events
         assert closed_events[0].reason == "agent_close"
         assert pool._closing_sessions == {}
+
+    @pytest.mark.anyio
+    async def test_external_close_racing_reserve_close_admission_does_not_double_coordinate(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``gate.reserve_close`` takes the gate's own ``_admission_lock``,
+        which can suspend ``reserve_close_browser`` for a full loop turn
+        while it STILL holds ``pool._sessions_lock`` (contended by any other
+        gated operation on this session). The synchronous external-close
+        acceptance seam never takes ``_admission_lock``, so it can win the
+        close race in exactly that window: mark the gate closed and install
+        its own ``ClosingSession`` wrapping the SAME reservation
+        ``reserve_close`` then hands back to the parked caller (its own
+        ``_close_reservation is not None`` short-circuit). Only ONE
+        coordinator must ever run -- not two wrapping the identical
+        reservation."""
+        from octowright.browser_pool.lifecycle import reserve_close_browser
+
+        events: list[Any] = []
+        monkeypatch.setattr(session_event_bus, "publish_nowait", events.append)
+
+        admission_lock = session._operation_gate._admission_lock
+        await admission_lock.acquire()
+        try:
+            reserve_task = asyncio.create_task(
+                reserve_close_browser(pool, session.instance_id, force=True, reason="agent_close")
+            )
+            # Let reserve_close_browser run up to (and park on) gate.reserve_close's
+            # admission-lock wait -- it's held, so this is where it suspends.
+            await asyncio.sleep(0)
+            assert not reserve_task.done()
+            # Win the close race while reserve_close_browser is parked: the
+            # synchronous acceptance seam never touches _admission_lock.
+            won = pool._accept_external_close_nowait(session.instance_id, expected_session=session, reason="user_close")
+            assert won is not None
+        finally:
+            admission_lock.release()
+
+        entry = await reserve_task
+        assert entry is won, "a second ClosingSession was installed over the already-accepted external one"
+        outcome = await entry.reservation.wait()
+        assert outcome.response["closed"] is True
+
+        session.context.close.assert_awaited_once()
+        close_rows = [call for call in session.recorder.record.call_args_list if call.args[0] == "close"]
+        assert len(close_rows) == 1, close_rows
+        session.recorder.close.assert_called_once()
+        closed_events = [e for e in events if isinstance(e, SessionClosedEvent)]
+        assert len(closed_events) == 1, closed_events
+        assert closed_events[0].reason == "user_close"
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+    @pytest.mark.anyio
+    async def test_coordinator_emits_closed_span_and_counter(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``octowright_browser_closed_total`` and the ``octowright.session.close``
+        span are owned by the close coordinator (not ``SessionOpsMixin.close()``,
+        which no production close routes through anymore) -- assert they fire
+        exactly once per real close."""
+        from octowright.browser_pool import lifecycle as _lifecycle
+
+        counted: list[tuple[int, dict[str, str] | None]] = []
+        monkeypatch.setattr(
+            _lifecycle._SESSION_CLOSED, "add", lambda amount, attributes=None: counted.append((amount, attributes))
+        )
+        spans: list[str] = []
+
+        class _FakeSpanCtx:
+            def __enter__(self) -> _FakeSpanCtx:
+                return self
+
+            def __exit__(self, *_exc: object) -> None:
+                return None
+
+        def _fake_span(name: str, **_kw: object) -> _FakeSpanCtx:
+            spans.append(name)
+            return _FakeSpanCtx()
+
+        monkeypatch.setattr(_lifecycle, "span", _fake_span)
+
+        result = await pool.close(session.instance_id, force=True)
+        assert result["closed"] is True
+        assert counted == [(1, {"kind": session.kind})]
+        assert spans == ["octowright.session.close"]

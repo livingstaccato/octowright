@@ -59,14 +59,15 @@ class _LogCapture:
 
 @pytest.fixture
 def listeners_log(monkeypatch: pytest.MonkeyPatch) -> _LogCapture:
-    """Replace the eviction-listener module's `log` (and the lifecycle
-    module's, which emits the explicit-close line) with a shared capture."""
-    from octowright.browser_pool import lifecycle as _lifecycle
+    """Replace the eviction-listener module's `log` (and close_helpers',
+    which emits the explicit-close/evicted-externally lines from inside the
+    close coordinator) with a shared capture."""
+    from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool import listeners as _listeners
 
     cap = _LogCapture()
     monkeypatch.setattr(_listeners, "log", cap)
-    monkeypatch.setattr(_lifecycle, "log", cap)
+    monkeypatch.setattr(_close_helpers, "log", cap)
     return cap
 
 

@@ -14,13 +14,11 @@ from typing import TYPE_CHECKING, Any, cast
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter, span
+from octowright.browser_pool import close_helpers
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
-from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReason
+from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.launch_helpers import rotate_har_path
-from octowright.browser_pool.session_event_bus import session_event_bus
-from octowright.session.operation_gate import CloseReservation, SessionClosedError
-from octowright.session_manifest import remove_session as remove_manifest_session
-from octowright.session_manifest import run_manifest_transaction_async
+from octowright.session.operation_gate import CloseReservation, OperationGateInvariantError, SessionClosedError
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
@@ -28,12 +26,14 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-# Bumped by every external-close coordinator; an explicit close doesn't (it
-# isn't an eviction). Moved here from listeners.py -- the coordinator now
-# decides "was this close explicit or external".
-_EVICTED = counter(
-    "octowright_browser_evicted_total",
-    description="Browsers removed from the pool by an external close signal (not pool.close)",
+# Bumped once per coordinator run, regardless of trigger. Moved here from
+# session/core_ops_mixin.py -- SessionOpsMixin.close() no longer runs for any
+# production close (every real close routes through this module's
+# coordinator instead), so this is now the only place a real close is ever
+# observed to increment it.
+_SESSION_CLOSED = counter(
+    "octowright_browser_closed_total",
+    description="Browser sessions closed cleanly via the pool's close coordinator",
 )
 
 
@@ -128,6 +128,24 @@ async def reserve_close_browser(
                 )
 
         reservation = await session._operation_gate.reserve_close("browser_close", preflight=_preflight)
+        # gate.reserve_close's own admission lock can suspend THIS coroutine
+        # for a full loop turn (contended by any other gated op on this
+        # session) while we still hold pool._sessions_lock -- but the sync
+        # external-close seam (accept_external_close_nowait) never takes
+        # that lock, so it can win the race in that window: it marks the
+        # gate closed and installs its own ClosingSession wrapping this
+        # SAME reservation (reserve_close's `_close_reservation is not None`
+        # short-circuit is what handed it back to us above). Re-check, after
+        # the only await in this function, and share that entry rather than
+        # wrapping the identical reservation in a second one -- else two
+        # coordinators both run the full teardown.
+        existing = pool._closing_sessions.get(resolved_id)
+        if existing is not None:
+            if existing.session is not session or existing.reservation is not reservation:
+                raise OperationGateInvariantError(
+                    f"session {resolved_id!r} close reservation raced an unrelated closing-registry entry"
+                )
+            return existing
         entry = ClosingSession(session=session, reservation=reservation)
         pool._closing_sessions[resolved_id] = entry
     _spawn_close_coordinator(pool, resolved_id, entry, reason=reason)
@@ -181,107 +199,6 @@ def _observe_close_coordinator(instance_id: str, task: asyncio.Task[None]) -> No
         log.error("octowright.pool.close_coordinator_crashed", instance_id=instance_id, error=repr(exc))
 
 
-def _recorder_close_reason(reason: SessionCloseReason) -> str | None:
-    if reason == "crashed":
-        return "crashed"
-    if reason in ("user_close", "external_disconnect"):
-        return "external"
-    return None  # agent_close / shutdown keep the current reason-less row
-
-
-async def _remove_active_identity(pool: BrowserPool, instance_id: str, session: BrowserSession) -> None:
-    async with pool._sessions_lock:
-        if pool._sessions.get(instance_id) is session:
-            pool._sessions.pop(instance_id, None)
-
-
-def _log_secondary_teardown_error(session: BrowserSession, exc: BaseException, *, primary: BaseException) -> None:
-    log.warning(
-        "octowright.browser.close_teardown_secondary_error",
-        instance_id=getattr(session, "instance_id", None),
-        kind=getattr(session, "kind", None),
-        error=repr(exc),
-        primary_error=repr(primary),
-    )
-
-
-async def _prepare_then_teardown(
-    session: BrowserSession,
-    preparation: Any,
-    recorder_reason: str | None,
-) -> tuple[object | None, BaseException | None]:
-    """Always attempt the teardown, even when ``preparation`` fails first.
-    Returns ``(prepared, error)`` where ``error`` is the FIRST failure; a
-    teardown failure following a preparation failure is logged as secondary,
-    not swapped in as the shared outcome."""
-    prepared: object | None = None
-    error: BaseException | None = None
-    if preparation is not None:
-        try:
-            prepared = await preparation(session)
-        except BaseException as exc:
-            error = exc
-    try:
-        await session._teardown_after_close_cutoff(reason=recorder_reason)
-    except BaseException as exc:
-        if error is None:
-            error = exc
-        else:
-            _log_secondary_teardown_error(session, exc, primary=error)
-    return prepared, error
-
-
-def _close_response(session: BrowserSession) -> dict[str, Any]:
-    return {
-        "closed": True,
-        "log_path": str(session.log_path),
-        "video_path": str(session.video_path) if session.video_path else None,
-        "trace_path": str(session.trace_path) if session.trace_path else None,
-        "har_path": str(session.har_path) if session.har_path else None,
-    }
-
-
-async def _remove_manifest_best_effort(instance_id: str) -> None:
-    try:
-        await run_manifest_transaction_async(remove_manifest_session, instance_id)
-    except Exception as exc:
-        log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
-
-
-def _publish_close_once(session: BrowserSession, instance_id: str, reason: SessionCloseReason) -> None:
-    """Log + publish exactly once. ``reason`` picks the log line/metric:
-    explicit close keeps ``octowright.browser.closed``; an external-origin
-    reason is ``octowright.browser.evicted_externally`` plus the eviction
-    counter -- what the listeners used to emit directly before this task."""
-    if reason in ("user_close", "external_disconnect", "crashed"):
-        _EVICTED.add(1, attributes={"kind": session.kind})
-        log.info(
-            "octowright.browser.evicted_externally",
-            instance_id=instance_id,
-            kind=session.kind,
-            profile=session.profile,
-            log_path=str(session.log_path),
-        )
-    else:
-        log.info(
-            "octowright.browser.closed",
-            instance_id=instance_id,
-            kind=session.kind,
-            profile=session.profile,
-            log_path=str(session.log_path),
-        )
-    session_event_bus.publish_nowait(
-        SessionClosedEvent(
-            instance_id=instance_id,
-            kind=session.kind,
-            label=session.label,
-            profile=session.profile,
-            reason=reason,
-            log_path=str(session.log_path),
-        )
-    )
-
-
 async def _coordinate_close(
     pool: BrowserPool,
     instance_id: str,
@@ -291,46 +208,53 @@ async def _coordinate_close(
     preparation: Any = None,
 ) -> None:
     """Run exactly once per ``entry``: admit under the gate (or take the bare
-    teardown-only path), teardown, publish, and resolve the shared outcome."""
+    teardown-only path), teardown, publish, and resolve the shared outcome.
+    Owns the ``octowright.session.close`` span + closed-total counter -- the
+    only place either fires now that ``SessionOpsMixin.close()`` no longer
+    runs for a production close."""
     session = entry.session
     prepared: object | None = None
     error: BaseException | None = None
     response: dict[str, Any] | None = None
-    recorder_reason = _recorder_close_reason(reason)
-    try:
+    recorder_reason = close_helpers.recorder_close_reason(reason)
+    with span("octowright.session.close", instance_id=instance_id, kind=session.kind):
         try:
-            async with session._operation_gate.close_operation(entry.reservation):
-                await _remove_active_identity(pool, instance_id, session)
-                prepared, error = await _prepare_then_teardown(session, preparation, recorder_reason)
-        except SessionClosedError as exc:
-            # An external browser/page close invalidated admission first.
-            await _remove_active_identity(pool, instance_id, session)
-            prepared, teardown_error = await _prepare_then_teardown(session, None, recorder_reason)
-            if preparation is None:
-                error = teardown_error
-            else:
+            try:
+                async with session._operation_gate.close_operation(entry.reservation):
+                    await close_helpers.remove_active_identity(pool, instance_id, session)
+                    prepared, error = await close_helpers.prepare_then_teardown(session, preparation, recorder_reason)
+            except SessionClosedError as exc:
+                # An external browser/page close invalidated admission first.
+                await close_helpers.remove_active_identity(pool, instance_id, session)
+                prepared, teardown_error = await close_helpers.prepare_then_teardown(session, None, recorder_reason)
+                if preparation is None:
+                    error = teardown_error
+                else:
+                    error = exc
+                    if teardown_error is not None:
+                        close_helpers.log_secondary_teardown_error(session, teardown_error, primary=exc)
+            response = close_helpers.close_response(session)
+        except BaseException as exc:
+            if error is None:
                 error = exc
-                if teardown_error is not None:
-                    _log_secondary_teardown_error(session, teardown_error, primary=exc)
-        response = _close_response(session)
-    except BaseException as exc:
-        if error is None:
-            error = exc
-    finally:
-        await _remove_manifest_best_effort(instance_id)
-        _publish_close_once(session, instance_id, reason)
-        async with pool._sessions_lock:
-            pool._sessions.pop(instance_id, None)
-        if error is None:
-            session._operation_gate.complete_close(
-                entry.reservation,
-                CloseCoordinatorOutcome(response=response or _close_response(session), prepared=prepared),
-            )
-        else:
-            session._operation_gate.fail_close(entry.reservation, error)
-        async with pool._sessions_lock:
-            if pool._closing_sessions.get(instance_id) is entry:
-                pool._closing_sessions.pop(instance_id)
+        finally:
+            _SESSION_CLOSED.add(1, attributes={"kind": session.kind})
+            await close_helpers.remove_manifest_best_effort(instance_id)
+            close_helpers.publish_close_once(session, instance_id, reason)
+            async with pool._sessions_lock:
+                pool._sessions.pop(instance_id, None)
+            if error is None:
+                session._operation_gate.complete_close(
+                    entry.reservation,
+                    CloseCoordinatorOutcome(
+                        response=response or close_helpers.close_response(session), prepared=prepared
+                    ),
+                )
+            else:
+                session._operation_gate.fail_close(entry.reservation, error)
+            async with pool._sessions_lock:
+                if pool._closing_sessions.get(instance_id) is entry:
+                    pool._closing_sessions.pop(instance_id)
 
 
 def _closing_entry_for(pool: BrowserPool, instance_id: str, session: BrowserSession | None) -> ClosingSession | None:

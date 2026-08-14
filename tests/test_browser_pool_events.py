@@ -175,7 +175,7 @@ async def test_close_browser_publishes_agent_close() -> None:
 
     received: list[SessionClosedEvent] = []
 
-    with patch("octowright.browser_pool.lifecycle.remove_manifest_session"):
+    with patch("octowright.browser_pool.close_helpers.remove_manifest_session"):
         async with session_event_bus.subscribe() as sub:
             await close_browser(pool, "close-me")
             received.append(await asyncio.wait_for(sub.get(), timeout=1.0))
@@ -201,7 +201,7 @@ async def test_close_browser_with_shutdown_reason() -> None:
 
     received: list[SessionClosedEvent] = []
 
-    with patch("octowright.browser_pool.lifecycle.remove_manifest_session"):
+    with patch("octowright.browser_pool.close_helpers.remove_manifest_session"):
         async with session_event_bus.subscribe() as sub:
             await close_browser(pool, "shut-me", _reason="shutdown")
             received.append(await asyncio.wait_for(sub.get(), timeout=1.0))

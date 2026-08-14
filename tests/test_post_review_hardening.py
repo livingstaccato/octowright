@@ -108,14 +108,14 @@ async def test_external_close_identity_check_ignores_keep_id_replacement(
     deferred-task shape this used to race: ``_accept_external_close_nowait``
     is called directly from the sync Playwright callback, no ``create_task``
     in between)."""
-    from octowright.browser_pool import lifecycle
+    from octowright.browser_pool import close_helpers
 
     pool = BrowserPool()
     original = _session("b1")
     replacement = _session("new1")
     pool._sessions["b1"] = original
     pool._sessions["new1"] = replacement
-    monkeypatch.setattr(lifecycle, "remove_manifest_session", lambda _instance_id: None)
+    monkeypatch.setattr(close_helpers, "remove_manifest_session", lambda _instance_id: None)
 
     # Simulate the id having already been rekeyed to `replacement` (as
     # keep-id relaunch does) before the OLD session's late external-close
@@ -162,13 +162,13 @@ async def test_rekeyed_replacement_listener_evicts_its_current_instance_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The replacement's own listener must follow its keep-id rekey."""
-    from octowright.browser_pool import lifecycle, listeners
+    from octowright.browser_pool import close_helpers, listeners
 
     pool = BrowserPool()
     replacement = _session("new1")
     pool._sessions["new1"] = replacement
     listeners._wire_close_evictor(pool, replacement)
-    monkeypatch.setattr(lifecycle, "remove_manifest_session", lambda _instance_id: None)
+    monkeypatch.setattr(close_helpers, "remove_manifest_session", lambda _instance_id: None)
     publish = MagicMock()
     monkeypatch.setattr(listeners.session_event_bus, "publish_nowait", publish)
 
@@ -261,12 +261,12 @@ async def test_close_follows_expected_session_across_keep_id_rekey(
     """A caller holding a STALE id (captured before a keep-id rekey) still
     closes the correct object: ``reserve_close_browser``'s identity-aware
     resolution scans by OBJECT identity, not just the caller's id."""
-    from octowright.browser_pool import lifecycle
+    from octowright.browser_pool import close_helpers
 
     pool = BrowserPool()
     replacement = _session("new1")
     pool._sessions["new1"] = replacement
-    monkeypatch.setattr(lifecycle, "remove_manifest_session", lambda _instance_id: None)
+    monkeypatch.setattr(close_helpers, "remove_manifest_session", lambda _instance_id: None)
 
     assert await driver_relaunch._finalize_id(pool, "new1", "old1", "keep-id") == "old1"
     await pool.close("new1", force=True, _expected_session=replacement)
