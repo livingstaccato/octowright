@@ -14,6 +14,7 @@ import pytest
 
 from octowright.browser_pool import BrowserPool
 from octowright.browser_pool import close_helpers as _close_helpers
+from tests._pool_invariants import wait_until
 
 
 def _fake_source(
@@ -97,8 +98,10 @@ async def test_handoff_reuses_profile_and_closes_original(monkeypatch: pytest.Mo
     )
     source.page.url = "https://octowright.com/live"
     pool._sessions["old01"] = source
+    launched: dict[str, Any] = {}
 
     async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        launched.update(kwargs)
         return {
             "instance_id": "new01",
             "kind": kwargs["kind"],
@@ -119,6 +122,10 @@ async def test_handoff_reuses_profile_and_closes_original(monkeypatch: pytest.Mo
     assert result["old_closed"] is True
     assert result["profile"] == "dante"
     source._teardown_after_close_cutoff.assert_awaited_once()
+    # Regression: handoff replacements must keep the corner badge (a bare
+    # `badge: bool = False` default in _launch_from_snapshot silently
+    # dropped it for every non-fluid handoff).
+    assert launched["badge"] is True
 
 
 @pytest.mark.anyio
@@ -184,19 +191,27 @@ async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.Monke
 
 
 def _get_then_evict(pool: BrowserPool) -> Any:
-    """Simulate a Playwright external-close eviction firing in the gap
+    """Simulate a REAL Playwright external-close eviction firing in the gap
     between ``handoff_browser``'s ``pool.get(old_instance_id)`` snapshot and
     the close reservation resolving the SAME identity: the session is
-    returned once, then immediately removed from ``_sessions`` so the
-    identity-aware ``expected_session`` lookup inside
-    ``lifecycle._resolve_close_target`` raises ``KeyError``, exactly as a
-    real race would."""
+    returned once, then immediately routed through
+    ``pool._accept_external_close_nowait`` -- the actual seam
+    ``listeners._evict`` uses, which both pops ``_sessions`` AND installs a
+    teardown-only ``ClosingSession`` entry for the whole eviction duration.
+
+    A direct ``_sessions.pop`` (the old version of this helper) only
+    reproduces the ``KeyError`` half of the race: it leaves no
+    ``_closing_sessions`` entry behind, so ``reserve_close_browser`` never
+    exercises its ``require_fresh``-vs-``SessionClosingError`` branch --
+    exactly the gap a real eviction hits, since the external coordinator
+    IS already draining the session by the time the fallback runs."""
 
     def _get(instance_id: str) -> Any:
         session = pool._sessions.get(instance_id)
         if session is None:
             raise KeyError(pool._missing_session_message(instance_id))
-        pool._sessions.pop(instance_id, None)
+        won = pool._accept_external_close_nowait(instance_id, expected_session=session, reason="user_close")
+        assert won is not None, "external-close acceptance seam declined to take ownership"
         return session
 
     return _get
@@ -204,13 +219,16 @@ def _get_then_evict(pool: BrowserPool) -> Any:
 
 @pytest.mark.anyio
 async def test_handoff_survives_eviction_race(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression: a Playwright external-close eviction can fire AFTER
+    """Regression: a REAL Playwright external-close eviction can fire AFTER
     handoff_browser's `pool.get(old_instance_id)` snapshot but BEFORE the
-    close reservation resolves the same identity. The identity-aware close
-    then sees the session already gone and raises KeyError, which must not
-    abort the entire handoff -- the replacement is still launched from a
+    close reservation resolves the same identity. The external coordinator
+    already owns a `_closing_sessions` entry for it by then, so
+    `reserve_close_browser(require_fresh=True)` raises `SessionClosingError`
+    (not `KeyError`) -- both must be caught, or the entire handoff aborts
+    with no replacement launched. The replacement is still launched from a
     pre-close fallback snapshot of `source`.
     """
+    _pop_manifest_noop(monkeypatch)
     pool = BrowserPool()
     source = _fake_source(
         instance_id="evict01",
@@ -240,26 +258,41 @@ async def test_handoff_survives_eviction_race(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(pool, "launch", _fake_launch)
 
-    # Before fix: this raises KeyError. After fix: handoff completes,
-    # launching the replacement with the snapshotted fields.
+    # Before the fix: this raised SessionClosingError and aborted the whole
+    # handoff. After the fix: handoff completes, launching the replacement
+    # with the pre-close snapshotted fields.
     result = await pool.handoff("evict01", headed=False)
 
     assert result["new_instance_id"] == "newAfterEvict"
     assert result["old_instance_id"] == "evict01"
-    # old_closed=False because the close raced eviction (already gone).
+    # old_closed=False because OUR close raced the external eviction (it
+    # never got its own ticket) -- the external coordinator did the actual
+    # teardown, tracked separately below.
     assert result["old_closed"] is False
     assert result["profile"] == "dante"
     assert launched["profile"] == "dante"
     assert launched["kind"] == "chromium"
     assert launched["label"] == "dante-lab"
+    # Handoff replacements keep the corner badge (regression: a bare
+    # `badge: bool = False` default silently dropped it).
+    assert launched["badge"] is True
+
+    # The external coordinator's own teardown-only close must still run to
+    # completion and clear the registry -- it isn't ours to await directly.
+    await wait_until(lambda: "evict01" not in pool._closing_sessions)
+    source._teardown_after_close_cutoff.assert_awaited_once()
 
 
 @pytest.mark.anyio
 async def test_relaunch_fluid_survives_eviction_race(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Same race as handoff, but for relaunch_fluid: external-close eviction
-    fires between pool.get() snapshot and the close reservation resolving.
-    The replacement must still launch.
+    """Same race as handoff, but for relaunch_fluid: a REAL external-close
+    eviction fires between pool.get() snapshot and the close reservation
+    resolving, landing on SessionClosingError (see test_handoff_survives_
+    eviction_race). The replacement must still launch. relaunch_fluid is a
+    LIVE production path (server/browser/lifecycle.browser_relaunch_fluid),
+    so this is the regression with real user-facing blast radius.
     """
+    _pop_manifest_noop(monkeypatch)
     pool = BrowserPool()
     source = _fake_source(
         instance_id="fluid01",
@@ -297,5 +330,9 @@ async def test_relaunch_fluid_survives_eviction_race(monkeypatch: pytest.MonkeyP
     assert result["mode"] == "fluid"
     assert launched["kind"] == "chromium"
     assert launched["label"] == "scratch"
+    assert launched["badge"] is True
     # stateless source → ephemeral=True
     assert launched["ephemeral"] is True
+
+    await wait_until(lambda: "fluid01" not in pool._closing_sessions)
+    source._teardown_after_close_cutoff.assert_awaited_once()

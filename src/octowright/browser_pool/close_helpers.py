@@ -116,6 +116,62 @@ async def remove_manifest_best_effort(instance_id: str) -> None:
         log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
 
 
+async def run_close_bookkeeping(
+    pool: BrowserPool,
+    session: BrowserSession,
+    instance_id: str,
+    reason: SessionCloseReason,
+    error: BaseException | None,
+    closed_counter: Any,
+) -> BaseException | None:
+    """The closed-total counter, manifest removal, event publish, and
+    ``_sessions`` pop -- run from ``_coordinate_close``'s ``finally`` block,
+    where letting any of these propagate would skip ``complete_close``/
+    ``fail_close`` entirely, permanently stranding every
+    ``reservation.wait()`` caller (and leaking the ``_closing_sessions``
+    entry forever, since the pop below it would never run either).
+
+    Best-effort: a failure here becomes the close's ``error`` ONLY if there
+    wasn't already one (a raising log handler, a stray ``MemoryError``, or a
+    ``CancelledError`` delivered at the ``pool._sessions_lock`` acquisition
+    are the realistic triggers); a failure on top of an existing primary
+    error is logged as secondary and does not replace it.
+    """
+    try:
+        if not is_external_reason(reason):
+            closed_counter.add(1, attributes={"kind": session.kind})
+        await remove_manifest_best_effort(instance_id)
+        publish_close_once(session, instance_id, reason)
+        async with pool._sessions_lock:
+            pool._sessions.pop(instance_id, None)
+    except BaseException as exc:
+        if error is None:
+            return exc
+        log_secondary_teardown_error(session, exc, primary=error)
+    return error
+
+
+def resolve_close_outcome(
+    session: BrowserSession,
+    error: BaseException | None,
+    response: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, BaseException | None]:
+    """The final ``(response, error)`` pair ``complete_close``/``fail_close``
+    receive. Computing the fallback ``close_response(session)`` can itself
+    raise (the exact failure this hardens: a session double -- or, in
+    principle, a session missing an attribute some future refactor stops
+    setting -- with no ``log_path``); that failure becomes the error rather
+    than propagating, so this function NEVER raises and the caller can
+    unconditionally call ``complete_close``/``fail_close`` afterward.
+    """
+    if error is not None:
+        return None, error
+    try:
+        return response or close_response(session), None
+    except BaseException as exc:
+        return None, exc
+
+
 def publish_close_once(session: BrowserSession, instance_id: str, reason: SessionCloseReason) -> None:
     """Log + publish exactly once. ``reason`` picks the log line/metric:
     explicit close keeps ``octowright.browser.closed``; an external-origin

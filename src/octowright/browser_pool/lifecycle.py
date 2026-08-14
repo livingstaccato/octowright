@@ -286,7 +286,16 @@ async def _coordinate_close(
     ``octowright_browser_evicted_total`` so ``launched - closed - evicted``
     keeps meaning "still live"). Neither fired for a production close before
     this method owned them, since ``SessionOpsMixin.close()`` no longer runs
-    for one."""
+    for one.
+
+    The ``finally`` block's own bookkeeping (counter, manifest, publish,
+    registry pops) is delegated to ``close_helpers.run_close_bookkeeping``/
+    ``resolve_close_outcome`` specifically so IT can never raise past this
+    point -- a secondary failure there must not skip ``complete_close``/
+    ``fail_close`` (which would strand every ``reservation.wait()`` caller
+    forever) or the final ``_closing_sessions`` pop (which would permanently
+    poison the instance_id).
+    """
     session = entry.session
     prepared: object | None = None
     error: BaseException | None = None
@@ -313,24 +322,35 @@ async def _coordinate_close(
             if error is None:
                 error = exc
         finally:
-            if not close_helpers.is_external_reason(reason):
-                _SESSION_CLOSED.add(1, attributes={"kind": session.kind})
-            await close_helpers.remove_manifest_best_effort(instance_id)
-            close_helpers.publish_close_once(session, instance_id, reason)
-            async with pool._sessions_lock:
-                pool._sessions.pop(instance_id, None)
-            if error is None:
+            error = await close_helpers.run_close_bookkeeping(
+                pool, session, instance_id, reason, error, _SESSION_CLOSED
+            )
+            final_response, final_error = close_helpers.resolve_close_outcome(session, error, response)
+            if final_error is None:
+                # resolve_close_outcome only returns a None response paired
+                # with a None error when close_response(session) itself
+                # raised -- and that raise is what final_error would then
+                # carry instead. narrows for type-checkers.
+                assert final_response is not None  # nosec B101
                 session._operation_gate.complete_close(
-                    entry.reservation,
-                    CloseCoordinatorOutcome(
-                        response=response or close_helpers.close_response(session), prepared=prepared
-                    ),
+                    entry.reservation, CloseCoordinatorOutcome(response=final_response, prepared=prepared)
                 )
             else:
-                session._operation_gate.fail_close(entry.reservation, error)
-            async with pool._sessions_lock:
-                if pool._closing_sessions.get(instance_id) is entry:
-                    pool._closing_sessions.pop(instance_id)
+                session._operation_gate.fail_close(entry.reservation, final_error)
+            try:
+                async with pool._sessions_lock:
+                    if pool._closing_sessions.get(instance_id) is entry:
+                        pool._closing_sessions.pop(instance_id)
+            except BaseException as exc:
+                # The reservation is already resolved above either way, so
+                # a caller can never hang on this -- but log loudly, since a
+                # failure here leaks the registry entry (instance_id stays
+                # permanently "closing" for pool.get()/shutdown_pool).
+                log.error(
+                    "octowright.pool.close_coordinator_registry_cleanup_failed",
+                    instance_id=instance_id,
+                    error=repr(exc),
+                )
 
 
 def _closing_entry_for(pool: BrowserPool, instance_id: str, session: BrowserSession | None) -> ClosingSession | None:
