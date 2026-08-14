@@ -7,21 +7,31 @@
 ``relaunch_fluid_browser``.
 
 Split out of ``lifecycle.py`` (kept under the repository's LOC ceiling) --
-both build on ``lifecycle.close_with_preparation``/``RelaunchSnapshot`` (Task
+both build on ``lifecycle.reserve_close_browser``/``RelaunchSnapshot`` (Task
 8) so the URL/profile/protection snapshot used to build the replacement
 launch is taken INSIDE the close ticket, after it owns the gate, rather than
 racing a concurrent navigation between an upfront read and the close.
+
+Deliberately do NOT use ``lifecycle.close_with_preparation`` (which wraps
+reservation + awaiting the outcome as one call): the two phases need
+DIFFERENT exception handling here -- see ``_close_with_fallback_snapshot``.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
 from octowright.browser_pool.launch_helpers import rotate_har_path
-from octowright.browser_pool.lifecycle import RelaunchSnapshot, close_with_preparation
+from octowright.browser_pool.lifecycle import (
+    CloseCoordinatorOutcome,
+    RelaunchSnapshot,
+    reserve_close_browser,
+)
+from octowright.session.operation_gate import SessionClosingError
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
@@ -64,7 +74,7 @@ async def _launch_from_snapshot(
     snapshot: RelaunchSnapshot,
     *,
     headed: bool | None,
-    badge: bool = False,
+    badge: bool = True,
     ephemeral: bool = False,
 ) -> dict[str, Any]:
     # Don't overwrite the prior HAR — a handoff/relaunch gets a fresh sibling path.
@@ -84,6 +94,48 @@ async def _launch_from_snapshot(
         session=snapshot.profile is None and snapshot.user_data_dir is not None,
         protected=snapshot.protected,
     )
+
+
+async def _close_with_fallback_snapshot(
+    pool: BrowserPool,
+    instance_id: str,
+    *,
+    operation_name: LiteralString,
+    preparation: Callable[[BrowserSession], Awaitable[object]],
+    source: BrowserSession,
+    warning_event: str,
+) -> tuple[dict[str, Any] | None, RelaunchSnapshot]:
+    """Reserve a fresh forced close with ``preparation`` and await its
+    durable outcome. ONLY a failure to acquire our OWN ticket -- the session
+    is already gone (``KeyError``), or another close/coordinator already
+    owns it (``SessionClosingError`` from ``require_fresh=True``, e.g. a
+    real external-close eviction's teardown-only reservation) -- falls back
+    to a pre-close read of ``source`` and still lets the caller launch a
+    replacement so the user isn't left with no browser.
+
+    A failure AFTER our own ticket is admitted (teardown, the preparation
+    callback itself) is a REAL error and must propagate untouched: it is
+    deliberately NOT inside this function's try/except, only the
+    reservation step is. Coalescing those into the same fallback would
+    silently paper over a genuine close failure by pretending it was a
+    race and launching a replacement over a half-torn-down browser.
+    """
+    try:
+        entry = await reserve_close_browser(
+            pool,
+            instance_id,
+            force=True,
+            reason="agent_close",
+            operation_name=operation_name,
+            preparation=preparation,
+            expected_session=source,
+            require_fresh=True,
+        )
+    except (KeyError, SessionClosingError):
+        log.warning(warning_event, instance_id=instance_id, kind=source.kind)
+        return None, _relaunch_snapshot_from_session(source)
+    outcome = cast(CloseCoordinatorOutcome, await entry.reservation.wait())
+    return outcome.response, cast(RelaunchSnapshot, outcome.prepared)
 
 
 async def _restore_protection(pool: BrowserPool, instance_id: str, snapshot: RelaunchSnapshot) -> None:
@@ -165,37 +217,20 @@ async def handoff_browser(
             async with source.operation("browser_handoff"):
                 return await _handoff_without_close_owned(pool, source, headed=headed)
 
-        try:
-            # force=True: the caller explicitly opted into close_original
-            # (close-then-relaunch of the same logical browser, state
-            # preserved) — not a destructive agent close, so a protected
-            # (e.g. headed-by-default) source must not refuse here the
-            # way an explicit browser_close would. expected_session pins
-            # this to the SAME source object, not just its instance_id.
-            outcome = await close_with_preparation(
-                pool,
-                old_instance_id,
-                force=True,
-                reason="agent_close",
-                operation_name="browser_handoff",
-                preparation=_prepare_handoff_snapshot,
-                expected_session=source,
-            )
-            close_result: dict[str, Any] | None = outcome.response
-            snapshot = cast(RelaunchSnapshot, outcome.prepared)
-        except KeyError:
-            # The session was evicted (external-close listener fired)
-            # between pool.get() above and this close(). Treat as
-            # "already closed" and proceed to launch the replacement so the
-            # user isn't left with no browser -- the preparation callback
-            # never ran, so fall back to a pre-close read of ``source``.
-            log.warning(
-                "octowright.browser.handoff.close_raced_eviction",
-                old_instance_id=old_instance_id,
-                kind=source_kind,
-            )
-            close_result = None
-            snapshot = _relaunch_snapshot_from_session(source)
+        # force=True: the caller explicitly opted into close_original
+        # (close-then-relaunch of the same logical browser, state
+        # preserved) — not a destructive agent close, so a protected
+        # (e.g. headed-by-default) source must not refuse here the way an
+        # explicit browser_close would. expected_session pins this to the
+        # SAME source object, not just its instance_id.
+        close_result, snapshot = await _close_with_fallback_snapshot(
+            pool,
+            old_instance_id,
+            operation_name="browser_handoff",
+            preparation=_prepare_handoff_snapshot,
+            source=source,
+            warning_event="octowright.browser.handoff.close_raced_eviction",
+        )
 
         launch = await _launch_from_snapshot(pool, snapshot, headed=headed)
         await _restore_protection(pool, launch["instance_id"], snapshot)
@@ -218,34 +253,22 @@ async def relaunch_fluid_browser(pool: BrowserPool, instance_id: str) -> dict[st
     # Wrap close+launch under a parent span so the child browser.close /
     # browser.launch spans nest underneath as one fluid-mode round-trip.
     with span("octowright.browser.relaunch_fluid", instance_id=instance_id, kind=source_kind):
-        try:
-            # force=True: relaunch_fluid closes the source only to reopen
-            # the same logical browser immediately after (state/profile
-            # preserved) — it is not a destructive agent close, so a
-            # protected (e.g. headed-by-default) source must not refuse
-            # here the way an explicit browser_close would.
-            outcome = await close_with_preparation(
-                pool,
-                instance_id,
-                force=True,
-                reason="agent_close",
-                operation_name="browser_relaunch_fluid",
-                preparation=_prepare_relaunch_snapshot,
-                expected_session=source,
-            )
-            close_result: dict[str, Any] | None = outcome.response
-            snapshot = cast(RelaunchSnapshot, outcome.prepared)
-        except KeyError:
-            log.warning(
-                "octowright.browser.relaunch_fluid.close_raced_eviction",
-                instance_id=instance_id,
-                kind=source_kind,
-            )
-            close_result = None
-            snapshot = _relaunch_snapshot_from_session(source)
+        # force=True: relaunch_fluid closes the source only to reopen the
+        # same logical browser immediately after (state/profile preserved)
+        # — it is not a destructive agent close, so a protected (e.g.
+        # headed-by-default) source must not refuse here the way an
+        # explicit browser_close would.
+        close_result, snapshot = await _close_with_fallback_snapshot(
+            pool,
+            instance_id,
+            operation_name="browser_relaunch_fluid",
+            preparation=_prepare_relaunch_snapshot,
+            source=source,
+            warning_event="octowright.browser.relaunch_fluid.close_raced_eviction",
+        )
 
         stateless = snapshot.profile is None and snapshot.user_data_dir is None
-        result = await _launch_from_snapshot(pool, snapshot, headed=True, badge=True, ephemeral=stateless)
+        result = await _launch_from_snapshot(pool, snapshot, headed=True, ephemeral=stateless)
         await _restore_protection(pool, result["instance_id"], snapshot)
         return {
             "ok": True,
