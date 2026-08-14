@@ -12,7 +12,25 @@ dependency on the scanner's own modules.
 
 from __future__ import annotations
 
-PLAYWRIGHT_ROOT_ATTRS = frozenset({"page", "pages", "context", "browser", "active_frame"})
+PLAYWRIGHT_ROOT_ATTRS = frozenset(
+    {
+        "page",
+        "pages",
+        "context",
+        "browser",
+        "active_frame",
+        # Private cached Playwright-object handles (self._X = <playwright
+        # object>) found across BrowserSession/ScreencastManager. Same shape
+        # as the five names above -- reading the attribute itself already
+        # exposes the live object -- just not part of the original public
+        # surface. Grepped exhaustively for `self._\w+\s*:\s*(Page|Frame|
+        # Browser|BrowserContext|Video|Locator|_ScreencastPage)` across
+        # session/ and browser_pool/; these three are the complete result.
+        "_video",  # BrowserSession._video: Video | None (core.py)
+        "_browser_for_close",  # BrowserSession._browser_for_close: Browser | None (core.py)
+        "_bound_page",  # ScreencastManager._bound_page: _ScreencastPage | None (screencast.py)
+    }
+)
 PLAYWRIGHT_CHAIN_ATTRS = frozenset(
     {
         "locator",
@@ -84,6 +102,10 @@ PLAYWRIGHT_CHAIN_ATTRS = frozenset(
         "status_text",
         "failure",
         "request",
+        # EventContextManager.value (async with page.expect_popup() as info:
+        # p = await info.value) -- the awaited result IS the new Page/Download/
+        # etc; needed for with-as taint propagation to reach past the binding.
+        "value",
     }
 )
 APPROVED_BYPASS_CLASSES = frozenset(
@@ -138,6 +160,18 @@ SEED_PARAM_NAMES = frozenset(
 )
 SESSION_TYPE_NAMES = frozenset({"BrowserSession", "SessionLike"})
 GENERIC_TYPING_MODULES = frozenset({"typing", "typing_extensions"})
+
+# Conventional-name seeds that collide with common non-Playwright libraries
+# (httpx.Response/Request, Starlette's Request/WebSocket) badly enough that
+# an UNANNOTATED local/parameter with one of these names in a file that
+# imports one of those libraries is more likely a false positive than a real
+# Playwright handle. Suppressed only in files showing that import evidence;
+# an explicit Playwright-resolving annotation (annotation_signal) or an
+# actually-tainted value still taints normally even in such a file. Every
+# other conventional name (page/frame/context/locator/dialog/route/etc.) was
+# checked repo-wide and has no such collision, so this set stays narrow.
+AMBIGUOUS_SEED_NAMES = frozenset({"request", "response", "websocket"})
+AMBIGUOUS_NAME_LIBRARY_MODULES = frozenset({"httpx", "starlette"})
 
 TARGET_METHOD = "_target"
 GATE_METHOD = "operation"
