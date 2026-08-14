@@ -11,16 +11,10 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright._tracing import counter, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 from octowright.session.operation_gate import gated_operation
-
-_SESSION_CLOSED = counter(
-    "octowright_browser_closed_total",
-    description="Browser sessions closed cleanly via session.close()",
-)
 
 log = get_logger(__name__)
 
@@ -438,30 +432,28 @@ class SessionOpsMixin(SessionLike):
 
         A pool-launched session carries a ``_pool_close_requester`` (set by
         ``launch_pipeline._build_session_object``) that routes here through
-        the identity-aware pool coordinator. A session built directly
+        the identity-aware pool coordinator -- which owns the
+        ``octowright.session.close`` span and the ``octowright_browser_
+        closed_total`` counter itself (see ``lifecycle._coordinate_close``),
+        so this method does not duplicate either. A session built directly
         (test-only -- no production code constructs ``BrowserSession``
         outside a pool) falls back to ``core_ops_standalone_close``'s
         session-owned coordinator, which reuses the same gate reservation/
-        outcome/cancellation mechanics with no pool registry to update.
+        outcome/cancellation mechanics with no pool registry -- and no
+        telemetry owner -- to hand off to.
         """
-        instance_id = getattr(self, "instance_id", None)
-        kind = getattr(self, "kind", None)
-        with span("octowright.session.close", instance_id=instance_id, kind=kind):
-            try:
-                requester = getattr(self, "_pool_close_requester", None)
-                if requester is not None:
-                    await requester()
-                elif getattr(self, "_operation_gate", None) is not None:
-                    from octowright.session.core_ops_standalone_close import close_standalone
+        requester = getattr(self, "_pool_close_requester", None)
+        if requester is not None:
+            await requester()
+        elif getattr(self, "_operation_gate", None) is not None:
+            from octowright.session.core_ops_standalone_close import close_standalone
 
-                    await close_standalone(self)
-                else:
-                    # A bare mixin double with no gate at all (unit tests that
-                    # construct SessionOpsMixin.__new__() directly) -- nothing
-                    # to coordinate, run the teardown body verbatim.
-                    await self._teardown_after_close_cutoff()
-            finally:
-                _SESSION_CLOSED.add(1, attributes={"kind": kind or "unknown"})
+            await close_standalone(self)
+        else:
+            # A bare mixin double with no gate at all (unit tests that
+            # construct SessionOpsMixin.__new__() directly) -- nothing to
+            # coordinate, run the teardown body verbatim.
+            await self._teardown_after_close_cutoff()
 
     async def _teardown_after_close_cutoff(self, *, reason: str | None = None) -> None:
         from octowright.session import core_teardown_helpers as _teardown
