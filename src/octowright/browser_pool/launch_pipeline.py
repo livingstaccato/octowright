@@ -7,10 +7,11 @@
 
 The pipeline is split into four pieces:
 
-- ``launch_publish._prepare_session_before_publication`` — recorder + session
-  construction, listener/init-script/trace wiring. Runs BEFORE the session
-  is registry-visible (split into its own module to keep this file under
-  the repository's 550-line LOC ceiling — see that module's docstring).
+- ``launch_publish._prepare_session_before_publication`` — session
+  construction, listener/init-script/trace wiring against a ``Recorder`` the
+  caller already constructed. Runs BEFORE the session is registry-visible
+  (split into its own module to keep this file under the repository's
+  550-line LOC ceiling — see that module's docstring).
 - ``cleanup_failed_launch`` — unified cleanup for both the pre-register
   context-open phase and the post-register session-setup phase.
 - ``post_context_setup`` — registry insertion through initial navigation,
@@ -224,21 +225,31 @@ async def post_context_setup(
     """Recorder → BrowserSession → wire listeners → goto → register.
 
     Owns the entire post-context-open phase and the single cleanup branch
-    gated by the local ``registered`` flag. Everything before registry
-    publication (recorder/session construction, listener/init-script/trace
-    wiring) is delegated to ``_prepare_session_before_publication`` — nothing
-    there can resolve the session by instance_id yet. Registry publication
-    through the initial navigation runs under one ``browser_launch_navigation``
-    lease, ACQUIRED ON THE SESSION BEFORE IT IS INSERTED into ``pool._sessions``
-    and held across that insertion — so a concurrent dashboard/in-process
-    caller that resolves the instance_id the instant it appears just queues
-    behind this same root operation instead of racing the initial goto.
+    gated by the local ``registered`` flag. The ``Recorder`` is constructed
+    HERE, as the first statement in the ``try`` block (matching the
+    pre-Task-10 ordering) — not inside ``_prepare_session_before_publication``
+    — so that if any of that helper's three failure-prone awaits
+    (``_expose_viewport_binding``, ``wire_init_scripts``,
+    ``context.tracing.start``) raises, the ``except`` handlers below still
+    hold a live reference and can close it deterministically via
+    ``cleanup_unregistered_launch`` instead of leaking an open file handle to
+    GC-timed cleanup. Everything else before registry publication (session
+    construction, listener/init-script/trace wiring) is delegated to
+    ``_prepare_session_before_publication`` — nothing there can resolve the
+    session by instance_id yet. Registry publication through the initial
+    navigation runs under one ``browser_launch_navigation`` lease, ACQUIRED ON
+    THE SESSION BEFORE IT IS INSERTED into ``pool._sessions`` and held across
+    that insertion — so a concurrent dashboard/in-process caller that
+    resolves the instance_id the instant it appears just queues behind this
+    same root operation instead of racing the initial goto.
     """
     recorder: Recorder | None = None
     registered = False
     try:
-        recorder, new_session = await _prepare_session_before_publication(
+        recorder = Recorder(log_path)
+        new_session = await _prepare_session_before_publication(
             pool,
+            recorder=recorder,
             launch_options=launch_options,
             instance_id=instance_id,
             profile=profile,
