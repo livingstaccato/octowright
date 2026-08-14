@@ -79,6 +79,14 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "close-race fallback snapshot in _close_with_fallback_snapshot where the gate is by "
         "definition no longer available",
     ),
+    "session/screencast.py:ScreencastManager._stop_bound_owned_locked": (
+        "cached-property-only",
+        "reads and clears the cached _bound_page reference (no I/O) purely to decide whether "
+        "there is a producer to stop at all; the real Playwright call (page.screencast.stop()) "
+        "is separately gated a few lines below, and moving this read inside that gate would "
+        "change its documented behavior -- a session with no bound page must return cleanly "
+        "even while the gate is closing/closed, not be refused for having nothing to stop",
+    ),
     # A close cutoff or external close has already made ordinary admission impossible.
     "session/core_ops_mixin.py:SessionOpsMixin._teardown_after_close_cutoff": (
         "teardown-only",
@@ -99,6 +107,13 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "teardown-only",
         "extracted verbatim from _teardown_after_close_cutoff's own body (LOC-ceiling split, "
         "no behavior change); runs only after a reserved close owns the cutoff",
+    ),
+    "session/core_teardown_helpers.py:resolve_video_path_after_close": (
+        "teardown-only",
+        "extracted verbatim from _teardown_after_close_cutoff's own body (LOC-ceiling split, "
+        "no behavior change); runs only after a reserved close owns the cutoff -- the third of "
+        "the file's three teardown-body functions, alongside stop_trace_if_enabled and "
+        "close_browser_handle_after_context_close",
     ),
     # Browser callbacks must respond synchronously or unblock the admitted call.
     "session/core_interaction_mixin.py:SessionInteractionMixin._handle_dialog._act": (
