@@ -125,7 +125,7 @@ def _live_summary(session: Any) -> dict[str, Any]:
     if not started_at:
         launch = _read_first_launch(log_path) if log_path.exists() else None
         started_at = (launch or {}).get("ts") or _iso(time.time())
-    return {
+    summary: dict[str, Any] = {
         "id": session.instance_id,
         "kind": session.kind,
         "label": session.label,
@@ -140,6 +140,12 @@ def _live_summary(session: Any) -> dict[str, Any]:
         "download_count": int(getattr(session, "download_count", len(getattr(session, "downloads", ())))),
         "page_count": int(getattr(session, "page_count", len(getattr(session, "pages", ()) or (1,)))),
     }
+    # Terminal sessions carry no operation gate -- only add the key when the
+    # object actually supplies one, rather than fabricating an idle default.
+    snapshot = getattr(session, "operation_snapshot", None)
+    if callable(snapshot):
+        summary["operation_gate"] = snapshot()
+    return summary
 
 
 # Per-file summary cache. _summarise_recording reads the first launch row

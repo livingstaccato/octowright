@@ -15,7 +15,10 @@ from octowright.browser_pool import BrowserPool
 
 
 def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
+    from octowright.session.operation_gate import SessionOperationGate
+
     pool = BrowserPool()
+    gate = SessionOperationGate("abc123", "webkit")
     session = SimpleNamespace(
         instance_id="abc123",
         kind="webkit",
@@ -25,6 +28,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
         log_path="/tmp/demo.jsonl",
         har_path=None,
         protected=False,
+        operation_snapshot=gate.snapshot,
     )
     pool._sessions["abc123"] = session  # type: ignore[assignment]
 
@@ -42,6 +46,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
             "log_path": "/tmp/demo.jsonl",
             "har_path": None,
             "protected": False,
+            "operation_gate": gate.snapshot(),
         }
     ]
 

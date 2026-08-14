@@ -353,7 +353,29 @@ class TestListSessions:
         pool = BrowserPool()
         pool._sessions["a"] = _fake_session(instance_id="a")
         rows = pool.list_sessions()
-        assert set(rows[0]) == {"instance_id", "kind", "label", "profile", "url", "log_path", "har_path", "protected"}
+        assert set(rows[0]) == {
+            "instance_id",
+            "kind",
+            "label",
+            "profile",
+            "url",
+            "log_path",
+            "har_path",
+            "protected",
+            "operation_gate",
+        }
+
+
+def test_pool_list_sessions_includes_gate_snapshot(pool: BrowserPool, session: BrowserSession) -> None:
+    row = pool.list_sessions()[0]
+    assert row["operation_gate"] == {
+        "state": "open",
+        "active_operation": None,
+        "active_for_ms": None,
+        "queue_depth": 0,
+        "oldest_wait_ms": None,
+        "queue_timeout_seconds": 300.0,
+    }
 
 
 class TestProfileInUse:
