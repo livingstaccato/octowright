@@ -1605,6 +1605,92 @@ class TestDurableCloseCoordinator:
         assert spans[1][1]["reason"] == "user_close"
 
 
+# ─── _coordinate_close finally-block resilience (hardening, Task 8 review) ──
+
+
+class TestCloseCoordinatorFinallyResilience:
+    """A secondary exception inside ``_coordinate_close``'s ``finally``
+    block used to be able to escape the coordinator entirely, skipping
+    ``complete_close``/``fail_close`` (stranding every ``reservation.wait()``
+    caller forever) and the ``_closing_sessions`` pop (permanently poisoning
+    the instance_id). ``close_helpers.run_close_bookkeeping``/
+    ``resolve_close_outcome`` now contain that -- these pin the guarantee
+    directly, independent of the compound-operation (preparation-callback)
+    machinery above."""
+
+    @pytest.mark.anyio
+    async def test_secondary_finally_failure_does_not_strand_reservation(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A secondary exception in the finally block's own bookkeeping
+        (e.g. a raising log handler) becomes the close's error rather than
+        propagating -- the caller sees a clean exception, not a hang."""
+        from octowright.browser_pool import close_helpers as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+
+        def _raising_publish(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("publish blew up")
+
+        monkeypatch.setattr(_lc, "publish_close_once", _raising_publish)
+
+        with pytest.raises(RuntimeError, match="publish blew up"):
+            await asyncio.wait_for(pool.close(session.instance_id, force=True), timeout=2.0)
+
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+    @pytest.mark.anyio
+    async def test_primary_close_error_wins_over_secondary_finally_failure(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When teardown itself fails AND the finally block's own
+        bookkeeping also fails, the caller sees the ORIGINAL teardown error
+        -- the secondary failure is logged, never substituted in its place."""
+        from octowright.browser_pool import close_helpers as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        primary_error = RuntimeError("teardown failed")
+        session.context.close.side_effect = primary_error
+
+        def _raising_publish(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("publish blew up too")
+
+        monkeypatch.setattr(_lc, "publish_close_once", _raising_publish)
+
+        with pytest.raises(RuntimeError, match="teardown failed"):
+            await asyncio.wait_for(pool.close(session.instance_id, force=True), timeout=2.0)
+
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+    @pytest.mark.anyio
+    async def test_response_computation_failure_does_not_hang(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A session double missing an attribute close_response needs (the
+        exact failure mode that motivated this hardening -- see Task 8's
+        report) fails the close cleanly with a bounded timeout instead of
+        hanging every caller of reservation.wait() forever."""
+        from octowright.browser_pool import close_helpers as _lc
+        from octowright.session.operation_gate import SessionOperationGate
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        pool = BrowserPool()
+        broken = SimpleNamespace(
+            instance_id="broken1",
+            kind="chromium",
+            protected=False,
+            protected_reason="explicit",
+            _teardown_after_close_cutoff=AsyncMock(),
+            _operation_gate=SessionOperationGate("broken1", "chromium"),
+            # log_path/video_path/trace_path deliberately OMITTED --
+            # close_response(session) raises AttributeError reading them.
+        )
+        pool._sessions["broken1"] = broken
+
+        with pytest.raises(AttributeError):
+            await asyncio.wait_for(pool.close("broken1", force=True), timeout=2.0)
+
+        await wait_until(lambda: "broken1" not in pool._closing_sessions)
+
+
 # ─── Compound close operations (Task 8): preparation-at-ticket atomicity ────
 
 
@@ -1645,6 +1731,8 @@ class TestCompoundCloseOperations:
         assert result["url"] == "https://final.test"
         assert result["old_closed"] is True
         assert pool.launch.call_args.kwargs["url"] == "https://final.test"
+        # Regression: handoff replacements must keep the corner badge.
+        assert pool.launch.call_args.kwargs["badge"] is True
 
     @pytest.mark.anyio
     async def test_nonclosing_handoff_uses_one_ordinary_source_lease(
