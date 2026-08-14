@@ -9,7 +9,7 @@ Pins:
 - LaunchOptions.validate() / promoted_profile() / session_name() / from_mapping()
 - BrowserPool.get raises with the empty-pool vs known-ids hint
 - maybe_get / has_session / active_count / iter_sessions / list_sessions /
-  profile_in_use / _evict_session_nowait shape
+  profile_in_use / _accept_external_close_nowait shape
 - _build_launch_kwargs (chromium-headed-tile vs everything-else)
 - _resolve_session_dir (None when session=False, tmp creation, key reuse,
   recreation when tmpdir vanishes)
@@ -17,12 +17,18 @@ Pins:
 - handoff_browser stateless rejection, persistent close_original=False rejection
 - close_all + spawn_roster (per-spec error captured without aborting siblings)
 - shutdown_pool (close_all + pw stop + tmpdir cleanup)
+- TestDurableCloseCoordinator: the durable, coalesced close coordinator
+  (Task 7) -- caller cancellation vs. accepted-close durability, duplicate
+  close identity coalescing, close_all's two-stage reserve-then-await,
+  protection-race both orderings, external-close-wins-mid-drain, a broken
+  gate's teardown-only path, and replayed Playwright close-listener no-ops.
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -31,9 +37,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.browser_pool import BrowserPool
+from octowright.browser_pool.errors import ProtectedBrowserCloseError
+from octowright.browser_pool.events import SessionClosedEvent
 from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
 from octowright.browser_pool.options import LaunchOptions
 from octowright.browser_pool.roster import close_all, spawn_roster
+from octowright.browser_pool.session_event_bus import session_event_bus
+from octowright.session import BrowserSession
+from octowright.session.operation_gate import SessionClosingError
+from tests._pool_invariants import hold_operation, wait_for_active, wait_for_state, wait_until
 
 
 @pytest.fixture
@@ -55,6 +67,13 @@ def _fake_session(
     protected: bool = False,
     trace: bool = False,
 ) -> Any:
+    """A duck-typed session double carrying a REAL ``SessionOperationGate`` --
+    the close coordinator (``lifecycle.py``) drives ``_operation_gate``
+    directly, so a bare mock gate would not exercise its actual state
+    machine. ``_teardown_after_close_cutoff`` stands in for the real
+    session's teardown body (the coordinator calls it, never ``.close()``)."""
+    from octowright.session.operation_gate import SessionOperationGate
+
     return SimpleNamespace(
         instance_id=instance_id,
         kind=kind,
@@ -66,11 +85,15 @@ def _fake_session(
         user_data_dir=user_data_dir,
         stabilize=stabilize,
         protected=protected,
+        protected_reason="explicit",
         trace=trace,
         page=SimpleNamespace(url=url),
         video_path=None,
         trace_path=None,
         close=AsyncMock(),
+        _teardown_after_close_cutoff=AsyncMock(),
+        _operation_gate=SessionOperationGate(instance_id, kind),
+        _crashed=False,
     )
 
 
@@ -218,24 +241,28 @@ class TestPoolLookupAPI:
         assert pool.get("abc123") is sess
 
     def test_get_raises_with_relaunch_hint_for_externally_evicted_instance(self) -> None:
-        """A browser dropped via the external-close/crash path (_evict_session_nowait)
-        yields a 'relaunch' message, distinct from the generic 'no such id' — so an
-        agent whose browser crashed knows it died rather than thinking it mistyped."""
+        """A browser dropped via the external-close/crash path
+        (_accept_external_close_nowait) yields a 'relaunch' message, distinct
+        from the generic 'no such id' — so an agent whose browser crashed
+        knows it died rather than thinking it mistyped. Called with no
+        running loop (a sync test), so no durable-teardown coordinator is
+        created — the eviction itself is still synchronous."""
         pool = BrowserPool()
-        pool._sessions["abc123"] = _fake_session()
-        evicted = pool._evict_session_nowait("abc123")
-        assert evicted is not None  # the external-close path actually dropped it
+        sess = _fake_session()
+        pool._sessions["abc123"] = sess
+        pool._accept_external_close_nowait("abc123", expected_session=sess, reason="user_close")
+        assert "abc123" not in pool._sessions  # the external-close path actually dropped it
         with pytest.raises(KeyError) as exc:
             pool.get("abc123")
         msg = str(exc.value)
         assert "abc123" in msg
         assert "relaunch" in msg.lower()
 
-    def test_evict_session_nowait_miss_does_not_record(self) -> None:
+    def test_accept_external_close_miss_does_not_record(self) -> None:
         """A no-op eviction (id never live) must not mark the id as crashed —
         get() on a never-seen id keeps the plain 'no such id' message."""
         pool = BrowserPool()
-        assert pool._evict_session_nowait("never") is None
+        assert pool._accept_external_close_nowait("never") is None
         with pytest.raises(KeyError) as exc:
             pool.get("never")
         assert "relaunch" not in str(exc.value).lower()
@@ -325,17 +352,20 @@ class TestProfileInUse:
         assert BrowserPool().profile_in_use(kind="chromium", profile="x") is False
 
 
-class TestEvictSessionNowait:
-    def test_returns_session_and_removes(self) -> None:
+class TestAcceptExternalCloseNowait:
+    def test_removes_session_synchronously(self) -> None:
+        """No running loop (a sync test) → the registry eviction still
+        happens synchronously, even though no coordinator task is created."""
         pool = BrowserPool()
         sess = _fake_session()
         pool._sessions["x"] = sess
-        evicted = pool._evict_session_nowait("x")
-        assert evicted is sess
+        result = pool._accept_external_close_nowait("x", expected_session=sess, reason="user_close")
+        assert result is None  # no running loop to schedule durable cleanup on
         assert "x" not in pool._sessions
+        assert sess._operation_gate.snapshot()["state"] == "closed"
 
     def test_missing_returns_none_no_raise(self) -> None:
-        assert BrowserPool()._evict_session_nowait("nope") is None
+        assert BrowserPool()._accept_external_close_nowait("nope") is None
 
 
 # ─── _build_launch_kwargs ────────────────────────────────────────────────────
@@ -617,7 +647,7 @@ class TestCloseBrowser:
             await pool.close(sess.instance_id)
 
         assert pool._sessions[sess.instance_id] is sess
-        sess.close.assert_not_awaited()
+        sess._teardown_after_close_cutoff.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_pool_close_force_closes_protected(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -633,11 +663,12 @@ class TestCloseBrowser:
 
         assert result["closed"] is True
         assert sess.instance_id not in pool._sessions
-        sess.close.assert_awaited_once()
+        sess._teardown_after_close_cutoff.assert_awaited_once()
 
     @pytest.mark.anyio
     async def test_evicts_session_before_close(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The session is removed from _sessions BEFORE session.close() is awaited."""
+        """The session leaves _sessions once its ticket owns the gate, BEFORE
+        the teardown body is awaited (see lifecycle._coordinate_close)."""
         pool = BrowserPool()
         sess = _fake_session()
         pool._sessions[sess.instance_id] = sess
@@ -649,7 +680,7 @@ class TestCloseBrowser:
 
         await close_browser(pool, sess.instance_id)
         assert sess.instance_id not in pool._sessions
-        sess.close.assert_awaited_once()
+        sess._teardown_after_close_cutoff.assert_awaited_once()
 
     @pytest.mark.anyio
     async def test_manifest_remove_failure_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -753,79 +784,72 @@ class TestCloseAll:
         assert await close_all(pool) == {"closed": []}
 
     @pytest.mark.anyio
-    async def test_closes_each_session(self) -> None:
-        """Every session id gets passed to pool.close in order."""
+    async def test_closes_each_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every live session is reserved and torn down through the real
+        two-stage coordinator (reserve-all, then await-all)."""
+        from octowright.browser_pool import lifecycle as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()
-        pool._sessions["a"] = _fake_session(instance_id="a")
-        pool._sessions["b"] = _fake_session(instance_id="b")
-        called: list[tuple[str, bool]] = []
+        a = _fake_session(instance_id="a")
+        b = _fake_session(instance_id="b")
+        pool._sessions["a"] = a
+        pool._sessions["b"] = b
 
-        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
-            called.append((iid, force))
-            return {"closed": True}
-
-        pool.close = fake_close  # type: ignore[method-assign]
         result = await close_all(pool)
         assert sorted(result["closed"]) == ["a", "b"]
-        assert sorted(called) == [("a", False), ("b", False)]
+        a._teardown_after_close_cutoff.assert_awaited_once()
+        b._teardown_after_close_cutoff.assert_awaited_once()
+        assert pool._closing_sessions == {}
 
     @pytest.mark.anyio
-    async def test_force_passed_to_each_close(self) -> None:
+    async def test_force_passed_to_each_close(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """close_all(force=True) intentionally overrides protected sessions."""
+        from octowright.browser_pool import lifecycle as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()
-        pool._sessions["a"] = _fake_session(instance_id="a", protected=True)
-        called: list[tuple[str, bool]] = []
+        a = _fake_session(instance_id="a", protected=True)
+        pool._sessions["a"] = a
 
-        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
-            called.append((iid, force))
-            return {"closed": True}
-
-        pool.close = fake_close  # type: ignore[method-assign]
         result = await close_all(pool, force=True)
         assert result == {"closed": ["a"]}
-        assert called == [("a", True)]
+        a._teardown_after_close_cutoff.assert_awaited_once()
 
     @pytest.mark.anyio
-    async def test_skips_protected_without_force(self) -> None:
+    async def test_skips_protected_without_force(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """close_all reports protected sessions skipped from the owner-layer guard."""
-        from octowright.browser_pool.errors import ProtectedBrowserCloseError
+        from octowright.browser_pool import lifecycle as _lc
 
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()
         pool._sessions["a"] = _fake_session(instance_id="a", protected=True)
         pool._sessions["b"] = _fake_session(instance_id="b", protected=False)
-        called: list[tuple[str, bool]] = []
 
-        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
-            called.append((iid, force))
-            if iid == "a":
-                raise ProtectedBrowserCloseError("browser 'a' is protected; pass force=True to close it")
-            return {"closed": True}
-
-        pool.close = fake_close  # type: ignore[method-assign]
         result = await close_all(pool)
         assert result["closed"] == ["b"]
         assert result["skipped_protected"] == ["a"]
         assert "force=True" in result["message"]
-        assert sorted(called) == [("a", False), ("b", False)]
+        # The refused protected session was never reserved -- still fully open.
+        assert pool._sessions["a"].instance_id == "a"
 
     @pytest.mark.anyio
-    async def test_reports_non_protected_close_failures(self) -> None:
+    async def test_reports_non_protected_close_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """close_all returns failures so callers can distinguish them from an empty pool."""
+        from octowright.browser_pool import lifecycle as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()
-        pool._sessions["a"] = _fake_session(instance_id="a")
-        pool._sessions["b"] = _fake_session(instance_id="b")
+        a = _fake_session(instance_id="a")
+        b = _fake_session(instance_id="b")
+        a._teardown_after_close_cutoff.side_effect = RuntimeError("page crashed")
+        b._teardown_after_close_cutoff.side_effect = ValueError("not protected, just invalid")
+        pool._sessions["a"] = a
+        pool._sessions["b"] = b
 
-        async def fake_close(iid: str, *, force: bool = False, **_kw: Any) -> dict[str, Any]:
-            if iid == "a":
-                raise RuntimeError("page crashed")
-            if iid == "b":
-                raise ValueError("not protected, just invalid")
-            return {"closed": True}
-
-        pool.close = fake_close  # type: ignore[method-assign]
         result = await close_all(pool)
         assert result["closed"] == []
-        assert result["failed"] == [
+        assert sorted(result["failed"], key=lambda row: row["instance_id"]) == [
             {"instance_id": "a", "error": "RuntimeError: page crashed"},
             {"instance_id": "b", "error": "ValueError: not protected, just invalid"},
         ]
@@ -1206,3 +1230,243 @@ class TestSessionsLock:
             assert isinstance(pool._sessions_lock, asyncio.Lock)
             await close_browser(pool, sess.instance_id)
         assert sess.instance_id not in pool._sessions
+
+
+# ─── durable, coalesced close coordinator (Task 7) ──────────────────────────
+#
+# These tests use a REAL BrowserSession (not the SimpleNamespace double
+# above) with a mocked context/page/recorder, so the coordinator's actual
+# gate transitions (reserve_close / close_operation / complete_close /
+# fail_close) and real ``_teardown_after_close_cutoff`` body run for real.
+
+
+def _real_session(*, instance_id: str, tmp_path: Path, protected: bool = False) -> BrowserSession:
+    context = MagicMock()
+    context.close = AsyncMock()
+    context.tracing = MagicMock()
+    context.on = MagicMock()
+    page = MagicMock()
+    return BrowserSession(
+        instance_id=instance_id,
+        kind="chromium",
+        label=None,
+        url="https://octowright.com",
+        browser=None,
+        context=context,
+        page=page,
+        recorder=MagicMock(),
+        log_path=tmp_path / f"{instance_id}.jsonl",
+        protected=protected,
+    )
+
+
+@pytest.fixture
+def pool() -> BrowserPool:
+    return BrowserPool()
+
+
+@pytest.fixture
+def session(pool: BrowserPool, tmp_path: Path) -> BrowserSession:
+    sess = _real_session(instance_id="sess-1", tmp_path=tmp_path)
+    pool._sessions[sess.instance_id] = sess
+    return sess
+
+
+@dataclass
+class PoolPair:
+    pool: BrowserPool
+    first: BrowserSession
+    second: BrowserSession
+    release_first: asyncio.Event
+    release_second: asyncio.Event
+
+
+@pytest.fixture
+def pool_with_two_sessions(pool: BrowserPool, tmp_path: Path) -> PoolPair:
+    # Deliberately a SYNC fixture: an async fixture alongside this file's
+    # @pytest.mark.anyio tests risks the fixture and the test running on two
+    # different event loops under anyio's plugin. The "hold each gate busy"
+    # setup instead happens explicitly inside the one test that needs it.
+    first = _real_session(instance_id="first", tmp_path=tmp_path)
+    second = _real_session(instance_id="second", tmp_path=tmp_path)
+    pool._sessions[first.instance_id] = first
+    pool._sessions[second.instance_id] = second
+    return PoolPair(
+        pool=pool,
+        first=first,
+        second=second,
+        release_first=asyncio.Event(),
+        release_second=asyncio.Event(),
+    )
+
+
+class TestDurableCloseCoordinator:
+    @pytest.mark.anyio
+    async def test_cancelled_close_caller_does_not_cancel_accepted_close(
+        self, pool: BrowserPool, session: BrowserSession
+    ) -> None:
+        active_release = asyncio.Event()
+        active = asyncio.create_task(hold_operation(session, "long_action", active_release))
+        await wait_for_active(session._operation_gate, "long_action")
+        caller = asyncio.create_task(pool.close(session.instance_id, force=True))
+        await wait_for_state(session._operation_gate, "closing")
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        active_release.set()
+        await active
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+        session.context.close.assert_awaited_once()
+        with pytest.raises(KeyError):
+            pool.get(session.instance_id)
+
+    @pytest.mark.anyio
+    async def test_duplicate_close_callers_share_one_error(self, pool: BrowserPool, session: BrowserSession) -> None:
+        teardown_error = RuntimeError("teardown failed")
+        session.context.close.side_effect = teardown_error
+        first = asyncio.create_task(pool.close(session.instance_id, force=True))
+        await wait_for_state(session._operation_gate, "closing")
+        second = asyncio.create_task(pool.close(session.instance_id, force=True))
+        first_result, second_result = await asyncio.gather(first, second, return_exceptions=True)
+        assert first_result is teardown_error
+        assert second_result is teardown_error
+        assert session.operation_snapshot()["state"] == "closed"
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+    @pytest.mark.anyio
+    async def test_duplicate_close_callers_share_one_success(self, pool: BrowserPool, session: BrowserSession) -> None:
+        """The happy-path twin of the error-coalescing test above: two
+        concurrent callers for the same identity get the SAME response dict
+        (one coordinator, one outcome), and the context is only closed once."""
+        first = asyncio.create_task(pool.close(session.instance_id, force=True))
+        await wait_for_state(session._operation_gate, "closing")
+        second = asyncio.create_task(pool.close(session.instance_id, force=True))
+        first_result, second_result = await asyncio.gather(first, second)
+        assert first_result == second_result
+        session.context.close.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_close_all_reserves_every_session_before_waiting(self, pool_with_two_sessions: PoolPair) -> None:
+        pair = pool_with_two_sessions
+        # Hold each session's gate busy so close_all's reservation is
+        # accepted (state -> closing) but not yet granted -- the whole point
+        # of the two-stage close_all test is proving the SECOND reservation
+        # isn't blocked behind the FIRST session's still-active operation.
+        first_holder = asyncio.create_task(hold_operation(pair.first, "long_action", pair.release_first))
+        second_holder = asyncio.create_task(hold_operation(pair.second, "long_action", pair.release_second))
+        await wait_for_active(pair.first._operation_gate, "long_action")
+        await wait_for_active(pair.second._operation_gate, "long_action")
+
+        result_task = asyncio.create_task(pair.pool.close_all(force=True))
+        await wait_for_state(pair.first._operation_gate, "closing")
+        await wait_for_state(pair.second._operation_gate, "closing")
+        assert not result_task.done()
+        pair.release_first.set()
+        pair.release_second.set()
+        result = await result_task
+        assert set(result["closed"]) == {pair.first.instance_id, pair.second.instance_id}
+        assert pair.pool._closing_sessions == {}
+        await first_holder
+        await second_holder
+
+    @pytest.mark.anyio
+    async def test_protection_commits_first_then_unforced_close_is_refused(
+        self, pool: BrowserPool, session: BrowserSession
+    ) -> None:
+        """Protection wins the race: it commits before any close reservation
+        exists, so an unforced close is refused and the gate stays open."""
+        await session.set_protected_state(True)
+        with pytest.raises(ProtectedBrowserCloseError):
+            await pool.close(session.instance_id)
+        assert session.operation_snapshot()["state"] == "open"
+        assert pool.get(session.instance_id) is session
+
+    @pytest.mark.anyio
+    async def test_close_reserves_first_then_late_protection_check_is_moot(
+        self, pool: BrowserPool, session: BrowserSession
+    ) -> None:
+        """Close reserves the cutoff first (force=True, so its own preflight
+        passes); a caller that then tries to read/mutate protected state
+        through the gate sees SessionClosingError, not a stale open gate."""
+        active_release = asyncio.Event()
+        active = asyncio.create_task(hold_operation(session, "long_action", active_release))
+        await wait_for_active(session._operation_gate, "long_action")
+        close_task = asyncio.create_task(pool.close(session.instance_id, force=True))
+        await wait_for_state(session._operation_gate, "closing")
+        with pytest.raises(SessionClosingError):
+            pool.get(session.instance_id)
+        active_release.set()
+        await active
+        result = await close_task
+        assert result["closed"] is True
+
+    @pytest.mark.anyio
+    async def test_external_close_wins_while_explicit_close_drains(
+        self, pool: BrowserPool, session: BrowserSession
+    ) -> None:
+        """Playwright's own close signal fires while an accepted explicit
+        close is still waiting on its FIFO turn: the SAME coordinator takes
+        the teardown-only branch instead of a second one spinning up."""
+        release = asyncio.Event()
+        holder = asyncio.create_task(hold_operation(session, "long_action", release))
+        await wait_for_active(session._operation_gate, "long_action")
+
+        close_task = asyncio.create_task(pool.close(session.instance_id, force=True))
+        await wait_for_state(session._operation_gate, "closing")
+
+        won = pool._accept_external_close_nowait(session.instance_id, expected_session=session, reason="user_close")
+        assert won is pool._closing_sessions[session.instance_id]
+        assert session.instance_id not in pool._sessions
+
+        release.set()
+        await holder
+        result = await close_task
+        assert result["closed"] is True
+        session.context.close.assert_awaited_once()
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+    @pytest.mark.anyio
+    async def test_close_on_broken_gate_runs_teardown_only(self, pool: BrowserPool, session: BrowserSession) -> None:
+        """A broken gate still gets a durable, once-only teardown -- the
+        close reservation takes the ready/teardown_only path immediately."""
+        session._operation_gate._break_locked("test-induced break")
+        result = await pool.close(session.instance_id, force=True)
+        assert result["closed"] is True
+        session.context.close.assert_awaited_once()
+        assert session._operation_gate.snapshot()["state"] == "closed"
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+    @pytest.mark.anyio
+    async def test_explicit_close_ignores_replayed_playwright_close_signal(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_teardown_after_close_cutoff`` calling ``context.close()`` fires
+        every normal Playwright close listener wired on it (real Playwright
+        behavior). Those listeners must not overwrite the explicit reason,
+        change coordinator ownership mid-teardown, or publish a second event
+        -- whether they fire as a side effect of the coordinator's own
+        context.close() or are replayed afterward."""
+        from octowright.browser_pool.listeners import _wire_close_evictor
+
+        monkeypatch.setattr("octowright.browser_pool.lifecycle.remove_manifest_session", lambda _id: None)
+        events: list[Any] = []
+        monkeypatch.setattr(session_event_bus, "publish_nowait", events.append)
+
+        _wire_close_evictor(pool, session)
+
+        def _fire_registered_close(*_a: Any, **_kw: Any) -> None:
+            for call in session.context.on.call_args_list:
+                if call.args[0] == "close":
+                    call.args[1]()
+
+        session.context.close.side_effect = _fire_registered_close
+
+        result = await pool.close(session.instance_id, force=True)
+        assert result["closed"] is True
+        # Replay the same signal again after the coordinator finished.
+        _fire_registered_close()
+
+        closed_events = [e for e in events if isinstance(e, SessionClosedEvent)]
+        assert len(closed_events) == 1, closed_events
+        assert closed_events[0].reason == "agent_close"
+        assert pool._closing_sessions == {}

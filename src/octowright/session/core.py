@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -129,6 +130,14 @@ class BrowserSession(
     _on_page_close: Callable[..., None] | None = field(default=None, repr=False)
     _on_page_crash: Callable[..., None] | None = field(default=None, repr=False)
     _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
+    # Installed by ``launch_pipeline._build_session_object`` before registry
+    # publication so ``BrowserSession.close()`` routes through the pool's
+    # durable close coordinator instead of tearing down directly. ``None`` for
+    # a session constructed outside a pool (tests only -- see
+    # ``SessionOpsMixin.close``'s standalone fallback), which then owns its
+    # own reservation via ``_standalone_close_task``.
+    _pool_close_requester: Callable[[], Awaitable[Any]] | None = field(default=None, repr=False)
+    _standalone_close_task: asyncio.Task[None] | None = field(default=None, repr=False)
     # Set True by the page.on("crash") listener; lets eviction report a definite
     # crash (reason="crashed") instead of an ambiguous external close. Cleared
     # again when crash_recovery successfully reloads the page.
