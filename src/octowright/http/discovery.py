@@ -148,6 +148,32 @@ def _live_summary(session: Any) -> dict[str, Any]:
     return summary
 
 
+def _live_summary_from_launch(result: dict[str, Any]) -> dict[str, Any]:
+    """Build a SessionSummary-shaped dict for the response of POST /api/sessions.
+
+    The shape mirrors ``_live_summary()`` so dashboard code that consumes
+    ``GET /api/sessions``'s ``live[]`` entries can reuse the same parser for
+    the launch response.
+    """
+    log_path = Path(result["log_path"])
+    started_at = _iso(log_path.stat().st_ctime) if log_path.exists() else _iso(time.time())
+    return {
+        "id": result["instance_id"],
+        "kind": result["kind"],
+        "label": result.get("label"),
+        "profile": result.get("profile"),
+        "url": result.get("url"),
+        "started_at": started_at,
+        "live": True,
+        "protected": result.get("protected", False),
+        "log_path": str(log_path),
+        "event_count": 1,  # launch event is written before HTTP response
+        "console_count": 0,
+        "download_count": 0,
+        "page_count": 1,
+    }
+
+
 # Per-file summary cache. _summarise_recording reads the first launch row
 # (which is stable for the file's lifetime), so a (mtime_ns, size) signature
 # is sufficient to detect anything that would change the summary. Eliminates
