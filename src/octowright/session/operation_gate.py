@@ -163,9 +163,22 @@ async def _run_shielded(coro: Coroutine[Any, Any, None]) -> None:
         raise
 
 
+def _observe_future_exception(future: asyncio.Future[object]) -> None:
+    # A CloseReservation.outcome may end up with no remaining observer (every
+    # caller cancelled .wait(), which shields the underlying future). Calling
+    # .exception() here -- without consuming it -- stops asyncio's "exception
+    # was never retrieved" warning; a later await of the same future still
+    # raises the identical stored object.
+    def _observe(done: asyncio.Future[object]) -> None:
+        if not done.cancelled():
+            done.exception()
+
+    future.add_done_callback(_observe)
+
+
 @dataclass(slots=True)
 class _Waiter:
-    task: asyncio.Task[object]
+    task: asyncio.Task[object] | None
     operation_name: str
     queued_at: float
     ready: asyncio.Future[None]
@@ -179,6 +192,17 @@ class _LeaseToken:
 
 
 @dataclass(slots=True)
+class CloseReservation:
+    operation_name: str
+    waiter: _Waiter
+    outcome: asyncio.Future[object]
+    teardown_only: bool = False
+
+    async def wait(self) -> object:
+        return await asyncio.shield(self.outcome)
+
+
+@dataclass(slots=True)
 class _Diagnostics:
     state: OperationGateState
     active_operation: str | None
@@ -188,13 +212,19 @@ class _Diagnostics:
     queue_timeout_seconds: float
 
 
-class SessionOperationGate:
+# Imported here, not at module top: operation_gate_close imports names
+# defined above back out of this module, which must bind them first.
+from octowright.session.operation_gate_close import _CloseGateMixin  # noqa: E402
+
+
+class SessionOperationGate(_CloseGateMixin):
     """Serializes Playwright operations for one browser session.
 
     Exactly one asyncio ``Task`` may own the gate at a time, checked by
     ``asyncio.current_task()`` identity. The owning task may re-enter without
     queueing; every other task -- including one the owner spawns itself via
-    ``asyncio.create_task`` -- queues FIFO behind it.
+    ``asyncio.create_task`` -- queues FIFO behind it. Close/external-close/
+    control-plane methods come from ``_CloseGateMixin``, part of this API.
     """
 
     def __init__(
@@ -218,6 +248,8 @@ class SessionOperationGate:
         self._queue_depth = 0
         self._state = OperationGateState.OPEN
         self._invariant_reason: str | None = None
+        self._close_reservation: CloseReservation | None = None
+        self._granted_close_reservation: CloseReservation | None = None
         self._diagnostics_lock = threading.Lock()
         self._diagnostics = _Diagnostics(
             state=self._state,
@@ -268,10 +300,33 @@ class SessionOperationGate:
     def _break_locked(self, reason: str) -> None:
         self._state = OperationGateState.BROKEN
         self._invariant_reason = reason
+        self._fail_queued_locked(OperationGateInvariantError, reason=reason)
         log.error(
             "octowright.operation.invariant_broken",
             instance_id=self.instance_id,
             kind=self.kind,
+            state=self._state.value,
+            reason=reason,
+        )
+
+    def _fail_queued_locked(self, error_cls: type[RuntimeError], *, reason: str) -> None:
+        waiters, self._waiters = list(self._waiters), deque()
+        if waiters:
+            self._queue_depth_delta(-len(waiters))
+        for waiter in waiters:
+            if waiter.ready.done():
+                continue
+            self._log_rejected(waiter.operation_name, reason)
+            waiter.ready.set_exception(error_cls(self._rejection_message(waiter.operation_name, self._state)))
+        self._publish_diagnostics_locked()
+
+    def _log_rejected(self, name: str, reason: str) -> None:
+        _REJECTED.add(1, attributes={"operation": name, "kind": self.kind, "reason": reason})
+        log.warning(
+            "octowright.operation.rejected",
+            instance_id=self.instance_id,
+            kind=self.kind,
+            operation=name,
             state=self._state.value,
             reason=reason,
         )
@@ -294,16 +349,7 @@ class SessionOperationGate:
         state = self._state
         if state is OperationGateState.OPEN:
             return
-        reason = state.value
-        _REJECTED.add(1, attributes={"operation": name, "kind": self.kind, "reason": reason})
-        log.warning(
-            "octowright.operation.rejected",
-            instance_id=self.instance_id,
-            kind=self.kind,
-            operation=name,
-            state=state.value,
-            reason=reason,
-        )
+        self._log_rejected(name, state.value)
         message = self._rejection_message(name, state)
         if state is OperationGateState.CLOSING:
             raise SessionClosingError(message)
@@ -370,15 +416,13 @@ class SessionOperationGate:
         return _LeaseToken(task, name)
 
     def _grant_next_locked(self) -> None:
-        if self._owner_task is not None or not self._waiters:
+        if self._owner_task is not None or self._granted_close_reservation is not None or not self._waiters:
             return
         waiter = self._waiters.popleft()
         self._queue_depth_delta(-1)
         waiter.granted = True
-        self._owner_task = waiter.task
         self._root_operation = waiter.operation_name
         self._active_since = self._clock()
-        self._depth = 1
         wait_seconds = self._active_since - waiter.queued_at
         _QUEUE_WAIT.record(
             wait_seconds,
@@ -393,6 +437,21 @@ class SessionOperationGate:
             queue_depth=self._queue_depth,
             queue_wait_ms=round(wait_seconds * 1000),
         )
+        if waiter.task is None:
+            # Close waiter: no coordinator task exists yet (see
+            # close_operation). _granted_close_reservation is a sentinel that
+            # keeps the guard above treating the gate as occupied across the
+            # grant-to-bind gap, instead of assigning a nonexistent owner.
+            reservation = self._close_reservation
+            if reservation is None or reservation.waiter is not waiter:
+                self._break_locked("close waiter granted without a retained reservation")
+                self._publish_diagnostics_locked()
+                return
+            self._granted_close_reservation = reservation
+            self._depth = 0
+        else:
+            self._owner_task = waiter.task
+            self._depth = 1
         self._publish_diagnostics_locked()
         waiter.ready.set_result(None)
 
