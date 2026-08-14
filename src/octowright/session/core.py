@@ -88,6 +88,26 @@ class BrowserSession(
     viewport_mode: str = _VIEWPORT_MODE_UNKNOWN
     viewport_width: int | None = None
     viewport_height: int | None = None
+    # Browser chrome around the content area, in CSS pixels, measured once at
+    # launch: ``outerWidth - innerWidth`` and ``outerHeight - innerHeight``.
+    #
+    # It is a launch-time measurement because that is the only moment the
+    # numbers are trustworthy. Playwright welds the OS window to a fixed
+    # viewport — it resizes the window so the content area matches, and
+    # re-welds on every set_viewport_size — so at launch the difference
+    # between the window and the viewport IS the chrome and nothing else.
+    # Later it may also contain drift (a tiling WM, or a maximise the
+    # emulated viewport did not follow), which is exactly what
+    # ``viewport_status`` exists to report; without a baseline captured now,
+    # there is nothing to subtract and the drift stays invisible.
+    #
+    # None means "not measured" — a page that could not be evaluated at
+    # launch. Callers must treat None as unknown and decline to warn rather
+    # than guess: a hardcoded chrome allowance is what made ``mismatch`` fire
+    # on every headed session (chrome is ~85px tall on Linux/Wayland, over the
+    # old 80px bar), and a permanent warning cannot warn.
+    viewport_frame_inset_w: int | None = None
+    viewport_frame_inset_h: int | None = None
     console: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=1000))
     video_path: Path | None = None
     trace_path: Path | None = None
