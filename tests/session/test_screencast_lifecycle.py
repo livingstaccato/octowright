@@ -221,29 +221,33 @@ async def test_session_closed_event_terminates_even_when_the_gate_is_already_clo
     sess = FakeSession("gate-already-closed")
     mgr, viewer = await sc.acquire_viewer(sess, fps=1000, quality=70)
     bound = sess.page
-    try:
-        await _await_watcher_subscription()
-        sess._test_operation_gate.mark_closed_external()
+    await _await_watcher_subscription()
+    sess._test_operation_gate.mark_closed_external()
 
-        session_event_bus.publish_nowait(
-            SessionClosedEvent(
-                instance_id=sess.instance_id,
-                kind="chromium",
-                label=None,
-                profile=None,
-                reason="user_close",
-                log_path="/x/fake.jsonl",  # fake event payload; never opened
-            )
+    session_event_bus.publish_nowait(
+        SessionClosedEvent(
+            instance_id=sess.instance_id,
+            kind="chromium",
+            label=None,
+            profile=None,
+            reason="user_close",
+            log_path="/x/fake.jsonl",  # fake event payload; never opened
         )
-        with pytest.raises(sc.ScreencastEnded):
-            await asyncio.wait_for(viewer.get(), timeout=2)
+    )
+    with pytest.raises(sc.ScreencastEnded):
+        await asyncio.wait_for(viewer.get(), timeout=2)
 
-        assert mgr._started is False
-        assert bound.screencast.stopped is True
-    finally:
-        with suppress(Exception):
-            await sc.release_viewer(mgr, viewer)
-        await _drain_registry(sess.instance_id)
+    assert mgr._started is False
+    assert bound.screencast.stopped is True
+
+    # release_viewer (the WS endpoint's `finally`, and the ONLY production
+    # path that reclaims a manager) must still succeed and fully reclaim the
+    # manager even though the session's operation gate is already closed --
+    # not raise SessionClosedError and strand a manager holding the closed
+    # BrowserSession for the life of the process.
+    await sc.release_viewer(mgr, viewer)
+    assert sc._managers.get(sess.instance_id) is None
+    assert mgr.viewer_count == 0
 
 
 @pytest.mark.asyncio
