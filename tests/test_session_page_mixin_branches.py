@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from octowright.session.core_expect_mixin import SessionExpectMixin
 from octowright.session.core_page_mixin import SessionPageMixin
 
 
@@ -39,9 +40,14 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def _make_subject(tmp_path: Path) -> SessionPageMixin:
-    """Build a SessionPageMixin instance with the attributes navigate/* read."""
-    subj = SessionPageMixin.__new__(SessionPageMixin)
+class _CombinedMixin(SessionExpectMixin, SessionPageMixin):
+    """expect_* now lives on SessionExpectMixin; wait_for (SessionPageMixin)
+    calls the inherited _poll_until, so tests exercising either need both."""
+
+
+def _make_subject(tmp_path: Path) -> _CombinedMixin:
+    """Build a combined-mixin instance with the attributes navigate/* read."""
+    subj = _CombinedMixin.__new__(_CombinedMixin)
     subj._last_mcp_navigation = None
     page = MagicMock()
     page.url = "https://octowright.com"
@@ -759,7 +765,7 @@ class TestExpectUrl:
 
 
 class TestExpectText:
-    def _setup(self, tmp_path: Path, *, inner_text: str = "hello") -> SessionPageMixin:
+    def _setup(self, tmp_path: Path, *, inner_text: str = "hello") -> _CombinedMixin:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         element = MagicMock()

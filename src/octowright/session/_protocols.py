@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, LiteralString, Protocol
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
 from octowright.recorder import Recorder
+from octowright.session.operation_gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
 
 
 class SessionLike(Protocol):
@@ -62,6 +64,12 @@ class SessionLike(Protocol):
 
     def _websocket_cache_path(self) -> Path: ...
 
+    # Implemented on SessionExpectMixin; declared here so SessionPageMixin's
+    # wait_for (which calls self._poll_until for its text/expression
+    # branches) type-checks in isolation despite the two mixins only being
+    # combined together on BrowserSession.
+    async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None: ...
+
     # Action methods accessed directly (not via getattr) by the macro
     # dispatcher. The remaining action methods (navigate, type_text,
     # press_key, etc.) are looked up dynamically through ``_ACTION_MAP``
@@ -80,3 +88,19 @@ class SessionLike(Protocol):
     ) -> dict[str, Any]: ...
 
     async def snapshot(self) -> dict[str, Any]: ...
+
+    def operation(
+        self,
+        operation_name: LiteralString,
+        *,
+        wait_timeout_seconds: float | None | UseDefault = USE_DEFAULT,
+    ) -> AbstractAsyncContextManager[None]: ...
+
+    def operation_snapshot(self) -> OperationGateSnapshot: ...
+
+    async def set_protected_state(
+        self,
+        protected: bool,
+        *,
+        reason: str = "explicit",
+    ) -> dict[str, object]: ...

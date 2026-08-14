@@ -257,6 +257,7 @@ def _build_session_object(
     launch_options: LaunchOptions,
     har_path: Path | None,
     viewport_info: Any,
+    operation_queue_timeout_seconds: float,
 ) -> BrowserSession:
     """Construct the BrowserSession dataclass plus video tracking.
 
@@ -291,6 +292,7 @@ def _build_session_object(
         viewport_width=viewport_info.width,
         viewport_height=viewport_info.height,
         _browser_for_close=(browser if browser is not None else getattr(context, "browser", None)),
+        operation_queue_timeout_seconds=operation_queue_timeout_seconds,
     )
     # Wire up video tracking — page.video is only non-None when record_video_dir was set.
     if launch_options.record_video and page.video is not None:
@@ -372,6 +374,7 @@ async def post_context_setup(
             launch_options=launch_options,
             har_path=har_path,
             viewport_info=viewport_info,
+            operation_queue_timeout_seconds=pool.operation_queue_timeout_seconds,
         )
         new_session.attach_console()
         await pool._expose_viewport_binding(context, new_session)

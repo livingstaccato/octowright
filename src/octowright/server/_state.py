@@ -20,7 +20,7 @@ from provide.telemetry import get_logger
 from octowright import scenarios_pool as _scenario_pool_mod
 from octowright import terminal as _terminal
 from octowright.browser_pool import BrowserPool
-from octowright.server._heartbeat import _progress_heartbeat
+from octowright.server._heartbeat import HEARTBEAT_MAX_SECONDS, _progress_heartbeat
 from octowright.server._idempotency import _idempotent_dispatch
 from octowright.server._request_context import RequestContextMiddleware
 from octowright.server.profiles import active_filter
@@ -38,6 +38,33 @@ log = get_logger("octowright.server")
 _CallableT = TypeVar("_CallableT", bound=Callable[..., Any])
 
 pool = BrowserPool()
+
+# The operation gate's per-session queue timeout and the progress heartbeat's
+# ceiling are configured independently (different env vars, different
+# owners), but they interact: a queued operation waits up to
+# operation_queue_timeout_seconds for admission, while the heartbeat that
+# keeps the follower bridge's transport deadline alive for that same request
+# stops pinging at HEARTBEAT_MAX_SECONDS. If the queue timeout is allowed to
+# reach or exceed the heartbeat ceiling, a long queue wait can outlive the
+# heartbeat and the transport can appear to hang/disconnect before the
+# operation is ever admitted. Checked once at daemon startup so a
+# misconfiguration is visible immediately rather than discovered under load.
+# NOTE: does not import octowright.server here (only octowright.server._heartbeat,
+# already imported above) — importing the server package from the session/pool
+# layer would execute server/__init__ and risk a layer cycle; this check lives
+# in the server layer itself, right after the pool it inspects is built.
+if pool.operation_queue_timeout_seconds >= HEARTBEAT_MAX_SECONDS:
+    log.warning(
+        "octowright.pool.operation_queue_timeout_exceeds_heartbeat_ceiling",
+        operation_queue_timeout_seconds=pool.operation_queue_timeout_seconds,
+        heartbeat_max_seconds=HEARTBEAT_MAX_SECONDS,
+        hint=(
+            "a queued operation may wait longer than the progress-heartbeat ceiling, so the bridge's "
+            "transport visibility can expire before the operation is ever admitted; lower "
+            "OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS or raise OCTOWRIGHT_HEARTBEAT_MAX_SECONDS"
+        ),
+    )
+
 scenario_pool = _scenario_pool_mod.ScenarioPool()
 
 # Terminal sessions are an optional feature (the `octowright[terminal]` extra —
