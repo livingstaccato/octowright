@@ -190,6 +190,7 @@ def _build_session_object(
 async def _prepare_session_before_publication(
     pool: BrowserPool,
     *,
+    recorder: Recorder,
     launch_options: LaunchOptions,
     instance_id: str,
     profile: str | None,
@@ -207,14 +208,22 @@ async def _prepare_session_before_publication(
     page: Any,
     user_data_dir: str | None,
     session: bool,
-) -> tuple[Recorder, BrowserSession]:
-    """Recorder + BrowserSession construction, listener/init-script/trace wiring.
+) -> BrowserSession:
+    """BrowserSession construction, listener/init-script/trace wiring.
 
     Nothing here can resolve the session by ``instance_id`` yet — it is not
     registry-visible until ``post_context_setup`` publishes it — so none of
     this needs an operation lease.
+
+    ``recorder`` is constructed by the CALLER (as the first statement of
+    ``post_context_setup``, restoring the pre-Task-10 ordering) rather than
+    here, so that a failure partway through this function's three
+    failure-prone awaits (``_expose_viewport_binding``, ``wire_init_scripts``,
+    ``context.tracing.start``) still leaves the caller's failure handler
+    holding a live reference to close deterministically — a recorder that
+    only this function's local variable pointed to would otherwise leak its
+    open file handle to GC-timed cleanup instead of a deterministic close.
     """
-    recorder = Recorder(log_path)
     _record_launch_event(
         recorder,
         instance_id=instance_id,
@@ -295,4 +304,4 @@ async def _prepare_session_before_publication(
     if launch_options.trace:
         await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
-    return recorder, new_session
+    return new_session

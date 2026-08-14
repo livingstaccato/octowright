@@ -103,10 +103,14 @@ async def test_launch_failure_closes_context_browser_and_recorder(
         return recorder
 
     monkeypatch.setattr("octowright.browser_pool.pool.RECORDINGS_DIR", tmp_path)
-    # Recorder construction lives in launch_publish._prepare_session_before_publication
-    # (Task 10 split, keeps launch_pipeline.py under the LOC ceiling), called
-    # from launch_pipeline.post_context_setup after the _launch_impl split.
-    monkeypatch.setattr("octowright.browser_pool.launch_publish.Recorder", fake_recorder)
+    # Recorder construction lives in launch_pipeline.post_context_setup, as the
+    # first statement in its try block (restored there in the Task 10 review
+    # follow-up: it must NOT live inside launch_publish._prepare_session_before_
+    # publication, or a failure partway through that helper would leave the
+    # surrounding except handlers with no live Recorder reference to close
+    # deterministically — see test_launch_failure_during_prepublication_setup_
+    # closes_recorder_deterministically below).
+    monkeypatch.setattr("octowright.browser_pool.launch_pipeline.Recorder", fake_recorder)
 
     # Navigation failures no longer tear down the browser — the session stays
     # registered and the error is surfaced as nav_warning in the result.
@@ -115,6 +119,48 @@ async def test_launch_failure_closes_context_browser_and_recorder(
     assert context.closed is False
     assert browser.closed is False
     assert len(pool.list_sessions()) == 1
+
+
+@pytest.mark.asyncio
+async def test_launch_failure_during_prepublication_setup_closes_recorder_deterministically(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failure inside one of ``_prepare_session_before_publication``'s three
+    failure-prone awaits (``_expose_viewport_binding`` / ``wire_init_scripts`` /
+    ``context.tracing.start``) happens before that helper ever returns, so
+    ``post_context_setup``'s ``except`` handler runs with the tuple-unpack
+    line never reached. The Recorder must still close deterministically —
+    proving ``recorder = Recorder(log_path)`` really is the first statement
+    of ``post_context_setup``'s ``try`` block (not something constructed
+    inside the helper and only reachable via its return value)."""
+    context = FakeContext()
+    browser = FakeBrowser(context)
+    pool = BrowserPool()
+    pool._pw = SimpleNamespace(chromium=FakeBrowserType(browser))  # type: ignore[assignment]
+    recorder_holder: dict[str, FakeRecorder] = {}
+
+    def fake_recorder(path: Path) -> FakeRecorder:
+        recorder = FakeRecorder(path)
+        recorder_holder["recorder"] = recorder
+        return recorder
+
+    monkeypatch.setattr("octowright.browser_pool.pool.RECORDINGS_DIR", tmp_path)
+    monkeypatch.setattr("octowright.browser_pool.launch_pipeline.Recorder", fake_recorder)
+
+    from octowright.browser_pool import launch_publish as _launch_publish
+
+    async def _boom_wire_init_scripts(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("init script injection failed")
+
+    monkeypatch.setattr(_launch_publish, "wire_init_scripts", _boom_wire_init_scripts)
+
+    with pytest.raises(RuntimeError, match="init script injection failed"):
+        await pool.launch(kind="chromium", url="https://octowright.com", headed=False)
+
+    assert recorder_holder["recorder"].closed is True
+    assert context.closed is True
+    assert browser.closed is True
+    assert len(pool.list_sessions()) == 0
 
 
 @pytest.mark.anyio
