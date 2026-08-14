@@ -269,6 +269,11 @@ async def test_close_follows_expected_session_across_keep_id_rekey(
     monkeypatch.setattr(close_helpers, "remove_manifest_session", lambda _instance_id: None)
 
     assert await driver_relaunch._finalize_id(pool, "new1", "old1", "keep-id") == "old1"
+    # The gate captures its own instance_id string at construction (log/error
+    # text only, never a lookup key) -- the rekey must carry it forward too,
+    # or every gate error/log line raised on the rekeyed session would still
+    # report the stale pre-rekey id.
+    assert replacement._operation_gate.instance_id == "old1"
     await pool.close("new1", force=True, _expected_session=replacement)
 
     assert pool.maybe_get("old1") is None
