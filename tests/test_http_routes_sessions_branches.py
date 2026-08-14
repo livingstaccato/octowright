@@ -36,6 +36,7 @@ from octowright.http import state as _http_state
 from octowright.http.routes import sessions as session_routes
 from octowright.recorder import Recorder
 from octowright.server import _state
+from octowright.session.operation_gate import SessionOperationGate
 
 # ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -279,6 +280,21 @@ class TestRecordingDelete:
 # ─── session_selector_validate (POST /api/sessions/{id}/selector/validate) ──
 
 
+def _gated_session(instance_id: str, **overrides: Any) -> SimpleNamespace:
+    """A SimpleNamespace-based session fake with a real operation gate —
+    ``session_selector_validate`` awaits `.operation(...)` as an async
+    context manager, which a bare SimpleNamespace/MagicMock does not provide.
+    """
+    gate = SessionOperationGate(instance_id, "chromium", queue_timeout_seconds=30)
+    return SimpleNamespace(
+        instance_id=instance_id,
+        operation=gate.operation,
+        operation_snapshot=gate.snapshot,
+        _test_operation_gate=gate,
+        **overrides,
+    )
+
+
 class TestSelectorValidate:
     def test_404_unknown_session(self, client: TestClient) -> None:
         """No live session with that id → 404."""
@@ -326,7 +342,7 @@ class TestSelectorValidate:
         locator.count = AsyncMock(return_value=3)
         page = MagicMock()
         page.locator = MagicMock(return_value=locator)
-        pool._sessions["selsesn00005"] = SimpleNamespace(instance_id="selsesn00005", page=page)
+        pool._sessions["selsesn00005"] = _gated_session("selsesn00005", page=page)
         r = client.post(
             "/api/sessions/selsesn00005/selector/validate",
             json={"selector": ".btn-primary"},
@@ -342,7 +358,7 @@ class TestSelectorValidate:
         locator.count = AsyncMock(return_value=0)
         page = MagicMock()
         page.locator = MagicMock(return_value=locator)
-        pool._sessions["selsesn00006"] = SimpleNamespace(instance_id="selsesn00006", page=page)
+        pool._sessions["selsesn00006"] = _gated_session("selsesn00006", page=page)
         r = client.post(
             "/api/sessions/selsesn00006/selector/validate",
             json={"selector": ".missing"},
@@ -358,7 +374,7 @@ class TestSelectorValidate:
         locator.count = AsyncMock(side_effect=ValueError("invalid selector"))
         page = MagicMock()
         page.locator = MagicMock(return_value=locator)
-        pool._sessions["selsesn00007"] = SimpleNamespace(instance_id="selsesn00007", page=page)
+        pool._sessions["selsesn00007"] = _gated_session("selsesn00007", page=page)
         r = client.post(
             "/api/sessions/selsesn00007/selector/validate",
             json={"selector": ":bogus(["},
@@ -722,6 +738,9 @@ class TestSessionDetailLiveEdges:
         page.locator = MagicMock(return_value=locator)
         page.url = "https://octowright.com"
         recorder = SimpleNamespace(event_count=5, action_count=3)
+        # A real gate (not a MagicMock) — _live_session_detail_response awaits
+        # `.operation(...)` as an async context manager.
+        gate = SessionOperationGate(instance_id, "chromium", queue_timeout_seconds=30)
         return SimpleNamespace(
             instance_id=instance_id,
             kind="chromium",
@@ -741,6 +760,9 @@ class TestSessionDetailLiveEdges:
             page_count=1,
             page=page,
             recorder=recorder,
+            operation=gate.operation,
+            operation_snapshot=gate.snapshot,
+            _test_operation_gate=gate,
         )
 
     def test_aria_failure_does_not_break_detail(

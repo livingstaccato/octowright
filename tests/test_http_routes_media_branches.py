@@ -28,6 +28,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from octowright.http import state as _http_state
+from octowright.session.operation_gate import SessionOperationGate
 
 # Reuse fixtures from the existing http test module so we don't fork the
 # fake-pool plumbing.
@@ -48,8 +49,12 @@ def _live_session(log_path: Path, **overrides: Any) -> SimpleNamespace:
     """Build a fake live BrowserSession that the http routes treat as live."""
     page = MagicMock()
     page.screenshot = AsyncMock(return_value=b"\x89PNG-mock")
+    instance_id = overrides.get("instance_id", log_path.stem.split("-")[-1])
+    # A real gate (not a MagicMock) — session_screenshot_now/dashboard_session_detail
+    # await `.operation(...)` as an async context manager.
+    gate = SessionOperationGate(instance_id, "chromium", queue_timeout_seconds=30)
     base = SimpleNamespace(
-        instance_id=overrides.get("instance_id", log_path.stem.split("-")[-1]),
+        instance_id=instance_id,
         kind="chromium",
         label=None,
         profile=None,
@@ -67,6 +72,9 @@ def _live_session(log_path: Path, **overrides: Any) -> SimpleNamespace:
         download_count=0,
         page_count=1,
         page=page,
+        operation=gate.operation,
+        operation_snapshot=gate.snapshot,
+        _test_operation_gate=gate,
     )
     for key, value in overrides.items():
         setattr(base, key, value)
@@ -245,6 +253,39 @@ class TestScreenshotNow:
         r = client.get("/api/sessions/liveasync01/screenshot/now")
         assert r.status_code == 200
         assert r.content == b"\x89PNG-async"
+
+
+@pytest.mark.anyio
+async def test_live_screenshot_waits_for_session_gate(
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    """A concurrent dashboard_screenshot request must queue behind an
+    already-held session operation instead of racing it -- proving
+    session_screenshot_now's ``async with live.operation("dashboard_screenshot")``
+    boundary is real, not a no-op wrapper around an already-unguarded call."""
+    import asyncio
+    from types import SimpleNamespace as _SimpleNamespace
+
+    from octowright.http.routes import media as _media
+
+    log_path = isolated_recordings / "20260101T000000Z-chromium-gatewait0001.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    session = _live_session(log_path, instance_id="gatewait0001")
+    empty_pool["pool"]._sessions["gatewait0001"] = session
+
+    async with session.operation("owner"):
+        request = _SimpleNamespace(path_params={"id": "gatewait0001"}, query_params={})
+        response_task = asyncio.create_task(_media.session_screenshot_now(request))
+
+        async with asyncio.timeout(1):
+            while session.operation_snapshot()["queue_depth"] != 1:
+                await asyncio.sleep(0)
+        session.page.screenshot.assert_not_awaited()
+
+    response = await asyncio.wait_for(response_task, timeout=1.0)
+    assert response.status_code == 200
+    session.page.screenshot.assert_awaited_once()
 
 
 # ─── /frame edge cases ──────────────────────────────────────────────────────

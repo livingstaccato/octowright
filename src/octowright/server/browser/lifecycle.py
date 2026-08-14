@@ -18,14 +18,39 @@ from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import (
     BROWSER_LAUNCH_TIMEOUT_SECONDS,
-    SNAPSHOT_TIMEOUT_SECONDS,
     _read_project_config,
     get_default_label,
     project_config_str,
 )
 from octowright.server._state import mcp, pool
-from octowright.server.browser.inspect import browser_brief, browser_page_outline
+from octowright.server.browser.inspect import browser_page_outline
+from octowright.server.browser.lifecycle_navigate import (
+    browser_navigate,
+    browser_navigate_back,
+    browser_open_url,
+    browser_resize,
+    browser_viewport_status,
+    browser_viewport_sync,
+)
 from octowright.server.browser.lifecycle_summary import browser_list_summary_row
+
+__all__ = [
+    "browser_close",
+    "browser_close_all",
+    "browser_launch",
+    "browser_list",
+    "browser_navigate",
+    "browser_navigate_back",
+    "browser_open_url",
+    "browser_quick_launch",
+    "browser_relaunch_fluid",
+    "browser_resize",
+    "browser_set_protected",
+    "browser_spawn_roster",
+    "browser_suggest_for_url",
+    "browser_viewport_status",
+    "browser_viewport_sync",
+]
 
 
 def _enforce_browser_cap(*, adding: int) -> None:
@@ -416,118 +441,12 @@ async def browser_set_protected(instance_id: str, protected: bool) -> dict[str, 
 
 @mcp.tool(
     structured_output=False,
-    description=(
-        "Navigate an instance to a URL. Use this to go to a new page; do NOT use for "
-        "in-app routing that the SPA handles via clicks (use browser_click instead). "
-        "Equivalent to typing the URL in the address bar and hitting enter. "
-        "Pass response_mode='outline' to also return a compact browser_page_outline "
-        "(headings, landmarks, links, fields) in the same call, or response_mode='brief' "
-        "for the older aria-based browser_brief snapshot."
-    ),
-)
-async def browser_navigate(
-    instance_id: str,
-    url: str,
-    response_mode: str | None = None,
-) -> dict[str, Any]:
-    res: dict[str, Any] = await pool.get(instance_id).navigate(url)
-    if response_mode == "outline":
-        res["outline"] = await browser_page_outline(instance_id)
-    if response_mode == "brief":
-        try:
-            res["brief"] = await asyncio.wait_for(browser_brief(instance_id), timeout=SNAPSHOT_TIMEOUT_SECONDS)
-        except TimeoutError:
-            res["brief_warning"] = (
-                f"browser_brief timed out after {SNAPSHOT_TIMEOUT_SECONDS:.1f}s; "
-                "navigation succeeded, call browser_brief separately or use a scoped snapshot."
-            )
-    return res
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Navigate back in the browser's history (equivalent to clicking the Back button). "
-        "Returns {ok, url, title} — ok is False when there is no previous page in history. "
-        "Use this after a browser_navigate or link-click to return to the prior page. "
-        "Do NOT use for in-app routing where the SPA manages its own history stack. "
-        "Pass response_mode='outline' to include a compact browser_page_outline in the same call."
-    ),
-)
-async def browser_navigate_back(instance_id: str, response_mode: str | None = None) -> dict[str, Any]:
-    res = await pool.get(instance_id).navigate_back()
-    out = dict(res)
-    if response_mode == "outline":
-        out["outline"] = await browser_page_outline(instance_id)
-    return out
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Resize the browser viewport to the given width x height in CSS pixels. "
-        "Use this to test responsive layouts, simulate mobile screen sizes, or ensure "
-        "elements are visible at a specific viewport dimension. Does not resize the OS window "
-        "— only the page's viewport."
-    ),
-)
-async def browser_resize(instance_id: str, width: int, height: int) -> dict[str, Any]:
-    return await pool.get(instance_id).resize(width, height)
-
-
-@mcp.tool(
-    structured_output=False,
-    description="Return fixed/fluid viewport status and measured page/window dimensions.",
-)
-async def browser_viewport_status(instance_id: str) -> dict[str, Any]:
-    return await pool.get(instance_id).viewport_status()
-
-
-@mcp.tool(
-    structured_output=False,
-    description="Resize a fixed Playwright viewport once to the current measured browser window size.",
-)
-async def browser_viewport_sync(instance_id: str) -> dict[str, Any]:
-    return await pool.get(instance_id).viewport_sync()
-
-
-@mcp.tool(
-    structured_output=False,
     description="Close and relaunch a session as a headed fluid viewport using no_viewport=True.",
 )
 async def browser_relaunch_fluid(instance_id: str) -> dict[str, Any]:
     result = await pool.relaunch_fluid(instance_id)
     publish_dashboard_invalidation_nowait("sessions")
     return result
-
-
-@mcp.tool(
-    structured_output=False,
-    description=(
-        "Open a URL in a new tab or new window of an existing instance. "
-        "target='tab' (default) opens a new page in the same browser context — "
-        "behaves like cmd-T then typing a URL. target='window' opens it in a "
-        "separate OS window via window.open(...,'popup',...) — useful when the "
-        "user explicitly says 'in a new window'. For 'window', width and height "
-        "set the popup window size (defaults 1024x768). Returns {ok, target, "
-        "page_index, url}; the new page is appended to the instance's page list "
-        "and is the same shape page_switch / page_close use. Pass response_mode='outline' "
-        "to include a compact browser_page_outline for the newly active page in the same call."
-    ),
-)
-async def browser_open_url(
-    instance_id: str,
-    url: str,
-    target: str = "tab",
-    width: int = 1024,
-    height: int = 768,
-    response_mode: str | None = None,
-) -> dict[str, Any]:
-    res = await pool.get(instance_id).open_url(url, target=target, width=width, height=height)
-    out = dict(res)
-    if response_mode == "outline":
-        out["outline"] = await browser_page_outline(instance_id)
-    return out
 
 
 @mcp.tool(

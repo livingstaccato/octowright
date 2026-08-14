@@ -28,6 +28,7 @@ from octowright.mcp_types import (
     BrowserToolAction,
 )
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 from octowright.server.browser.discovery import (
     _outline_next_actions,
     browser_fields,
@@ -121,12 +122,12 @@ def _evaluate_truncated_actions(instance_id: str, expression: str) -> list[Brows
     description="Screenshot an instance to disk. If path omitted, writes next to the recording.",
 )
 async def browser_screenshot(instance_id: str, path: str | None = None) -> BrowserScreenshotResult:
-    session = pool.get(instance_id)
-    target = Path(path) if path else session.log_path.with_suffix(".png")
-    # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
-    target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"screenshot path {str(target)!r}")
-    out = await session.screenshot(target)
-    return {"path": str(out)}
+    async with browser_operation(pool, instance_id, "browser_screenshot") as session:
+        target = Path(path) if path else session.log_path.with_suffix(".png")
+        # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
+        target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"screenshot path {str(target)!r}")
+        out = await session.screenshot(target)
+        return {"path": str(out)}
 
 
 @mcp.tool(
@@ -143,34 +144,40 @@ async def browser_snapshot(
     full: bool = False,
     max_chars: int | None = None,
 ) -> BrowserSnapshotResult:
-    session = pool.get(instance_id)
-    # Route through session.snapshot so the JSONL gets a "snapshot" event;
-    # bypassing it would make MCP-tool snapshots invisible to macro replay,
-    # golden diffs, and the audit trail.
-    try:
-        snap = await asyncio.wait_for(session.snapshot(selector=selector), timeout=SNAPSHOT_TIMEOUT_S)
-    except TimeoutError:
-        # A heavy DOM can make aria_snapshot() run past the bridge request timeout,
-        # which the agent can't distinguish from a disconnect. Degrade to a typed
-        # result that points at the cheaper observe paths instead of hanging.
-        return _snapshot_timeout_result(instance_id)
-    aria = snap["aria"]
-    cap = None if full else (max_chars or DEFAULT_PREVIEW_CHARS)
-    out: BrowserSnapshotResult = {
-        "url": snap["url"],
-        "title": snap["title"],
-    }
-    if cap is not None and len(aria) > cap:
-        out["aria"] = aria[:cap]
-        out["truncated"] = True
-        out["aria_size"] = len(aria)
-        out["cap"] = cap
-        out["actions"] = _snapshot_compact_actions(instance_id)
-    else:
-        out["aria"] = aria
-        out["truncated"] = False
-        out["aria_size"] = len(aria)
-    return out
+    async with browser_operation(pool, instance_id, "browser_snapshot") as session:
+        # Route through session.snapshot so the JSONL gets a "snapshot" event;
+        # bypassing it would make MCP-tool snapshots invisible to macro replay,
+        # golden diffs, and the audit trail. asyncio.timeout (not wait_for) —
+        # session.snapshot() re-enters the SAME gate this boundary already
+        # holds via exact-task reentrancy; wait_for would run it in a
+        # separate Task via ensure_future, which the gate treats as a
+        # different owner and queues forever (deadlock) since the calling
+        # task itself is blocked awaiting it.
+        try:
+            async with asyncio.timeout(SNAPSHOT_TIMEOUT_S):
+                snap = await session.snapshot(selector=selector)
+        except TimeoutError:
+            # A heavy DOM can make aria_snapshot() run past the bridge request timeout,
+            # which the agent can't distinguish from a disconnect. Degrade to a typed
+            # result that points at the cheaper observe paths instead of hanging.
+            return _snapshot_timeout_result(instance_id)
+        aria = snap["aria"]
+        cap = None if full else (max_chars or DEFAULT_PREVIEW_CHARS)
+        out: BrowserSnapshotResult = {
+            "url": snap["url"],
+            "title": snap["title"],
+        }
+        if cap is not None and len(aria) > cap:
+            out["aria"] = aria[:cap]
+            out["truncated"] = True
+            out["aria_size"] = len(aria)
+            out["cap"] = cap
+            out["actions"] = _snapshot_compact_actions(instance_id)
+        else:
+            out["aria"] = aria
+            out["truncated"] = False
+            out["aria_size"] = len(aria)
+        return out
 
 
 @mcp.tool(
@@ -189,7 +196,8 @@ async def browser_evaluate(
     max_chars: int | None = None,
     full: bool = False,
 ) -> BrowserEvaluateResult:
-    result = await pool.get(instance_id).evaluate(expression)
+    async with browser_operation(pool, instance_id, "browser_evaluate") as session:
+        result = await session.evaluate(expression)
     cap = None if full else (max_chars or DEFAULT_PREVIEW_CHARS)
     rendered = result if isinstance(result, str | bytes) else _json.dumps(result, default=str)
     if isinstance(rendered, bytes):
@@ -232,11 +240,12 @@ async def browser_wait_for(
     expression: str | None = None,
     response_mode: str | None = None,
 ) -> BrowserOkResult:
-    await pool.get(instance_id).wait_for(selector, text, timeout_ms, expression=expression)
-    result: BrowserOkResult = {"ok": True}
-    if response_mode == "outline":
-        result["outline"] = await browser_page_outline(instance_id)
-    return result
+    async with browser_operation(pool, instance_id, "browser_wait_for") as session:
+        await session.wait_for(selector, text, timeout_ms, expression=expression)
+        result: BrowserOkResult = {"ok": True}
+        if response_mode == "outline":
+            result["outline"] = await browser_page_outline(instance_id)
+        return result
 
 
 @mcp.tool(structured_output=False, description="Path to the JSONL action log for an instance.")
@@ -321,65 +330,65 @@ async def browser_read_markdown(
     response_mode: str | None = None,
     summary_limit: int = 40,
 ) -> BrowserReadMarkdownResult:
-    session = pool.get(instance_id)
     if max_chars is not None and max_chars < 0:
         raise ValueError("max_chars must be >= 0")
 
-    # Always refresh on explicit reads so SPA/in-page changes do not serve a
-    # stale markdown cache from a prior render.
-    path = await session.capture_markdown(force=True)
+    async with browser_operation(pool, instance_id, "browser_read_markdown") as session:
+        # Always refresh on explicit reads so SPA/in-page changes do not serve a
+        # stale markdown cache from a prior render.
+        path = await session.capture_markdown(force=True)
 
-    if not path or not path.exists():
-        raise RuntimeError(
-            "markdown generation failed or is unavailable; "
-            "ensure markitdown is installed and the page rendered HTML content"
-        )
+        if not path or not path.exists():
+            raise RuntimeError(
+                "markdown generation failed or is unavailable; "
+                "ensure markitdown is installed and the page rendered HTML content"
+            )
 
-    text = path.read_text(encoding="utf-8", errors="replace")
-    original_size = len(text)
+        text = path.read_text(encoding="utf-8", errors="replace")
+        original_size = len(text)
 
-    if response_mode == "summary":
-        target = session._target()
-        saved = _captures.save_capture(
-            kind="markdown",
-            content=text,
-            url=target.url,
-            title=await session.page.title(),
-            instance_id=instance_id,
-            source={"source": "markdown", "path": str(path)},
-        )
-        _annotate_capture_result_actions(saved)
-        capture_id = str(saved["capture_id"])
-        summary = _annotate_capture_result_actions(_captures.summarize_capture(capture_id, limit=summary_limit))
-        return {
-            "url": target.url,
-            "title": saved.get("title") if isinstance(saved.get("title"), str) else None,
-            "capture_id": capture_id,
-            "kind": "markdown",
+        if response_mode == "summary":
+            target = session._target()
+            saved = _captures.save_capture(
+                kind="markdown",
+                content=text,
+                url=target.url,
+                title=await session.page.title(),
+                instance_id=instance_id,
+                source={"source": "markdown", "path": str(path)},
+            )
+            _annotate_capture_result_actions(saved)
+            capture_id = str(saved["capture_id"])
+            summary = _annotate_capture_result_actions(_captures.summarize_capture(capture_id, limit=summary_limit))
+            return {
+                "url": target.url,
+                "title": saved.get("title") if isinstance(saved.get("title"), str) else None,
+                "capture_id": capture_id,
+                "kind": "markdown",
+                "markdown_size": original_size,
+                "size_chars": original_size,
+                "summary": summary,
+                "actions": ["capture_summary", "capture_search", "capture_lines", "capture_get"],
+                "next_actions": _markdown_summary_next_actions(capture_id, summary_limit),
+            }
+
+        cap = DEFAULT_PREVIEW_CHARS if max_chars is None else max_chars
+
+        truncated = False
+        if original_size > cap:
+            text = text[:cap]
+            truncated = True
+
+        result: BrowserReadMarkdownResult = {
+            # _target().url so the reported url matches the frame the markdown came from.
+            "url": session._target().url,
+            "markdown": text,
+            "truncated": truncated,
             "markdown_size": original_size,
-            "size_chars": original_size,
-            "summary": summary,
-            "actions": ["capture_summary", "capture_search", "capture_lines", "capture_get"],
-            "next_actions": _markdown_summary_next_actions(capture_id, summary_limit),
         }
-
-    cap = DEFAULT_PREVIEW_CHARS if max_chars is None else max_chars
-
-    truncated = False
-    if original_size > cap:
-        text = text[:cap]
-        truncated = True
-
-    result: BrowserReadMarkdownResult = {
-        # _target().url so the reported url matches the frame the markdown came from.
-        "url": session._target().url,
-        "markdown": text,
-        "truncated": truncated,
-        "markdown_size": original_size,
-    }
-    if truncated:
-        result["next_actions"] = _markdown_truncated_next_actions(instance_id, original_size)
-    return result
+        if truncated:
+            result["next_actions"] = _markdown_truncated_next_actions(instance_id, original_size)
+        return result
 
 
 @mcp.tool(
@@ -390,20 +399,20 @@ async def browser_read_markdown(
     ),
 )
 async def browser_brief(instance_id: str) -> BrowserBriefResult:
-    session = pool.get(instance_id)
-    # Route through _target() so brief reflects a switched frame, matching snapshot
-    # and every action tool. title stays page-level — Playwright Frames have none.
-    target = session._target()
-    title = await session.page.title()
-    # Pull a tiny slice of the body snapshot to provide basic orientation
-    aria = await target.locator("body").aria_snapshot()
-    elements = aria[:500] + ("..." if len(aria) > 500 else "")
+    async with browser_operation(pool, instance_id, "browser_brief") as session:
+        # Route through _target() so brief reflects a switched frame, matching snapshot
+        # and every action tool. title stays page-level — Playwright Frames have none.
+        target = session._target()
+        title = await session.page.title()
+        # Pull a tiny slice of the body snapshot to provide basic orientation
+        aria = await target.locator("body").aria_snapshot()
+        elements = aria[:500] + ("..." if len(aria) > 500 else "")
 
-    return {
-        "url": target.url,
-        "title": title,
-        "elements": elements,
-    }
+        return {
+            "url": target.url,
+            "title": title,
+            "elements": elements,
+        }
 
 
 def _observe_next_actions(instance_id: str, limit: int) -> list[dict[str, Any]]:
@@ -439,16 +448,17 @@ async def browser_observe(
     include_network: bool = True,
     include_downloads: bool = False,
 ) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "instance_id": instance_id,
-        "outline": await browser_page_outline(instance_id, limit=limit),
-        "actions": ["browser_page_outline", "browser_find_link", "browser_find_field", "browser_read_markdown"],
-        "next_actions": _observe_next_actions(instance_id, limit),
-    }
-    if include_console:
-        result["console"] = browser_console_summary(instance_id)
-    if include_network:
-        result["network"] = browser_network_summary(instance_id)
-    if include_downloads:
-        result["downloads"] = browser_downloads_summary(instance_id)
-    return result
+    async with browser_operation(pool, instance_id, "browser_observe"):
+        result: dict[str, Any] = {
+            "instance_id": instance_id,
+            "outline": await browser_page_outline(instance_id, limit=limit),
+            "actions": ["browser_page_outline", "browser_find_link", "browser_find_field", "browser_read_markdown"],
+            "next_actions": _observe_next_actions(instance_id, limit),
+        }
+        if include_console:
+            result["console"] = browser_console_summary(instance_id)
+        if include_network:
+            result["network"] = browser_network_summary(instance_id)
+        if include_downloads:
+            result["downloads"] = browser_downloads_summary(instance_id)
+        return result

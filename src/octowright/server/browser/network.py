@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
 
 
@@ -172,7 +173,8 @@ async def browser_set_dialog_policy(
     policy: str,
     prompt_text: str | None = None,
 ) -> dict[str, Any]:
-    return await pool.get(instance_id).set_dialog_policy(policy, prompt_text)
+    async with browser_operation(pool, instance_id, "browser_set_dialog_policy") as session:
+        return await session.set_dialog_policy(policy, prompt_text)
 
 
 @mcp.tool(
@@ -193,13 +195,14 @@ async def browser_mock_route(
     content_type: str = "application/json",
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    return await pool.get(instance_id).mock_route(
-        url_pattern,
-        status=status,
-        body=body,
-        content_type=content_type,
-        headers=headers,
-    )
+    async with browser_operation(pool, instance_id, "browser_mock_route") as session:
+        return await session.mock_route(
+            url_pattern,
+            status=status,
+            body=body,
+            content_type=content_type,
+            headers=headers,
+        )
 
 
 @mcp.tool(
@@ -207,7 +210,8 @@ async def browser_mock_route(
     description=("Remove a previously-installed mock for `url_pattern`. Raises if no mock was active."),
 )
 async def browser_unmock_route(instance_id: str, url_pattern: str) -> dict[str, Any]:
-    return await pool.get(instance_id).unmock_route(url_pattern)
+    async with browser_operation(pool, instance_id, "browser_unmock_route") as session:
+        return await session.unmock_route(url_pattern)
 
 
 @mcp.tool(

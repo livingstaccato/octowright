@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -534,3 +535,131 @@ def test_gate_operation_names_never_enter_the_replay_or_recorder_vocabulary() ->
         | CONDITIONAL_ACTIONS
     )
     assert gate_operation_names.isdisjoint(replay_and_recorder_vocabulary)
+
+
+# ─── Task 10: complete-workflow composites keep ONE observable root op ─────
+#
+# browser_operation(pool, instance_id, operation_name) defines a boundary
+# around a WHOLE MCP-tool call. A composite like browser_click(...,
+# response_mode="outline") dispatches a click AND builds an outline
+# response; both must run under the SAME root operation (exact-task
+# reentrancy, Task 2) rather than two separate gate acquisitions with a
+# window between them where a concurrent caller could interleave.
+
+
+class ToolGateFake(OperationAwareFake):
+    """Real-gate session fake wired with just enough of the click/discovery
+    surface for the real ``browser_click``/``browser_page_outline`` MCP
+    tools to run end-to-end. Every Page/Frame-touching point records the
+    gate's current root operation name so a test can assert it never moved."""
+
+    instance_id = "click-outline-inst"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.observed_roots: list[str | None] = []
+        self.page = SimpleNamespace(title=self._title)
+
+    async def _title(self) -> str:
+        self.observed_roots.append(self.operation_snapshot()["active_operation"])
+        return "Example"
+
+    async def click(self, selector: str) -> None:
+        self.observed_roots.append(self.operation_snapshot()["active_operation"])
+
+    def _target(self) -> _ToolGateTarget:
+        return _ToolGateTarget(self)
+
+
+class _ToolGateTarget:
+    url = "https://octowright.com"
+
+    def __init__(self, fake: ToolGateFake) -> None:
+        self._fake = fake
+
+    async def evaluate(self, _js: str, _args: dict[str, Any]) -> dict[str, Any]:
+        self._fake.observed_roots.append(self._fake.operation_snapshot()["active_operation"])
+        return {"headings": [], "landmarks": [], "links": [], "fields": [], "counts": {}}
+
+
+@pytest.mark.asyncio
+async def test_browser_click_outline_is_one_root_operation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.server.browser import discovery as _discovery
+    from octowright.server.browser import input as _input
+    from octowright.server.browser.input import browser_click
+
+    tool_session = ToolGateFake()
+    fake_pool = MagicMock()
+    fake_pool.get.return_value = tool_session
+    monkeypatch.setattr(_input, "pool", fake_pool)
+    monkeypatch.setattr(_discovery, "pool", fake_pool)
+
+    result = await browser_click(tool_session.instance_id, selector="#buy", response_mode="outline")
+
+    assert result["ok"] is True
+    assert "outline" in result
+    # Click AND the outline's page-side evaluate both ran while "browser_click"
+    # was still the gate's root -- one observable operation, not two.
+    assert tool_session.observed_roots
+    assert all(root == "browser_click" for root in tool_session.observed_roots)
+
+
+class CaptureGateFake(OperationAwareFake):
+    """Real-gate session fake for ``capture_create``: aria content read
+    through URL/title metadata must stay under one root."""
+
+    instance_id = "capture-gate-inst"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.observed_roots: list[str | None] = []
+        self.page = SimpleNamespace(title=self._title)
+
+    async def _title(self) -> str:
+        self.observed_roots.append(self.operation_snapshot()["active_operation"])
+        return "Example"
+
+    def _target(self) -> _CaptureGateTarget:
+        return _CaptureGateTarget(self)
+
+
+class _CaptureGateTarget:
+    url = "https://octowright.com"
+
+    def __init__(self, fake: CaptureGateFake) -> None:
+        self._fake = fake
+
+    def locator(self, _selector: str) -> _CaptureGateLocator:
+        return _CaptureGateLocator(self._fake)
+
+
+class _CaptureGateLocator:
+    def __init__(self, fake: CaptureGateFake) -> None:
+        self._fake = fake
+
+    async def aria_snapshot(self) -> str:
+        self._fake.observed_roots.append(self._fake.operation_snapshot()["active_operation"])
+        return "- button 'Buy'"
+
+
+@pytest.mark.asyncio
+async def test_capture_create_keeps_content_and_metadata_together(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.server import captures as _captures_tools
+
+    session = CaptureGateFake()
+    fake_pool = MagicMock()
+    fake_pool.get.return_value = session
+    monkeypatch.setattr(_captures_tools, "pool", fake_pool)
+    monkeypatch.setattr(
+        _captures_tools._captures,
+        "save_capture",
+        lambda **_kw: {"capture_id": "cap_test", "preview": "preview", "truncated": False},
+    )
+
+    out = await _captures_tools.capture_create(session.instance_id, source="snapshot")
+
+    assert out["capture_id"] == "cap_test"
+    # The aria-snapshot content read and the title/url metadata read both ran
+    # under the same "capture_create" root as the eventual save_capture call.
+    assert session.observed_roots
+    assert all(root == "capture_create" for root in session.observed_roots)

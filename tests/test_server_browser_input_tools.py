@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.server.browser import input as _input
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture(autouse=True)
@@ -18,9 +19,16 @@ def _patch_pool_input(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return fake_pool
 
 
+class _FakeSession(OperationAwareFake):
+    """Real-gate session fake — every input.py tool now enters
+    ``browser_operation``, which awaits ``session.operation()`` as an async
+    context manager; a bare ``MagicMock`` merely tolerates ``async with``
+    without proving anything."""
+
+
 @pytest.mark.anyio
 async def test_browser_click_brief_mode(_patch_pool_input: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    s = MagicMock()
+    s = _FakeSession()
     _patch_pool_input.get.return_value = s
     s.click = AsyncMock(return_value={"ok": True})
 
@@ -54,7 +62,7 @@ async def test_mutating_input_tools_outline_mode_return_page_outline(
     session_method: str,
     session_return: dict[str, object] | None,
 ) -> None:
-    s = MagicMock()
+    s = _FakeSession()
     method = AsyncMock(return_value=session_return)
     setattr(s, session_method, method)
     _patch_pool_input.get.return_value = s
@@ -84,7 +92,7 @@ def test_mutating_input_tool_descriptions_advertise_outline_mode() -> None:
 
 @pytest.mark.anyio
 async def test_browser_get_text_by_truncates_large_text(_patch_pool_input: MagicMock) -> None:
-    s = MagicMock()
+    s = _FakeSession()
     s.get_text_by = AsyncMock(return_value={"text": "x" * 20})
     _patch_pool_input.get.return_value = s
 
@@ -106,7 +114,7 @@ async def test_browser_get_text_by_truncates_large_text(_patch_pool_input: Magic
 
 @pytest.mark.anyio
 async def test_browser_get_text_by_full_mode_preserves_text(_patch_pool_input: MagicMock) -> None:
-    s = MagicMock()
+    s = _FakeSession()
     s.get_text_by = AsyncMock(return_value={"text": "x" * 20})
     _patch_pool_input.get.return_value = s
 

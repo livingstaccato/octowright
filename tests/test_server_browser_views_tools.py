@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.server.browser import views as _views
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +19,13 @@ def _patch_pool(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     fake_pool = MagicMock()
     monkeypatch.setattr(_views, "pool", fake_pool)
     return fake_pool
+
+
+class _FakeSession(OperationAwareFake):
+    """Real-gate session fake — page_list/browser_list_frames/page_switch/
+    browser_switch_frame/browser_reset_frame now enter ``browser_operation``,
+    which awaits ``session.operation()`` as an async context manager; a bare
+    ``MagicMock`` merely tolerates ``async with`` without proving anything."""
 
 
 def test_browser_downloads_summary_aggregates_without_raw_dump(_patch_pool: MagicMock) -> None:
@@ -92,7 +100,7 @@ def test_browser_downloads_summary_mode_delegates_to_compact_summary(_patch_pool
 
 @pytest.mark.anyio
 async def test_page_list_summary_bounds_rows_and_adds_actions(_patch_pool: MagicMock) -> None:
-    session = MagicMock()
+    session = _FakeSession()
     session.list_pages = AsyncMock(
         return_value=[
             {
@@ -127,7 +135,7 @@ async def test_page_list_summary_bounds_rows_and_adds_actions(_patch_pool: Magic
 
 @pytest.mark.anyio
 async def test_browser_list_frames_summary_bounds_rows_and_adds_actions(_patch_pool: MagicMock) -> None:
-    session = MagicMock()
+    session = _FakeSession()
     session.list_frames = AsyncMock(
         return_value=[
             {
@@ -169,7 +177,7 @@ async def test_browser_list_frames_summary_bounds_rows_and_adds_actions(_patch_p
 async def test_page_switch_outline_mode_returns_page_outline(
     _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = MagicMock()
+    session = _FakeSession()
     session.switch_page = AsyncMock(return_value={"ok": True, "index": 1})
     _patch_pool.get.return_value = session
     outline = AsyncMock(return_value={"url": "https://example.com/docs", "headings": []})
@@ -186,7 +194,7 @@ async def test_page_switch_outline_mode_returns_page_outline(
 async def test_browser_switch_frame_outline_mode_returns_page_outline(
     _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = MagicMock()
+    session = _FakeSession()
     session.switch_frame = AsyncMock(return_value={"ok": True, "index": 2})
     _patch_pool.get.return_value = session
     outline = AsyncMock(return_value={"url": "https://widget.example.com", "fields": []})
@@ -203,7 +211,7 @@ async def test_browser_switch_frame_outline_mode_returns_page_outline(
 async def test_browser_reset_frame_outline_mode_returns_page_outline(
     _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = MagicMock()
+    session = _FakeSession()
     session.reset_frame = AsyncMock(return_value={"ok": True})
     _patch_pool.get.return_value = session
     outline = AsyncMock(return_value={"url": "https://example.com", "links": []})

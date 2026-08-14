@@ -100,6 +100,18 @@ class SessionLike(Protocol):
 
     async def snapshot(self) -> dict[str, Any]: ...
 
+    async def evaluate(self, expression: str) -> Any: ...
+
+    def get_network_requests(
+        self,
+        url_filter: str | None = None,
+        method_filter: str | None = None,
+        resource_type_filter: str | None = None,
+        since: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def capture_markdown(self, *, page: Page | None = None, force: bool = False) -> Path | None: ...
+
     def operation(
         self,
         operation_name: LiteralString,

@@ -36,6 +36,7 @@ from octowright.http.exposure import guard_sensitive_http
 from octowright.http.recording_sidecars import is_recording_sidecar
 from octowright.http.routes._common import _parse_bool, _read_json_body
 from octowright.http.session_artifacts import session_artifact_cache
+from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 from octowright.session.screencast_config import screencast_config_block
 from octowright.terminal.errors import ProtectedTerminalCloseError
 
@@ -114,7 +115,8 @@ async def _live_session_detail_response(live: Any) -> JSONResponse:
     log_path = Path(live.log_path)
     detail["action_count"] = int(getattr(getattr(live, "recorder", None), "action_count", 0))
     try:
-        detail["aria"] = await live.page.locator("html").aria_snapshot()
+        async with live.operation("dashboard_session_detail"):
+            detail["aria"] = await live.page.locator("html").aria_snapshot()
     except Exception as exc:
         state.log.debug(
             "octowright.http.live_aria_snapshot_failed",
@@ -415,7 +417,12 @@ async def session_selector_validate(request: Request) -> JSONResponse:
         return JSONResponse({"error": f"no live session with id {sid!r}"}, status_code=404)
     session = pool.get(sid)
     try:
-        count = await session.page.locator(selector).count()
+        async with session.operation("dashboard_selector_validate"):
+            count = await session.page.locator(selector).count()
+    except (SessionClosingError, SessionClosedError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    except SessionBusyTimeoutError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
         return JSONResponse(
             {

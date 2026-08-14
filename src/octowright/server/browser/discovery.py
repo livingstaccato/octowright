@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, cast
+from typing import Any, LiteralString, cast
 
 from octowright.mcp_types import (
     BrowserActionSuggestion,
@@ -21,12 +21,14 @@ from octowright.mcp_types import (
     BrowserToolAction,
 )
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 from octowright.server.browser.discovery_links import (
     _action_with_fallback,
     _clean_limit,
     _clean_link_candidate,
 )
 from octowright.server.profiles import annotate_next_actions_for_profile
+from octowright.session._protocols import SessionLike
 from octowright.text_scoring import weighted_text_score
 
 _FIELD_EXTRACTOR_JS = """
@@ -175,14 +177,19 @@ def _field_role(field: BrowserFieldCandidate) -> str | None:
 
 
 async def _extract_browser_fields(
-    instance_id: str, selector: str, limit: int
-) -> tuple[Any, list[BrowserFieldCandidate]]:
-    session = pool.get(instance_id)
-    target = session._target()
-    candidates = await target.evaluate(_FIELD_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)})
+    session: SessionLike,
+    instance_id: str,
+    selector: str,
+    limit: int,
+    *,
+    operation: LiteralString,
+) -> list[BrowserFieldCandidate]:
+    async with session.operation(operation):
+        target = session._target()
+        candidates = await target.evaluate(_FIELD_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)})
     if not isinstance(candidates, list):
         candidates = []
-    return session, [_clean_field_candidate(item, instance_id) for item in candidates]
+    return [_clean_field_candidate(item, instance_id) for item in candidates]
 
 
 def _fields_next_actions(instance_id: str) -> list[BrowserToolAction]:
@@ -205,17 +212,18 @@ def _fields_next_actions(instance_id: str) -> list[BrowserToolAction]:
 )
 async def browser_fields(instance_id: str, selector: str = "body", limit: int = 50) -> BrowserFieldsResult:
     cap = _clean_limit(limit)
-    session, fields = await _extract_browser_fields(instance_id, selector, cap + 1)
-    title = await session.page.title()
-    target = session._target()
-    return {
-        "url": target.url,
-        "title": title,
-        "fields": fields[:cap],
-        "total": len(fields),
-        "truncated": len(fields) > cap,
-        "next_actions": _fields_next_actions(instance_id),
-    }
+    async with browser_operation(pool, instance_id, "browser_fields") as session:
+        fields = await _extract_browser_fields(session, instance_id, selector, cap + 1, operation="browser_fields")
+        title = await session.page.title()
+        target = session._target()
+        return {
+            "url": target.url,
+            "title": title,
+            "fields": fields[:cap],
+            "total": len(fields),
+            "truncated": len(fields) > cap,
+            "next_actions": _fields_next_actions(instance_id),
+        }
 
 
 def _score_field(field: BrowserFieldCandidate, query: str) -> tuple[float, str]:
@@ -256,29 +264,30 @@ async def browser_find_field(
     limit: int = 8,
 ) -> BrowserFindFieldResult:
     cap = _clean_limit(limit)
-    session, fields = await _extract_browser_fields(instance_id, selector, 200)
-    ranked: list[BrowserFieldCandidate] = []
-    for rank, field in enumerate(fields, start=1):
-        score, reason = _score_field(field, query)
-        if score <= 0:
-            continue
-        item = cast("BrowserFieldCandidate", dict(field))
-        item["rank"] = rank
-        item["score"] = score
-        item["reason"] = reason
-        ranked.append(item)
-    ranked.sort(key=lambda item: (float(item.get("score") or 0), bool(item.get("visible"))), reverse=True)
-    title = await session.page.title()
-    target = session._target()
-    return {
-        "query": query,
-        "url": target.url,
-        "title": title,
-        "fields": ranked[:cap],
-        "total": len(ranked),
-        "truncated": len(ranked) > cap,
-        "next_actions": _fields_next_actions(instance_id),
-    }
+    async with browser_operation(pool, instance_id, "browser_find_field") as session:
+        fields = await _extract_browser_fields(session, instance_id, selector, 200, operation="browser_find_field")
+        ranked: list[BrowserFieldCandidate] = []
+        for rank, field in enumerate(fields, start=1):
+            score, reason = _score_field(field, query)
+            if score <= 0:
+                continue
+            item = cast("BrowserFieldCandidate", dict(field))
+            item["rank"] = rank
+            item["score"] = score
+            item["reason"] = reason
+            ranked.append(item)
+        ranked.sort(key=lambda item: (float(item.get("score") or 0), bool(item.get("visible"))), reverse=True)
+        title = await session.page.title()
+        target = session._target()
+        return {
+            "query": query,
+            "url": target.url,
+            "title": title,
+            "fields": ranked[:cap],
+            "total": len(ranked),
+            "truncated": len(ranked) > cap,
+            "next_actions": _fields_next_actions(instance_id),
+        }
 
 
 _PAGE_OUTLINE_JS = """
@@ -455,21 +464,21 @@ def _outline_next_actions(instance_id: str) -> list[BrowserToolAction]:
 )
 async def browser_page_outline(instance_id: str, selector: str = "body", limit: int = 20) -> BrowserPageOutlineResult:
     cap = _clean_limit(limit)
-    session = pool.get(instance_id)
-    target = session._target()
-    raw = await target.evaluate(_PAGE_OUTLINE_JS, {"selector": selector, "limit": cap})
-    if not isinstance(raw, dict):
-        raw = {}
-    counts = _outline_counts(raw)
-    title = await session.page.title()
-    return {
-        "url": target.url,
-        "title": title,
-        "headings": [_clean_heading_candidate(item) for item in _outline_items(raw, "headings")[:cap]],
-        "landmarks": [_clean_landmark_candidate(item) for item in _outline_items(raw, "landmarks")[:cap]],
-        "links": [_clean_link_candidate(item, instance_id) for item in _outline_items(raw, "links")[:cap]],
-        "fields": [_clean_field_candidate(item, instance_id) for item in _outline_items(raw, "fields")[:cap]],
-        "counts": counts,
-        "truncated": any(count > cap for count in counts.values()),
-        "next_actions": _outline_next_actions(instance_id),
-    }
+    async with browser_operation(pool, instance_id, "browser_page_outline") as session:
+        target = session._target()
+        raw = await target.evaluate(_PAGE_OUTLINE_JS, {"selector": selector, "limit": cap})
+        if not isinstance(raw, dict):
+            raw = {}
+        counts = _outline_counts(raw)
+        title = await session.page.title()
+        return {
+            "url": target.url,
+            "title": title,
+            "headings": [_clean_heading_candidate(item) for item in _outline_items(raw, "headings")[:cap]],
+            "landmarks": [_clean_landmark_candidate(item) for item in _outline_items(raw, "landmarks")[:cap]],
+            "links": [_clean_link_candidate(item, instance_id) for item in _outline_items(raw, "links")[:cap]],
+            "fields": [_clean_field_candidate(item, instance_id) for item in _outline_items(raw, "fields")[:cap]],
+            "counts": counts,
+            "truncated": any(count > cap for count in counts.values()),
+            "next_actions": _outline_next_actions(instance_id),
+        }
