@@ -26,6 +26,7 @@ def browser_list_summary_row(session: dict[str, Any]) -> dict[str, Any]:
         "url": _short_text(session.get("url"), 200),
         "title": _short_text(session.get("title"), 120),
         "protected": bool(session.get("protected")),
+        "operation_gate": session.get("operation_gate"),
         "actions": [
             {"tool": "browser_page_outline", "args": {"instance_id": instance_id}},
             {"tool": "browser_close", "args": {"instance_id": instance_id}},

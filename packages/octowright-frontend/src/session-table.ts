@@ -10,6 +10,30 @@ export interface SessionTableActions {
   onDelete: (id: string) => void;
 }
 
+/** CSS-class suffix for the badge; idle/closed gates never render one at all,
+ * so there is no fourth variant to represent here. */
+type OperationBadgeRenderState = "busy" | "closing" | "broken";
+
+function operationBadge(row: SessionSummary): HTMLElement | null {
+  const gate = row.operation_gate;
+  if (!gate || row.kind === "terminal" || !row.live) return null;
+  let text: string | null = null;
+  let renderState: OperationBadgeRenderState | null = null;
+  if (gate.state === "open" && gate.active_operation) {
+    renderState = "busy";
+    text = `busy ${gate.active_operation}${gate.queue_depth > 0 ? ` +${gate.queue_depth}` : ""}`;
+  } else if (gate.state === "closing" || gate.state === "broken") {
+    renderState = gate.state;
+    text = gate.state;
+  }
+  if (text === null || renderState === null) return null;
+  const badge = document.createElement("span");
+  badge.className = `operation-badge operation-badge--${renderState}`;
+  badge.textContent = text;
+  badge.setAttribute("role", "status");
+  return badge;
+}
+
 export function renderSessionTable(
   rows: SessionSummary[],
   live: boolean,
@@ -52,6 +76,8 @@ export function renderSessionTable(
       lock.setAttribute("title", "Protected — close-capable tools require force=True");
       lockTd.append(lock);
     }
+    const badge = operationBadge(row);
+    if (badge) lockTd.append(badge);
     tr.append(
       lockTd,
       cell(linkCell(row.id, `/sessions/${encodeURIComponent(row.id)}`)),
