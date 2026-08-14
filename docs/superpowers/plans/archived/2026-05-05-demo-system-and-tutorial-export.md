@@ -438,6 +438,7 @@ def routes() -> list[Route]:
 # src/octowright/http/routes/registry.py
 from octowright.http.routes import demos, events, health, media, meta, scenarios, sessions
 
+
 def all_routes() -> list[Any]:
     routes: list[Any] = []
     routes.extend(health.routes())

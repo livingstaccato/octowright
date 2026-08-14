@@ -300,22 +300,16 @@ from octowright import proxy_supervisor as supervisor
 
 def _request(method: str, request_id: str = "r1") -> SessionMessage:
     return SessionMessage(
-        JSONRPCMessage(
-            root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params={"x": 1})
-        )
+        JSONRPCMessage(root=JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params={"x": 1}))
     )
 
 
 def _notification(method: str) -> SessionMessage:
-    return SessionMessage(
-        JSONRPCMessage(root=JSONRPCNotification(jsonrpc="2.0", method=method, params={"x": 1}))
-    )
+    return SessionMessage(JSONRPCMessage(root=JSONRPCNotification(jsonrpc="2.0", method=method, params={"x": 1})))
 
 
 def _response(request_id: str = "r1") -> SessionMessage:
-    return SessionMessage(
-        JSONRPCMessage(root=JSONRPCResponse(jsonrpc="2.0", id=request_id, result={"ok": True}))
-    )
+    return SessionMessage(JSONRPCMessage(root=JSONRPCResponse(jsonrpc="2.0", id=request_id, result={"ok": True})))
 
 
 def test_request_id_and_method_for_request() -> None:

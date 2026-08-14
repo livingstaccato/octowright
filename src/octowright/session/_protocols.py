@@ -116,7 +116,7 @@ class SessionLike(Protocol):
         self,
         operation_name: LiteralString,
         *,
-        wait_timeout_seconds: float | None | UseDefault = USE_DEFAULT,
+        wait_timeout_seconds: float | UseDefault | None = USE_DEFAULT,
     ) -> AbstractAsyncContextManager[None]: ...
 
     def operation_snapshot(self) -> OperationGateSnapshot: ...
