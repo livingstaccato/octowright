@@ -15,6 +15,7 @@ from octowright._tracing import counter, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
+from octowright.session.viewport_ops import SessionViewportMixin
 
 _SESSION_CLOSED = counter(
     "octowright_browser_closed_total",
@@ -41,13 +42,15 @@ def _html_preview(html: str, html_preview_chars: int) -> str | None:
     return html[: min(html_preview_chars, DEFAULT_PREVIEW_CHARS)]
 
 
-class SessionOpsMixin(SessionLike):
+# SessionViewportMixin carries resize / viewport_status / viewport_sync, split
+# out when this module reached the 550-LOC ceiling. It is inherited here rather
+# than listed alongside the other mixins on BrowserSession so that anything
+# holding a SessionOpsMixin — the ops tests build one directly — still finds
+# the viewport ops where they have always been.
+class SessionOpsMixin(SessionViewportMixin, SessionLike):
     active_frame: Any | None
     video_path: Path | None
     trace_path: Path | None
-    viewport_mode: str
-    viewport_width: int | None
-    viewport_height: int | None
     _BG_TASK_DRAIN_TIMEOUT_SECONDS = 1.0
     # Max iterations of the iterative drain loop. Bg-task callbacks may
     # schedule more bg work (markdown capture rescheduled by a
@@ -228,60 +231,6 @@ class SessionOpsMixin(SessionLike):
         title = await self.page.title()
         self.recorder.record("navigate_back", url=url)
         return {"ok": response is not None, "url": url, "title": title}
-
-    async def resize(self, width: int, height: int) -> dict[str, Any]:
-        await self.page.set_viewport_size({"width": width, "height": height})
-        self.recorder.record("resize", width=width, height=height)
-        return {"ok": True, "width": width, "height": height}
-
-    async def viewport_status(self) -> dict[str, Any]:
-        measured = await self.page.evaluate(
-            """() => ({
-                innerWidth: window.innerWidth,
-                innerHeight: window.innerHeight,
-                outerWidth: window.outerWidth,
-                outerHeight: window.outerHeight,
-                devicePixelRatio: window.devicePixelRatio
-            })"""
-        )
-        page = {
-            "width": int(measured.get("innerWidth") or 0),
-            "height": int(measured.get("innerHeight") or 0),
-        }
-        outer = {
-            "width": int(measured.get("outerWidth") or 0),
-            "height": int(measured.get("outerHeight") or 0),
-        }
-        mismatch = (
-            self.viewport_mode == "fixed"
-            and outer["width"] > 0
-            and outer["height"] > 0
-            and (abs(outer["width"] - page["width"]) > 24 or abs(outer["height"] - page["height"]) > 80)
-        )
-        return {
-            "mode": self.viewport_mode,
-            "fixed": self.viewport_mode == "fixed",
-            "fluid": self.viewport_mode == "fluid",
-            "configured": {"width": self.viewport_width, "height": self.viewport_height},
-            "page": page,
-            "outer": outer,
-            "device_pixel_ratio": measured.get("devicePixelRatio"),
-            "mismatch": mismatch,
-        }
-
-    async def viewport_sync(self) -> dict[str, Any]:
-        status = await self.viewport_status()
-        outer = status["outer"]
-        width = int(outer["width"] or status["page"]["width"])
-        height = int(outer["height"] or status["page"]["height"])
-        if width <= 0 or height <= 0:
-            raise ValueError("unable to measure a usable viewport size")
-        await self.page.set_viewport_size({"width": width, "height": height})
-        self.viewport_mode = "fixed"
-        self.viewport_width = width
-        self.viewport_height = height
-        self.recorder.record("resize", width=width, height=height)
-        return {"ok": True, "mode": "fixed", "width": width, "height": height}
 
     async def open_url(
         self,
