@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Literal
 
 import pytest
@@ -88,9 +90,51 @@ async def wait_for_queue_depth(gate: SessionOperationGate, depth: int) -> None:
             await asyncio.sleep(0)
 
 
+async def wait_for_active(gate: SessionOperationGate, name: str) -> None:
+    async with asyncio.timeout(1):
+        while gate.snapshot()["active_operation"] != name:
+            await asyncio.sleep(0)
+
+
 async def enter_and_signal(gate: SessionOperationGate, name: str, entered: asyncio.Event) -> None:
     async with gate.operation(name):
         entered.set()
+
+
+async def enter_once(gate: SessionOperationGate, name: str) -> None:
+    async with gate.operation(name):
+        pass
+
+
+async def run_recorded(gate: SessionOperationGate, name: str, sequence: list[str]) -> None:
+    async with gate.operation(name):
+        sequence.append(name)
+
+
+async def run_close_reservation(
+    gate: SessionOperationGate,
+    reservation: operation_gate.CloseReservation,
+    sequence: list[str],
+) -> None:
+    async with gate.close_operation(reservation):
+        sequence.append("close")
+    gate.complete_close(reservation, None)
+
+
+@asynccontextmanager
+async def hold_gate(gate: SessionOperationGate, name: str, release: asyncio.Event) -> AsyncIterator[None]:
+    async with gate.operation(name):
+        yield
+        await release.wait()
+
+
+class ProtectedForTest(RuntimeError):
+    pass
+
+
+def raise_protected(protected: bool) -> None:
+    if protected:
+        raise ProtectedForTest("browser is protected")
 
 
 @pytest.mark.asyncio
@@ -537,3 +581,237 @@ async def test_arbitrary_baseexception_during_wait_cleans_up_queued_waiter() -> 
 
     async with gate.operation("after"):
         assert gate.snapshot()["active_operation"] == "after"
+
+
+@pytest.mark.asyncio
+async def test_close_cutoff_drains_earlier_waiters_and_rejects_later_work() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    release_owner = asyncio.Event()
+    sequence: list[str] = []
+
+    async def owner() -> None:
+        async with gate.operation("owner"):
+            await release_owner.wait()
+            sequence.append("owner")
+
+    owner_task = asyncio.create_task(owner())
+    await wait_for_active(gate, "owner")
+    earlier = asyncio.create_task(run_recorded(gate, "earlier", sequence))
+    await wait_for_queue_depth(gate, 1)
+    reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+    assert gate.snapshot()["state"] == "closing"
+    with pytest.raises(SessionClosingError):
+        async with gate.operation("later"):
+            raise AssertionError("later work must not enter")
+
+    close_task = asyncio.create_task(run_close_reservation(gate, reservation, sequence))
+    release_owner.set()
+    await asyncio.gather(owner_task, earlier, close_task)
+    assert sequence == ["owner", "earlier", "close"]
+    assert gate.snapshot()["state"] == "closed"
+
+
+@pytest.mark.asyncio
+async def test_external_close_fails_waiters_but_not_another_gate() -> None:
+    first = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    second = SessionOperationGate("two", "firefox", queue_timeout_seconds=30)
+    release = asyncio.Event()
+    async with hold_gate(first, "owner", release):
+        waiter = asyncio.create_task(enter_once(first, "queued"))
+        await wait_for_queue_depth(first, 1)
+        first.mark_closed_external()
+        with pytest.raises(SessionClosedError):
+            await waiter
+        async with second.operation("healthy"):
+            assert second.snapshot()["active_operation"] == "healthy"
+        release.set()
+
+
+@pytest.mark.asyncio
+async def test_control_update_and_close_preflight_have_one_winner() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    protected = False
+
+    def protect() -> None:
+        nonlocal protected
+        protected = True
+
+    await gate.control_update("browser_set_protected", protect)
+    with pytest.raises(ProtectedForTest):
+        await gate.reserve_close("browser_close", preflight=lambda: raise_protected(protected))
+    assert gate.snapshot()["state"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_reserve_close_returns_retained_object() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    calls = 0
+
+    def preflight() -> None:
+        nonlocal calls
+        calls += 1
+
+    first = await gate.reserve_close("browser_close", preflight=preflight)
+    second = await gate.reserve_close("browser_close", preflight=preflight)
+    assert first is second
+    assert calls == 1
+
+    async with gate.close_operation(first):
+        pass
+    gate.complete_close(first, "done")
+    assert await second.wait() == "done"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_close_waiter_does_not_cancel_shared_outcome() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+
+    waiting = asyncio.create_task(reservation.wait())
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    assert not reservation.outcome.cancelled()
+    assert not reservation.outcome.done()
+
+    async with gate.close_operation(reservation):
+        pass
+    boom = RuntimeError("boom")
+    gate.fail_close(reservation, boom)
+
+    assert reservation.outcome.exception() is boom
+    with pytest.raises(RuntimeError) as excinfo:
+        await reservation.wait()
+    assert excinfo.value is boom
+
+
+@pytest.mark.asyncio
+async def test_external_close_invalidates_pending_close_ticket_and_teardown_reuses_it() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    release_owner = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("owner"):
+            await release_owner.wait()
+
+    owner_task = asyncio.create_task(owner())
+    await wait_for_active(gate, "owner")
+
+    reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+    assert gate.snapshot()["state"] == "closing"
+    assert not reservation.waiter.ready.done()
+
+    gate.mark_closed_external()
+    assert gate.snapshot()["state"] == "closed"
+    with pytest.raises(SessionClosedError):
+        await reservation.waiter.ready
+    assert not reservation.outcome.done()
+
+    teardown = gate.reserve_external_teardown("session_external_teardown")
+    assert teardown is reservation
+
+    gate.complete_close(reservation, None)
+    assert await reservation.wait() is None
+
+    release_owner.set()
+    await owner_task
+
+
+@pytest.mark.asyncio
+async def test_external_close_after_grant_but_before_bind_routes_to_teardown() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+    assert gate.snapshot()["state"] == "closing"
+    assert gate._granted_close_reservation is reservation
+    assert reservation.waiter.ready.done()
+
+    gate.mark_closed_external()
+    assert gate.snapshot()["state"] == "closed"
+    assert gate._granted_close_reservation is reservation
+
+    with pytest.raises(SessionClosedError):
+        async with gate.close_operation(reservation):
+            raise AssertionError("closed reservation must not enter close_operation body")
+
+    assert gate._granted_close_reservation is None
+    assert not reservation.outcome.done()
+
+
+@pytest.mark.asyncio
+async def test_reserve_external_teardown_is_idempotent_after_external_close() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+
+    with pytest.raises(OperationGateInvariantError):
+        gate.reserve_external_teardown("session_external_teardown")
+
+    gate.mark_closed_external()
+    first = gate.reserve_external_teardown("session_external_teardown")
+    second = gate.reserve_external_teardown("session_external_teardown")
+    assert first is second
+    assert first.teardown_only is True
+    assert not first.outcome.done()
+
+    gate.complete_close(first, None)
+    assert await first.wait() is None
+
+
+@pytest.mark.asyncio
+async def test_broken_gate_close_reservation_is_teardown_only_but_runs_preflight() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+
+    await gate._acquire("owner", USE_DEFAULT)
+    foreign_task = asyncio.create_task(asyncio.sleep(0))
+    try:
+        bogus_lease = operation_gate._LeaseToken(foreign_task, "owner")
+        with pytest.raises(OperationGateInvariantError):
+            await gate._release(bogus_lease, "ok")
+        assert gate.snapshot()["state"] == "broken"
+
+        preflight_calls = 0
+
+        def preflight() -> None:
+            nonlocal preflight_calls
+            preflight_calls += 1
+
+        reservation = await gate.reserve_close("browser_close", preflight=preflight)
+        assert preflight_calls == 1
+        assert reservation.teardown_only is True
+
+        async with gate.close_operation(reservation):
+            pass
+
+        gate.complete_close(reservation, None)
+        assert gate.snapshot()["state"] == "closed"
+    finally:
+        await foreign_task
+
+
+@pytest.mark.asyncio
+async def test_break_locked_fails_queued_waiters_with_invariant_error() -> None:
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    release_owner = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("owner"):
+            await release_owner.wait()
+
+    owner_task = asyncio.create_task(owner())
+    await wait_for_active(gate, "owner")
+    queued = asyncio.create_task(enter_once(gate, "queued"))
+    await wait_for_queue_depth(gate, 1)
+
+    foreign_task = asyncio.create_task(asyncio.sleep(0))
+    try:
+        bogus_lease = operation_gate._LeaseToken(foreign_task, "owner")
+        with pytest.raises(OperationGateInvariantError):
+            await gate._release(bogus_lease, "ok")
+
+        with pytest.raises(OperationGateInvariantError):
+            await queued
+        assert gate.snapshot()["queue_depth"] == 0
+        assert gate.snapshot()["state"] == "broken"
+    finally:
+        await foreign_task
+        release_owner.set()
+        await owner_task
