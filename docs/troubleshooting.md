@@ -147,6 +147,58 @@ The profile mapping lives at `src/octowright/server/profiles.py`. See the
 [Capability profiles](getting-started.md#slimming-the-llm-tool-surface)
 section in the getting-started guide for worked examples.
 
+## Browser session busy / operation queue timeout
+
+**Symptoms**
+
+- A tool call fails with an error mentioning "operation gate", "timed out
+  waiting for the operation gate", or `SessionBusyTimeoutError`.
+- A call fails immediately with `SessionClosingError` or `SessionClosedError`
+  right after (or during) a `browser_close`.
+- A dashboard session-detail read (live screenshot, aria snapshot, selector
+  validate) fails fast on a busy session while the MCP tool call for the same
+  browser is still happily waiting.
+
+**Diagnosis**
+
+1. This is expected, working serialization, not a bug: every browser session
+   runs its own operations FIFO, and different sessions never block each
+   other. A `SessionBusyTimeoutError` means another operation on the *same*
+   `instance_id` (a slow navigation, a long macro, a stuck `wait_for`) held
+   the session for longer than the queue timeout — check what else is running
+   against that `instance_id` with `browser_list` / `octowright_status`.
+
+2. `SessionClosingError` / `SessionClosedError` mean the session was already
+   closing or closed when the call arrived — normal ordering, not a race bug.
+   The gate drains everything already queued before a close completes and
+   rejects anything new; retry against a freshly launched instance instead of
+   the closed one.
+
+3. None of these errors mean the MCP server, the daemon, or any other browser
+   is unhealthy — a gate error is scoped to the one browser session and the
+   one rejected call. Do not run `octowright restart` for this; reconnect
+   your MCP client only if `octowright_status` itself reports the daemon
+   unhealthy.
+
+4. If timeouts are routine rather than exceptional (e.g. deliberately
+   long-running background macros sharing a session with interactive calls),
+   raise the queue budget rather than fighting it — see Tuning below.
+
+**Tuning**
+
+- `OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS` (default `300`) — how long an
+  ordinary MCP tool call waits in the FIFO queue for its browser session
+  before failing with `SessionBusyTimeoutError`. Must be positive, finite
+  seconds. An embedded `BrowserPool(operation_queue_timeout_seconds=...)`
+  takes precedence over this variable. Keep it below
+  `OCTOWRIGHT_HEARTBEAT_MAX_SECONDS` (default `600`) — a queue wait at or
+  beyond the heartbeat ceiling can outlive the bridge's own progress
+  visibility, and the daemon logs a warning if it is.
+- `OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS` (default `8`) — the much
+  shorter budget the dashboard's own read-only session views (live
+  screenshot, aria snapshot, selector validate) wait on a busy session's gate
+  before failing fast, independent of the MCP tool timeout above.
+
 ## MCP transport closed or timed out
 
 **Symptoms**
