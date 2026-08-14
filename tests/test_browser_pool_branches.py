@@ -1523,20 +1523,27 @@ class TestDurableCloseCoordinator:
         await wait_until(lambda: session.instance_id not in pool._closing_sessions)
 
     @pytest.mark.anyio
-    async def test_coordinator_emits_closed_span_and_counter(
-        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    async def test_coordinator_counts_explicit_close_only_but_spans_both(
+        self, pool: BrowserPool, session: BrowserSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``octowright_browser_closed_total`` and the ``octowright.session.close``
         span are owned by the close coordinator (not ``SessionOpsMixin.close()``,
-        which no production close routes through anymore) -- assert they fire
-        exactly once per real close."""
+        which no production close routes through anymore).
+
+        Per spec: the counter stays disjoint from ``octowright_browser_
+        evicted_total`` (so ``launched - closed - evicted`` keeps meaning
+        "still live") and fires ONLY for an explicit ``pool.close()`` --
+        never for an external-origin reason. The span isn't summed, so it
+        fires for EVERY close (explicit or external), carrying ``reason`` as
+        an attribute so the two stay filterable in a trace backend despite
+        sharing one span name."""
         from octowright.browser_pool import lifecycle as _lifecycle
 
         counted: list[tuple[int, dict[str, str] | None]] = []
         monkeypatch.setattr(
             _lifecycle._SESSION_CLOSED, "add", lambda amount, attributes=None: counted.append((amount, attributes))
         )
-        spans: list[str] = []
+        spans: list[tuple[str, dict[str, object]]] = []
 
         class _FakeSpanCtx:
             def __enter__(self) -> _FakeSpanCtx:
@@ -1545,13 +1552,29 @@ class TestDurableCloseCoordinator:
             def __exit__(self, *_exc: object) -> None:
                 return None
 
-        def _fake_span(name: str, **_kw: object) -> _FakeSpanCtx:
-            spans.append(name)
+        def _fake_span(name: str, **kw: object) -> _FakeSpanCtx:
+            spans.append((name, kw))
             return _FakeSpanCtx()
 
         monkeypatch.setattr(_lifecycle, "span", _fake_span)
 
+        # Explicit close: counter fires once; span fires once with reason=agent_close.
         result = await pool.close(session.instance_id, force=True)
         assert result["closed"] is True
         assert counted == [(1, {"kind": session.kind})]
-        assert spans == ["octowright.session.close"]
+        assert len(spans) == 1
+        assert spans[0][0] == "octowright.session.close"
+        assert spans[0][1]["reason"] == "agent_close"
+
+        # External close: counter must NOT fire again; span fires again with
+        # reason=user_close.
+        second = _real_session(instance_id="sess-2", tmp_path=tmp_path)
+        pool._sessions[second.instance_id] = second
+        won = pool._accept_external_close_nowait(second.instance_id, expected_session=second, reason="user_close")
+        assert won is not None
+        await won.reservation.wait()
+
+        assert counted == [(1, {"kind": session.kind})], "external close must not bump the closed-total counter"
+        assert len(spans) == 2
+        assert spans[1][0] == "octowright.session.close"
+        assert spans[1][1]["reason"] == "user_close"
