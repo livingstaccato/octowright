@@ -58,7 +58,7 @@ from octowright.browser_pool.options import resolve_protected
         (False, True, False, True, True, False, "explicit"),
         (None, True, False, True, False, True, "all_default"),
         (None, True, False, False, True, True, "headed_default"),
-        (None, True, True, False, True, False, "unprotected"),   # ephemeral headed opts out
+        (None, True, True, False, True, False, "unprotected"),  # ephemeral headed opts out
         (None, False, False, False, True, False, "unprotected"),  # headless never
         (None, True, False, False, False, False, "unprotected"),  # protect_headed off
     ],
@@ -192,11 +192,11 @@ to:
 
 `options.py` line 65, change:
 
-```python
+```text
             protected=options.get("protected", PROTECT_BROWSERS_DEFAULT),
 ```
 to:
-```python
+```text
             protected=options.get("protected"),
 ```
 
@@ -383,7 +383,7 @@ from octowright.browser_pool.options import LaunchOptions, resolve_protected
 
 In `launch_pipeline.py`, at the construction near line 209-222, after `protected=launch_options.protected,` add:
 
-```python
+```text
         protected_reason=launch_options.protected_reason,
 ```
 
@@ -459,11 +459,11 @@ Expected: FAIL — default is `PROTECT_BROWSERS_DEFAULT` (a bool), not `None`.
 `lifecycle.py` line 137 and line 252, change:
 
 ```python
-    protected: bool = PROTECT_BROWSERS_DEFAULT,
+protected: bool = (PROTECT_BROWSERS_DEFAULT,)
 ```
 to:
 ```python
-    protected: bool | None = None,
+protected: bool | None = (None,)
 ```
 
 Remove the now-unused `PROTECT_BROWSERS_DEFAULT` import at `lifecycle.py:21` **only if** no other reference remains (`grep -n PROTECT_BROWSERS_DEFAULT src/octowright/server/browser/lifecycle.py`).

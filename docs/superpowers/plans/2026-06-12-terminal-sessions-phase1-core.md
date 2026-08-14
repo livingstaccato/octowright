@@ -175,9 +175,7 @@ from provide.uterm.server.connectors import (
     registered_types,
 )
 
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32", reason="PTY connector is POSIX-only"
-)
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="PTY connector is POSIX-only")
 
 
 def _ensure_pty_registered() -> None:
@@ -197,9 +195,7 @@ async def test_pty_connector_emits_cumulative_snapshot() -> None:
     _ensure_pty_registered()
     assert "pty" in registered_types()
 
-    conn = build_connector(
-        "char-1", "char", "pty", {"command": "/bin/echo", "args": ["hello-uterm"]}
-    )
+    conn = build_connector("char-1", "char", "pty", {"command": "/bin/echo", "args": ["hello-uterm"]})
     await conn.start()
     try:
         screen = ""
@@ -375,7 +371,7 @@ class MessageTranslator:
         if not prev:
             return cur
         if cur.startswith(prev):
-            return cur[len(prev):]
+            return cur[len(prev) :]
         # Cap slid (output exceeded ~32KB) or buffer was cleared: the delta is
         # the new buffer past the longest suffix-of-prev that prefixes cur.
         max_overlap = min(len(prev), len(cur))
@@ -623,9 +619,7 @@ def _read_actions(log_path: Path) -> list[dict]:
 async def test_engine_records_start_output_and_eof_stop(tmp_path: Path) -> None:
     log_path = tmp_path / "t.jsonl"
     recorder = Recorder(log_path)
-    engine = TerminalEngine(
-        "eng-1", "echo", "pty", {"command": "/bin/echo", "args": ["hello-engine"]}, recorder
-    )
+    engine = TerminalEngine("eng-1", "echo", "pty", {"command": "/bin/echo", "args": ["hello-engine"]}, recorder)
     await engine.start()
     # /bin/echo writes then exits → poll loop sees EOF and records terminal_stop.
     for _ in range(60):
@@ -773,9 +767,7 @@ class TerminalEngine:
 
     async def start(self) -> None:
         await self._connector.start()
-        self._recorder.record(
-            "terminal_start", connector_type=self._connector_type, cols=self._cols, rows=self._rows
-        )
+        self._recorder.record("terminal_start", connector_type=self._connector_type, cols=self._cols, rows=self._rows)
         self._poll_task = asyncio.create_task(self._poll_loop())
 
     async def _poll_loop(self) -> None:
@@ -798,9 +790,7 @@ class TerminalEngine:
             self._recorder.record(action, **fields)
 
     async def send_input(self, text: str, *, password: bool = False) -> None:
-        masked = redact.should_mask(
-            at_password_prompt=self._at_password_prompt, password_source=password
-        )
+        masked = redact.should_mask(at_password_prompt=self._at_password_prompt, password_source=password)
         self._recorder.record("terminal_input", **redact.input_fields(text, masked=masked))
         for msg in await self._connector.handle_input(text):
             self._ingest(msg)
@@ -815,9 +805,7 @@ class TerminalEngine:
             "rows": msg.get("rows"),
         }
 
-    async def wait_for(
-        self, *, prompt: str | None = None, text: str | None = None, timeout: float = 10.0
-    ) -> bool:
+    async def wait_for(self, *, prompt: str | None = None, text: str | None = None, timeout: float = 10.0) -> bool:
         if prompt is None and text is None:
             raise ValueError("wait_for requires either prompt= or text=")
         pattern = re.compile(prompt) if prompt is not None else None
@@ -1042,9 +1030,7 @@ async def test_get_and_maybe_get() -> None:
 
 async def test_close_refuses_protected_without_force() -> None:
     pool = TerminalPool()
-    iid = (
-        await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}, protected=True)
-    )["instance_id"]
+    iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}, protected=True))["instance_id"]
     try:
         with pytest.raises(ProtectedTerminalCloseError):
             await pool.close(iid)
@@ -1163,9 +1149,7 @@ class TerminalPool:
         if session is None:
             raise KeyError(f"no terminal session {instance_id!r}")
         if session.protected and not force:
-            raise ProtectedTerminalCloseError(
-                f"terminal {instance_id!r} is protected; pass force=True to close it"
-            )
+            raise ProtectedTerminalCloseError(f"terminal {instance_id!r} is protected; pass force=True to close it")
         await session.close(force=force)
         async with self._lock:
             self._sessions.pop(instance_id, None)

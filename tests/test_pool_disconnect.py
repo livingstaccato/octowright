@@ -26,6 +26,7 @@ that whichever Playwright actually fires first wins.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -34,6 +35,8 @@ import pytest
 import octowright.browser_pool.launch_execution as launch_execution_module
 import octowright.browser_pool.pool as pool_module
 from octowright.browser_pool import BrowserPool
+from octowright.recorder import Recorder
+from octowright.session import BrowserSession
 
 
 class _LogCapture:
@@ -59,14 +62,15 @@ class _LogCapture:
 
 @pytest.fixture
 def listeners_log(monkeypatch: pytest.MonkeyPatch) -> _LogCapture:
-    """Replace the eviction-listener module's `log` (and the lifecycle
-    module's, which emits the explicit-close line) with a shared capture."""
-    from octowright.browser_pool import lifecycle as _lifecycle
+    """Replace the eviction-listener module's `log` (and close_helpers',
+    which emits the explicit-close/evicted-externally lines from inside the
+    close coordinator) with a shared capture."""
+    from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool import listeners as _listeners
 
     cap = _LogCapture()
     monkeypatch.setattr(_listeners, "log", cap)
-    monkeypatch.setattr(_lifecycle, "log", cap)
+    monkeypatch.setattr(_close_helpers, "log", cap)
     return cap
 
 
@@ -339,9 +343,12 @@ async def test_launch_cancelled_during_nav_leaves_no_registered_session(monkeypa
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """Synthesize a context 'close' event and verify the session is evicted +
-    the eviction log line is emitted."""
+    the eviction log line is emitted. The registry eviction is synchronous
+    (asserted immediately); the eviction log line is emitted by the retained
+    coordinator task, which needs the loop to run at least once."""
     _install_playwright_stub(monkeypatch)
     pool = BrowserPool()
 
@@ -365,10 +372,11 @@ async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, li
         cb()
 
     assert iid not in pool._sessions
-    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
+    await _wait_until(lambda: any("evicted_externally" in m for m in listeners_log.messages()))
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_browser_disconnected_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """When the underlying browser process dies, Playwright fires
     ``browser.on('disconnected', ...)`` — that signal must also evict."""
@@ -397,7 +405,7 @@ async def test_browser_disconnected_evicts_session(monkeypatch: pytest.MonkeyPat
         cb()
 
     assert iid not in pool._sessions
-    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
+    await _wait_until(lambda: any("evicted_externally" in m for m in listeners_log.messages()))
 
 
 def _capture_session_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
@@ -444,6 +452,7 @@ async def test_page_crash_marks_session_and_notifies(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_eviction_after_crash_reports_reason_crashed(
     monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
 ) -> None:
@@ -473,13 +482,17 @@ async def test_eviction_after_crash_reports_reason_crashed(
         cb()
 
     assert iid not in pool._sessions
+    # The "relaunch" guidance distinguishes a crash from an ordinary close --
+    # this is set synchronously by the acceptance seam, no need to wait.
+    assert "crashed" in pool._missing_session_message(iid)
+    # The SessionClosedEvent is published by the retained coordinator task.
+    await _wait_until(lambda: any(isinstance(e, SessionClosedEvent) for e in events))
     closed = [e for e in events if isinstance(e, SessionClosedEvent)]
     assert closed and closed[-1].reason == "crashed"
-    # The "relaunch" guidance distinguishes a crash from an ordinary close.
-    assert "crashed" in pool._missing_session_message(iid)
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_external_close_without_crash_stays_user_close(
     monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
 ) -> None:
@@ -499,12 +512,14 @@ async def test_external_close_without_crash_stays_user_close(
     for cb in _close_handlers(session):
         cb()
 
-    closed = [e for e in events if isinstance(e, SessionClosedEvent)]
-    assert closed and closed[-1].reason == "user_close"
-    # Generic "ended unexpectedly" message, NOT the crash-specific one.
+    # Generic "ended unexpectedly" message, NOT the crash-specific one -- set
+    # synchronously by the acceptance seam.
     message = pool._missing_session_message(iid)
     assert "ended unexpectedly" in message
     assert "its process died" not in message
+    await _wait_until(lambda: any(isinstance(e, SessionClosedEvent) for e in events))
+    closed = [e for e in events if isinstance(e, SessionClosedEvent)]
+    assert closed and closed[-1].reason == "user_close"
 
 
 async def _wait_until(predicate: Any, *, timeout: float = 5.0) -> None:
@@ -551,20 +566,23 @@ async def test_all_pages_closed_runs_full_session_close(
     assert _page_close_handlers(page), "expected page.on('close') handler"
 
     page.mark_closed()  # last page gone → fires page.on('close')
-    # Wait for the full teardown, not just the registry pop (close_browser pops
-    # BEFORE awaiting session.close(), so registry removal races the teardown).
+    # Wait for the full teardown, not just the registry pop (the coordinator
+    # pops _sessions BEFORE awaiting the teardown body, so registry removal
+    # races the teardown itself).
     await _wait_until(
         lambda: (
             session.context.close.await_count >= 1
-            and any("octowright.browser.closed" in message for message in listeners_log.messages())
+            and any("octowright.browser.evicted_externally" in message for message in listeners_log.messages())
         )
     )
 
     assert iid not in pool._sessions
     # The context was actually torn down (the whole point) — not just popped.
     assert session.context.close.await_count >= 1
-    # Full close logs the canonical closed line via the lifecycle path.
-    assert any("octowright.browser.closed" in m for m in listeners_log.messages()), listeners_log.messages()
+    # Last-page-gone now routes through the SAME external-close acceptance
+    # seam as context.close/browser.disconnected (Task 7), so it logs the
+    # external line, not the explicit-close one.
+    assert any("octowright.browser.evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
 @pytest.mark.anyio
@@ -597,6 +615,7 @@ async def test_one_page_close_with_survivor_does_not_evict(monkeypatch: pytest.M
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_multiple_signals_only_evict_once(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """Real Playwright might fire context.close AND browser.disconnected for
     the same teardown. The eviction log line should appear at most once."""
@@ -622,6 +641,7 @@ async def test_multiple_signals_only_evict_once(monkeypatch: pytest.MonkeyPatch,
     session.pages[0].mark_closed()
 
     assert iid not in pool._sessions
+    await _wait_until(lambda: any("evicted_externally" in m for m in listeners_log.messages()))
     evictions = [m for m in listeners_log.messages() if "evicted_externally" in m]
     assert len(evictions) == 1, f"expected exactly one eviction log; got {len(evictions)}"
 
@@ -759,3 +779,239 @@ async def test_persistent_context_has_no_browser_disconnect(monkeypatch: pytest.
     for cb in _close_handlers(session):
         cb()
     assert iid not in pool._sessions
+
+
+# ─── failure-containment integration at the tool boundary (Task 13) ────────
+#
+# Real BrowserSession + BrowserPool wiring (not the Playwright stub above) so
+# the operation gate's failure modes are proven through the ACTUAL MCP tool
+# functions (server/browser/input.py, server/browser/lifecycle.py) rather
+# than the raw gate/pool APIs those already have dedicated coverage for.
+
+
+def _real_gated_session(instance_id: str, tmp_path: Path, **kwargs: Any) -> BrowserSession:
+    context = MagicMock()
+    context.close = AsyncMock()
+    context.tracing = MagicMock()
+    context.on = MagicMock()
+    page = MagicMock()
+    page.click = AsyncMock()
+    log_path = tmp_path / f"{instance_id}.jsonl"
+    return BrowserSession(
+        instance_id=instance_id,
+        kind="chromium",
+        label=None,
+        url="https://octowright.com",
+        browser=None,
+        context=context,
+        page=page,
+        recorder=Recorder(log_path),
+        log_path=log_path,
+        **kwargs,
+    )
+
+
+async def _wait_for_queue_depth(gate: Any, depth: int) -> None:
+    import asyncio
+
+    async with asyncio.timeout(1):
+        while gate.snapshot()["queue_depth"] != depth:
+            await asyncio.sleep(0)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_gate_busy_timeout_isolates_failure_at_tool_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Holding browser A's gate beyond its (short, test-only) queue timeout
+    and calling a real MCP tool on it surfaces ``SessionBusyTimeoutError``
+    through the existing tool error path -- no gate-specific response shape,
+    no auto-close, no auto-retry -- while browser B, called concurrently,
+    succeeds normally and the MCP registry + event loop stay alive."""
+    import asyncio
+
+    from octowright.browser_pool import driver_health
+    from octowright.server.browser import input as _input
+    from octowright.session.operation_gate import SessionBusyTimeoutError
+    from tests._pool_invariants import hold_operation, wait_for_active
+
+    pool = BrowserPool()
+    session_a = _real_gated_session("A", tmp_path, operation_queue_timeout_seconds=0.08)
+    session_b = _real_gated_session("B", tmp_path)
+    pool._sessions[session_a.instance_id] = session_a
+    pool._sessions[session_b.instance_id] = session_b
+    monkeypatch.setattr(_input, "pool", pool)
+
+    release = asyncio.Event()
+    holder = asyncio.create_task(hold_operation(session_a, "external_hold", release))
+    await wait_for_active(session_a._operation_gate, "external_hold")
+
+    before_restarts = pool.driver_restart_count()
+
+    with pytest.raises(SessionBusyTimeoutError) as excinfo:
+        await _input.browser_click(session_a.instance_id, "#buy")
+    assert driver_health.is_driver_dead_error(excinfo.value) is False
+    assert session_a.recorder.action_count == 0  # the timed-out ticket never entered click's body
+
+    # Browser B, called concurrently, is completely unaffected.
+    out_b = await _input.browser_click(session_b.instance_id, "#buy")
+    assert out_b == {"ok": True}
+    assert session_b.recorder.action_count == 1
+
+    # The MCP tool registry and the event loop stayed alive throughout.
+    tool_names = {tool.name for tool in _input.mcp._tool_manager.list_tools()}
+    assert "browser_click" in tool_names
+    assert asyncio.get_running_loop().is_running()
+
+    # A is still registered -- a gate error never auto-closes a browser.
+    assert pool.get(session_a.instance_id) is session_a
+
+    release.set()
+    await holder
+
+    # A is fully usable once the holder releases -- no auto-retry needed.
+    out_a = await _input.browser_click(session_a.instance_id, "#buy")
+    assert out_a == {"ok": True}
+    assert session_a.recorder.action_count == 1
+    assert pool.driver_restart_count() == before_restarts
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_external_closure_fails_queued_call_without_driver_reset_or_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Playwright's own close signal firing on a session with a queued call
+    behind it must fail that call cleanly (SessionClosedError) -- it must not
+    reach for driver reset or any daemon-restart-adjacent recovery path."""
+    import asyncio
+
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.server.browser import input as _input
+    from octowright.session.operation_gate import SessionClosedError
+    from tests._pool_invariants import hold_operation, wait_for_active, wait_until
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session_a = _real_gated_session("A", tmp_path)
+    pool._sessions[session_a.instance_id] = session_a
+    monkeypatch.setattr(_input, "pool", pool)
+
+    release = asyncio.Event()
+    holder = asyncio.create_task(hold_operation(session_a, "external_hold", release))
+    await wait_for_active(session_a._operation_gate, "external_hold")
+
+    queued = asyncio.create_task(_input.browser_click(session_a.instance_id, "#buy"))
+    await _wait_for_queue_depth(session_a._operation_gate, 1)
+
+    before_restarts = pool.driver_restart_count()
+    won = pool._accept_external_close_nowait(session_a.instance_id, expected_session=session_a, reason="user_close")
+    assert won is not None
+
+    with pytest.raises(SessionClosedError):
+        await queued
+
+    assert pool.driver_restart_count() == before_restarts
+    assert session_a.instance_id not in pool._sessions
+
+    release.set()
+    await holder
+    await wait_until(lambda: session_a.instance_id not in pool._closing_sessions)
+    session_a.context.close.assert_awaited_once()
+
+    # The rejected click never ran -- teardown legitimately writes its own
+    # "close" row, so this checks for the ABSENCE of a "click" row rather
+    # than an exact count.
+    import json
+
+    recorded_actions = [json.loads(line)["action"] for line in session_a.recorder.log_path.read_text().splitlines()]
+    assert "click" not in recorded_actions
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_cancelled_waiter_never_executes_later_and_leaves_no_recorder_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller that cancels a still-queued call must never have that call's
+    body run later once the gate frees up, and it must leave no JSONL row --
+    a cancelled ticket is not a deferred one."""
+    import asyncio
+
+    from octowright.server.browser import input as _input
+    from tests._pool_invariants import hold_operation, wait_for_active
+
+    pool = BrowserPool()
+    session_a = _real_gated_session("A", tmp_path)
+    pool._sessions[session_a.instance_id] = session_a
+    monkeypatch.setattr(_input, "pool", pool)
+
+    release = asyncio.Event()
+    holder = asyncio.create_task(hold_operation(session_a, "external_hold", release))
+    await wait_for_active(session_a._operation_gate, "external_hold")
+
+    queued = asyncio.create_task(_input.browser_click(session_a.instance_id, "#buy"))
+    await _wait_for_queue_depth(session_a._operation_gate, 1)
+
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+
+    assert session_a._operation_gate.snapshot()["queue_depth"] == 0
+    assert session_a.recorder.action_count == 0
+
+    release.set()
+    await holder
+
+    # Even after the gate frees up, the cancelled ticket never runs later.
+    await asyncio.sleep(0.05)
+    assert session_a.recorder.action_count == 0
+    session_a.page.click.assert_not_awaited()
+
+    # A fresh call still works normally.
+    out = await _input.browser_click(session_a.instance_id, "#buy")
+    assert out == {"ok": True}
+    assert session_a.recorder.action_count == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_accepted_close_completes_through_the_mcp_tool_despite_caller_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same cancellation-safety the raw pool.close coordinator has
+    (tests/test_browser_pool_branches.py::test_cancelled_close_caller_does_
+    not_cancel_accepted_close) must hold through the real ``browser_close``
+    MCP tool too: once a close reservation is accepted, cancelling the
+    CALLING task must not stop the close from completing."""
+    import asyncio
+
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.server.browser import lifecycle as _lifecycle
+    from tests._pool_invariants import hold_operation, wait_for_active, wait_for_state, wait_until
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session_a = _real_gated_session("A", tmp_path)
+    pool._sessions[session_a.instance_id] = session_a
+    monkeypatch.setattr(_lifecycle, "pool", pool)
+
+    release = asyncio.Event()
+    holder = asyncio.create_task(hold_operation(session_a, "long_action", release))
+    await wait_for_active(session_a._operation_gate, "long_action")
+
+    close_task = asyncio.create_task(_lifecycle.browser_close(session_a.instance_id, force=True))
+    await wait_for_state(session_a._operation_gate, "closing")
+
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    release.set()
+    await holder
+    await wait_until(lambda: session_a.instance_id not in pool._closing_sessions)
+
+    session_a.context.close.assert_awaited_once()
+    with pytest.raises(KeyError):
+        pool.get(session_a.instance_id)

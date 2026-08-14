@@ -135,18 +135,19 @@ Replace the hardcoded `opacity: "0.72"` in `src/octowright/browser_pool/_assets/
 In the `if badge:` block (around line 298–310), update the badge script substitution:
 
 ```python
-    if badge:
-        badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji, kind=kind)
-        color_seed = profile or label or instance_id[:6]
-        from octowright.defaults import BADGE_OPACITY
-        badge_script = (
-            _badge_script()
-            .replace("__TAG__", _json.dumps(badge_text))
-            .replace("__COLOR__", _json.dumps(_badge_color_for(color_seed)))
-            .replace("__POS__", _json.dumps(_BADGE_POSITIONS[badge_position]))
-            .replace("__OPACITY__", _json.dumps(BADGE_OPACITY))
-        )
-        await context.add_init_script(script=badge_script)
+if badge:
+    badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji, kind=kind)
+    color_seed = profile or label or instance_id[:6]
+    from octowright.defaults import BADGE_OPACITY
+
+    badge_script = (
+        _badge_script()
+        .replace("__TAG__", _json.dumps(badge_text))
+        .replace("__COLOR__", _json.dumps(_badge_color_for(color_seed)))
+        .replace("__POS__", _json.dumps(_BADGE_POSITIONS[badge_position]))
+        .replace("__OPACITY__", _json.dumps(BADGE_OPACITY))
+    )
+    await context.add_init_script(script=badge_script)
 ```
 
 - [ ] **Step 6: Run tests**
@@ -187,16 +188,23 @@ git commit -m "feat(badge): configurable opacity via OCTOWRIGHT_BADGE_OPACITY, d
 ```python
 def test_all_eight_positions_exist() -> None:
     from octowright.browser_pool.visuals import _BADGE_POSITIONS
+
     expected = {
-        "top-left", "top-center", "top-right",
-        "left-center", "right-center",
-        "bottom-left", "bottom-center", "bottom-right",
+        "top-left",
+        "top-center",
+        "top-right",
+        "left-center",
+        "right-center",
+        "bottom-left",
+        "bottom-center",
+        "bottom-right",
     }
     assert expected == set(_BADGE_POSITIONS.keys())
 
 
 def test_center_positions_have_transform() -> None:
     from octowright.browser_pool.visuals import _BADGE_POSITIONS
+
     for key in ("top-center", "bottom-center"):
         assert "transform" in _BADGE_POSITIONS[key]
         assert "translateX(-50%)" in _BADGE_POSITIONS[key]["transform"]
@@ -219,14 +227,14 @@ Replace the existing `_BADGE_POSITIONS` dict (lines 149–154):
 
 ```python
 _BADGE_POSITIONS: dict[str, dict[str, str]] = {
-    "top-left":      {"vertical": "top",    "horizontal": "left"},
-    "top-center":    {"vertical": "top",    "horizontal": "left",   "transform": "translateX(-50%)", "h_offset": "50%"},
-    "top-right":     {"vertical": "top",    "horizontal": "right"},
-    "left-center":   {"vertical": "top",    "horizontal": "left",   "transform": "translateY(-50%)", "v_offset": "50%"},
-    "right-center":  {"vertical": "top",    "horizontal": "right",  "transform": "translateY(-50%)", "v_offset": "50%"},
-    "bottom-left":   {"vertical": "bottom", "horizontal": "left"},
-    "bottom-center": {"vertical": "bottom", "horizontal": "left",   "transform": "translateX(-50%)", "h_offset": "50%"},
-    "bottom-right":  {"vertical": "bottom", "horizontal": "right"},
+    "top-left": {"vertical": "top", "horizontal": "left"},
+    "top-center": {"vertical": "top", "horizontal": "left", "transform": "translateX(-50%)", "h_offset": "50%"},
+    "top-right": {"vertical": "top", "horizontal": "right"},
+    "left-center": {"vertical": "top", "horizontal": "left", "transform": "translateY(-50%)", "v_offset": "50%"},
+    "right-center": {"vertical": "top", "horizontal": "right", "transform": "translateY(-50%)", "v_offset": "50%"},
+    "bottom-left": {"vertical": "bottom", "horizontal": "left"},
+    "bottom-center": {"vertical": "bottom", "horizontal": "left", "transform": "translateX(-50%)", "h_offset": "50%"},
+    "bottom-right": {"vertical": "bottom", "horizontal": "right"},
 }
 ```
 
@@ -265,15 +273,17 @@ The `if self.badge_position not in _BADGE_POSITIONS: raise ValueError(...)` will
 Find the `badge_position` sentence in the `browser_launch` description string (around line 65):
 
 ```python
-        "badge_position controls the corner (top-left/top-right/bottom-left/bottom-right, "
-        "default bottom-right). "
+"badge_position controls the corner (top-left/top-right/bottom-left/bottom-right,"
+
+"default bottom-right). "
 ```
 
 Replace with:
 
 ```python
-        "badge_position controls placement — any of: top-left, top-center, top-right, "
-        "left-center, right-center, bottom-left, bottom-center, bottom-right (default bottom-right). "
+"badge_position controls placement — any of: top-left, top-center, top-right,"
+
+"left-center, right-center, bottom-left, bottom-center, bottom-right (default bottom-right). "
 ```
 
 - [ ] **Step 7: Run tests**
@@ -532,22 +542,23 @@ Replace the entire contents of `src/octowright/browser_pool/_assets/badge.js`:
 In the `if badge:` block, extend the substitution chain (after the existing `.replace("__OPACITY__", ...)` call):
 
 ```python
-    if badge:
-        badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji, kind=kind)
-        color_seed = profile or label or instance_id[:6]
-        from octowright.defaults import BADGE_OPACITY, get_default_url
-        # Dashboard URL is the daemon origin (strip the /new-tab path)
-        dashboard_url = get_default_url().removesuffix("/new-tab")
-        badge_script = (
-            _badge_script()
-            .replace("__TAG__", _json.dumps(badge_text))
-            .replace("__COLOR__", _json.dumps(_badge_color_for(color_seed)))
-            .replace("__POS__", _json.dumps(_BADGE_POSITIONS[badge_position]))
-            .replace("__OPACITY__", _json.dumps(BADGE_OPACITY))
-            .replace("__DASHBOARD_URL__", _json.dumps(dashboard_url))
-            .replace("__INSTANCE_ID__", _json.dumps(instance_id))
-        )
-        await context.add_init_script(script=badge_script)
+if badge:
+    badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji, kind=kind)
+    color_seed = profile or label or instance_id[:6]
+    from octowright.defaults import BADGE_OPACITY, get_default_url
+
+    # Dashboard URL is the daemon origin (strip the /new-tab path)
+    dashboard_url = get_default_url().removesuffix("/new-tab")
+    badge_script = (
+        _badge_script()
+        .replace("__TAG__", _json.dumps(badge_text))
+        .replace("__COLOR__", _json.dumps(_badge_color_for(color_seed)))
+        .replace("__POS__", _json.dumps(_BADGE_POSITIONS[badge_position]))
+        .replace("__OPACITY__", _json.dumps(BADGE_OPACITY))
+        .replace("__DASHBOARD_URL__", _json.dumps(dashboard_url))
+        .replace("__INSTANCE_ID__", _json.dumps(instance_id))
+    )
+    await context.add_init_script(script=badge_script)
 ```
 
 - [ ] **Step 5: Run targeted tests**
@@ -625,11 +636,15 @@ Expected: FAIL — current code uses `asyncio.sleep`, not `wait_for_load_state`.
 Replace lines 47–71 in `src/octowright/browser_pool/launch_pipeline.py`:
 
 ```python
-_BLANK_URLS = frozenset({
-    "", "about:blank",
-    "chrome://newtab/", "chrome://newtab",   # trailing-slash variants
-    "about:newtab",
-})
+_BLANK_URLS = frozenset(
+    {
+        "",
+        "about:blank",
+        "chrome://newtab/",
+        "chrome://newtab",  # trailing-slash variants
+        "about:newtab",
+    }
+)
 
 # Task references kept alive to prevent GC mid-flight (satisfies RUF006).
 _redirect_tasks: set[asyncio.Task[None]] = set()
@@ -728,10 +743,11 @@ git commit -m "fix(new-tab): reliable Cmd+T redirect via wait_for_load_state + c
 At the end of the `browser_launch` `@mcp.tool(description=...)` string (just before the closing `)`), append after `"Returns instance_id."`:
 
 ```python
-        "If the initial navigation fails (network error, bad URL, DNS failure, etc.) the "
-        "browser instance is NOT destroyed — it stays alive and registered. The return dict "
-        "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
-        "to retry navigation or go to a different URL without re-launching."
+"If the initial navigation fails (network error, bad URL, DNS failure, etc.) the"
+
+"browser instance is NOT destroyed — it stays alive and registered. The return dict "
+"includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
+"to retry navigation or go to a different URL without re-launching."
 ```
 
 - [ ] **Step 2: Find and update `browser_quick_launch` description**

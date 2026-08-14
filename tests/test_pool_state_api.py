@@ -15,7 +15,10 @@ from octowright.browser_pool import BrowserPool
 
 
 def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
+    from octowright.session.operation_gate import SessionOperationGate
+
     pool = BrowserPool()
+    gate = SessionOperationGate("abc123", "webkit")
     session = SimpleNamespace(
         instance_id="abc123",
         kind="webkit",
@@ -25,6 +28,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
         log_path="/tmp/demo.jsonl",
         har_path=None,
         protected=False,
+        operation_snapshot=gate.snapshot,
     )
     pool._sessions["abc123"] = session  # type: ignore[assignment]
 
@@ -42,6 +46,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
             "log_path": "/tmp/demo.jsonl",
             "har_path": None,
             "protected": False,
+            "operation_gate": gate.snapshot(),
         }
     ]
 
@@ -71,6 +76,11 @@ async def test_concurrent_ensure_pw_initializes_playwright_once(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_concurrent_close_claims_session_once() -> None:
+    """Concurrent closes for the SAME identity coalesce onto one durable
+    coordinator (Task 7): both callers get the SAME successful outcome
+    (neither raises KeyError), and the teardown body runs exactly once."""
+    from octowright.session.operation_gate import SessionOperationGate
+
     pool = BrowserPool()
     close_calls = 0
 
@@ -79,12 +89,15 @@ async def test_concurrent_close_claims_session_once() -> None:
         kind = "webkit"
         label = None
         profile = None
+        protected = False
+        protected_reason = "explicit"
         log_path = "/tmp/demo.jsonl"
         video_path = None
         trace_path = None
         har_path = None
+        _operation_gate = SessionOperationGate("abc123", "webkit")
 
-        async def close(self) -> None:
+        async def _teardown_after_close_cutoff(self, *, reason: str | None = None) -> None:
             nonlocal close_calls
             close_calls += 1
             await asyncio.sleep(0.01)
@@ -94,7 +107,8 @@ async def test_concurrent_close_claims_session_once() -> None:
     results = await asyncio.gather(pool.close("abc123"), pool.close("abc123"), return_exceptions=True)
 
     closed = [result for result in results if isinstance(result, dict)]
-    errors = [result for result in results if isinstance(result, KeyError)]
-    assert len(closed) == 1
-    assert len(errors) == 1
+    errors = [result for result in results if isinstance(result, BaseException)]
+    assert len(closed) == 2
+    assert not errors
+    assert closed[0] == closed[1]
     assert close_calls == 1

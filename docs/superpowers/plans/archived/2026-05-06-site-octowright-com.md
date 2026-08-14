@@ -181,13 +181,18 @@ def test_sync_exports_copies_index_hero_payloads_and_assets(tmp_path: Path) -> N
     target = tmp_path / "site"
     (source / "heroes").mkdir(parents=True)
     (source / "artifacts" / "seven-mix-orchestration").mkdir(parents=True)
-    (source / "index.json").write_text('{"heroes":[{"id":"seven-mix-orchestration","payload":"heroes/seven-mix-orchestration.json","artifacts_dir":"artifacts/seven-mix-orchestration"}]}')
+    (source / "index.json").write_text(
+        '{"heroes":[{"id":"seven-mix-orchestration","payload":"heroes/seven-mix-orchestration.json","artifacts_dir":"artifacts/seven-mix-orchestration"}]}'
+    )
     (source / "heroes" / "seven-mix-orchestration.json").write_text('{"title":"Seven Mix Orchestration"}')
     (source / "artifacts" / "seven-mix-orchestration" / "poster.png").write_bytes(b"poster")
 
     sync_exports(source_root=source, site_root=target)
 
-    assert json.loads((target / "data" / "demos" / "index.json").read_text())["heroes"][0]["id"] == "seven-mix-orchestration"
+    assert (
+        json.loads((target / "data" / "demos" / "index.json").read_text())["heroes"][0]["id"]
+        == "seven-mix-orchestration"
+    )
     assert (target / "data" / "demos" / "heroes" / "seven-mix-orchestration.json").exists()
     assert (target / "static" / "demo-assets" / "seven-mix-orchestration" / "poster.png").read_bytes() == b"poster"
 ```
