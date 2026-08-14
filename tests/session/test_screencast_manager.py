@@ -154,6 +154,54 @@ async def test_acquire_cancellation_after_add_viewer_releases_created_viewer():
 
 
 @pytest.mark.asyncio
+async def test_acquire_repeated_cancellation_after_add_viewer_still_releases_created_viewer():
+    """A single ``Task.cancel()`` can be requested more than once before the
+    task processes any of them (this repo's MCP server runs under anyio,
+    whose cancel scopes keep re-delivering CancelledError at every checkpoint
+    until their ``with`` block exits). ``acquire_viewer``'s recovery must
+    absorb every extra cancel via ``_join_after_cancellation`` and keep
+    joining ``add_task`` rather than abandoning it mid-flight on the second
+    delivery -- which would leak the viewer/producer this whole recovery
+    path exists to prevent."""
+    started = asyncio.Event()
+    allow_start = asyncio.Event()
+
+    class BlockingStartScreencast(FakeScreencast):
+        async def start(self, on_frame=None, quality=None):
+            await super().start(on_frame=on_frame, quality=quality)
+            started.set()
+            await allow_start.wait()
+
+    sess = FakeSession("cancel-twice-after-add")
+    sess.page.screencast = BlockingStartScreencast()
+
+    task = asyncio.create_task(sc.acquire_viewer(sess, fps=10, quality=70))
+    await started.wait()
+
+    await sc._registry_lock.acquire()
+    try:
+        allow_start.set()
+        while sc._managers[sess.instance_id].viewer_count == 0:
+            await asyncio.sleep(0)
+        # Deliver several cancellations in quick succession, well before the
+        # task can finish joining `add_task` -- simulating anyio's repeated
+        # redelivery within a single logical cancellation.
+        for _ in range(4):
+            task.cancel()
+            await asyncio.sleep(0)
+    finally:
+        sc._registry_lock.release()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    manager = sc._managers.get(sess.instance_id)
+    assert manager is None
+    assert sc._pending_acquires.get(sess.instance_id) is None
+    assert sess.page.screencast.stopped is True
+
+
+@pytest.mark.asyncio
 async def test_release_drops_manager_when_final_stop_fails():
     sess = FakeSession("stop-fails")
     sess.page.screencast = FakeScreencast(fail_stop=True)
