@@ -1596,6 +1596,51 @@ def test_no_frontend_routes_when_bundle_missing(monkeypatch: pytest.MonkeyPatch,
 
 
 # ---------------------------------------------------------------------------
+# _live_summary — shared operation_gate snapshot
+# ---------------------------------------------------------------------------
+
+
+def test_http_live_summary_reuses_session_snapshot() -> None:
+    """`_live_summary` must not compute its own gate state -- it forwards the
+    exact dict `session.operation_snapshot()` returns."""
+    from octowright.http.discovery import _live_summary
+
+    gate = SessionOperationGate("sess-1", "chromium")
+    session = SimpleNamespace(
+        instance_id="sess-1",
+        kind="chromium",
+        label=None,
+        profile=None,
+        url="https://octowright.com",
+        log_path=Path("/tmp/does-not-exist.jsonl"),
+        started_at="2026-01-01T00:00:00Z",
+        operation_snapshot=gate.snapshot,
+    )
+
+    expected = session.operation_snapshot()
+
+    assert _live_summary(session)["operation_gate"] == expected
+
+
+def test_http_live_summary_omits_gate_when_no_snapshot_method() -> None:
+    """A terminal session row has no `operation_snapshot` — the key must be
+    OMITTED, not fabricated as an idle-looking default."""
+    from octowright.http.discovery import _live_summary
+
+    session = SimpleNamespace(
+        instance_id="term-1",
+        kind="terminal",
+        label=None,
+        profile=None,
+        url=None,
+        log_path=Path("/tmp/does-not-exist.jsonl"),
+        started_at="2026-01-01T00:00:00Z",
+    )
+
+    assert "operation_gate" not in _live_summary(session)
+
+
+# ---------------------------------------------------------------------------
 # /screenshot/now (live preview)
 # ---------------------------------------------------------------------------
 

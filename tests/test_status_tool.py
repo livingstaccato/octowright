@@ -18,6 +18,16 @@ from octowright.server.meta import (
     octowright_advisor_status,
     octowright_status,
 )
+from octowright.server.meta import pool as status_pool
+
+BUSY_SNAPSHOT = {
+    "state": "open",
+    "active_operation": "macro_run",
+    "active_for_ms": 1200,
+    "queue_depth": 1,
+    "oldest_wait_ms": 400,
+    "queue_timeout_seconds": 300.0,
+}
 
 
 def test_status_returns_required_top_level_blocks() -> None:
@@ -201,6 +211,19 @@ def test_status_pool_counts_are_ints() -> None:
     # health verdict rolls the signals into ok|degraded|critical + reasons.
     assert snap["health"]["status"] in ("ok", "degraded", "critical")
     assert isinstance(snap["health"]["reasons"], list)
+
+
+def test_status_uses_pool_snapshots_without_page_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    """octowright_status must derive live_browsers/protected_browsers/operation_gates
+    from ONE pool.list_sessions() call -- never a second Page/Frame-driven state model."""
+    rows = [{"instance_id": "one", "kind": "chromium", "operation_gate": BUSY_SNAPSHOT}]
+    monkeypatch.setattr(status_pool, "list_sessions", lambda: rows)
+
+    result = octowright_status()
+
+    assert result["pool"]["operation_gates"] == [{"instance_id": "one", "kind": "chromium", **BUSY_SNAPSHOT}]
+    assert result["pool"]["live_browsers"] == 1
+    assert result["pool"]["protected_browsers"] == 0
 
 
 def test_status_personas_returns_name_list() -> None:
