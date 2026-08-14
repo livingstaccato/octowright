@@ -29,8 +29,47 @@ if TYPE_CHECKING:
     # Annotation only — avoids the launch_helpers → options runtime cycle
     # (options.py imports launch_helpers locally for the same reason).
     from octowright.browser_pool.options import LaunchOptions
+    from octowright.session import BrowserSession
 
 log = get_logger(__name__)
+
+
+async def _measure_frame_inset(new_session: BrowserSession, page: Any) -> None:
+    """Record the browser chrome around the content area, once, at launch.
+
+    Launch is the only moment this is measurable. Playwright welds the OS
+    window to a fixed viewport — it sizes the window so the content area
+    matches what was asked for — so right now ``outer - inner`` is the chrome
+    and nothing else. Later the same difference may also carry drift (a tiling
+    WM, a maximise the emulated viewport did not follow), which is precisely
+    what ``viewport_status`` reports by subtracting this baseline.
+
+    Best-effort by design: a failure leaves the inset None, and every consumer
+    treats None as "cannot see the window" and declines to warn. Launching a
+    browser must not fail over a diagnostic measurement.
+    """
+    try:
+        measured = await page.evaluate(
+            """() => ({
+                dw: window.outerWidth - window.innerWidth,
+                dh: window.outerHeight - window.innerHeight
+            })"""
+        )
+        inset_w = int(measured["dw"])
+        inset_h = int(measured["dh"])
+    except Exception as exc:
+        log.debug("octowright.launch.frame_inset_unavailable", error=repr(exc))
+        return
+    # Headless reports outer == inner (no window, no chrome), which is a true
+    # zero inset rather than a failed measurement. Negative is nonsense — a
+    # window cannot be smaller than its own content area — so treat it as
+    # unmeasured rather than storing a number that would overstate the content
+    # area and invent a mismatch.
+    if inset_w < 0 or inset_h < 0:
+        log.debug("octowright.launch.frame_inset_negative", width=inset_w, height=inset_h)
+        return
+    new_session.viewport_frame_inset_w = inset_w
+    new_session.viewport_frame_inset_h = inset_h
 
 
 def _build_viewport_kwargs(
