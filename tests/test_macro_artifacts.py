@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._operation_gate_fakes import OperationAwareFake
+
 
 @pytest.fixture(autouse=True)
 def _restore_reloaded_defaults() -> None:
@@ -296,9 +298,10 @@ def test_macro_export_cli_unsupported_action_exits_nonzero_and_writes_evidence(
     assert evidence_data["records"][1]["action"]["action"] == "not_supported"
 
 
-class FakeSession:
+class FakeSession(OperationAwareFake):
     def __init__(self, tmp_path: Path) -> None:
         self.instance_id = "inst-1"
+        super().__init__()
         self.log_path = tmp_path / "recording.jsonl"
         self.log_path.write_text('{"action":"click"}\n', encoding="utf-8")
         self.page = None

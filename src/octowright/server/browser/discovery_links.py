@@ -17,7 +17,9 @@ from octowright.mcp_types import (
     BrowserToolAction,
 )
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
+from octowright.session._protocols import SessionLike
 from octowright.text_scoring import weighted_text_score
 
 _LINK_EXTRACTOR_JS = """
@@ -138,13 +140,22 @@ def _clean_link_candidate(raw: Any, instance_id: str) -> BrowserLinkCandidate:
     return out
 
 
-async def _extract_browser_links(instance_id: str, selector: str, limit: int) -> tuple[Any, list[BrowserLinkCandidate]]:
-    session = pool.get(instance_id)
-    target = session._target()
-    candidates = await target.evaluate(_LINK_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)})
+async def _extract_browser_links(
+    session: SessionLike,
+    instance_id: str,
+    selector: str,
+    limit: int,
+) -> list[BrowserLinkCandidate]:
+    # Every caller already holds a browser_operation(...) lease under its own
+    # tool name; this re-enters it (same task) rather than forwarding a
+    # second, dynamic operation name -- a fixed literal keeps this scanner-
+    # provable without a caller-supplied name.
+    async with session.operation("browser_extract_links"):
+        target = session._target()
+        candidates = await target.evaluate(_LINK_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)})
     if not isinstance(candidates, list):
         candidates = []
-    return session, [_clean_link_candidate(item, instance_id) for item in candidates]
+    return [_clean_link_candidate(item, instance_id) for item in candidates]
 
 
 def _links_next_actions(instance_id: str) -> list[BrowserToolAction]:
@@ -167,18 +178,19 @@ def _links_next_actions(instance_id: str) -> list[BrowserToolAction]:
 )
 async def browser_links(instance_id: str, selector: str = "body", limit: int = 50) -> BrowserLinksResult:
     cap = _clean_limit(limit)
-    session, links = await _extract_browser_links(instance_id, selector, cap + 1)
-    title = await session.page.title()
-    target = session._target()
-    truncated = len(links) > cap
-    return {
-        "url": target.url,
-        "title": title,
-        "links": links[:cap],
-        "total": len(links),
-        "truncated": truncated,
-        "next_actions": _links_next_actions(instance_id),
-    }
+    async with browser_operation(pool, instance_id, "browser_links") as session:
+        links = await _extract_browser_links(session, instance_id, selector, cap + 1)
+        title = await session.page.title()
+        target = session._target()
+        truncated = len(links) > cap
+        return {
+            "url": target.url,
+            "title": title,
+            "links": links[:cap],
+            "total": len(links),
+            "truncated": truncated,
+            "next_actions": _links_next_actions(instance_id),
+        }
 
 
 def _score_link(link: BrowserLinkCandidate, query: str) -> tuple[float, str]:
@@ -209,26 +221,27 @@ async def browser_find_link(
     limit: int = 8,
 ) -> BrowserFindLinkResult:
     cap = _clean_limit(limit)
-    session, links = await _extract_browser_links(instance_id, selector, 200)
-    ranked: list[BrowserLinkCandidate] = []
-    for rank, link in enumerate(links, start=1):
-        score, reason = _score_link(link, query)
-        if score <= 0:
-            continue
-        item = cast("BrowserLinkCandidate", dict(link))
-        item["rank"] = rank
-        item["score"] = score
-        item["reason"] = reason
-        ranked.append(item)
-    ranked.sort(key=lambda item: (float(item.get("score") or 0), bool(item.get("visible"))), reverse=True)
-    title = await session.page.title()
-    target = session._target()
-    return {
-        "query": query,
-        "url": target.url,
-        "title": title,
-        "links": ranked[:cap],
-        "total": len(ranked),
-        "truncated": len(ranked) > cap,
-        "next_actions": _links_next_actions(instance_id),
-    }
+    async with browser_operation(pool, instance_id, "browser_find_link") as session:
+        links = await _extract_browser_links(session, instance_id, selector, 200)
+        ranked: list[BrowserLinkCandidate] = []
+        for rank, link in enumerate(links, start=1):
+            score, reason = _score_link(link, query)
+            if score <= 0:
+                continue
+            item = cast("BrowserLinkCandidate", dict(link))
+            item["rank"] = rank
+            item["score"] = score
+            item["reason"] = reason
+            ranked.append(item)
+        ranked.sort(key=lambda item: (float(item.get("score") or 0), bool(item.get("visible"))), reverse=True)
+        title = await session.page.title()
+        target = session._target()
+        return {
+            "query": query,
+            "url": target.url,
+            "title": title,
+            "links": ranked[:cap],
+            "total": len(ranked),
+            "truncated": len(ranked) > cap,
+            "next_actions": _links_next_actions(instance_id),
+        }

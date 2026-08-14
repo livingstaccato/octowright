@@ -22,6 +22,7 @@ from provide.telemetry import get_logger
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import gated_operation
 
 _BYTE_LIMIT_OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", "no"}
 
@@ -207,6 +208,7 @@ class SessionIOMixin(SessionLike):
         clean = re.sub(r"\n{3,}", "\n\n", clean)
         return clean.strip()
 
+    @gated_operation("markdown_capture")
     async def capture_markdown(self, *, page: Page | None = None, force: bool = False) -> Path | None:
         """Render and persist markdown for the current page.
 

@@ -29,7 +29,7 @@ session_closed params shape::
       "kind": "chromium",
       "label": "user-label-or-null",
       "profile": "persona-name-or-null",
-      "reason": "agent_close" | "user_close" | "external_disconnect" | "shutdown",
+      "reason": "agent_close" | "user_close" | "external_disconnect" | "crashed" | "shutdown",
       "log_path": "/path/to/session.jsonl"
     }
 

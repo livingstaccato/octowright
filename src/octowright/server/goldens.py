@@ -11,6 +11,7 @@ from typing import Any
 
 from octowright import goldens as goldens_mod
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 
 
 @mcp.tool(
@@ -25,13 +26,13 @@ async def golden_save(
     name: str,
     description: str | None = None,
 ) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    tree = await session.snapshot()
-    # snapshot() is frame-aware and carries the snapshotted document's url; use it so
-    # a golden taken inside an iframe isn't mislabeled with the parent page's url.
-    url = tree.get("url") or session.page.url
-    path = goldens_mod.save_golden(name=name, tree=tree, url=url, description=description)
-    return {"saved": True, "name": name, "path": str(path)}
+    async with browser_operation(pool, instance_id, "golden_save") as session:
+        tree = await session.snapshot()
+        # snapshot() is frame-aware and carries the snapshotted document's url; use it so
+        # a golden taken inside an iframe isn't mislabeled with the parent page's url.
+        url = tree.get("url") or session.page.url
+        path = goldens_mod.save_golden(name=name, tree=tree, url=url, description=description)
+        return {"saved": True, "name": name, "path": str(path)}
 
 
 class GoldenMismatchError(AssertionError):
@@ -58,13 +59,13 @@ class GoldenMismatchError(AssertionError):
     ),
 )
 async def golden_assert(instance_id: str, name: str) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    actual = await session.snapshot()
-    expected = goldens_mod.load_golden(name)["tree"]
-    diffs = goldens_mod.diff_trees(expected, actual)
-    if diffs:
-        raise GoldenMismatchError(name, diffs)
-    return {"ok": True, "diffs": 0}
+    async with browser_operation(pool, instance_id, "golden_assert") as session:
+        actual = await session.snapshot()
+        expected = goldens_mod.load_golden(name)["tree"]
+        diffs = goldens_mod.diff_trees(expected, actual)
+        if diffs:
+            raise GoldenMismatchError(name, diffs)
+        return {"ok": True, "diffs": 0}
 
 
 @mcp.tool(
@@ -76,17 +77,17 @@ async def golden_assert(instance_id: str, name: str) -> dict[str, Any]:
     ),
 )
 async def golden_verify_loop(instance_id: str, name: str) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    actual = await session.snapshot()
-    expected = goldens_mod.load_golden(name)["tree"]
-    diffs = goldens_mod.diff_trees(expected, actual)
-    if not diffs:
-        return {"ok": True, "diffs": 0}
-    return {
-        "ok": False,
-        "diff_count": len(diffs),
-        "diffs": diffs[:10],
-    }
+    async with browser_operation(pool, instance_id, "golden_verify_loop") as session:
+        actual = await session.snapshot()
+        expected = goldens_mod.load_golden(name)["tree"]
+        diffs = goldens_mod.diff_trees(expected, actual)
+        if not diffs:
+            return {"ok": True, "diffs": 0}
+        return {
+            "ok": False,
+            "diff_count": len(diffs),
+            "diffs": diffs[:10],
+        }
 
 
 @mcp.tool(structured_output=False, description="List saved goldens.")

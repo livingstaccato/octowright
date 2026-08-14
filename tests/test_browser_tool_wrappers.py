@@ -22,22 +22,37 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.server.browser import lifecycle as _lifecycle
+from octowright.server.browser import lifecycle_navigate as _nav
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture(autouse=True)
 def _patch_pool(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Replace the module-level `pool` with a mock for every test."""
+    """Replace the module-level `pool` with a mock for every test.
+
+    ``browser_navigate``/``browser_navigate_back``/``browser_resize``/
+    ``browser_viewport_status``/``browser_viewport_sync``/``browser_open_url``
+    live in ``lifecycle_navigate`` (Task 10 split, keeps ``lifecycle.py``
+    under the LOC ceiling), so both modules' ``pool`` references must point
+    at the same fake for a `.get()` call made from either to be observed.
+    """
     fake_pool = MagicMock()
     # The browser cap (ON by default) reads pool.active_count() on user-facing
     # launches; a real int keeps the cap check from tripping on the mock.
     fake_pool.active_count.return_value = 0
     monkeypatch.setattr(_lifecycle, "pool", fake_pool)
+    monkeypatch.setattr(_nav, "pool", fake_pool)
     return fake_pool
 
 
-def _stub_session(method_name: str, return_value: object) -> MagicMock:
-    """Build a session-like mock whose `method_name` is an AsyncMock."""
-    session = MagicMock()
+class _FakeSession(OperationAwareFake):
+    """Real-gate session fake — ``browser_operation`` awaits ``.operation()``
+    as an async context manager, which a bare ``MagicMock`` does not provide."""
+
+
+def _stub_session(method_name: str, return_value: object) -> _FakeSession:
+    """Build a session-like fake whose `method_name` is an AsyncMock."""
+    session = _FakeSession()
     setattr(session, method_name, AsyncMock(return_value=return_value))
     return session
 
@@ -68,7 +83,7 @@ async def test_browser_navigate_back_outline_mode_returns_page_outline(
     session = _stub_session("navigate_back", expected)
     _patch_pool.get = MagicMock(return_value=session)
     outline = AsyncMock(return_value={"url": "https://prev.octowright.com", "headings": []})
-    monkeypatch.setattr(_lifecycle, "browser_page_outline", outline)
+    monkeypatch.setattr(_nav, "browser_page_outline", outline)
 
     result = await _lifecycle.browser_navigate_back("inst-1", response_mode="outline")
 
@@ -158,7 +173,7 @@ async def test_browser_open_url_outline_mode_returns_page_outline(
     session = _stub_session("open_url", expected)
     _patch_pool.get = MagicMock(return_value=session)
     outline = AsyncMock(return_value={"url": "https://x", "links": []})
-    monkeypatch.setattr(_lifecycle, "browser_page_outline", outline)
+    monkeypatch.setattr(_nav, "browser_page_outline", outline)
 
     result = await _lifecycle.browser_open_url("inst-1", "https://x", response_mode="outline")
 

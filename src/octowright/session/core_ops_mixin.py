@@ -11,16 +11,11 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright._tracing import counter, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import gated_operation
 from octowright.session.viewport_ops import SessionViewportMixin
-
-_SESSION_CLOSED = counter(
-    "octowright_browser_closed_total",
-    description="Browser sessions closed cleanly via session.close()",
-)
 
 log = get_logger(__name__)
 
@@ -60,6 +55,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
     # ship (the producer dies after the closed page rejects its work).
     _BG_TASK_DRAIN_MAX_PASSES = 3
 
+    @gated_operation("browser_diagnostic_bundle")
     async def diagnostic_bundle(
         self,
         *,
@@ -98,6 +94,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         await self._capture_diagnostic_screenshot(bundle, screenshot_dir=screenshot_dir)
         return bundle
 
+    @gated_operation("browser_diagnostic_bundle")
     async def _capture_diagnostic_page_meta(self, bundle: dict[str, Any]) -> None:
         try:
             bundle["url"] = self.page.url
@@ -108,6 +105,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         except Exception:
             pass
 
+    @gated_operation("browser_diagnostic_bundle")
     async def _capture_diagnostic_html(
         self,
         bundle: dict[str, Any],
@@ -133,6 +131,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         except Exception as e:
             bundle["html_error"] = repr(e)
 
+    @gated_operation("browser_diagnostic_bundle")
     async def _capture_diagnostic_screenshot(
         self,
         bundle: dict[str, Any],
@@ -147,6 +146,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         except Exception as e:
             bundle["screenshot_error"] = repr(e)
 
+    @gated_operation("browser_switch_frame")
     async def switch_frame(
         self,
         *,
@@ -158,7 +158,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         from octowright.session import frames as _frames
 
         frame, info = await _frames.switch_frame_impl(
-            self.page,
+            self,
             selector=selector,
             name=name,
             url_pattern=url_pattern,
@@ -175,22 +175,26 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         )
         return info
 
+    @gated_operation("browser_reset_frame")
     async def reset_frame(self) -> dict[str, Any]:
         """Clear active_frame so tools target the top-level page again."""
         self.active_frame = None
         self.recorder.record("reset_frame")
         return {"ok": True, "active_frame": None}
 
-    def list_frames(self) -> list[dict[str, Any]]:
+    @gated_operation("browser_list_frames")
+    async def list_frames(self) -> list[dict[str, Any]]:
         """Return [{index, name, url, is_active}, ...] for every frame on the active page."""
         from octowright.session import frames as _frames
 
-        return _frames.list_frames_impl(self.page, self.active_frame)
+        return await _frames.list_frames_impl(self)
 
+    @gated_operation("browser_hover")
     async def hover(self, selector: str) -> None:
         await self._target().hover(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("hover", selector=selector)
 
+    @gated_operation("browser_select_option")
     async def select_option(
         self,
         selector: str,
@@ -221,10 +225,12 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         )
         return {"ok": True, "selected": selected}
 
+    @gated_operation("browser_drag")
     async def drag(self, source_selector: str, target_selector: str) -> None:
         await self._target().drag_and_drop(source_selector, target_selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("drag", source=source_selector, target=target_selector)
 
+    @gated_operation("browser_navigate_back")
     async def navigate_back(self) -> dict[str, Any]:
         response = await self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
         url = self.page.url
@@ -232,6 +238,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         self.recorder.record("navigate_back", url=url)
         return {"ok": response is not None, "url": url, "title": title}
 
+    @gated_operation("browser_open_url")
     async def open_url(
         self,
         url: str,
@@ -367,81 +374,43 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
             await asyncio.gather(*pending, return_exceptions=True)
 
     async def close(self) -> None:
-        instance_id = getattr(self, "instance_id", None)
-        kind = getattr(self, "kind", None)
-        with span("octowright.session.close", instance_id=instance_id, kind=kind):
-            try:
-                await self._close_impl()
-            finally:
-                _SESSION_CLOSED.add(1, attributes={"kind": kind or "unknown"})
+        """Tear the session down exactly once, through the durable cutoff.
 
-    async def _close_impl(self) -> None:
+        A pool-launched session carries a ``_pool_close_requester`` (set by
+        ``launch_pipeline._build_session_object``) that routes here through
+        the identity-aware pool coordinator -- which owns the
+        ``octowright.session.close`` span and the ``octowright_browser_
+        closed_total`` counter itself (see ``lifecycle._coordinate_close``),
+        so this method does not duplicate either. A session built directly
+        (test-only -- no production code constructs ``BrowserSession``
+        outside a pool) falls back to ``core_ops_standalone_close``'s
+        session-owned coordinator, which reuses the same gate reservation/
+        outcome/cancellation mechanics with no pool registry -- and no
+        telemetry owner -- to hand off to.
+        """
+        requester = getattr(self, "_pool_close_requester", None)
+        if requester is not None:
+            await requester()
+        elif getattr(self, "_operation_gate", None) is not None:
+            from octowright.session.core_ops_standalone_close import close_standalone
+
+            await close_standalone(self)
+        else:
+            # A bare mixin double with no gate at all (unit tests that
+            # construct SessionOpsMixin.__new__() directly) -- nothing to
+            # coordinate, run the teardown body verbatim.
+            await self._teardown_after_close_cutoff()
+
+    async def _teardown_after_close_cutoff(self, *, reason: str | None = None) -> None:
+        from octowright.session import core_teardown_helpers as _teardown
+
         try:
             await self._drain_background_tasks()
-            if self.trace:
-                self.trace_path = self.log_path.with_suffix(".trace.zip")
-                try:
-                    await self.context.tracing.stop(path=str(self.trace_path))
-                except Exception as e:
-                    self.recorder.record("trace_stop_error", error=repr(e))
-                    self.trace_path = None
+            await _teardown.stop_trace_if_enabled(self)
             await self.context.close()
-            # Resolve video path after context close (Playwright finalises file on close).
-            if self._video is not None:
-                try:
-                    resolved = await self._video.path()
-                    self.video_path = Path(resolved)
-                except Exception as exc:
-                    # Per silent-swallow policy: video_path stays None and the
-                    # dashboard can't surface the video. Log so the failure is
-                    # diagnosable rather than just missing from the UI.
-                    log.debug(
-                        "octowright.session.video_path_resolve_failed",
-                        instance_id=getattr(self, "instance_id", None),
-                        error=repr(exc),
-                    )
+            await _teardown.resolve_video_path_after_close(self)
         finally:
-            close_handle = getattr(self, "_browser_for_close", None) or self.browser
-            if close_handle is not None:
-                # context.close() may have already terminated the underlying
-                # browser process (persistent contexts in particular). A
-                # second .close() then raises and bypasses the recorder
-                # terminal-event write below — log and continue.
-                try:
-                    await close_handle.close()
-                except Exception as exc:
-                    log.debug(
-                        "octowright.session.browser_close_after_context_close_failed",
-                        instance_id=getattr(self, "instance_id", None),
-                        error=repr(exc),
-                    )
-            ws_fh = getattr(self, "_websocket_fh", None)
-            if ws_fh is not None:
-                try:
-                    # Flush any buffered frames before the close so a final
-                    # batch isn't lost behind the block-buffering window.
-                    ws_fh.flush()
-                except Exception as exc:
-                    log.debug(
-                        "octowright.session.websocket_fh_flush_failed",
-                        instance_id=getattr(self, "instance_id", None),
-                        error=repr(exc),
-                    )
-                try:
-                    ws_fh.close()
-                except Exception as exc:
-                    log.debug(
-                        "octowright.session.websocket_fh_close_failed",
-                        instance_id=getattr(self, "instance_id", None),
-                        error=repr(exc),
-                    )
-                self._websocket_fh = None
-            self.recorder.record(
-                "close",
-                video_path=str(self.video_path) if self.video_path else None,
-                trace_path=str(self.trace_path) if self.trace_path else None,
-                har_path=str(self.har_path) if self.har_path else None,
-                markdown_path=str(self.markdown_path) if self.markdown_path else None,
-                websocket_path=str(self.websocket_path) if self.websocket_path else None,
-            )
+            await _teardown.close_browser_handle_after_context_close(self)
+            _teardown.flush_and_close_websocket_fh(self)
+            self.recorder.record("close", **_teardown.close_recorder_fields(self, reason))
             self.recorder.close()

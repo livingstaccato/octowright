@@ -146,106 +146,112 @@ async def run_macro_artifact(
     slowmo_ms: int | None = None,
     verify: bool = True,
 ) -> dict[str, Any]:
-    macro = load_macro(name)
-    args_used = dict(args or {})
-    store = ArtifactStore()
-    artifact_dir = store.macro_dir(name)
-    runs_dir = artifact_dir / "runs"
-    exports_dir = artifact_dir / "exports"
-    manifest_path = artifact_dir / "artifact.json"
-    manifest = _manifest_for_plan(
-        name=name,
-        macro=macro,
-        args_used=args_used,
-        missing_args=_missing_args(macro, args_used),
-        artifact_dir=artifact_dir,
-        runs_dir=runs_dir,
-        exports_dir=exports_dir,
-    )
-    existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
-    if existing_manifest_path is not None:
-        manifest = _merge_existing_manifest(existing_manifest_path, manifest)
-    write_artifact_manifest(manifest_path, manifest)
-
-    run_dir = store.next_run_dir(artifact_dir)
-    evidence = EvidenceBuilder()
-    await _capture_screenshot(session=session, run_dir=run_dir, evidence=evidence, label="before", enabled=capture)
-
-    status = "ok"
-    error: str | None = None
-    executed = 0
-    skipped = 0
-    try:
-        replay = await macro_mod.run_macro(session=session, name=name, args=args_used, slowmo_ms=slowmo_ms)
-        if isinstance(replay, dict):
-            executed = int(replay.get("executed", 0))
-            skipped = int(replay.get("skipped", 0))
-    except Exception as exc:  # Return artifact paths to MCP callers even when replay fails.
-        status = "failed"
-        error = f"{exc.__class__.__name__}: {exc}"
-        evidence.log_excerpt(
-            path=Path(getattr(session, "log_path", run_dir / "replay.jsonl")),
-            offset=0,
-            preview=traceback.format_exc(limit=8),
-        )
-
-    await _capture_screenshot(session=session, run_dir=run_dir, evidence=evidence, label="after", enabled=capture)
-
-    recording_path = str(getattr(session, "log_path", "")) or None
-    run_result = new_run_result(
-        run_id=run_dir.name,
-        status=status,
-        instance_id=str(getattr(session, "instance_id", "")),
-        macro=name,
-        args_used=args_used,
-        executed=executed,
-        skipped=skipped,
-        error=error,
-        recording_path=recording_path,
-    )
-    summary = notes or f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}."
-    paths = write_run_bundle(run_dir=run_dir, result=run_result, evidence=evidence.records, summary=summary)
-
-    manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
-    write_artifact_manifest(manifest_path, manifest)
-
-    verification_status = "not_configured"
-    verification_paths = {}
-    critical_points = manifest.get("critical_points", [])
-    if verify and critical_points:
-        v_res = macro_artifact_verify(name, run_dir.name)
-        if v_res.get("ok"):
-            verification_status = v_res.get("status", "unknown")
-            verification_paths = v_res.get("paths", {})
-
-    with span("octowright.macro.artifact.run") as s:
-        set_attrs(s, macro=name, run_id=run_dir.name, verify=verify)
-        counter("octowright_macro_artifact_run_total").add(
-            1, attributes={"macro": _cap_macro(name), "status": status, "verified": str(bool(critical_points))}
-        )
-        log.info(
-            "octowright.macro.artifact.run.complete",
-            artifact_type="macro",
+    # One root lease for the entire replay: screenshots, replay, failure
+    # evidence, run-bundle writes, verification, metrics, and the response
+    # all stay under it. The nested run_macro/session.screenshot calls
+    # re-enter it (same task); the root observable status stays
+    # "macro_artifact_run" throughout.
+    async with session.operation("macro_artifact_run"):
+        macro = load_macro(name)
+        args_used = dict(args or {})
+        store = ArtifactStore()
+        artifact_dir = store.macro_dir(name)
+        runs_dir = artifact_dir / "runs"
+        exports_dir = artifact_dir / "exports"
+        manifest_path = artifact_dir / "artifact.json"
+        manifest = _manifest_for_plan(
             name=name,
+            macro=macro,
+            args_used=args_used,
+            missing_args=_missing_args(macro, args_used),
+            artifact_dir=artifact_dir,
+            runs_dir=runs_dir,
+            exports_dir=exports_dir,
+        )
+        existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
+        if existing_manifest_path is not None:
+            manifest = _merge_existing_manifest(existing_manifest_path, manifest)
+        write_artifact_manifest(manifest_path, manifest)
+
+        run_dir = store.next_run_dir(artifact_dir)
+        evidence = EvidenceBuilder()
+        await _capture_screenshot(session=session, run_dir=run_dir, evidence=evidence, label="before", enabled=capture)
+
+        status = "ok"
+        error: str | None = None
+        executed = 0
+        skipped = 0
+        try:
+            replay = await macro_mod.run_macro(session=session, name=name, args=args_used, slowmo_ms=slowmo_ms)
+            if isinstance(replay, dict):
+                executed = int(replay.get("executed", 0))
+                skipped = int(replay.get("skipped", 0))
+        except Exception as exc:  # Return artifact paths to MCP callers even when replay fails.
+            status = "failed"
+            error = f"{exc.__class__.__name__}: {exc}"
+            evidence.log_excerpt(
+                path=Path(getattr(session, "log_path", run_dir / "replay.jsonl")),
+                offset=0,
+                preview=traceback.format_exc(limit=8),
+            )
+
+        await _capture_screenshot(session=session, run_dir=run_dir, evidence=evidence, label="after", enabled=capture)
+
+        recording_path = str(getattr(session, "log_path", "")) or None
+        run_result = new_run_result(
             run_id=run_dir.name,
             status=status,
+            instance_id=str(getattr(session, "instance_id", "")),
+            macro=name,
+            args_used=args_used,
+            executed=executed,
+            skipped=skipped,
+            error=error,
+            recording_path=recording_path,
         )
+        summary = notes or f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}."
+        paths = write_run_bundle(run_dir=run_dir, result=run_result, evidence=evidence.records, summary=summary)
 
-    return {
-        "ok": status == "ok",
-        "macro": name,
-        "run_id": run_dir.name,
-        "summary": summary,
-        "verification_status": verification_status,
-        "paths": {
-            "run_dir": str(run_dir),
-            "manifest": str(manifest_path),
-            "summary": str(paths["summary"]),
-            "evidence": str(paths["evidence"]),
-            "result": str(paths["result"]),
-            **verification_paths,
-        },
-    }
+        manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
+        write_artifact_manifest(manifest_path, manifest)
+
+        verification_status = "not_configured"
+        verification_paths = {}
+        critical_points = manifest.get("critical_points", [])
+        if verify and critical_points:
+            v_res = macro_artifact_verify(name, run_dir.name)
+            if v_res.get("ok"):
+                verification_status = v_res.get("status", "unknown")
+                verification_paths = v_res.get("paths", {})
+
+        with span("octowright.macro.artifact.run") as s:
+            set_attrs(s, macro=name, run_id=run_dir.name, verify=verify)
+            counter("octowright_macro_artifact_run_total").add(
+                1, attributes={"macro": _cap_macro(name), "status": status, "verified": str(bool(critical_points))}
+            )
+            log.info(
+                "octowright.macro.artifact.run.complete",
+                artifact_type="macro",
+                name=name,
+                run_id=run_dir.name,
+                status=status,
+            )
+
+        return {
+            "ok": status == "ok",
+            "macro": name,
+            "run_id": run_dir.name,
+            "summary": summary,
+            "verification_status": verification_status,
+            "paths": {
+                "run_dir": str(run_dir),
+                "manifest": str(manifest_path),
+                "summary": str(paths["summary"]),
+                "evidence": str(paths["evidence"]),
+                "result": str(paths["result"]),
+                **verification_paths,
+            },
+        }
 
 
 async def _capture_screenshot(
@@ -256,18 +262,23 @@ async def _capture_screenshot(
     label: str,
     enabled: bool,
 ) -> None:
-    if not enabled or getattr(session, "page", None) is None:
-        return
-    screenshot = getattr(session, "screenshot", None)
-    if screenshot is None:
-        return
-    path = run_dir / "screenshots" / f"{label}.png"
-    try:
-        await screenshot(path)
-    except Exception as exc:  # Best-effort evidence must not hide macro results.
-        evidence.log_excerpt(path=path, offset=0, preview=f"{exc.__class__.__name__}: {exc}")
-        return
-    evidence.screenshot(path=path, label=label)
+    # Re-enters run_macro_artifact's own "macro_artifact_run" lease (same
+    # task, Task 2 reentrancy) -- both call sites already hold it, so this
+    # never queues; it exists so the page check and screenshot call don't run
+    # unguarded outside any operation boundary.
+    async with session.operation("macro_artifact_run"):
+        if not enabled or getattr(session, "page", None) is None:
+            return
+        screenshot = getattr(session, "screenshot", None)
+        if screenshot is None:
+            return
+        path = run_dir / "screenshots" / f"{label}.png"
+        try:
+            await screenshot(path)
+        except Exception as exc:  # Best-effort evidence must not hide macro results.
+            evidence.log_excerpt(path=path, offset=0, preview=f"{exc.__class__.__name__}: {exc}")
+            return
+        evidence.screenshot(path=path, label=label)
 
 
 def _safe_existing_manifest_path(store: ArtifactStore, manifest_path: Path) -> Path | None:

@@ -25,7 +25,8 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.pairing import pairing_required
-from octowright.http.routes._common import _parse_bool
+from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool
+from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 
 # Production session ids are ``uuid.uuid4().hex[:12]`` (12 lower-case hex
 # chars), but tests and a few other call sites use longer alphanumeric ids.
@@ -205,12 +206,17 @@ async def session_screenshot_now(request: Request) -> Response:
             status_code=404,
         )
 
-    page = live.page
     kwargs: dict[str, Any] = {"type": fmt, "full_page": full_page}
     if fmt == "jpeg":
         kwargs["quality"] = quality
+    timeout = _dashboard_operation_timeout_seconds()
     try:
-        data = await page.screenshot(**kwargs)
+        async with live.operation("dashboard_screenshot", wait_timeout_seconds=timeout):
+            data = await live.page.screenshot(**kwargs)
+    except (SessionClosingError, SessionClosedError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    except SessionBusyTimeoutError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
         state.log.warning(
             "octowright.http.live_screenshot_failed",

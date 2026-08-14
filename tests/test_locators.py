@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from octowright.session import BrowserSession
+from octowright.session.operation_gate import SessionOperationGate
 
 # ---------------------------------------------------------------------------
 # Fake Locator
@@ -130,6 +131,10 @@ def _make_session(page: FakePage, tmp_path: Path) -> BrowserSession:
     session.active_frame = None
     session.downloads = []
     session._pending_download_events = []
+    # BrowserSession.__new__ bypasses __post_init__, so the real gate every
+    # decorated method requires (_locator/click_by/fill_by/get_text_by) has
+    # to be wired in by hand here.
+    session._operation_gate = SessionOperationGate(session.instance_id, session.kind, queue_timeout_seconds=30)
     return session
 
 
@@ -138,24 +143,27 @@ def _make_session(page: FakePage, tmp_path: Path) -> BrowserSession:
 # ---------------------------------------------------------------------------
 
 
-def test_locator_no_finders_raises(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_locator_no_finders_raises(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
     with pytest.raises(ValueError, match="exactly one"):
-        session._locator()
+        await session._locator()
 
 
-def test_locator_two_finders_raises(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_locator_two_finders_raises(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
     with pytest.raises(ValueError, match="exactly one"):
-        session._locator(role="button", label="Email")
+        await session._locator(role="button", label="Email")
 
 
-def test_locator_role_with_name(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_locator_role_with_name(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
-    session._locator(role="button", role_name="Submit")
+    await session._locator(role="button", role_name="Submit")
     assert len(page.calls) == 1
     method, args, kwargs = page.calls[0]
     assert method == "get_by_role"
@@ -163,10 +171,11 @@ def test_locator_role_with_name(tmp_path: Path) -> None:
     assert kwargs == {"name": "Submit", "exact": False}
 
 
-def test_locator_role_without_name_passes_no_kwargs(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_locator_role_without_name_passes_no_kwargs(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
-    session._locator(role="button")
+    await session._locator(role="button")
     assert len(page.calls) == 1
     method, args, kwargs = page.calls[0]
     assert method == "get_by_role"
@@ -175,24 +184,27 @@ def test_locator_role_without_name_passes_no_kwargs(tmp_path: Path) -> None:
     assert "name" not in kwargs
 
 
-def test_locator_label(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_locator_label(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
-    session._locator(label="Email")
+    await session._locator(label="Email")
     assert page.calls == [("get_by_label", ("Email",), {})]
 
 
-def test_locator_text(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_locator_text(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
-    session._locator(text="Hi")
+    await session._locator(text="Hi")
     assert page.calls == [("get_by_text", ("Hi",), {})]
 
 
-def test_locator_test_id(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_locator_test_id(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
-    session._locator(test_id="login")
+    await session._locator(test_id="login")
     assert page.calls == [("get_by_test_id", ("login",), {})]
 
 
@@ -309,12 +321,13 @@ async def test_get_text_by_records_action(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_locator_routes_through_active_frame(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_locator_routes_through_active_frame(tmp_path: Path) -> None:
     page = FakePage()
     frame = FakePage()
     session = _make_session(page, tmp_path)
     session.active_frame = frame  # type: ignore[assignment]
-    session._locator(label="Email")
+    await session._locator(label="Email")
     # Frame got the call, not the page
     assert len(frame.calls) == 1
     assert len(page.calls) == 0

@@ -49,25 +49,28 @@ def test_default_dialog_policy_is_dismiss(tmp_path: Path) -> None:
     assert session._dialog_prompt_text is None
 
 
-def test_set_dialog_policy_accept_overrides_default(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_set_dialog_policy_accept_overrides_default(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    result = session.set_dialog_policy("accept", "yes please")
+    result = await session.set_dialog_policy("accept", "yes please")
     assert result == {"ok": True, "policy": "accept", "prompt_text": "yes please"}
     assert session._dialog_policy == "accept"
     assert session._dialog_prompt_text == "yes please"
 
 
-def test_set_dialog_policy_manual_overrides_default(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_set_dialog_policy_manual_overrides_default(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    session.set_dialog_policy("manual")
+    await session.set_dialog_policy("manual")
     assert session._dialog_policy == "manual"
     assert session._dialog_prompt_text is None
 
 
-def test_set_dialog_policy_rejects_unknown_policy(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_set_dialog_policy_rejects_unknown_policy(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
     with pytest.raises(ValueError, match=r"accept\|dismiss\|manual"):
-        session.set_dialog_policy("ignore")
+        await session.set_dialog_policy("ignore")
 
 
 @pytest.mark.anyio
@@ -98,7 +101,7 @@ async def test_handle_dialog_dismisses_by_default(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_handle_dialog_accepts_when_policy_set(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    session.set_dialog_policy("accept", "hello")
+    await session.set_dialog_policy("accept", "hello")
 
     accepted_with: list[Any] = []
     dismissed = asyncio.Event()

@@ -14,15 +14,19 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
-from octowright._tracing import span
 from octowright.browser_pool import driver_health, driver_relaunch
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.launch_execution import launch_profile_locked
-from octowright.browser_pool.launch_helpers import rotate_har_path
-from octowright.browser_pool.lifecycle import close_browser, handoff_browser, shutdown_pool
+from octowright.browser_pool.lifecycle import (
+    ClosingSession,
+    accept_external_close_nowait,
+    close_browser,
+    shutdown_pool,
+)
 from octowright.browser_pool.options import LaunchOptions
+from octowright.browser_pool.relaunch import handoff_browser, relaunch_fluid_browser
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
@@ -30,6 +34,11 @@ from octowright.browser_pool.visuals import _tile_args_for_chromium
 from octowright.defaults import RECORDINGS_DIR, get_default_url
 from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
 from octowright.session import BrowserSession
+from octowright.session.operation_gate import (
+    SessionClosedError,
+    SessionClosingError,
+    resolve_operation_queue_timeout_seconds,
+)
 
 log = get_logger(__name__)
 
@@ -47,17 +56,34 @@ class BrowserPool:
     # "relaunch" hint in get(); bounded so a long-lived pool can't leak.
     _RECENTLY_EVICTED_CAP = 64
 
-    def __init__(self, *, recordings_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        recordings_dir: Path | None = None,
+        operation_queue_timeout_seconds: float | None = None,
+    ) -> None:
         # Per-pool artefact write root (custom root = write-side only); see CLAUDE.md.
         self._recordings_dir = (recordings_dir if recordings_dir is not None else RECORDINGS_DIR).expanduser()
+        # Resolved once here (explicit arg > OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS
+        # > default) and handed to every session this pool launches, so all
+        # sessions in one pool share one effective queue timeout instead of each
+        # re-reading the env var at construction time.
+        self._operation_queue_timeout_seconds = resolve_operation_queue_timeout_seconds(operation_queue_timeout_seconds)
         self._pw: Playwright | None = None
         self._pw_lock = asyncio.Lock()
         # Count of shared-driver rebuilds after a death (surfaced in status).
         self._driver_restarts: int = 0
         self._sessions: dict[str, BrowserSession] = {}
         self._sessions_lock = asyncio.Lock()
+        # Sessions mid-teardown: inserted by ``reserve_close_browser``/
+        # ``accept_external_close_nowait`` as soon as a close is accepted,
+        # retained through teardown + outcome publication (see lifecycle.py).
+        # During the drain interval an entry's session is intentionally
+        # visible in BOTH this dict and ``_sessions``; once its ticket owns
+        # the gate only the ``_sessions`` entry is removed.
+        self._closing_sessions: dict[str, ClosingSession] = {}
         # Instance ids dropped via the external close/crash path
-        # (_evict_session_nowait), insertion-ordered + capped. Maps id -> crashed?
+        # (_accept_external_close_nowait), insertion-ordered + capped. Maps id -> crashed?
         # (True when a page.on("crash") was seen) so get() can say "crashed" vs a
         # generic "ended unexpectedly", instead of a bare "no such id".
         self._recently_evicted: dict[str, bool] = {}
@@ -77,6 +103,11 @@ class BrowserPool:
     def recordings_dir(self) -> Path:
         """Root this pool writes per-launch artefacts under (see __init__)."""
         return self._recordings_dir
+
+    @property
+    def operation_queue_timeout_seconds(self) -> float:
+        """Effective per-session operation-gate queue timeout this pool passes to every launch (see __init__)."""
+        return self._operation_queue_timeout_seconds
 
     async def _ensure_pw(self) -> Playwright:
         async with self._pw_lock:
@@ -146,19 +177,33 @@ class BrowserPool:
             return await launch_profile_locked(self, launch_options, _sp, profile, target_url)
 
     def get(self, instance_id: str) -> BrowserSession:
-        """Return the live session for ``instance_id`` or raise KeyError.
+        """Return the live session for ``instance_id``.
 
-        Reads ``_sessions`` without ``_sessions_lock`` — concurrent eviction
-        (``_evict_session_nowait`` in ``listeners.py``) writes without the
-        lock too, relying on CPython's GIL-atomic ``dict.pop``. The returned
-        session may therefore be evicted by a Playwright-side close signal
-        between this call and the caller's first ``await`` on it; tool
-        handlers in that window will surface as Playwright-disconnected
-        errors rather than a clean KeyError. (The eviction itself has
-        already incremented ``octowright_browser_evicted_total`` via the
-        listener path.) The caller is expected to treat both as terminal
-        for the session and either close or retry.
+        Checks ``_closing_sessions`` FIRST: a session mid-teardown must never
+        be handed back as though it were usable, and the caller deserves the
+        gate's own terminal-state errors (``SessionClosingError`` while the
+        FIFO ticket is still draining, ``SessionClosedError`` once it has
+        finished) rather than a generic "no such instance" ``KeyError``.
+
+        Otherwise reads ``_sessions`` without ``_sessions_lock`` — concurrent
+        eviction (``accept_external_close_nowait`` in ``lifecycle.py``)
+        writes without the lock too, relying on CPython's GIL-atomic
+        ``dict.pop``. The returned session may therefore be evicted by a
+        Playwright-side close signal between this call and the caller's
+        first ``await`` on it; tool handlers in that window will surface as
+        Playwright-disconnected errors rather than a clean KeyError. The
+        caller is expected to treat both as terminal for the session and
+        either close or retry.
         """
+        closing = self._closing_sessions.get(instance_id)
+        if closing is not None:
+            message = (
+                f"browser instance_id={instance_id!r} is closing — its teardown is already in "
+                "flight; wait for it to finish, or relaunch a new one with browser_launch"
+            )
+            if closing.session.operation_snapshot()["state"] == "closing":
+                raise SessionClosingError(message)
+            raise SessionClosedError(message)
         if instance_id not in self._sessions:
             raise KeyError(self._missing_session_message(instance_id))
         return self._sessions[instance_id]
@@ -198,8 +243,8 @@ class BrowserPool:
 
     def list_sessions(self) -> list[dict[str, Any]]:
         # Snapshot values() into a tuple before iterating: Playwright sync
-        # close callbacks fire _evict_session_nowait between awaits and could
-        # otherwise mutate the dict mid-iteration.
+        # close callbacks fire _accept_external_close_nowait between awaits
+        # and could otherwise mutate the dict mid-iteration.
         return [
             {
                 "instance_id": s.instance_id,
@@ -210,6 +255,7 @@ class BrowserPool:
                 "log_path": str(s.log_path),
                 "har_path": str(s.har_path) if s.har_path else None,
                 "protected": s.protected,
+                "operation_gate": s.operation_snapshot(),
             }
             for s in tuple(self._sessions.values())
         ]
@@ -244,108 +290,27 @@ class BrowserPool:
         await expose_binding("__octowright_viewport_action", _viewport_action)
 
     async def relaunch_fluid(self, instance_id: str) -> dict[str, Any]:
-        source = self.get(instance_id)
-        # Snapshot every field we need BEFORE awaiting close. A Playwright
-        # external-close eviction can fire between pool.get() and pool.close(),
-        # popping the session and turning close() into a KeyError. We treat
-        # that race as "already closed" and still launch the replacement so
-        # the user isn't left with no browser.
-        source_kind = source.kind
-        source_label = source.label
-        source_profile = source.profile
-        source_user_data_dir = source.user_data_dir
-        source_stabilize = source.stabilize
-        source_trace = source.trace
-        source_har_path = source.har_path
-        source_protected = getattr(source, "protected", False)
-        source_protected_reason = getattr(source, "protected_reason", "explicit")
-        target_url = getattr(source.page, "url", None) or source.url
-        # Wrap close+launch under a parent span so the child browser.close /
-        # browser.launch spans nest underneath as one fluid-mode round-trip.
-        with span("octowright.browser.relaunch_fluid", instance_id=instance_id, kind=source_kind):
-            session_scoped = source_profile is None and source_user_data_dir is not None
-            stateless = source_profile is None and source_user_data_dir is None
-            # Don't overwrite the prior HAR — relaunch gets a sibling path.
-            next_har = rotate_har_path(source_har_path)
-            try:
-                # force=True: relaunch_fluid closes the source only to reopen
-                # the same logical browser immediately after (state/profile
-                # preserved) — it is not a destructive agent close, so a
-                # protected (e.g. headed-by-default) source must not refuse
-                # here the way an explicit browser_close would.
-                close_result: dict[str, Any] | None = await self.close(instance_id, force=True)
-            except KeyError:
-                log.warning(
-                    "octowright.browser.relaunch_fluid.close_raced_eviction",
-                    instance_id=instance_id,
-                    kind=source_kind,
-                )
-                close_result = None
-            result = await self.launch(
-                kind=source_kind,
-                url=target_url,
-                headed=True,
-                label=source_label,
-                profile=source_profile,
-                stabilize=source_stabilize,
-                trace=source_trace,
-                har=bool(source_har_path),
-                har_path=str(next_har) if next_har else None,
-                badge=True,
-                ephemeral=stateless,
-                session=session_scoped,
-                protected=source_protected,
-            )
-            # resolve_protected() always stamps reason="explicit" whenever an
-            # explicit (non-None) protected value is passed in — which we just
-            # did with source_protected above, to carry the boolean across the
-            # relaunch. That correctly preserves the protected bit but loses
-            # the ORIGINAL reason (e.g. "headed_default"), which the tailored
-            # close-refusal message keys off. Restore it post-hoc now that the
-            # new session is registered in the pool. Use maybe_get (not get):
-            # some unit tests stub out ``launch`` entirely, so there may be no
-            # real session behind the returned instance_id — nothing to patch
-            # in that case.
-            new_session = self.maybe_get(result["instance_id"])
-            if new_session is not None:
-                new_session.protected_reason = source_protected_reason
-            return {
-                "ok": True,
-                "old_instance_id": instance_id,
-                "new_instance_id": result["instance_id"],
-                "old_closed": bool(close_result and close_result.get("closed")),
-                "mode": "fluid",
-                "launch": result,
-            }
+        # Body lives in browser_pool.relaunch (Task 8): the URL/profile
+        # snapshot used to build the replacement launch must be taken INSIDE
+        # the close ticket, after it owns the gate -- see
+        # ``relaunch_fluid_browser`` / ``RelaunchSnapshot``.
+        return await relaunch_fluid_browser(self, instance_id)
 
     def profile_in_use(self, kind: str, profile: str) -> bool:
         return any(s.kind == kind and profile_names_match(s.profile, profile) for s in tuple(self._sessions.values()))
 
-    def _evict_session_nowait(
+    def _accept_external_close_nowait(
         self,
         instance_id: str,
         *,
         expected_session: BrowserSession | None = None,
-    ) -> BrowserSession | None:
-        # Called from synchronous Playwright event callbacks (page.close,
-        # context.close, browser.disconnected). Can't `await` a lock from a
-        # sync callback, but there is no await between the identity check and
-        # pop, and these callbacks run on the asyncio thread. ``expected_session``
-        # protects keep-id replacements from late callbacks owned by the old
-        # session. Idempotent: returns None on miss or identity mismatch.
-        if expected_session is not None and self._sessions.get(instance_id) is not expected_session:
-            return None
-        session = self._sessions.pop(instance_id, None)
-        if session is not None:
-            # Remember it died externally (crash / OS close), and whether a crash
-            # was observed on it, so get() can say "crashed" vs the generic
-            # "ended unexpectedly". An explicit agent close pops under the lock
-            # first, so this returns None there and we skip — agent-closed ids
-            # keep the plain "no such id" message.
-            self._recently_evicted[instance_id] = bool(getattr(session, "_crashed", False))
-            if len(self._recently_evicted) > self._RECENTLY_EVICTED_CAP:
-                del self._recently_evicted[next(iter(self._recently_evicted))]
-        return session
+        reason: SessionCloseReason = "user_close",
+    ) -> ClosingSession | None:
+        """Synchronous external-close acceptance seam — see
+        ``lifecycle.accept_external_close_nowait`` for the full contract.
+        Called from sync Playwright event callbacks (page.close,
+        context.close, browser.disconnected) and a dead shared driver."""
+        return accept_external_close_nowait(self, instance_id, expected_session=expected_session, reason=reason)
 
     async def close(
         self,

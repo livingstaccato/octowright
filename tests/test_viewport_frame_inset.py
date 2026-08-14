@@ -22,10 +22,17 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.session.viewport_ops import SessionViewportMixin
+from tests._operation_gate_fakes import OperationAwareFake
+
+
+class _ViewportFake(OperationAwareFake, SessionViewportMixin):
+    """Real-gate fake so ``measure_frame_inset`` (``@gated_operation``) runs
+    through an actual SessionOperationGate, not a bare mixin missing
+    ``operation()``."""
 
 
 def _session(**evaluate: Any) -> Any:
-    session = SessionViewportMixin.__new__(SessionViewportMixin)
+    session = _ViewportFake()
     session.page = MagicMock()
     session.page.evaluate = AsyncMock(**evaluate)
     session.viewport_frame_inset_w = None

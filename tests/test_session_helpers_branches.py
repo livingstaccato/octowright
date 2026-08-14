@@ -33,6 +33,29 @@ from octowright.session.downloads import _timestamp, save_download, wait_for_dow
 from octowright.session.frames import list_frames_impl, switch_frame_impl
 from octowright.session.locators import build_locator
 from octowright.stabilize import STABILIZE_SCRIPT, render_stabilize_script
+from tests._operation_gate_fakes import OperationAwareFake
+
+
+class _FrameSessionFake(OperationAwareFake):
+    """Minimal session-shaped fake for switch_frame_impl/list_frames_impl:
+    a real gate plus the page/active_frame attributes those helpers read."""
+
+    def __init__(self, page: Any, active_frame: Any = None) -> None:
+        super().__init__()
+        self.page = page
+        self.active_frame = active_frame
+
+
+class _LocatorSessionFake(OperationAwareFake):
+    """Minimal session-shaped fake for build_locator: a real gate plus a
+    stubbed _target() so the finder-construction call can be observed."""
+
+    def __init__(self, target: Any) -> None:
+        super().__init__()
+        self._resolved_target = target
+
+    def _target(self) -> Any:
+        return self._resolved_target
 
 
 @pytest.fixture
@@ -66,20 +89,29 @@ class TestTimestamp:
 # ─── session/downloads: save_download ──────────────────────────────────────
 
 
+class _DownloadSessionFake(OperationAwareFake):
+    """Minimal session-shaped fake for save_download/wait_for_download_impl:
+    a real gate (save_download is now ``async with session.operation(...)``)
+    plus the download-bookkeeping attributes those helpers read/mutate."""
+
+    instance_id = "inst123"
+
+    def __init__(self, tmp_path: Any) -> None:
+        super().__init__()
+        # Downloads anchor on the session's recordings root (log_path.parent), which
+        # for a real session == the owning pool's recordings_dir. Point it at tmp_path
+        # so it matches the monkeypatched RECORDINGS_DIR these tests assert against.
+        self.log_path = tmp_path / "session.jsonl"
+        self.downloads: list[Any] = []
+        self.download_count = 0
+        self.recorder = MagicMock()
+        self.recorder.record = MagicMock()
+        self._pending_download_events: list[Any] = []
+
+
 def _fake_session(tmp_path: Any) -> Any:
     """Build a minimal session-shaped object for download tests."""
-    sess = SimpleNamespace()
-    sess.instance_id = "inst123"
-    # Downloads anchor on the session's recordings root (log_path.parent), which
-    # for a real session == the owning pool's recordings_dir. Point it at tmp_path
-    # so it matches the monkeypatched RECORDINGS_DIR these tests assert against.
-    sess.log_path = tmp_path / "session.jsonl"
-    sess.downloads = []
-    sess.download_count = 0
-    sess.recorder = MagicMock()
-    sess.recorder.record = MagicMock()
-    sess._pending_download_events = []
-    return sess
+    return _DownloadSessionFake(tmp_path)
 
 
 class TestSaveDownload:
@@ -283,14 +315,14 @@ class TestSwitchFrameValidation:
         """All three None → ValueError listing the empty 'provided' list."""
         page, _ = _make_page_with_frames()
         with pytest.raises(ValueError, match=r"exactly one of selector/name/url_pattern must be set"):
-            await switch_frame_impl(page, selector=None, name=None, url_pattern=None)
+            await switch_frame_impl(_FrameSessionFake(page), selector=None, name=None, url_pattern=None)
 
     @pytest.mark.anyio
     async def test_two_args_raises(self) -> None:
         """Multiple args → ValueError listing them."""
         page, _ = _make_page_with_frames()
         with pytest.raises(ValueError, match=r"selector"):
-            await switch_frame_impl(page, selector="iframe", name="foo", url_pattern=None)
+            await switch_frame_impl(_FrameSessionFake(page), selector="iframe", name="foo", url_pattern=None)
 
 
 class TestSwitchFrameSelector:
@@ -303,7 +335,7 @@ class TestSwitchFrameSelector:
         # owner is NOT callable (SimpleNamespace) so the `callable(owner_attr)` branch is False.
         owner = SimpleNamespace(element_handle=AsyncMock(return_value=handle))
         page.frame_locator.return_value.owner = owner
-        frame, info = await switch_frame_impl(page, selector="iframe.x", name=None, url_pattern=None)
+        frame, info = await switch_frame_impl(_FrameSessionFake(page), selector="iframe.x", name=None, url_pattern=None)
         assert frame is target_frame
         assert info["index"] == 1
         assert info["url"] == target_frame.url
@@ -321,7 +353,7 @@ class TestSwitchFrameSelector:
             return owner
 
         page.frame_locator.return_value.owner = _owner_call
-        frame, _info = await switch_frame_impl(page, selector="iframe", name=None, url_pattern=None)
+        frame, _info = await switch_frame_impl(_FrameSessionFake(page), selector="iframe", name=None, url_pattern=None)
         assert frame is target_frame
 
     @pytest.mark.anyio
@@ -331,7 +363,7 @@ class TestSwitchFrameSelector:
         owner = SimpleNamespace(element_handle=AsyncMock(return_value=None))
         page.frame_locator.return_value.owner = owner
         with pytest.raises(RuntimeError, match=r"no element matches iframe selector"):
-            await switch_frame_impl(page, selector="iframe.bad", name=None, url_pattern=None)
+            await switch_frame_impl(_FrameSessionFake(page), selector="iframe.bad", name=None, url_pattern=None)
 
     @pytest.mark.anyio
     async def test_selector_no_content_frame_raises(self) -> None:
@@ -341,7 +373,7 @@ class TestSwitchFrameSelector:
         owner = SimpleNamespace(element_handle=AsyncMock(return_value=handle))
         page.frame_locator.return_value.owner = owner
         with pytest.raises(RuntimeError, match=r"no frame found for selector"):
-            await switch_frame_impl(page, selector="iframe.x", name=None, url_pattern=None)
+            await switch_frame_impl(_FrameSessionFake(page), selector="iframe.x", name=None, url_pattern=None)
 
 
 class TestSwitchFrameName:
@@ -351,7 +383,7 @@ class TestSwitchFrameName:
         page, frames = _make_page_with_frames()
         target = frames[2]
         page.frame = MagicMock(return_value=target)
-        frame, info = await switch_frame_impl(page, selector=None, name="frame-2", url_pattern=None)
+        frame, info = await switch_frame_impl(_FrameSessionFake(page), selector=None, name="frame-2", url_pattern=None)
         assert frame is target
         assert info["index"] == 2
 
@@ -361,7 +393,7 @@ class TestSwitchFrameName:
         page, _ = _make_page_with_frames()
         page.frame = MagicMock(return_value=None)
         with pytest.raises(RuntimeError, match=r"no frame with name="):
-            await switch_frame_impl(page, selector=None, name="missing", url_pattern=None)
+            await switch_frame_impl(_FrameSessionFake(page), selector=None, name="missing", url_pattern=None)
 
 
 class TestSwitchFrameUrlPattern:
@@ -371,7 +403,9 @@ class TestSwitchFrameUrlPattern:
         page, frames = _make_page_with_frames()
         target = frames[0]
         page.frame = MagicMock(return_value=target)
-        frame, _info = await switch_frame_impl(page, selector=None, name=None, url_pattern=r"frame-\d")
+        frame, _info = await switch_frame_impl(
+            _FrameSessionFake(page), selector=None, name=None, url_pattern=r"frame-\d"
+        )
         assert frame is target
         # The kwarg passed to page.frame is a compiled regex.
         passed = page.frame.call_args.kwargs["url"]
@@ -384,7 +418,7 @@ class TestSwitchFrameUrlPattern:
         page, _ = _make_page_with_frames()
         page.frame = MagicMock(return_value=None)
         with pytest.raises(RuntimeError, match=r"no frame matching url_pattern="):
-            await switch_frame_impl(page, selector=None, name=None, url_pattern="x")
+            await switch_frame_impl(_FrameSessionFake(page), selector=None, name=None, url_pattern="x")
 
 
 class TestSwitchFrameInfoIndex:
@@ -397,7 +431,7 @@ class TestSwitchFrameInfoIndex:
         rogue.url = "rogue"
         rogue.name = "rogue"
         page.frame = MagicMock(return_value=rogue)
-        _frame, info = await switch_frame_impl(page, selector=None, name="x", url_pattern=None)
+        _frame, info = await switch_frame_impl(_FrameSessionFake(page), selector=None, name="x", url_pattern=None)
         assert info["index"] == -1
 
 
@@ -405,93 +439,105 @@ class TestSwitchFrameInfoIndex:
 
 
 class TestListFrames:
-    def test_returns_dict_per_frame(self) -> None:
+    @pytest.mark.anyio
+    async def test_returns_dict_per_frame(self) -> None:
         """One dict per frame, with index/name/url/is_active fields."""
         page, frames = _make_page_with_frames(num_frames=3)
-        result = list_frames_impl(page, active_frame=frames[1])
+        result = await list_frames_impl(_FrameSessionFake(page, active_frame=frames[1]))
         assert len(result) == 3
         for i, row in enumerate(result):
             assert row["index"] == i
             assert row["url"] == frames[i].url
             assert row["name"] == frames[i].name
 
-    def test_active_frame_marked(self) -> None:
+    @pytest.mark.anyio
+    async def test_active_frame_marked(self) -> None:
         """is_active=True only for the matching frame."""
         page, frames = _make_page_with_frames(num_frames=3)
-        result = list_frames_impl(page, active_frame=frames[1])
+        result = await list_frames_impl(_FrameSessionFake(page, active_frame=frames[1]))
         flags = [row["is_active"] for row in result]
         assert flags == [False, True, False]
 
-    def test_no_active_frame_all_false(self) -> None:
+    @pytest.mark.anyio
+    async def test_no_active_frame_all_false(self) -> None:
         """active_frame=None → no rows have is_active=True."""
         page, _ = _make_page_with_frames(num_frames=2)
-        result = list_frames_impl(page, active_frame=None)
+        result = await list_frames_impl(_FrameSessionFake(page))
         assert all(row["is_active"] is False for row in result)
 
-    def test_empty_frames(self) -> None:
+    @pytest.mark.anyio
+    async def test_empty_frames(self) -> None:
         """Page with no frames → empty list."""
         page = MagicMock()
         page.frames = []
-        assert list_frames_impl(page, active_frame=None) == []
+        assert await list_frames_impl(_FrameSessionFake(page)) == []
 
 
 # ─── session/locators: build_locator ───────────────────────────────────────
 
 
 class TestBuildLocatorValidation:
-    def test_no_args_raises(self) -> None:
+    @pytest.mark.anyio
+    async def test_no_args_raises(self) -> None:
         """All None → ValueError listing the empty 'provided' list."""
-        target = MagicMock()
+        session = _LocatorSessionFake(MagicMock())
         with pytest.raises(ValueError, match=r"exactly one of role/label/text/test_id must be set"):
-            build_locator(target)
+            await build_locator(session)
 
-    def test_two_args_raises(self) -> None:
+    @pytest.mark.anyio
+    async def test_two_args_raises(self) -> None:
         """Multiple finder args → ValueError naming both."""
-        target = MagicMock()
+        session = _LocatorSessionFake(MagicMock())
         with pytest.raises(ValueError, match=r"role"):
-            build_locator(target, role="button", label="OK")
+            await build_locator(session, role="button", label="OK")
 
 
 class TestBuildLocatorDispatch:
-    def test_role_no_name_passes_no_kwargs(self) -> None:
+    @pytest.mark.anyio
+    async def test_role_no_name_passes_no_kwargs(self) -> None:
         """role given, role_name=None → get_by_role with empty kwargs."""
         target = MagicMock()
         target.get_by_role.return_value = "result"
-        result = build_locator(target, role="button")
+        result = await build_locator(_LocatorSessionFake(target), role="button")
         assert result == "result"
         target.get_by_role.assert_called_once_with("button")
 
-    def test_role_with_name_passes_name_and_exact(self) -> None:
+    @pytest.mark.anyio
+    async def test_role_with_name_passes_name_and_exact(self) -> None:
         """role + role_name → kwargs include name + exact (default False)."""
         target = MagicMock()
-        build_locator(target, role="button", role_name="Save")
+        await build_locator(_LocatorSessionFake(target), role="button", role_name="Save")
         target.get_by_role.assert_called_once_with("button", name="Save", exact=False)
 
-    def test_role_exact_true_passthrough(self) -> None:
+    @pytest.mark.anyio
+    async def test_role_exact_true_passthrough(self) -> None:
         """role_exact=True → kwargs has exact=True."""
         target = MagicMock()
-        build_locator(target, role="button", role_name="Save", role_exact=True)
+        await build_locator(_LocatorSessionFake(target), role="button", role_name="Save", role_exact=True)
         target.get_by_role.assert_called_once_with("button", name="Save", exact=True)
 
-    def test_label_dispatch(self) -> None:
+    @pytest.mark.anyio
+    async def test_label_dispatch(self) -> None:
         """label-only → get_by_label."""
         target = MagicMock()
         target.get_by_label.return_value = "lbl"
-        assert build_locator(target, label="Email") == "lbl"
+        assert await build_locator(_LocatorSessionFake(target), label="Email") == "lbl"
         target.get_by_label.assert_called_once_with("Email")
 
-    def test_text_dispatch(self) -> None:
+    @pytest.mark.anyio
+    async def test_text_dispatch(self) -> None:
         """text-only → get_by_text."""
         target = MagicMock()
         target.get_by_text.return_value = "t"
-        assert build_locator(target, text="Click me") == "t"
+        assert await build_locator(_LocatorSessionFake(target), text="Click me") == "t"
         target.get_by_text.assert_called_once_with("Click me")
 
-    def test_test_id_dispatch(self) -> None:
+    @pytest.mark.anyio
+    async def test_test_id_dispatch(self) -> None:
         """test_id-only → get_by_test_id."""
         target = MagicMock()
         target.get_by_test_id.return_value = "tid"
-        assert build_locator(target, test_id="submit-btn") == "tid"
+        assert await build_locator(_LocatorSessionFake(target), test_id="submit-btn") == "tid"
         target.get_by_test_id.assert_called_once_with("submit-btn")
 
 

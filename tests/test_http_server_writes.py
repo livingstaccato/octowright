@@ -102,6 +102,8 @@ class _FakePool:
         if self.close_raises is not None:
             raise self.close_raises
         sess = self._sessions.get(instance_id)
+        if sess is None:
+            raise KeyError(instance_id)
         if getattr(sess, "protected", False) and not force:
             raise ProtectedBrowserCloseError(f"browser {instance_id!r} is protected; pass force=True to close it")
         self._sessions.pop(instance_id, None)

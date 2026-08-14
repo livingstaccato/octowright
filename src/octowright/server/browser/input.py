@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 from octowright.server.browser.inspect import browser_brief, browser_page_outline
 from octowright.server.profiles import annotate_next_actions_for_profile
 
@@ -94,27 +95,29 @@ async def browser_click(
     timeout_ms: int | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    if role or label or text or test_id:
-        await session.click_by(
-            role=role,
-            role_name=role_name,
-            role_exact=role_exact,
-            label=label,
-            text=text,
-            test_id=test_id,
-            timeout_ms=timeout_ms,
-        )
-    elif selector:
-        await session.click(selector)
-    else:
+    if not (selector or role or label or text or test_id):
         raise ValueError("provide a selector or at least one ARIA locator (role/label/text/test_id)")
-    res: dict[str, Any] = {"ok": True}
-    if response_mode == "outline":
-        res["outline"] = await browser_page_outline(instance_id)
-    if response_mode == "brief":
-        res["brief"] = await browser_brief(instance_id)
-    return res
+    async with browser_operation(pool, instance_id, "browser_click") as session:
+        if role or label or text or test_id:
+            await session.click_by(
+                role=role,
+                role_name=role_name,
+                role_exact=role_exact,
+                label=label,
+                text=text,
+                test_id=test_id,
+                timeout_ms=timeout_ms,
+            )
+        elif selector:
+            await session.click(selector)
+        else:
+            raise ValueError("provide a selector or at least one ARIA locator (role/label/text/test_id)")
+        res: dict[str, Any] = {"ok": True}
+        if response_mode == "outline":
+            res["outline"] = await browser_page_outline(instance_id)
+        if response_mode == "brief":
+            res["brief"] = await browser_brief(instance_id)
+        return res
 
 
 @mcp.tool(
@@ -135,8 +138,9 @@ async def browser_type(
     delay_ms: int | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
-    await pool.get(instance_id).type_text(selector, text, delay_ms)
-    return await _with_outline(instance_id, {"ok": True}, response_mode)
+    async with browser_operation(pool, instance_id, "browser_type") as session:
+        await session.type_text(selector, text, delay_ms)
+        return await _with_outline(instance_id, {"ok": True}, response_mode)
 
 
 @mcp.tool(
@@ -167,24 +171,26 @@ async def browser_fill(
     timeout_ms: int | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    if role or label or test_id:
-        await session.fill_by(
-            value,
-            role=role,
-            role_name=role_name,
-            label=label,
-            test_id=test_id,
-            timeout_ms=timeout_ms,
-        )
-    elif selector:
-        await session.fill(selector, value)
-    else:
+    if not (selector or role or label or test_id):
         raise ValueError("provide a selector or at least one ARIA locator (role/label/test_id)")
-    res: dict[str, Any] = {"ok": True}
-    if response_mode == "outline":
-        res["outline"] = await browser_page_outline(instance_id)
-    return res
+    async with browser_operation(pool, instance_id, "browser_fill") as session:
+        if role or label or test_id:
+            await session.fill_by(
+                value,
+                role=role,
+                role_name=role_name,
+                label=label,
+                test_id=test_id,
+                timeout_ms=timeout_ms,
+            )
+        elif selector:
+            await session.fill(selector, value)
+        else:
+            raise ValueError("provide a selector or at least one ARIA locator (role/label/test_id)")
+        res: dict[str, Any] = {"ok": True}
+        if response_mode == "outline":
+            res["outline"] = await browser_page_outline(instance_id)
+        return res
 
 
 @mcp.tool(
@@ -198,11 +204,12 @@ async def browser_fill(
     ),
 )
 async def browser_press_key(instance_id: str, key: str, response_mode: str | None = None) -> dict[str, Any]:
-    await pool.get(instance_id).press_key(key)
-    res: dict[str, Any] = {"ok": True}
-    if response_mode == "outline":
-        res["outline"] = await browser_page_outline(instance_id)
-    return res
+    async with browser_operation(pool, instance_id, "browser_press_key") as session:
+        await session.press_key(key)
+        res: dict[str, Any] = {"ok": True}
+        if response_mode == "outline":
+            res["outline"] = await browser_page_outline(instance_id)
+        return res
 
 
 @mcp.tool(
@@ -226,15 +233,16 @@ async def browser_get_text_by(
     max_chars: int | None = None,
     full: bool = False,
 ) -> dict[str, Any]:
-    result = await pool.get(instance_id).get_text_by(
-        role=role,
-        role_name=role_name,
-        role_exact=role_exact,
-        label=label,
-        text=text,
-        test_id=test_id,
-        timeout_ms=timeout_ms,
-    )
+    async with browser_operation(pool, instance_id, "browser_get_text_by") as session:
+        result = await session.get_text_by(
+            role=role,
+            role_name=role_name,
+            role_exact=role_exact,
+            label=label,
+            text=text,
+            test_id=test_id,
+            timeout_ms=timeout_ms,
+        )
     out = _truncate_text_value(str(result.get("text") or ""), max_chars=max_chars, full=full)
     if out["truncated"]:
         out["next_actions"] = _get_text_by_full_action(
@@ -266,8 +274,9 @@ async def browser_set_input_files(
 ) -> dict[str, Any]:
     if not isinstance(paths, list) or not paths:
         raise ValueError("paths must be a non-empty list of file paths")
-    result = await pool.get(instance_id).set_input_files(selector, paths)
-    return await _with_outline(instance_id, dict(result), response_mode)
+    async with browser_operation(pool, instance_id, "browser_set_input_files") as session:
+        result = await session.set_input_files(selector, paths)
+        return await _with_outline(instance_id, dict(result), response_mode)
 
 
 @mcp.tool(
@@ -280,8 +289,9 @@ async def browser_set_input_files(
     ),
 )
 async def browser_hover(instance_id: str, selector: str, response_mode: str | None = None) -> dict[str, Any]:
-    await pool.get(instance_id).hover(selector)
-    return await _with_outline(instance_id, {"ok": True}, response_mode)
+    async with browser_operation(pool, instance_id, "browser_hover") as session:
+        await session.hover(selector)
+        return await _with_outline(instance_id, {"ok": True}, response_mode)
 
 
 @mcp.tool(
@@ -302,8 +312,9 @@ async def browser_select_option(
     index: int | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
-    result = await pool.get(instance_id).select_option(selector, value=value, label=label, index=index)
-    return await _with_outline(instance_id, dict(result), response_mode)
+    async with browser_operation(pool, instance_id, "browser_select_option") as session:
+        result = await session.select_option(selector, value=value, label=label, index=index)
+        return await _with_outline(instance_id, dict(result), response_mode)
 
 
 @mcp.tool(
@@ -329,5 +340,6 @@ async def browser_drag(
     target_selector: str,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
-    await pool.get(instance_id).drag(source_selector, target_selector)
-    return await _with_outline(instance_id, {"ok": True}, response_mode)
+    async with browser_operation(pool, instance_id, "browser_drag") as session:
+        await session.drag(source_selector, target_selector)
+        return await _with_outline(instance_id, {"ok": True}, response_mode)

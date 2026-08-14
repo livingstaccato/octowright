@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import gated_operation
 
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
@@ -86,7 +87,8 @@ class SessionInteractionMixin(SessionLike):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
-    def set_dialog_policy(self, policy: str, prompt_text: str | None = None) -> dict[str, Any]:
+    @gated_operation("browser_set_dialog_policy")
+    async def set_dialog_policy(self, policy: str, prompt_text: str | None = None) -> dict[str, Any]:
         """Update the session's dialog-handling policy. policy in {accept, dismiss, manual}."""
         if policy not in ("accept", "dismiss", "manual"):
             raise ValueError(f"policy must be accept|dismiss|manual, got {policy!r}")
@@ -99,6 +101,7 @@ class SessionInteractionMixin(SessionLike):
     # Route mocking
     # ------------------------------------------------------------------
 
+    @gated_operation("browser_mock_route")
     async def mock_route(
         self,
         url_pattern: str,
@@ -134,6 +137,7 @@ class SessionInteractionMixin(SessionLike):
         )
         return {"ok": True, "pattern": url_pattern, "status": status}
 
+    @gated_operation("browser_unmock_route")
     async def unmock_route(self, url_pattern: str) -> dict[str, Any]:
         """Remove a previously-installed mock for url_pattern."""
         handler = self._active_routes.pop(url_pattern, None)
@@ -147,6 +151,7 @@ class SessionInteractionMixin(SessionLike):
     # File-input upload
     # ------------------------------------------------------------------
 
+    @gated_operation("browser_set_input_files")
     async def set_input_files(self, selector: str, paths: list[str]) -> dict[str, Any]:
         """Upload one or more files into an <input type=file> element.
 

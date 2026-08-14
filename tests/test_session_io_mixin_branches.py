@@ -17,6 +17,7 @@ us from booting a real BrowserSession.
 from __future__ import annotations
 
 import ast
+import asyncio
 import base64
 import json
 import sys
@@ -28,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.session.core_io_mixin import SessionIOMixin, _looks_like_binary_text
+from octowright.session.operation_gate import SessionOperationGate
 
 
 @pytest.fixture
@@ -69,6 +71,13 @@ def _make_subject(tmp_path: Path) -> SessionIOMixin:
     subj.recorder.record = MagicMock()
     subj._bg_tasks = set()
     subj.log_path = log_path
+    subj.instance_id = "io-test"
+    # capture_markdown is @gated_operation("markdown_capture") -- give this
+    # hand-rolled subject a real gate so calling it doesn't AttributeError on
+    # a missing `self.operation`.
+    subj._operation_gate = SessionOperationGate("io-test", "chromium", queue_timeout_seconds=30)
+    subj.operation = subj._operation_gate.operation  # type: ignore[method-assign]
+    subj.operation_snapshot = subj._operation_gate.snapshot  # type: ignore[method-assign]
 
     def _ws_path() -> Path:
         return log_path.with_suffix(".websocket.cache.jsonl")
@@ -508,6 +517,42 @@ class TestScheduleMarkdownCapture:
             await subj._pending_markdown_capture
         except Exception:
             pass
+
+
+async def wait_for_queue_depth(gate: SessionOperationGate, depth: int) -> None:
+    async with asyncio.timeout(1):
+        while gate.snapshot()["queue_depth"] != depth:
+            await asyncio.sleep(0)
+
+
+async def drain_session_tasks(subject: SessionIOMixin) -> None:
+    tasks = list(subject._bg_tasks)  # type: ignore[attr-defined]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+class TestScheduleMarkdownCaptureGating:
+    @pytest.mark.anyio
+    async def test_markdown_capture_queues_behind_an_active_operation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``capture_markdown`` is ``@gated_operation("markdown_capture")``, and
+        the child task ``_schedule_markdown_capture`` creates is a DIFFERENT
+        task from whatever triggered it (exact-task reentrancy), so it must
+        queue behind an already-active operation rather than jumping the line
+        or inheriting the triggering task's ownership."""
+        monkeypatch.setitem(sys.modules, "markitdown", None)
+        subj = _make_subject(tmp_path)
+        subj.page.url = "https://octowright.com/p"
+        subj.page.content = AsyncMock(return_value="<p>hello</p>")
+
+        async with subj.operation("browser_navigate"):
+            subj._schedule_markdown_capture(force=True)
+            await wait_for_queue_depth(subj._operation_gate, 1)
+            subj.page.content.assert_not_awaited()
+
+        await drain_session_tasks(subj)
+        subj.page.content.assert_awaited_once()
 
 
 # ─── attach_console ──────────────────────────────────────────────────────────

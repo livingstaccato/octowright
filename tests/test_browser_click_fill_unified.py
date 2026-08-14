@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.server.browser import input as _input
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture(autouse=True)
@@ -29,8 +30,15 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def _session(patch: MagicMock) -> MagicMock:
-    s = MagicMock()
+class _FakeSession(OperationAwareFake):
+    """Real-gate session fake — browser_click/browser_fill/browser_press_key
+    now enter ``browser_operation``, which awaits ``session.operation()`` as
+    an async context manager; a bare ``MagicMock`` merely tolerates
+    ``async with`` without proving anything."""
+
+
+def _session(patch: MagicMock) -> _FakeSession:
+    s = _FakeSession()
     s.click = AsyncMock(return_value=None)
     s.click_by = AsyncMock(return_value={"ok": True})
     s.fill = AsyncMock(return_value=None)
