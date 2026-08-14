@@ -138,24 +138,21 @@ async def cleanup_failed_launch(
 
 
 async def cancel_cleanup_after_register(pool: Any, instance_id: str) -> None:
-    """Cancellation AFTER the session was registered: atomically remove it from
-    the pool and tear it down. A registered session owns its resources, so the
-    ``registered``-gated cleanup skips it — but a cancelled launch never returns
-    the instance_id to the caller, so without this the live browser is an
-    orphan the caller can't address. Best-effort; logs but does not raise."""
-    async with pool._sessions_lock:
-        session = pool._sessions.pop(instance_id, None)
+    """Cancellation AFTER the session was registered: route it through the
+    pool's identity-aware durable close coordinator instead of popping
+    ``_sessions``, removing the manifest, and closing the session by hand —
+    that would bypass the gate cutoff and leave the registries/manifest/event
+    bus inconsistent if launch cancellation lands immediately after
+    publication. A registered session owns its resources, so a cancelled
+    launch that never returned the instance_id to the caller would otherwise
+    leak an orphan the caller can't address. Best-effort; logs but does not
+    raise. ``_reason="agent_close"`` — this is internal cleanup of an
+    agent-requested launch, not a wire-vocabulary change."""
+    session = pool.maybe_get(instance_id)
     if session is None:
         return  # a racing external-close eviction already removed it
     try:
-        from octowright.session_manifest import remove_session as _manifest_remove_session
-        from octowright.session_manifest import run_manifest_transaction_async
-
-        await run_manifest_transaction_async(_manifest_remove_session, instance_id)
-    except Exception as exc:
-        log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
-    try:
-        await session.close()
+        await pool.close(instance_id, force=True, _reason="agent_close", _expected_session=session)
     except Exception as exc:
         log.warning("octowright.launch.cancel_close_failed", instance_id=instance_id, error=repr(exc))
 
@@ -243,6 +240,7 @@ def build_launch_result(
 
 def _build_session_object(
     *,
+    pool: BrowserPool,
     instance_id: str,
     kind: str,
     label: str | None,
@@ -297,6 +295,15 @@ def _build_session_object(
     # Wire up video tracking — page.video is only non-None when record_video_dir was set.
     if launch_options.record_video and page.video is not None:
         new_session._video = page.video
+
+    async def _pool_close_requester() -> Any:
+        # Identity-aware: routes through the pool's durable, FIFO-coordinated
+        # cutoff instead of tearing the session down directly. force=True
+        # matches session.close()'s existing behavior, which never itself
+        # respected `protected`.
+        return await pool.close(instance_id, force=True, _expected_session=new_session)
+
+    new_session._pool_close_requester = _pool_close_requester
     return new_session
 
 
@@ -360,6 +367,7 @@ async def post_context_setup(
         # ``session`` is now the public name of the launch flag (session=True
         # for tmpdir profiles). Use ``new_session`` to avoid shadowing the bool.
         new_session = _build_session_object(
+            pool=pool,
             instance_id=instance_id,
             kind=kind,
             label=label,

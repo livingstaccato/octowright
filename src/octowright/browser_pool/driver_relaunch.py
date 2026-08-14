@@ -110,9 +110,15 @@ def _descriptor(session: Any) -> dict[str, Any]:
 
 def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
     """Capture + record + evict the sessions lost with the dead driver. Sessions
-    this module previously relaunched are skipped (loop guard)."""
+    this module previously relaunched are skipped (loop guard).
+
+    Routes eviction through the same synchronous acceptance seam
+    (``pool._accept_external_close_nowait``, reason ``external_disconnect``)
+    every other external-close path uses — no second raw-pop API. Each
+    returned descriptor carries its ``ClosingSession`` (or ``None``) so
+    ``_relaunch_one`` can await the retained teardown before reusing the old
+    identity's profile."""
     descriptors: list[dict[str, Any]] = []
-    evictions: list[tuple[str, Any]] = []
     for session in pool.iter_sessions():
         if getattr(session, "_auto_relaunched", False):
             continue
@@ -128,10 +134,10 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
         record = {"ts": inc["ts"], "reason": reason, **desc, "relaunched_to": None}
         _LOST.append(record)
         _DRIVER_LOST.add(1, attributes={"outcome": "surfaced", "kind": desc["kind"]})
-        descriptors.append({**desc, "lost_record": record})
-        evictions.append((desc["instance_id"], session))
-    for instance_id, session in evictions:
-        pool._evict_session_nowait(instance_id, expected_session=session)
+        closing = pool._accept_external_close_nowait(
+            desc["instance_id"], expected_session=session, reason="external_disconnect"
+        )
+        descriptors.append({**desc, "lost_record": record, "closing": closing})
     return descriptors
 
 
@@ -197,6 +203,22 @@ async def _relaunch_all(pool: Any, descriptors: list[dict[str, Any]], mode: str)
 
 
 async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
+    # Await the retained teardown BEFORE reusing a persistent/session-scoped
+    # profile or launching a replacement at all: the old context, manifest
+    # entry, and closing-registry identity must have finished first, or a
+    # profile-lock/registry-identity race can slip in between. A teardown
+    # failure is logged but does not suppress the best-effort relaunch.
+    closing = desc.get("closing")
+    if closing is not None:
+        try:
+            await closing.reservation.wait()
+        except Exception as exc:
+            log.warning(
+                "octowright.driver_relaunch.teardown_failed",
+                instance_id=desc["instance_id"],
+                kind=desc["kind"],
+                error=repr(exc),
+            )
     profile = desc["profile"]
     udd = desc["user_data_dir"]
     session_scoped = profile is None and udd is not None

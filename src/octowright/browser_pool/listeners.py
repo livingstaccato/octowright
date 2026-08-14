@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from weakref import WeakSet
 
@@ -14,14 +12,10 @@ from provide.telemetry import get_logger
 
 from octowright._tracing import counter
 from octowright.browser_pool import crash_recovery
-from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReason, SessionCrashedEvent
+from octowright.browser_pool.events import SessionCloseReason, SessionCrashedEvent
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session import BrowserSession
 
-_EVICTED = counter(
-    "octowright_browser_evicted_total",
-    description="Browsers removed from the pool by an external close signal (not pool.close)",
-)
 _CRASHED = counter(
     "octowright_browser_crashed_total",
     description="Browser pages that fired a Playwright crash event (page.on('crash'))",
@@ -31,58 +25,6 @@ if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
 
 log = get_logger(__name__)
-
-# Full-close tasks scheduled from the (sync) last-page-close listener. Held here,
-# NOT on ``session._bg_tasks`` — ``session.close()`` drains that set, and a close
-# task awaiting its own drain would deadlock. Tasks self-remove on completion.
-_PENDING_FULL_CLOSES: set[asyncio.Task[None]] = set()
-_PENDING_MANIFEST_REMOVALS: set[asyncio.Task[None]] = set()
-
-
-async def _run_manifest_remove(instance_id: str, remove: Callable[[str], object]) -> None:
-    """Run manifest locking/I/O away from the shared leader event loop."""
-    try:
-        from octowright.session_manifest import run_manifest_transaction_async
-
-        await run_manifest_transaction_async(remove, instance_id)
-    except Exception as exc:
-        log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
-
-
-def _schedule_manifest_remove(instance_id: str, remove: Callable[[str], object]) -> None:
-    """Schedule best-effort manifest cleanup from a synchronous listener."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # A teardown callback outside the daemon loop cannot block that loop.
-        try:
-            remove(instance_id)
-        except Exception as exc:
-            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
-        return
-    task = loop.create_task(_run_manifest_remove(instance_id, remove))
-    _PENDING_MANIFEST_REMOVALS.add(task)
-    task.add_done_callback(_PENDING_MANIFEST_REMOVALS.discard)
-
-
-async def _run_deferred_full_close(pool: Any, instance_id: str, session: Any, reason: SessionCloseReason) -> None:
-    """Full-close ``session``, but only if the registry still holds exactly it.
-
-    The "last page is gone" decision is made in the SYNC page-close callback;
-    this task runs later, and ``pool.close(instance_id, force=True)`` would
-    close whatever the registry holds under that id at THAT moment.
-    ``OCTOWRIGHT_DRIVER_RELAUNCH=keep-id`` deliberately rebinds the original
-    instance_id to a fresh live session, so without an identity re-check a
-    stale task could force-close an unrelated — possibly protected — browser
-    (``force=True`` skips the protection refusal by design, for the case where
-    the user already closed the window).
-    """
-    try:
-        await pool.close(instance_id, force=True, _reason=reason, _expected_session=session)
-    except KeyError:
-        pass  # already evicted or rebound; either way, not ours to close
-    except Exception as exc:
-        log.warning("octowright.evict.full_close_failed", instance_id=instance_id, error=repr(exc))
 
 
 def _wire_listeners(session: BrowserSession, page: Any) -> None:
@@ -150,72 +92,22 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
        the context alive after the last page closes and wait for an idle
        timeout; we don't want to wait.
 
-    The three signals coexist via the idempotent ``_evict`` callback. It passes
-    the session identity along with its current id so a delayed callback cannot
-    evict a keep-id replacement now registered under the same id, while the
-    replacement's own callbacks follow its rekey. Second/subsequent callbacks
-    and identity mismatches return ``None`` and bail silently.
-
-    Idempotent — safe if the session was already explicitly closed via
-    ``pool.close(id)``. In the explicit-close path, ``pool.close`` removes
-    the entry from ``_sessions`` BEFORE the underlying ``context.close()``
-    fires its event, so the ``pop`` call below returns ``None`` and this
-    handler bails silently (no double-log, no double-close on the recorder).
+    The three signals coexist via the idempotent ``_evict`` callback, which
+    routes straight into ``pool._accept_external_close_nowait`` (identity-
+    checked against ``session``, so a delayed callback for a keep-id-replaced
+    identity is a no-op) — that seam owns the mark-closed-external, registry
+    eviction, and the ONE retained coordinator that performs teardown,
+    manifest cleanup, and the terminal notification exactly once. Idempotent
+    — a session already explicitly closed via ``pool.close(id)`` has already
+    left ``_sessions`` before its Playwright close events fire, so this
+    handler's acceptance call is a silent no-op (case 5 of the acceptance
+    seam's contract; see ``lifecycle.accept_external_close_nowait``).
     """
 
     def _evict(*_: Any) -> None:
         instance_id = session.instance_id
-        existing = pool._evict_session_nowait(instance_id, expected_session=session)
-        if existing is None:
-            # Already removed by an explicit pool.close — that path logs
-            # "octowright.browser.closed" itself. Stay silent.
-            return
-        try:
-            from octowright.session_manifest import remove_session as _manifest_remove_session
-
-            _schedule_manifest_remove(instance_id, _manifest_remove_session)
-        except Exception as exc:
-            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
-        _EVICTED.add(1, attributes={"kind": session.kind})
-        log.info(
-            "octowright.browser.evicted_externally",
-            instance_id=instance_id,
-            kind=session.kind,
-            profile=session.profile,
-            log_path=str(session.log_path),
-        )
-        # Notify MCP clients that the session is gone. The disconnect event
-        # alone can't tell "user closed the window" from "process died", so we
-        # default to ``user_close`` — UNLESS a ``page.on("crash")`` fired on this
-        # session first (``session._crashed``), which upgrades it to a definite
-        # ``crashed``.
         reason: SessionCloseReason = "crashed" if getattr(session, "_crashed", False) else "user_close"
-        session_event_bus.publish_nowait(
-            SessionClosedEvent(
-                instance_id=instance_id,
-                kind=session.kind,
-                label=session.label,
-                profile=session.profile,
-                reason=reason,
-                log_path=str(session.log_path),
-            )
-        )
-        # Best-effort: record an external-close marker in the recording so
-        # post-mortem inspection shows the session ended unexpectedly. Both
-        # calls may raise if the recorder was already closed by an in-flight
-        # session.close() — swallow it.
-        try:
-            session.recorder.record("close", reason=reason if reason == "crashed" else "external")
-            session.recorder.close()
-        except Exception as exc:
-            # Swallow per the silent-swallow policy: the recorder may already
-            # be closed by an in-flight session.close(). Log so post-mortem
-            # diagnosis is possible.
-            log.debug(
-                "octowright.evict.recorder_close_failed",
-                instance_id=instance_id,
-                error=repr(exc),
-            )
+        pool._accept_external_close_nowait(instance_id, expected_session=session, reason=reason)
 
     def _on_page_close(*_: Any) -> None:
         instance_id = session.instance_id
@@ -239,22 +131,12 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         if still_open:
             return
         # Last page gone, but unlike context.close / browser.disconnected the
-        # context (and its profile lock + background tasks) may still be ALIVE.
-        # A bookkeeping-only eviction here would orphan them while removing the
-        # session from the registry, so run the full idempotent close instead.
-        # The listener is sync; schedule the async close on the running loop.
+        # context (and its profile lock + background tasks) may still be
+        # ALIVE. Accept the close synchronously here too — scheduling a LATER
+        # normal pool.close would leave a window in which work could still be
+        # admitted against a session whose last page is already gone.
         reason: SessionCloseReason = "crashed" if getattr(session, "_crashed", False) else "user_close"
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No asyncio loop (e.g. teardown outside the daemon loop) — fall back
-            # to bookkeeping eviction so the registry at least stops reporting it.
-            _evict()
-            return
-
-        task = loop.create_task(_run_deferred_full_close(pool, instance_id, session, reason))
-        _PENDING_FULL_CLOSES.add(task)
-        task.add_done_callback(_PENDING_FULL_CLOSES.discard)
+        pool._accept_external_close_nowait(instance_id, expected_session=session, reason=reason)
 
     def _on_page_crash(crashed_page: Any = None, *_: Any) -> None:
         instance_id = session.instance_id

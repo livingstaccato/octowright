@@ -41,6 +41,10 @@ def _fake_session(
     profile: str | None = "test-persona",
     log_path: str = "/tmp/test.jsonl",
 ) -> Any:
+    """A duck-typed session double carrying a REAL ``SessionOperationGate`` --
+    the close coordinator drives ``_operation_gate`` directly."""
+    from octowright.session.operation_gate import SessionOperationGate
+
     return SimpleNamespace(
         instance_id=instance_id,
         kind=kind,
@@ -51,12 +55,17 @@ def _fake_session(
         video_path=None,
         trace_path=None,
         har_path=None,
+        protected=False,
+        protected_reason="explicit",
         recorder=SimpleNamespace(
             record=MagicMock(),
             close=MagicMock(),
         ),
         pages=[],
         close=AsyncMock(),
+        _teardown_after_close_cutoff=AsyncMock(),
+        _operation_gate=SessionOperationGate(instance_id, kind),
+        _crashed=False,
     )
 
 
@@ -203,11 +212,16 @@ async def test_close_browser_with_shutdown_reason() -> None:
 # ─── external eviction publishes user_close ───────────────────────────────────
 
 
-def test_wire_close_evictor_publishes_user_close() -> None:
+@pytest.mark.anyio
+async def test_wire_close_evictor_publishes_user_close(monkeypatch: pytest.MonkeyPatch) -> None:
     """When ``_wire_close_evictor``'s ``_evict`` callback fires (simulating a
-    page.close or context.close signal), the bus receives ``reason='user_close'``."""
-    import threading
+    page.close or context.close signal), the bus receives ``reason='user_close'``.
 
+    ``_accept_external_close_nowait`` needs a running loop to schedule its
+    durable coordinator (which is what actually publishes the event), so this
+    runs inside the test's own event loop rather than firing the callback
+    from a bare sync function -- the production callback always runs on the
+    daemon's real loop too."""
     from octowright.browser_pool.listeners import _wire_close_evictor
     from octowright.browser_pool.pool import BrowserPool
 
@@ -215,46 +229,19 @@ def test_wire_close_evictor_publishes_user_close() -> None:
     session = _fake_session(instance_id="ext-close")
     pool._sessions["ext-close"] = session  # type: ignore[assignment]
 
-    # Run an event loop on a background thread so ``call_soon_threadsafe``
-    # actually delivers the notification to the subscriber queue.
-    received: list[SessionClosedEvent] = []
-    ready = threading.Event()
-    done = threading.Event()
-
-    def _thread_main() -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        async def _inner() -> None:
-            async with session_event_bus.subscribe() as sub:
-                ready.set()
-                received.append(await asyncio.wait_for(sub.get(), timeout=2.0))
-            done.set()
-
-        loop.run_until_complete(_inner())
-        loop.close()
-
-    t = threading.Thread(target=_thread_main, daemon=True)
-    t.start()
-    ready.wait(timeout=2.0)
-
-    # Wire the evictor and simulate a Playwright close signal.
     session.context = MagicMock()
     session.context.on = MagicMock()
     session.browser = None
     session._browser_for_close = None
-    with patch("octowright.session_manifest.remove_session"):
-        _wire_close_evictor(pool, session)  # type: ignore[arg-type]
+    monkeypatch.setattr("octowright.session_manifest.remove_session", lambda _id: None)
+    _wire_close_evictor(pool, session)  # type: ignore[arg-type]
 
-    # Trigger the evict path the same way Playwright would — call the evict
-    # callback that _wire_close_evictor registered on context.on("close", ...).
-    # We inspect the call args to retrieve the callback.
-    close_callback = session.context.on.call_args_list[0][0][1]
-    close_callback()
+    async with session_event_bus.subscribe() as sub:
+        # Trigger the evict path the same way Playwright would — call the
+        # evict callback registered on context.on("close", ...).
+        close_callback = session.context.on.call_args_list[0][0][1]
+        close_callback()
+        received = await asyncio.wait_for(sub.get(), timeout=2.0)
 
-    done.wait(timeout=2.0)
-    t.join(timeout=2.0)
-
-    assert len(received) == 1
-    assert received[0].reason == "user_close"
-    assert received[0].instance_id == "ext-close"
+    assert received.reason == "user_close"
+    assert received.instance_id == "ext-close"

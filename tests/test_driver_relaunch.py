@@ -46,6 +46,22 @@ def _session(instance_id: str, **over: Any) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
+class _FakeReservation:
+    async def wait(self) -> None:
+        return None
+
+
+class _FakeClosingSession:
+    """Duck-typed stand-in for ``lifecycle.ClosingSession``: enough shape for
+    ``driver_relaunch._relaunch_one`` to ``await closing.reservation.wait()``
+    before reusing the old identity, without exercising the real gate."""
+
+    def __init__(self, session: SimpleNamespace) -> None:
+        self.session = session
+        self.reservation = _FakeReservation()
+        self.task = None
+
+
 class _FakePool:
     def __init__(self, sessions: list[SimpleNamespace]) -> None:
         self._sessions = {s.instance_id: s for s in sessions}
@@ -61,16 +77,20 @@ class _FakePool:
     def maybe_get(self, instance_id: str) -> SimpleNamespace | None:
         return self._sessions.get(instance_id)
 
-    def _evict_session_nowait(
+    def _accept_external_close_nowait(
         self,
         instance_id: str,
         *,
         expected_session: SimpleNamespace | None = None,
-    ) -> None:
+        reason: str = "external_disconnect",
+    ) -> _FakeClosingSession | None:
         if expected_session is not None and self._sessions.get(instance_id) is not expected_session:
-            return
-        self._sessions.pop(instance_id, None)
+            return None
+        session = self._sessions.pop(instance_id, None)
+        if session is None:
+            return None
         self._recently_evicted[instance_id] = False
+        return _FakeClosingSession(session)
 
     async def launch(self, **kwargs: Any) -> dict[str, Any]:
         self.launched.append(kwargs)
@@ -341,3 +361,92 @@ def test_schedule_relaunch_without_running_loop_returns_none(monkeypatch: pytest
     assert result is None
     assert {r["instance_id"] for r in driver_relaunch.recent_lost()} == {"a"}
     assert pool.launched == []  # nothing relaunched without a loop
+
+
+# --- Task 7: relaunch awaits the retained teardown before reusing the identity ---
+
+
+def test_relaunch_awaits_teardown_before_launching_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A persistent/session-scoped replacement must not be launched (and a
+    keep-id rekey must not land) before the OLD identity's retained teardown
+    has actually finished -- otherwise the old profile lock / manifest entry
+    / closing-registry identity could still be live when the new one starts."""
+    _set_mode(monkeypatch, "keep-id")
+    order: list[str] = []
+    pool = _FakePool([_session("a", profile="dante")])
+    real_accept = pool._accept_external_close_nowait
+
+    def _tracked_accept(instance_id: str, **kwargs: Any) -> Any:
+        entry = real_accept(instance_id, **kwargs)
+        if entry is not None:
+            real_wait = entry.reservation.wait
+
+            async def _tracked_wait() -> None:
+                order.append("teardown-start")
+                await real_wait()
+                order.append("teardown-done")
+
+            entry.reservation.wait = _tracked_wait  # type: ignore[method-assign]
+        return entry
+
+    pool._accept_external_close_nowait = _tracked_accept  # type: ignore[method-assign]
+    real_launch = pool.launch
+
+    async def _tracked_launch(**kwargs: Any) -> dict[str, Any]:
+        order.append("launch")
+        return await real_launch(**kwargs)
+
+    pool.launch = _tracked_launch  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        task = driver_relaunch.on_driver_reset(pool, reason="driver died")
+        assert task is not None
+        await task
+
+    asyncio.run(_run())
+    assert order == ["teardown-start", "teardown-done", "launch"]
+    # The keep-id rekey still lands, and only after the tracked sequence above.
+    assert "a" in pool._sessions
+
+
+def test_relaunch_logs_teardown_failure_without_unhandled_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A teardown failure on the lost identity is observed/logged, never an
+    unretrieved/unhandled task exception, and does not suppress the
+    best-effort relaunch -- the replacement still launches afterward."""
+    _set_mode(monkeypatch, "new-id")
+    pool = _FakePool([_session("a")])
+    real_accept = pool._accept_external_close_nowait
+
+    def _failing_accept(instance_id: str, **kwargs: Any) -> Any:
+        entry = real_accept(instance_id, **kwargs)
+        if entry is not None:
+
+            async def _boom() -> None:
+                raise RuntimeError("teardown boom")
+
+            entry.reservation.wait = _boom  # type: ignore[method-assign]
+        return entry
+
+    pool._accept_external_close_nowait = _failing_accept  # type: ignore[method-assign]
+
+    logged: list[tuple[str, dict[str, Any]]] = []
+
+    class _LogCapture:
+        def warning(self, event: str, **kw: Any) -> None:
+            logged.append((event, kw))
+
+        def __getattr__(self, _name: str) -> Any:
+            return lambda *_a, **_kw: None
+
+    monkeypatch.setattr(driver_relaunch, "log", _LogCapture())
+
+    async def _run() -> None:
+        task = driver_relaunch.on_driver_reset(pool, reason="x")
+        assert task is not None
+        await task
+
+    asyncio.run(_run())  # must not raise / must not leave a pending-task exception
+    assert any(event == "octowright.driver_relaunch.teardown_failed" for event, _kw in logged), logged
+    # The replacement still launched despite the teardown failure.
+    assert len(pool.launched) == 1
+    assert "new1" in pool._sessions

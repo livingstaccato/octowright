@@ -253,6 +253,7 @@ def fake_launch_parts(tmp_path: Path) -> FakeLaunchParts:
 
 def build_session_for_test(pool: BrowserPool, parts: FakeLaunchParts) -> BrowserSession:
     return _build_session_object(
+        pool=pool,
         instance_id=parts.instance_id,
         kind=parts.kind,
         label=parts.label,

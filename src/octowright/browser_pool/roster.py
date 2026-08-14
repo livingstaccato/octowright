@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 from provide.telemetry import get_logger
@@ -14,6 +14,7 @@ from provide.telemetry import get_logger
 from octowright._tracing import set_attrs, span
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
+from octowright.browser_pool.lifecycle import CloseCoordinatorOutcome, reserve_close_browser
 from octowright.browser_pool.limits import enforce_launch_limits, headed_launch_concurrency
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
 
@@ -46,18 +47,36 @@ async def shielded_rollback_close(
                 logger.warning(event, instance_id=instance_id, error=repr(exc))
 
 
+async def _await_reserved_or_return_error(entry: Any) -> Any:
+    """Second-stage helper for ``close_all``: pass a first-stage reservation
+    failure through unchanged, otherwise await that entry's own outcome."""
+    if isinstance(entry, BaseException):
+        return entry
+    try:
+        outcome = await entry.reservation.wait()
+    except BaseException as exc:
+        return exc
+    return cast(CloseCoordinatorOutcome, outcome).response
+
+
 async def close_all(
     pool: BrowserPool,
     *,
     force: bool = False,
     _reason: SessionCloseReason = "agent_close",
 ) -> dict[str, Any]:
-    # Close every session concurrently. A single hung browser would otherwise
-    # block daemon shutdown if we awaited them serially; gather + return_exceptions
-    # lets the rest tear down even if one raises or stalls.
+    # Two-stage: reserve every session's close cutoff FIRST (so every session
+    # is admitted-or-refused up front, atomically with respect to each
+    # other), THEN await every outcome. Never hold one session's lease while
+    # reserving or awaiting another's -- a single hung browser's teardown
+    # must not block the others from even being cut off.
     ids = [session.instance_id for session in pool.iter_sessions()]
+    entries = await asyncio.gather(
+        *(reserve_close_browser(pool, iid, force=force, reason=_reason) for iid in ids),
+        return_exceptions=True,
+    )
     results = await asyncio.gather(
-        *(pool.close(iid, force=force, _reason=_reason) for iid in ids),
+        *(_await_reserved_or_return_error(entry) for entry in entries),
         return_exceptions=True,
     )
     closed: list[str] = []

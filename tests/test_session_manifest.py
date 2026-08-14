@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -162,14 +161,17 @@ async def test_close_clears_session_manifest(isolated_pool: tuple[BrowserPool, P
 
 @pytest.mark.asyncio
 async def test_external_context_close_clears_session_manifest(isolated_pool: tuple[BrowserPool, Path]) -> None:
-    from octowright.browser_pool import listeners
+    from tests._pool_invariants import wait_until
 
     pool, manifest_path = isolated_pool
     result = await pool.launch(kind="chromium", url="https://example.test", headed=False, ephemeral=True)
     session = pool.get(result["instance_id"])
 
     session.context.events["close"]()
-    await asyncio.gather(*tuple(listeners._PENDING_MANIFEST_REMOVALS))
+    # Manifest removal now happens inside the retained close coordinator
+    # (see browser_pool/lifecycle.py), not a listener-scheduled task -- wait
+    # for it to finish rather than a removed pending-task set.
+    await wait_until(lambda: result["instance_id"] not in pool._closing_sessions)
 
     body = json.loads(manifest_path.read_text())
     assert body["sessions"] == {}

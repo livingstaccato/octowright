@@ -339,9 +339,12 @@ async def test_launch_cancelled_during_nav_leaves_no_registered_session(monkeypa
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """Synthesize a context 'close' event and verify the session is evicted +
-    the eviction log line is emitted."""
+    the eviction log line is emitted. The registry eviction is synchronous
+    (asserted immediately); the eviction log line is emitted by the retained
+    coordinator task, which needs the loop to run at least once."""
     _install_playwright_stub(monkeypatch)
     pool = BrowserPool()
 
@@ -365,10 +368,11 @@ async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, li
         cb()
 
     assert iid not in pool._sessions
-    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
+    await _wait_until(lambda: any("evicted_externally" in m for m in listeners_log.messages()))
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_browser_disconnected_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """When the underlying browser process dies, Playwright fires
     ``browser.on('disconnected', ...)`` — that signal must also evict."""
@@ -397,7 +401,7 @@ async def test_browser_disconnected_evicts_session(monkeypatch: pytest.MonkeyPat
         cb()
 
     assert iid not in pool._sessions
-    assert any("evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
+    await _wait_until(lambda: any("evicted_externally" in m for m in listeners_log.messages()))
 
 
 def _capture_session_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
@@ -444,6 +448,7 @@ async def test_page_crash_marks_session_and_notifies(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_eviction_after_crash_reports_reason_crashed(
     monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
 ) -> None:
@@ -473,13 +478,17 @@ async def test_eviction_after_crash_reports_reason_crashed(
         cb()
 
     assert iid not in pool._sessions
+    # The "relaunch" guidance distinguishes a crash from an ordinary close --
+    # this is set synchronously by the acceptance seam, no need to wait.
+    assert "crashed" in pool._missing_session_message(iid)
+    # The SessionClosedEvent is published by the retained coordinator task.
+    await _wait_until(lambda: any(isinstance(e, SessionClosedEvent) for e in events))
     closed = [e for e in events if isinstance(e, SessionClosedEvent)]
     assert closed and closed[-1].reason == "crashed"
-    # The "relaunch" guidance distinguishes a crash from an ordinary close.
-    assert "crashed" in pool._missing_session_message(iid)
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_external_close_without_crash_stays_user_close(
     monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
 ) -> None:
@@ -499,12 +508,14 @@ async def test_external_close_without_crash_stays_user_close(
     for cb in _close_handlers(session):
         cb()
 
-    closed = [e for e in events if isinstance(e, SessionClosedEvent)]
-    assert closed and closed[-1].reason == "user_close"
-    # Generic "ended unexpectedly" message, NOT the crash-specific one.
+    # Generic "ended unexpectedly" message, NOT the crash-specific one -- set
+    # synchronously by the acceptance seam.
     message = pool._missing_session_message(iid)
     assert "ended unexpectedly" in message
     assert "its process died" not in message
+    await _wait_until(lambda: any(isinstance(e, SessionClosedEvent) for e in events))
+    closed = [e for e in events if isinstance(e, SessionClosedEvent)]
+    assert closed and closed[-1].reason == "user_close"
 
 
 async def _wait_until(predicate: Any, *, timeout: float = 5.0) -> None:
@@ -551,20 +562,23 @@ async def test_all_pages_closed_runs_full_session_close(
     assert _page_close_handlers(page), "expected page.on('close') handler"
 
     page.mark_closed()  # last page gone → fires page.on('close')
-    # Wait for the full teardown, not just the registry pop (close_browser pops
-    # BEFORE awaiting session.close(), so registry removal races the teardown).
+    # Wait for the full teardown, not just the registry pop (the coordinator
+    # pops _sessions BEFORE awaiting the teardown body, so registry removal
+    # races the teardown itself).
     await _wait_until(
         lambda: (
             session.context.close.await_count >= 1
-            and any("octowright.browser.closed" in message for message in listeners_log.messages())
+            and any("octowright.browser.evicted_externally" in message for message in listeners_log.messages())
         )
     )
 
     assert iid not in pool._sessions
     # The context was actually torn down (the whole point) — not just popped.
     assert session.context.close.await_count >= 1
-    # Full close logs the canonical closed line via the lifecycle path.
-    assert any("octowright.browser.closed" in m for m in listeners_log.messages()), listeners_log.messages()
+    # Last-page-gone now routes through the SAME external-close acceptance
+    # seam as context.close/browser.disconnected (Task 7), so it logs the
+    # external line, not the explicit-close one.
+    assert any("octowright.browser.evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
 @pytest.mark.anyio
@@ -597,6 +611,7 @@ async def test_one_page_close_with_survivor_does_not_evict(monkeypatch: pytest.M
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_multiple_signals_only_evict_once(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
     """Real Playwright might fire context.close AND browser.disconnected for
     the same teardown. The eviction log line should appear at most once."""
@@ -622,6 +637,7 @@ async def test_multiple_signals_only_evict_once(monkeypatch: pytest.MonkeyPatch,
     session.pages[0].mark_closed()
 
     assert iid not in pool._sessions
+    await _wait_until(lambda: any("evicted_externally" in m for m in listeners_log.messages()))
     evictions = [m for m in listeners_log.messages() if "evicted_externally" in m]
     assert len(evictions) == 1, f"expected exactly one eviction log; got {len(evictions)}"
 

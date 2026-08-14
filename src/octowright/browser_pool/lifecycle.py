@@ -5,23 +5,54 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import shutil
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast
 
 from provide.telemetry import get_logger
 
-from octowright._tracing import span
+from octowright._tracing import counter, span
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionClosedEvent, SessionCloseReason
 from octowright.browser_pool.launch_helpers import rotate_har_path
 from octowright.browser_pool.session_event_bus import session_event_bus
+from octowright.session.operation_gate import CloseReservation, SessionClosedError
 from octowright.session_manifest import remove_session as remove_manifest_session
 from octowright.session_manifest import run_manifest_transaction_async
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
+    from octowright.session import BrowserSession
 
 log = get_logger(__name__)
+
+# Bumped by every external-close coordinator; an explicit close doesn't (it
+# isn't an eviction). Moved here from listeners.py -- the coordinator now
+# decides "was this close explicit or external".
+_EVICTED = counter(
+    "octowright_browser_evicted_total",
+    description="Browsers removed from the pool by an external close signal (not pool.close)",
+)
+
+
+@dataclass(slots=True)
+class CloseCoordinatorOutcome:
+    """The shared, once-resolved result of a durable close coordinator run."""
+
+    response: dict[str, Any]
+    prepared: object | None
+
+
+@dataclass(slots=True)
+class ClosingSession:
+    """One entry in ``pool._closing_sessions``: a session mid-teardown plus
+    the reservation/task that owns finishing it."""
+
+    session: BrowserSession
+    reservation: CloseReservation
+    task: asyncio.Task[None] | None = None
 
 
 def _protected_close_message(instance_id: str, reason: str) -> str:
@@ -38,7 +69,12 @@ def _protected_close_message(instance_id: str, reason: str) -> str:
 
 
 def _resolve_close_target(pool: BrowserPool, instance_id: str, expected_session: Any | None) -> tuple[str, Any]:
-    """Resolve an identity-aware close target while the caller holds the lock."""
+    """Resolve an identity-aware close target while the caller holds the lock.
+
+    ``expected_session`` (when given) is searched for by OBJECT identity
+    across the whole registry, not looked up by ``instance_id`` -- the
+    caller's id may be stale (a keep-id relaunch rekeys the object to a new
+    id between when a caller captured it and when it calls close)."""
     if expected_session is None:
         session = pool._sessions.get(instance_id)
         if session is None:
@@ -53,58 +89,149 @@ def _resolve_close_target(pool: BrowserPool, instance_id: str, expected_session:
     return current
 
 
+async def reserve_close_browser(
+    pool: BrowserPool,
+    instance_id: str,
+    *,
+    force: bool,
+    reason: SessionCloseReason,
+    expected_session: BrowserSession | None = None,
+) -> ClosingSession:
+    """Reserve the close cutoff and return its (possibly shared) coordinator entry.
+
+    Holds ``pool._sessions_lock`` only for identity lookup, the existing-
+    ``_closing_sessions`` coalescing check, registry insertion, and the short
+    gate ``reserve_close`` control transaction -- never while awaiting a FIFO
+    ticket, Playwright, artifact I/O, or the coordinator task.
+    """
+    async with pool._sessions_lock:
+        try:
+            resolved_id, session = _resolve_close_target(pool, instance_id, expected_session)
+        except KeyError:
+            # The object already left `_sessions` (its coordinator popped it
+            # once the ticket owned the gate, or an external close raced
+            # ahead of us) but may still be draining in `_closing_sessions`.
+            existing = pool._closing_sessions.get(instance_id)
+            if existing is not None and (expected_session is None or existing.session is expected_session):
+                return existing
+            raise
+        existing = pool._closing_sessions.get(resolved_id)
+        if existing is not None and existing.session is session:
+            # A duplicate close for the SAME identity shares the one
+            # coordinator already draining it, rather than starting a second.
+            return existing
+
+        def _preflight() -> None:
+            if getattr(session, "protected", False) and not force:
+                raise ProtectedBrowserCloseError(
+                    _protected_close_message(resolved_id, getattr(session, "protected_reason", "explicit"))
+                )
+
+        reservation = await session._operation_gate.reserve_close("browser_close", preflight=_preflight)
+        entry = ClosingSession(session=session, reservation=reservation)
+        pool._closing_sessions[resolved_id] = entry
+    _spawn_close_coordinator(pool, resolved_id, entry, reason=reason)
+    return entry
+
+
 async def close_browser(
     pool: BrowserPool,
     instance_id: str,
     *,
     force: bool = False,
     _reason: SessionCloseReason = "agent_close",
-    _expected_session: Any | None = None,
+    _expected_session: BrowserSession | None = None,
 ) -> dict[str, Any]:
-    # Identity resolution, protection check, and pop form one transaction. A
-    # deferred last-page close passes the session it observed; keep-id relaunch
-    # takes this same lock while re-keying, so object identity remains
-    # authoritative even if the id captured before an await has changed.
-    async with pool._sessions_lock:
-        instance_id, session = _resolve_close_target(pool, instance_id, _expected_session)
-        if getattr(session, "protected", False) and not force:
-            raise ProtectedBrowserCloseError(
-                _protected_close_message(instance_id, getattr(session, "protected_reason", "explicit"))
-            )
-        # Remove before awaiting session.close(); that call fires close events
-        # wired by listeners, which should then no-op.
-        pool._sessions.pop(instance_id)
-    # Always run manifest cleanup even if session.close() raises (e.g. a
-    # hung browser process) — the session is already evicted from the pool,
-    # so the manifest entry would otherwise be orphaned. The session's own
-    # finally block ensures the recorder closes regardless.
+    entry = await reserve_close_browser(
+        pool, instance_id, force=force, reason=_reason, expected_session=_expected_session
+    )
+    outcome = cast(CloseCoordinatorOutcome, await entry.reservation.wait())
+    return outcome.response
+
+
+def _spawn_close_coordinator(
+    pool: BrowserPool,
+    instance_id: str,
+    entry: ClosingSession,
+    *,
+    reason: SessionCloseReason,
+) -> None:
+    """Create the detached, retained coordinator task and store it on ``entry``.
+
+    Detached: the requester awaits only ``entry.reservation.wait()`` (itself
+    shielded), so a requester's own cancellation never reaches this task.
+    Retained: stored on ``entry.task`` so ``shutdown_pool`` can await it.
+    """
+    task = asyncio.create_task(_coordinate_close(pool, instance_id, entry, reason=reason))
+    entry.task = task
+    task.add_done_callback(functools.partial(_observe_close_coordinator, instance_id))
+
+
+def _observe_close_coordinator(instance_id: str, task: asyncio.Task[None]) -> None:
+    """Retrieve an unexpected exception from a detached coordinator task --
+    its own try/except/finally always resolves the reservation and never
+    re-raises, so reaching one here means something broke outside that
+    contract; surface it rather than let asyncio log a bare unretrieved-
+    exception warning."""
     try:
-        await session.close()
-    finally:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is not None:
+        log.error("octowright.pool.close_coordinator_crashed", instance_id=instance_id, error=repr(exc))
+
+
+def _recorder_close_reason(reason: SessionCloseReason) -> str | None:
+    if reason == "crashed":
+        return "crashed"
+    if reason in ("user_close", "external_disconnect"):
+        return "external"
+    return None  # agent_close / shutdown keep the current reason-less row
+
+
+async def _remove_active_identity(pool: BrowserPool, instance_id: str, session: BrowserSession) -> None:
+    async with pool._sessions_lock:
+        if pool._sessions.get(instance_id) is session:
+            pool._sessions.pop(instance_id, None)
+
+
+def _log_secondary_teardown_error(session: BrowserSession, exc: BaseException, *, primary: BaseException) -> None:
+    log.warning(
+        "octowright.browser.close_teardown_secondary_error",
+        instance_id=getattr(session, "instance_id", None),
+        kind=getattr(session, "kind", None),
+        error=repr(exc),
+        primary_error=repr(primary),
+    )
+
+
+async def _prepare_then_teardown(
+    session: BrowserSession,
+    preparation: Any,
+    recorder_reason: str | None,
+) -> tuple[object | None, BaseException | None]:
+    """Always attempt the teardown, even when ``preparation`` fails first.
+    Returns ``(prepared, error)`` where ``error`` is the FIRST failure; a
+    teardown failure following a preparation failure is logged as secondary,
+    not swapped in as the shared outcome."""
+    prepared: object | None = None
+    error: BaseException | None = None
+    if preparation is not None:
         try:
-            await run_manifest_transaction_async(remove_manifest_session, instance_id)
-        except Exception as exc:
-            log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
-    log.info(
-        "octowright.browser.closed",
-        instance_id=instance_id,
-        kind=session.kind,
-        profile=session.profile,
-        log_path=str(session.log_path),
-    )
-    # Notify MCP clients that the session has closed. ``_reason`` is
-    # ``agent_close`` for explicit tool calls and ``shutdown`` when the pool
-    # tears down on daemon exit.
-    session_event_bus.publish_nowait(
-        SessionClosedEvent(
-            instance_id=instance_id,
-            kind=session.kind,
-            label=session.label,
-            profile=session.profile,
-            reason=_reason,
-            log_path=str(session.log_path),
-        )
-    )
+            prepared = await preparation(session)
+        except BaseException as exc:
+            error = exc
+    try:
+        await session._teardown_after_close_cutoff(reason=recorder_reason)
+    except BaseException as exc:
+        if error is None:
+            error = exc
+        else:
+            _log_secondary_teardown_error(session, exc, primary=error)
+    return prepared, error
+
+
+def _close_response(session: BrowserSession) -> dict[str, Any]:
     return {
         "closed": True,
         "log_path": str(session.log_path),
@@ -112,6 +239,168 @@ async def close_browser(
         "trace_path": str(session.trace_path) if session.trace_path else None,
         "har_path": str(session.har_path) if session.har_path else None,
     }
+
+
+async def _remove_manifest_best_effort(instance_id: str) -> None:
+    try:
+        await run_manifest_transaction_async(remove_manifest_session, instance_id)
+    except Exception as exc:
+        log.warning("octowright.session_manifest.remove_failed", instance_id=instance_id, error=repr(exc))
+
+
+def _publish_close_once(session: BrowserSession, instance_id: str, reason: SessionCloseReason) -> None:
+    """Log + publish exactly once. ``reason`` picks the log line/metric:
+    explicit close keeps ``octowright.browser.closed``; an external-origin
+    reason is ``octowright.browser.evicted_externally`` plus the eviction
+    counter -- what the listeners used to emit directly before this task."""
+    if reason in ("user_close", "external_disconnect", "crashed"):
+        _EVICTED.add(1, attributes={"kind": session.kind})
+        log.info(
+            "octowright.browser.evicted_externally",
+            instance_id=instance_id,
+            kind=session.kind,
+            profile=session.profile,
+            log_path=str(session.log_path),
+        )
+    else:
+        log.info(
+            "octowright.browser.closed",
+            instance_id=instance_id,
+            kind=session.kind,
+            profile=session.profile,
+            log_path=str(session.log_path),
+        )
+    session_event_bus.publish_nowait(
+        SessionClosedEvent(
+            instance_id=instance_id,
+            kind=session.kind,
+            label=session.label,
+            profile=session.profile,
+            reason=reason,
+            log_path=str(session.log_path),
+        )
+    )
+
+
+async def _coordinate_close(
+    pool: BrowserPool,
+    instance_id: str,
+    entry: ClosingSession,
+    *,
+    reason: SessionCloseReason,
+    preparation: Any = None,
+) -> None:
+    """Run exactly once per ``entry``: admit under the gate (or take the bare
+    teardown-only path), teardown, publish, and resolve the shared outcome."""
+    session = entry.session
+    prepared: object | None = None
+    error: BaseException | None = None
+    response: dict[str, Any] | None = None
+    recorder_reason = _recorder_close_reason(reason)
+    try:
+        try:
+            async with session._operation_gate.close_operation(entry.reservation):
+                await _remove_active_identity(pool, instance_id, session)
+                prepared, error = await _prepare_then_teardown(session, preparation, recorder_reason)
+        except SessionClosedError as exc:
+            # An external browser/page close invalidated admission first.
+            await _remove_active_identity(pool, instance_id, session)
+            prepared, teardown_error = await _prepare_then_teardown(session, None, recorder_reason)
+            if preparation is None:
+                error = teardown_error
+            else:
+                error = exc
+                if teardown_error is not None:
+                    _log_secondary_teardown_error(session, teardown_error, primary=exc)
+        response = _close_response(session)
+    except BaseException as exc:
+        if error is None:
+            error = exc
+    finally:
+        await _remove_manifest_best_effort(instance_id)
+        _publish_close_once(session, instance_id, reason)
+        async with pool._sessions_lock:
+            pool._sessions.pop(instance_id, None)
+        if error is None:
+            session._operation_gate.complete_close(
+                entry.reservation,
+                CloseCoordinatorOutcome(response=response or _close_response(session), prepared=prepared),
+            )
+        else:
+            session._operation_gate.fail_close(entry.reservation, error)
+        async with pool._sessions_lock:
+            if pool._closing_sessions.get(instance_id) is entry:
+                pool._closing_sessions.pop(instance_id)
+
+
+def _closing_entry_for(pool: BrowserPool, instance_id: str, session: BrowserSession | None) -> ClosingSession | None:
+    """The retained ``ClosingSession`` for ``instance_id``, if any (and, when
+    ``session`` is given, only if it is draining that exact object)."""
+    existing = pool._closing_sessions.get(instance_id)
+    if existing is not None and (session is None or existing.session is session):
+        return existing
+    return None
+
+
+def _record_recently_evicted(pool: BrowserPool, instance_id: str, session: BrowserSession) -> None:
+    pool._recently_evicted[instance_id] = bool(getattr(session, "_crashed", False))
+    if len(pool._recently_evicted) > pool._RECENTLY_EVICTED_CAP:
+        del pool._recently_evicted[next(iter(pool._recently_evicted))]
+
+
+def _running_loop_available(instance_id: str, session: BrowserSession) -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        log.warning("octowright.pool.external_close_no_loop", instance_id=instance_id, kind=session.kind)
+        return False
+    return True
+
+
+def accept_external_close_nowait(
+    pool: BrowserPool,
+    instance_id: str,
+    *,
+    expected_session: BrowserSession | None,
+    reason: SessionCloseReason,
+) -> ClosingSession | None:
+    """Synchronous external-close acceptance seam for Playwright close/crash
+    callbacks (``listeners._wire_close_evictor``) and a dead shared driver
+    (``driver_relaunch._snapshot_and_evict``). No ``await`` between steps.
+
+    Returns the retained ``ClosingSession`` (a caller may later
+    ``await entry.reservation.wait()`` on it), or ``None`` when there is
+    nothing to do (unknown id, a stale identity a keep-id rekey already moved
+    past, or no running loop to schedule durable cleanup on)."""
+    session = pool._sessions.get(instance_id)
+    active = session is not None and (expected_session is None or session is expected_session)
+    if not active:
+        # Either genuinely unknown, or a late signal for an identity a
+        # keep-id rekey already moved past -- unless an explicit close (or an
+        # earlier external signal) already owns this id's teardown, in which
+        # case that coordinator is the one to hand back, untouched.
+        return _closing_entry_for(pool, instance_id, expected_session)
+    assert session is not None, "narrows for type-checkers; `active` proved it above"  # nosec B101
+    # Close admission FIRST, before removing visibility or scheduling
+    # anything -- an operation that started admission just before this must
+    # not observe an "active" session whose registry entry then vanishes
+    # without the gate ever having said so.
+    session._operation_gate.mark_closed_external()
+    pool._sessions.pop(instance_id, None)
+    _record_recently_evicted(pool, instance_id, session)
+    # An explicit close already draining this exact session takes ownership
+    # -- its own coordinator will take the SessionClosedError teardown-only
+    # branch once it is granted; don't spin up a second owner.
+    existing = _closing_entry_for(pool, instance_id, session)
+    if existing is not None:
+        return existing
+    if not _running_loop_available(instance_id, session):
+        return None
+    reservation = session._operation_gate.reserve_external_teardown("external_close")
+    entry = ClosingSession(session=session, reservation=reservation)
+    pool._closing_sessions[instance_id] = entry
+    _spawn_close_coordinator(pool, instance_id, entry, reason=reason)
+    return entry
 
 
 async def handoff_browser(
@@ -229,6 +518,17 @@ async def shutdown_pool(pool: BrowserPool) -> None:
     # Use the ``shutdown`` reason so MCP clients can distinguish daemon exit
     # from an agent explicitly calling ``browser_close_all``.
     await pool.close_all(_reason="shutdown", force=True)
+    # close_all only reaches sessions that were still in `_sessions`. An
+    # external-close or canceled-close coordinator that had already left
+    # `_sessions` (but is still draining in `_closing_sessions`) must not be
+    # abandoned mid-teardown just because it's no longer pool-visible.
+    async with pool._sessions_lock:
+        stragglers = list(pool._closing_sessions.values())
+    for entry in stragglers:
+        try:
+            await entry.reservation.wait()
+        except Exception as exc:
+            log.warning("octowright.pool.shutdown_straggler_close_failed", error=repr(exc))
     if pool._pw is not None:
         await pool._pw.stop()
         pool._pw = None
