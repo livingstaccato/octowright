@@ -21,6 +21,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.session.core_ops_mixin import SessionOpsMixin
+from tests._operation_gate_fakes import OperationAwareFake
+
+
+class _OpsFake(OperationAwareFake, SessionOpsMixin):
+    """Real-gate fake so every decorated core_ops_mixin method below runs
+    through an actual SessionOperationGate, not a bare mixin missing
+    ``operation()``."""
 
 
 class _Recorder:
@@ -36,7 +43,7 @@ class _Recorder:
 
 
 def _build(tmp_path: Path, *, page: Any = None, context: Any = None, **overrides: Any) -> SessionOpsMixin:
-    inst = SessionOpsMixin.__new__(SessionOpsMixin)
+    inst = _OpsFake()
     inst.page = page if page is not None else MagicMock()
     inst.context = context if context is not None else MagicMock()
     inst.browser = None
@@ -81,7 +88,7 @@ class TestFrameOps:
         info = {"index": 2, "url": "https://x", "name": "iframe-1"}
         fake_frame = MagicMock()
 
-        async def fake_switch(page: Any, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
+        async def fake_switch(session: Any, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
             return fake_frame, info
 
         monkeypatch.setattr(_frames, "switch_frame_impl", fake_switch)
@@ -106,25 +113,24 @@ class TestFrameOps:
         assert out == {"ok": True, "active_frame": None}
         assert inst.recorder.events[0][0] == "reset_frame"
 
-    def test_list_frames_delegates_to_impl(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """list_frames forwards page + active_frame to frames.list_frames_impl."""
+    @pytest.mark.anyio
+    async def test_list_frames_delegates_to_impl(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """list_frames forwards the session to frames.list_frames_impl."""
         from octowright.session import frames as _frames
 
         captured: dict[str, Any] = {}
 
-        def fake_list(page: Any, active: Any) -> list[dict[str, Any]]:
-            captured["page"] = page
-            captured["active"] = active
+        async def fake_list(session: Any) -> list[dict[str, Any]]:
+            captured["session"] = session
             return [{"index": 0, "name": "main", "url": "u", "is_active": True}]
 
         monkeypatch.setattr(_frames, "list_frames_impl", fake_list)
         inst = _build(tmp_path)
         active = MagicMock()
         inst.active_frame = active
-        out = inst.list_frames()
+        out = await inst.list_frames()
         assert out == [{"index": 0, "name": "main", "url": "u", "is_active": True}]
-        assert captured["page"] is inst.page
-        assert captured["active"] is active
+        assert captured["session"] is inst
 
 
 # ─── hover / select_option / drag ──────────────────────────────────────────

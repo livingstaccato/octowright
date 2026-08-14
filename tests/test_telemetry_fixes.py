@@ -442,8 +442,12 @@ class TestRunSequenceSpan:
 def _make_navigate_subject() -> Any:
     """Minimal SessionPageMixin subject — only what navigate() touches."""
     from octowright.session.core_page_mixin import SessionPageMixin
+    from tests._operation_gate_fakes import OperationAwareFake
 
-    subj = SessionPageMixin.__new__(SessionPageMixin)
+    class _PageFake(OperationAwareFake, SessionPageMixin):
+        pass
+
+    subj = _PageFake()
     subj._last_mcp_navigation = None
     page = MagicMock()
     page.url = "https://octowright.com"

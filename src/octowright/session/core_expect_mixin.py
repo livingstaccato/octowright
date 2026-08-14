@@ -12,11 +12,13 @@ from typing import Any
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import gated_operation
 
 _WAIT_FOR_POLL_SECONDS = 0.05
 
 
 class SessionExpectMixin(SessionLike):
+    @gated_operation("browser_expect_poll")
     async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None:
         deadline = None if timeout_ms == 0 else time.monotonic() + (timeout_ms / 1000)
         last_error: Exception | None = None
@@ -36,6 +38,7 @@ class SessionExpectMixin(SessionLike):
             else:
                 await asyncio.sleep(_WAIT_FOR_POLL_SECONDS)
 
+    @gated_operation("browser_expect_url")
     async def expect_url(self, pattern: str, mode: str = "regex") -> str:
         """Check the page URL against *pattern*. Returns the actual URL on success."""
         actual: str = self.page.url
@@ -53,6 +56,7 @@ class SessionExpectMixin(SessionLike):
         self.recorder.record("expect_url", pattern=pattern, mode=mode)
         return actual
 
+    @gated_operation("browser_expect_text")
     async def expect_text(
         self,
         selector: str,
@@ -83,6 +87,7 @@ class SessionExpectMixin(SessionLike):
         self.recorder.record("expect_text", selector=selector, text=text, mode=mode)
         return actual
 
+    @gated_operation("browser_expect_selector")
     async def expect_selector(
         self,
         selector: str,
@@ -103,6 +108,7 @@ class SessionExpectMixin(SessionLike):
                 raise RuntimeError(f'selector should be absent but was found: "{selector}"')
         self.recorder.record("expect_selector", selector=selector, present=present)
 
+    @gated_operation("browser_expect_js")
     async def expect_js(self, expression: str, equals: Any = None) -> Any:
         """Evaluate *expression* in the page and assert it is truthy (or equals *equals*)."""
         result = await self._target().evaluate(expression)

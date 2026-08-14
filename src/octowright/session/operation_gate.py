@@ -6,16 +6,17 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import math
 import os
 import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, LiteralString, TypedDict
+from typing import Any, Concatenate, Literal, LiteralString, ParamSpec, TypedDict, TypeVar, cast
 
 from provide.telemetry import get_logger
 
@@ -45,9 +46,13 @@ __all__ = [
     "SessionClosingError",
     "SessionOperationGate",
     "UseDefault",
+    "gated_operation",
     "resolve_operation_queue_timeout_seconds",
     "validate_operation_name",
 ]
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 DEFAULT_OPERATION_QUEUE_TIMEOUT_SECONDS = 300.0
 _OPERATION_TIMEOUT_ENV = "OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS"
@@ -64,7 +69,12 @@ class OperationGateSnapshot(TypedDict):
 
 def _positive_finite_seconds(value: object, *, source: str) -> float:
     try:
-        parsed = float(value)
+        # value is genuinely untyped input (env var / caller-supplied
+        # override); float() rejects anything it can't parse via the
+        # except clause below, so a permissive Any is safe here -- mypy
+        # otherwise refuses `float(object)` outright regardless of the
+        # try/except.
+        parsed = float(cast(Any, value))
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{source} must be positive finite seconds, got {value!r}") from exc
     if not math.isfinite(parsed) or parsed <= 0:
@@ -448,3 +458,47 @@ class SessionOperationGate(_CloseGateMixin):
             # cancellation-safe exit would falsely trip the ownership
             # invariant.
             await _run_shielded(self._release(lease, outcome))
+
+
+def gated_operation(
+    operation_name: LiteralString,
+) -> Callable[
+    [Callable[Concatenate[Any, P], Coroutine[Any, Any, R]]],
+    Callable[Concatenate[Any, P], Coroutine[Any, Any, R]],
+]:
+    """Wrap an async session method so every call runs under a fixed operation lease.
+
+    ``operation_name`` is validated at decoration time (import time), not per
+    call -- a typo in a fixed literal fails the test suite immediately rather
+    than surfacing as a runtime ``ValueError`` on first invocation. The wrapper
+    reads ``self.operation`` dynamically (not a captured gate) so it works on
+    any object exposing the ``operation()`` context-manager surface, matching
+    ``SessionLike`` rather than binding to ``SessionOperationGate`` directly.
+    Reentrant by construction: ``self.operation(...)`` re-enters the caller's
+    existing lease when the same task already owns the gate, so a decorated
+    method calling another decorated method on the same session never queues
+    behind itself and the root operation name stays the outermost one.
+
+    Typed with ``Concatenate[Any, P]`` / ``Coroutine[Any, Any, R]`` rather
+    than ``object`` / ``Awaitable[R]``: a concrete self type (e.g.
+    ``SessionPageMixin``) narrower than ``object`` fails the decorator's
+    parameter-contravariance check, and ``Awaitable[R]`` is a wider return
+    type than the ``Coroutine[Any, Any, R]`` every ``async def`` actually
+    returns, which trips a Liskov override error against ``SessionLike``'s
+    declared async signatures. ``Any`` sidesteps both without changing
+    runtime behavior.
+    """
+    fixed_name = validate_operation_name(operation_name)
+
+    def _decorate(
+        function: Callable[Concatenate[Any, P], Coroutine[Any, Any, R]],
+    ) -> Callable[Concatenate[Any, P], Coroutine[Any, Any, R]]:
+        @functools.wraps(function)
+        async def _wrapped(self: Any, *args: P.args, **kwargs: P.kwargs) -> R:
+            operation = self.operation
+            async with operation(fixed_name):
+                return await function(self, *args, **kwargs)
+
+        return _wrapped
+
+    return _decorate

@@ -409,10 +409,9 @@ async def browser_close_all(force: bool = False) -> dict[str, Any]:
     ),
 )
 async def browser_set_protected(instance_id: str, protected: bool) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    session.protected = protected
+    result = await pool.get(instance_id).set_protected_state(protected)
     publish_dashboard_invalidation_nowait("sessions")
-    return {"instance_id": instance_id, "protected": protected}
+    return result
 
 
 @mcp.tool(

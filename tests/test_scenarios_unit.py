@@ -530,7 +530,7 @@ class _StubSession:
         self.dialog_policy_calls: list[tuple[str, str | None]] = []
         self.mock_calls: list[dict[str, Any]] = []
 
-    def set_dialog_policy(self, policy: str, prompt_text: str | None = None) -> None:
+    async def set_dialog_policy(self, policy: str, prompt_text: str | None = None) -> None:
         self.dialog_policy_calls.append((policy, prompt_text))
 
     async def mock_route(self, pattern: str, **kwargs: Any) -> None:

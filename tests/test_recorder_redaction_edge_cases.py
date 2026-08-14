@@ -31,7 +31,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
+from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
+from tests._operation_gate_fakes import OperationAwareFake
 
 REDACT_INPUTS_ENV = "OCTOWRIGHT_REDACT_INPUTS"
 
@@ -39,6 +41,14 @@ REDACT_INPUTS_ENV = "OCTOWRIGHT_REDACT_INPUTS"
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+class _PageFake(OperationAwareFake, SessionPageMixin):
+    """Real-gate fake: fill/type_text/press_key/evaluate are all decorated."""
+
+
+class _OpsFake(OperationAwareFake, SessionOpsMixin):
+    """Real-gate fake: select_option is decorated."""
 
 
 def _locator_with_input_info(evaluate_return: Any, *, raises: bool = False) -> MagicMock:
@@ -58,10 +68,10 @@ def _locator_with_input_info(evaluate_return: Any, *, raises: bool = False) -> M
     return locator
 
 
-def _make_redaction_subject(evaluate_return: Any, *, raises: bool = False) -> SessionPageMixin:
+def _make_redaction_subject(evaluate_return: Any, *, raises: bool = False) -> _PageFake:
     """Reusable subject builder. Stubs _target() to return a target whose
     locator(selector) returns a uniform mock regardless of selector."""
-    subj = SessionPageMixin.__new__(SessionPageMixin)
+    subj = _PageFake()
     subj._last_mcp_navigation = None
     subj.page = MagicMock()
     subj.pages = [subj.page]
@@ -340,10 +350,8 @@ class TestSinkRedaction:
 
     @pytest.mark.anyio
     async def test_select_option_value_label_redacted_under_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from octowright.session.core_ops_mixin import SessionOpsMixin
-
         monkeypatch.setenv(REDACT_INPUTS_ENV, "all")
-        subj = SessionOpsMixin.__new__(SessionOpsMixin)
+        subj = _OpsFake()
         subj.recorder = MagicMock()
         subj.recorder.record = MagicMock()
         target = MagicMock()
@@ -360,10 +368,8 @@ class TestSinkRedaction:
 
     @pytest.mark.anyio
     async def test_select_option_raw_under_passwords(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from octowright.session.core_ops_mixin import SessionOpsMixin
-
         monkeypatch.setenv(REDACT_INPUTS_ENV, "passwords")
-        subj = SessionOpsMixin.__new__(SessionOpsMixin)
+        subj = _OpsFake()
         subj.recorder = MagicMock()
         subj.recorder.record = MagicMock()
         target = MagicMock()
@@ -387,7 +393,7 @@ class TestPerSelectorEvaluation:
         from one selector to the next."""
         monkeypatch.delenv(REDACT_INPUTS_ENV, raising=False)
 
-        subj = SessionPageMixin.__new__(SessionPageMixin)
+        subj = _PageFake()
         subj._last_mcp_navigation = None
         subj.page = MagicMock()
         subj.pages = [subj.page]

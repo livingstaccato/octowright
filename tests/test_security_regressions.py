@@ -9,6 +9,7 @@ import pytest
 
 from octowright import personas
 from octowright.session.core_page_mixin import SessionPageMixin
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 class _FailingLocator:
@@ -25,7 +26,7 @@ class _FailingTarget:
         return _FailingLocator()
 
 
-class _SessionWithFailingLookup(SessionPageMixin):
+class _SessionWithFailingLookup(OperationAwareFake, SessionPageMixin):
     def _target(self) -> _FailingTarget:
         return _FailingTarget()
 

@@ -21,7 +21,7 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -134,6 +134,89 @@ def test_core_expect_mixin_module_exists_and_is_importable() -> None:
     assert hasattr(SessionExpectMixin, "expect_selector")
     assert hasattr(SessionExpectMixin, "expect_js")
     assert hasattr(SessionExpectMixin, "_poll_until")
+
+
+# ─── gated_operation: direct-call serialization + reentrant timeout boundary ──
+
+
+def blocking_call(started: asyncio.Event, release: asyncio.Event) -> Any:
+    async def _side_effect(*_args: Any, **_kwargs: Any) -> None:
+        started.set()
+        await release.wait()
+
+    return _side_effect
+
+
+async def wait_for_queue_depth(gate: Any, depth: int) -> None:
+    async with asyncio.timeout(1):
+        while gate.snapshot()["queue_depth"] != depth:
+            await asyncio.sleep(0)
+
+
+@pytest.fixture
+def fake_browser_session(fake_session_kwargs: dict[str, object]) -> BrowserSession:
+    page = MagicMock()
+    page.url = "https://octowright.com"
+    page.goto = AsyncMock()
+    page.title = AsyncMock(return_value="Example")
+    page.evaluate = AsyncMock(return_value=None)
+    page.wait_for_selector = AsyncMock()
+    kwargs = {**fake_session_kwargs, "page": page}
+    session = BrowserSession(**kwargs)  # type: ignore[arg-type]
+    # Not exercised by these gate-serialization tests; stub out so navigate()
+    # doesn't spawn a real markdown-capture background task against a
+    # MagicMock page.
+    session._schedule_markdown_capture = MagicMock()  # type: ignore[method-assign]
+    return session
+
+
+@pytest.mark.asyncio
+async def test_direct_session_actions_serialize(fake_browser_session: BrowserSession) -> None:
+    """Two decorated methods called directly (no MCP layer) still serialize
+    through the same gate: the second call queues behind the first and its
+    Playwright call does not fire until the first releases."""
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    fake_browser_session.page.goto.side_effect = blocking_call(first_started, release_first)
+    first = asyncio.create_task(fake_browser_session.navigate("https://one.test"))
+    await first_started.wait()
+    second = asyncio.create_task(fake_browser_session.evaluate("document.title"))
+    await wait_for_queue_depth(fake_browser_session._operation_gate, 1)
+    fake_browser_session.page.evaluate.assert_not_awaited()
+    release_first.set()
+    await asyncio.gather(first, second)
+    fake_browser_session.page.evaluate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_inner_timeout_begins_after_gate_admission(fake_browser_session: BrowserSession) -> None:
+    """A queued call's own internal timeout must not start ticking while it
+    waits for the gate -- it starts only once admitted."""
+    async with fake_browser_session.operation("owner"):
+        queued = asyncio.create_task(fake_browser_session.expect_selector("#ready", timeout_ms=25))
+        await wait_for_queue_depth(fake_browser_session._operation_gate, 1)
+        fake_browser_session.page.wait_for_selector.assert_not_awaited()
+    await queued
+    fake_browser_session.page.wait_for_selector.assert_awaited_once_with("#ready", timeout=25)
+
+
+@pytest.mark.asyncio
+async def test_list_pages_is_coherent_and_async(fake_browser_session: BrowserSession) -> None:
+    result = await fake_browser_session.list_pages()
+    assert result[0]["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_frames_is_coherent_and_async(fake_browser_session: BrowserSession) -> None:
+    fake_browser_session.page.frames = []
+    result = await fake_browser_session.list_frames()
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_set_dialog_policy_is_coherent_and_async(fake_browser_session: BrowserSession) -> None:
+    result = await fake_browser_session.set_dialog_policy("accept")
+    assert result == {"ok": True, "policy": "accept", "prompt_text": None}
 
 
 # ─── pool → session timeout propagation ────────────────────────────────────

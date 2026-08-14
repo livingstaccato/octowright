@@ -145,8 +145,8 @@ def _frame_summary_row(instance_id: str, frame: dict[str, Any]) -> dict[str, Any
         "bounded rows with page_switch/page_close action payloads."
     ),
 )
-def page_list(instance_id: str, response_mode: str | None = None, limit: int = 20) -> Any:
-    pages = pool.get(instance_id).list_pages()
+async def page_list(instance_id: str, response_mode: str | None = None, limit: int = 20) -> Any:
+    pages = await pool.get(instance_id).list_pages()
     if response_mode != "summary":
         return pages
     capped = _clean_limit(limit)
@@ -226,8 +226,8 @@ async def browser_reset_frame(instance_id: str, response_mode: str | None = None
         "for bounded rows with browser_switch_frame/browser_reset_frame action payloads."
     ),
 )
-def browser_list_frames(instance_id: str, response_mode: str | None = None, limit: int = 20) -> Any:
-    frames = pool.get(instance_id).list_frames()
+async def browser_list_frames(instance_id: str, response_mode: str | None = None, limit: int = 20) -> Any:
+    frames = await pool.get(instance_id).list_frames()
     if response_mode != "summary":
         return frames
     capped = _clean_limit(limit)
