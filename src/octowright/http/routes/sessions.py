@@ -278,13 +278,18 @@ async def _close_browser_session(sid: str, *, force: bool) -> JSONResponse:
     validation error; 500 on unexpected failure.
     """
     pool = state.pool
-    if not pool.has_session(sid):
+    try:
+        result = await pool.close(sid, force=force)
+    except KeyError:
+        # A live session with sid may still be draining in pool._closing_sessions
+        # (removed from pool._sessions once the coordinator's ticket is admitted,
+        # well before teardown finishes) -- pool.close() itself coalesces onto
+        # that in-flight coordinator and returns normally. Only a genuinely
+        # unknown/fully-closed id reaches this branch.
         return JSONResponse(
             {"error": f"no live session with id {sid!r}; closed sessions cannot be re-closed"},
             status_code=404,
         )
-    try:
-        result = await pool.close(sid, force=force)
     except ProtectedBrowserCloseError as e:
         return JSONResponse({"error": str(e).replace("force=True", "force=true")}, status_code=409)
     except ValueError as e:

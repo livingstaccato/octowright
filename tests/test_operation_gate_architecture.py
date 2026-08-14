@@ -88,6 +88,26 @@ def test_does_not_confuse_starlette_annotations_for_playwright(tmp_path: Path) -
     assert _violations([source], {}) == []
 
 
+def test_if_else_taint_uses_conservative_union_not_sequential_mutation(tmp_path: Path) -> None:
+    """A name un-tainted inside the ``if`` branch (reassigned to a non-Playwright
+    value) must not leak that discard into the ``else`` branch's walk, and must
+    stay tainted after the if/else if EITHER branch would keep it that way at
+    runtime -- only one branch ever actually executes. Sequential mutation of a
+    single shared taint set (walking body then orelse on the SAME set) produces
+    a false negative here: the body's reassignment discards the name before the
+    (empty) orelse walk even starts, so the post-if access is wrongly cleared."""
+    source = tmp_path / "if_else_union.py"
+    source.write_text(
+        "async def leak(session):\n"
+        "    handle = session.page\n"
+        "    if cond:\n"
+        "        handle = 1\n"
+        "    await handle.title()\n",
+        encoding="utf-8",
+    )
+    assert _violations([source], {}) == [("leak", 2), ("leak", 5)]
+
+
 def test_direct_access_before_valid_context_still_fails(tmp_path: Path) -> None:
     source = tmp_path / "mutation_before.py"
     source.write_text(

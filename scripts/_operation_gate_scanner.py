@@ -128,8 +128,18 @@ def _walk_function_stmt(stmt: ast.stmt, *, gated: bool, ctx: _FuncCtx) -> None:
             _walk_function_body(stmt.orelse, gated=gated, ctx=ctx)
             return
         _scan_expr(stmt.test, ctx, gated=gated)
+        # Conservative union, not sequential mutation: only ONE of body/orelse
+        # runs at runtime, so a reassignment that un-taints a name in one
+        # branch must never leak into the other branch's walk, and a name
+        # left tainted by EITHER branch must stay tainted after the if/else
+        # (a false negative here silently hides a real gate violation on the
+        # branch that keeps the Playwright handle).
+        before = set(ctx.tainted)
         _walk_function_body(stmt.body, gated=gated, ctx=ctx)
+        body_tainted = ctx.tainted
+        ctx.tainted = set(before)
         _walk_function_body(stmt.orelse, gated=gated, ctx=ctx)
+        ctx.tainted = body_tainted | ctx.tainted
         return
     if isinstance(stmt, ast.For | ast.AsyncFor):
         iter_tainted = _scan_expr(stmt.iter, ctx, gated=gated)

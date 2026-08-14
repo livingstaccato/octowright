@@ -91,6 +91,8 @@ class _FakePool:
     async def close(self, instance_id: str, *, force: bool = False) -> dict[str, Any]:
         if self.close_raises is not None:
             raise self.close_raises
+        if instance_id not in self._sessions:
+            raise KeyError(instance_id)
         self._sessions.pop(instance_id, None)
         if self.close_result is not None:
             return self.close_result
