@@ -388,7 +388,11 @@ class SessionPageMixin(SessionLike):
         img_type: Literal["jpeg", "png"] = "jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "png"
 
         async def _write(tmp: Path) -> None:
-            await self.page.screenshot(path=str(tmp), type=img_type)
+            # Nested closure is its own scope, independent of the decorator
+            # above (Task 11 scanner rule) -- re-enters the same "browser_screenshot"
+            # lease this method's own @gated_operation already holds (same task).
+            async with self.operation("browser_screenshot"):
+                await self.page.screenshot(path=str(tmp), type=img_type)
 
         from octowright._paths import atomic_write_via_writer
 
