@@ -89,20 +89,29 @@ class TestTimestamp:
 # ─── session/downloads: save_download ──────────────────────────────────────
 
 
+class _DownloadSessionFake(OperationAwareFake):
+    """Minimal session-shaped fake for save_download/wait_for_download_impl:
+    a real gate (save_download is now ``async with session.operation(...)``)
+    plus the download-bookkeeping attributes those helpers read/mutate."""
+
+    instance_id = "inst123"
+
+    def __init__(self, tmp_path: Any) -> None:
+        super().__init__()
+        # Downloads anchor on the session's recordings root (log_path.parent), which
+        # for a real session == the owning pool's recordings_dir. Point it at tmp_path
+        # so it matches the monkeypatched RECORDINGS_DIR these tests assert against.
+        self.log_path = tmp_path / "session.jsonl"
+        self.downloads: list[Any] = []
+        self.download_count = 0
+        self.recorder = MagicMock()
+        self.recorder.record = MagicMock()
+        self._pending_download_events: list[Any] = []
+
+
 def _fake_session(tmp_path: Any) -> Any:
     """Build a minimal session-shaped object for download tests."""
-    sess = SimpleNamespace()
-    sess.instance_id = "inst123"
-    # Downloads anchor on the session's recordings root (log_path.parent), which
-    # for a real session == the owning pool's recordings_dir. Point it at tmp_path
-    # so it matches the monkeypatched RECORDINGS_DIR these tests assert against.
-    sess.log_path = tmp_path / "session.jsonl"
-    sess.downloads = []
-    sess.download_count = 0
-    sess.recorder = MagicMock()
-    sess.recorder.record = MagicMock()
-    sess._pending_download_events = []
-    return sess
+    return _DownloadSessionFake(tmp_path)
 
 
 class TestSaveDownload:
