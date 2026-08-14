@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.server.browser import views as _views
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +19,13 @@ def _patch_pool(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     fake_pool = MagicMock()
     monkeypatch.setattr(_views, "pool", fake_pool)
     return fake_pool
+
+
+class _FakeSession(OperationAwareFake):
+    """Real-gate session fake — page_list/browser_list_frames/page_switch/
+    browser_switch_frame/browser_reset_frame now enter ``browser_operation``,
+    which awaits ``session.operation()`` as an async context manager; a bare
+    ``MagicMock`` merely tolerates ``async with`` without proving anything."""
 
 
 def test_browser_downloads_summary_aggregates_without_raw_dump(_patch_pool: MagicMock) -> None:
@@ -90,16 +98,24 @@ def test_browser_downloads_summary_mode_delegates_to_compact_summary(_patch_pool
     assert out["recent"][0]["suggested_filename"] == "report.csv"
 
 
-def test_page_list_summary_bounds_rows_and_adds_actions(_patch_pool: MagicMock) -> None:
-    session = MagicMock()
-    session.list_pages.return_value = [
-        {"index": 0, "url": "https://example.com/" + ("a" * 300), "title": "Home" + ("!" * 300), "is_active": True},
-        {"index": 1, "url": "https://example.com/docs", "title": "Docs", "is_active": False},
-        {"index": 2, "url": "https://example.com/login", "title": "Login", "is_active": False},
-    ]
+@pytest.mark.anyio
+async def test_page_list_summary_bounds_rows_and_adds_actions(_patch_pool: MagicMock) -> None:
+    session = _FakeSession()
+    session.list_pages = AsyncMock(
+        return_value=[
+            {
+                "index": 0,
+                "url": "https://example.com/" + ("a" * 300),
+                "title": "Home" + ("!" * 300),
+                "is_active": True,
+            },
+            {"index": 1, "url": "https://example.com/docs", "title": "Docs", "is_active": False},
+            {"index": 2, "url": "https://example.com/login", "title": "Login", "is_active": False},
+        ]
+    )
     _patch_pool.get.return_value = session
 
-    out = _views.page_list("i", response_mode="summary", limit=2)
+    out = await _views.page_list("i", response_mode="summary", limit=2)
 
     assert out["total"] == 3
     assert out["count"] == 2
@@ -117,28 +133,31 @@ def test_page_list_summary_bounds_rows_and_adds_actions(_patch_pool: MagicMock) 
     ]
 
 
-def test_browser_list_frames_summary_bounds_rows_and_adds_actions(_patch_pool: MagicMock) -> None:
-    session = MagicMock()
-    session.list_frames.return_value = [
-        {
-            "index": 0,
-            "name": "",
-            "url": "https://example.com/top",
-            "is_active": True,
-            "is_main": True,
-        },
-        {
-            "index": 1,
-            "name": "checkout",
-            "url": "https://pay.example.com/frame?" + ("q" * 300),
-            "is_active": False,
-            "is_main": False,
-            "selector": "iframe[name='checkout']",
-        },
-    ]
+@pytest.mark.anyio
+async def test_browser_list_frames_summary_bounds_rows_and_adds_actions(_patch_pool: MagicMock) -> None:
+    session = _FakeSession()
+    session.list_frames = AsyncMock(
+        return_value=[
+            {
+                "index": 0,
+                "name": "",
+                "url": "https://example.com/top",
+                "is_active": True,
+                "is_main": True,
+            },
+            {
+                "index": 1,
+                "name": "checkout",
+                "url": "https://pay.example.com/frame?" + ("q" * 300),
+                "is_active": False,
+                "is_main": False,
+                "selector": "iframe[name='checkout']",
+            },
+        ]
+    )
     _patch_pool.get.return_value = session
 
-    out = _views.browser_list_frames("i", response_mode="summary", limit=2)
+    out = await _views.browser_list_frames("i", response_mode="summary", limit=2)
 
     assert out["total"] == 2
     assert out["count"] == 2
@@ -158,7 +177,7 @@ def test_browser_list_frames_summary_bounds_rows_and_adds_actions(_patch_pool: M
 async def test_page_switch_outline_mode_returns_page_outline(
     _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = MagicMock()
+    session = _FakeSession()
     session.switch_page = AsyncMock(return_value={"ok": True, "index": 1})
     _patch_pool.get.return_value = session
     outline = AsyncMock(return_value={"url": "https://example.com/docs", "headings": []})
@@ -175,7 +194,7 @@ async def test_page_switch_outline_mode_returns_page_outline(
 async def test_browser_switch_frame_outline_mode_returns_page_outline(
     _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = MagicMock()
+    session = _FakeSession()
     session.switch_frame = AsyncMock(return_value={"ok": True, "index": 2})
     _patch_pool.get.return_value = session
     outline = AsyncMock(return_value={"url": "https://widget.example.com", "fields": []})
@@ -192,7 +211,7 @@ async def test_browser_switch_frame_outline_mode_returns_page_outline(
 async def test_browser_reset_frame_outline_mode_returns_page_outline(
     _patch_pool: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = MagicMock()
+    session = _FakeSession()
     session.reset_frame = AsyncMock(return_value={"ok": True})
     _patch_pool.get.return_value = session
     outline = AsyncMock(return_value={"url": "https://example.com", "links": []})

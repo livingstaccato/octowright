@@ -26,6 +26,7 @@ def test_shim_reexports_provide_telemetry_callables() -> None:
     assert _tracing.set_attrs is pt.set_attrs
     assert _tracing.record_exception is pt.record_exception
     assert _tracing.counter is pt.counter
+    assert _tracing.gauge is pt.gauge
     assert _tracing.histogram is pt.histogram
     assert _tracing._tracer is pt.get_tracer
 
@@ -47,3 +48,11 @@ def test_counter_and_histogram_usable_through_shim() -> None:
     h = histogram("octowright_shim_hist", description="t", unit="s")
     c.add(1, attributes={"k": "v"})
     h.record(0.5, attributes={"k": "v"})
+
+
+def test_gauge_usable_through_shim() -> None:
+    """gauge() returns a recorder whose add() never raises."""
+    from octowright._tracing import gauge
+
+    g = gauge("octowright_shim_gauge", description="t", unit="1")
+    g.add(5, attributes={"k": "v"})

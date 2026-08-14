@@ -3,17 +3,21 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Post-merge review findings: deferred-close identity race + bounded state lock.
+"""Post-merge review findings: identity-race hardening + bounded state lock.
 
 Two defects found by the multi-agent review of PR #100/#101 after merge:
 
-1. ``listeners._on_page_close`` schedules an async full close and then calls
-   ``pool.close(instance_id, force=True)``. The "last page is gone" decision is
-   made in the SYNC callback, but the task runs later and closes whatever the
-   registry holds under that id AT THAT TIME. ``OCTOWRIGHT_DRIVER_RELAUNCH=keep-id``
-   deliberately rebinds the original instance_id to a NEW live session, so the
-   stale task could force-close an unrelated (possibly protected) browser —
-   ``force=True`` skips the protection refusal by design.
+1. Originally: ``listeners._on_page_close`` scheduled an async full close and
+   then called ``pool.close(instance_id, force=True)`` later, closing
+   whatever the registry held under that id AT THAT (later) TIME --
+   ``OCTOWRIGHT_DRIVER_RELAUNCH=keep-id`` deliberately rebinds the original
+   instance_id to a NEW live session, so a stale deferred task could
+   force-close an unrelated (possibly protected) browser. Task 7's durable
+   close coordinator restructures this: ``_on_page_close`` now calls the
+   synchronous ``pool._accept_external_close_nowait`` directly (no deferred
+   task, no scheduling gap), and identity is checked at acceptance time via
+   ``expected_session``. These tests now pin that seam's identity-safety
+   directly instead of the (now-removed) deferred-task shape.
 
 2. ``bridge_state._state_lock`` took a blocking ``flock(LOCK_EX)`` with no
    timeout on the caller's asyncio event loop (follower reconnect loop, leader
@@ -26,7 +30,6 @@ Two defects found by the multi-agent review of PR #100/#101 after merge:
 
 from __future__ import annotations
 
-import asyncio
 import sys
 import time
 from pathlib import Path
@@ -37,6 +40,14 @@ import pytest
 
 from octowright import bridge_state
 from octowright.browser_pool import BrowserPool, driver_relaunch
+from tests._pool_invariants import wait_until
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    # The close coordinator is asyncio-native (asyncio.Task/Future) -- see
+    # session/operation_gate.py. These tests exercise it directly.
+    return "asyncio"
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +57,7 @@ def _isolate_session_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(session_manifest, "SESSION_MANIFEST_PATH", tmp_path / "default-session-manifest.json")
 
 
-# --- 1. deferred full close must re-validate session identity -----------------
+# --- 1. external-close identity safety -----------------------------------
 
 
 class _EventTarget:
@@ -62,6 +73,8 @@ class _EventTarget:
 
 
 def _session(instance_id: str) -> SimpleNamespace:
+    from octowright.session.operation_gate import SessionOperationGate
+
     return SimpleNamespace(
         instance_id=instance_id,
         kind="chromium",
@@ -73,69 +86,48 @@ def _session(instance_id: str) -> SimpleNamespace:
         trace_path=None,
         har_path=None,
         protected=False,
+        protected_reason="explicit",
         context=_EventTarget(),
         browser=None,
         recorder=MagicMock(),
         close=AsyncMock(),
+        _teardown_after_close_cutoff=AsyncMock(),
+        _operation_gate=SessionOperationGate(instance_id, "chromium"),
+        _crashed=False,
     )
 
 
 @pytest.mark.anyio
-async def test_deferred_close_cannot_pop_keep_id_replacement(
+async def test_external_close_identity_check_ignores_keep_id_replacement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Identity validation and pop must share the registry lock with keep-id.
-
-    Holding the real BrowserPool lock lets the deferred close validate the old
-    session and then stall before its pop. A keep-id relaunch used to re-key a
-    replacement during that gap, so the stale close popped and force-closed it.
-    """
-    from octowright.browser_pool import lifecycle
-    from octowright.browser_pool.listeners import _run_deferred_full_close
+    """A late external-close signal captured against the OLD session object
+    must not touch the registry once a keep-id rekey has moved that id to a
+    NEW session -- ``expected_session`` identity is checked synchronously,
+    with no scheduling gap for a rekey to land in (Task 7 removed the
+    deferred-task shape this used to race: ``_accept_external_close_nowait``
+    is called directly from the sync Playwright callback, no ``create_task``
+    in between)."""
+    from octowright.browser_pool import close_helpers
 
     pool = BrowserPool()
     original = _session("b1")
     replacement = _session("new1")
     pool._sessions["b1"] = original
     pool._sessions["new1"] = replacement
-    monkeypatch.setattr(lifecycle, "remove_manifest_session", lambda _instance_id: None)
+    monkeypatch.setattr(close_helpers, "remove_manifest_session", lambda _instance_id: None)
 
-    close_started = asyncio.Event()
-    real_close = pool.close
+    # Simulate the id having already been rekeyed to `replacement` (as
+    # keep-id relaunch does) before the OLD session's late external-close
+    # signal arrives.
+    pool._sessions["b1"] = replacement
+    del pool._sessions["new1"]
 
-    async def _observed_close(*args: object, **kwargs: object) -> dict[str, object]:
-        close_started.set()
-        return await real_close(*args, **kwargs)  # type: ignore[arg-type]
-
-    async def _reuse_registered_replacement(**_kwargs: object) -> dict[str, str]:
-        return {"instance_id": "new1"}
-
-    monkeypatch.setattr(pool, "close", _observed_close)
-    monkeypatch.setattr(pool, "launch", _reuse_registered_replacement)
-    descriptor = {
-        "instance_id": "b1",
-        "kind": "chromium",
-        "label": "replacement",
-        "profile": None,
-        "url": "https://example.test/b1",
-        "user_data_dir": None,
-        "lost_record": {"relaunched_to": None},
-    }
-
-    async with pool._sessions_lock:
-        close_task = asyncio.create_task(_run_deferred_full_close(pool, "b1", original, "user_close"))
-        await asyncio.wait_for(close_started.wait(), timeout=1.0)
-        rekey_task = asyncio.create_task(driver_relaunch._relaunch_one(pool, descriptor, "keep-id"))
-        await asyncio.sleep(0)
-        assert not close_task.done()
-        assert not rekey_task.done()
-
-    await asyncio.gather(close_task, rekey_task)
-
+    result = pool._accept_external_close_nowait("b1", expected_session=original, reason="user_close")
+    assert result is None
     assert pool.maybe_get("b1") is replacement
-    assert pool.maybe_get("new1") is None
-    original.close.assert_awaited_once()
-    replacement.close.assert_not_awaited()
+    original._teardown_after_close_cutoff.assert_not_awaited()
+    replacement._teardown_after_close_cutoff.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -170,15 +162,13 @@ async def test_rekeyed_replacement_listener_evicts_its_current_instance_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The replacement's own listener must follow its keep-id rekey."""
-    from octowright import session_manifest
-    from octowright.browser_pool import listeners
+    from octowright.browser_pool import close_helpers, listeners
 
     pool = BrowserPool()
     replacement = _session("new1")
     pool._sessions["new1"] = replacement
     listeners._wire_close_evictor(pool, replacement)
-    remove_manifest = MagicMock()
-    monkeypatch.setattr(session_manifest, "remove_session", remove_manifest)
+    monkeypatch.setattr(close_helpers, "remove_manifest_session", lambda _instance_id: None)
     publish = MagicMock()
     monkeypatch.setattr(listeners.session_event_bus, "publish_nowait", publish)
 
@@ -186,11 +176,14 @@ async def test_rekeyed_replacement_listener_evicts_its_current_instance_id(
     assert final_id == "old1"
 
     replacement.context.fire("close")
-    await asyncio.gather(*tuple(listeners._PENDING_MANIFEST_REMOVALS))
+    # The retained coordinator (not the sync listener callback) does the
+    # manifest removal/publish; wait for it rather than a removed pending-
+    # task set.
+    await wait_until(lambda: "old1" not in pool._closing_sessions)
 
     assert pool.maybe_get("old1") is None
     assert pool._recently_evicted["old1"] is False
-    remove_manifest.assert_called_once_with("old1")
+    replacement._teardown_after_close_cutoff.assert_awaited_once()
     assert publish.call_args.args[0].instance_id == "old1"
 
 
@@ -249,7 +242,7 @@ async def test_keep_id_rekey_reconciles_replacement_closed_during_manifest_write
     async def _close_during_rekey(func: object, *args: object, **kwargs: object) -> object:
         result = await original_runner(func, *args, **kwargs)  # type: ignore[arg-type]
         if getattr(func, "__name__", "") == "rekey_session":
-            pool._evict_session_nowait("new1", expected_session=replacement)
+            pool._accept_external_close_nowait("new1", expected_session=replacement, reason="user_close")
         return result
 
     monkeypatch.setattr(session_manifest, "run_manifest_transaction_async", _close_during_rekey)
@@ -262,23 +255,29 @@ async def test_keep_id_rekey_reconciles_replacement_closed_during_manifest_write
 
 
 @pytest.mark.anyio
-async def test_deferred_close_follows_expected_session_across_keep_id_rekey(
+async def test_close_follows_expected_session_across_keep_id_rekey(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A task scheduled under the temporary id must close that object after rekey."""
-    from octowright.browser_pool import lifecycle
-    from octowright.browser_pool.listeners import _run_deferred_full_close
+    """A caller holding a STALE id (captured before a keep-id rekey) still
+    closes the correct object: ``reserve_close_browser``'s identity-aware
+    resolution scans by OBJECT identity, not just the caller's id."""
+    from octowright.browser_pool import close_helpers
 
     pool = BrowserPool()
     replacement = _session("new1")
     pool._sessions["new1"] = replacement
-    monkeypatch.setattr(lifecycle, "remove_manifest_session", lambda _instance_id: None)
+    monkeypatch.setattr(close_helpers, "remove_manifest_session", lambda _instance_id: None)
 
     assert await driver_relaunch._finalize_id(pool, "new1", "old1", "keep-id") == "old1"
-    await _run_deferred_full_close(pool, "new1", replacement, "user_close")
+    # The gate captures its own instance_id string at construction (log/error
+    # text only, never a lookup key) -- the rekey must carry it forward too,
+    # or every gate error/log line raised on the rekeyed session would still
+    # report the stale pre-rekey id.
+    assert replacement._operation_gate.instance_id == "old1"
+    await pool.close("new1", force=True, _expected_session=replacement)
 
     assert pool.maybe_get("old1") is None
-    replacement.close.assert_awaited_once()
+    replacement._teardown_after_close_cutoff.assert_awaited_once()
 
 
 # --- 2. bridge-state lock must be bounded, never an indefinite block ----------

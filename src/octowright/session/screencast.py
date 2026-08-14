@@ -9,10 +9,18 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
-from contextlib import AsyncExitStack, suppress
-from typing import Any, Protocol
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, suppress
+from typing import Any, LiteralString, Protocol
 
 from provide.telemetry import get_logger
+
+from octowright.session.operation_gate import (
+    USE_DEFAULT,
+    SessionClosedError,
+    SessionClosingError,
+    UseDefault,
+)
+from octowright.session.operation_gate_types import _join_after_cancellation
 
 log = get_logger(__name__)
 
@@ -56,6 +64,13 @@ class _ScreencastPage(Protocol):
 class _ScreencastSession(Protocol):
     instance_id: str
     page: _ScreencastPage
+
+    def operation(
+        self,
+        operation_name: LiteralString,
+        *,
+        wait_timeout_seconds: float | UseDefault | None = USE_DEFAULT,
+    ) -> AbstractAsyncContextManager[None]: ...
 
 
 class ScreencastViewer:
@@ -149,15 +164,25 @@ class ScreencastManager:
         return len(self._viewers)
 
     async def add_viewer(self, *, fps: int | None = None) -> ScreencastViewer:
-        async with self._lock:
-            if not self._started:
-                await self._start_locked(self._session.page)
+        # Lock ordering: the session operation lease is acquired BEFORE
+        # ``self._lock``, never the reverse -- reversing it would let this
+        # method block inside ``self._lock`` while holding no session lease,
+        # which is exactly the shape that deadlocks against any other code
+        # path that acquires the two in the opposite order.
+        async with self._session.operation("screencast_start"), self._lock:
+            return await self._add_viewer_locked(fps=fps)
 
-            viewer = ScreencastViewer(fps=self._fps if fps is None else fps)
-            if self.latest is not None:
-                viewer.offer(self.latest)
-            self._viewers.add(viewer)
-            return viewer
+    async def _add_viewer_locked(self, *, fps: int | None = None) -> ScreencastViewer:
+        # Sole caller (add_viewer) already holds this lease; re-enters it (a nested method is its own scope).
+        async with self._session.operation("screencast_start"):
+            if not self._started:
+                await self._start_owned_locked(self._session.page)
+
+        viewer = ScreencastViewer(fps=self._fps if fps is None else fps)
+        if self.latest is not None:
+            viewer.offer(self.latest)
+        self._viewers.add(viewer)
+        return viewer
 
     async def rebind(self, new_page: _ScreencastPage) -> None:
         """Move the producer onto ``new_page`` (crash recovery, or a tab switch).
@@ -167,17 +192,22 @@ class ScreencastManager:
         session-level recovery event names the unchanged active page whenever a
         *background* tab was the one that crashed.
         """
-        async with self._lock:
+        async with self._session.operation("screencast_rebind"), self._lock:
+            await self._rebind_locked(new_page)
+
+    async def _rebind_locked(self, new_page: _ScreencastPage) -> None:
+        # Sole caller (rebind) already holds this lease; re-enters it (a nested method is its own scope).
+        async with self._session.operation("screencast_rebind"):
             self._session.page = new_page
             if not self._started or not self._viewers:
                 return
             if new_page is self._bound_page:
                 return
 
-            await self._stop_bound_locked()
+            await self._stop_bound_owned_locked()
             self._started = False
             try:
-                await self._start_locked(new_page)
+                await self._start_owned_locked(new_page)
             except BaseException:
                 # No producer left and no path back: wake the viewers so their
                 # sockets close and the dashboard falls back to polling.
@@ -187,73 +217,32 @@ class ScreencastManager:
     async def terminate(self) -> None:
         """Stop the producer and end every viewer — the session is gone."""
         async with self._lock:
-            if self._started:
-                self._started = False
-                await self._stop_bound_locked()
-            self._end_viewers_locked()
+            await self._terminate_producer_after_close()
 
-    async def remove_viewer(self, viewer: ScreencastViewer) -> None:
-        async with self._lock:
-            if viewer not in self._viewers:
-                return
+    async def _terminate_producer_after_close(self) -> None:
+        """Best-effort producer stop + viewer wakeup once the session is
+        already closing or closed.
 
-            if len(self._viewers) > 1:
-                self._viewers.remove(viewer)
-                return
-
-            if not self._started:
-                self._viewers.remove(viewer)
-                await self._stop_recovery_watcher_locked()
-                return
-
-            bound = self._bound_page if self._bound_page is not None else self._session.page
-            stop_error: BaseException | None = None
-            try:
-                await bound.screencast.stop()
-            except BaseException as exc:
-                stop_error = exc
-            finally:
-                self._started = False
-                self._bound_page = None
-                self._viewers.remove(viewer)
-                await self._stop_recovery_watcher_locked()
-            if stop_error is not None:
-                raise stop_error
-
-    def _handle_frame(self, frame: Mapping[str, object]) -> None:
-        data = frame.get("data")
-        if not isinstance(data, bytes):
-            return
-
-        self.latest = data
-        for viewer in tuple(self._viewers):
-            viewer.offer(data)
-
-    async def _start_locked(self, page: _ScreencastPage) -> None:
-        # Subscribe first: ``screencast.start`` awaits the Playwright channel, so
-        # a session close landing during that await would be dropped by the bus
-        # if we only subscribed afterwards.
-        await self._ensure_recovery_watcher_locked()
-        try:
-            await page.screencast.start(
-                on_frame=self._handle_frame,
-                quality=self._quality,
-            )
-        except BaseException:
-            if not self._viewers:
-                await self._stop_recovery_watcher_locked()
-            raise
-        self._started = True
-        self._bound_page = page
-
-    async def _stop_bound_locked(self) -> None:
-        """Best-effort stop of the currently bound producer.
-
-        Called when the producer moves to another page or the session ends, so
-        the old page's encoder does not keep running (and keep pushing frames)
-        for the rest of its life. The page may be crashed or closing, hence the
-        timeout and the swallow.
+        Runs under only ``self._lock`` -- NOT the session operation gate. By
+        the time an external close reaches here the gate may already be
+        ``closing``/``closed``, and entering it would raise instead of
+        releasing the producer and waking viewers, which is the one thing
+        this path must still do.
         """
+        await self._best_effort_stop_bound_locked()
+        self._end_viewers_locked()
+
+    async def _best_effort_stop_bound_locked(self) -> None:
+        """Stop whatever producer is bound, swallowing any failure.
+
+        Shared by the two paths that must not let a doomed Playwright call
+        block cleanup: full termination (``_terminate_producer_after_close``)
+        and a single-viewer removal that discovers the session already
+        closed underneath it (``_remove_viewer_after_close_locked``).
+        """
+        if not self._started:
+            return
+        self._started = False
         page = self._bound_page
         self._bound_page = None
         if page is None:
@@ -266,6 +255,116 @@ class ScreencastManager:
                 instance_id=self._instance_id,
                 error=repr(exc),
             )
+
+    async def remove_viewer(self, viewer: ScreencastViewer) -> None:
+        try:
+            async with self._session.operation("screencast_stop"), self._lock:
+                await self._remove_viewer_locked(viewer)
+        except (SessionClosingError, SessionClosedError):
+            # The session can close out from under a still-attached viewer
+            # (e.g. the dashboard was open when the browser closed) -- the
+            # gate correctly refuses a fresh "screencast_stop" lease at that
+            # point, but the manager/viewer bookkeeping still has to happen,
+            # or this viewer is stranded in ``self._viewers`` forever and the
+            # manager can never be reclaimed by ``release_viewer``/
+            # ``_drop_empty_manager``. Fall back to the same lock-only,
+            # best-effort teardown ``terminate()`` uses once the session is
+            # gone, instead of the raise-on-failure semantics that only make
+            # sense while the session is still reachable.
+            async with self._lock:
+                await self._remove_viewer_after_close_locked(viewer)
+
+    async def _remove_viewer_locked(self, viewer: ScreencastViewer) -> None:
+        if viewer not in self._viewers:
+            return
+
+        if len(self._viewers) > 1:
+            self._viewers.remove(viewer)
+            return
+
+        if not self._started:
+            self._viewers.remove(viewer)
+            await self._stop_recovery_watcher_locked()
+            return
+
+        # Sole caller (remove_viewer) already holds this lease; re-enters it (a nested method is its own scope).
+        async with self._session.operation("screencast_stop"):
+            bound = self._bound_page if self._bound_page is not None else self._session.page
+            stop_error: BaseException | None = None
+            try:
+                await bound.screencast.stop()
+            except BaseException as exc:
+                stop_error = exc
+            finally:
+                self._started = False
+                self._bound_page = None
+                self._viewers.remove(viewer)
+                await self._stop_recovery_watcher_locked()
+        if stop_error is not None:
+            raise stop_error
+
+    async def _remove_viewer_after_close_locked(self, viewer: ScreencastViewer) -> None:
+        if viewer not in self._viewers:
+            return
+        self._viewers.remove(viewer)
+        if not self._viewers:
+            await self._best_effort_stop_bound_locked()
+            await self._stop_recovery_watcher_locked()
+
+    def _handle_frame(self, frame: Mapping[str, object]) -> None:
+        # Deliberately does not acquire the session operation gate: this runs
+        # on every delivered frame from an already-started producer and must
+        # never serialize against unrelated session work.
+        data = frame.get("data")
+        if not isinstance(data, bytes):
+            return
+
+        self.latest = data
+        for viewer in tuple(self._viewers):
+            viewer.offer(data)
+
+    async def _start_owned_locked(self, page: _ScreencastPage) -> None:
+        # Subscribe first: ``screencast.start`` awaits the Playwright channel, so
+        # a session close landing during that await would be dropped by the bus
+        # if we only subscribed afterwards.
+        await self._ensure_recovery_watcher_locked()
+        try:
+            async with self._session.operation("screencast_start"):
+                await page.screencast.start(
+                    on_frame=self._handle_frame,
+                    quality=self._quality,
+                )
+        except BaseException:
+            if not self._viewers:
+                await self._stop_recovery_watcher_locked()
+            raise
+        self._started = True
+        self._bound_page = page
+
+    async def _stop_bound_owned_locked(self) -> None:
+        """Best-effort stop of the currently bound producer.
+
+        Called when the producer moves to another page (a live rebind), so
+        the old page's encoder does not keep running (and keep pushing frames)
+        for the rest of its life. The page may be crashed or closing, hence the
+        timeout and the swallow. Wraps only the Playwright call in the session
+        operation lease so a standalone caller (a test exercising this helper
+        directly) is still refused once the gate is closing/closed, rather
+        than the failure being folded into the same best-effort swallow.
+        """
+        page = self._bound_page
+        self._bound_page = None
+        if page is None:
+            return
+        async with self._session.operation("screencast_stop"):
+            try:
+                await asyncio.wait_for(page.screencast.stop(), timeout=_STOP_TIMEOUT_SECONDS)
+            except Exception as exc:
+                log.debug(
+                    "octowright.screencast.stop_bound_failed",
+                    instance_id=self._instance_id,
+                    error=repr(exc),
+                )
 
     def _end_viewers_locked(self) -> None:
         for viewer in tuple(self._viewers):
@@ -355,8 +454,28 @@ async def acquire_viewer(
         _pending_acquires[instance_id] = _pending_acquires.get(instance_id, 0) + 1
 
     viewer: ScreencastViewer | None = None
+    # ``add_viewer`` is now gated: even after its body finishes successfully,
+    # releasing the session operation lease is itself a real await (shielded
+    # internally so the release completes cleanly), so a caller cancellation
+    # landing in that narrow window still surfaces here as CancelledError --
+    # AFTER the viewer already exists. Run it as its own task so its outcome
+    # can be recovered instead of leaking a live producer nobody has a handle
+    # to release just because this call merely *looked* like it failed.
+    add_task: asyncio.Task[ScreencastViewer] = asyncio.create_task(manager.add_viewer(fps=fps))
     try:
-        viewer = await manager.add_viewer(fps=fps)
+        try:
+            viewer = await asyncio.shield(add_task)
+        except asyncio.CancelledError:
+            # This repo's MCP server runs under anyio, whose cancel scopes
+            # keep re-delivering CancelledError at every checkpoint until
+            # their `with` block exits -- a single re-await (even shielded)
+            # only survives ONE such redelivery and would abandon `add_task`
+            # mid-flight on a second. `_join_after_cancellation` loops and
+            # `uncancel()`s until `add_task` is genuinely done, however many
+            # times this task is re-cancelled while waiting for it.
+            with suppress(Exception):  # a genuine add_viewer failure still loses to the cancel
+                viewer = await _join_after_cancellation(add_task)
+            raise
         await _finish_acquire(instance_id, manager, cleanup_empty=False)
     except BaseException:
         try:

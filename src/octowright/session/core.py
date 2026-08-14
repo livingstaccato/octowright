@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, LiteralString
 from weakref import WeakSet
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
@@ -17,12 +19,20 @@ from playwright.async_api import Browser, BrowserContext, Page, Video
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
+from octowright.session.core_expect_mixin import SessionExpectMixin
 from octowright.session.core_interaction_mixin import SessionInteractionMixin
 from octowright.session.core_io_mixin import SessionIOMixin
 from octowright.session.core_locator_mixin import SessionLocatorMixin
 from octowright.session.core_network_mixin import SessionNetworkMixin
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
+from octowright.session.operation_gate import (
+    USE_DEFAULT,
+    OperationGateSnapshot,
+    SessionOperationGate,
+    UseDefault,
+    resolve_operation_queue_timeout_seconds,
+)
 
 # ``DEFAULT_PREVIEW_CHARS`` is the public preview cap, re-exported via
 # ``session.__init__`` and used by server/browser tools. Defined in
@@ -52,6 +62,7 @@ if TYPE_CHECKING:  # pragma: no cover - import-time-only assertion
 @dataclass
 class BrowserSession(
     SessionIOMixin,
+    SessionExpectMixin,
     SessionPageMixin,
     SessionOpsMixin,
     SessionNetworkMixin,
@@ -139,6 +150,14 @@ class BrowserSession(
     _on_page_close: Callable[..., None] | None = field(default=None, repr=False)
     _on_page_crash: Callable[..., None] | None = field(default=None, repr=False)
     _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
+    # Installed by ``launch_pipeline._build_session_object`` before registry
+    # publication so ``BrowserSession.close()`` routes through the pool's
+    # durable close coordinator instead of tearing down directly. ``None`` for
+    # a session constructed outside a pool (tests only -- see
+    # ``SessionOpsMixin.close``'s standalone fallback), which then owns its
+    # own reservation via ``_standalone_close_task``.
+    _pool_close_requester: Callable[[], Awaitable[Any]] | None = field(default=None, repr=False)
+    _standalone_close_task: asyncio.Task[None] | None = field(default=None, repr=False)
     # Set True by the page.on("crash") listener; lets eviction report a definite
     # crash (reason="crashed") instead of an ambiguous external close. Cleared
     # again when crash_recovery successfully reloads the page.
@@ -152,8 +171,15 @@ class BrowserSession(
     download_count: int = 0
     page_count: int = 1
     started_at: str = ""
+    operation_queue_timeout_seconds: float | None = field(default=None, repr=False)
+    _operation_gate: SessionOperationGate = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self._operation_gate = SessionOperationGate(
+            self.instance_id,
+            self.kind,
+            queue_timeout_seconds=resolve_operation_queue_timeout_seconds(self.operation_queue_timeout_seconds),
+        )
         if self._browser_for_close is None and self.browser is not None:
             self._browser_for_close = self.browser
         if self.page not in self.pages:
@@ -172,3 +198,27 @@ class BrowserSession(
 
     def _websocket_cache_path(self) -> Path:
         return self.log_path.with_suffix(".websocket.jsonl")
+
+    def operation(
+        self,
+        operation_name: LiteralString,
+        *,
+        wait_timeout_seconds: float | UseDefault | None = USE_DEFAULT,
+    ) -> AbstractAsyncContextManager[None]:
+        return self._operation_gate.operation(operation_name, wait_timeout_seconds=wait_timeout_seconds)
+
+    def operation_snapshot(self) -> OperationGateSnapshot:
+        return self._operation_gate.snapshot()
+
+    async def set_protected_state(
+        self,
+        protected: bool,
+        *,
+        reason: str = "explicit",
+    ) -> dict[str, object]:
+        def _commit() -> dict[str, object]:
+            self.protected = protected
+            self.protected_reason = reason
+            return {"instance_id": self.instance_id, "protected": protected}
+
+        return await self._operation_gate.control_update("browser_set_protected", _commit)

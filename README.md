@@ -273,6 +273,24 @@ identity is worth metadata and credential references. A scenario when you
 need N coordinated browsers as a single unit. The dashboard whenever you
 want to *see* what's happening rather than ask your MCP client.
 
+**Operation ordering.** Every browser session serializes its own operations
+FIFO — a second tool call, a background capture, or a queued macro action
+against the same `instance_id` waits its turn instead of racing the one in
+flight, and one macro (or macro sequence, or artifact replay) holds its
+browser for the whole run so a manual action can't land mid-sequence.
+Different sessions never wait on each other. A queued operation gives up
+after `OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS` (default 300s, see
+[Configuration](#configuration)) and fails with a plain tool error — it never
+takes down the MCP connection or another browser. Closing a session drains
+whatever is already queued, then rejects anything new; if the browser or page
+closes out from under an in-flight call instead, that call still fails
+cleanly and any still-queued work is released with a session-closed error.
+Embedders driving `BrowserSession` directly: `list_pages()`, `list_frames()`,
+and `set_dialog_policy()` are `async` now and must be awaited, and a session
+should be torn down through `BrowserPool.close()` rather than closing the
+underlying Playwright objects directly so the drain/reject behavior above
+still applies.
+
 ## Tools
 
 Every mutating tool takes an `instance_id` returned from `browser_launch`. Each call
@@ -628,7 +646,9 @@ On Windows, config uses `%APPDATA%\octowright\`, while state and cache use
 | `OCTOWRIGHT_LIVE_SCREENCAST_FPS` | `10` | Positive integer cap for backend live-preview stream FPS and requested frontend `fps`. |
 | `OCTOWRIGHT_LIVE_SCREENCAST_QUALITY` | `70` | JPEG quality for live-preview frames, clamped to `1..100`. |
 | `OCTOWRIGHT_LIVE_SCREENCAST_FULLSCREEN_MODE` | `native` | Live-preview fullscreen behavior: `native` browser fullscreen or `panel` in-page fullscreen. |
-| `OCTOWRIGHT_IDLE_GRACE` | `300` | Seconds before auto-exit when the browser pool is empty. Use `--keep-alive` to disable. |
+| `OCTOWRIGHT_IDLE_GRACE` | unset (off) | Seconds before auto-exit when the browser pool is empty. Off by default — the daemon stays up until an explicit `octowright restart`. Set a positive number to opt in; `--keep-alive` force-disables it. |
+| `OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS` | `300` | How long a queued operation waits its turn on a busy browser session before failing with a tool error (see [Operation ordering](#concepts-how-the-pieces-relate)). Separate from any Playwright action/navigation timeout. Must be positive, finite seconds. Embedders can override per-`BrowserPool` via `operation_queue_timeout_seconds=`, which takes precedence over this variable. |
+| `OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS` | `8` | Much shorter budget the dashboard's own read-only session views (live screenshot, aria snapshot, selector validate) wait on a busy session's gate before failing fast, independent of the MCP tool timeout above. |
 
 ## CLI
 

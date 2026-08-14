@@ -27,6 +27,11 @@ from octowright.session.core_ops_mixin import (
     SessionOpsMixin,
     _timestamp,
 )
+from tests._operation_gate_fakes import OperationAwareFake
+
+
+class _OpsFake(OperationAwareFake, SessionOpsMixin):
+    """Real-gate fake: diagnostic_bundle and its capture helpers are decorated."""
 
 
 class _Recorder:
@@ -42,7 +47,7 @@ class _Recorder:
 
 
 def _build(tmp_path: Path, *, page: Any = None, context: Any = None, **overrides: Any) -> SessionOpsMixin:
-    inst = SessionOpsMixin.__new__(SessionOpsMixin)
+    inst = _OpsFake()
     inst.page = page if page is not None else MagicMock()
     inst.context = context if context is not None else MagicMock()
     inst.browser = None

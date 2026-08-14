@@ -17,6 +17,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState, dashboard_access_ok
 from octowright.http.routes import screencast as scr
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 class FakeScreencast:
@@ -37,11 +38,12 @@ class FakePage:
         self.screencast = FakeScreencast()
 
 
-class FakeSession:
+class FakeSession(OperationAwareFake):
     instance_id = "ws1"
     kind = "chromium"
 
     def __init__(self) -> None:
+        super().__init__()
         self.page = FakePage()
 
 

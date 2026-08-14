@@ -125,7 +125,7 @@ def _live_summary(session: Any) -> dict[str, Any]:
     if not started_at:
         launch = _read_first_launch(log_path) if log_path.exists() else None
         started_at = (launch or {}).get("ts") or _iso(time.time())
-    return {
+    summary: dict[str, Any] = {
         "id": session.instance_id,
         "kind": session.kind,
         "label": session.label,
@@ -139,6 +139,38 @@ def _live_summary(session: Any) -> dict[str, Any]:
         "console_count": int(getattr(session, "console_count", len(getattr(session, "console", ())))),
         "download_count": int(getattr(session, "download_count", len(getattr(session, "downloads", ())))),
         "page_count": int(getattr(session, "page_count", len(getattr(session, "pages", ()) or (1,)))),
+    }
+    # Terminal sessions carry no operation gate -- only add the key when the
+    # object actually supplies one, rather than fabricating an idle default.
+    snapshot = getattr(session, "operation_snapshot", None)
+    if callable(snapshot):
+        summary["operation_gate"] = snapshot()
+    return summary
+
+
+def _live_summary_from_launch(result: dict[str, Any]) -> dict[str, Any]:
+    """Build a SessionSummary-shaped dict for the response of POST /api/sessions.
+
+    The shape mirrors ``_live_summary()`` so dashboard code that consumes
+    ``GET /api/sessions``'s ``live[]`` entries can reuse the same parser for
+    the launch response.
+    """
+    log_path = Path(result["log_path"])
+    started_at = _iso(log_path.stat().st_ctime) if log_path.exists() else _iso(time.time())
+    return {
+        "id": result["instance_id"],
+        "kind": result["kind"],
+        "label": result.get("label"),
+        "profile": result.get("profile"),
+        "url": result.get("url"),
+        "started_at": started_at,
+        "live": True,
+        "protected": result.get("protected", False),
+        "log_path": str(log_path),
+        "event_count": 1,  # launch event is written before HTTP response
+        "console_count": 0,
+        "download_count": 0,
+        "page_count": 1,
     }
 
 

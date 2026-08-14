@@ -21,6 +21,7 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
 	uv run --active python scripts/check_spdx_headers.py
 	uv run --active python scripts/check_max_loc.py
+	uv run --active python scripts/check_operation_gate_architecture.py
 	uv run --active python scripts/check_agent_docs_sync.py
 	uv run --active python scripts/check_telemetry_docs.py
 	uv run --active python scripts/check_vulture.py

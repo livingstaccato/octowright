@@ -18,7 +18,7 @@ Octowright sends a JSON-RPC push notification to the MCP client whenever a brows
   "kind": "chromium",
   "label": "user-label-or-null",
   "profile": "persona-name-or-null",
-  "reason": "agent_close | user_close | external_disconnect | shutdown",
+  "reason": "agent_close | user_close | external_disconnect | crashed | shutdown",
   "log_path": "/path/to/session.jsonl"
 }
 ```
@@ -27,7 +27,8 @@ Octowright sends a JSON-RPC push notification to the MCP client whenever a brows
 - `agent_close` — you called `browser_close` or `browser_close_all`.
 - `user_close` — the human closed the window (or browser process exited cleanly). Playwright doesn't reliably distinguish "user clicked X" from a clean exit; both arrive as `user_close`.
 - `shutdown` — daemon exiting (idle watchdog, SIGTERM, `octowright restart`).
-- `external_disconnect` — reserved; not emitted today.
+- `external_disconnect` — the browser process disappeared without an explicit close call, including a session lost to a shared-driver death.
+- `crashed` — renderer-crash recovery was exhausted for this session.
 
 **What to do on receipt:**
 1. Remove `instance_id` from any local tracking (open tabs, active macros, etc.).

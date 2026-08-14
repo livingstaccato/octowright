@@ -42,6 +42,18 @@ def _memory_status(sysresources_mod: Any) -> dict[str, Any]:
     }
 
 
+def _pool_session_figures(rows: list[dict[str, Any]]) -> tuple[int, int, list[dict[str, Any]]]:
+    """Derive live_browsers/protected_browsers/operation_gates from ONE
+    pool.list_sessions() snapshot — never a second Page/Frame-driven read.
+    Extracted from octowright_status to keep its complexity under the gate."""
+    live_browsers = len(rows)
+    protected_browsers = sum(1 for row in rows if row.get("protected"))
+    operation_gates = [
+        {"instance_id": row["instance_id"], "kind": row["kind"], **row["operation_gate"]} for row in rows
+    ]
+    return live_browsers, protected_browsers, operation_gates
+
+
 def _compute_health(health_mod: Any, incidents_mod: Any, crash_recovery_mod: Any) -> dict[str, Any]:
     """Roll the stability signals into one verdict and log loudly when degraded,
     so the operator doesn't have to be watching status to notice instability.
@@ -269,6 +281,11 @@ def octowright_status() -> dict[str, Any]:
     stale_count = len(stale_sessions)
     stale_preview = stale_sessions[:_STATUS_STALE_LIMIT]
 
+    # One shared snapshot for every derived pool figure below -- live_browsers,
+    # protected_browsers, and operation_gates all read the SAME rows rather than
+    # each re-deriving state (and racing) against the live session table.
+    live_browsers, protected_browsers, operation_gates = _pool_session_figures(pool.list_sessions())
+
     raw_profile = defaults.active_profile_raw()
     profile_filter = active_filter()
     if profile_filter is None:
@@ -319,8 +336,8 @@ def octowright_status() -> dict[str, Any]:
             "badge_position_default": "bottom-right",
         },
         "pool": {
-            "live_browsers": pool.active_count(),
-            "protected_browsers": pool.protected_count(),
+            "live_browsers": live_browsers,
+            "protected_browsers": protected_browsers,
             # Pool-wide concurrent-browser cap (shared across all MCP clients).
             # null when disabled (OCTOWRIGHT_MAX_BROWSERS=off). When live_browsers
             # nears browser_cap, user-facing launches will start refusing.
@@ -345,6 +362,9 @@ def octowright_status() -> dict[str, Any]:
             "stale_manifest_sessions": stale_preview,
             "stale_manifest_count": stale_count,
             "stale_manifest_list_truncated": stale_count > len(stale_preview),
+            # Per-browser operation-gate state (busy/queue/closing/broken), reused
+            # verbatim from list_sessions() rows -- no separate Page/Frame read.
+            "operation_gates": operation_gates,
         },
         # Renderer-crash + auto-recovery tallies (process-lifetime). Lets the
         # operator/LLM see that "random crashes" are happening and whether they

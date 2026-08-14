@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderSessionTable } from "./session-table.js";
-import type { SessionSummary } from "./types.js";
+import type { OperationGateSnapshot, SessionSummary } from "./types.js";
 
 const row: SessionSummary = {
   id: "s/1",
@@ -11,6 +11,15 @@ const row: SessionSummary = {
   started_at: "bad-date",
   live: false,
   log_path: "s1.jsonl",
+};
+
+const IDLE_GATE: OperationGateSnapshot = {
+  state: "open",
+  active_operation: null,
+  active_for_ms: null,
+  queue_depth: 0,
+  oldest_wait_ms: null,
+  queue_timeout_seconds: 300,
 };
 
 describe("renderSessionTable", () => {
@@ -56,5 +65,44 @@ describe("renderSessionTable", () => {
 
     expect(onRelaunch).toHaveBeenCalledWith("s/1");
     expect(onDelete).toHaveBeenCalledWith("s/1");
+  });
+
+  it("shows busy operation and queue depth", () => {
+    const actions = { onRelaunch: vi.fn(), onDelete: vi.fn() };
+    const table = renderSessionTable(
+      [
+        {
+          ...row,
+          live: true,
+          operation_gate: {
+            state: "open",
+            active_operation: "macro_run",
+            active_for_ms: 1250,
+            queue_depth: 2,
+            oldest_wait_ms: 900,
+            queue_timeout_seconds: 300,
+          },
+        },
+      ],
+      true,
+      actions,
+    );
+    expect(table.querySelector(".operation-badge")?.textContent).toBe("busy macro_run +2");
+  });
+
+  it.each(["closing", "broken"] as const)("shows %s state", (state) => {
+    const actions = { onRelaunch: vi.fn(), onDelete: vi.fn() };
+    const table = renderSessionTable([{ ...row, live: true, operation_gate: { ...IDLE_GATE, state } }], true, actions);
+    expect(table.querySelector(`.operation-badge--${state}`)?.textContent).toBe(state);
+  });
+
+  it("is quiet for idle browsers, closed rows, and terminals", () => {
+    const actions = { onRelaunch: vi.fn(), onDelete: vi.fn() };
+    const rows: SessionSummary[] = [
+      { ...row, live: true, operation_gate: IDLE_GATE },
+      { ...row, id: "closed", live: false, operation_gate: { ...IDLE_GATE, state: "closed" as const } },
+      { ...row, id: "terminal", kind: "terminal" as const, live: true },
+    ];
+    expect(renderSessionTable(rows, true, actions).querySelector(".operation-badge")).toBeNull();
   });
 });

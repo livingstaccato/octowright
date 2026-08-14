@@ -31,7 +31,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from octowright.session.core_expect_mixin import SessionExpectMixin
 from octowright.session.core_page_mixin import SessionPageMixin
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture
@@ -39,9 +41,16 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def _make_subject(tmp_path: Path) -> SessionPageMixin:
-    """Build a SessionPageMixin instance with the attributes navigate/* read."""
-    subj = SessionPageMixin.__new__(SessionPageMixin)
+class _CombinedMixin(OperationAwareFake, SessionExpectMixin, SessionPageMixin):
+    """expect_* now lives on SessionExpectMixin; wait_for (SessionPageMixin)
+    calls the inherited _poll_until, so tests exercising either need both.
+    Inherits OperationAwareFake for a real gate -- every navigate/click/fill/
+    wait_for/etc. call below runs through a decorated method."""
+
+
+def _make_subject(tmp_path: Path) -> _CombinedMixin:
+    """Build a combined-mixin instance with the attributes navigate/* read."""
+    subj = _CombinedMixin()
     subj._last_mcp_navigation = None
     page = MagicMock()
     page.url = "https://octowright.com"
@@ -324,9 +333,9 @@ def _make_action_locator(snapshot: str = "", input_type: str = "text") -> MagicM
     return locator
 
 
-def _make_redaction_subject(tmp_path: Path, input_type: str | None) -> SessionPageMixin:
+def _make_redaction_subject(tmp_path: Path, input_type: str | None) -> _CombinedMixin:
     """Reusable subject builder for redaction tests."""
-    subj = SessionPageMixin.__new__(SessionPageMixin)
+    subj = _CombinedMixin()
     subj._last_mcp_navigation = None
     subj.page = MagicMock()
     subj.pages = [subj.page]
@@ -759,7 +768,7 @@ class TestExpectUrl:
 
 
 class TestExpectText:
-    def _setup(self, tmp_path: Path, *, inner_text: str = "hello") -> SessionPageMixin:
+    def _setup(self, tmp_path: Path, *, inner_text: str = "hello") -> _CombinedMixin:
         subj = _make_subject(tmp_path)
         target = MagicMock()
         element = MagicMock()
@@ -976,23 +985,25 @@ class TestExpectJs:
 
 
 class TestListPagesEdgeCases:
-    def test_list_pages_url_attribute_failure_yields_none(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_list_pages_url_attribute_failure_yields_none(self, tmp_path: Path) -> None:
         """If page.url raises, that page's url is None (not propagated)."""
         subj = _make_subject(tmp_path)
         bad = MagicMock()
         type(bad).url = property(lambda _self: (_ for _ in ()).throw(RuntimeError("no url")))
         subj.pages = [subj.page, bad]
-        result = subj.list_pages()
+        result = await subj.list_pages()
         assert result[0]["url"] == "https://octowright.com"
         assert result[1]["url"] is None
 
-    def test_list_pages_marks_active_correctly(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_list_pages_marks_active_correctly(self, tmp_path: Path) -> None:
         """is_active is True iff p is self.page."""
         subj = _make_subject(tmp_path)
         p2 = MagicMock()
         p2.url = "https://second"
         subj.pages = [subj.page, p2]
-        result = subj.list_pages()
+        result = await subj.list_pages()
         assert result[0]["is_active"] is True
         assert result[1]["is_active"] is False
 

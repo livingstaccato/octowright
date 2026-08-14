@@ -100,9 +100,10 @@ def test_register_popup_attaches_console_listener(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_pages_initial_shape(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_list_pages_initial_shape(tmp_path: Path) -> None:
     session = _make_session(tmp_path, url="https://initial.octowright.com")
-    pages = session.list_pages()
+    pages = await session.list_pages()
 
     assert len(pages) == 1
     assert pages[0]["index"] == 0
@@ -111,12 +112,13 @@ def test_list_pages_initial_shape(tmp_path: Path) -> None:
     assert "title" in pages[0]
 
 
-def test_list_pages_is_active_correct_after_popup(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_list_pages_is_active_correct_after_popup(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
     popup = _make_page("https://popup.octowright.com")
     session._register_popup(popup)
 
-    pages = session.list_pages()
+    pages = await session.list_pages()
     assert len(pages) == 2
     # Initial page (0) is still active.
     assert pages[0]["is_active"] is True
@@ -156,7 +158,7 @@ async def test_switch_page_is_active_reflects_new_selection(tmp_path: Path) -> N
     session._register_popup(popup)
 
     await session.switch_page(1)
-    pages = session.list_pages()
+    pages = await session.list_pages()
 
     assert pages[0]["is_active"] is False
     assert pages[1]["is_active"] is True
@@ -184,13 +186,22 @@ async def test_switch_page_rebinds_a_live_screencast(tmp_path: Path, monkeypatch
     assert calls == [("test-abc", popup)]
 
 
+async def _wait_for_queue_depth(session: BrowserSession, depth: int) -> None:
+    async with asyncio.timeout(1):
+        while session._operation_gate.snapshot()["queue_depth"] != depth:
+            await asyncio.sleep(0)
+
+
 @pytest.mark.anyio
-async def test_overlapping_switches_record_and_return_their_selected_pages(
+async def test_overlapping_switches_serialize_and_each_returns_its_own_page(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A slow screencast rebind must not let a later switch replace the page
-    used in the earlier switch's recording and response."""
+    """The operation gate now serializes page_switch calls: a slow screencast
+    rebind for the first switch holds the gate, so a second switch queues
+    behind it instead of interleaving -- eliminating the race this test used
+    to pin defensively (the earlier switch's recording/response could not be
+    corrupted by a later one racing ahead of it)."""
     from octowright.session import core_page_mixin
 
     first_rebind_started = asyncio.Event()
@@ -211,9 +222,14 @@ async def test_overlapping_switches_record_and_return_their_selected_pages(
 
     first_switch = asyncio.create_task(session.switch_page(1))
     await first_rebind_started.wait()
-    second_result = await session.switch_page(2)
+
+    second_switch = asyncio.create_task(session.switch_page(2))
+    # The second call queues behind the first (still blocked inside the
+    # slow rebind) instead of running concurrently.
+    await _wait_for_queue_depth(session, 1)
+
     release_first_rebind.set()
-    first_result = await first_switch
+    first_result, second_result = await asyncio.gather(first_switch, second_switch)
 
     assert session.page is second_popup
     assert first_result == {

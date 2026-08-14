@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from octowright import conditional as _cond
+from tests._operation_gate_fakes import OperationAwareFake
 
 # ---------------------------------------------------------------------------
 # stubs
@@ -49,14 +50,18 @@ class _StubPage:
         return _StubLocator(attached=selector in self._attached)
 
 
-class _StubSession:
+class _StubSession(OperationAwareFake):
     def __init__(self, page: _StubPage) -> None:
+        super().__init__()
         self.page = page
         self.records: list[tuple[str, dict[str, Any]]] = []
         self.recorder = self  # self-as-recorder; .record is below.
 
     def record(self, action: str, **fields: Any) -> None:
         self.records.append((action, fields))
+
+    def _target(self) -> _StubPage:
+        return self.page
 
 
 def _capturing_dispatch() -> tuple[
@@ -97,13 +102,15 @@ def _dispatch_factory_failing(failing_action_kinds: set[str]) -> Callable[..., A
 @pytest.mark.asyncio
 async def test_selector_present_true_when_attached() -> None:
     page = _StubPage(attached_selectors={".modal"})
-    assert await _cond.selector_present(page, ".modal", timeout_ms=500) is True
+    session = _StubSession(page)
+    assert await _cond.selector_present(session, ".modal", timeout_ms=500) is True
 
 
 @pytest.mark.asyncio
 async def test_selector_present_false_on_timeout() -> None:
     page = _StubPage(attached_selectors=set())
-    assert await _cond.selector_present(page, ".missing", timeout_ms=10) is False
+    session = _StubSession(page)
+    assert await _cond.selector_present(session, ".missing", timeout_ms=10) is False
 
 
 @pytest.mark.asyncio
@@ -114,7 +121,8 @@ async def test_selector_present_false_on_any_exception() -> None:
         def locator(self, selector: str) -> Any:
             return _StubLocator(attached=False, raise_kind=ValueError)
 
-    assert await _cond.selector_present(_BoomPage(), ".x", timeout_ms=10) is False
+    session = _StubSession(_BoomPage())
+    assert await _cond.selector_present(session, ".x", timeout_ms=10) is False
 
 
 # ---------------------------------------------------------------------------

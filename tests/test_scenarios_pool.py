@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from octowright.scenarios_pool import LiveScenario, ScenarioPool, _apply_fixtures, _run_startup_macros
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @dataclass
@@ -42,7 +43,7 @@ class _Session:
     async def mock_route(self, pattern: str, **kwargs):
         self.routes.append(pattern)
 
-    def set_dialog_policy(self, policy: str):
+    async def set_dialog_policy(self, policy: str):
         self.dialogs.append(policy)
 
 
@@ -426,6 +427,92 @@ async def test_wait_for_sync_reports_terminal_as_unsupported() -> None:
     ws = await sp.wait_for_sync(scenario_id="mix", browser_pool=_Pool(), role="operator", selector="#x")
     assert ws["results"][0]["ok"] is False
     assert "browser sync" in ws["results"][0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# Task 10: the url= branch of wait_for_sync gates per-session, not scenario-wide
+# ---------------------------------------------------------------------------
+
+
+class _UrlGatedSession(OperationAwareFake):
+    """Real-gate session fake for the url= branch: ``page.url`` plus a
+    ``page.wait_for_url`` that records its calls."""
+
+    def __init__(self, instance_id: str, url: str) -> None:
+        self.instance_id = instance_id
+        super().__init__()
+        self.wait_for_url_calls: list[str] = []
+        self.page = SimpleNamespace(url=url, wait_for_url=self._wait_for_url)
+
+    async def _wait_for_url(self, url: str, *, timeout: int) -> None:
+        self.wait_for_url_calls.append(url)
+
+    async def wait_for(self, selector=None, text=None, timeout_ms=None):
+        return None
+
+
+class _TwoSessionPool:
+    def __init__(self, sessions: dict[str, _UrlGatedSession]) -> None:
+        self._sessions = sessions
+
+    def get(self, instance_id: str) -> _UrlGatedSession:
+        return self._sessions[instance_id]
+
+
+@pytest.mark.anyio
+async def test_wait_for_sync_url_branch_gates_per_session_not_scenario_wide() -> None:
+    """Each participant's url= wait wraps ONLY its own body in
+    ``session.operation("scenario_wait_for_sync")`` -- holding one
+    participant's gate open under an unrelated operation must not block a
+    DIFFERENT participant's wait_for_sync, proving there is no scenario-wide
+    lease serializing participants against each other."""
+    import asyncio
+
+    session_a = _UrlGatedSession("a", "https://one.test/old")
+    session_b = _UrlGatedSession("b", "https://two.test/old")
+    pool = _TwoSessionPool({"a": session_a, "b": session_b})
+
+    sp = ScenarioPool()
+    live = LiveScenario(
+        scenario_id="parallel",
+        name="parallel",
+        spec=_Spec("parallel", [_ParticipantSpec("cosmo", "r1"), _ParticipantSpec("ziggy", "r2")], fixtures={}),
+        participants=[
+            {"instance_id": "a", "persona": "cosmo", "role": "r1", "kind": "chromium", "log_path": "a.log"},
+            {"instance_id": "b", "persona": "ziggy", "role": "r2", "kind": "chromium", "log_path": "b.log"},
+        ],
+    )
+    sp._live[live.scenario_id] = live
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold_a() -> None:
+        async with session_a.operation("unrelated"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold_a())
+    await entered.wait()
+
+    sync_task = asyncio.create_task(sp.wait_for_sync(scenario_id="parallel", browser_pool=pool, url="sync-target"))
+
+    async with asyncio.timeout(1):
+        while not session_b.wait_for_url_calls:
+            await asyncio.sleep(0)
+
+    # "b" completed its url wait while "a" is still blocked holding its own
+    # gate -- a scenario-wide lease would have made "b" queue too.
+    assert not holder.done()
+    assert session_a.wait_for_url_calls == []
+
+    release.set()
+    result = await asyncio.wait_for(sync_task, timeout=1.0)
+    await holder
+
+    assert {row["instance_id"]: row["ok"] for row in result["results"]} == {"a": True, "b": True}
+    assert session_a.wait_for_url_calls == ["sync-target"]
+    assert session_b.wait_for_url_calls == ["sync-target"]
 
 
 def test_remap_terminal_participant_uses_terminal_pool() -> None:

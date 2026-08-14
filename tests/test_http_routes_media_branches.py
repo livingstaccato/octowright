@@ -28,6 +28,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from octowright.http import state as _http_state
+from octowright.session.operation_gate import SessionOperationGate
 
 # Reuse fixtures from the existing http test module so we don't fork the
 # fake-pool plumbing.
@@ -48,8 +49,12 @@ def _live_session(log_path: Path, **overrides: Any) -> SimpleNamespace:
     """Build a fake live BrowserSession that the http routes treat as live."""
     page = MagicMock()
     page.screenshot = AsyncMock(return_value=b"\x89PNG-mock")
+    instance_id = overrides.get("instance_id", log_path.stem.split("-")[-1])
+    # A real gate (not a MagicMock) — session_screenshot_now/dashboard_session_detail
+    # await `.operation(...)` as an async context manager.
+    gate = SessionOperationGate(instance_id, "chromium", queue_timeout_seconds=30)
     base = SimpleNamespace(
-        instance_id=overrides.get("instance_id", log_path.stem.split("-")[-1]),
+        instance_id=instance_id,
         kind="chromium",
         label=None,
         profile=None,
@@ -67,10 +72,33 @@ def _live_session(log_path: Path, **overrides: Any) -> SimpleNamespace:
         download_count=0,
         page_count=1,
         page=page,
+        operation=gate.operation,
+        operation_snapshot=gate.snapshot,
+        _test_operation_gate=gate,
     )
     for key, value in overrides.items():
         setattr(base, key, value)
     return base
+
+
+class _RaisingOperation:
+    """A ``.operation()`` replacement whose entry raises immediately --
+    proves a route's exception handler maps this specific gate error. A
+    plain class (not ``@asynccontextmanager``) so there's no syntactically-
+    required-but-unreachable ``yield`` after the ``raise`` for vulture to
+    (correctly) flag as dead code."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def __call__(self, _name: str, *, wait_timeout_seconds: object = None) -> _RaisingOperation:
+        return self
+
+    async def __aenter__(self) -> None:
+        raise self._exc
+
+    async def __aexit__(self, *_args: object) -> bool:
+        return False
 
 
 # ─── /screenshot/now ────────────────────────────────────────────────────────
@@ -245,6 +273,148 @@ class TestScreenshotNow:
         r = client.get("/api/sessions/liveasync01/screenshot/now")
         assert r.status_code == 200
         assert r.content == b"\x89PNG-async"
+
+
+@pytest.mark.anyio
+async def test_live_screenshot_waits_for_session_gate(
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    """A concurrent dashboard_screenshot request must queue behind an
+    already-held session operation instead of racing it -- proving
+    session_screenshot_now's ``async with live.operation("dashboard_screenshot")``
+    boundary is real, not a no-op wrapper around an already-unguarded call."""
+    import asyncio
+    from types import SimpleNamespace as _SimpleNamespace
+
+    from octowright.http.routes import media as _media
+
+    log_path = isolated_recordings / "20260101T000000Z-chromium-gatewait0001.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    session = _live_session(log_path, instance_id="gatewait0001")
+    empty_pool["pool"]._sessions["gatewait0001"] = session
+
+    async with session.operation("owner"):
+        request = _SimpleNamespace(path_params={"id": "gatewait0001"}, query_params={})
+        response_task = asyncio.create_task(_media.session_screenshot_now(request))
+
+        async with asyncio.timeout(1):
+            while session.operation_snapshot()["queue_depth"] != 1:
+                await asyncio.sleep(0)
+        session.page.screenshot.assert_not_awaited()
+
+    response = await asyncio.wait_for(response_task, timeout=1.0)
+    assert response.status_code == 200
+    session.page.screenshot.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_live_screenshot_gate_busy_times_out_fast_not_300s(
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dashboard_screenshot must fail fast on a busy gate instead of
+    inheriting the operation gate's 300s MCP-tool default -- a human
+    watching the dashboard needs a legible failure, not a silent multi-
+    minute stall. Overrides the dashboard timeout down to make the real
+    gate's timeout path exercisable in a fast test without waiting out the
+    real default."""
+    import asyncio
+    import time
+    from types import SimpleNamespace as _SimpleNamespace
+
+    from octowright.http.routes import media as _media
+
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS", "0.05")
+
+    log_path = isolated_recordings / "20260101T000000Z-chromium-gatebusy0001.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    session = _live_session(log_path, instance_id="gatebusy0001")
+    empty_pool["pool"]._sessions["gatebusy0001"] = session
+
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with session.operation("owner"):
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    async with asyncio.timeout(1):
+        while session.operation_snapshot()["active_operation"] != "owner":
+            await asyncio.sleep(0)
+
+    request = _SimpleNamespace(path_params={"id": "gatebusy0001"}, query_params={})
+    started = time.monotonic()
+    response = await asyncio.wait_for(_media.session_screenshot_now(request), timeout=2.0)
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 503
+    # Comfortably under the 300s MCP-tool default -- proves the dashboard
+    # override is actually in effect, not just documented.
+    assert elapsed < 1.0
+    session.page.screenshot.assert_not_awaited()
+
+    release.set()
+    await holder
+
+
+@pytest.mark.anyio
+async def test_live_screenshot_session_busy_timeout_error_maps_to_503(
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    """A SessionBusyTimeoutError from the gate maps to 503, distinctly from
+    the generic screenshot-failure 503 branch -- locks in Task 10's Step 5
+    error-mapping contract."""
+    from types import SimpleNamespace as _SimpleNamespace
+
+    from octowright.http.routes import media as _media
+    from octowright.session.operation_gate import SessionBusyTimeoutError
+
+    log_path = isolated_recordings / "20260101T000000Z-chromium-busyerr00001.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    session = _live_session(log_path, instance_id="busyerr00001")
+
+    session.operation = _RaisingOperation(
+        SessionBusyTimeoutError("session 'busyerr00001' operation 'dashboard_screenshot' timed out")
+    )
+    empty_pool["pool"]._sessions["busyerr00001"] = session
+
+    request = _SimpleNamespace(path_params={"id": "busyerr00001"}, query_params={})
+    response = await _media.session_screenshot_now(request)
+
+    assert response.status_code == 503
+    session.page.screenshot.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_live_screenshot_session_closing_error_maps_to_409(
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    """A SessionClosingError from the gate maps to 409, not the generic
+    screenshot-failure 503 branch -- locks in Task 10's Step 5 error-mapping
+    contract."""
+    from types import SimpleNamespace as _SimpleNamespace
+
+    from octowright.http.routes import media as _media
+    from octowright.session.operation_gate import SessionClosingError
+
+    log_path = isolated_recordings / "20260101T000000Z-chromium-closingerr01.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    session = _live_session(log_path, instance_id="closingerr01")
+
+    session.operation = _RaisingOperation(
+        SessionClosingError("session 'closingerr01' operation 'dashboard_screenshot' rejected: gate is closing")
+    )
+    empty_pool["pool"]._sessions["closingerr01"] = session
+
+    request = _SimpleNamespace(path_params={"id": "closingerr01"}, query_params={})
+    response = await _media.session_screenshot_now(request)
+
+    assert response.status_code == 409
+    session.page.screenshot.assert_not_awaited()
 
 
 # ─── /frame edge cases ──────────────────────────────────────────────────────

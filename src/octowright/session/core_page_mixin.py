@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -23,6 +21,7 @@ from octowright.defaults import (
     REDACTED_INPUT_PLACEHOLDER,
 )
 from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import gated_operation
 from octowright.session.screencast import notify_active_page
 
 log = get_logger(__name__)
@@ -139,21 +138,25 @@ def _reject_unsafe_url(url: str) -> None:
     ssrf.check_navigation_url(stripped)
 
 
-_WAIT_FOR_POLL_SECONDS = 0.05
+async def _body_contains_text(session: SessionLike, body: Any, text: str) -> bool:
+    # Re-enters the parent's "browser_wait_for" lease reentrantly (same task,
+    # so this never queues) rather than assuming the caller already holds it --
+    # a direct caller of this module-level helper gets the same coherence
+    # guarantee as going through wait_for().
+    async with session.operation("browser_wait_for"):
+        return text in await body.inner_text(timeout=1000)
 
 
-async def _body_contains_text(body: Any, text: str) -> bool:
-    return text in await body.inner_text(timeout=1000)
-
-
-async def _evaluate_truthy(target: Any, expression: str) -> bool:
-    return bool(await target.evaluate(expression))
+async def _evaluate_truthy(session: SessionLike, target: Any, expression: str) -> bool:
+    async with session.operation("browser_wait_for"):
+        return bool(await target.evaluate(expression))
 
 
 class SessionPageMixin(SessionLike):
     _last_mcp_navigation: str | None
 
-    def list_pages(self) -> list[dict[str, Any]]:
+    @gated_operation("page_list")
+    async def list_pages(self) -> list[dict[str, Any]]:
         """Return [{index, url, title, is_active}, ...]. title is None for unloaded pages."""
         result = []
         for i, p in enumerate(self.pages):
@@ -171,6 +174,7 @@ class SessionPageMixin(SessionLike):
             )
         return result
 
+    @gated_operation("page_switch")
     async def switch_page(self, index: int) -> dict[str, Any]:
         """Set self.page to self.pages[index]. Raises IndexError if out of bounds."""
         if index < 0 or index >= len(self.pages):
@@ -182,6 +186,7 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("switch_page", index=index, url=selected_url)
         return {"index": index, "url": selected_url, "page_count": len(self.pages)}
 
+    @gated_operation("page_close")
     async def close_page(self, index: int) -> dict[str, Any]:
         """Close self.pages[index] and remove it from the list.
 
@@ -234,6 +239,7 @@ class SessionPageMixin(SessionLike):
             "page_count": len(self.pages),
         }
 
+    @gated_operation("browser_navigate")
     async def navigate(self, url: str) -> dict[str, Any]:
         _reject_unsafe_url(url)
         instance_id = getattr(self, "instance_id", None)
@@ -264,6 +270,7 @@ class SessionPageMixin(SessionLike):
             _NAVIGATE_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind or "unknown"})
             return {"url": url, "title": title}
 
+    @gated_operation("session_input_metadata")
     async def _resolve_semantic_metadata(self, selector: str) -> dict[str, str]:
         """Attempt to resolve the role and role_name of the element at selector."""
         try:
@@ -282,11 +289,13 @@ class SessionPageMixin(SessionLike):
             pass
         return {}
 
+    @gated_operation("browser_click")
     async def click(self, selector: str) -> None:
         meta = await self._resolve_semantic_metadata(selector)
         await self._target().click(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("click", selector=selector, **meta)
 
+    @gated_operation("session_input_redaction")
     async def _is_password_input(self, selector: str) -> bool:
         """Best-effort check: does *selector* resolve to a credential input?
 
@@ -331,6 +340,7 @@ class SessionPageMixin(SessionLike):
             return True
         return info.get("ac") in ("current-password", "new-password", "one-time-code")
 
+    @gated_operation("session_input_redaction")
     async def _redacted_or_original(self, selector: str, value: str) -> str:
         """Return ``REDACTED_INPUT_PLACEHOLDER`` if the current redaction
         policy says to scrub this value, else *value* unchanged. The page
@@ -346,22 +356,26 @@ class SessionPageMixin(SessionLike):
             return REDACTED_INPUT_PLACEHOLDER
         return value
 
+    @gated_operation("browser_type")
     async def type_text(self, selector: str, text: str, delay_ms: int | None) -> None:
         meta = await self._resolve_semantic_metadata(selector)
         recorded_text = await self._redacted_or_original(selector, text)
         await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("type", selector=selector, text=recorded_text, delay_ms=delay_ms, **meta)
 
+    @gated_operation("browser_fill")
     async def fill(self, selector: str, value: str) -> None:
         meta = await self._resolve_semantic_metadata(selector)
         recorded_value = await self._redacted_or_original(selector, value)
         await self._target().fill(selector, value, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
+    @gated_operation("browser_press_key")
     async def press_key(self, key: str) -> None:
         await self.page.keyboard.press(key)
         self.recorder.record("press_key", key=_redact_sink_value(key))
 
+    @gated_operation("browser_screenshot")
     async def screenshot(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -374,7 +388,11 @@ class SessionPageMixin(SessionLike):
         img_type: Literal["jpeg", "png"] = "jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "png"
 
         async def _write(tmp: Path) -> None:
-            await self.page.screenshot(path=str(tmp), type=img_type)
+            # Nested closure is its own scope, independent of the decorator
+            # above (Task 11 scanner rule) -- re-enters the same "browser_screenshot"
+            # lease this method's own @gated_operation already holds (same task).
+            async with self.operation("browser_screenshot"):
+                await self.page.screenshot(path=str(tmp), type=img_type)
 
         from octowright._paths import atomic_write_via_writer
 
@@ -382,6 +400,7 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("screenshot", path=str(path))
         return path
 
+    @gated_operation("browser_snapshot")
     async def snapshot(self, selector: str | None = None) -> dict[str, Any]:
         # Route through _target() so a switched frame's aria-tree is what you see —
         # every action tool (click/fill/evaluate/wait_for) already respects the
@@ -396,30 +415,13 @@ class SessionPageMixin(SessionLike):
         # page-level — Playwright Frames have no title().
         return {"aria": aria_yaml, "url": target.url, "title": await self.page.title()}
 
+    @gated_operation("browser_evaluate")
     async def evaluate(self, expression: str) -> Any:
         result = await self._target().evaluate(expression)
         self.recorder.record("evaluate", expression=_redact_sink_value(expression))
         return result
 
-    async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None:
-        deadline = None if timeout_ms == 0 else time.monotonic() + (timeout_ms / 1000)
-        last_error: Exception | None = None
-        while True:
-            try:
-                if await predicate():
-                    return
-                last_error = None
-            except Exception as exc:
-                last_error = exc
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    detail = f": {last_error}" if last_error is not None else ""
-                    raise TimeoutError(f"condition not met within {timeout_ms}ms: {label}{detail}") from last_error
-                await asyncio.sleep(min(_WAIT_FOR_POLL_SECONDS, remaining))
-            else:
-                await asyncio.sleep(_WAIT_FOR_POLL_SECONDS)
-
+    @gated_operation("browser_wait_for")
     async def wait_for(
         self,
         selector: str | None,
@@ -457,92 +459,13 @@ class SessionPageMixin(SessionLike):
             self.recorder.record("wait_for", selector=selector, timeout_ms=timeout)
         elif text:
             body = target.locator("body")
-            await self._poll_until(timeout, lambda: _body_contains_text(body, text), f"text={text!r}")
+            await self._poll_until(timeout, lambda: _body_contains_text(self, body, text), f"text={text!r}")
             self.recorder.record("wait_for", text=text, timeout_ms=timeout)
         elif expression:
-            await self._poll_until(timeout, lambda: _evaluate_truthy(target, expression), f"expression={expression!r}")
+            await self._poll_until(
+                timeout, lambda: _evaluate_truthy(self, target, expression), f"expression={expression!r}"
+            )
             self.recorder.record("wait_for", expression=expression, timeout_ms=timeout)
         else:
             await self.page.wait_for_load_state("networkidle", timeout=timeout)
             self.recorder.record("wait_for", timeout_ms=timeout)
-
-    async def expect_url(self, pattern: str, mode: str = "regex") -> str:
-        """Check the page URL against *pattern*. Returns the actual URL on success."""
-        actual: str = self.page.url
-        if mode == "equals":
-            if actual != pattern:
-                raise RuntimeError(f'URL mismatch: expected "{pattern}" (equals), got "{actual}"')
-        elif mode == "contains":
-            if pattern not in actual:
-                raise RuntimeError(f'URL mismatch: expected substring "{pattern}" (contains), got "{actual}"')
-        elif mode == "regex":
-            if not re.search(pattern, actual):
-                raise RuntimeError(f'URL mismatch: expected pattern "{pattern}" (regex), got "{actual}"')
-        else:
-            raise ValueError(f"unknown mode {mode!r}; expected 'regex', 'equals', or 'contains'")
-        self.recorder.record("expect_url", pattern=pattern, mode=mode)
-        return actual
-
-    async def expect_text(
-        self,
-        selector: str,
-        text: str,
-        mode: str = "contains",
-        timeout_ms: int | None = None,
-    ) -> str:
-        """Wait for *selector* and assert its inner text matches *text*. Returns actual text."""
-        timeout = timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS
-        try:
-            element = await self._target().wait_for_selector(selector, timeout=timeout)
-        except Exception as exc:
-            raise RuntimeError(f'element never appeared within {timeout}ms: selector="{selector}"') from exc
-        if element is None:
-            raise RuntimeError(f'element never appeared within {timeout}ms: selector="{selector}"')
-        actual: str = await element.inner_text()
-        if mode == "contains":
-            if text not in actual:
-                raise RuntimeError(f'text mismatch on "{selector}": expected to contain "{text}", got "{actual}"')
-        elif mode == "equals":
-            if actual != text:
-                raise RuntimeError(f'text mismatch on "{selector}": expected "{text}" (equals), got "{actual}"')
-        elif mode == "regex":
-            if not re.search(text, actual):
-                raise RuntimeError(f'text mismatch on "{selector}": expected pattern "{text}" (regex), got "{actual}"')
-        else:
-            raise ValueError(f"unknown mode {mode!r}; expected 'contains', 'equals', or 'regex'")
-        self.recorder.record("expect_text", selector=selector, text=text, mode=mode)
-        return actual
-
-    async def expect_selector(
-        self,
-        selector: str,
-        present: bool = True,
-        timeout_ms: int | None = None,
-    ) -> None:
-        """Assert that *selector* is present (or absent) in the page."""
-        timeout = timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS
-        if present:
-            try:
-                await self._target().wait_for_selector(selector, timeout=timeout)
-            except Exception as exc:
-                raise RuntimeError(f'selector never appeared within {timeout}ms: "{selector}"') from exc
-        else:
-            # Poll once — if the element exists right now, that's the failure.
-            element = await self._target().query_selector(selector)
-            if element is not None:
-                raise RuntimeError(f'selector should be absent but was found: "{selector}"')
-        self.recorder.record("expect_selector", selector=selector, present=present)
-
-    async def expect_js(self, expression: str, equals: Any = None) -> Any:
-        """Evaluate *expression* in the page and assert it is truthy (or equals *equals*)."""
-        result = await self._target().evaluate(expression)
-        if equals is not None:
-            if result != equals:
-                raise RuntimeError(
-                    f"JS assertion failed: expression={expression!r}, expected={equals!r}, got={result!r}"
-                )
-        else:
-            if not result:
-                raise RuntimeError(f"JS assertion failed (not truthy): expression={expression!r}, got={result!r}")
-        self.recorder.record("expect_js", expression=expression, equals=equals)
-        return result
