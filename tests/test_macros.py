@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from tests._operation_gate_fakes import OperationAwareFake
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -311,7 +313,7 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
 
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
-    class FakeSession:
+    class FakeSession(OperationAwareFake):
         # SessionLike attrs for run_macro span tagging.
         instance_id = "fake-instance"
         kind = "chromium"
@@ -476,15 +478,16 @@ async def test_run_macro_macro_call_enforces_depth_limit(monkeypatch: pytest.Mon
 # ---------------------------------------------------------------------------
 
 
-class _FakeSessionForSequence:
+class _FakeSessionForSequence(OperationAwareFake):
     """Minimal fake BrowserSession for run_sequence tests."""
 
+    instance_id = "fake-instance"
+    kind = "chromium"
+
     def __init__(self, *, raises_on: str | None = None) -> None:
+        super().__init__()
         self._raises_on = raises_on
         self.calls: list[str] = []
-        # SessionLike attrs for run_macro span tagging.
-        self.instance_id = "fake-instance"
-        self.kind = "chromium"
         # `_push_status` reads `.page`; None short-circuits the JS push.
         self.page = None
 
@@ -536,13 +539,15 @@ def _save_macro_file(m: Any, tmp_path: Path, name: str, actions: list[dict[str, 
     (tmp_path / "macros" / f"{name}.json").write_text(json.dumps(macro), encoding="utf-8")
 
 
-class _CallAwareFakeSession:
+class _CallAwareFakeSession(OperationAwareFake):
+    # SessionLike attrs accessed by run_macro / dispatch_simple for span +
+    # log tagging; previously masked by getattr(..., None) defaults.
+    instance_id = "fake-instance"
+    kind = "chromium"
+
     def __init__(self) -> None:
+        super().__init__()
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any] | None]] = []
-        # SessionLike attrs accessed by run_macro / dispatch_simple for span +
-        # log tagging; previously masked by getattr(..., None) defaults.
-        self.instance_id = "fake-instance"
-        self.kind = "chromium"
         # `_push_status` reads `.page`; None short-circuits the JS push, which
         # is what the test wants (no Playwright in-process).
         self.page = None
@@ -701,7 +706,7 @@ async def test_run_macro_dispatches_expect_text(monkeypatch: pytest.MonkeyPatch,
         async def wait_for_selector(self, selector: str, timeout: int = 15000) -> FakeElement:
             return FakeElement()
 
-    class FakeSessionWithPage:
+    class FakeSessionWithPage(OperationAwareFake):
         page = FakePage()
         # SessionLike attrs for span / log tagging in run_macro.
         instance_id = "fake-instance"
@@ -725,7 +730,7 @@ async def test_run_macro_dispatches_expect_text(monkeypatch: pytest.MonkeyPatch,
 # ---------------------------------------------------------------------------
 
 
-class _FakeSessionWithDiagnostic:
+class _FakeSessionWithDiagnostic(OperationAwareFake):
     """Fake session whose click always raises, and provides diagnostic_bundle."""
 
     # SessionLike attrs for run_macro span tagging.

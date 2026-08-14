@@ -31,6 +31,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests._operation_gate_fakes import OperationAwareFake
+
 
 @pytest.fixture
 def anyio_backend() -> str:
@@ -145,15 +147,17 @@ def _span_attrs(exporter, span_name: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-class _FakeSession:
+class _FakeSession(OperationAwareFake):
+    # SessionLike attrs for run_macro span tagging; previously masked by
+    # getattr(..., None) defaults.
+    instance_id = "fake-instance"
+    kind = "chromium"
+
     def __init__(self) -> None:
+        super().__init__()
         self.page = MagicMock()
         self.page.evaluate = AsyncMock()
         self.diagnostic_bundle = AsyncMock(return_value={"hint": "yo"})
-        # SessionLike attrs for run_macro span tagging; previously masked by
-        # getattr(..., None) defaults.
-        self.instance_id = "fake-instance"
-        self.kind = "chromium"
 
 
 @pytest.fixture

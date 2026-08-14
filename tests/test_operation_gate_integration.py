@@ -29,6 +29,7 @@ from octowright.browser_pool import BrowserPool
 from octowright.browser_pool.launch_pipeline import _build_session_object
 from octowright.browser_pool.options import LaunchOptions
 from octowright.session import BrowserSession
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture
@@ -381,3 +382,155 @@ async def test_reserve_close_browser_require_fresh_rejects_shared_ticket(
             require_fresh=True,
         )
     await first.reservation.wait()
+
+
+# ─── Task 9: macro replay holds one root lease per logical invocation ──────
+#
+# run_macro/run_sequence/run_macro_artifact each wrap their ENTIRE body in a
+# single outer session.operation(...) lease. Nested session-method calls
+# (click, expect_*, _push_status, selector_present, the checks helpers) all
+# re-enter that same lease because they run in the SAME asyncio task -- only
+# a call from a DIFFERENT task (a "manual" action racing the macro) actually
+# queues behind it. These tests prove that queueing, not just that the calls
+# don't raise.
+
+
+class MacroGateFake(OperationAwareFake):
+    """Real-gate session fake wired with just enough of the click/diagnostic
+    surface for ``run_macro`` to dispatch a tiny macro end-to-end through the
+    real dispatch machinery (no ``_dispatch_one`` monkeypatch needed)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.page = None  # `_push_status` reads `.page`; None short-circuits.
+        self.calls: list[str] = []
+        self.block_after_first: asyncio.Event | None = None
+        self.release_first: asyncio.Event | None = None
+
+    async def click(self, selector: str) -> None:
+        async with self.operation("browser_click"):
+            if selector == "#manual":
+                self.calls.append("manual")
+                return
+            self.calls.append(f"macro:{selector}")
+            if selector == "boom":
+                raise RuntimeError("boom click failed")
+            if selector == "first" and self.block_after_first is not None:
+                self.block_after_first.set()
+                assert self.release_first is not None
+                await self.release_first.wait()
+
+    async def diagnostic_bundle(self, **_kwargs: Any) -> dict[str, Any]:
+        self.calls.append("diagnostic_bundle")
+        return {}
+
+
+@pytest.fixture
+def session() -> MacroGateFake:
+    return MacroGateFake()
+
+
+def _register_macro_gate_fixtures(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.macros import execution as _execution
+
+    macros = {
+        "two-actions": {
+            "name": "two-actions",
+            "actions": [
+                {"action": "click", "selector": "first"},
+                {"action": "click", "selector": "second"},
+            ],
+        },
+        "failing-macro": {
+            "name": "failing-macro",
+            "actions": [{"action": "click", "selector": "boom"}],
+        },
+    }
+
+    def _fake_load(name: str) -> dict[str, Any]:
+        if name not in macros:
+            raise FileNotFoundError(name)
+        return macros[name]
+
+    monkeypatch.setattr(_execution, "load_macro", _fake_load)
+
+
+async def _wait_for_root_operation(fake_session: MacroGateFake, name: str) -> None:
+    async with asyncio.timeout(1):
+        while fake_session.operation_snapshot()["active_operation"] != name:
+            await asyncio.sleep(0)
+
+
+async def run_macro_with_waiting_manual_action(fake_session: MacroGateFake, name: str) -> None:
+    """Start ``run_macro`` and, once its root lease is confirmed held, race a
+    manual action against it -- proving *any* point during the macro's
+    execution (not just a hand-picked gap) rejects interleaving."""
+    from octowright.macros.execution import run_macro as _run_macro
+
+    macro_task = asyncio.create_task(_run_macro(fake_session, name))
+    await _wait_for_root_operation(fake_session, "macro_run")
+    manual_task = asyncio.create_task(fake_session.click("#manual"))
+    try:
+        await macro_task
+    finally:
+        await manual_task
+
+
+@pytest.mark.asyncio
+async def test_manual_action_cannot_interleave_macro(session: MacroGateFake, monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.macros.execution import run_macro
+
+    _register_macro_gate_fixtures(monkeypatch)
+    session.block_after_first = asyncio.Event()
+    session.release_first = asyncio.Event()
+    macro_task = asyncio.create_task(run_macro(session, "two-actions"))
+    await session.block_after_first.wait()
+    manual = asyncio.create_task(session.click("#manual"))
+    await wait_for_queue_depth(session._test_operation_gate, 1)
+    assert session.calls == ["macro:first"]
+    session.release_first.set()
+    await asyncio.gather(macro_task, manual)
+    assert session.calls == ["macro:first", "macro:second", "manual"]
+
+
+@pytest.mark.asyncio
+async def test_failure_bundle_is_captured_before_manual_waiter(
+    session: MacroGateFake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure diagnostics (diagnostic_bundle) run while the root
+    ``macro_run`` lease is still held -- a manual action queued behind it
+    can only run AFTER the lease releases, so it always lands last."""
+    _register_macro_gate_fixtures(monkeypatch)
+    with pytest.raises(RuntimeError):
+        await run_macro_with_waiting_manual_action(session, "failing-macro")
+    assert session.calls.index("diagnostic_bundle") < session.calls.index("manual")
+
+
+def test_gate_operation_names_never_enter_the_replay_or_recorder_vocabulary() -> None:
+    """Task 9's fixed operation names are pure in-process scheduling labels
+    for ``SessionOperationGate.operation(...)`` -- gate acquire/release/
+    timeout never touch the session's JSONL recorder, so these names must
+    never collide with a real macro action kind, replay rename/drop key, or
+    conditional-action name. A collision here would mean gate scheduling
+    leaked into the JSONL/replay/export vocabulary, which the design
+    explicitly forbids."""
+    from octowright.conditional import CONDITIONAL_ACTIONS
+    from octowright.macros import runtime as _runtime
+
+    gate_operation_names = {
+        "macro_run",
+        "macro_run_sequence",
+        "macro_artifact_run",
+        "macro_status",
+        "macro_condition",
+        "macro_check",
+    }
+    replay_and_recorder_vocabulary = (
+        set(_runtime._ACTION_MAP)
+        | _runtime._REPLAY_SKIP
+        | _runtime._REPLAY_PASSIVE
+        | set(_runtime._REPLAY_RENAME_KEYS)
+        | set(_runtime._REPLAY_DROP_KEYS)
+        | CONDITIONAL_ACTIONS
+    )
+    assert gate_operation_names.isdisjoint(replay_and_recorder_vocabulary)
