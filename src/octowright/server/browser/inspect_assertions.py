@@ -18,6 +18,7 @@ from octowright.mcp_types import (
     BrowserToolAction,
 )
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session import DEFAULT_PREVIEW_CHARS
 
@@ -71,9 +72,9 @@ async def browser_expect_url(
     pattern: str,
     mode: str = "regex",
 ) -> BrowserExpectUrlResult:
-    session = pool.get(instance_id)
-    actual = await session.expect_url(pattern, mode)
-    return {"ok": True, "url": actual}
+    async with browser_operation(pool, instance_id, "browser_expect_url") as session:
+        actual = await session.expect_url(pattern, mode)
+        return {"ok": True, "url": actual}
 
 
 @mcp.tool(
@@ -97,17 +98,17 @@ async def browser_expect_text(
     max_chars: int | None = None,
     full: bool = False,
 ) -> BrowserExpectTextResult:
-    session = pool.get(instance_id)
-    actual = await session.expect_text(selector, text, mode, timeout_ms)
-    bounded = _bounded_rendered_value(actual, field="text", max_chars=max_chars, full=full)
-    out: BrowserExpectTextResult = {"ok": True}
-    out["text"] = str(bounded["text"])
-    out["truncated"] = bool(bounded["truncated"])
-    out["text_size"] = int(bounded["text_size"])
-    if "cap" in bounded:
-        out["cap"] = int(bounded["cap"])
-        out["next_actions"] = _expect_text_truncated_actions(instance_id, selector, text)
-    return out
+    async with browser_operation(pool, instance_id, "browser_expect_text") as session:
+        actual = await session.expect_text(selector, text, mode, timeout_ms)
+        bounded = _bounded_rendered_value(actual, field="text", max_chars=max_chars, full=full)
+        out: BrowserExpectTextResult = {"ok": True}
+        out["text"] = str(bounded["text"])
+        out["truncated"] = bool(bounded["truncated"])
+        out["text_size"] = int(bounded["text_size"])
+        if "cap" in bounded:
+            out["cap"] = int(bounded["cap"])
+            out["next_actions"] = _expect_text_truncated_actions(instance_id, selector, text)
+        return out
 
 
 @mcp.tool(
@@ -125,9 +126,9 @@ async def browser_expect_selector(
     present: bool = True,
     timeout_ms: int | None = None,
 ) -> BrowserExpectSelectorResult:
-    session = pool.get(instance_id)
-    await session.expect_selector(selector, present, timeout_ms)
-    return {"ok": True, "selector": selector, "present": present}
+    async with browser_operation(pool, instance_id, "browser_expect_selector") as session:
+        await session.expect_selector(selector, present, timeout_ms)
+        return {"ok": True, "selector": selector, "present": present}
 
 
 @mcp.tool(
@@ -146,14 +147,14 @@ async def browser_expect_js(
     max_chars: int | None = None,
     full: bool = False,
 ) -> BrowserExpectJsResult:
-    session = pool.get(instance_id)
-    result = await session.expect_js(expression, equals)
-    bounded = _bounded_rendered_value(result, field="result", max_chars=max_chars, full=full)
-    out: BrowserExpectJsResult = {"ok": True}
-    out["result"] = bounded["result"]
-    out["truncated"] = bool(bounded["truncated"])
-    out["result_size"] = int(bounded["result_size"])
-    if "cap" in bounded:
-        out["cap"] = int(bounded["cap"])
-        out["next_actions"] = _expect_js_truncated_actions(instance_id, expression)
-    return out
+    async with browser_operation(pool, instance_id, "browser_expect_js") as session:
+        result = await session.expect_js(expression, equals)
+        bounded = _bounded_rendered_value(result, field="result", max_chars=max_chars, full=full)
+        out: BrowserExpectJsResult = {"ok": True}
+        out["result"] = bounded["result"]
+        out["truncated"] = bool(bounded["truncated"])
+        out["result_size"] = int(bounded["result_size"])
+        if "cap" in bounded:
+            out["cap"] = int(bounded["cap"])
+            out["next_actions"] = _expect_js_truncated_actions(instance_id, expression)
+        return out

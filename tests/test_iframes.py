@@ -219,24 +219,26 @@ async def test_reset_frame_clears_active_frame(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_frames_shape(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_list_frames_shape(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
     main = FakeFrame(name="", url="https://octowright.com")
     child = FakeFrame(name="inner", url="https://widget.octowright.com")
     s.page.frames = [main, child]  # type: ignore[attr-defined]
-    frames = s.list_frames()
+    frames = await s.list_frames()
     assert len(frames) == 2
     assert frames[0] == {"index": 0, "name": "", "url": "https://octowright.com", "is_active": False}
     assert frames[1] == {"index": 1, "name": "inner", "url": "https://widget.octowright.com", "is_active": False}
 
 
-def test_list_frames_marks_active(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_list_frames_marks_active(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
     main = FakeFrame(name="", url="https://octowright.com")
     child = FakeFrame(name="inner", url="https://widget.octowright.com")
     s.page.frames = [main, child]  # type: ignore[attr-defined]
     s.active_frame = child
-    frames = s.list_frames()
+    frames = await s.list_frames()
     assert frames[1]["is_active"] is True
     assert frames[0]["is_active"] is False
 

@@ -1,5 +1,14 @@
 export type Kind = "chromium" | "firefox" | "webkit" | "terminal";
 
+export interface OperationGateSnapshot {
+  state: "open" | "closing" | "closed" | "broken";
+  active_operation: string | null;
+  active_for_ms: number | null;
+  queue_depth: number;
+  oldest_wait_ms: number | null;
+  queue_timeout_seconds: number;
+}
+
 export interface SessionSummary {
   id: string;
   kind: Kind;
@@ -10,6 +19,7 @@ export interface SessionSummary {
   live: boolean;
   protected?: boolean;
   log_path: string;
+  operation_gate?: OperationGateSnapshot;
 }
 
 export interface CacheComponent {

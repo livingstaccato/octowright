@@ -34,6 +34,7 @@ from octowright.macros.execution import (
     run_macro,
     run_sequence,
 )
+from tests._operation_gate_fakes import OperationAwareFake
 
 # ─── _resolve_slowmo_ms ──────────────────────────────────────────────────────
 
@@ -97,7 +98,7 @@ class TestPushStatus:
     @pytest.mark.anyio
     async def test_session_with_no_page_no_op(self) -> None:
         """If session.page is None, function returns silently."""
-        session = MagicMock(spec=["page"])
+        session = MagicMock(spec=["page", "operation"])
         session.page = None
         # Should not raise.
         await _push_status(session, text="x")
@@ -180,17 +181,19 @@ def anyio_backend() -> str:
 # ─── run_macro / run_sequence test helpers ──────────────────────────────────
 
 
-class _FakeSession:
+class _FakeSession(OperationAwareFake):
     """Mocked session with everything run_macro touches."""
 
+    # SessionLike attrs accessed by run_macro / dispatch_simple for span
+    # + log tagging; previously masked by getattr(..., None) defaults.
+    instance_id = "fake-instance"
+    kind = "chromium"
+
     def __init__(self) -> None:
+        super().__init__()
         self.page = MagicMock()
         self.page.evaluate = AsyncMock()
         self.diagnostic_bundle = AsyncMock(return_value={"url": "https://x", "title": "t"})
-        # SessionLike attrs accessed by run_macro / dispatch_simple for span
-        # + log tagging; previously masked by getattr(..., None) defaults.
-        self.instance_id = "fake-instance"
-        self.kind = "chromium"
 
 
 @pytest.fixture

@@ -246,7 +246,7 @@ Add fields to `BrowserSession`:
 
 In `src/octowright/browser_pool/pool.py`, add these keyword arguments to `BrowserSession(...)`:
 
-```python
+```text
                 viewport_mode=viewport_info.mode.value,
                 viewport_width=viewport_info.width,
                 viewport_height=viewport_info.height,
@@ -309,48 +309,49 @@ assert session.viewport_height == 930
 In `src/octowright/session/core_ops_mixin.py`, add:
 
 ```python
-    async def viewport_status(self) -> dict[str, Any]:
-        measured = await self.page.evaluate(
-            """() => ({
-                innerWidth: window.innerWidth,
-                innerHeight: window.innerHeight,
-                outerWidth: window.outerWidth,
-                outerHeight: window.outerHeight,
-                devicePixelRatio: window.devicePixelRatio
-            })"""
-        )
-        page = {"width": int(measured.get("innerWidth") or 0), "height": int(measured.get("innerHeight") or 0)}
-        outer = {"width": int(measured.get("outerWidth") or 0), "height": int(measured.get("outerHeight") or 0)}
-        mismatch = (
-            self.viewport_mode == "fixed"
-            and outer["width"] > 0
-            and outer["height"] > 0
-            and (abs(outer["width"] - page["width"]) > 24 or abs(outer["height"] - page["height"]) > 80)
-        )
-        return {
-            "mode": self.viewport_mode,
-            "fixed": self.viewport_mode == "fixed",
-            "fluid": self.viewport_mode == "fluid",
-            "configured": {"width": self.viewport_width, "height": self.viewport_height},
-            "page": page,
-            "outer": outer,
-            "device_pixel_ratio": measured.get("devicePixelRatio"),
-            "mismatch": mismatch,
-        }
+async def viewport_status(self) -> dict[str, Any]:
+    measured = await self.page.evaluate(
+        """() => ({
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            outerWidth: window.outerWidth,
+            outerHeight: window.outerHeight,
+            devicePixelRatio: window.devicePixelRatio
+        })"""
+    )
+    page = {"width": int(measured.get("innerWidth") or 0), "height": int(measured.get("innerHeight") or 0)}
+    outer = {"width": int(measured.get("outerWidth") or 0), "height": int(measured.get("outerHeight") or 0)}
+    mismatch = (
+        self.viewport_mode == "fixed"
+        and outer["width"] > 0
+        and outer["height"] > 0
+        and (abs(outer["width"] - page["width"]) > 24 or abs(outer["height"] - page["height"]) > 80)
+    )
+    return {
+        "mode": self.viewport_mode,
+        "fixed": self.viewport_mode == "fixed",
+        "fluid": self.viewport_mode == "fluid",
+        "configured": {"width": self.viewport_width, "height": self.viewport_height},
+        "page": page,
+        "outer": outer,
+        "device_pixel_ratio": measured.get("devicePixelRatio"),
+        "mismatch": mismatch,
+    }
 
-    async def viewport_sync(self) -> dict[str, Any]:
-        status = await self.viewport_status()
-        outer = status["outer"]
-        width = int(outer["width"] or status["page"]["width"])
-        height = int(outer["height"] or status["page"]["height"])
-        if width <= 0 or height <= 0:
-            raise ValueError("unable to measure a usable viewport size")
-        await self.page.set_viewport_size({"width": width, "height": height})
-        self.viewport_mode = "fixed"
-        self.viewport_width = width
-        self.viewport_height = height
-        self.recorder.record("resize", width=width, height=height)
-        return {"ok": True, "mode": "fixed", "width": width, "height": height}
+
+async def viewport_sync(self) -> dict[str, Any]:
+    status = await self.viewport_status()
+    outer = status["outer"]
+    width = int(outer["width"] or status["page"]["width"])
+    height = int(outer["height"] or status["page"]["height"])
+    if width <= 0 or height <= 0:
+        raise ValueError("unable to measure a usable viewport size")
+    await self.page.set_viewport_size({"width": width, "height": height})
+    self.viewport_mode = "fixed"
+    self.viewport_width = width
+    self.viewport_height = height
+    self.recorder.record("resize", width=width, height=height)
+    return {"ok": True, "mode": "fixed", "width": width, "height": height}
 ```
 
 Use the existing `Any` import in that file.
@@ -360,12 +361,17 @@ Use the existing `Any` import in that file.
 In `src/octowright/server/browser/lifecycle.py`, add:
 
 ```python
-@mcp.tool(structured_output=False, description="Return fixed/fluid viewport status and measured page/window dimensions.")
+@mcp.tool(
+    structured_output=False, description="Return fixed/fluid viewport status and measured page/window dimensions."
+)
 async def browser_viewport_status(instance_id: str) -> dict[str, Any]:
     return await pool.get(instance_id).viewport_status()
 
 
-@mcp.tool(structured_output=False, description="Resize a fixed Playwright viewport once to the current measured browser window size.")
+@mcp.tool(
+    structured_output=False,
+    description="Resize a fixed Playwright viewport once to the current measured browser window size.",
+)
 async def browser_viewport_sync(instance_id: str) -> dict[str, Any]:
     return await pool.get(instance_id).viewport_sync()
 ```
@@ -455,7 +461,10 @@ and test that branch.
 In `src/octowright/server/browser/lifecycle.py`, add:
 
 ```python
-@mcp.tool(structured_output=False, description="Close and relaunch a session as a headed fluid viewport using no_viewport=True.")
+@mcp.tool(
+    structured_output=False,
+    description="Close and relaunch a session as a headed fluid viewport using no_viewport=True.",
+)
 async def browser_relaunch_fluid(instance_id: str) -> dict[str, Any]:
     result = await pool.relaunch_fluid(instance_id)
     publish_dashboard_invalidation_nowait("sessions")
@@ -668,9 +677,9 @@ _VIEWPORT_PILL_SCRIPT = (_ASSETS / "viewport_pill.js").read_text(encoding="utf-8
 Extend `wire_init_scripts(...)` signature:
 
 ```python
-    viewport_mode: str = "unknown",
-    viewport_width: int | None = None,
-    viewport_height: int | None = None,
+viewport_mode: str = ("unknown",)
+viewport_width: int | None = (None,)
+viewport_height: int | None = (None,)
 ```
 
 Before stabilize injection, add:
@@ -723,15 +732,16 @@ and the binding name is:
 In `src/octowright/browser_pool/pool.py`, after session creation and before navigation, add:
 
 ```python
-            async def _viewport_action(_source: Any, payload: dict[str, Any]) -> dict[str, Any]:
-                action = payload.get("action")
-                if action == "sync":
-                    return await new_session.viewport_sync()
-                if action == "relaunch-fluid":
-                    return await self.relaunch_fluid(new_session.instance_id)
-                raise ValueError(f"unknown viewport action: {action!r}")
+async def _viewport_action(_source: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    action = payload.get("action")
+    if action == "sync":
+        return await new_session.viewport_sync()
+    if action == "relaunch-fluid":
+        return await self.relaunch_fluid(new_session.instance_id)
+    raise ValueError(f"unknown viewport action: {action!r}")
 
-            await context.expose_binding("__octowright_viewport_action", _viewport_action)
+
+await context.expose_binding("__octowright_viewport_action", _viewport_action)
 ```
 
 If Playwright requires binding before page creation for init scripts to see it, move the binding into `_open_browser_context` or expose it immediately after context creation and before navigation.

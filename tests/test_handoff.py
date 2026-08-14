@@ -8,36 +8,100 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from octowright.browser_pool import BrowserPool
+from octowright.browser_pool import close_helpers as _close_helpers
+from tests._pool_invariants import wait_until
+
+
+def _fake_source(
+    *,
+    instance_id: str,
+    kind: str = "chromium",
+    label: str | None = None,
+    profile: str | None = None,
+    url: str = "https://octowright.com",
+    user_data_dir: Any = None,
+    har_path: Any = None,
+    stabilize: bool = False,
+    trace: bool = False,
+) -> Any:
+    """A duck-typed handoff/relaunch source carrying a REAL
+    ``SessionOperationGate`` -- Task 8 routes ``close_original=True`` through
+    ``close_with_preparation``, which drives ``_operation_gate`` directly and
+    calls ``session.operation(...)`` from inside the preparation callback, so
+    a bare ``SimpleNamespace`` (no gate, no ``.operation``) can no longer
+    stand in for the source. Mirrors ``test_browser_pool_branches._fake_session``
+    -- ``log_path``/``video_path``/``trace_path`` are required too: the real
+    coordinator's ``close_response``/``publish_close_once`` read them
+    unconditionally once teardown actually runs (a duck type missing them
+    used to be safe here only because the old tests mocked ``pool.close``
+    away entirely, never reaching that code)."""
+    from octowright.session.operation_gate import SessionOperationGate
+
+    gate = SessionOperationGate(instance_id, kind)
+    source = SimpleNamespace(
+        instance_id=instance_id,
+        kind=kind,
+        label=label,
+        profile=profile,
+        url=url,
+        user_data_dir=user_data_dir,
+        har_path=har_path,
+        stabilize=stabilize,
+        trace=trace,
+        protected=False,
+        protected_reason="explicit",
+        page=SimpleNamespace(url=url),
+        log_path=f"/tmp/{instance_id}.jsonl",
+        video_path=None,
+        trace_path=None,
+        _teardown_after_close_cutoff=AsyncMock(),
+        _operation_gate=gate,
+    )
+    source.operation = gate.operation
+    source.operation_snapshot = gate.snapshot
+
+    async def _set_protected_state(protected_value: bool, *, reason: str = "explicit") -> dict[str, object]:
+        def _commit() -> dict[str, object]:
+            source.protected = protected_value
+            source.protected_reason = reason
+            return {"instance_id": instance_id, "protected": protected_value}
+
+        return await gate.control_update("browser_set_protected", _commit)
+
+    source.set_protected_state = _set_protected_state
+    return source
+
+
+def _pop_manifest_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real close coordinator best-effort-removes a session-manifest
+    entry on every close; keep these unit tests off the real on-disk
+    manifest (matching test_browser_pool_branches.py's pattern)."""
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
 
 
 @pytest.mark.anyio
 async def test_handoff_reuses_profile_and_closes_original(monkeypatch: pytest.MonkeyPatch) -> None:
+    _pop_manifest_noop(monkeypatch)
     pool = BrowserPool()
-    source = SimpleNamespace(
+    source = _fake_source(
         instance_id="old01",
         kind="webkit",
         profile="dante",
         label="lab",
         url="https://octowright.com/app",
         user_data_dir="/tmp/profile-dir",
-        har_path=None,
-        stabilize=False,
-        page=SimpleNamespace(url="https://octowright.com/live"),
     )
+    source.page.url = "https://octowright.com/live"
     pool._sessions["old01"] = source
-
-    close_calls: list[str] = []
-
-    async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
-        close_calls.append(instance_id)
-        pool._sessions.pop(instance_id, None)
-        return {"closed": True}
+    launched: dict[str, Any] = {}
 
     async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        launched.update(kwargs)
         return {
             "instance_id": "new01",
             "kind": kwargs["kind"],
@@ -49,32 +113,25 @@ async def test_handoff_reuses_profile_and_closes_original(monkeypatch: pytest.Mo
             "trace": kwargs.get("trace", False),
         }
 
-    monkeypatch.setattr(pool, "close", _fake_close)
     monkeypatch.setattr(pool, "launch", _fake_launch)
 
     result = await pool.handoff("old01", headed=False)
 
-    assert close_calls == ["old01"]
     assert result["old_instance_id"] == "old01"
     assert result["new_instance_id"] == "new01"
     assert result["old_closed"] is True
     assert result["profile"] == "dante"
+    source._teardown_after_close_cutoff.assert_awaited_once()
+    # Regression: handoff replacements must keep the corner badge (a bare
+    # `badge: bool = False` default in _launch_from_snapshot silently
+    # dropped it for every non-fluid handoff).
+    assert launched["badge"] is True
 
 
 @pytest.mark.anyio
 async def test_handoff_rejects_stateless_without_opt_in() -> None:
     pool = BrowserPool()
-    pool._sessions["old02"] = SimpleNamespace(
-        instance_id="old02",
-        kind="chromium",
-        profile=None,
-        label=None,
-        url="https://octowright.com",
-        user_data_dir=None,
-        har_path=None,
-        stabilize=False,
-        page=SimpleNamespace(url="https://octowright.com"),
-    )
+    pool._sessions["old02"] = _fake_source(instance_id="old02", profile=None, user_data_dir=None)
 
     with pytest.raises(ValueError, match="accept_stateless=True"):
         await pool.handoff("old02", headed=True)
@@ -83,16 +140,12 @@ async def test_handoff_rejects_stateless_without_opt_in() -> None:
 @pytest.mark.anyio
 async def test_handoff_rejects_keep_original_for_persistent() -> None:
     pool = BrowserPool()
-    pool._sessions["old03"] = SimpleNamespace(
+    pool._sessions["old03"] = _fake_source(
         instance_id="old03",
         kind="firefox",
         profile="mortimer",
         label="mortimer",
-        url="https://octowright.com",
         user_data_dir="/tmp/ops",
-        har_path=None,
-        stabilize=False,
-        page=SimpleNamespace(url="https://octowright.com"),
     )
 
     with pytest.raises(ValueError, match="close_original=True"):
@@ -101,25 +154,16 @@ async def test_handoff_rejects_keep_original_for_persistent() -> None:
 
 @pytest.mark.asyncio
 async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _pop_manifest_noop(monkeypatch)
     pool = BrowserPool()
-    source = SimpleNamespace(
+    source = _fake_source(
         instance_id="old-session",
-        kind="chromium",
         label="scratch",
         profile=None,
         user_data_dir=tmp_path / "session-dir",
-        page=SimpleNamespace(url="https://octowright.com"),
-        url="https://octowright.com",
-        stabilize=False,
-        trace=False,
-        har_path=None,
     )
-    pool._sessions["old-session"] = source  # type: ignore[assignment]
+    pool._sessions["old-session"] = source
     launched: dict[str, object] = {}
-
-    async def fake_close(instance_id: str, **_kwargs: object) -> dict[str, object]:
-        pool._sessions.pop(instance_id, None)
-        return {"closed": True}
 
     async def fake_launch(**kwargs: object) -> dict[str, object]:
         launched.update(kwargs)
@@ -134,7 +178,6 @@ async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.Monke
             "trace": False,
         }
 
-    monkeypatch.setattr(pool, "close", fake_close)
     monkeypatch.setattr(pool, "launch", fake_launch)
 
     result = await BrowserPool.handoff(pool, "old-session", headed=False)
@@ -147,40 +190,56 @@ async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.Monke
 # ─── Eviction-mid-handoff race regression ────────────────────────────────────
 
 
+def _get_then_evict(pool: BrowserPool) -> Any:
+    """Simulate a REAL Playwright external-close eviction firing in the gap
+    between ``handoff_browser``'s ``pool.get(old_instance_id)`` snapshot and
+    the close reservation resolving the SAME identity: the session is
+    returned once, then immediately routed through
+    ``pool._accept_external_close_nowait`` -- the actual seam
+    ``listeners._evict`` uses, which both pops ``_sessions`` AND installs a
+    teardown-only ``ClosingSession`` entry for the whole eviction duration.
+
+    A direct ``_sessions.pop`` (the old version of this helper) only
+    reproduces the ``KeyError`` half of the race: it leaves no
+    ``_closing_sessions`` entry behind, so ``reserve_close_browser`` never
+    exercises its ``require_fresh``-vs-``SessionClosingError`` branch --
+    exactly the gap a real eviction hits, since the external coordinator
+    IS already draining the session by the time the fallback runs."""
+
+    def _get(instance_id: str) -> Any:
+        session = pool._sessions.get(instance_id)
+        if session is None:
+            raise KeyError(pool._missing_session_message(instance_id))
+        won = pool._accept_external_close_nowait(instance_id, expected_session=session, reason="user_close")
+        assert won is not None, "external-close acceptance seam declined to take ownership"
+        return session
+
+    return _get
+
+
 @pytest.mark.anyio
 async def test_handoff_survives_eviction_race(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression: a Playwright external-close eviction can fire AFTER
-    handoff_browser's `pool.get(old_instance_id)` snapshot but BEFORE
-    `pool.close(old_instance_id)` awaits. close_browser then sees the
-    session already popped and raises KeyError, aborting the entire
-    handoff and leaving the user with no browser.
-
-    The fix snapshots all required fields from `source` up-front and
-    treats KeyError from `pool.close` as "already evicted, proceed to
-    launch the replacement" — the replacement is still launched.
+    """Regression: a REAL Playwright external-close eviction can fire AFTER
+    handoff_browser's `pool.get(old_instance_id)` snapshot but BEFORE the
+    close reservation resolves the same identity. The external coordinator
+    already owns a `_closing_sessions` entry for it by then, so
+    `reserve_close_browser(require_fresh=True)` raises `SessionClosingError`
+    (not `KeyError`) -- both must be caught, or the entire handoff aborts
+    with no replacement launched. The replacement is still launched from a
+    pre-close fallback snapshot of `source`.
     """
+    _pop_manifest_noop(monkeypatch)
     pool = BrowserPool()
-    source = SimpleNamespace(
+    source = _fake_source(
         instance_id="evict01",
-        kind="chromium",
         profile="dante",
         label="dante-lab",
         url="https://octowright.com/app",
         user_data_dir="/tmp/profile-dir",
-        har_path=None,
-        stabilize=False,
-        trace=False,
-        page=SimpleNamespace(url="https://octowright.com/live"),
     )
+    source.page.url = "https://octowright.com/live"
     pool._sessions["evict01"] = source
-
-    close_calls: list[str] = []
-
-    async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
-        # Simulate the race: an external-close eviction popped the session
-        # between handoff_browser's pool.get() snapshot and this close().
-        close_calls.append(instance_id)
-        raise KeyError(pool._missing_session_message(instance_id))
+    monkeypatch.setattr(pool, "get", _get_then_evict(pool))
 
     launched: dict[str, Any] = {}
 
@@ -197,50 +256,54 @@ async def test_handoff_survives_eviction_race(monkeypatch: pytest.MonkeyPatch) -
             "trace": False,
         }
 
-    monkeypatch.setattr(pool, "close", _fake_close)
     monkeypatch.setattr(pool, "launch", _fake_launch)
 
-    # Before fix: this raises KeyError. After fix: handoff completes,
-    # launching the replacement with the snapshotted fields.
+    # Before the fix: this raised SessionClosingError and aborted the whole
+    # handoff. After the fix: handoff completes, launching the replacement
+    # with the pre-close snapshotted fields.
     result = await pool.handoff("evict01", headed=False)
 
-    assert close_calls == ["evict01"]
     assert result["new_instance_id"] == "newAfterEvict"
     assert result["old_instance_id"] == "evict01"
-    # old_closed=False because the close raised KeyError (already evicted).
+    # old_closed=False because OUR close raced the external eviction (it
+    # never got its own ticket) -- the external coordinator did the actual
+    # teardown, tracked separately below.
     assert result["old_closed"] is False
     assert result["profile"] == "dante"
     assert launched["profile"] == "dante"
     assert launched["kind"] == "chromium"
     assert launched["label"] == "dante-lab"
+    # Handoff replacements keep the corner badge (regression: a bare
+    # `badge: bool = False` default silently dropped it).
+    assert launched["badge"] is True
+
+    # The external coordinator's own teardown-only close must still run to
+    # completion and clear the registry -- it isn't ours to await directly.
+    await wait_until(lambda: "evict01" not in pool._closing_sessions)
+    source._teardown_after_close_cutoff.assert_awaited_once()
 
 
 @pytest.mark.anyio
 async def test_relaunch_fluid_survives_eviction_race(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Same race as handoff, but for relaunch_fluid: external-close
-    eviction fires between pool.get() snapshot and pool.close(). The
-    replacement must still launch.
+    """Same race as handoff, but for relaunch_fluid: a REAL external-close
+    eviction fires between pool.get() snapshot and the close reservation
+    resolving, landing on SessionClosingError (see test_handoff_survives_
+    eviction_race). The replacement must still launch. relaunch_fluid is a
+    LIVE production path (server/browser/lifecycle.browser_relaunch_fluid),
+    so this is the regression with real user-facing blast radius.
     """
+    _pop_manifest_noop(monkeypatch)
     pool = BrowserPool()
-    source = SimpleNamespace(
+    source = _fake_source(
         instance_id="fluid01",
-        kind="chromium",
         profile=None,
         label="scratch",
         url="https://octowright.com/app",
         user_data_dir=None,
-        har_path=None,
-        stabilize=False,
-        trace=False,
-        page=SimpleNamespace(url="https://octowright.com/live"),
     )
+    source.page.url = "https://octowright.com/live"
     pool._sessions["fluid01"] = source
-
-    close_calls: list[str] = []
-
-    async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
-        close_calls.append(instance_id)
-        raise KeyError(pool._missing_session_message(instance_id))
+    monkeypatch.setattr(pool, "get", _get_then_evict(pool))
 
     launched: dict[str, Any] = {}
 
@@ -257,17 +320,19 @@ async def test_relaunch_fluid_survives_eviction_race(monkeypatch: pytest.MonkeyP
             "trace": False,
         }
 
-    monkeypatch.setattr(pool, "close", _fake_close)
     monkeypatch.setattr(pool, "launch", _fake_launch)
 
     result = await pool.relaunch_fluid("fluid01")
 
-    assert close_calls == ["fluid01"]
     assert result["new_instance_id"] == "fluidAfterEvict"
     assert result["old_instance_id"] == "fluid01"
     assert result["old_closed"] is False
     assert result["mode"] == "fluid"
     assert launched["kind"] == "chromium"
     assert launched["label"] == "scratch"
+    assert launched["badge"] is True
     # stateless source → ephemeral=True
     assert launched["ephemeral"] is True
+
+    await wait_until(lambda: "fluid01" not in pool._closing_sessions)
+    source._teardown_after_close_cutoff.assert_awaited_once()
