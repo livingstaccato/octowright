@@ -23,11 +23,13 @@ from provide.telemetry import get_logger
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
 from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import gated_operation
 
 log = get_logger(__name__)
 
 
 class SessionLocatorMixin(SessionLike):
+    @gated_operation("session_locator_redaction")
     async def _is_password_locator(self, locator: Any) -> bool:
         """Best-effort credential check for semantic-locator actions."""
         try:
@@ -50,6 +52,7 @@ class SessionLocatorMixin(SessionLike):
             return True
         return info.get("ac") in ("current-password", "new-password", "one-time-code")
 
+    @gated_operation("session_locator_redaction")
     async def _redacted_or_original_for_locator(self, locator: Any, value: str) -> str:
         mode = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower()
         if mode not in {"off", "all", "passwords"}:
@@ -62,7 +65,8 @@ class SessionLocatorMixin(SessionLike):
             return REDACTED_INPUT_PLACEHOLDER
         return value
 
-    def _locator(self, **finders: Any) -> Any:
+    @gated_operation("session_locator_resolve")
+    async def _locator(self, **finders: Any) -> Any:
         """Return a Playwright Locator for the given finder kwargs.
 
         Exactly one of role / label / text / test_id must be supplied. Routes
@@ -70,29 +74,32 @@ class SessionLocatorMixin(SessionLike):
         """
         from octowright.session import locators as _locators
 
-        return _locators.build_locator(self._target(), **finders)
+        return await _locators.build_locator(self, **finders)
 
+    @gated_operation("browser_click")
     async def click_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Click an element matched by role, label, text, or data-testid."""
-        locator = self._locator(**finders)
+        locator = await self._locator(**finders)
         await locator.click(timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("click_by", **finders)
         return {"ok": True}
 
+    @gated_operation("browser_fill")
     async def fill_by(self, value: str, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Fill an input matched by role, label, or data-testid."""
-        locator = self._locator(**finders)
+        locator = await self._locator(**finders)
         recorded_value = await self._redacted_or_original_for_locator(locator, value)
         await locator.fill(value, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("fill_by", value=recorded_value, **finders)
         return {"ok": True}
 
+    @gated_operation("browser_get_text_by")
     async def get_text_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Return the inner text of the matched element.
 
         Useful for assertions that need a value rather than just a boolean match.
         """
-        locator = self._locator(**finders)
+        locator = await self._locator(**finders)
         await locator.wait_for(timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
         result = await locator.inner_text()
         self.recorder.record("get_text_by", result=result, **finders)

@@ -129,9 +129,7 @@ Move lookup, protection validation, expected-identity validation, and pop under
 
 ```python
 async def _close_if_current(self, instance_id, expected, *, force, _reason):
-    return await close_browser(
-        self, instance_id, force=force, _reason=_reason, expected_session=expected
-    )
+    return await close_browser(self, instance_id, force=force, _reason=_reason, expected_session=expected)
 ```
 
 An identity mismatch returns `None`; explicit public close retains its existing

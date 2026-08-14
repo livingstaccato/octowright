@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import gated_operation
 
 __all__ = ["VIEWPORT_ROUNDING_SLACK", "SessionViewportMixin"]
 
@@ -45,6 +46,7 @@ class SessionViewportMixin(SessionLike):
     viewport_frame_inset_w: int | None
     viewport_frame_inset_h: int | None
 
+    @gated_operation("browser_resize")
     async def resize(self, width: int, height: int) -> dict[str, Any]:
         await self.page.set_viewport_size({"width": width, "height": height})
         self.recorder.record("resize", width=width, height=height)
@@ -73,6 +75,7 @@ class SessionViewportMixin(SessionLike):
             "height": max(0, outer["height"] - inset_h),
         }
 
+    @gated_operation("browser_viewport_status")
     async def viewport_status(self) -> dict[str, Any]:
         measured = await self.page.evaluate(_MEASURE)
         page = {
@@ -119,6 +122,7 @@ class SessionViewportMixin(SessionLike):
             "mismatch": mismatch,
         }
 
+    @gated_operation("browser_viewport_sync")
     async def viewport_sync(self) -> dict[str, Any]:
         status = await self.viewport_status()
         # Target the CONTENT AREA, never the outer window. Sizing the viewport

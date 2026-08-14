@@ -251,7 +251,9 @@ Expected: PASS
 def test_scenario_remap_participants_passes_browser_pool(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
-    def fake_remap_participants(*, scenario_id: str, remaps: list[dict[str, object]], browser_pool: object) -> dict[str, object]:
+    def fake_remap_participants(
+        *, scenario_id: str, remaps: list[dict[str, object]], browser_pool: object
+    ) -> dict[str, object]:
         seen["scenario_id"] = scenario_id
         seen["remaps"] = remaps
         seen["browser_pool"] = browser_pool
