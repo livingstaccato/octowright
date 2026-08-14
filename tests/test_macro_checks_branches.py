@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from octowright.macros import checks as macro_checks
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 class _Elem:
@@ -59,6 +60,19 @@ class _Page:
         return self.eval_result
 
 
+class _Session(OperationAwareFake):
+    """Wraps a bare ``_Page`` double behind the ``SessionLike`` surface
+    ``macros.checks`` now requires: ``.page`` for ``_check_url`` and
+    ``._target()`` for the element/JS checks."""
+
+    def __init__(self, page: _Page) -> None:
+        super().__init__()
+        self.page = page
+
+    def _target(self) -> _Page:
+        return self.page
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
@@ -72,14 +86,18 @@ class TestCheckUrlEqualsBranch:
     async def test_equals_match_returns_actual_url(self) -> None:
         """Happy path: returns the page URL verbatim."""
         page = _Page(url="https://example.test/x")
-        assert await macro_checks._check_url(page, "https://example.test/x", mode="equals") == "https://example.test/x"
+        session = _Session(page)
+        assert (
+            await macro_checks._check_url(session, "https://example.test/x", mode="equals") == "https://example.test/x"
+        )
 
     @pytest.mark.anyio
     async def test_equals_mismatch_message_includes_equals_label_and_both_urls(self) -> None:
         """Mutating the f-string would lose any of: '(equals)', expected, actual."""
         page = _Page(url="https://actual")
+        session = _Session(page)
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_url(page, "https://expected", mode="equals")
+            await macro_checks._check_url(session, "https://expected", mode="equals")
         msg = str(exc_info.value)
         assert "URL mismatch" in msg
         assert '"https://expected"' in msg
@@ -92,14 +110,18 @@ class TestCheckUrlContainsBranch:
     async def test_contains_match_returns_actual_url(self) -> None:
         """Substring match returns actual URL."""
         page = _Page(url="https://example.test/path?q=1")
-        assert await macro_checks._check_url(page, "example.test", mode="contains") == "https://example.test/path?q=1"
+        session = _Session(page)
+        assert (
+            await macro_checks._check_url(session, "example.test", mode="contains") == "https://example.test/path?q=1"
+        )
 
     @pytest.mark.anyio
     async def test_contains_mismatch_message_uses_substring_label(self) -> None:
         """Message has 'substring' wording and '(contains)' label."""
         page = _Page(url="https://actual")
+        session = _Session(page)
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_url(page, "missing-piece", mode="contains")
+            await macro_checks._check_url(session, "missing-piece", mode="contains")
         msg = str(exc_info.value)
         assert "substring" in msg
         assert "(contains)" in msg
@@ -112,14 +134,16 @@ class TestCheckUrlRegexBranch:
     async def test_default_mode_is_regex(self) -> None:
         """Mode default is 'regex' — calling without mode should regex-match."""
         page = _Page(url="https://example.test/path")
-        assert await macro_checks._check_url(page, r"example\.test") == "https://example.test/path"
+        session = _Session(page)
+        assert await macro_checks._check_url(session, r"example\.test") == "https://example.test/path"
 
     @pytest.mark.anyio
     async def test_regex_mismatch_message_uses_pattern_label(self) -> None:
         """Message has 'pattern' wording and '(regex)' label."""
         page = _Page(url="https://actual")
+        session = _Session(page)
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_url(page, r"^nomatch$", mode="regex")
+            await macro_checks._check_url(session, r"^nomatch$", mode="regex")
         msg = str(exc_info.value)
         assert "pattern" in msg
         assert "(regex)" in msg
@@ -130,8 +154,11 @@ class TestCheckUrlRegexBranch:
     async def test_regex_uses_re_search_not_match(self) -> None:
         """Pattern matches anywhere in URL (re.search), not anchored to start (re.match)."""
         page = _Page(url="https://example.test/middle/path")
+        session = _Session(page)
         # If implementation used re.match, this would fail — re.search succeeds.
-        assert await macro_checks._check_url(page, r"middle/path", mode="regex") == "https://example.test/middle/path"
+        assert (
+            await macro_checks._check_url(session, r"middle/path", mode="regex") == "https://example.test/middle/path"
+        )
 
 
 class TestCheckUrlUnknownMode:
@@ -139,8 +166,9 @@ class TestCheckUrlUnknownMode:
     async def test_unknown_mode_raises_value_error_with_mode_repr(self) -> None:
         """ValueError message must include the bad mode repr-quoted and list valid modes."""
         page = _Page()
+        session = _Session(page)
         with pytest.raises(ValueError) as exc_info:
-            await macro_checks._check_url(page, "x", mode="bogus")
+            await macro_checks._check_url(session, "x", mode="bogus")
         msg = str(exc_info.value)
         assert "unknown mode" in msg
         assert "'bogus'" in msg  # repr quoting
@@ -157,32 +185,36 @@ class TestCheckTextDefaults:
     async def test_default_mode_is_contains(self) -> None:
         """Mode default is 'contains'."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("hello world")
         # No mode kwarg.
-        assert await macro_checks._check_text(page, "#x", "hello") == "hello world"
+        assert await macro_checks._check_text(session, "#x", "hello") == "hello world"
 
     @pytest.mark.anyio
     async def test_timeout_ms_none_falls_back_to_10000(self) -> None:
         """The `timeout_ms or 10000` fallback when timeout_ms is None."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("ok")
-        await macro_checks._check_text(page, "#x", "ok")
+        await macro_checks._check_text(session, "#x", "ok")
         assert page.wait_calls == [("#x", 10000)]
 
     @pytest.mark.anyio
     async def test_timeout_ms_zero_falls_back_to_10000(self) -> None:
         """0 is falsy; `or 10000` triggers the fallback."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("ok")
-        await macro_checks._check_text(page, "#x", "ok", timeout_ms=0)
+        await macro_checks._check_text(session, "#x", "ok", timeout_ms=0)
         assert page.wait_calls == [("#x", 10000)]
 
     @pytest.mark.anyio
     async def test_timeout_ms_explicit_value_passes_through(self) -> None:
         """Truthy timeout passes through verbatim."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("ok")
-        await macro_checks._check_text(page, "#x", "ok", timeout_ms=2500)
+        await macro_checks._check_text(session, "#x", "ok", timeout_ms=2500)
         assert page.wait_calls == [("#x", 2500)]
 
 
@@ -191,9 +223,10 @@ class TestCheckTextElementMissing:
     async def test_missing_element_message_includes_selector(self) -> None:
         """Mutating the f-string would lose the selector name."""
         page = _Page()
+        session = _Session(page)
         # selector_map empty → wait_for_selector returns None.
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_text(page, "#nope", "irrelevant")
+            await macro_checks._check_text(session, "#nope", "irrelevant")
         msg = str(exc_info.value)
         assert "never appeared" in msg
         assert '"#nope"' in msg
@@ -204,9 +237,10 @@ class TestCheckTextContainsBranch:
     async def test_contains_mismatch_message_format(self) -> None:
         """Message: text mismatch on "<selector>": expected to contain "<text>", got "<actual>"."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("hello world")
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_text(page, "#x", "missing", mode="contains")
+            await macro_checks._check_text(session, "#x", "missing", mode="contains")
         msg = str(exc_info.value)
         assert '"#x"' in msg
         assert "expected to contain" in msg
@@ -218,16 +252,18 @@ class TestCheckTextEqualsBranch:
     @pytest.mark.anyio
     async def test_equals_match_returns_actual(self) -> None:
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("exact")
-        assert await macro_checks._check_text(page, "#x", "exact", mode="equals") == "exact"
+        assert await macro_checks._check_text(session, "#x", "exact", mode="equals") == "exact"
 
     @pytest.mark.anyio
     async def test_equals_mismatch_message_includes_equals_label(self) -> None:
         """'(equals)' label and both expected/actual in repr-quotes."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("got-this")
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_text(page, "#x", "want-that", mode="equals")
+            await macro_checks._check_text(session, "#x", "want-that", mode="equals")
         msg = str(exc_info.value)
         assert "(equals)" in msg
         assert '"want-that"' in msg
@@ -238,16 +274,18 @@ class TestCheckTextRegexBranch:
     @pytest.mark.anyio
     async def test_regex_match_returns_actual(self) -> None:
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("hello world 123")
-        assert await macro_checks._check_text(page, "#x", r"world \d+", mode="regex") == "hello world 123"
+        assert await macro_checks._check_text(session, "#x", r"world \d+", mode="regex") == "hello world 123"
 
     @pytest.mark.anyio
     async def test_regex_mismatch_message_includes_pattern_label(self) -> None:
         """Message uses 'pattern' wording and '(regex)' label."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("hello")
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_text(page, "#x", r"^zzz$", mode="regex")
+            await macro_checks._check_text(session, "#x", r"^zzz$", mode="regex")
         msg = str(exc_info.value)
         assert "pattern" in msg
         assert "(regex)" in msg
@@ -258,9 +296,10 @@ class TestCheckTextUnknownMode:
     async def test_unknown_mode_raises_with_repr_and_valid_list(self) -> None:
         """ValueError message includes repr'd mode and the three valid mode names."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("ok")
         with pytest.raises(ValueError) as exc_info:
-            await macro_checks._check_text(page, "#x", "ok", mode="weird")
+            await macro_checks._check_text(session, "#x", "ok", mode="weird")
         msg = str(exc_info.value)
         assert "'weird'" in msg
         assert "contains" in msg
@@ -276,8 +315,9 @@ class TestCheckSelectorPresentBranch:
     async def test_present_default_true(self) -> None:
         """Default present=True calls wait_for_selector."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("x")
-        await macro_checks._check_selector(page, "#x")
+        await macro_checks._check_selector(session, "#x")
         assert page.wait_calls == [("#x", 10000)]
         assert page.query_calls == []
 
@@ -285,31 +325,35 @@ class TestCheckSelectorPresentBranch:
     async def test_present_returns_none(self) -> None:
         """Function returns None on success."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("x")
-        result = await macro_checks._check_selector(page, "#x", present=True)
+        result = await macro_checks._check_selector(session, "#x", present=True)
         assert result is None
 
     @pytest.mark.anyio
     async def test_present_timeout_ms_none_falls_back_to_10000(self) -> None:
         """`timeout_ms or 10000` for the present-branch wait_for_selector call."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("x")
-        await macro_checks._check_selector(page, "#x", present=True, timeout_ms=None)
+        await macro_checks._check_selector(session, "#x", present=True, timeout_ms=None)
         assert page.wait_calls == [("#x", 10000)]
 
     @pytest.mark.anyio
     async def test_present_timeout_ms_zero_falls_back_to_10000(self) -> None:
         """0 is falsy; the `or 10000` fallback triggers."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("x")
-        await macro_checks._check_selector(page, "#x", present=True, timeout_ms=0)
+        await macro_checks._check_selector(session, "#x", present=True, timeout_ms=0)
         assert page.wait_calls == [("#x", 10000)]
 
     @pytest.mark.anyio
     async def test_present_timeout_ms_explicit_passes_through(self) -> None:
         page = _Page()
+        session = _Session(page)
         page.selector_map["#x"] = _Elem("x")
-        await macro_checks._check_selector(page, "#x", present=True, timeout_ms=750)
+        await macro_checks._check_selector(session, "#x", present=True, timeout_ms=750)
         assert page.wait_calls == [("#x", 750)]
 
 
@@ -318,8 +362,9 @@ class TestCheckSelectorAbsentBranch:
     async def test_absent_uses_query_selector_not_wait(self) -> None:
         """The absent branch uses query_selector so it doesn't block."""
         page = _Page()
+        session = _Session(page)
         # Absent: not in selector_map.
-        await macro_checks._check_selector(page, "#missing", present=False)
+        await macro_checks._check_selector(session, "#missing", present=False)
         assert page.query_calls == ["#missing"]
         assert page.wait_calls == []
 
@@ -327,16 +372,18 @@ class TestCheckSelectorAbsentBranch:
     async def test_absent_succeeds_when_element_truly_absent(self) -> None:
         """No element → no error."""
         page = _Page()
-        result = await macro_checks._check_selector(page, "#missing", present=False)
+        session = _Session(page)
+        result = await macro_checks._check_selector(session, "#missing", present=False)
         assert result is None
 
     @pytest.mark.anyio
     async def test_absent_raises_when_element_found_with_selector_in_message(self) -> None:
         """RuntimeError message must include the selector name."""
         page = _Page()
+        session = _Session(page)
         page.selector_map["#here"] = _Elem("oops")
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_selector(page, "#here", present=False)
+            await macro_checks._check_selector(session, "#here", present=False)
         msg = str(exc_info.value)
         assert "should be absent" in msg
         assert '"#here"' in msg
@@ -345,8 +392,9 @@ class TestCheckSelectorAbsentBranch:
     async def test_absent_does_not_consult_timeout_for_query(self) -> None:
         """The absent branch ignores timeout_ms (passes nothing to query_selector)."""
         page = _Page()
+        session = _Session(page)
         # Even with a non-default timeout, the absent path doesn't touch wait_for_selector.
-        await macro_checks._check_selector(page, "#missing", present=False, timeout_ms=99999)
+        await macro_checks._check_selector(session, "#missing", present=False, timeout_ms=99999)
         assert page.wait_calls == []
 
 
@@ -357,16 +405,18 @@ class TestCheckJsEqualsBranch:
     @pytest.mark.anyio
     async def test_equals_match_returns_result(self) -> None:
         page = _Page()
+        session = _Session(page)
         page.eval_result = 42
-        assert await macro_checks._check_js(page, "x", equals=42) == 42
+        assert await macro_checks._check_js(session, "x", equals=42) == 42
 
     @pytest.mark.anyio
     async def test_equals_mismatch_message_format(self) -> None:
         """Message: 'JS assertion failed' + repr-quoted expression/expected/got."""
         page = _Page()
+        session = _Session(page)
         page.eval_result = 99
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_js(page, "x.length", equals=42)
+            await macro_checks._check_js(session, "x.length", equals=42)
         msg = str(exc_info.value)
         assert "JS assertion failed" in msg
         assert "expression='x.length'" in msg
@@ -377,33 +427,37 @@ class TestCheckJsEqualsBranch:
     async def test_equals_zero_routes_through_equals_branch(self) -> None:
         """`equals is not None` — 0 should NOT fall through to truthy check."""
         page = _Page()
+        session = _Session(page)
         page.eval_result = 0
         # Both equals=0 and result=0 → equality holds → no raise, returns 0.
-        assert await macro_checks._check_js(page, "x", equals=0) == 0
+        assert await macro_checks._check_js(session, "x", equals=0) == 0
 
     @pytest.mark.anyio
     async def test_equals_empty_string_routes_through_equals_branch(self) -> None:
         """`equals is not None` — '' should NOT fall through to truthy check."""
         page = _Page()
+        session = _Session(page)
         page.eval_result = ""
         # equals='' and result='' match → returns ''.
-        assert await macro_checks._check_js(page, "x", equals="") == ""
+        assert await macro_checks._check_js(session, "x", equals="") == ""
 
 
 class TestCheckJsTruthyBranch:
     @pytest.mark.anyio
     async def test_truthy_returns_result(self) -> None:
         page = _Page()
+        session = _Session(page)
         page.eval_result = {"any": "truthy"}
-        assert await macro_checks._check_js(page, "x") == {"any": "truthy"}
+        assert await macro_checks._check_js(session, "x") == {"any": "truthy"}
 
     @pytest.mark.anyio
     async def test_falsy_no_equals_raises_with_not_truthy_label(self) -> None:
         """Truthy-branch message includes '(not truthy)'."""
         page = _Page()
+        session = _Session(page)
         page.eval_result = 0
         with pytest.raises(RuntimeError) as exc_info:
-            await macro_checks._check_js(page, "x")
+            await macro_checks._check_js(session, "x")
         msg = str(exc_info.value)
         assert "(not truthy)" in msg
         assert "expression='x'" in msg
@@ -413,22 +467,25 @@ class TestCheckJsTruthyBranch:
     async def test_none_result_with_no_equals_raises(self) -> None:
         """None is falsy; truthy branch raises."""
         page = _Page()
+        session = _Session(page)
         page.eval_result = None
         with pytest.raises(RuntimeError):
-            await macro_checks._check_js(page, "x")
+            await macro_checks._check_js(session, "x")
 
     @pytest.mark.anyio
     async def test_empty_list_with_no_equals_raises(self) -> None:
         """Empty list is falsy."""
         page = _Page()
+        session = _Session(page)
         page.eval_result = []
         with pytest.raises(RuntimeError):
-            await macro_checks._check_js(page, "x")
+            await macro_checks._check_js(session, "x")
 
     @pytest.mark.anyio
     async def test_evaluate_called_with_expression_verbatim(self) -> None:
         """Mutating the expression argument would change what page.evaluate sees."""
         page = _Page()
+        session = _Session(page)
         page.eval_result = True
-        await macro_checks._check_js(page, "window.foo === 'bar'")
+        await macro_checks._check_js(session, "window.foo === 'bar'")
         assert page.eval_calls == ["window.foo === 'bar'"]
