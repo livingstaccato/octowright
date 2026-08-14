@@ -74,6 +74,29 @@ def _fake_session(
     )
 
 
+# ─── operation_queue_timeout_seconds ────────────────────────────────────────
+
+
+class TestOperationQueueTimeoutSeconds:
+    def test_default_resolves_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS", raising=False)
+        assert BrowserPool().operation_queue_timeout_seconds == 300.0
+
+    def test_explicit_value_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS", "99")
+        pool = BrowserPool(operation_queue_timeout_seconds=17.0)
+        assert pool.operation_queue_timeout_seconds == 17.0
+
+    def test_env_value_used_when_not_explicit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS", "42")
+        assert BrowserPool().operation_queue_timeout_seconds == 42.0
+
+    def test_property_is_read_only(self) -> None:
+        pool = BrowserPool()
+        with pytest.raises(AttributeError):
+            pool.operation_queue_timeout_seconds = 5.0  # type: ignore[misc]
+
+
 # ─── LaunchOptions ───────────────────────────────────────────────────────────
 
 

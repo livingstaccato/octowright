@@ -30,6 +30,7 @@ from octowright.browser_pool.visuals import _tile_args_for_chromium
 from octowright.defaults import RECORDINGS_DIR, get_default_url
 from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
 from octowright.session import BrowserSession
+from octowright.session.operation_gate import resolve_operation_queue_timeout_seconds
 
 log = get_logger(__name__)
 
@@ -47,9 +48,19 @@ class BrowserPool:
     # "relaunch" hint in get(); bounded so a long-lived pool can't leak.
     _RECENTLY_EVICTED_CAP = 64
 
-    def __init__(self, *, recordings_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        recordings_dir: Path | None = None,
+        operation_queue_timeout_seconds: float | None = None,
+    ) -> None:
         # Per-pool artefact write root (custom root = write-side only); see CLAUDE.md.
         self._recordings_dir = (recordings_dir if recordings_dir is not None else RECORDINGS_DIR).expanduser()
+        # Resolved once here (explicit arg > OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS
+        # > default) and handed to every session this pool launches, so all
+        # sessions in one pool share one effective queue timeout instead of each
+        # re-reading the env var at construction time.
+        self._operation_queue_timeout_seconds = resolve_operation_queue_timeout_seconds(operation_queue_timeout_seconds)
         self._pw: Playwright | None = None
         self._pw_lock = asyncio.Lock()
         # Count of shared-driver rebuilds after a death (surfaced in status).
@@ -77,6 +88,11 @@ class BrowserPool:
     def recordings_dir(self) -> Path:
         """Root this pool writes per-launch artefacts under (see __init__)."""
         return self._recordings_dir
+
+    @property
+    def operation_queue_timeout_seconds(self) -> float:
+        """Effective per-session operation-gate queue timeout this pool passes to every launch (see __init__)."""
+        return self._operation_queue_timeout_seconds
 
     async def _ensure_pw(self) -> Playwright:
         async with self._pw_lock:
