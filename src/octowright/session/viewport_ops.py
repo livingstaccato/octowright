@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from provide.telemetry import get_logger
+
 from octowright.session._protocols import SessionLike
+
+log = get_logger(__name__)
 
 __all__ = ["VIEWPORT_ROUNDING_SLACK", "SessionViewportMixin"]
 
@@ -45,10 +49,71 @@ class SessionViewportMixin(SessionLike):
     viewport_frame_inset_w: int | None
     viewport_frame_inset_h: int | None
 
+    async def measure_frame_inset(self, page: Any = None) -> None:
+        """Record the browser chrome around the content area.
+
+        Valid at exactly one kind of moment: just after Playwright has WELDED
+        the OS window to the viewport, which it does at launch and again on
+        every ``set_viewport_size``. At that instant ``outer - inner`` is the
+        chrome and nothing else. At any other time the same difference may also
+        carry drift -- a tiling WM, a maximise the emulated viewport did not
+        follow -- which is precisely what ``viewport_status`` reports by
+        subtracting this baseline, and would hide if it re-measured then.
+
+        Best-effort by design: a failure leaves the inset None, and every
+        consumer treats None as "cannot see the window" and declines to warn.
+        Neither launching a browser nor resizing one may fail over a diagnostic
+        measurement.
+        """
+        target = self.page if page is None else page
+        try:
+            measured = await target.evaluate(
+                """() => ({
+                    dw: window.outerWidth - window.innerWidth,
+                    dh: window.outerHeight - window.innerHeight
+                })"""
+            )
+            inset_w = int(measured["dw"])
+            inset_h = int(measured["dh"])
+        except Exception as exc:
+            log.debug("octowright.viewport.frame_inset_unavailable", error=repr(exc))
+            return
+        # Headless reports outer == inner (no window, no chrome), which is a
+        # true zero inset rather than a failed measurement. Negative is
+        # nonsense -- a window cannot be smaller than its own content area --
+        # so treat it as unmeasured rather than storing a number that would
+        # overstate the content area and invent a mismatch.
+        if inset_w < 0 or inset_h < 0:
+            log.debug("octowright.viewport.frame_inset_negative", width=inset_w, height=inset_h)
+            return
+        self.viewport_frame_inset_w = inset_w
+        self.viewport_frame_inset_h = inset_h
+
     async def resize(self, width: int, height: int) -> dict[str, Any]:
         await self.page.set_viewport_size({"width": width, "height": height})
+        # Re-measure: Playwright has just re-welded the window to the new
+        # viewport, so the chrome is measurable again -- and it may genuinely
+        # have CHANGED. A fluid session reports the real layout viewport, which
+        # excludes the classic scrollbar; a fixed one is emulated and does not.
+        # Measured on the same browser: 24x112 fluid against 8x85 fixed.
+        # Keeping the launch figure across the mode change would understate the
+        # content area by the difference and report a mismatch that is not
+        # there -- the exact false positive this check was rewritten to remove.
+        await self.measure_frame_inset()
+        # Record the new size as the session's own. Leaving it stale meant
+        # viewport_status reported a `configured` the page had not had since
+        # the resize, and the in-page pill announced a size the page was not.
+        #
+        # The mode moves to fixed because that is what happened: set_viewport_size
+        # pins the viewport, and a pinned viewport no longer follows its window.
+        # Saying "fluid" afterwards was not merely a wrong label -- `mismatch`
+        # only evaluates for fixed sessions, so a resized fluid session had
+        # drift detection silently switched off with nothing to say so.
+        self.viewport_mode = "fixed"
+        self.viewport_width = width
+        self.viewport_height = height
         self.recorder.record("resize", width=width, height=height)
-        return {"ok": True, "width": width, "height": height}
+        return {"ok": True, "mode": "fixed", "width": width, "height": height}
 
     def _content_area(self, outer: dict[str, int]) -> dict[str, int] | None:
         """The window's content area: the outer window less the browser chrome.
@@ -140,6 +205,9 @@ class SessionViewportMixin(SessionLike):
         if width <= 0 or height <= 0:
             raise ValueError("unable to measure a usable viewport size")
         await self.page.set_viewport_size({"width": width, "height": height})
+        # Same reason as resize(): the window has just been re-welded, which is
+        # both when the chrome is measurable and when it may have changed.
+        await self.measure_frame_inset()
         self.viewport_mode = "fixed"
         self.viewport_width = width
         self.viewport_height = height
