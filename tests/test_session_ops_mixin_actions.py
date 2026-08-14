@@ -60,6 +60,8 @@ def _build(tmp_path: Path, *, page: Any = None, context: Any = None, **overrides
     inst.viewport_mode = "unknown"
     inst.viewport_width = None
     inst.viewport_height = None
+    inst.viewport_frame_inset_w = None
+    inst.viewport_frame_inset_h = None
     inst._video = None
     inst._bg_tasks = set()
     inst.instance_id = "abc123"
@@ -247,51 +249,189 @@ class TestNavigateBackResize:
         assert out == {"ok": True, "width": 800, "height": 600}
         assert inst.recorder.events[0] == ("resize", {"width": 800, "height": 600})
 
-    @pytest.mark.anyio
-    async def test_viewport_status_reports_fixed_mismatch(self, tmp_path: Path) -> None:
+    @staticmethod
+    def _measuring(inner: tuple[int, int], outer: tuple[int, int], dpr: int = 2) -> Any:
         page = MagicMock()
         page.evaluate = AsyncMock(
             return_value={
-                "innerWidth": 1280,
-                "innerHeight": 800,
-                "outerWidth": 1512,
-                "outerHeight": 930,
-                "devicePixelRatio": 2,
-            }
-        )
-        inst = _build(tmp_path, page=page, viewport_mode="fixed", viewport_width=1280, viewport_height=800)
-
-        status = await inst.viewport_status()
-
-        assert status["mode"] == "fixed"
-        assert status["page"] == {"width": 1280, "height": 800}
-        assert status["outer"] == {"width": 1512, "height": 930}
-        assert status["configured"] == {"width": 1280, "height": 800}
-        assert status["device_pixel_ratio"] == 2
-        assert status["mismatch"] is True
-
-    @pytest.mark.anyio
-    async def test_viewport_sync_uses_measured_outer_size(self, tmp_path: Path) -> None:
-        page = MagicMock()
-        page.evaluate = AsyncMock(
-            return_value={
-                "innerWidth": 1280,
-                "innerHeight": 800,
-                "outerWidth": 1512,
-                "outerHeight": 930,
-                "devicePixelRatio": 2,
+                "innerWidth": inner[0],
+                "innerHeight": inner[1],
+                "outerWidth": outer[0],
+                "outerHeight": outer[1],
+                "devicePixelRatio": dpr,
             }
         )
         page.set_viewport_size = AsyncMock()
-        inst = _build(tmp_path, page=page, viewport_mode="fixed", viewport_width=1280, viewport_height=800)
+        return page
+
+    @pytest.mark.anyio
+    async def test_viewport_status_does_not_call_browser_chrome_a_mismatch(self, tmp_path: Path) -> None:
+        """A window that merely wears its own chrome is not drifting.
+
+        The exact numbers observed in the field: a fixed 1400x900 session on
+        Linux/Wayland chromium, whose window is 1408x985 because the tab strip
+        and address bar are 85px tall. Playwright welds the window to the
+        viewport, so this is the resting state of EVERY headed fixed session
+        -- and the old check (outer vs inner, tolerating 24x80px of chrome)
+        called it a mismatch from the moment the browser opened. A warning
+        that is always on cannot warn.
+        """
+        page = self._measuring(inner=(1400, 900), outer=(1408, 985))
+        inst = _build(
+            tmp_path,
+            page=page,
+            viewport_mode="fixed",
+            viewport_width=1400,
+            viewport_height=900,
+            viewport_frame_inset_w=8,
+            viewport_frame_inset_h=85,
+        )
+
+        status = await inst.viewport_status()
+
+        assert status["mismatch"] is False
+        assert status["content"] == {"width": 1400, "height": 900}
+        assert status["frame_inset"] == {"width": 8, "height": 85}
+
+    @pytest.mark.anyio
+    async def test_viewport_status_reports_a_window_the_viewport_did_not_follow(self, tmp_path: Path) -> None:
+        """The signal the badge exists for, now that chrome no longer drowns it.
+
+        Same 8x85 chrome, but the window is 1908x1385 -- a maximise the
+        emulated viewport did not follow. The content area is 1900x1300 while
+        the page still renders 1400x900, so a screenshot is not what someone
+        at this window sees. That is a mismatch.
+        """
+        page = self._measuring(inner=(1400, 900), outer=(1908, 1385))
+        inst = _build(
+            tmp_path,
+            page=page,
+            viewport_mode="fixed",
+            viewport_width=1400,
+            viewport_height=900,
+            viewport_frame_inset_w=8,
+            viewport_frame_inset_h=85,
+        )
+
+        status = await inst.viewport_status()
+
+        assert status["mismatch"] is True
+        assert status["content"] == {"width": 1900, "height": 1300}
+        assert status["page"] == {"width": 1400, "height": 900}
+        assert status["outer"] == {"width": 1908, "height": 1385}
+        assert status["configured"] == {"width": 1400, "height": 900}
+        assert status["device_pixel_ratio"] == 2
+
+    @pytest.mark.anyio
+    async def test_viewport_status_declines_to_warn_without_a_measured_inset(self, tmp_path: Path) -> None:
+        """No inset means we cannot see the window, so we say nothing.
+
+        Guessing the chrome is exactly what produced the permanent false
+        positive; the numbers here would trip any fixed allowance.
+        """
+        page = self._measuring(inner=(1400, 900), outer=(1908, 1385))
+        inst = _build(tmp_path, page=page, viewport_mode="fixed", viewport_width=1400, viewport_height=900)
+
+        status = await inst.viewport_status()
+
+        assert status["mismatch"] is False
+        assert status["content"] is None
+        assert status["frame_inset"] == {"width": None, "height": None}
+
+    @pytest.mark.anyio
+    async def test_viewport_status_ignores_rounding_slack(self, tmp_path: Path) -> None:
+        """A CSS pixel of rounding under a fractional DPR is not drift."""
+        page = self._measuring(inner=(1400, 900), outer=(1409, 986), dpr=1)
+        inst = _build(
+            tmp_path,
+            page=page,
+            viewport_mode="fixed",
+            viewport_width=1400,
+            viewport_height=900,
+            viewport_frame_inset_w=8,
+            viewport_frame_inset_h=85,
+        )
+
+        assert (await inst.viewport_status())["mismatch"] is False
+
+    @pytest.mark.anyio
+    async def test_viewport_status_stays_quiet_in_fluid_mode(self, tmp_path: Path) -> None:
+        page = self._measuring(inner=(1276, 888), outer=(1300, 1000))
+        inst = _build(
+            tmp_path,
+            page=page,
+            viewport_mode="fluid",
+            viewport_frame_inset_w=24,
+            viewport_frame_inset_h=112,
+        )
+
+        status = await inst.viewport_status()
+
+        assert status["mismatch"] is False
+        assert status["fluid"] is True
+
+    @pytest.mark.anyio
+    async def test_viewport_sync_targets_the_content_area_not_the_outer_window(self, tmp_path: Path) -> None:
+        """Sync must land on the size the page can actually fill.
+
+        Targeting the outer window is how sync used to grow the viewport by a
+        whole browser chrome on every call -- Playwright resizes the window to
+        fit whatever viewport it is given, so asking for the window's own size
+        makes the window bigger, and the next call bigger again. Measured from
+        1000x700: 1008x785, 1016x870, 1024x955, 1032x1040.
+        """
+        page = self._measuring(inner=(1400, 900), outer=(1908, 1385))
+        inst = _build(
+            tmp_path,
+            page=page,
+            viewport_mode="fixed",
+            viewport_width=1400,
+            viewport_height=900,
+            viewport_frame_inset_w=8,
+            viewport_frame_inset_h=85,
+        )
 
         result = await inst.viewport_sync()
 
-        page.set_viewport_size.assert_awaited_once_with({"width": 1512, "height": 930})
-        assert result == {"ok": True, "mode": "fixed", "width": 1512, "height": 930}
-        assert inst.viewport_width == 1512
-        assert inst.viewport_height == 930
-        assert inst.recorder.events[0] == ("resize", {"width": 1512, "height": 930})
+        page.set_viewport_size.assert_awaited_once_with({"width": 1900, "height": 1300})
+        assert result == {"ok": True, "mode": "fixed", "width": 1900, "height": 1300}
+        assert inst.viewport_width == 1900
+        assert inst.viewport_height == 1300
+        assert inst.recorder.events[0] == ("resize", {"width": 1900, "height": 1300})
+
+    @pytest.mark.anyio
+    async def test_viewport_sync_is_idempotent_on_a_settled_window(self, tmp_path: Path) -> None:
+        """Syncing a window that is already welded to its viewport changes nothing.
+
+        The regression that matters: the old sync asked for 1408x985 here and
+        would have asked for something larger again next time.
+        """
+        page = self._measuring(inner=(1400, 900), outer=(1408, 985))
+        inst = _build(
+            tmp_path,
+            page=page,
+            viewport_mode="fixed",
+            viewport_width=1400,
+            viewport_height=900,
+            viewport_frame_inset_w=8,
+            viewport_frame_inset_h=85,
+        )
+
+        result = await inst.viewport_sync()
+
+        page.set_viewport_size.assert_awaited_once_with({"width": 1400, "height": 900})
+        assert result == {"ok": True, "mode": "fixed", "width": 1400, "height": 900}
+
+    @pytest.mark.anyio
+    async def test_viewport_sync_without_an_inset_keeps_the_current_size(self, tmp_path: Path) -> None:
+        """Unmeasured chrome means no target, so sync holds rather than grows."""
+        page = self._measuring(inner=(1400, 900), outer=(1908, 1385))
+        inst = _build(tmp_path, page=page, viewport_mode="fixed", viewport_width=1400, viewport_height=900)
+
+        result = await inst.viewport_sync()
+
+        page.set_viewport_size.assert_awaited_once_with({"width": 1400, "height": 900})
+        assert result == {"ok": True, "mode": "fixed", "width": 1400, "height": 900}
 
 
 # ─── open_url ──────────────────────────────────────────────────────────────

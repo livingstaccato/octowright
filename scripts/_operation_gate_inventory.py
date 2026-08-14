@@ -31,6 +31,10 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "launch-time-before-session-publication",
         "creates context/page before BrowserSession construction and registry publication",
     ),
+    "browser_pool/launch_helpers.py:_measure_frame_inset": (
+        "launch-time-before-session-publication",
+        "measures the launch-welded browser chrome inset before registry publication",
+    ),
     "browser_pool/visuals.py:wire_init_scripts": (
         "launch-time-before-session-publication",
         "injects context init scripts before BrowserSession registry publication",

@@ -6,8 +6,11 @@
     const INITIAL = __VIEWPORT_INFO__;
     const CLICK_MODIFIER = "altKey";
     const ALT_HOLD_MS = 1000;
-    const FRAME_TOLERANCE_W = 24;
-    const FRAME_TOLERANCE_H = 80;
+    // CSS pixels of slack when comparing the viewport against the window's
+    // content area — rounding under a fractional devicePixelRatio, nothing
+    // more. Mirrors VIEWPORT_ROUNDING_SLACK in session/viewport_ops.py;
+    // change both together or the pill and the tool will disagree.
+    const ROUNDING_SLACK = 2;
 
     let modifierActive = false;
     let modifierHeld = false;
@@ -21,14 +24,36 @@
         outerHeight: window.outerHeight || 0,
     });
 
+    // The window's content area: the outer window less the browser chrome
+    // measured at launch. null when that measurement is unavailable.
+    const contentArea = () => {
+        const m = measure();
+        if (current.inset_w === null || current.inset_w === undefined) return null;
+        if (current.inset_h === null || current.inset_h === undefined) return null;
+        if (m.outerWidth <= 0 || m.outerHeight <= 0) return null;
+        return {
+            width: Math.max(0, m.outerWidth - current.inset_w),
+            height: Math.max(0, m.outerHeight - current.inset_h),
+        };
+    };
+
+    // Is the page rendering at a different size from the window around it?
+    //
+    // Compares the viewport against the CONTENT AREA. Comparing it against
+    // the OUTER window — which this did, with a 24x80px allowance — measures
+    // the browser chrome rather than any drift, and chrome on Linux/Wayland
+    // is ~85px tall, over that bar. The badge read "fixed mismatch" on every
+    // headed fixed-viewport session from launch onwards, so a real drift was
+    // indistinguishable from the permanent false positive.
     const isMismatch = () => {
         if (current.mode !== "fixed") return false;
+        const content = contentArea();
+        if (!content) return false;
         const m = measure();
+        if (m.innerWidth <= 0 || m.innerHeight <= 0) return false;
         return (
-            m.outerWidth > 0 &&
-            m.outerHeight > 0 &&
-            (Math.abs(m.outerWidth - m.innerWidth) > FRAME_TOLERANCE_W ||
-                Math.abs(m.outerHeight - m.innerHeight) > FRAME_TOLERANCE_H)
+            Math.abs(content.width - m.innerWidth) > ROUNDING_SLACK ||
+            Math.abs(content.height - m.innerHeight) > ROUNDING_SLACK
         );
     };
 
@@ -82,7 +107,11 @@
         try {
             const result = await window.__octowright_viewport_action({ action: name, measured: measure() });
             if (name === "sync") {
-                current = { mode: "fixed", width: result.width, height: result.height };
+                // Spread `current` first: the chrome inset was measured at
+                // launch and is still valid after a sync. Replacing the whole
+                // object would drop it, contentArea() would go null, and the
+                // badge would be unable to warn for the rest of the session.
+                current = { ...current, mode: "fixed", width: result.width, height: result.height };
                 render();
                 setModalMessage(`${result.width}x${result.height}`, true);
             } else if (name === "relaunch-fluid") {
