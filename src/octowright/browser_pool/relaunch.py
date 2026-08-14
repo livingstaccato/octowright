@@ -31,7 +31,7 @@ from octowright.browser_pool.lifecycle import (
     RelaunchSnapshot,
     reserve_close_browser,
 )
-from octowright.session.operation_gate import SessionClosingError
+from octowright.session.operation_gate import SessionClosedError, SessionClosingError
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
@@ -106,19 +106,35 @@ async def _close_with_fallback_snapshot(
     warning_event: str,
 ) -> tuple[dict[str, Any] | None, RelaunchSnapshot]:
     """Reserve a fresh forced close with ``preparation`` and await its
-    durable outcome. ONLY a failure to acquire our OWN ticket -- the session
-    is already gone (``KeyError``), or another close/coordinator already
-    owns it (``SessionClosingError`` from ``require_fresh=True``, e.g. a
-    real external-close eviction's teardown-only reservation) -- falls back
-    to a pre-close read of ``source`` and still lets the caller launch a
-    replacement so the user isn't left with no browser.
+    durable outcome. ONLY a failure to acquire OR HOLD our OWN ticket falls
+    back to a pre-close read of ``source`` and still lets the caller launch
+    a replacement so the user isn't left with no browser -- covering THREE
+    distinct places an external close can win the race:
 
-    A failure AFTER our own ticket is admitted (teardown, the preparation
-    callback itself) is a REAL error and must propagate untouched: it is
-    deliberately NOT inside this function's try/except, only the
-    reservation step is. Coalescing those into the same fallback would
-    silently paper over a genuine close failure by pretending it was a
-    race and launching a replacement over a half-torn-down browser.
+    1. ``KeyError`` -- the session is already gone before we even try to
+       reserve (identity-aware ``expected_session`` lookup fails).
+    2. ``SessionClosingError`` -- another close/coordinator already owns the
+       cutoff (``require_fresh=True``), e.g. a real external-close
+       eviction's teardown-only reservation was installed first.
+    3. ``SessionClosedError`` from ``entry.reservation.wait()`` -- OUR OWN
+       ticket was admitted (``require_fresh=True`` guarantees it started
+       fresh), but an external close won the race for the GATE ITSELF
+       between admission and the coordinator task's bind (or grant, if the
+       gate was busy). ``_coordinate_close``'s ``except SessionClosedError``
+       branch ALWAYS calls ``prepare_then_teardown(session, None, ...)`` in
+       that path -- i.e. the REAL ``preparation`` callback is passed
+       explicitly as ``None`` and is therefore GUARANTEED never to have run
+       -- so this can only mean "our preparation never got its chance",
+       never "preparation ran and genuinely failed" (a failure from inside
+       the callback itself would surface as whatever THAT raised, not
+       ``SessionClosedError``, since exact-task reentrancy means our own
+       ``session.operation(...)`` call inside preparation cannot itself
+       raise it).
+
+    A failure of any OTHER kind, at any point, is a REAL error and must
+    propagate untouched. Coalescing those into the same fallback would
+    silently paper over a genuine close failure by pretending it was a race
+    and launching a replacement over a half-torn-down browser.
     """
     try:
         entry = await reserve_close_browser(
@@ -134,7 +150,12 @@ async def _close_with_fallback_snapshot(
     except (KeyError, SessionClosingError):
         log.warning(warning_event, instance_id=instance_id, kind=source.kind)
         return None, _relaunch_snapshot_from_session(source)
-    outcome = cast(CloseCoordinatorOutcome, await entry.reservation.wait())
+
+    try:
+        outcome = cast(CloseCoordinatorOutcome, await entry.reservation.wait())
+    except SessionClosedError:
+        log.warning(warning_event, instance_id=instance_id, kind=source.kind)
+        return None, _relaunch_snapshot_from_session(source)
     return outcome.response, cast(RelaunchSnapshot, outcome.prepared)
 
 
