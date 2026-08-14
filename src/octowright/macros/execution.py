@@ -189,9 +189,6 @@ async def _push_status(
     `done=True` freezes the elapsed counter and disables the pill's
     auto-hide so the final state stays on screen.
     """
-    page = session.page
-    if page is None:
-        return
     payload: dict[str, Any] = {"visible": visible}
     if text is not None:
         payload["text"] = text
@@ -199,12 +196,16 @@ async def _push_status(
         payload["start"] = True
     if done:
         payload["done"] = True
-    try:
-        await page.evaluate(_STATUS_PUSH_JS, payload)
-    except Exception as exc:
-        # Per silent-swallow policy: this is a user-action path, so log instead
-        # of truly swallowing. A failed pill push must not break macro dispatch.
-        log.debug("octowright.macro.pill_push_failed", error=repr(exc))
+    async with session.operation("macro_status"):
+        page = session.page
+        if page is None:
+            return
+        try:
+            await page.evaluate(_STATUS_PUSH_JS, payload)
+        except Exception as exc:
+            # Per silent-swallow policy: this is a user-action path, so log instead
+            # of truly swallowing. A failed pill push must not break macro dispatch.
+            log.debug("octowright.macro.pill_push_failed", error=repr(exc))
 
 
 def _resolve_slowmo_ms(slowmo_ms: int | None) -> int:
@@ -326,13 +327,14 @@ async def run_macro(
     slowmo_ms: int | None = None,
     ctx: Any | None = None,
 ) -> MacroRunResult:
-    with span(
-        "octowright.macro.run",
-        macro=name,
-        instance_id=session.instance_id,
-        kind=session.kind,
-    ):
-        return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx)
+    async with session.operation("macro_run"):
+        with span(
+            "octowright.macro.run",
+            macro=name,
+            instance_id=session.instance_id,
+            kind=session.kind,
+        ):
+            return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx)
 
 
 async def _run_macro_impl(
@@ -447,35 +449,45 @@ async def run_sequence(
     slowmo_ms: int | None = None,
     ctx: Any | None = None,
 ) -> MacroSequenceResult:
-    # Wrap the whole sequence in a single parent span so the per-macro
-    # ``octowright.macro.run`` spans nest underneath it in the trace tree
-    # (OTel context propagation handles the nesting automatically). Without
-    # this, N successive run_macro calls produced N sibling top-level spans
-    # with no aggregate to anchor sequence-level latency / status views.
-    with span(
-        "octowright.macro.run_sequence",
-        names_count=len(names),
-        stop_on_failure=stop_on_failure,
-    ):
-        resolved_args: list[dict[str, Any]] = []
-        for index in range(len(names)):
-            if args_list is not None and index < len(args_list):
-                resolved_args.append(args_list[index] or {})
-            else:
-                resolved_args.append({})
+    # The outer lease keeps "macro_run_sequence" as the observable root for
+    # every member macro's run_macro re-entry (same task, no re-queueing) --
+    # a manual action can't interleave between sequence steps any more than
+    # it can between actions inside a single run_macro.
+    async with session.operation("macro_run_sequence"):
+        # Wrap the whole sequence in a single parent span so the per-macro
+        # ``octowright.macro.run`` spans nest underneath it in the trace tree
+        # (OTel context propagation handles the nesting automatically). Without
+        # this, N successive run_macro calls produced N sibling top-level spans
+        # with no aggregate to anchor sequence-level latency / status views.
+        with span(
+            "octowright.macro.run_sequence",
+            names_count=len(names),
+            stop_on_failure=stop_on_failure,
+        ):
+            resolved_args: list[dict[str, Any]] = []
+            for index in range(len(names)):
+                if args_list is not None and index < len(args_list):
+                    resolved_args.append(args_list[index] or {})
+                else:
+                    resolved_args.append({})
 
-        steps: list[MacroSequenceStep] = []
-        all_ok = True
-        for name, step_args in zip(names, resolved_args, strict=True):
-            try:
-                outcome = await run_macro(session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx)
-                steps.append({**outcome, "ok": True})
-            except Exception as exc:
-                all_ok = False
-                steps.append(
-                    {"macro": name, "ok": False, "error": str(exc), "args_used": _redact_args_for_response(step_args)}
-                )
-                if stop_on_failure:
-                    raise
+            steps: list[MacroSequenceStep] = []
+            all_ok = True
+            for name, step_args in zip(names, resolved_args, strict=True):
+                try:
+                    outcome = await run_macro(session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx)
+                    steps.append({**outcome, "ok": True})
+                except Exception as exc:
+                    all_ok = False
+                    steps.append(
+                        {
+                            "macro": name,
+                            "ok": False,
+                            "error": str(exc),
+                            "args_used": _redact_args_for_response(step_args),
+                        }
+                    )
+                    if stop_on_failure:
+                        raise
 
-        return {"sequence": names, "steps": steps, "ok": all_ok}
+            return {"sequence": names, "steps": steps, "ok": all_ok}

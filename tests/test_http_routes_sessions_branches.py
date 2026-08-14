@@ -34,8 +34,10 @@ from octowright import http as _http
 from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.http import state as _http_state
 from octowright.http.routes import sessions as session_routes
+from octowright.http.routes import sessions_recording as session_recording_routes
 from octowright.recorder import Recorder
 from octowright.server import _state
+from octowright.session.operation_gate import SessionOperationGate
 
 # ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -89,6 +91,8 @@ class _FakePool:
     async def close(self, instance_id: str, *, force: bool = False) -> dict[str, Any]:
         if self.close_raises is not None:
             raise self.close_raises
+        if instance_id not in self._sessions:
+            raise KeyError(instance_id)
         self._sessions.pop(instance_id, None)
         if self.close_result is not None:
             return self.close_result
@@ -225,7 +229,7 @@ class TestRecordingDelete:
         """Successful delete fires the dashboard 'sessions' invalidation."""
         _write_recording(isolated_recordings, "invalsesn001")
         publish = AsyncMock()
-        monkeypatch.setattr(session_routes, "publish_dashboard_invalidation", publish)
+        monkeypatch.setattr(session_recording_routes, "publish_dashboard_invalidation", publish)
         client.delete("/api/sessions/invalsesn001/recording")
         publish.assert_awaited_once_with("sessions")
 
@@ -279,6 +283,57 @@ class TestRecordingDelete:
 # ─── session_selector_validate (POST /api/sessions/{id}/selector/validate) ──
 
 
+def _gated_session(instance_id: str, **overrides: Any) -> SimpleNamespace:
+    """A SimpleNamespace-based session fake with a real operation gate —
+    ``session_selector_validate`` awaits `.operation(...)` as an async
+    context manager, which a bare SimpleNamespace/MagicMock does not provide.
+    """
+    gate = SessionOperationGate(instance_id, "chromium", queue_timeout_seconds=30)
+    return SimpleNamespace(
+        instance_id=instance_id,
+        operation=gate.operation,
+        operation_snapshot=gate.snapshot,
+        _test_operation_gate=gate,
+        **overrides,
+    )
+
+
+def _selector_validate_request(sid: str, selector: str = ".btn-primary") -> SimpleNamespace:
+    """A minimal fake Starlette ``Request`` for calling
+    ``session_selector_validate`` directly (bypassing ``TestClient``, which
+    doesn't mix cleanly with a background task holding a session's gate open
+    in the same event loop)."""
+
+    async def _body() -> bytes:
+        return json.dumps({"selector": selector}).encode()
+
+    return SimpleNamespace(
+        path_params={"id": sid},
+        headers={"content-type": "application/json"},
+        body=_body,
+    )
+
+
+class _RaisingOperation:
+    """A ``.operation()`` replacement whose entry raises immediately --
+    proves a route's exception handler maps this specific gate error. A
+    plain class (not ``@asynccontextmanager``) so there's no syntactically-
+    required-but-unreachable ``yield`` after the ``raise`` for vulture to
+    (correctly) flag as dead code."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def __call__(self, _name: str, *, wait_timeout_seconds: object = None) -> _RaisingOperation:
+        return self
+
+    async def __aenter__(self) -> None:
+        raise self._exc
+
+    async def __aexit__(self, *_args: object) -> bool:
+        return False
+
+
 class TestSelectorValidate:
     def test_404_unknown_session(self, client: TestClient) -> None:
         """No live session with that id → 404."""
@@ -326,7 +381,7 @@ class TestSelectorValidate:
         locator.count = AsyncMock(return_value=3)
         page = MagicMock()
         page.locator = MagicMock(return_value=locator)
-        pool._sessions["selsesn00005"] = SimpleNamespace(instance_id="selsesn00005", page=page)
+        pool._sessions["selsesn00005"] = _gated_session("selsesn00005", page=page)
         r = client.post(
             "/api/sessions/selsesn00005/selector/validate",
             json={"selector": ".btn-primary"},
@@ -342,7 +397,7 @@ class TestSelectorValidate:
         locator.count = AsyncMock(return_value=0)
         page = MagicMock()
         page.locator = MagicMock(return_value=locator)
-        pool._sessions["selsesn00006"] = SimpleNamespace(instance_id="selsesn00006", page=page)
+        pool._sessions["selsesn00006"] = _gated_session("selsesn00006", page=page)
         r = client.post(
             "/api/sessions/selsesn00006/selector/validate",
             json={"selector": ".missing"},
@@ -358,7 +413,7 @@ class TestSelectorValidate:
         locator.count = AsyncMock(side_effect=ValueError("invalid selector"))
         page = MagicMock()
         page.locator = MagicMock(return_value=locator)
-        pool._sessions["selsesn00007"] = SimpleNamespace(instance_id="selsesn00007", page=page)
+        pool._sessions["selsesn00007"] = _gated_session("selsesn00007", page=page)
         r = client.post(
             "/api/sessions/selsesn00007/selector/validate",
             json={"selector": ":bogus(["},
@@ -370,6 +425,93 @@ class TestSelectorValidate:
         assert body["found"] is False
         assert body["count"] == 0
         assert "invalid selector" in body["error"]
+
+    async def test_gate_busy_times_out_fast_not_300s(
+        self, fakes: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dashboard_selector_validate must fail fast on a busy gate instead
+        of inheriting the operation gate's 300s MCP-tool default -- a human
+        watching the dashboard needs a legible failure, not a silent
+        multi-minute stall. Overrides the dashboard timeout down so the real
+        gate's timeout path is exercisable in a fast test."""
+        import asyncio
+        import time
+
+        monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS", "0.05")
+        pool: _FakePool = fakes["pool"]
+        page = MagicMock()
+        page.locator = MagicMock(return_value=MagicMock(count=AsyncMock(return_value=1)))
+        session = _gated_session("selbusy0001", page=page)
+        pool._sessions["selbusy0001"] = session
+
+        release = asyncio.Event()
+
+        async def _hold() -> None:
+            async with session.operation("owner"):
+                await release.wait()
+
+        holder = asyncio.create_task(_hold())
+        async with asyncio.timeout(1):
+            while session.operation_snapshot()["active_operation"] != "owner":
+                await asyncio.sleep(0)
+
+        request = _selector_validate_request("selbusy0001")
+        started = time.monotonic()
+        response = await asyncio.wait_for(session_routes.session_selector_validate(request), timeout=2.0)
+        elapsed = time.monotonic() - started
+
+        assert response.status_code == 503
+        # Comfortably under the 300s MCP-tool default -- proves the
+        # dashboard override is actually in effect, not just documented.
+        assert elapsed < 1.0
+        page.locator.assert_not_called()
+
+        release.set()
+        await holder
+
+    async def test_session_busy_timeout_error_maps_to_503(self, fakes: dict[str, Any]) -> None:
+        """A SessionBusyTimeoutError from the gate maps to 503, distinctly
+        from the generic locator-exception 400 branch -- locks in Task 10's
+        Step 5 error-mapping contract."""
+        from octowright.session.operation_gate import SessionBusyTimeoutError
+
+        pool: _FakePool = fakes["pool"]
+        page = MagicMock()
+        page.locator = MagicMock(return_value=MagicMock(count=AsyncMock(return_value=1)))
+        session = _gated_session("selbusyerr1", page=page)
+
+        session.operation = _RaisingOperation(
+            SessionBusyTimeoutError("session 'selbusyerr1' operation 'dashboard_selector_validate' timed out")
+        )
+        pool._sessions["selbusyerr1"] = session
+
+        request = _selector_validate_request("selbusyerr1")
+        response = await session_routes.session_selector_validate(request)
+
+        assert response.status_code == 503
+        page.locator.assert_not_called()
+
+    async def test_session_closing_error_maps_to_409(self, fakes: dict[str, Any]) -> None:
+        """A SessionClosingError from the gate maps to 409, not the generic
+        locator-exception 400 branch -- locks in Task 10's Step 5
+        error-mapping contract."""
+        from octowright.session.operation_gate import SessionClosingError
+
+        pool: _FakePool = fakes["pool"]
+        page = MagicMock()
+        page.locator = MagicMock(return_value=MagicMock(count=AsyncMock(return_value=1)))
+        session = _gated_session("selclosing1", page=page)
+
+        session.operation = _RaisingOperation(
+            SessionClosingError("session 'selclosing1' operation 'dashboard_selector_validate' rejected")
+        )
+        pool._sessions["selclosing1"] = session
+
+        request = _selector_validate_request("selclosing1")
+        response = await session_routes.session_selector_validate(request)
+
+        assert response.status_code == 409
+        page.locator.assert_not_called()
 
 
 # ─── session_close: 500 path + warm_close failure swallow ───────────────────
@@ -722,6 +864,9 @@ class TestSessionDetailLiveEdges:
         page.locator = MagicMock(return_value=locator)
         page.url = "https://octowright.com"
         recorder = SimpleNamespace(event_count=5, action_count=3)
+        # A real gate (not a MagicMock) — _live_session_detail_response awaits
+        # `.operation(...)` as an async context manager.
+        gate = SessionOperationGate(instance_id, "chromium", queue_timeout_seconds=30)
         return SimpleNamespace(
             instance_id=instance_id,
             kind="chromium",
@@ -741,6 +886,9 @@ class TestSessionDetailLiveEdges:
             page_count=1,
             page=page,
             recorder=recorder,
+            operation=gate.operation,
+            operation_snapshot=gate.snapshot,
+            _test_operation_gate=gate,
         )
 
     def test_aria_failure_does_not_break_detail(
@@ -778,6 +926,51 @@ class TestSessionDetailLiveEdges:
         r = client.get("/api/sessions/ariaok000001")
         assert r.status_code == 200
         assert r.json()["aria"] == "- button 'OK'"
+
+    async def test_busy_gate_degrades_fast_not_300s(
+        self, isolated_recordings: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The aria capture's operation boundary must fail fast on a busy
+        gate (falling into the existing debug-log-and-degrade branch)
+        instead of inheriting the operation gate's 300s MCP-tool default and
+        silently stalling the whole session-detail response for minutes.
+        Calls _live_session_detail_response directly rather than through
+        TestClient, which runs the ASGI app on its own thread/event loop —
+        incompatible with a gate Future created on this test's loop."""
+        import asyncio
+        import time
+
+        from octowright.http.routes.sessions import _live_session_detail_response
+
+        monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS", "0.05")
+        log_path = _write_recording(isolated_recordings, "ariabusy0001")
+        live = self._live_session("ariabusy0001", log_path)
+
+        release = asyncio.Event()
+
+        async def _hold() -> None:
+            async with live.operation("owner"):
+                await release.wait()
+
+        holder = asyncio.create_task(_hold())
+        async with asyncio.timeout(1):
+            while live.operation_snapshot()["active_operation"] != "owner":
+                await asyncio.sleep(0)
+
+        started = time.monotonic()
+        response = await asyncio.wait_for(_live_session_detail_response(live), timeout=2.0)
+        elapsed = time.monotonic() - started
+
+        assert response.status_code == 200
+        body = json.loads(response.body)
+        assert "aria" not in body
+        # Comfortably under the 300s MCP-tool default -- proves the
+        # dashboard override is actually in effect, not just documented.
+        assert elapsed < 1.0
+        live.page.locator.assert_not_called()
+
+        release.set()
+        await holder
 
     def test_aria_failure_logs_at_debug(
         self,

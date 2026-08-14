@@ -15,15 +15,30 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
 from octowright.browser_pool import crash_recovery, incidents
+from octowright.session.operation_gate import SessionOperationGate
+from tests._operation_gate_fakes import OperationAwareFake
 
 
-def _session(*, recoveries: int = 0, last_crash: float = 0.0) -> SimpleNamespace:
+class _FakeCrashSession(OperationAwareFake):
+    """Minimal session-shaped fake for crash-recovery tests: a real gate
+    (``_recover`` is ``async with session.operation("crash_recovery", ...)``)
+    plus whatever page/context/bookkeeping attributes the caller supplies."""
+
+    def __init__(self, **attrs: Any) -> None:
+        self.instance_id = attrs.pop("instance_id", "abc123")
+        self.kind = attrs.pop("kind", "chromium")
+        super().__init__()
+        for key, value in attrs.items():
+            setattr(self, key, value)
+
+
+def _session(*, recoveries: int = 0, last_crash: float = 0.0) -> _FakeCrashSession:
     dead_page = MagicMock(name="dead_page")
     dead_page.url = "https://example.com"
     dead_page.close = AsyncMock()
@@ -32,9 +47,7 @@ def _session(*, recoveries: int = 0, last_crash: float = 0.0) -> SimpleNamespace
     fresh_page.screenshot = AsyncMock()
     context = MagicMock()
     context.new_page = AsyncMock(return_value=fresh_page)
-    return SimpleNamespace(
-        instance_id="abc123",
-        kind="chromium",
+    return _FakeCrashSession(
         label=None,
         profile=None,
         log_path=Path("/tmp/x.jsonl"),
@@ -110,9 +123,7 @@ async def test_replace_crashed_page_no_duplicate_when_page_event_already_appende
     fresh.goto = AsyncMock()
     fresh.screenshot = AsyncMock()
     context = MagicMock()
-    s = SimpleNamespace(
-        instance_id="abc123",
-        kind="chromium",
+    s = _FakeCrashSession(
         label=None,
         profile=None,
         log_path=Path("/tmp/x.jsonl"),
@@ -328,3 +339,123 @@ def test_schedule_recovery_eligible_creates_tracked_task(monkeypatch: pytest.Mon
         s.context.new_page.assert_awaited_once()  # recovery replaced the dead page
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# operation-gate serialization (Task 6): crash_recovery as a durable system
+# operation with no ordinary queue timeout, invalidated by external close.
+# ---------------------------------------------------------------------------
+
+
+async def _wait_for_queue_depth(gate: SessionOperationGate, depth: int) -> None:
+    async with asyncio.timeout(1):
+        while gate.snapshot()["queue_depth"] != depth:
+            await asyncio.sleep(0)
+
+
+async def test_recover_waits_behind_the_operation_that_crashed_ignoring_ordinary_timeout() -> None:
+    """``_recover`` uses ``wait_timeout_seconds=None`` -- it must keep waiting
+    behind whatever operation owns the gate even well past the gate's
+    ordinary (short, here) queue timeout, rather than raising
+    SessionBusyTimeoutError like a normal operation would."""
+    s = _session()
+    s._test_operation_gate = SessionOperationGate(s.instance_id, s.kind, queue_timeout_seconds=0.05)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with s.operation("browser_click"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await entered.wait()
+
+    recover_task = asyncio.create_task(
+        crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    )
+    # Well past the 0.05s ordinary queue timeout -- an ordinarily-gated
+    # operation would have raised SessionBusyTimeoutError by now.
+    await asyncio.sleep(0.2)
+    assert not recover_task.done()
+    s.context.new_page.assert_not_awaited()
+
+    release.set()
+    await holder
+    ok = await recover_task
+    assert ok is True
+    s.context.new_page.assert_awaited_once()
+
+
+async def test_recover_invalidated_by_external_close_does_not_touch_the_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recovery ticket still queued when the session closes externally must
+    be invalidated (return False, log, no page replacement, no recovered/
+    failed event) rather than retried or run anyway."""
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+
+    s = _session()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with s.operation("browser_click"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await entered.wait()
+
+    recover_task = asyncio.create_task(
+        crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    )
+    await _wait_for_queue_depth(s._test_operation_gate, 1)
+
+    s._test_operation_gate.mark_closed_external()
+    release.set()
+    await holder
+
+    ok = await recover_task
+    assert ok is False
+    s.context.new_page.assert_not_awaited()
+    assert events == []  # neither "recovered" nor "failed" published
+    assert crash_recovery.recovery_stats()["recoveries"] == 0
+    assert crash_recovery.recovery_stats()["recovery_failures"] == 0
+
+
+async def test_second_concurrent_recovery_queues_behind_the_first() -> None:
+    """Two crash callbacks racing the same session (e.g. a second renderer
+    crash while the first recovery is in flight) must serialize through the
+    gate rather than both replacing the page concurrently."""
+    s = _session()
+    first_release = asyncio.Event()
+
+    async def _slow_goto(_url: str, timeout: float) -> None:
+        await first_release.wait()
+
+    s.context.new_page.return_value.goto = AsyncMock(side_effect=_slow_goto)
+
+    first_task = asyncio.create_task(
+        crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    )
+    # Let the first attempt actually enter goto() before starting the second.
+    async with asyncio.timeout(1):
+        while s.context.new_page.await_count == 0:
+            await asyncio.sleep(0)
+
+    second_task = asyncio.create_task(
+        crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    )
+    await _wait_for_queue_depth(s._test_operation_gate, 1)
+    assert s.context.new_page.await_count == 1  # second has not started yet
+
+    first_release.set()
+    ok1 = await first_task
+    ok2 = await second_task
+    assert ok1 is True
+    assert ok2 is True
+    assert s.context.new_page.await_count == 2

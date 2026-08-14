@@ -222,6 +222,10 @@ arg > `OCTOWRIGHT_PROTECT_BROWSERS=1` (all) > `OCTOWRIGHT_PROTECT_HEADED`
 (throwaway intent). Internal relaunch/handoff/teardown close with `force=True`
 and are unaffected.
 
+### Browser Session Operation Gate
+
+Every `BrowserSession` owns one `SessionOperationGate` (`src/octowright/session/operation_gate.py`) that serializes Octowright-owned Playwright work FIFO within that session while leaving different sessions fully parallel: the exact owning `asyncio.Task` may re-enter (a compound operation calling existing session helpers doesn't deadlock), but a task the owner spawns is a different identity and queues behind it like anyone else. One macro run — including nested `macro_call` actions, a full `macro_run_sequence`, macro-artifact replay, capture-and-close, and a closing handoff/fluid relaunch of the source session — holds one root lease for its entire invocation so a manual action can't interleave mid-sequence. Ordinary admission is bounded by `OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS` (default `300`, must be positive finite seconds; `BrowserPool(operation_queue_timeout_seconds=...)` takes precedence over the env var) — this is queue wait only, separate from and added on top of any Playwright action/navigation/expect timeout, and the gate never retries a browser operation. A configuration at or above the 600-second progress-heartbeat ceiling (`OCTOWRIGHT_HEARTBEAT_MAX_SECONDS`) is allowed but logs `octowright.pool.operation_queue_timeout_exceeds_heartbeat_ceiling` because a caller stuck that long in queue may lose bridge transport visibility before it is ever admitted. A normal close establishes a cutoff, drains everything already admitted or queued, and only then tears the session down; work arriving after the cutoff is rejected with `SessionClosingError` rather than queued, and the close outcome is durable — cancelling the calling task does not revoke an accepted close or strand the session. External browser/page/context closure (not routed through the gate) can still interrupt whatever operation is actively running; any operation still queued at that point fails with `SessionClosedError`. All four gate errors (`SessionBusyTimeoutError`, `SessionClosingError`, `SessionClosedError`, `OperationGateInvariantError`) are session/tool-scoped — they never mean the MCP transport should be restarted, and a broken gate is isolated to its one session. `BrowserSession.list_pages()`, `list_frames()`, and `set_dialog_policy()` are now `async` (they read/mutate active-target state under the gate) — any embedder calling them directly must `await` them, and should tear a session down through `BrowserPool.close()` rather than raw Playwright teardown so the close cutoff/drain semantics apply. `session.operation_snapshot()` / the optional field `BrowserPool.list_sessions()` adds returns only `{state, active_operation, active_for_ms, queue_depth, oldest_wait_ms, queue_timeout_seconds}` — fixed operation identifiers and timing/depth counters, never a selector, URL, credential, macro argument, or task identity. The same snapshots for every live browser session are also available in one call at `octowright_status()["pool"]["operation_gates"]` (each entry adds `instance_id` and `kind`), the fastest way for an agent or operator to check whether a specific session's gate is stuck. `OperationGateInvariantError` (the fourth gate error) means that one session's gate reached an inconsistent internal state and is now permanently `broken` — it is not a transport or daemon problem; relaunch that one session and move on. Telemetry is the same shape: five bounded metrics, all under `octowright_operation_*`, with attributes limited to the fixed operation name, browser `kind`, and outcome/reason — never an instance ID — `octowright_operation_queue_wait_seconds` and `octowright_operation_active_duration_seconds` (histograms), `octowright_operation_queue_timeout_total` and `octowright_operation_rejected_total` (counters), and `octowright_operation_queue_depth` (a gauge aggregated per browser `kind`, not per session or operation). Gate scheduling itself is never written to JSONL, replayed, exported, or otherwise surfaced through the macro pipeline — only the underlying behavioral action is. Accessible keyboard drag/drop, a future control-lease/"Take control" workflow, terminal-session gating, and the repo-wide DRY audit are explicitly out of scope for this gate and remain separate future work.
+
 ### Octowright Advisor
 
 Octowright Advisor is local and deterministic. It records bounded MCP tool-usage summaries and explicit repeated-workflow observations, then returns suggestions in `octowright_status` and `octowright_advisor_status`. Agents should inspect the `advisor` block after first-touch status. When an agent notices the same manual workflow repeating, call `octowright_advisor_record_macro_observation(source="llm", signature=..., summary=...)`; two matching signatures produce a `macro_candidate` suggestion. Advisor never auto-saves macros — macro candidates remain prompt-only even when the preference is `automatic`. Use `octowright_advisor_set_preference` to persist `yes` / `no` / `automatic` preferences for `macro_candidate` and `profile_change`.
@@ -285,6 +289,25 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
   unparsable value falls back to the default; the floor is 1 (a non-positive value
   would deadlock). Parser/const: `browser_pool.limits.headed_launch_concurrency` /
   `HEADED_LAUNCH_CONCURRENCY_DEFAULT`.
+- `OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS` — FIFO admission timeout for the
+  per-session **Browser Session Operation Gate** (see above). **Default `300`**;
+  must parse as positive, finite seconds or the pool/gate fails to configure.
+  `BrowserPool(operation_queue_timeout_seconds=...)` takes precedence over the
+  env var, which takes precedence over the default. Bounds only the queue wait
+  before an operation is admitted — a separate concern from any Playwright
+  action/navigation/expect timeout, and no automatic retries are added.
+  Close coordinators and crash recovery are durable system operations and do
+  not use this timeout. Parser/resolver:
+  `session.operation_gate.resolve_operation_queue_timeout_seconds`.
+- `OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS` — separate, much shorter gate
+  wait budget for best-effort **dashboard reads** (session-detail aria capture,
+  live screenshot, selector validate) that touch a session's operation gate.
+  **Default `8.0`** seconds; a non-positive/unparsable value falls back to the
+  default rather than going unbounded. An MCP tool call still inherits the
+  gate's own `OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS` (300s default) because
+  an agent is willing to wait out a real in-flight action, whereas a human
+  staring at the dashboard needs a fast, legible failure instead of an
+  unexplained multi-minute stall. Parser: `http/routes/_common._dashboard_operation_timeout_seconds`.
 
 ## Telemetry (OpenTelemetry)
 
@@ -358,6 +381,11 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 | `octowright_macro_run_duration_seconds` | histogram (s) | `macro` | `run_macro` elapsed time including nested actions. |
 | `octowright_session_navigate_duration_seconds` | histogram (s) | `kind` | Duration of `session.navigate()` including `page.goto`. |
 | `octowright_bridge_rpc_duration_seconds` | histogram (s) | `method`, `outcome` | End-to-end follower→leader→follower RPC latency. |
+| `octowright_operation_queue_wait_seconds` | histogram (s) | `operation`, `kind`, `outcome` | Time an operation spent in the per-session FIFO queue before admission (`outcome` = `admitted`/`timeout`/`cancelled`). See **Browser Session Operation Gate**. |
+| `octowright_operation_active_duration_seconds` | histogram (s) | `operation`, `kind`, `outcome` | Time an admitted operation held the gate (`outcome` = `ok`/`error`/`cancelled`). |
+| `octowright_operation_queue_timeout_total` | counter | `operation`, `kind` | FIFO tickets that expired before admission (`SessionBusyTimeoutError`). |
+| `octowright_operation_rejected_total` | counter | `operation`, `kind`, `reason` | Operations rejected outright because the gate was not open (`reason` is the gate state or close/invariant cause, e.g. `closing`/`closed`/`broken`/`external_close`/`session_closed`). |
+| `octowright_operation_queue_depth` | gauge (1) | `kind` | Current FIFO queue depth, aggregated per browser `kind` (not per session or per operation). |
 
 The `macro` label is capped at `OCTOWRIGHT_METRICS_MACRO_LABEL_CAP` distinct values (default 256); beyond the cap, names land in an `(overflow)` bucket so long-lived deployments don't unbound their time-series count. The `error` and `method` labels are intrinsically bounded by code paths; `kind` is bounded to the three browser engines plus `unknown`; `connector_type` is bounded to `pty`/`ssh`/`telnet`. `octowright_status()["metrics"]` surfaces `macro_labels_seen` and `macro_label_overflow_count` so an operator can see when dynamic macro names (e.g. `migrate-table-{uuid}`) have saturated the cap. The recovery escape hatch is `octowright.macros.execution.reset_macro_label_seen()` — in-process only (not exposed as an MCP tool, by design) for tests or operator process access.
 

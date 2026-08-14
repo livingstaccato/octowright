@@ -22,7 +22,8 @@ GET    /api/sessions/{id}                        → SessionDetail
 DELETE /api/sessions/{id}                        → SessionCloseResponse (200); 404 if not in live pool.  
   SessionCloseResponse: {"closed": true, "instance_id": str, "log_path": str, "video_path": str|null, "trace_path": str|null, "cache": CacheReport}
 DELETE /api/sessions/{id}/recording              → {"deleted": true, "session_id": str, "files_removed": int} (200); 404 if no recording on disk; 409 if the session is still live
-POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live
+POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS (this route does not use the shorter dashboard timeout)
+POST   /api/sessions/{id}/selector/validate      → {"ok": true, "count": int} (200) — CSS selector match count against the live page, bounded by OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS. 400 if selector missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past the dashboard timeout
 POST   /api/sessions/{id}/relaunch                → SessionSummary (201) for a NEW instance_id launched with the same kind/profile/label/url/viewport as the original. 404 if no recording on disk; 409 if the session is still live; 422 if the JSONL has no parseable launch record.
 GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
 GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
@@ -35,7 +36,7 @@ GET    /api/sessions/{id}/trace                  → application/zip download. 4
 GET    /api/sessions/{id}/markdown                → text/markdown bytes (the cached markdown rendering of the page). For LIVE sessions, transparently triggers `capture_markdown()` on first request if the cache is missing. 404 if no live session and no cached markdown on disk; 500 if generation fails.
 GET    /api/sessions/{id}/screenshots            → {"screenshots": [{"path": str, "filename": str, "ts": float, "size_bytes": int}, ...]}
 GET    /api/sessions/{id}/screenshots/{filename} → image/png bytes
-GET    /api/sessions/{id}/screenshot/now?format=png|jpeg&quality=N&full_page=bool → image/png|jpeg bytes (live page only). Defaults: format=png, quality=80 (jpeg only), full_page=false. Cache-Control: no-store. 404 closed/unknown, 503 if page.screenshot() raises.
+GET    /api/sessions/{id}/screenshot/now?format=png|jpeg&quality=N&full_page=bool → image/png|jpeg bytes (live page only). Defaults: format=png, quality=80 (jpeg only), full_page=false. Cache-Control: no-store. 404 closed/unknown; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS or page.screenshot() raises.
 GET    /api/scenarios                            → {"live": [LiveScenario, ...]}
 POST   /api/scenarios/{name}/start               → {"scenario_id": str, "name": str, "participants": [...]} (201). 404 if scenario not on disk; 400 validation; 500 if any participant fails to launch.
 DELETE /api/scenarios/{id}                       → {"scenario_id": str, "teardown_errors": [...], "closed": [...]} (200). 404 if no live scenario with that id.
@@ -140,14 +141,24 @@ All write endpoints accept an empty body as `{}`. Request body conventions:
 ```python
 SessionSummary = {
     "id": str,
-    "kind": str,           # "chromium" | "firefox" | "webkit"
+    "kind": str,  # "chromium" | "firefox" | "webkit"
     "label": str | None,
     "profile": str | None,
     "url": str | None,
-    "started_at": str,     # ISO8601 UTC
+    "started_at": str,  # ISO8601 UTC
     "live": bool,
-    "protected": bool,     # true if browser_close/close_all refuse this session without force=True
+    "protected": bool,  # true if browser_close/close_all refuse this session without force=True
     "log_path": str,
+    "operation_gate"?: OperationGateSnapshot,  # browser sessions only; absent for terminal sessions
+}
+
+OperationGateSnapshot = {
+    "state": "open" | "closing" | "closed" | "broken",
+    "active_operation": str | None,
+    "active_for_ms": int | None,
+    "queue_depth": int,
+    "oldest_wait_ms": int | None,
+    "queue_timeout_seconds": float,
 }
 ```
 

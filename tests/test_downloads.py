@@ -70,6 +70,24 @@ def _make_session(tmp_path: Path) -> BrowserSession:
     )
 
 
+async def _drain(session: BrowserSession) -> None:
+    """Let ``_handle_download``'s background save task run to completion.
+
+    ``save_download`` is now ``async with session.operation("download_save")``
+    (Task 6), so it goes through the gate's FIFO admission path rather than
+    completing within whatever event-loop turn a single ``sleep(0)`` covers.
+    """
+    tasks = list(session._bg_tasks)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def wait_for_queue_depth(gate: Any, depth: int) -> None:
+    async with asyncio.timeout(1):
+        while gate.snapshot()["queue_depth"] != depth:
+            await asyncio.sleep(0)
+
+
 # ---------------------------------------------------------------------------
 # _handle_download — saves file, appends record
 # ---------------------------------------------------------------------------
@@ -88,7 +106,7 @@ async def test_handle_download_appends_record(tmp_path: Path, monkeypatch: pytes
 
     s._handle_download(dl)
     # _handle_download schedules a task; let it run
-    await asyncio.sleep(0)
+    await _drain(s)
 
     assert len(s.downloads) == 1
     rec = s.downloads[0]
@@ -108,7 +126,7 @@ async def test_handle_download_saves_to_downloads_dir(tmp_path: Path, monkeypatc
     dl = FakeDownload(filename="data.json")
 
     s._handle_download(dl)
-    await asyncio.sleep(0)
+    await _drain(s)
 
     assert len(s.downloads) == 1
     saved_path = Path(s.downloads[0]["path"])
@@ -134,7 +152,7 @@ async def test_download_anchors_on_session_recordings_root_not_global(
     s = _make_session(pool_root)  # log_path = pool_root / "test.jsonl"
 
     s._handle_download(FakeDownload(filename="report.csv"))
-    await asyncio.sleep(0)
+    await _drain(s)
 
     saved = Path(s.downloads[0]["path"]).resolve()
     assert saved.is_relative_to((pool_root / "downloads" / s.instance_id).resolve())
@@ -151,9 +169,9 @@ async def test_handle_download_increments_prefix(tmp_path: Path, monkeypatch: py
     s = _make_session(tmp_path)
 
     s._handle_download(FakeDownload(filename="a.csv"))
-    await asyncio.sleep(0)
+    await _drain(s)
     s._handle_download(FakeDownload(filename="b.csv"))
-    await asyncio.sleep(0)
+    await _drain(s)
 
     assert len(s.downloads) == 2
     assert Path(s.downloads[0]["path"]).name.startswith("000-")
@@ -179,7 +197,7 @@ async def test_malicious_suggested_filename_cannot_escape_downloads_dir(
     dl = FakeDownload(url="https://evil/x", filename="../../../../pwned.txt")
 
     s._handle_download(dl)
-    await asyncio.sleep(0)
+    await _drain(s)
 
     assert len(s.downloads) == 1, "download was dropped instead of contained"
     saved = Path(s.downloads[0]["path"]).resolve()
@@ -202,7 +220,7 @@ async def test_dotdot_only_filename_falls_back(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
     s = _make_session(tmp_path)
     s._handle_download(FakeDownload(filename=".."))
-    await asyncio.sleep(0)
+    await _drain(s)
     assert len(s.downloads) == 1
     saved = Path(s.downloads[0]["path"]).resolve()
     assert saved.is_relative_to((tmp_path / "downloads" / s.instance_id).resolve())
@@ -226,7 +244,7 @@ async def test_list_downloads_returns_copy(tmp_path: Path, monkeypatch: pytest.M
 
     s = _make_session(tmp_path)
     s._handle_download(FakeDownload(filename="x.txt"))
-    await asyncio.sleep(0)
+    await _drain(s)
 
     result = s.list_downloads()
     assert len(result) == 1
@@ -251,7 +269,7 @@ async def test_wait_for_download_ignores_prior_and_waits_for_next(
     s = _make_session(tmp_path)
     # Prior download must NOT satisfy the wait — the contract is "next".
     s._handle_download(FakeDownload(filename="pre.csv"))
-    await asyncio.sleep(0)
+    await _drain(s)
 
     async def _trigger_after_delay() -> None:
         await asyncio.sleep(0.05)
@@ -286,3 +304,82 @@ async def test_wait_for_download_raises_timeout(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
     with pytest.raises(TimeoutError, match="no download within"):
         await s.wait_for_download(timeout_ms=50)
+
+
+# ---------------------------------------------------------------------------
+# operation-gate serialization (Task 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_download_save_queues_behind_an_active_operation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``save_download`` runs ``async with session.operation("download_save")``,
+    so the background task ``_handle_download`` schedules must queue behind an
+    already-active operation rather than racing it -- e.g. a page that
+    triggers a download mid-click must not have the save land while the click
+    is still resolving."""
+    import octowright.defaults as defs
+
+    monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
+    s = _make_session(tmp_path)
+    dl = FakeDownload(filename="report.csv")
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with s.operation("browser_click"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await entered.wait()
+
+    s._handle_download(dl)
+    await wait_for_queue_depth(s._operation_gate, 1)
+    dl.save_as.assert_not_awaited()
+
+    release.set()
+    await holder
+    await _drain(s)
+    assert len(s.downloads) == 1
+    assert s.downloads[0]["suggested_filename"] == "report.csv"
+
+
+@pytest.mark.anyio
+async def test_wait_for_download_is_ungated_and_stays_concurrent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``wait_for_download`` waits on Octowright's own event/list, not the
+    operation gate -- it must keep waiting immediately even while another
+    operation is active, and must not itself add to the queue depth. Gating
+    it would deadlock any caller pairing it with an action that queues behind
+    the same active operation before triggering the download."""
+    import octowright.defaults as defs
+
+    monkeypatch.setattr(defs, "RECORDINGS_DIR", tmp_path)
+    s = _make_session(tmp_path)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with s.operation("browser_click"):
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await entered.wait()
+
+    wait_task = asyncio.create_task(s.wait_for_download(timeout_ms=2000))
+    await asyncio.sleep(0)
+    assert s.operation_snapshot()["queue_depth"] == 0
+
+    s._handle_download(FakeDownload(filename="late.csv"))
+    await wait_for_queue_depth(s._operation_gate, 1)
+
+    release.set()
+    await holder
+
+    rec = await asyncio.wait_for(wait_task, timeout=2.0)
+    assert rec["suggested_filename"] == "late.csv"

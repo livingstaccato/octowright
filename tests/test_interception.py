@@ -87,23 +87,26 @@ def _make_session(tmp_path: Path) -> BrowserSession:
 # ---------------------------------------------------------------------------
 
 
-def test_set_dialog_policy_rejects_invalid(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_set_dialog_policy_rejects_invalid(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
     with pytest.raises(ValueError, match="policy must be accept"):
-        s.set_dialog_policy("yolo")
+        await s.set_dialog_policy("yolo")
 
 
-def test_set_dialog_policy_updates_state(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_set_dialog_policy_updates_state(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
-    result = s.set_dialog_policy("accept", prompt_text="my text")
+    result = await s.set_dialog_policy("accept", prompt_text="my text")
     assert result == {"ok": True, "policy": "accept", "prompt_text": "my text"}
     assert s._dialog_policy == "accept"
     assert s._dialog_prompt_text == "my text"
 
 
-def test_set_dialog_policy_records_action(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_set_dialog_policy_records_action(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
-    s.set_dialog_policy("manual")
+    await s.set_dialog_policy("manual")
     log = (tmp_path / "test.jsonl").read_text()
     assert "set_dialog_policy" in log
     assert "manual" in log

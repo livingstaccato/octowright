@@ -14,35 +14,40 @@ from octowright import captures as _captures
 from octowright.config_paths import user_config_dir
 from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CAPTURES_DIR, RECORDINGS_DIR
 from octowright.server._state import mcp, pool
+from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
+from octowright.session._protocols import SessionLike
 
 
-async def _capture_snapshot(session: Any, _meta: dict[str, Any], _expression: str | None) -> str:
+async def _capture_snapshot(session: SessionLike, _meta: dict[str, Any], _expression: str | None) -> str:
     # _target() so a snapshot capture descends into a switched frame, like browser_snapshot.
-    return await session._target().locator("body").aria_snapshot()
+    async with session.operation("capture_create"):
+        return await session._target().locator("body").aria_snapshot()
 
 
-async def _capture_text(session: Any, _meta: dict[str, Any], _expression: str | None) -> str:
-    return await session._target().locator("body").inner_text()
+async def _capture_text(session: SessionLike, _meta: dict[str, Any], _expression: str | None) -> str:
+    async with session.operation("capture_create"):
+        return await session._target().locator("body").inner_text()
 
 
-async def _capture_evaluate(session: Any, meta: dict[str, Any], expression: str | None) -> str:
+async def _capture_evaluate(session: SessionLike, meta: dict[str, Any], expression: str | None) -> str:
     if not expression:
         raise ValueError("expression is required when source='evaluate'")
-    value = await session.evaluate(expression)
+    async with session.operation("capture_create"):
+        value = await session.evaluate(expression)
     meta["expression"] = expression
     return value if isinstance(value, str) else json.dumps(value, default=str, indent=2)
 
 
-async def _capture_console(session: Any, _meta: dict[str, Any], _expression: str | None) -> str:
+async def _capture_console(session: SessionLike, _meta: dict[str, Any], _expression: str | None) -> str:
     return json.dumps(list(session.console), default=str, indent=2)
 
 
-async def _capture_network(session: Any, _meta: dict[str, Any], _expression: str | None) -> str:
+async def _capture_network(session: SessionLike, _meta: dict[str, Any], _expression: str | None) -> str:
     return json.dumps(session.get_network_requests(), default=str, indent=2)
 
 
-async def _capture_markdown(session: Any, meta: dict[str, Any], _expression: str | None) -> str:
+async def _capture_markdown(session: SessionLike, meta: dict[str, Any], _expression: str | None) -> str:
     path = await session.capture_markdown()
     if path is None:
         raise RuntimeError("markdown capture did not produce a file")
@@ -50,7 +55,7 @@ async def _capture_markdown(session: Any, meta: dict[str, Any], _expression: str
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-async def _capture_recording(session: Any, meta: dict[str, Any], _expression: str | None) -> str:
+async def _capture_recording(session: SessionLike, meta: dict[str, Any], _expression: str | None) -> str:
     meta["path"] = str(session.log_path)
     return session.log_path.read_text(encoding="utf-8", errors="replace")
 
@@ -98,8 +103,7 @@ def _annotate_capture_result_actions(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-async def _capture_content(instance_id: str, source: str, expression: str | None) -> tuple[str, dict[str, Any]]:
-    session = pool.get(instance_id)
+async def _capture_content(session: SessionLike, source: str, expression: str | None) -> tuple[str, dict[str, Any]]:
     meta: dict[str, Any] = {"source": source}
     capture_source = _CAPTURE_SOURCES.get(source)
     if capture_source is None:
@@ -127,26 +131,26 @@ async def capture_create(
     response_mode: str | None = None,
     summary_limit: int = 40,
 ) -> dict[str, Any]:
-    session = pool.get(instance_id)
-    content, meta = await _capture_content(instance_id, source, expression)
-    result = _captures.save_capture(
-        kind=source,
-        content=content,
-        # _target().url so the capture's url matches the frame the content came from.
-        url=session._target().url,
-        title=await session.page.title(),
-        instance_id=instance_id,
-        source=meta,
-        preview_chars=preview_chars,
-    )
-    _annotate_capture_result_actions(result)
-    if response_mode == "summary":
-        capture_id = str(result["capture_id"])
-        result["summary"] = _captures.summarize_capture(capture_id, limit=summary_limit)
-        _annotate_capture_result_actions(result["summary"])
-        result["actions"] = ["capture_summary", "capture_search", "capture_lines", "capture_get"]
-        result["next_actions"] = _capture_summary_next_actions(capture_id, summary_limit)
-    return result
+    async with browser_operation(pool, instance_id, "capture_create") as session:
+        content, meta = await _capture_content(session, source, expression)
+        result = _captures.save_capture(
+            kind=source,
+            content=content,
+            # _target().url so the capture's url matches the frame the content came from.
+            url=session._target().url,
+            title=await session.page.title(),
+            instance_id=instance_id,
+            source=meta,
+            preview_chars=preview_chars,
+        )
+        _annotate_capture_result_actions(result)
+        if response_mode == "summary":
+            capture_id = str(result["capture_id"])
+            result["summary"] = _captures.summarize_capture(capture_id, limit=summary_limit)
+            _annotate_capture_result_actions(result["summary"])
+            result["actions"] = ["capture_summary", "capture_search", "capture_lines", "capture_get"]
+            result["next_actions"] = _capture_summary_next_actions(capture_id, summary_limit)
+        return result
 
 
 @mcp.tool(
