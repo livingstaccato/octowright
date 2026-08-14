@@ -203,6 +203,46 @@ async def test_inner_timeout_begins_after_gate_admission(fake_browser_session: B
 
 
 @pytest.mark.asyncio
+async def test_timeout_waiter_never_enters_body_and_leaves_no_recorder_row(tmp_path: Path) -> None:
+    """A ticket that expires waiting for gate admission must never enter the
+    click body -- no Playwright call, no JSONL row -- even after the holder
+    releases and the gate opens back up. Uses a REAL ``Recorder`` (not a
+    mock) so ``action_count`` reflects an actual disk-backed decision, not a
+    mock call tally."""
+    from octowright.recorder import Recorder
+    from octowright.session.operation_gate import SessionBusyTimeoutError
+
+    page = MagicMock()
+    page.click = AsyncMock()
+    log_path = tmp_path / "timeout-session.jsonl"
+    session = BrowserSession(
+        instance_id="timeout-session",
+        kind="chromium",
+        label=None,
+        url="https://octowright.com",
+        browser=None,
+        context=MagicMock(),
+        page=page,
+        recorder=Recorder(log_path),
+        log_path=log_path,
+        operation_queue_timeout_seconds=0.05,
+    )
+
+    async with session.operation("owner"):
+        queued = asyncio.create_task(session.click("#buy"))
+        with pytest.raises(SessionBusyTimeoutError):
+            await queued
+
+    assert session.recorder.action_count == 0
+    page.click.assert_not_awaited()
+
+    # The gate is open again and the session is fully usable.
+    await session.click("#buy")
+    assert session.recorder.action_count == 1
+    page.click.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_list_pages_is_coherent_and_async(fake_browser_session: BrowserSession) -> None:
     result = await fake_browser_session.list_pages()
     assert result[0]["is_active"] is True
