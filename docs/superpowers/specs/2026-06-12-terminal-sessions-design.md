@@ -125,21 +125,22 @@ A **parallel dataclass to `BrowserSession`**, not a subclass — `BrowserSession
 @dataclass
 class TerminalSession:
     instance_id: str
-    kind: str                 # always "terminal"
+    kind: str  # always "terminal"
     label: str | None
     profile: str | None
-    url: None                 # always None; present so dashboard summaries are uniform
+    url: None  # always None; present so dashboard summaries are uniform
     recorder: Recorder
     log_path: Path
     protected: bool
-    engine: TerminalEngine    # builds + drives a uterm SessionConnector
+    engine: TerminalEngine  # builds + drives a uterm SessionConnector
 
     async def close(self, *, force: bool = False) -> None: ...
     async def send_input(self, text: str) -> None: ...
-    async def snapshot(self) -> dict[str, Any]: ...        # screen text + cursor
+    async def snapshot(self) -> dict[str, Any]: ...  # screen text + cursor
     async def read(self, *, since: int | None = None) -> dict[str, Any]: ...
-    async def wait_for(self, *, prompt: str | None = None,
-                       text: str | None = None, timeout: float) -> dict[str, Any]: ...
+    async def wait_for(
+        self, *, prompt: str | None = None, text: str | None = None, timeout: float
+    ) -> dict[str, Any]: ...
 ```
 
 `protected`/`force` semantics are identical to browsers: close-capable tools refuse a protected session unless `force=True`; internal rollback/teardown uses `force=True`.
@@ -157,7 +158,7 @@ class TerminalPool:
     def get(self, instance_id: str) -> TerminalSession: ...
     def maybe_get(self, instance_id: str) -> TerminalSession | None: ...
     def iter_sessions(self) -> Iterable[TerminalSession]: ...
-    def list_sessions(self) -> list[dict[str, Any]]: ...     # same keys BrowserPool returns
+    def list_sessions(self) -> list[dict[str, Any]]: ...  # same keys BrowserPool returns
     async def spawn_roster(self, specs: list[dict]) -> dict[str, Any]: ...
     async def close(self, instance_id: str, *, force: bool = False) -> None: ...
     async def close_all(self, *, force: bool = False) -> None: ...
@@ -262,7 +263,7 @@ Change to **partition by kind**:
 ```python
 browser_specs = [resolve_launch_kwargs(p) for p in spec.participants if p.kind != "terminal"]
 terminal_specs = [resolve_terminal_kwargs(p) for p in spec.participants if p.kind == "terminal"]
-browser_result  = await browser_pool.spawn_roster(browser_specs)
+browser_result = await browser_pool.spawn_roster(browser_specs)
 terminal_result = await terminal_pool.spawn_roster(terminal_specs)
 # merge launched entries back, preserving participant order, into LiveScenario.participants
 ```
@@ -304,8 +305,9 @@ This keeps the "same identity drives browser + terminal" story available without
 `list_sessions` (`:41`) merges both pools:
 
 ```python
-live = [_live_summary(s) for s in state.pool.iter_sessions()] \
-     + [_live_summary(s) for s in state.terminal_pool.iter_sessions()]
+live = [_live_summary(s) for s in state.pool.iter_sessions()] + [
+    _live_summary(s) for s in state.terminal_pool.iter_sessions()
+]
 ```
 
 Because `TerminalSession` exposes the same summary keys, `_live_summary` and the session-detail route work unchanged. Terminal recordings are discovered as closed sessions the same way browser recordings are (same `RECORDINGS_DIR`, `kind="terminal"` in the filename).

@@ -54,20 +54,28 @@ from octowright.terminal.connector_config import pty_connector_config, ssh_conne
 
 def test_pty_config_defaults_and_overrides() -> None:
     assert pty_connector_config(command=None, cols=None, rows=None) == {
-        "command": "/bin/bash", "cols": 80, "rows": 24,
+        "command": "/bin/bash",
+        "cols": 80,
+        "rows": 24,
     }
     assert pty_connector_config(command="/bin/zsh", cols=132, rows=50) == {
-        "command": "/bin/zsh", "cols": 132, "rows": 50,
+        "command": "/bin/zsh",
+        "cols": 132,
+        "rows": 50,
     }
 
 
 def test_ssh_config_emits_only_connector_keys() -> None:
     cfg = ssh_connector_config(
-        host="h", port=2222, user="me", key_path="/k", password=None,
-        known_hosts="/kh", insecure_no_host_check=False,
+        host="h",
+        port=2222,
+        user="me",
+        key_path="/k",
+        password=None,
+        known_hosts="/kh",
+        insecure_no_host_check=False,
     )
-    assert cfg == {"port": 2222, "host": "h", "username": "me",
-                   "client_key_path": "/k", "known_hosts": "/kh"}
+    assert cfg == {"port": 2222, "host": "h", "username": "me", "client_key_path": "/k", "known_hosts": "/kh"}
     assert "cols" not in cfg and "rows" not in cfg and "command" not in cfg
 ```
 
@@ -163,15 +171,20 @@ SUPPORTED_TERMINAL_KINDS = ("pty", "ssh")
 ```python
 def test_terminal_participant_accepted() -> None:
     from octowright.scenarios import Participant, Scenario, _validate_scenario
-    s = Scenario(name="t", participants=[
-        Participant(persona="alice", kind="terminal", role="operator", connector_type="pty"),
-    ])
+
+    s = Scenario(
+        name="t",
+        participants=[
+            Participant(persona="alice", kind="terminal", role="operator", connector_type="pty"),
+        ],
+    )
     _validate_scenario(s)  # must not raise
     assert s.participants[0].connector_type == "pty"
 
 
 def test_terminal_participant_defaults_connector_type_to_pty() -> None:
     from octowright.scenarios import _load_yaml_participant
+
     p = _load_yaml_participant({"persona": "a", "kind": "terminal", "role": "operator"}, index=0, scenario_name="t")
     assert p.connector_type == "pty"
 
@@ -179,6 +192,7 @@ def test_terminal_participant_defaults_connector_type_to_pty() -> None:
 def test_terminal_bad_connector_type_rejected() -> None:
     from octowright.scenarios import Participant, Scenario, _validate_scenario
     import pytest
+
     s = Scenario(name="t", participants=[Participant(persona="a", kind="terminal", role="x", connector_type="telnet")])
     with pytest.raises(ValueError, match="connector_type"):
         _validate_scenario(s)
@@ -187,9 +201,13 @@ def test_terminal_bad_connector_type_rejected() -> None:
 def test_terminal_with_startup_macros_rejected() -> None:
     from octowright.scenarios import Participant, Scenario, _validate_scenario
     import pytest
-    s = Scenario(name="t", participants=[
-        Participant(persona="a", kind="terminal", role="x", connector_type="pty", startup_macros=["m"]),
-    ])
+
+    s = Scenario(
+        name="t",
+        participants=[
+            Participant(persona="a", kind="terminal", role="x", connector_type="pty", startup_macros=["m"]),
+        ],
+    )
     with pytest.raises(ValueError, match="startup_macros"):
         _validate_scenario(s)
 
@@ -197,6 +215,7 @@ def test_terminal_with_startup_macros_rejected() -> None:
 def test_browser_kind_still_validated() -> None:
     from octowright.scenarios import Participant, Scenario, _validate_scenario
     import pytest
+
     s = Scenario(name="t", participants=[Participant(persona="a", kind="opera", role="player")])
     with pytest.raises(ValueError, match="unsupported kind"):
         _validate_scenario(s)
@@ -233,42 +252,58 @@ class Participant:
 - [ ] **Step 4: Terminal-aware `_validate_scenario`** — replace the `if p.kind not in SUPPORTED_KINDS` block:
 
 ```python
-    from octowright.defaults import SUPPORTED_TERMINAL_KINDS
-    for p in s.participants:
-        if p.kind == "terminal":
-            ct = p.connector_type or "pty"
-            if ct not in SUPPORTED_TERMINAL_KINDS:
-                raise ValueError(
-                    f"scenario {s.name!r}: terminal participant has unsupported connector_type {p.connector_type!r}"
-                )
-            if p.startup_macros:
-                raise ValueError(
-                    f"scenario {s.name!r}: terminal participant {p.persona!r} cannot declare startup_macros "
-                    "(Playwright macros don't apply to terminals)"
-                )
-        elif p.kind not in SUPPORTED_KINDS:
-            raise ValueError(f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}")
-        # ... role check + duplicate (persona, kind) check unchanged ...
+from octowright.defaults import SUPPORTED_TERMINAL_KINDS
+
+for p in s.participants:
+    if p.kind == "terminal":
+        ct = p.connector_type or "pty"
+        if ct not in SUPPORTED_TERMINAL_KINDS:
+            raise ValueError(
+                f"scenario {s.name!r}: terminal participant has unsupported connector_type {p.connector_type!r}"
+            )
+        if p.startup_macros:
+            raise ValueError(
+                f"scenario {s.name!r}: terminal participant {p.persona!r} cannot declare startup_macros "
+                "(Playwright macros don't apply to terminals)"
+            )
+    elif p.kind not in SUPPORTED_KINDS:
+        raise ValueError(f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}")
+    # ... role check + duplicate (persona, kind) check unchanged ...
 ```
 
 - [ ] **Step 5: YAML loader** — in `_load_yaml_participant`, default `connector_type` to `"pty"` when `kind == "terminal"`, validate the new optional ints (`port`, `cols`, `rows`) and bool (`insecure_no_host_check`), and pass the terminal fields to `Participant(...)`:
 
 ```python
-    _validate_optional_ints(raw, ("viewport_w", "viewport_h", "port", "cols", "rows"), index=index, scenario_name=scenario_name)
-    _validate_optional_bools(raw, ("stabilize", "record_video", "trace", "insecure_no_host_check"), index=index, scenario_name=scenario_name)
-    kind = raw["kind"]
-    connector_type = raw.get("connector_type") or ("pty" if kind == "terminal" else None)
-    return Participant(
-        persona=raw["persona"], kind=kind, role=raw.get("role", "player"),
-        url=raw.get("url"), startup_macros=startup_macros,
-        viewport_w=raw.get("viewport_w"), viewport_h=raw.get("viewport_h"),
-        stabilize=raw.get("stabilize"), record_video=raw.get("record_video"), trace=raw.get("trace"),
-        connector_type=connector_type, command=raw.get("command"),
-        cols=raw.get("cols"), rows=raw.get("rows"),
-        host=raw.get("host"), port=raw.get("port"), user=raw.get("user"),
-        key_path=raw.get("key_path"), known_hosts=raw.get("known_hosts"),
-        insecure_no_host_check=raw.get("insecure_no_host_check"),
-    )
+_validate_optional_ints(
+    raw, ("viewport_w", "viewport_h", "port", "cols", "rows"), index=index, scenario_name=scenario_name
+)
+_validate_optional_bools(
+    raw, ("stabilize", "record_video", "trace", "insecure_no_host_check"), index=index, scenario_name=scenario_name
+)
+kind = raw["kind"]
+connector_type = raw.get("connector_type") or ("pty" if kind == "terminal" else None)
+return Participant(
+    persona=raw["persona"],
+    kind=kind,
+    role=raw.get("role", "player"),
+    url=raw.get("url"),
+    startup_macros=startup_macros,
+    viewport_w=raw.get("viewport_w"),
+    viewport_h=raw.get("viewport_h"),
+    stabilize=raw.get("stabilize"),
+    record_video=raw.get("record_video"),
+    trace=raw.get("trace"),
+    connector_type=connector_type,
+    command=raw.get("command"),
+    cols=raw.get("cols"),
+    rows=raw.get("rows"),
+    host=raw.get("host"),
+    port=raw.get("port"),
+    user=raw.get("user"),
+    key_path=raw.get("key_path"),
+    known_hosts=raw.get("known_hosts"),
+    insecure_no_host_check=raw.get("insecure_no_host_check"),
+)
 ```
 
 - [ ] **Step 6: Update `mcp_types.ScenarioParticipant`** TypedDict — add `connector_type: NotRequired[str | None]` so the launched terminal participant dicts type-check.
@@ -290,7 +325,10 @@ class Participant:
 ```python
 def test_resolve_terminal_launch_pty() -> None:
     from octowright.scenarios import Participant, resolve_terminal_launch
-    kw = resolve_terminal_launch(Participant(persona="a", kind="terminal", role="op", connector_type="pty", command="/bin/sh"))
+
+    kw = resolve_terminal_launch(
+        Participant(persona="a", kind="terminal", role="op", connector_type="pty", command="/bin/sh")
+    )
     assert kw["kind"] == "pty"
     assert kw["connector_config"] == {"command": "/bin/sh", "cols": 80, "rows": 24}
     assert kw["profile"] == "a" and kw["protected"] is False
@@ -303,12 +341,15 @@ def test_resolve_terminal_launch_ssh_explicit_wins(monkeypatch, tmp_path) -> Non
 
     class _P:  # stand-in persona
         app = {"ssh": {"host": "default-host", "user": "deploy", "key_path": "/k", "known_hosts": "/kh"}}
+
     monkeypatch.setattr(sc, "_load_persona_or_none", lambda name: _P())
-    kw = resolve_terminal_launch(Participant(persona="a", kind="terminal", role="op", connector_type="ssh", host="explicit-host"))
+    kw = resolve_terminal_launch(
+        Participant(persona="a", kind="terminal", role="op", connector_type="ssh", host="explicit-host")
+    )
     cfg = kw["connector_config"]
     assert kw["kind"] == "ssh"
-    assert cfg["host"] == "explicit-host"          # participant wins
-    assert cfg["username"] == "deploy"             # persona default
+    assert cfg["host"] == "explicit-host"  # participant wins
+    assert cfg["username"] == "deploy"  # persona default
     assert cfg["client_key_path"] == "/k" and cfg["known_hosts"] == "/kh"
 ```
 
@@ -324,6 +365,7 @@ from octowright.terminal.connector_config import (
 
 def _load_persona_or_none(name: str) -> Any:
     from octowright import personas as _p
+
     try:
         return _p.load_persona(name)
     except FileNotFoundError:
@@ -352,9 +394,13 @@ def resolve_terminal_launch(p: Participant) -> dict[str, Any]:
             else bool(ssh.get("insecure_no_host_check", False))
         )
         cfg = ssh_connector_config(
-            host=pick("host", "host"), port=port, user=pick("user", "user"),
-            key_path=pick("key_path", "key_path"), password=None,
-            known_hosts=pick("known_hosts", "known_hosts"), insecure_no_host_check=insecure,
+            host=pick("host", "host"),
+            port=port,
+            user=pick("user", "user"),
+            key_path=pick("key_path", "key_path"),
+            password=None,
+            known_hosts=pick("known_hosts", "known_hosts"),
+            insecure_no_host_check=insecure,
         )
     else:
         cfg = pty_connector_config(command=p.command, cols=p.cols, rows=p.rows)

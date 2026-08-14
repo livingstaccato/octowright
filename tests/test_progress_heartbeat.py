@@ -22,9 +22,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -269,3 +270,135 @@ async def test_leader_heartbeat_rearms_follower_deadline(monkeypatch: pytest.Mon
     assert sup._in_flight["req-1"].deadline > deadline_before
     # synthetic token progress is swallowed — never forwarded to the client
     assert sent == []
+
+
+# ─── operation-gate queue timeout vs. heartbeat ceiling (Task 13) ─────────
+#
+# ``server/_state.py`` warns (but never refuses) when a configured operation-
+# gate queue timeout reaches the heartbeat's ceiling -- past that point a
+# queued call can outlive the transport-keepalive pings that are supposed to
+# cover it. These tests pin the shipped default relationship and exercise the
+# extracted comparison helper directly, rather than reimporting the whole
+# server package under different env vars.
+
+
+def test_default_queue_timeout_is_comfortably_below_the_heartbeat_ceiling() -> None:
+    from octowright.session.operation_gate import DEFAULT_OPERATION_QUEUE_TIMEOUT_SECONDS
+
+    assert DEFAULT_OPERATION_QUEUE_TIMEOUT_SECONDS == 300.0
+    assert _heartbeat.HEARTBEAT_MAX_SECONDS == 600.0
+    assert DEFAULT_OPERATION_QUEUE_TIMEOUT_SECONDS < _heartbeat.HEARTBEAT_MAX_SECONDS
+
+
+class _WarnLogCapture:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def warning(self, event: str, **kw: Any) -> None:
+        self.events.append((event, kw))
+
+
+def test_queue_timeout_at_the_ceiling_warns_once_but_is_still_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.server import _state
+
+    log_cap = _WarnLogCapture()
+    monkeypatch.setattr(_state, "log", log_cap)
+
+    warned = _state._warn_if_queue_timeout_meets_heartbeat_ceiling(600.0, 600.0)
+
+    assert warned is True
+    assert len(log_cap.events) == 1
+    event, fields = log_cap.events[0]
+    assert event == "octowright.pool.operation_queue_timeout_exceeds_heartbeat_ceiling"
+    assert fields["operation_queue_timeout_seconds"] == 600.0
+    assert fields["heartbeat_max_seconds"] == 600.0
+
+
+def test_queue_timeout_above_the_ceiling_warns_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.server import _state
+
+    log_cap = _WarnLogCapture()
+    monkeypatch.setattr(_state, "log", log_cap)
+
+    warned = _state._warn_if_queue_timeout_meets_heartbeat_ceiling(900.0, 600.0)
+
+    assert warned is True
+    assert len(log_cap.events) == 1
+
+
+def test_queue_timeout_below_the_ceiling_emits_no_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.server import _state
+
+    log_cap = _WarnLogCapture()
+    monkeypatch.setattr(_state, "log", log_cap)
+
+    warned = _state._warn_if_queue_timeout_meets_heartbeat_ceiling(299.0, 600.0)
+
+    assert warned is False
+    assert log_cap.events == []
+
+
+# ─── the heartbeat keeps pinging through a queued (not-yet-admitted) call ──
+
+
+@pytest.mark.anyio
+async def test_heartbeat_pings_while_a_call_is_queued_behind_the_gate_then_stops_on_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A tool call stuck waiting for gate admission is still a live, running
+    coroutine -- the heartbeat wraps the WHOLE tool body (idempotency +
+    browser_operation included), so it keeps producing progress for the
+    entire queue wait, not just once the operation is admitted. Once the
+    gate's own (short, test-only) queue timeout fires, the call ends and the
+    heartbeat stops with it -- no lingering ping task."""
+    from octowright.server.browser import input as _input
+    from octowright.session import BrowserSession
+    from octowright.session.operation_gate import SessionBusyTimeoutError
+    from tests._pool_invariants import wait_for_active
+
+    monkeypatch.setattr(_heartbeat, "HEARTBEAT_INTERVAL_SECONDS", 0.02)
+
+    session = BrowserSession(
+        instance_id="heartbeat-gate",
+        kind="chromium",
+        label=None,
+        url="https://octowright.com",
+        browser=None,
+        context=MagicMock(),
+        page=MagicMock(),
+        recorder=MagicMock(),
+        log_path=tmp_path / "heartbeat-gate.jsonl",
+        operation_queue_timeout_seconds=0.12,
+    )
+    fake_pool = MagicMock()
+    fake_pool.get.return_value = session
+    monkeypatch.setattr(_input, "pool", fake_pool)
+
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with session.operation("external_hold"):
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await wait_for_active(session._operation_gate, "external_hold")
+
+    sess = _session()
+    with (
+        _request_context("owpt-gate", sess),
+        pytest.raises(SessionBusyTimeoutError),
+    ):
+        await _input.browser_click(session.instance_id, selector="#buy")
+
+    # pinged repeatedly DURING the queue wait, before any timeout resolved it
+    assert sess.send_progress_notification.await_count >= 2
+    for call in sess.send_progress_notification.await_args_list:
+        assert call.kwargs["progress_token"] == "owpt-gate"
+
+    release.set()
+    await holder
+
+    # no lingering beat task once the call (and the queue wait it covered) ended
+    await asyncio.sleep(0.03)
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    assert pending == []

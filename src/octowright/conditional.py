@@ -56,18 +56,23 @@ DispatchFn = Callable[["SessionLike", dict[str, Any]], Awaitable[tuple[int, int]
 _DEFAULT_PREDICATE_TIMEOUT_MS = 1000
 
 
-async def selector_present(page: Any, selector: str, timeout_ms: int) -> bool:
+async def selector_present(session: SessionLike, selector: str, timeout_ms: int) -> bool:
     """Return True if at least one element matches `selector` within `timeout_ms`.
 
     Uses Playwright's `wait_for(state='attached')` so we report 'present' as
     soon as the element is in the DOM, even if it isn't visible yet. On
     timeout, returns False — does NOT raise.
+
+    Acquires the ``macro_condition`` lease before dereferencing the active
+    target (frame or page); a caller already holding a root lease (e.g. a
+    macro's ``macro_run``) re-enters it in the same task without queueing.
     """
-    try:
-        await page.locator(selector).first.wait_for(state="attached", timeout=timeout_ms)
-        return True
-    except Exception:
-        return False
+    async with session.operation("macro_condition"):
+        try:
+            await session._target().locator(selector).first.wait_for(state="attached", timeout=timeout_ms)
+            return True
+        except Exception:
+            return False
 
 
 async def do_if_selector(
@@ -83,7 +88,7 @@ async def do_if_selector(
     selector = action["selector"]
     expected_present = bool(action.get("present", True))
     timeout_ms = int(action.get("timeout_ms", _DEFAULT_PREDICATE_TIMEOUT_MS))
-    actually_present = await selector_present(session.page, selector, timeout_ms)
+    actually_present = await selector_present(session, selector, timeout_ms)
     matched = actually_present == expected_present
     branch = action.get("then" if matched else "else") or []
     session.recorder.record(

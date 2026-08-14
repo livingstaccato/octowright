@@ -18,14 +18,19 @@ import asyncio
 import contextlib
 import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from mcp.server.mcpserver import Context
 
 from octowright.server import _idempotency
 from octowright.server import _request_context as _rc
+from octowright.server.browser import input as _input
+from octowright.session import BrowserSession
 
 
 @pytest.fixture
@@ -554,3 +559,66 @@ async def test_blocking_sync_tool_does_not_stall_event_loop() -> None:
     assert not call.done()
     release.set()
     assert await call == "done"
+
+
+# ─── operation-gate integration (Task 13) ─────────────────────────────────
+#
+# The follower bridge re-sends the SAME idempotency key after a cancelled/
+# reconnected request. If the first attempt's detached producer is still
+# queued behind another operation's held gate lease when the resend lands,
+# the resend must dedup onto that SAME producer/gate ticket -- not spin up a
+# second one that would double the browser side effect.
+
+
+async def _wait_for_queue_depth(gate: Any, depth: int) -> None:
+    async with asyncio.timeout(1):
+        while gate.snapshot()["queue_depth"] != depth:
+            await asyncio.sleep(0)
+
+
+@dataclass
+class IdempotentGateHarness:
+    """A real ``BrowserSession`` wired behind the real (idempotency- and
+    heartbeat-wrapped) ``browser_click`` MCP tool, so a resend exercises the
+    exact dispatch path a follower reconnect would use."""
+
+    session: BrowserSession
+
+    async def call(self, *, key: str) -> dict[str, Any]:
+        with _request_context(key, self.session):
+            return await _input.browser_click(self.session.instance_id, selector="#buy")
+
+
+@pytest.fixture
+def idempotent_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> IdempotentGateHarness:
+    page = MagicMock()
+    page.click = AsyncMock()
+    session = BrowserSession(
+        instance_id="idem-session",
+        kind="chromium",
+        label=None,
+        url="https://octowright.com",
+        browser=None,
+        context=MagicMock(),
+        page=page,
+        recorder=MagicMock(),
+        log_path=tmp_path / "idem.jsonl",
+    )
+    fake_pool = MagicMock()
+    fake_pool.get.return_value = session
+    monkeypatch.setattr(_input, "pool", fake_pool)
+    return IdempotentGateHarness(session=session)
+
+
+@pytest.mark.asyncio
+async def test_idempotent_reconnect_reuses_same_gate_ticket(idempotent_tool: IdempotentGateHarness) -> None:
+    async with idempotent_tool.session.operation("owner"):
+        first = asyncio.create_task(idempotent_tool.call(key="same-key"))
+        await _wait_for_queue_depth(idempotent_tool.session._operation_gate, 1)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        second = asyncio.create_task(idempotent_tool.call(key="same-key"))
+        assert idempotent_tool.session.operation_snapshot()["queue_depth"] == 1
+    assert await second == {"ok": True}
+    idempotent_tool.session.page.click.assert_awaited_once()

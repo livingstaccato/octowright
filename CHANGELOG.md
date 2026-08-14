@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.14.3] - 2026-08-12
 
+### Added
+- **Per-session browser operation gate.** Every browser session now
+  serializes its own Playwright operations FIFO — a manual tool call can no
+  longer interleave mid-macro, and background work (markdown capture, crash
+  recovery, screencast lifecycle) queues behind whatever is active — while
+  different sessions stay fully parallel. One macro, macro sequence,
+  artifact replay, capture-and-close, or closing handoff/relaunch holds its
+  session for its entire run. Ordinary admission is bounded by the new
+  `OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS` (default 300s; per-`BrowserPool`
+  override takes precedence), a wait budget separate from any Playwright
+  action/navigation/expect timeout. Closing a session drains already-queued
+  work before tearing it down and rejects anything arriving after the cutoff;
+  external browser/page closure still fails the active call cleanly and
+  releases anything left queued. All resulting errors are scoped to the one
+  tool call/session and never mean the MCP transport or another browser is
+  unhealthy. The dashboard's session-detail, screenshot, and selector-validate
+  reads get their own, much shorter
+  `OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS` (default 8s) so a busy
+  session fails those reads fast instead of stalling the page (the live
+  screencast view is not yet on this budget and can still wait the full
+  ordinary queue timeout). New
+  metrics: `octowright_operation_queue_wait_seconds`,
+  `octowright_operation_active_duration_seconds`,
+  `octowright_operation_queue_timeout_total`,
+  `octowright_operation_rejected_total`, `octowright_operation_queue_depth`
+  — see AGENTS.md's **Browser Session Operation Gate** section for the full
+  contract.
+
+### Changed
+- **Embedder API migration.** `BrowserSession.list_pages()`, `list_frames()`,
+  and `set_dialog_policy()` are now `async` and must be `await`ed by direct
+  Python callers; tear a session down through `BrowserPool.close()` rather
+  than closing the underlying Playwright objects directly so the new close
+  drain/reject semantics apply.
+- **Driver-death session loss is now accounted for like any other external
+  close.** Each session lost to a shared-driver death additionally increments
+  `octowright_browser_evicted_total` and emits its own
+  `notifications/octowright/session_closed` (with the recorder getting a
+  terminal `close` row), alongside the existing `octowright_driver_lost_total`
+  and the single `driver_died` notification.
+
 ### Fixed
 - **Paired dashboard access now expires on live connections too.** Established
   event, recording-tail, and screencast streams revalidate their bearer lease

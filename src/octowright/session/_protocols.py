@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, LiteralString, Protocol
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
 from octowright.recorder import Recorder
+from octowright.session.operation_gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
 
 
 class SessionLike(Protocol):
@@ -55,6 +57,11 @@ class SessionLike(Protocol):
     _last_markdown_capture_url: str | None
     _last_markdown_capture_key: str | None
     _pending_markdown_capture: Any | None
+    # Crash-recovery bookkeeping (browser_pool.crash_recovery): needed here so
+    # ``_capture_recovery_screenshot`` can be typed against ``SessionLike``
+    # (Task 6) instead of ``Any`` while still naming a postmortem screenshot
+    # file after the current attempt count.
+    _crash_recoveries: int
 
     def _target(self) -> Any: ...
 
@@ -64,6 +71,12 @@ class SessionLike(Protocol):
 
     def _websocket_cache_path(self) -> Path: ...
 
+    # Implemented on SessionExpectMixin; declared here so SessionPageMixin's
+    # wait_for (which calls self._poll_until for its text/expression
+    # branches) type-checks in isolation despite the two mixins only being
+    # combined together on BrowserSession.
+    async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None: ...
+
     # Action methods accessed directly (not via getattr) by the macro
     # dispatcher. The remaining action methods (navigate, type_text,
     # press_key, etc.) are looked up dynamically through ``_ACTION_MAP``
@@ -71,6 +84,12 @@ class SessionLike(Protocol):
     async def click(self, selector: str) -> None: ...
 
     async def fill(self, selector: str, value: str) -> None: ...
+
+    async def list_pages(self) -> list[dict[str, Any]]: ...
+
+    async def list_frames(self) -> list[dict[str, Any]]: ...
+
+    async def set_dialog_policy(self, policy: str, prompt_text: str | None = None) -> dict[str, Any]: ...
 
     async def diagnostic_bundle(
         self,
@@ -82,3 +101,31 @@ class SessionLike(Protocol):
     ) -> dict[str, Any]: ...
 
     async def snapshot(self) -> dict[str, Any]: ...
+
+    async def evaluate(self, expression: str) -> Any: ...
+
+    def get_network_requests(
+        self,
+        url_filter: str | None = None,
+        method_filter: str | None = None,
+        resource_type_filter: str | None = None,
+        since: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def capture_markdown(self, *, page: Page | None = None, force: bool = False) -> Path | None: ...
+
+    def operation(
+        self,
+        operation_name: LiteralString,
+        *,
+        wait_timeout_seconds: float | UseDefault | None = USE_DEFAULT,
+    ) -> AbstractAsyncContextManager[None]: ...
+
+    def operation_snapshot(self) -> OperationGateSnapshot: ...
+
+    async def set_protected_state(
+        self,
+        protected: bool,
+        *,
+        reason: str = "explicit",
+    ) -> dict[str, object]: ...

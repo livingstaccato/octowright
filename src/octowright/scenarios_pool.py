@@ -466,8 +466,9 @@ class ScenarioPool:
                 if selector or text:
                     await session.wait_for(selector=selector, text=text, timeout_ms=timeout_ms)
                 elif url:
-                    if not _re.search(url, session.page.url):
-                        await session.page.wait_for_url(url, timeout=timeout_ms or 30000)
+                    async with session.operation("scenario_wait_for_sync"):
+                        if not _re.search(url, session.page.url):
+                            await session.page.wait_for_url(url, timeout=timeout_ms or 30000)
                 else:
                     await session.wait_for(selector=None, text=None, timeout_ms=timeout_ms)
                 return {"instance_id": p["instance_id"], "ok": True}
@@ -497,7 +498,7 @@ async def _apply_fixtures(browser_pool: Any, live: LiveScenario, fixtures: dict[
             return  # dialog policy + mock routes are browser-only
         session = browser_pool.get(p["instance_id"])
         if dialog_policy:
-            session.set_dialog_policy(dialog_policy)
+            await session.set_dialog_policy(dialog_policy)
         for mr in mock_routes:
             await session.mock_route(
                 mr["pattern"],

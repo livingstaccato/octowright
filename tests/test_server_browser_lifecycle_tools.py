@@ -9,12 +9,23 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.server.browser import lifecycle as _lifecycle
+from octowright.server.browser import lifecycle_navigate as _nav
+from tests._operation_gate_fakes import OperationAwareFake
+
+
+class _FakeSession(OperationAwareFake):
+    """Real-gate session fake — the navigate/resize/viewport/open-url tools
+    now enter ``browser_operation``, which awaits ``session.operation()`` as
+    an async context manager; a bare ``MagicMock`` does not provide that."""
 
 
 @pytest.fixture(autouse=True)
 def _patch_pool_lifecycle(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     fake_pool = MagicMock()
     monkeypatch.setattr(_lifecycle, "pool", fake_pool)
+    # browser_navigate/etc. live in lifecycle_navigate (Task 10 split, keeps
+    # lifecycle.py under the LOC ceiling) with their own `pool` reference.
+    monkeypatch.setattr(_nav, "pool", fake_pool)
     return fake_pool
 
 
@@ -22,7 +33,7 @@ def _patch_pool_lifecycle(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 async def test_browser_navigate_default_returns_navigate_result(
     _patch_pool_lifecycle: MagicMock,
 ) -> None:
-    s = MagicMock()
+    s = _FakeSession()
     _patch_pool_lifecycle.get.return_value = s
     s.navigate = AsyncMock(return_value={"url": "https://octowright.com", "title": "Example"})
 
@@ -36,12 +47,12 @@ async def test_browser_navigate_brief_mode_includes_brief(
     _patch_pool_lifecycle: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    s = MagicMock()
+    s = _FakeSession()
     _patch_pool_lifecycle.get.return_value = s
     s.navigate = AsyncMock(return_value={"url": "https://octowright.com", "title": "Example"})
 
     monkeypatch.setattr(
-        _lifecycle,
+        _nav,
         "browser_brief",
         AsyncMock(return_value={"url": "https://octowright.com", "title": "Example", "elements": "..."}),
     )
@@ -57,13 +68,13 @@ async def test_browser_navigate_outline_mode_includes_page_outline(
     _patch_pool_lifecycle: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    s = MagicMock()
+    s = _FakeSession()
     _patch_pool_lifecycle.get.return_value = s
     s.navigate = AsyncMock(return_value={"url": "https://octowright.com", "title": "Example"})
     brief = AsyncMock(return_value={"url": "brief"})
     outline = AsyncMock(return_value={"url": "outline", "headings": []})
-    monkeypatch.setattr(_lifecycle, "browser_brief", brief)
-    monkeypatch.setattr(_lifecycle, "browser_page_outline", outline)
+    monkeypatch.setattr(_nav, "browser_brief", brief)
+    monkeypatch.setattr(_nav, "browser_page_outline", outline)
 
     out = await _lifecycle.browser_navigate("i", "https://octowright.com", response_mode="outline")
 
@@ -78,7 +89,7 @@ async def test_browser_navigate_brief_mode_degrades_when_brief_times_out(
     _patch_pool_lifecycle: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    s = MagicMock()
+    s = _FakeSession()
     _patch_pool_lifecycle.get.return_value = s
     s.navigate = AsyncMock(return_value={"url": "https://octowright.com", "title": "Example"})
 
@@ -86,8 +97,8 @@ async def test_browser_navigate_brief_mode_degrades_when_brief_times_out(
         await asyncio.sleep(0.02)
         return {"url": "https://octowright.com", "title": "Example", "elements": "..."}
 
-    monkeypatch.setattr(_lifecycle, "SNAPSHOT_TIMEOUT_SECONDS", 0.001)
-    monkeypatch.setattr(_lifecycle, "browser_brief", slow_brief)
+    monkeypatch.setattr(_nav, "SNAPSHOT_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(_nav, "browser_brief", slow_brief)
 
     out = await _lifecycle.browser_navigate("i", "https://octowright.com", response_mode="brief")
 
@@ -95,6 +106,23 @@ async def test_browser_navigate_brief_mode_degrades_when_brief_times_out(
     assert out["title"] == "Example"
     assert "brief" not in out
     assert "timed out" in out["brief_warning"]
+
+
+@pytest.mark.anyio
+async def test_browser_set_protected_routes_through_set_protected_state(
+    _patch_pool_lifecycle: MagicMock,
+) -> None:
+    """browser_set_protected must mutate through session.set_protected_state
+    (the gate's control_update path), not a bare attribute assignment, so
+    Task 7's close-race linearization covers this mutation too."""
+    s = MagicMock()
+    _patch_pool_lifecycle.get.return_value = s
+    s.set_protected_state = AsyncMock(return_value={"instance_id": "i", "protected": True})
+
+    out = await _lifecycle.browser_set_protected("i", True)
+
+    s.set_protected_state.assert_awaited_once_with(True)
+    assert out == {"instance_id": "i", "protected": True}
 
 
 def test_browser_list_summary_mode_bounds_rows_and_adds_actions(_patch_pool_lifecycle: MagicMock) -> None:
@@ -151,6 +179,35 @@ def test_browser_list_summary_mode_bounds_rows_and_adds_actions(_patch_pool_life
         {"tool": "browser_close_all", "args": {}},
     ]
     assert "summary" in out
+
+
+def test_browser_list_summary_retains_operation_gate(_patch_pool_lifecycle: MagicMock) -> None:
+    """browser_list_summary_row must forward operation_gate verbatim -- no
+    second gate-state computation in the MCP summary layer."""
+    gate_snapshot = {
+        "state": "open",
+        "active_operation": "macro_run",
+        "active_for_ms": 1200,
+        "queue_depth": 1,
+        "oldest_wait_ms": 400,
+        "queue_timeout_seconds": 300.0,
+    }
+    _patch_pool_lifecycle.list_sessions.return_value = [
+        {
+            "instance_id": "alpha",
+            "kind": "chromium",
+            "label": "ops",
+            "profile": "ops",
+            "url": "https://example.com",
+            "title": "Ops",
+            "protected": False,
+            "operation_gate": gate_snapshot,
+        },
+    ]
+
+    out = _lifecycle.browser_list(response_mode="summary")
+
+    assert out["browsers"][0]["operation_gate"] == gate_snapshot
 
 
 @pytest.fixture
