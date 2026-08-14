@@ -40,6 +40,8 @@ class SessionLike(Protocol):
     viewport_mode: str
     viewport_width: int | None
     viewport_height: int | None
+    viewport_frame_inset_w: int | None
+    viewport_frame_inset_h: int | None
     video_path: Path | None
     markdown_path: Path | None
     websocket_path: Path | None
