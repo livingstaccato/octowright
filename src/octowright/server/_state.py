@@ -39,6 +39,7 @@ _CallableT = TypeVar("_CallableT", bound=Callable[..., Any])
 
 pool = BrowserPool()
 
+
 # The operation gate's per-session queue timeout and the progress heartbeat's
 # ceiling are configured independently (different env vars, different
 # owners), but they interact: a queued operation waits up to
@@ -47,23 +48,35 @@ pool = BrowserPool()
 # stops pinging at HEARTBEAT_MAX_SECONDS. If the queue timeout is allowed to
 # reach or exceed the heartbeat ceiling, a long queue wait can outlive the
 # heartbeat and the transport can appear to hang/disconnect before the
-# operation is ever admitted. Checked once at daemon startup so a
-# misconfiguration is visible immediately rather than discovered under load.
+# operation is ever admitted. Extracted into a pure function (rather than left
+# inline) so a test can drive both branches directly instead of reimporting
+# this module under different env vars; the call below still runs it exactly
+# once, at daemon startup, right after the pool it inspects is built.
 # NOTE: does not import octowright.server here (only octowright.server._heartbeat,
 # already imported above) — importing the server package from the session/pool
 # layer would execute server/__init__ and risk a layer cycle; this check lives
 # in the server layer itself, right after the pool it inspects is built.
-if pool.operation_queue_timeout_seconds >= HEARTBEAT_MAX_SECONDS:
+def _warn_if_queue_timeout_meets_heartbeat_ceiling(queue_timeout_seconds: float, heartbeat_max_seconds: float) -> bool:
+    """Log once and return True when ``queue_timeout_seconds`` is at or beyond
+    ``heartbeat_max_seconds``; return False (no log) otherwise. Never raises —
+    a misconfiguration is surfaced, not refused, so a deliberately long queue
+    timeout on a shared/CI host still starts."""
+    if queue_timeout_seconds < heartbeat_max_seconds:
+        return False
     log.warning(
         "octowright.pool.operation_queue_timeout_exceeds_heartbeat_ceiling",
-        operation_queue_timeout_seconds=pool.operation_queue_timeout_seconds,
-        heartbeat_max_seconds=HEARTBEAT_MAX_SECONDS,
+        operation_queue_timeout_seconds=queue_timeout_seconds,
+        heartbeat_max_seconds=heartbeat_max_seconds,
         hint=(
             "a queued operation may wait longer than the progress-heartbeat ceiling, so the bridge's "
             "transport visibility can expire before the operation is ever admitted; lower "
             "OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS or raise OCTOWRIGHT_HEARTBEAT_MAX_SECONDS"
         ),
     )
+    return True
+
+
+_warn_if_queue_timeout_meets_heartbeat_ceiling(pool.operation_queue_timeout_seconds, HEARTBEAT_MAX_SECONDS)
 
 scenario_pool = _scenario_pool_mod.ScenarioPool()
 
