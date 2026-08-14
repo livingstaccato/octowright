@@ -63,6 +63,13 @@ __all__ = [
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "octowright"
 
+# Sanity floor for the CLI's own scan of SRC (currently ~200 files, excluding
+# the optional terminal/ extra). Well below that so ordinary tree growth or
+# shrinkage never trips it, but high enough that a near-empty scan -- e.g. an
+# ancestor directory collision with EXCLUDED_DIR_NAMES, or SRC not existing
+# -- fails loudly instead of a false "OK" from having scanned nothing.
+_MIN_EXPECTED_SRC_FILES = 50
+
 
 class BypassInventoryError(ValueError):
     """A bypass or forwarder inventory entry is stale, malformed, or unproven."""
@@ -73,7 +80,14 @@ def _expand_files(paths: Iterable[Path]) -> list[Path]:
     for path in paths:
         if path.is_dir():
             for candidate in sorted(path.rglob("*.py")):
-                if not any(part in EXCLUDED_DIR_NAMES for part in candidate.parts):
+                # Exclusion must be checked against the path RELATIVE TO THE
+                # SCANNED ROOT, not the absolute path -- checking absolute
+                # parts means an ancestor directory that happens to be named
+                # "terminal" (e.g. a checkout under ~/src/terminal/octowright)
+                # silently excludes every file in the entire scan, and the
+                # CLI would report a false "OK" having scanned nothing.
+                rel_parts = candidate.relative_to(path).parts
+                if not any(part in EXCLUDED_DIR_NAMES for part in rel_parts):
                     files.append(candidate)
         else:
             files.append(path)
@@ -194,7 +208,17 @@ def scan_paths(
 
 
 def main() -> int:
-    violations = scan_paths([SRC], bypasses=BYPASSES)
+    files = _expand_files([SRC])
+    if len(files) < _MIN_EXPECTED_SRC_FILES:
+        print(
+            f"Refusing to report a result: only {len(files)} file(s) were scanned under "
+            f"{SRC} (expected at least {_MIN_EXPECTED_SRC_FILES}). This usually means SRC "
+            "does not exist, or an ancestor directory name collided with the terminal/ "
+            "exclusion list and silently excluded the whole tree.",
+            file=sys.stderr,
+        )
+        return 1
+    violations = scan_paths(files, bypasses=BYPASSES)
     if violations:
         print("Ungated or unclassified Playwright access found:")
         for item in violations:

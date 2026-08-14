@@ -21,8 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from scripts._operation_gate_ast import (
+    annotation_signal,
     build_import_map,
     classify_withitem,
+    has_ambiguous_library_import,
     has_literal_gate_decorator,
     is_protocol_class,
     is_type_checking_test,
@@ -31,6 +33,7 @@ from scripts._operation_gate_ast import (
     seed_session_param_names,
 )
 from scripts._operation_gate_constants import (
+    AMBIGUOUS_SEED_NAMES,
     PLAYWRIGHT_CHAIN_ATTRS,
     PLAYWRIGHT_ROOT_ATTRS,
     SEED_BASE_NAMES,
@@ -58,6 +61,7 @@ class FileScanner:
     def __init__(self, rel_path: str, tree: ast.Module) -> None:
         self.rel_path = rel_path
         self.import_map: dict[str, str] = build_import_map(tree)
+        self.suppress_ambiguous_names: bool = has_ambiguous_library_import(tree)
         self.records: dict[str, _FuncRecord] = {}
         self._visit_top_level(tree.body)
 
@@ -93,7 +97,7 @@ class FileScanner:
         key = f"{self.rel_path}:{qualname}"
         self._record(key)
         gated = has_literal_gate_decorator(node)
-        tainted = seed_param_taint(node, self.import_map)
+        tainted = seed_param_taint(node, self.import_map, suppress_ambiguous=self.suppress_ambiguous_names)
         session_names = set(SEED_BASE_NAMES) | seed_session_param_names(node)
         ctx = _FuncCtx(
             scanner=self,
@@ -120,13 +124,22 @@ class _FuncCtx:
         self.scanner._record(self.key).dynamic_sites.append(line)
 
 
+def _name_based_taint(name: str, ctx: _FuncCtx) -> bool:
+    # See seed_param_taint's identical guard: an unannotated local named
+    # request/response/websocket in a file that imports httpx/starlette is
+    # more likely that library's object than Playwright's.
+    if name not in SEED_PARAM_NAMES:
+        return False
+    return not (ctx.scanner.suppress_ambiguous_names and name in AMBIGUOUS_SEED_NAMES)
+
+
 def _taint_assign_target(target: ast.expr, tainted_value: bool, ctx: _FuncCtx) -> None:
     if isinstance(target, ast.Name):
         # A conventionally-named local (``context = await browser_type.new_context()``)
         # is seeded the same way a same-named PARAMETER would be -- the taint
         # source is the identifier's meaning, not whether it arrived as an
         # argument or a local assignment.
-        if tainted_value or target.id in SEED_PARAM_NAMES:
+        if tainted_value or _name_based_taint(target.id, ctx):
             ctx.tainted.add(target.id)
         else:
             ctx.tainted.discard(target.id)
@@ -136,7 +149,46 @@ def _taint_assign_target(target: ast.expr, tainted_value: bool, ctx: _FuncCtx) -
     elif isinstance(target, ast.Starred):
         _taint_assign_target(target.value, tainted_value, ctx)
     # Attribute/Subscript assignment targets (self.page = x, d[k] = x) don't
-    # extend local-variable taint tracking; nothing further to do.
+    # extend local-variable taint tracking; nothing further to do -- but see
+    # _scan_target_reads, called alongside this everywhere it's called, for
+    # the embedded-read Playwright accesses those target shapes can carry.
+
+
+def _scan_target_reads(target: ast.expr, ctx: _FuncCtx, *, gated: bool) -> None:
+    """A Store-context assignment target can embed genuine Load-context
+    reads -- ``cache[session.page.url] = 1`` and ``totals[page.url] += 1``
+    both dereference Playwright INSIDE the target expression, which the AST
+    marks as a single Store-context node the ordinary expression walk never
+    visits. Recurse into exactly the parts that are still reads."""
+    if isinstance(target, ast.Attribute):
+        _scan_expr(target.value, ctx, gated=gated)
+    elif isinstance(target, ast.Subscript):
+        _scan_expr(target.value, ctx, gated=gated)
+        _scan_expr(target.slice, ctx, gated=gated)
+    elif isinstance(target, ast.Tuple | ast.List):
+        for elt in target.elts:
+            _scan_target_reads(elt, ctx, gated=gated)
+    elif isinstance(target, ast.Starred):
+        _scan_target_reads(target.value, ctx, gated=gated)
+    # Name: no embedded read.
+
+
+def _taint_annotated_target(target: ast.expr, annotation: ast.expr, tainted_value: bool, ctx: _FuncCtx) -> None:
+    if isinstance(target, ast.Name):
+        signal = annotation_signal(annotation, ctx.scanner.import_map)
+        if signal is True:
+            ctx.tainted.add(target.id)
+            return
+        if signal is False:
+            # An explicit, concrete non-Playwright local annotation (e.g.
+            # ``response: httpx.Response = ...``) overrides the conventional-
+            # name heuristic the same way a PARAMETER annotation already did
+            # -- previously only parameters got this override, so an
+            # explicitly-typed local still fell through to the blind name
+            # match.
+            ctx.tainted.discard(target.id)
+            return
+    _taint_assign_target(target, tainted_value, ctx)
 
 
 def _scan_expr(node: ast.expr | None, ctx: _FuncCtx, *, gated: bool) -> bool:
@@ -251,6 +303,7 @@ def _scan_expr(node: ast.expr | None, ctx: _FuncCtx, *, gated: bool) -> bool:
     if isinstance(node, ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp):
         for generator in node.generators:
             iter_tainted = _scan_expr(generator.iter, ctx, gated=gated)
+            _scan_target_reads(generator.target, ctx, gated=gated)
             _taint_assign_target(generator.target, iter_tainted, ctx)
             for cond in generator.ifs:
                 _scan_expr(cond, ctx, gated=gated)
@@ -261,7 +314,13 @@ def _scan_expr(node: ast.expr | None, ctx: _FuncCtx, *, gated: bool) -> bool:
         return _scan_expr(node.elt, ctx, gated=gated)
 
     if isinstance(node, ast.Lambda):
-        return _scan_expr(node.body, ctx, gated=gated)
+        # Independent scope, same rule as a nested ``def`` (Task 11 scanner
+        # rule): a lambda registered as an event handler
+        # (page.on("dialog", lambda: ...)) executes long after whatever
+        # lexically-enclosing gate was active when it was DEFINED, so it must
+        # never inherit that gate's ``gated=True``.
+        _enter_lambda(node, ctx=ctx)
+        return False
 
     if isinstance(node, ast.JoinedStr):
         for value in node.values:
@@ -302,6 +361,7 @@ def _walk_function_stmt(stmt: ast.stmt, *, gated: bool, ctx: _FuncCtx) -> None:
         return
     if isinstance(stmt, ast.For | ast.AsyncFor):
         iter_tainted = _scan_expr(stmt.iter, ctx, gated=gated)
+        _scan_target_reads(stmt.target, ctx, gated=gated)
         _taint_assign_target(stmt.target, iter_tainted, ctx)
         _walk_function_body(stmt.body, gated=gated, ctx=ctx)
         _walk_function_body(stmt.orelse, gated=gated, ctx=ctx)
@@ -326,14 +386,17 @@ def _walk_function_stmt(stmt: ast.stmt, *, gated: bool, ctx: _FuncCtx) -> None:
     if isinstance(stmt, ast.Assign):
         value_tainted = _scan_expr(stmt.value, ctx, gated=gated)
         for target in stmt.targets:
+            _scan_target_reads(target, ctx, gated=gated)
             _taint_assign_target(target, value_tainted, ctx)
         return
     if isinstance(stmt, ast.AnnAssign):
         value_tainted = _scan_expr(stmt.value, ctx, gated=gated) if stmt.value is not None else False
-        _taint_assign_target(stmt.target, value_tainted, ctx)
+        _scan_target_reads(stmt.target, ctx, gated=gated)
+        _taint_annotated_target(stmt.target, stmt.annotation, value_tainted, ctx)
         return
     if isinstance(stmt, ast.AugAssign):
         _scan_expr(stmt.value, ctx, gated=gated)
+        _scan_target_reads(stmt.target, ctx, gated=gated)
         return
     if isinstance(stmt, ast.Return | ast.Expr):
         _scan_expr(stmt.value, ctx, gated=gated)
@@ -365,7 +428,9 @@ def _enter_nested_function(node: ast.FunctionDef | ast.AsyncFunctionDef, *, ctx:
     key = f"{ctx.scanner.rel_path}:{'.'.join(qual_parts)}"
     ctx.scanner._record(key)
     nested_gated = has_literal_gate_decorator(node)
-    nested_tainted = set(ctx.tainted) | seed_param_taint(node, ctx.scanner.import_map)
+    nested_tainted = set(ctx.tainted) | seed_param_taint(
+        node, ctx.scanner.import_map, suppress_ambiguous=ctx.scanner.suppress_ambiguous_names
+    )
     nested_session_names = set(ctx.session_names) | seed_session_param_names(node)
     nested_ctx = _FuncCtx(
         scanner=ctx.scanner,
@@ -377,6 +442,32 @@ def _enter_nested_function(node: ast.FunctionDef | ast.AsyncFunctionDef, *, ctx:
     _walk_function_body(node.body, gated=nested_gated, ctx=nested_ctx)
 
 
+def _enter_lambda(node: ast.Lambda, *, ctx: _FuncCtx) -> None:
+    # Lambdas have no name of their own; "<lambda>" matches Python's own
+    # __name__ convention for one and keeps the qualname scheme uniform with
+    # _enter_nested_function. Two lambdas on the same line of the same
+    # enclosing scope would collide on (key, line) -- an acceptable heuristic
+    # edge case, not reachable by any real production code in this repo.
+    qual_parts = [*ctx.qual_parts, "<lambda>"]
+    key = f"{ctx.scanner.rel_path}:{'.'.join(qual_parts)}"
+    ctx.scanner._record(key)
+    lambda_tainted = set(ctx.tainted) | seed_param_taint(
+        node, ctx.scanner.import_map, suppress_ambiguous=ctx.scanner.suppress_ambiguous_names
+    )
+    lambda_session_names = set(ctx.session_names) | seed_session_param_names(node)
+    lambda_ctx = _FuncCtx(
+        scanner=ctx.scanner,
+        key=key,
+        qual_parts=qual_parts,
+        tainted=lambda_tainted,
+        session_names=lambda_session_names,
+    )
+    # A lambda can never carry a literal-context boundary of its own (no
+    # decorators, no statement body to hold an ``async with``), so it always
+    # starts ungated -- gated=False unconditionally, never inherited.
+    _scan_expr(node.body, lambda_ctx, gated=False)
+
+
 def _walk_with(stmt: ast.With | ast.AsyncWith, *, gated: bool, ctx: _FuncCtx) -> None:
     gate_found = False
     for item in stmt.items:
@@ -385,5 +476,15 @@ def _walk_with(stmt: ast.With | ast.AsyncWith, *, gated: bool, ctx: _FuncCtx) ->
             gate_found = True
         elif kind == "gate-dynamic":
             ctx.report_dynamic(item.context_expr.lineno)
-        _scan_expr(item.context_expr, ctx, gated=gated)
+        context_tainted = _scan_expr(item.context_expr, ctx, gated=gated)
+        if item.optional_vars is not None:
+            # ``async with page.expect_popup() as info:`` -- info is bound to
+            # whatever __aenter__ returns; when the context expression itself
+            # is already recognized as tainted (a chain rooted in a seeded
+            # name), the binding inherits that taint. This does NOT taint
+            # e.g. ``async with client.stream(...) as response:`` -- "client"/
+            # "stream" were never seeded, so context_tainted is False there
+            # and the binding stays untainted, same as before this fix.
+            _scan_target_reads(item.optional_vars, ctx, gated=gated)
+            _taint_assign_target(item.optional_vars, context_tainted, ctx)
     _walk_function_body(stmt.body, gated=gated or gate_found, ctx=ctx)

@@ -173,9 +173,7 @@ class ScreencastManager:
             return await self._add_viewer_locked(fps=fps)
 
     async def _add_viewer_locked(self, *, fps: int | None = None) -> ScreencastViewer:
-        # Sole caller (add_viewer) already holds this lease; re-enters it
-        # (same task, Task 2 reentrancy) since a nested method is its own
-        # scope for this scanner's purposes.
+        # Sole caller (add_viewer) already holds this lease; re-enters it (a nested method is its own scope).
         async with self._session.operation("screencast_start"):
             if not self._started:
                 await self._start_owned_locked(self._session.page)
@@ -198,21 +196,23 @@ class ScreencastManager:
             await self._rebind_locked(new_page)
 
     async def _rebind_locked(self, new_page: _ScreencastPage) -> None:
-        self._session.page = new_page
-        if not self._started or not self._viewers:
-            return
-        if new_page is self._bound_page:
-            return
+        # Sole caller (rebind) already holds this lease; re-enters it (a nested method is its own scope).
+        async with self._session.operation("screencast_rebind"):
+            self._session.page = new_page
+            if not self._started or not self._viewers:
+                return
+            if new_page is self._bound_page:
+                return
 
-        await self._stop_bound_owned_locked()
-        self._started = False
-        try:
-            await self._start_owned_locked(new_page)
-        except BaseException:
-            # No producer left and no path back: wake the viewers so their
-            # sockets close and the dashboard falls back to polling.
-            self._end_viewers_locked()
-            raise
+            await self._stop_bound_owned_locked()
+            self._started = False
+            try:
+                await self._start_owned_locked(new_page)
+            except BaseException:
+                # No producer left and no path back: wake the viewers so their
+                # sockets close and the dashboard falls back to polling.
+                self._end_viewers_locked()
+                raise
 
     async def terminate(self) -> None:
         """Stop the producer and end every viewer — the session is gone."""
@@ -287,9 +287,7 @@ class ScreencastManager:
             await self._stop_recovery_watcher_locked()
             return
 
-        # Sole caller (remove_viewer) already holds this lease; re-enters it
-        # (same task, Task 2 reentrancy) since a nested method is its own
-        # scope for this scanner's purposes.
+        # Sole caller (remove_viewer) already holds this lease; re-enters it (a nested method is its own scope).
         async with self._session.operation("screencast_stop"):
             bound = self._bound_page if self._bound_page is not None else self._session.page
             stop_error: BaseException | None = None
