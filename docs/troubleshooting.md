@@ -166,13 +166,23 @@ section in the getting-started guide for worked examples.
    other. A `SessionBusyTimeoutError` means another operation on the *same*
    `instance_id` (a slow navigation, a long macro, a stuck `wait_for`) held
    the session for longer than the queue timeout — check what else is running
-   against that `instance_id` with `browser_list` / `octowright_status`.
+   against that `instance_id` with `browser_list` / `octowright_status`. The
+   per-session gate state for every live browser is at
+   `octowright_status()["pool"]["operation_gates"]` (each entry adds
+   `instance_id` and `kind` to the `{state, active_operation, active_for_ms,
+   queue_depth, oldest_wait_ms, queue_timeout_seconds}` shape) — check it
+   first before guessing.
 
 2. `SessionClosingError` / `SessionClosedError` mean the session was already
    closing or closed when the call arrived — normal ordering, not a race bug.
    The gate drains everything already queued before a close completes and
    rejects anything new; retry against a freshly launched instance instead of
    the closed one.
+
+2a. `OperationGateInvariantError` means that one session's gate reached an
+    inconsistent internal state and is now permanently `broken` — it affects
+    only that one `instance_id`. Relaunch that session; it is not a daemon or
+    transport problem and does not warrant `octowright restart`.
 
 3. None of these errors mean the MCP server, the daemon, or any other browser
    is unhealthy — a gate error is scoped to the one browser session and the

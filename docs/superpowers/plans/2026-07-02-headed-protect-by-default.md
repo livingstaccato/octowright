@@ -192,12 +192,12 @@ to:
 
 `options.py` line 65, change:
 
-```python
-protected = (options.get("protected", PROTECT_BROWSERS_DEFAULT),)
+```text
+            protected=options.get("protected", PROTECT_BROWSERS_DEFAULT),
 ```
 to:
-```python
-protected = (options.get("protected"),)
+```text
+            protected=options.get("protected"),
 ```
 
 Remove the now-unused `from octowright.defaults import PROTECT_BROWSERS_DEFAULT` at line 42 **only if** nothing else in `from_mapping` uses it (grep first: `grep -n PROTECT_BROWSERS_DEFAULT src/octowright/browser_pool/options.py`; `resolve_protected` uses `defaults.PROTECT_BROWSERS_DEFAULT`, not this local import).
@@ -383,8 +383,8 @@ from octowright.browser_pool.options import LaunchOptions, resolve_protected
 
 In `launch_pipeline.py`, at the construction near line 209-222, after `protected=launch_options.protected,` add:
 
-```python
-protected_reason = (launch_options.protected_reason,)
+```text
+        protected_reason=launch_options.protected_reason,
 ```
 
 Do the same at the second construction near line 403 (`protected=launch_options.protected,` → add the `protected_reason=` line beneath it).

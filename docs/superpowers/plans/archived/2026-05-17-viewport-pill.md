@@ -246,10 +246,10 @@ Add fields to `BrowserSession`:
 
 In `src/octowright/browser_pool/pool.py`, add these keyword arguments to `BrowserSession(...)`:
 
-```python
-viewport_mode = (viewport_info.mode.value,)
-viewport_width = (viewport_info.width,)
-viewport_height = (viewport_info.height,)
+```text
+                viewport_mode=viewport_info.mode.value,
+                viewport_width=viewport_info.width,
+                viewport_height=viewport_info.height,
 ```
 
 - [ ] **Step 4: Run focused launch/session tests**
