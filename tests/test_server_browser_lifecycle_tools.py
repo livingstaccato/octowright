@@ -181,6 +181,35 @@ def test_browser_list_summary_mode_bounds_rows_and_adds_actions(_patch_pool_life
     assert "summary" in out
 
 
+def test_browser_list_summary_retains_operation_gate(_patch_pool_lifecycle: MagicMock) -> None:
+    """browser_list_summary_row must forward operation_gate verbatim -- no
+    second gate-state computation in the MCP summary layer."""
+    gate_snapshot = {
+        "state": "open",
+        "active_operation": "macro_run",
+        "active_for_ms": 1200,
+        "queue_depth": 1,
+        "oldest_wait_ms": 400,
+        "queue_timeout_seconds": 300.0,
+    }
+    _patch_pool_lifecycle.list_sessions.return_value = [
+        {
+            "instance_id": "alpha",
+            "kind": "chromium",
+            "label": "ops",
+            "profile": "ops",
+            "url": "https://example.com",
+            "title": "Ops",
+            "protected": False,
+            "operation_gate": gate_snapshot,
+        },
+    ]
+
+    out = _lifecycle.browser_list(response_mode="summary")
+
+    assert out["browsers"][0]["operation_gate"] == gate_snapshot
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"

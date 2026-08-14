@@ -284,6 +284,22 @@ code, .mono { font-family: var(--mono); }
   cursor: default;
 }
 
+.operation-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+}
+
+.operation-badge--busy    { background: rgba(232,180,40,0.15); color: var(--warn); border-color: var(--warn); }
+.operation-badge--closing { background: var(--bg-2); color: var(--fg-3); }
+.operation-badge--broken  { background: rgba(232,96,96,0.15); color: var(--err); border-color: var(--err); }
+
 .protected-session td {
   background: color-mix(in srgb, var(--bg) 92%, var(--accent) 8%);
 }
