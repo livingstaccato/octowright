@@ -262,18 +262,23 @@ async def _capture_screenshot(
     label: str,
     enabled: bool,
 ) -> None:
-    if not enabled or getattr(session, "page", None) is None:
-        return
-    screenshot = getattr(session, "screenshot", None)
-    if screenshot is None:
-        return
-    path = run_dir / "screenshots" / f"{label}.png"
-    try:
-        await screenshot(path)
-    except Exception as exc:  # Best-effort evidence must not hide macro results.
-        evidence.log_excerpt(path=path, offset=0, preview=f"{exc.__class__.__name__}: {exc}")
-        return
-    evidence.screenshot(path=path, label=label)
+    # Re-enters run_macro_artifact's own "macro_artifact_run" lease (same
+    # task, Task 2 reentrancy) -- both call sites already hold it, so this
+    # never queues; it exists so the page check and screenshot call don't run
+    # unguarded outside any operation boundary.
+    async with session.operation("macro_artifact_run"):
+        if not enabled or getattr(session, "page", None) is None:
+            return
+        screenshot = getattr(session, "screenshot", None)
+        if screenshot is None:
+            return
+        path = run_dir / "screenshots" / f"{label}.png"
+        try:
+            await screenshot(path)
+        except Exception as exc:  # Best-effort evidence must not hide macro results.
+            evidence.log_excerpt(path=path, offset=0, preview=f"{exc.__class__.__name__}: {exc}")
+            return
+        evidence.screenshot(path=path, label=label)
 
 
 def _safe_existing_manifest_path(store: ArtifactStore, manifest_path: Path) -> Path | None:

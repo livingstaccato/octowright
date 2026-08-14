@@ -98,7 +98,7 @@ class TestPushStatus:
     @pytest.mark.anyio
     async def test_session_with_no_page_no_op(self) -> None:
         """If session.page is None, function returns silently."""
-        session = MagicMock(spec=["page"])
+        session = MagicMock(spec=["page", "operation"])
         session.page = None
         # Should not raise.
         await _push_status(session, text="x")

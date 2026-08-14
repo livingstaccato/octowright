@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, LiteralString, cast
+from typing import Any, cast
 
 from octowright.mcp_types import (
     BrowserActionSuggestion,
@@ -181,10 +181,12 @@ async def _extract_browser_fields(
     instance_id: str,
     selector: str,
     limit: int,
-    *,
-    operation: LiteralString,
 ) -> list[BrowserFieldCandidate]:
-    async with session.operation(operation):
+    # Every caller already holds a browser_operation(...) lease under its own
+    # tool name; this re-enters it (same task) rather than forwarding a
+    # second, dynamic operation name -- a fixed literal keeps this scanner-
+    # provable without a caller-supplied name.
+    async with session.operation("browser_extract_fields"):
         target = session._target()
         candidates = await target.evaluate(_FIELD_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)})
     if not isinstance(candidates, list):
@@ -213,7 +215,7 @@ def _fields_next_actions(instance_id: str) -> list[BrowserToolAction]:
 async def browser_fields(instance_id: str, selector: str = "body", limit: int = 50) -> BrowserFieldsResult:
     cap = _clean_limit(limit)
     async with browser_operation(pool, instance_id, "browser_fields") as session:
-        fields = await _extract_browser_fields(session, instance_id, selector, cap + 1, operation="browser_fields")
+        fields = await _extract_browser_fields(session, instance_id, selector, cap + 1)
         title = await session.page.title()
         target = session._target()
         return {
@@ -265,7 +267,7 @@ async def browser_find_field(
 ) -> BrowserFindFieldResult:
     cap = _clean_limit(limit)
     async with browser_operation(pool, instance_id, "browser_find_field") as session:
-        fields = await _extract_browser_fields(session, instance_id, selector, 200, operation="browser_find_field")
+        fields = await _extract_browser_fields(session, instance_id, selector, 200)
         ranked: list[BrowserFieldCandidate] = []
         for rank, field in enumerate(fields, start=1):
             score, reason = _score_field(field, query)
