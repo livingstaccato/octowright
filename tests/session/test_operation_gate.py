@@ -67,6 +67,9 @@ class _LogCapture:
     def warning(self, event: str, **kw: object) -> None:
         self.events.append((event, kw))
 
+    def error(self, event: str, **kw: object) -> None:
+        self.events.append((event, kw))
+
 
 class _MetricCapture:
     def __init__(self) -> None:
@@ -382,7 +385,9 @@ async def test_grant_that_races_a_timeout_cleanup_is_rolled_back() -> None:
 
 
 @pytest.mark.asyncio
-async def test_release_by_non_owner_breaks_only_this_gate() -> None:
+async def test_release_by_non_owner_breaks_only_this_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    log_cap = _LogCapture()
+    monkeypatch.setattr(operation_gate, "log", log_cap)
     gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
     other = SessionOperationGate("two", "firefox", queue_timeout_seconds=30)
 
@@ -394,6 +399,14 @@ async def test_release_by_non_owner_breaks_only_this_gate() -> None:
             await gate._release(bogus_lease, "ok")
 
         assert gate.snapshot()["state"] == "broken"
+
+        broken_events = [event for event in log_cap.events if event[0] == "octowright.operation.invariant_broken"]
+        assert len(broken_events) == 1
+        fields = broken_events[0][1]
+        assert fields["instance_id"] == "one"
+        assert fields["kind"] == "chromium"
+        assert fields["state"] == "broken"
+        assert fields["reason"] == "operation released by a task that does not own the gate"
 
         async def try_later() -> None:
             async with gate.operation("later"):
@@ -408,3 +421,119 @@ async def test_release_by_non_owner_breaks_only_this_gate() -> None:
         assert other.snapshot()["state"] == "open"
     finally:
         await foreign_task
+
+
+@pytest.mark.asyncio
+async def test_snapshot_derives_active_and_wait_ms_from_injected_clock() -> None:
+    clock_value = 100.0
+
+    def fake_clock() -> float:
+        return clock_value
+
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30, clock=fake_clock)
+    owner_entered = asyncio.Event()
+    release_owner = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("owner"):
+            owner_entered.set()
+            await release_owner.wait()
+
+    async def waiter() -> None:
+        async with gate.operation("waiter"):
+            pass
+
+    owner_task = asyncio.create_task(owner())
+    await owner_entered.wait()
+
+    clock_value = 102.0
+    waiter_task = asyncio.create_task(waiter())
+    await wait_for_queue_depth(gate, 1)
+
+    clock_value = 105.5
+    snap = gate.snapshot()
+    assert snap["active_for_ms"] == 5500
+    assert snap["oldest_wait_ms"] == 3500
+
+    release_owner.set()
+    await asyncio.gather(owner_task, waiter_task)
+
+    idle = gate.snapshot()
+    assert idle["active_for_ms"] is None
+    assert idle["oldest_wait_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_release_survives_repeated_cancellation_of_the_owner() -> None:
+    """``asyncio.Task.cancel()`` can be requested more than once before the
+    task processes any of them. ``_join_after_cancellation`` must absorb
+    every extra cancel via ``current.uncancel()`` and keep joining the
+    detached release task rather than letting a second cancel escape
+    mid-cleanup and leave the gate with a dangling owner.
+    """
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("owner"):
+            entered.set()
+            await never.wait()
+
+    owner_task = asyncio.create_task(owner())
+    await entered.wait()
+
+    await gate._admission_lock.acquire()
+    owner_task.cancel()
+    await asyncio.sleep(0)
+    owner_task.cancel()
+    await asyncio.sleep(0)
+    assert not owner_task.done()
+    gate._admission_lock.release()
+
+    with pytest.raises(asyncio.CancelledError):
+        await owner_task
+
+    assert gate.snapshot()["active_operation"] is None
+    async with gate.operation("after"):
+        assert gate.snapshot()["active_operation"] == "after"
+
+
+@pytest.mark.asyncio
+async def test_arbitrary_baseexception_during_wait_cleans_up_queued_waiter() -> None:
+    class _InjectedBaseException(BaseException):
+        pass
+
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    owner_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("owner"):
+            owner_entered.set()
+            await never.wait()
+
+    async def blocked() -> None:
+        async with gate.operation("blocked"):
+            pass
+
+    owner_task = asyncio.create_task(owner())
+    await owner_entered.wait()
+    blocked_task = asyncio.create_task(blocked())
+    await wait_for_queue_depth(gate, 1)
+
+    queued_waiter = gate._waiters[0]
+    queued_waiter.ready.set_exception(_InjectedBaseException())
+
+    with pytest.raises(_InjectedBaseException):
+        await blocked_task
+
+    assert gate.snapshot()["queue_depth"] == 0
+    assert queued_waiter not in gate._waiters
+
+    owner_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await owner_task
+
+    async with gate.operation("after"):
+        assert gate.snapshot()["active_operation"] == "after"
