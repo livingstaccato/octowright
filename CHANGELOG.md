@@ -22,9 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   external browser/page closure still fails the active call cleanly and
   releases anything left queued. All resulting errors are scoped to the one
   tool call/session and never mean the MCP transport or another browser is
-  unhealthy. Dashboard reads get their own, much shorter
+  unhealthy. The dashboard's session-detail, screenshot, and selector-validate
+  reads get their own, much shorter
   `OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS` (default 8s) so a busy
-  session fails a live-view read fast instead of stalling the page. New
+  session fails those reads fast instead of stalling the page (the live
+  screencast view is not yet on this budget and can still wait the full
+  ordinary queue timeout). New
   metrics: `octowright_operation_queue_wait_seconds`,
   `octowright_operation_active_duration_seconds`,
   `octowright_operation_queue_timeout_total`,

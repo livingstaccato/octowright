@@ -105,6 +105,7 @@ If Octowright tools vanish from your tool list, or **any** Octowright tool retur
 | Faking a browser with shell `open` when Octowright is down | User gets an undriveable tab you wrongly report as "opened" | Never substitute `open`/`xdg-open`/`start`; tell the user to reconnect Octowright in their MCP client |
 | Running `octowright restart` or `which octowright` when disconnected | Wastes tokens; never fixes the MCP connection; binary isn't on agent PATH | Stop immediately; tell user to reconnect via their MCP client |
 | Writing Playwright scripts as a "fallback" when Octowright is down | Produces the wrong deliverable; user wanted a driven session, not a script | Stop immediately; tell user to reconnect |
+| Treating `SessionBusyTimeoutError`/`SessionClosingError`/`SessionClosedError`/`OperationGateInvariantError` as a transport problem | Wasted `octowright restart`, or giving up on a healthy browser | These are session-scoped, not daemon-scoped — check `octowright_status()["pool"]["operation_gates"]` for that `instance_id`, then retry or relaunch just that session |
 
 ## Rationalization Table
 
@@ -119,6 +120,7 @@ If Octowright tools vanish from your tool list, or **any** Octowright tool retur
 | "I'll run `octowright restart` since I have shell access." | The binary isn't on the agent's PATH. Even if it were, restarting the daemon closes the stdio connection — it doesn't reconnect the MCP client. Only the user can do that. Stop and tell them. |
 | "I'll write Playwright tests so the user isn't blocked while Octowright is down." | The user asked for driven, recorded, Octowright-managed work. Raw Playwright scripts are a different product. Stop and wait for reconnect. |
 | "I'll probe `/api/health` to understand the situation." | Even knowing the daemon is alive doesn't fix the MCP client handle. You don't have the right shell environment reliably, and this burns tokens with no fix. Stop and tell the user to reconnect. |
+| "A tool call failed with a gate/timeout error, so the connection must be broken." | Every browser session serializes its own operations; a `SessionBusyTimeoutError`/`SessionClosingError`/`SessionClosedError`/`OperationGateInvariantError` means that ONE session was busy, closing, or broken — never that the MCP transport or another browser is unhealthy. Don't restart anything; check `octowright_status()["pool"]["operation_gates"]` for that `instance_id`. |
 
 ## Quick Reference
 

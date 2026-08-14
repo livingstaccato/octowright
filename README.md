@@ -646,8 +646,9 @@ On Windows, config uses `%APPDATA%\octowright\`, while state and cache use
 | `OCTOWRIGHT_LIVE_SCREENCAST_FPS` | `10` | Positive integer cap for backend live-preview stream FPS and requested frontend `fps`. |
 | `OCTOWRIGHT_LIVE_SCREENCAST_QUALITY` | `70` | JPEG quality for live-preview frames, clamped to `1..100`. |
 | `OCTOWRIGHT_LIVE_SCREENCAST_FULLSCREEN_MODE` | `native` | Live-preview fullscreen behavior: `native` browser fullscreen or `panel` in-page fullscreen. |
-| `OCTOWRIGHT_IDLE_GRACE` | `300` | Seconds before auto-exit when the browser pool is empty. Use `--keep-alive` to disable. |
+| `OCTOWRIGHT_IDLE_GRACE` | unset (off) | Seconds before auto-exit when the browser pool is empty. Off by default — the daemon stays up until an explicit `octowright restart`. Set a positive number to opt in; `--keep-alive` force-disables it. |
 | `OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS` | `300` | How long a queued operation waits its turn on a busy browser session before failing with a tool error (see [Operation ordering](#concepts-how-the-pieces-relate)). Separate from any Playwright action/navigation timeout. Must be positive, finite seconds. Embedders can override per-`BrowserPool` via `operation_queue_timeout_seconds=`, which takes precedence over this variable. |
+| `OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS` | `8` | Much shorter budget the dashboard's own read-only session views (live screenshot, aria snapshot, selector validate) wait on a busy session's gate before failing fast, independent of the MCP tool timeout above. |
 
 ## CLI
 
