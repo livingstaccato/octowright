@@ -8,47 +8,49 @@ from __future__ import annotations
 import asyncio
 import math
 import os
-import re
 import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from enum import Enum, StrEnum
-from typing import Any, Literal, LiteralString, TypedDict, TypeVar
+from enum import Enum
+from typing import Literal, LiteralString, TypedDict
 
-import anyio
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter, gauge, histogram
+from octowright.session.operation_gate_close import _CloseGateMixin
+from octowright.session.operation_gate_types import (
+    CloseReservation,
+    OperationGateInvariantError,
+    OperationGateState,
+    SessionBusyTimeoutError,
+    SessionClosedError,
+    SessionClosingError,
+    _LeaseToken,
+    _run_shielded,
+    _Waiter,
+    validate_operation_name,
+)
+
+__all__ = [
+    "USE_DEFAULT",
+    "CloseReservation",
+    "OperationGateInvariantError",
+    "OperationGateSnapshot",
+    "OperationGateState",
+    "SessionBusyTimeoutError",
+    "SessionClosedError",
+    "SessionClosingError",
+    "SessionOperationGate",
+    "UseDefault",
+    "resolve_operation_queue_timeout_seconds",
+    "validate_operation_name",
+]
 
 DEFAULT_OPERATION_QUEUE_TIMEOUT_SECONDS = 300.0
 _OPERATION_TIMEOUT_ENV = "OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS"
-_OPERATION_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
-
-
-class OperationGateState(StrEnum):
-    OPEN = "open"
-    CLOSING = "closing"
-    CLOSED = "closed"
-    BROKEN = "broken"
-
-
-class SessionBusyTimeoutError(RuntimeError):
-    """The operation's FIFO ticket expired before it owned the session."""
-
-
-class SessionClosingError(RuntimeError):
-    """The operation arrived after the session close cutoff."""
-
-
-class SessionClosedError(RuntimeError):
-    """The underlying browser session is already closed."""
-
-
-class OperationGateInvariantError(RuntimeError):
-    """The gate's ownership/state invariants were violated."""
 
 
 class OperationGateSnapshot(TypedDict):
@@ -82,12 +84,6 @@ def resolve_operation_queue_timeout_seconds(
     return _positive_finite_seconds(raw, source=_OPERATION_TIMEOUT_ENV)
 
 
-def validate_operation_name(name: str) -> str:
-    if not _OPERATION_NAME_RE.fullmatch(name):
-        raise ValueError(f"operation name must be a fixed identifier, got {name!r}")
-    return name
-
-
 _QUEUE_WAIT = histogram("octowright_operation_queue_wait_seconds", unit="s")
 _ACTIVE_DURATION = histogram("octowright_operation_active_duration_seconds", unit="s")
 _QUEUE_TIMEOUT = counter("octowright_operation_queue_timeout_total")
@@ -112,96 +108,6 @@ def _elapsed_ms(now: float, since: float | None) -> int | None:
     return max(0, round((now - since) * 1000))
 
 
-_T = TypeVar("_T")
-
-
-async def _join_after_cancellation(task: asyncio.Task[_T]) -> _T:
-    """Join ``task`` despite the joining task being cancelled again mid-join.
-
-    Local re-implementation of ``session_manifest.wait_task_after_cancellation``:
-    duplicated rather than imported so this session-layer primitive never
-    depends on the higher-level manifest module built on top of it. The
-    ``anyio.CancelScope(shield=True)`` matters even though the outer
-    ``asyncio.shield`` already protects ``task`` from being cancelled itself:
-    it protects *this join* from anyio-level re-cancellation (the MCP server
-    runs under anyio, whose cancel scopes keep re-delivering ``CancelledError``
-    at every checkpoint until their ``with`` block exits) so the loop below
-    reliably reaches ``task.done()`` instead of degrading into a spin that
-    merely re-arms on each iteration.
-    """
-    current = asyncio.current_task()
-    while not task.done():
-        try:
-            with anyio.CancelScope(shield=True):
-                await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if current is not None:
-                current.uncancel()
-    return task.result()
-
-
-async def _run_shielded(coro: Coroutine[Any, Any, None]) -> None:
-    """Run ``coro`` in a detached task the caller's cancellation cannot reach.
-
-    A bare ``asyncio.shield(coro)`` only survives a single cancellation of the
-    awaiting side; a second cancel delivered while the shielded task is still
-    running (e.g. an MCP client that force-cancels twice, or an anyio cancel
-    scope that keeps re-cancelling until its ``with`` block exits) would
-    otherwise let ``CancelledError`` escape mid-cleanup and strand a queued
-    waiter or leave a phantom gate owner. Looping the join
-    (``_join_after_cancellation``) keeps the detached task's completion
-    guaranteed regardless of how many times the caller is cancelled, which is
-    essential here: the detached task carries the only in-flight mutation of
-    gate ownership, so abandoning the join would leave that mutation's
-    outcome unobserved by the gate itself.
-    """
-    task = asyncio.create_task(coro)
-    try:
-        await asyncio.shield(task)
-    except asyncio.CancelledError:
-        await _join_after_cancellation(task)
-        raise
-
-
-def _observe_future_exception(future: asyncio.Future[object]) -> None:
-    # A CloseReservation.outcome may end up with no remaining observer (every
-    # caller cancelled .wait(), which shields the underlying future). Calling
-    # .exception() here -- without consuming it -- stops asyncio's "exception
-    # was never retrieved" warning; a later await of the same future still
-    # raises the identical stored object.
-    def _observe(done: asyncio.Future[object]) -> None:
-        if not done.cancelled():
-            done.exception()
-
-    future.add_done_callback(_observe)
-
-
-@dataclass(slots=True)
-class _Waiter:
-    task: asyncio.Task[object] | None
-    operation_name: str
-    queued_at: float
-    ready: asyncio.Future[None]
-    granted: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class _LeaseToken:
-    owner_task: asyncio.Task[object]
-    operation_name: str
-
-
-@dataclass(slots=True)
-class CloseReservation:
-    operation_name: str
-    waiter: _Waiter
-    outcome: asyncio.Future[object]
-    teardown_only: bool = False
-
-    async def wait(self) -> object:
-        return await asyncio.shield(self.outcome)
-
-
 @dataclass(slots=True)
 class _Diagnostics:
     state: OperationGateState
@@ -210,11 +116,6 @@ class _Diagnostics:
     queue_depth: int
     oldest_queued_at: float | None
     queue_timeout_seconds: float
-
-
-# Imported here, not at module top: operation_gate_close imports names
-# defined above back out of this module, which must bind them first.
-from octowright.session.operation_gate_close import _CloseGateMixin  # noqa: E402
 
 
 class SessionOperationGate(_CloseGateMixin):
