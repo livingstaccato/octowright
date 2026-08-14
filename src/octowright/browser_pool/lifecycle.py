@@ -8,8 +8,9 @@ from __future__ import annotations
 import asyncio
 import functools
 import shutil
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 from provide.telemetry import get_logger
 
@@ -17,8 +18,12 @@ from octowright._tracing import counter, span
 from octowright.browser_pool import close_helpers
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
-from octowright.browser_pool.launch_helpers import rotate_har_path
-from octowright.session.operation_gate import CloseReservation, OperationGateInvariantError, SessionClosedError
+from octowright.session.operation_gate import (
+    CloseReservation,
+    OperationGateInvariantError,
+    SessionClosedError,
+    SessionClosingError,
+)
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
@@ -53,6 +58,10 @@ class ClosingSession:
     session: BrowserSession
     reservation: CloseReservation
     task: asyncio.Task[None] | None = None
+    # Set only by ``close_with_preparation`` (capture-and-close/handoff/
+    # relaunch): run exactly once, inside the coordinator, once the ticket
+    # owns the gate and before teardown. ``None`` for an ordinary close.
+    preparation: Callable[[BrowserSession], Awaitable[object]] | None = None
 
 
 def _protected_close_message(instance_id: str, reason: str) -> str:
@@ -89,13 +98,33 @@ def _resolve_close_target(pool: BrowserPool, instance_id: str, expected_session:
     return current
 
 
+def _already_closing_message(instance_id: str, existing: ClosingSession) -> str:
+    return (
+        f"browser {instance_id!r} is already closing under operation "
+        f"{existing.reservation.operation_name!r}; a compound close cannot attach its own "
+        "preparation to a close ticket it does not own"
+    )
+
+
+def _coalesce_or_reject(existing: ClosingSession, instance_id: str, *, require_fresh: bool) -> ClosingSession:
+    """Share an already-accepted close reservation, unless the caller
+    demanded a fresh ticket of its own (a compound helper's preparation
+    would otherwise silently never run, having shared someone else's)."""
+    if require_fresh:
+        raise SessionClosingError(_already_closing_message(instance_id, existing))
+    return existing
+
+
 async def reserve_close_browser(
     pool: BrowserPool,
     instance_id: str,
     *,
     force: bool,
     reason: SessionCloseReason,
+    operation_name: LiteralString = "browser_close",
     expected_session: BrowserSession | None = None,
+    preparation: Callable[[BrowserSession], Awaitable[object]] | None = None,
+    require_fresh: bool = False,
 ) -> ClosingSession:
     """Reserve the close cutoff and return its (possibly shared) coordinator entry.
 
@@ -103,6 +132,13 @@ async def reserve_close_browser(
     ``_closing_sessions`` coalescing check, registry insertion, and the short
     gate ``reserve_close`` control transaction -- never while awaiting a FIFO
     ticket, Playwright, artifact I/O, or the coordinator task.
+
+    ``operation_name``/``preparation``/``require_fresh`` are internal-only:
+    a compound helper (capture-and-close, handoff, fluid relaunch) passes its
+    own root identifier plus a preparation callback that the coordinator runs
+    exactly once, after the ticket owns the gate. ``require_fresh=True``
+    refuses to coalesce onto an already-accepted close -- a compound helper's
+    preparation would silently never run if it shared someone else's ticket.
     """
     async with pool._sessions_lock:
         try:
@@ -113,13 +149,14 @@ async def reserve_close_browser(
             # ahead of us) but may still be draining in `_closing_sessions`.
             existing = pool._closing_sessions.get(instance_id)
             if existing is not None and (expected_session is None or existing.session is expected_session):
-                return existing
+                return _coalesce_or_reject(existing, instance_id, require_fresh=require_fresh)
             raise
         existing = pool._closing_sessions.get(resolved_id)
         if existing is not None and existing.session is session:
             # A duplicate close for the SAME identity shares the one
-            # coordinator already draining it, rather than starting a second.
-            return existing
+            # coordinator already draining it, rather than starting a second
+            # -- unless the caller demanded a fresh ticket of its own.
+            return _coalesce_or_reject(existing, resolved_id, require_fresh=require_fresh)
 
         def _preflight() -> None:
             if getattr(session, "protected", False) and not force:
@@ -127,7 +164,7 @@ async def reserve_close_browser(
                     _protected_close_message(resolved_id, getattr(session, "protected_reason", "explicit"))
                 )
 
-        reservation = await session._operation_gate.reserve_close("browser_close", preflight=_preflight)
+        reservation = await session._operation_gate.reserve_close(operation_name, preflight=_preflight)
         # gate.reserve_close's own admission lock can suspend THIS coroutine
         # for a full loop turn (contended by any other gated op on this
         # session) while we still hold pool._sessions_lock -- but the sync
@@ -145,8 +182,8 @@ async def reserve_close_browser(
                 raise OperationGateInvariantError(
                     f"session {resolved_id!r} close reservation raced an unrelated closing-registry entry"
                 )
-            return existing
-        entry = ClosingSession(session=session, reservation=reservation)
+            return _coalesce_or_reject(existing, resolved_id, require_fresh=require_fresh)
+        entry = ClosingSession(session=session, reservation=reservation, preparation=preparation)
         pool._closing_sessions[resolved_id] = entry
     _spawn_close_coordinator(pool, resolved_id, entry, reason=reason)
     return entry
@@ -167,6 +204,37 @@ async def close_browser(
     return outcome.response
 
 
+async def close_with_preparation(
+    pool: BrowserPool,
+    instance_id: str,
+    *,
+    force: bool,
+    reason: SessionCloseReason,
+    operation_name: LiteralString,
+    preparation: Callable[[BrowserSession], Awaitable[object]],
+    expected_session: BrowserSession | None = None,
+    require_fresh: bool = True,
+) -> CloseCoordinatorOutcome:
+    """The compound-operation counterpart of ``close_browser``: reserves the
+    close cutoff with a ``preparation`` callback attached and returns the
+    full durable outcome (``.response`` AND ``.prepared``), not just the
+    close response. Same protection preflight, same shielded/durable
+    coordination -- a caller's own cancellation after acceptance can skip
+    neither the preparation nor the teardown, exactly like an ordinary close.
+    """
+    entry = await reserve_close_browser(
+        pool,
+        instance_id,
+        force=force,
+        reason=reason,
+        operation_name=operation_name,
+        expected_session=expected_session,
+        preparation=preparation,
+        require_fresh=require_fresh,
+    )
+    return cast(CloseCoordinatorOutcome, await entry.reservation.wait())
+
+
 def _spawn_close_coordinator(
     pool: BrowserPool,
     instance_id: str,
@@ -180,7 +248,9 @@ def _spawn_close_coordinator(
     shielded), so a requester's own cancellation never reaches this task.
     Retained: stored on ``entry.task`` so ``shutdown_pool`` can await it.
     """
-    task = asyncio.create_task(_coordinate_close(pool, instance_id, entry, reason=reason))
+    task = asyncio.create_task(
+        _coordinate_close(pool, instance_id, entry, reason=reason, preparation=entry.preparation)
+    )
     entry.task = task
     task.add_done_callback(functools.partial(_observe_close_coordinator, instance_id))
 
@@ -333,115 +403,28 @@ def accept_external_close_nowait(
     return entry
 
 
-async def handoff_browser(
-    pool: BrowserPool,
-    old_instance_id: str,
-    *,
-    headed: bool | None = None,
-    close_original: bool = True,
-    accept_stateless: bool = False,
-) -> dict[str, Any]:
-    # Wrap the full handoff in a span so close + launch nest cleanly under it
-    # in the trace tree. Without a parent span the only signal an operator
-    # had was two unrelated `browser.close` / `browser.launch` events with
-    # no semantic link back to the originating handoff request.
-    source = pool.get(old_instance_id)
-    # Snapshot every field we need BEFORE awaiting close. A Playwright
-    # external-close eviction (context.close / browser.disconnected /
-    # page.close) can fire between this point and `pool.close()`, popping
-    # the session out of the pool. If we re-read ``source`` attributes
-    # later they'd still be valid (SimpleNamespace-style ref), but the
-    # important invariant is that we don't depend on the session staying
-    # registered: the launch of the replacement must succeed whether or
-    # not close raced an eviction.
-    source_kind = source.kind
-    source_label = source.label
-    source_profile = source.profile
-    source_user_data_dir = getattr(source, "user_data_dir", None)
-    source_stabilize = getattr(source, "stabilize", False)
-    source_trace = getattr(source, "trace", False)
-    source_har_path = getattr(source, "har_path", None)
-    source_protected = getattr(source, "protected", False)
-    source_protected_reason = getattr(source, "protected_reason", "explicit")
-    target_url = getattr(source.page, "url", None) or source.url
-    with span(
-        "octowright.browser.handoff",
-        old_instance_id=old_instance_id,
-        kind=source_kind,
-        headed=headed,
-        close_original=close_original,
-        accept_stateless=accept_stateless,
-    ):
-        if source_profile is None and source_user_data_dir is None and not accept_stateless:
-            raise ValueError(
-                "handoff would be stateless: source has no profile/user_data_dir; pass accept_stateless=True to proceed"
-            )
-        if not close_original and (source_profile is not None or source_user_data_dir is not None):
-            raise ValueError(
-                "persistent handoff requires close_original=True so the state directory can be safely reused"
-            )
+@dataclass(slots=True, frozen=True)
+class RelaunchSnapshot:
+    """Immutable capture of every field a close-then-relaunch compound
+    (handoff, fluid relaunch) needs to build its replacement launch.
 
-        session_scoped = source_profile is None and source_user_data_dir is not None
-        close_result: dict[str, Any] | None = None
-        if close_original:
-            try:
-                # force=True: the caller explicitly opted into close_original
-                # (close-then-relaunch of the same logical browser, state
-                # preserved) — not a destructive agent close, so a protected
-                # (e.g. headed-by-default) source must not refuse here the
-                # way an explicit browser_close would.
-                close_result = await pool.close(old_instance_id, force=True)
-            except KeyError:
-                # The session was evicted (external-close listener fired)
-                # between pool.get() above and this close(). Treat as
-                # "already closed" and proceed to launch the replacement
-                # so the user isn't left with no browser.
-                log.warning(
-                    "octowright.browser.handoff.close_raced_eviction",
-                    old_instance_id=old_instance_id,
-                    kind=source_kind,
-                )
-                close_result = None
+    Built by ``_relaunch_snapshot_from_session`` and returned from the
+    preparation callback the coordinator runs once the close ticket owns the
+    gate -- ``target_url`` in particular must reflect the session's FINAL
+    navigated URL (``session.page.url``), not a pre-close read that a
+    concurrent navigation could have raced past.
+    """
 
-        # Don't overwrite the prior HAR — handoff gets a fresh sibling path.
-        next_har = rotate_har_path(source_har_path)
-        launch = await pool.launch(
-            kind=source_kind,
-            url=target_url,
-            headed=headed,
-            label=source_label,
-            profile=source_profile,
-            stabilize=source_stabilize,
-            trace=source_trace,
-            har=bool(source_har_path),
-            har_path=str(next_har) if next_har else None,
-            session=session_scoped,
-            protected=source_protected,
-        )
-        # resolve_protected() always stamps reason="explicit" whenever an
-        # explicit (non-None) protected value is passed in — which we just did
-        # with source_protected above, to carry the boolean across the
-        # handoff. That correctly preserves the protected bit but loses the
-        # ORIGINAL reason (e.g. "headed_default"), which the tailored
-        # close-refusal message keys off. Restore it post-hoc now that the new
-        # session is registered in the pool. Use maybe_get (not get): some
-        # unit tests stub out ``pool.launch`` entirely, so there may be no
-        # real session behind the returned instance_id — nothing to patch in
-        # that case.
-        new_session = pool.maybe_get(launch["instance_id"])
-        if new_session is not None:
-            new_session.protected_reason = source_protected_reason
-
-        return {
-            "ok": True,
-            "old_instance_id": old_instance_id,
-            "new_instance_id": launch["instance_id"],
-            "old_closed": bool(close_result and close_result.get("closed")),
-            "profile": source_profile,
-            "kind": source_kind,
-            "url": target_url,
-            "har_path": launch.get("har_path"),
-        }
+    kind: str
+    label: str | None
+    profile: str | None
+    user_data_dir: Any
+    stabilize: bool
+    trace: bool
+    har_path: Any
+    protected: bool
+    protected_reason: str
+    target_url: str
 
 
 async def shutdown_pool(pool: BrowserPool) -> None:
