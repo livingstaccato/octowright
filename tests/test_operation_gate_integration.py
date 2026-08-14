@@ -342,12 +342,17 @@ def test_pool_default_operation_timeout_resolves_from_env(
 # ─── close_with_preparation (Task 8): preparation runs at the close ticket ──
 
 
-def _real_pool_session(instance_id: str, tmp_path: Path) -> BrowserSession:
+def _real_pool_session(
+    instance_id: str, tmp_path: Path, *, operation_queue_timeout_seconds: float | None = None
+) -> BrowserSession:
     context = MagicMock()
     context.close = AsyncMock()
     context.tracing = MagicMock()
     context.on = MagicMock()
     page = MagicMock()
+    kwargs: dict[str, object] = {}
+    if operation_queue_timeout_seconds is not None:
+        kwargs["operation_queue_timeout_seconds"] = operation_queue_timeout_seconds
     return BrowserSession(
         instance_id=instance_id,
         kind="chromium",
@@ -358,6 +363,7 @@ def _real_pool_session(instance_id: str, tmp_path: Path) -> BrowserSession:
         page=page,
         recorder=MagicMock(),
         log_path=tmp_path / f"{instance_id}.jsonl",
+        **kwargs,  # type: ignore[arg-type]
     )
 
 
@@ -493,6 +499,38 @@ async def test_dashboard_routes_answer_409_inside_the_close_drain_window(
     release.set()
     await holder
     await closing
+
+
+@pytest.mark.asyncio
+async def test_session_navigate_answers_503_when_gate_is_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A navigate call that cannot be admitted within the queue timeout must
+    answer 503 (``SessionBusyTimeoutError``), not fall through to the
+    generic-exception 500 branch -- the same mapping ``session_selector_validate``
+    and ``screenshot/now`` already use."""
+    from octowright.http.routes import sessions as _session_routes
+    from octowright.server import _state as _server_state
+    from tests._pool_invariants import wait_until
+
+    pool = BrowserPool()
+    session = _real_pool_session("busy-navigate", tmp_path, operation_queue_timeout_seconds=0.1)
+    sid = session.instance_id
+    pool._sessions[sid] = session
+    monkeypatch.setattr(_server_state, "pool", pool)
+
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with session.operation("held_work"):
+            await release.wait()
+
+    holder = asyncio.create_task(_hold())
+    await wait_until(lambda: session.operation_snapshot()["active_operation"] == "held_work")
+
+    navigate = await _session_routes.session_navigate(_json_route_request(sid, {"url": "https://octowright.com/next"}))
+    assert navigate.status_code == 503
+
+    release.set()
+    await holder
 
 
 # ─── Task 9: macro replay holds one root lease per logical invocation ──────
