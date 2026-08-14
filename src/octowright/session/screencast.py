@@ -14,7 +14,13 @@ from typing import Any, LiteralString, Protocol
 
 from provide.telemetry import get_logger
 
-from octowright.session.operation_gate import USE_DEFAULT, UseDefault
+from octowright.session.operation_gate import (
+    USE_DEFAULT,
+    SessionClosedError,
+    SessionClosingError,
+    UseDefault,
+)
+from octowright.session.operation_gate_types import _join_after_cancellation
 
 log = get_logger(__name__)
 
@@ -219,24 +225,50 @@ class ScreencastManager:
         releasing the producer and waking viewers, which is the one thing
         this path must still do.
         """
-        if self._started:
-            self._started = False
-            page = self._bound_page
-            self._bound_page = None
-            if page is not None:
-                try:
-                    await asyncio.wait_for(page.screencast.stop(), timeout=_STOP_TIMEOUT_SECONDS)
-                except Exception as exc:
-                    log.debug(
-                        "octowright.screencast.stop_bound_failed",
-                        instance_id=self._instance_id,
-                        error=repr(exc),
-                    )
+        await self._best_effort_stop_bound_locked()
         self._end_viewers_locked()
 
+    async def _best_effort_stop_bound_locked(self) -> None:
+        """Stop whatever producer is bound, swallowing any failure.
+
+        Shared by the two paths that must not let a doomed Playwright call
+        block cleanup: full termination (``_terminate_producer_after_close``)
+        and a single-viewer removal that discovers the session already
+        closed underneath it (``_remove_viewer_after_close_locked``).
+        """
+        if not self._started:
+            return
+        self._started = False
+        page = self._bound_page
+        self._bound_page = None
+        if page is None:
+            return
+        try:
+            await asyncio.wait_for(page.screencast.stop(), timeout=_STOP_TIMEOUT_SECONDS)
+        except Exception as exc:
+            log.debug(
+                "octowright.screencast.stop_bound_failed",
+                instance_id=self._instance_id,
+                error=repr(exc),
+            )
+
     async def remove_viewer(self, viewer: ScreencastViewer) -> None:
-        async with self._session.operation("screencast_stop"), self._lock:
-            await self._remove_viewer_locked(viewer)
+        try:
+            async with self._session.operation("screencast_stop"), self._lock:
+                await self._remove_viewer_locked(viewer)
+        except (SessionClosingError, SessionClosedError):
+            # The session can close out from under a still-attached viewer
+            # (e.g. the dashboard was open when the browser closed) -- the
+            # gate correctly refuses a fresh "screencast_stop" lease at that
+            # point, but the manager/viewer bookkeeping still has to happen,
+            # or this viewer is stranded in ``self._viewers`` forever and the
+            # manager can never be reclaimed by ``release_viewer``/
+            # ``_drop_empty_manager``. Fall back to the same lock-only,
+            # best-effort teardown ``terminate()`` uses once the session is
+            # gone, instead of the raise-on-failure semantics that only make
+            # sense while the session is still reachable.
+            async with self._lock:
+                await self._remove_viewer_after_close_locked(viewer)
 
     async def _remove_viewer_locked(self, viewer: ScreencastViewer) -> None:
         if viewer not in self._viewers:
@@ -264,6 +296,14 @@ class ScreencastManager:
             await self._stop_recovery_watcher_locked()
         if stop_error is not None:
             raise stop_error
+
+    async def _remove_viewer_after_close_locked(self, viewer: ScreencastViewer) -> None:
+        if viewer not in self._viewers:
+            return
+        self._viewers.remove(viewer)
+        if not self._viewers:
+            await self._best_effort_stop_bound_locked()
+            await self._stop_recovery_watcher_locked()
 
     def _handle_frame(self, frame: Mapping[str, object]) -> None:
         # Deliberately does not acquire the session operation gate: this runs
@@ -412,17 +452,23 @@ async def acquire_viewer(
     # releasing the session operation lease is itself a real await (shielded
     # internally so the release completes cleanly), so a caller cancellation
     # landing in that narrow window still surfaces here as CancelledError --
-    # AFTER the viewer already exists. Run it as its own task so a shielded
-    # re-await can recover the true, already-committed outcome instead of
-    # leaking a live producer nobody has a handle to release just because
-    # this call merely *looked* like it failed.
+    # AFTER the viewer already exists. Run it as its own task so its outcome
+    # can be recovered instead of leaking a live producer nobody has a handle
+    # to release just because this call merely *looked* like it failed.
     add_task: asyncio.Task[ScreencastViewer] = asyncio.create_task(manager.add_viewer(fps=fps))
     try:
         try:
             viewer = await asyncio.shield(add_task)
         except asyncio.CancelledError:
-            with suppress(BaseException):
-                viewer = await asyncio.shield(add_task)
+            # This repo's MCP server runs under anyio, whose cancel scopes
+            # keep re-delivering CancelledError at every checkpoint until
+            # their `with` block exits -- a single re-await (even shielded)
+            # only survives ONE such redelivery and would abandon `add_task`
+            # mid-flight on a second. `_join_after_cancellation` loops and
+            # `uncancel()`s until `add_task` is genuinely done, however many
+            # times this task is re-cancelled while waiting for it.
+            with suppress(Exception):  # a genuine add_viewer failure still loses to the cancel
+                viewer = await _join_after_cancellation(add_task)
             raise
         await _finish_acquire(instance_id, manager, cleanup_empty=False)
     except BaseException:
