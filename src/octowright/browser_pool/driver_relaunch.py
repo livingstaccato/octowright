@@ -307,6 +307,15 @@ async def _finalize_id(pool: Any, new_id: str, old_id: str, mode: str) -> str:
                 raise cancelled
             raise RuntimeError(f"replacement session {new_id!r} closed while it was being rebound to {old_id!r}")
         session.instance_id = old_id
+        # SessionOperationGate captures its own instance_id string at
+        # construction (never a back-reference to the session) purely for
+        # log/error text -- not a lookup key, so this is cosmetic-only, but
+        # a stale value there would misreport the wrong id in any gate
+        # error/log line raised after this rekey. Suppressed: must never
+        # abort the load-bearing pool._sessions remapping below just because
+        # a caller's session stand-in has no real gate attached.
+        with contextlib.suppress(AttributeError):
+            session._operation_gate.instance_id = old_id
         pool._sessions.pop(new_id, None)
         pool._sessions[old_id] = session
         pool._recently_evicted.pop(old_id, None)
