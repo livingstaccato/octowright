@@ -546,33 +546,66 @@ class TestNavigateUrlSanitization:
 # ---------------------------------------------------------------------------
 
 
+def _telemetry_fake_source(
+    *,
+    instance_id: str,
+    kind: str = "chromium",
+    label: str | None = None,
+    profile: str | None = None,
+    url: str = "https://octowright.com/initial",
+    user_data_dir: Any = None,
+) -> Any:
+    """Duck-typed handoff/relaunch source carrying a REAL SessionOperationGate
+    -- Task 8's close_original=True path drives ``_operation_gate`` directly
+    via ``close_with_preparation``, so a bare SimpleNamespace can no longer
+    stand in (mirrors ``tests/test_handoff.py::_fake_source``)."""
+    from octowright.session.operation_gate import SessionOperationGate
+
+    gate = SessionOperationGate(instance_id, kind)
+    source = SimpleNamespace(
+        instance_id=instance_id,
+        kind=kind,
+        profile=profile,
+        label=label,
+        url=url,
+        user_data_dir=user_data_dir,
+        har_path=None,
+        stabilize=False,
+        trace=False,
+        protected=False,
+        protected_reason="explicit",
+        page=SimpleNamespace(url="https://octowright.com/live"),
+        log_path=f"/tmp/{instance_id}.jsonl",
+        video_path=None,
+        trace_path=None,
+        _teardown_after_close_cutoff=AsyncMock(),
+        _operation_gate=gate,
+    )
+    source.operation = gate.operation
+    source.operation_snapshot = gate.snapshot
+    return source
+
+
 class TestHandoffSpan:
     @pytest.mark.anyio
     async def test_handoff_emits_span_with_attrs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from octowright.browser_pool import BrowserPool
+        from octowright.browser_pool import close_helpers as _close_helpers
 
+        monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
         exporter = _setup_span_exporter(monkeypatch)
         pool = BrowserPool()
-        pool._sessions["old01"] = SimpleNamespace(
+        pool._sessions["old01"] = _telemetry_fake_source(
             instance_id="old01",
             kind="webkit",
             profile="dante",
             label="lab",
-            url="https://octowright.com",
             user_data_dir="/tmp/profile-dir",
-            har_path=None,
-            stabilize=False,
-            page=SimpleNamespace(url="https://octowright.com/live"),
         )
-
-        async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
-            pool._sessions.pop(instance_id, None)
-            return {"closed": True}
 
         async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
             return {"instance_id": "new01"}
 
-        monkeypatch.setattr(pool, "close", _fake_close)
         monkeypatch.setattr(pool, "launch", _fake_launch)
         await pool.handoff("old01", headed=False)
 
@@ -619,31 +652,17 @@ class TestRelaunchFluidSpan:
     @pytest.mark.anyio
     async def test_relaunch_fluid_emits_span(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from octowright.browser_pool import BrowserPool
+        from octowright.browser_pool import close_helpers as _close_helpers
 
+        monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
         exporter = _setup_span_exporter(monkeypatch)
         pool = BrowserPool()
-        source = SimpleNamespace(
-            instance_id="rid",
-            kind="chromium",
-            profile=None,
-            label="lab",
-            url="https://octowright.com/initial",
-            user_data_dir=None,
-            har_path=None,
-            stabilize=False,
-            trace=False,
-            page=SimpleNamespace(url="https://octowright.com/live"),
-        )
+        source = _telemetry_fake_source(instance_id="rid", label="lab")
         pool._sessions["rid"] = source
-
-        async def _fake_close(instance_id: str, **_kwargs: Any) -> dict[str, Any]:
-            pool._sessions.pop(instance_id, None)
-            return {"closed": True}
 
         async def _fake_launch(**_kw: Any) -> dict[str, Any]:
             return {"instance_id": "new-rid"}
 
-        monkeypatch.setattr(pool, "close", _fake_close)
         monkeypatch.setattr(pool, "launch", _fake_launch)
 
         out = await pool.relaunch_fluid("rid")
