@@ -134,7 +134,7 @@ async def test_operation_gate_serializes_real_chromium_sessions(
     _configure_runtime_paths(monkeypatch, tmp_path)
     _write_gate_order_macro(monkeypatch, tmp_path)
 
-    pool = BrowserPool(operation_queue_timeout_seconds=0.25)
+    pool = BrowserPool(operation_queue_timeout_seconds=0.5)
     try:
         launch_a = await _launch(
             pool,
@@ -186,11 +186,17 @@ async def test_operation_gate_serializes_real_chromium_sessions(
         assert result_b["result"] == 6
 
         # ── Behavior 4: close cutoff admits the earlier queued op, rejects later ──
-        # The hold here must be well under the pool's 0.25s queue timeout --
+        # The hold here must be well under the pool's 0.5s queue timeout --
         # unlike behaviors 2/3, "early_task" below is itself a plain queued
         # evaluate bound by that same default timeout, so it must be admitted
-        # (hold released) before ITS OWN 250ms admission window expires.
-        hold_task_3 = asyncio.create_task(session_a.evaluate("() => new Promise(resolve => setTimeout(resolve, 150))"))
+        # (hold released) before ITS OWN 500ms admission window expires. Kept
+        # at 200ms, leaving 300ms of margin rather than the original
+        # 150ms/250ms pairing's 100ms -- that margin flaked on contended
+        # macOS CI runners (observed timing out at ~252-253ms, just over the
+        # old 250ms ceiling). 0.5s (not the 1.0s first tried) keeps behavior
+        # 3's 1000ms holds comfortably ABOVE the timeout too -- a 1.0s pool
+        # timeout made that a coin flip instead of a reliable timeout.
+        hold_task_3 = asyncio.create_task(session_a.evaluate("() => new Promise(resolve => setTimeout(resolve, 200))"))
         await _wait_for_snapshot(session_a, lambda s: s["active_operation"] == "browser_evaluate")
         early_task = asyncio.create_task(session_a.evaluate("5 + 5"))
         await _wait_for_snapshot(session_a, lambda s: s["queue_depth"] >= 1)
