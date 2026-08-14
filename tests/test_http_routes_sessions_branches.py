@@ -34,6 +34,7 @@ from octowright import http as _http
 from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.http import state as _http_state
 from octowright.http.routes import sessions as session_routes
+from octowright.http.routes import sessions_recording as session_recording_routes
 from octowright.recorder import Recorder
 from octowright.server import _state
 from octowright.session.operation_gate import SessionOperationGate
@@ -226,7 +227,7 @@ class TestRecordingDelete:
         """Successful delete fires the dashboard 'sessions' invalidation."""
         _write_recording(isolated_recordings, "invalsesn001")
         publish = AsyncMock()
-        monkeypatch.setattr(session_routes, "publish_dashboard_invalidation", publish)
+        monkeypatch.setattr(session_recording_routes, "publish_dashboard_invalidation", publish)
         client.delete("/api/sessions/invalsesn001/recording")
         publish.assert_awaited_once_with("sessions")
 
