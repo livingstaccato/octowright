@@ -11,12 +11,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Literal, LiteralString, TypeVar
 
-# Private module: import SessionOperationGate from operation_gate.py, never
-# import this module directly first. operation_gate.py imports _CloseGateMixin
-# from here after defining the names below, so operation_gate.py must load
-# first -- importing this module on its own triggers operation_gate.py to
-# load reentrantly and fails with ImportError on a not-yet-bound name.
-from octowright.session.operation_gate import (
+from octowright.session.operation_gate_types import (
     CloseReservation,
     OperationGateInvariantError,
     OperationGateState,
@@ -125,20 +120,26 @@ class _CloseGateMixin:
         await asyncio.shield(reservation.waiter.ready)
         task = self._current_task()
         async with self._admission_lock:
-            if self._granted_close_reservation is not reservation:
-                raise OperationGateInvariantError(self._invariant_message())
             if self._state is OperationGateState.CLOSED:
-                # mark_closed_external() landed in the grant-to-bind gap: the
-                # ticket's admission future already resolved before the
-                # browser closed out from under it. There is nothing left to
-                # prepare -- clear the sentinel and route the coordinator to
-                # teardown-only cleanup instead of a page/context touch that
-                # would only surface Playwright's own closed error.
-                self._granted_close_reservation = None
-                self._root_operation = None
-                self._active_since = None
-                self._publish_diagnostics_locked()
+                # Either an entirely ordinary double-close (this exact
+                # reservation already completed/failed) or mark_closed_external()
+                # landed in the grant-to-bind gap (ticket already granted
+                # before the browser closed out from under it) -- either way
+                # there is nothing left to prepare. Checked before the
+                # sentinel-identity check below so a plain double-close gets
+                # SessionClosedError, not a misleading "broken" error (the
+                # gate isn't broken, it's just closed).
+                if self._granted_close_reservation is reservation:
+                    self._granted_close_reservation = None
+                    self._root_operation = None
+                    self._active_since = None
+                    self._publish_diagnostics_locked()
                 raise SessionClosedError(self._rejection_message(reservation.operation_name, self._state))
+            if self._granted_close_reservation is not reservation:
+                raise OperationGateInvariantError(
+                    f"session {self.instance_id!r} close_operation called for a reservation that is "
+                    f"not the currently granted close ticket (kind={self.kind!r})"
+                )
             self._granted_close_reservation = None
             self._owner_task = task
             self._root_operation = reservation.operation_name
@@ -146,19 +147,28 @@ class _CloseGateMixin:
             self._depth = 1
             self._publish_diagnostics_locked()
         outcome: Literal["ok", "error", "cancelled"] = "ok"
+        exc: BaseException | None = None
         try:
             yield
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught:
             outcome = "cancelled"
+            exc = caught
             raise
-        except BaseException:
+        except BaseException as caught:
             outcome = "error"
+            exc = caught
             raise
         finally:
             lease = _LeaseToken(task, reservation.operation_name)
-            await _run_shielded(self._release_close(lease, outcome))
+            await _run_shielded(self._release_close(lease, outcome, reservation, exc))
 
-    async def _release_close(self, lease: _LeaseToken, outcome: Literal["ok", "error", "cancelled"]) -> None:
+    async def _release_close(
+        self,
+        lease: _LeaseToken,
+        outcome: Literal["ok", "error", "cancelled"],
+        reservation: CloseReservation,
+        exc: BaseException | None,
+    ) -> None:
         async with self._admission_lock:
             if self._owner_task is not lease.owner_task:
                 self._break_locked("close operation released by a task that does not own the gate")
@@ -171,7 +181,25 @@ class _CloseGateMixin:
             self._owner_task = None
             self._root_operation = None
             self._active_since = None
-            self._publish_diagnostics_locked()
+            if outcome == "ok":
+                self._publish_diagnostics_locked()
+                return
+            # The close body was cancelled or raised mid-close: the browser's
+            # real state is now unknown, so this ticket is a failed close, not
+            # a resumable one -- reopening to `open` would let ordinary work
+            # resume against a possibly half-closed browser. Resolve it the
+            # same terminal way an in-band close finishes (state closed,
+            # shared outcome set) so no `reservation.wait()` caller hangs
+            # forever and a retry lands on the `state is CLOSED` branch above
+            # instead of a phantom-owner invariant error.
+            if exc is None or isinstance(exc, asyncio.CancelledError):
+                failure: BaseException = SessionClosedError(
+                    f"session {self.instance_id!r} close operation {reservation.operation_name!r} was "
+                    f"interrupted before completing; the session is now closed (kind={self.kind!r})"
+                )
+            else:
+                failure = exc
+            self.fail_close(reservation, failure)
 
     def mark_closed_external(self) -> None:
         if self._state is OperationGateState.CLOSED:
@@ -185,7 +213,20 @@ class _CloseGateMixin:
         if self._state is not OperationGateState.CLOSED:
             raise OperationGateInvariantError(f"reserve_external_teardown called before mark_closed_external ({name})")
         if self._close_reservation is not None:
-            return self._close_reservation
+            reservation = self._close_reservation
+            # A retained reservation from reserve_close() is FIFO-shaped
+            # (teardown_only=False) by construction. The caller here always
+            # wants the bare-yield teardown path from close_operation --
+            # CloseReservation is a mutable slots dataclass, so flip the flag
+            # in place rather than making the caller juggle two reservation
+            # shapes for what is conceptually one cleanup handle.
+            reservation.teardown_only = True
+            if self._granted_close_reservation is reservation:
+                self._granted_close_reservation = None
+                self._root_operation = None
+                self._active_since = None
+                self._publish_diagnostics_locked()
+            return reservation
         reservation = self._new_close_reservation(name, ready=True, teardown_only=True)
         self._close_reservation = reservation
         return reservation
