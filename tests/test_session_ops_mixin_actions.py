@@ -237,14 +237,85 @@ class TestNavigateBackResize:
         """Viewport resize uses the dict shape Playwright expects."""
         page = MagicMock()
         page.set_viewport_size = AsyncMock()
+        page.evaluate = AsyncMock(return_value={"dw": 8, "dh": 85})
         inst = _build(tmp_path, page=page)
         out = await inst.resize(800, 600)
         assert page.set_viewport_size.await_args.args == ({"width": 800, "height": 600},)
-        assert out == {"ok": True, "width": 800, "height": 600}
+        assert out == {"ok": True, "mode": "fixed", "width": 800, "height": 600}
         assert inst.recorder.events[0] == ("resize", {"width": 800, "height": 600})
+
+    @pytest.mark.anyio
+    async def test_resize_records_the_new_size_as_the_sessions_own(self, tmp_path: Path) -> None:
+        """Leaving the recorded size behind made two things lie about the page.
+
+        viewport_status reported a `configured` the page had not had since the
+        resize, and the in-page pill announced that stale size for the rest of
+        the session -- and kept announcing it, because a navigation re-ran the
+        pill script with the same launch-time constant baked in.
+        """
+        page = MagicMock()
+        page.set_viewport_size = AsyncMock()
+        page.evaluate = AsyncMock(return_value={"dw": 8, "dh": 85})
+        inst = _build(tmp_path, page=page, viewport_mode="fixed", viewport_width=900, viewport_height=600)
+
+        await inst.resize(1200, 800)
+
+        assert (inst.viewport_width, inst.viewport_height) == (1200, 800)
+
+    @pytest.mark.anyio
+    async def test_resizing_a_fluid_session_makes_it_fixed(self, tmp_path: Path) -> None:
+        """set_viewport_size pins the viewport, so "fluid" stops being true.
+
+        This is not a labelling nicety. `mismatch` only evaluates for fixed
+        sessions, so a resized session still calling itself fluid had drift
+        detection silently switched off -- and drift is exactly what resizing a
+        fluid session causes, since Playwright pins the viewport without moving
+        the window.
+        """
+        page = MagicMock()
+        page.set_viewport_size = AsyncMock()
+        page.evaluate = AsyncMock(return_value={"dw": -255, "dh": 380})
+        inst = _build(tmp_path, page=page, viewport_mode="fluid")
+
+        result = await inst.resize(1200, 800)
+
+        assert inst.viewport_mode == "fixed"
+        assert result["mode"] == "fixed"
+
+    @pytest.mark.anyio
+    async def test_resize_re_measures_the_chrome(self, tmp_path: Path) -> None:
+        """The window has just been re-welded, so the chrome is measurable again.
+
+        It can also have genuinely changed: a fluid session reports the real
+        layout viewport, which excludes the classic scrollbar, while a fixed
+        one is emulated and does not. Measured on one browser: 24x112 fluid
+        against 8x85 fixed. Carrying the old figure across would understate the
+        content area and invent a mismatch.
+        """
+        page = MagicMock()
+        page.set_viewport_size = AsyncMock()
+        page.evaluate = AsyncMock(return_value={"dw": 8, "dh": 85})
+        inst = _build(
+            tmp_path,
+            page=page,
+            viewport_mode="fixed",
+            viewport_frame_inset_w=24,
+            viewport_frame_inset_h=112,
+        )
+
+        await inst.resize(1200, 800)
+
+        assert (inst.viewport_frame_inset_w, inst.viewport_frame_inset_h) == (8, 85)
 
     @staticmethod
     def _measuring(inner: tuple[int, int], outer: tuple[int, int], dpr: int = 2) -> Any:
+        """A page that answers both viewport probes from one measurement.
+
+        ``viewport_status`` asks for inner/outer; ``measure_frame_inset`` asks
+        for their difference. One mock serves both, and derives dw/dh from the
+        same numbers so a test cannot accidentally describe a window whose
+        chrome disagrees with its own dimensions.
+        """
         page = MagicMock()
         page.evaluate = AsyncMock(
             return_value={
@@ -253,6 +324,8 @@ class TestNavigateBackResize:
                 "outerWidth": outer[0],
                 "outerHeight": outer[1],
                 "devicePixelRatio": dpr,
+                "dw": outer[0] - inner[0],
+                "dh": outer[1] - inner[1],
             }
         )
         page.set_viewport_size = AsyncMock()
