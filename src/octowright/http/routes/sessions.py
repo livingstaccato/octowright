@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 from typing import Any
 
@@ -25,15 +24,13 @@ from octowright.http.artifacts import _build_cache_components
 from octowright.http.discovery import (
     _closed_sessions,
     _find_recording_for,
-    _iso,
     _live_session_or_none,
     _live_summary,
-    _read_first_launch,
+    _live_summary_from_launch,
     _resolve_artifact_path,
     _summarise_recording,
 )
 from octowright.http.exposure import guard_sensitive_http
-from octowright.http.recording_sidecars import is_recording_sidecar
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool, _read_json_body
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
@@ -194,32 +191,6 @@ async def session_detail(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 # Write endpoints — sessions (launch / close / navigate)
 # ---------------------------------------------------------------------------
-
-
-def _live_summary_from_launch(result: dict[str, Any]) -> dict[str, Any]:
-    """Build a SessionSummary-shaped dict for the response of POST /api/sessions.
-
-    The shape mirrors ``_live_summary()`` so dashboard code that consumes
-    ``GET /api/sessions``'s ``live[]`` entries can reuse the same parser for
-    the launch response.
-    """
-    log_path = Path(result["log_path"])
-    started_at = _iso(log_path.stat().st_ctime) if log_path.exists() else _iso(time.time())
-    return {
-        "id": result["instance_id"],
-        "kind": result["kind"],
-        "label": result.get("label"),
-        "profile": result.get("profile"),
-        "url": result.get("url"),
-        "started_at": started_at,
-        "live": True,
-        "protected": result.get("protected", False),
-        "log_path": str(log_path),
-        "event_count": 1,  # launch event is written before HTTP response
-        "console_count": 0,
-        "download_count": 0,
-        "page_count": 1,
-    }
 
 
 async def session_launch(request: Request) -> JSONResponse:
@@ -393,6 +364,8 @@ async def session_navigate(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=400)
     except (SessionClosingError, SessionClosedError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
+    except SessionBusyTimeoutError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
         state.log.exception("octowright.http.session_navigate_failed", instance_id=sid, url=url)
         return JSONResponse({"error": f"navigate failed: {e}"}, status_code=500)
@@ -439,96 +412,6 @@ async def session_selector_validate(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "selector": selector, "found": count > 0, "count": count})
 
 
-async def recording_delete(request: Request) -> JSONResponse:
-    """DELETE /api/sessions/{id}/recording — remove a closed session's files from disk."""
-    sid = request.path_params["id"]
-    pool = state.pool
-    if pool.has_session(sid):
-        return JSONResponse(
-            {"error": f"session {sid!r} is still live; close it first"},
-            status_code=409,
-        )
-
-    jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
-    if jsonl is None:
-        return JSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
-
-    deleted: list[str] = []
-    stem = jsonl.stem
-    for f in jsonl.parent.iterdir():
-        if is_recording_sidecar(f.name, stem):
-            try:
-                f.unlink()
-                deleted.append(f.name)
-            except OSError as e:
-                state.log.warning("recording_delete.unlink_failed", file=str(f), error=str(e))
-
-    state.log.info("recording_deleted", session_id=sid, files=len(deleted))
-    await publish_dashboard_invalidation("sessions")
-    return JSONResponse({"deleted": True, "session_id": sid, "files_removed": len(deleted)})
-
-
-def _relaunch_kwargs_from_record(launch: dict[str, Any]) -> dict[str, Any]:
-    """Translate a JSONL ``launch`` record into ``pool.launch`` kwargs.
-
-    The JSONL-shape → LaunchOptions translation (nested viewport dict,
-    ``video_dir`` → ``record_video`` bool, default ``headed=True``) lives on
-    ``LaunchOptions.from_launch_record``; ``with_har_rotated`` then bumps
-    the HAR sibling so the relaunch doesn't clobber the prior recording.
-    """
-    return LaunchOptions.from_launch_record(launch).with_har_rotated().to_pool_kwargs()
-
-
-async def session_relaunch(request: Request) -> JSONResponse:
-    """POST /api/sessions/{id}/relaunch — start a fresh session with the same launch params.
-
-    Reads the first ``launch`` record from the closed session's JSONL and
-    calls ``pool.launch(...)`` with the same kind / profile / label / url /
-    viewport. Returns the SessionSummary for the NEW session (new
-    ``instance_id``); the old recording is untouched. Profile-backed sessions
-    pick up persisted cookies / localStorage automatically.
-
-    409 if the session is still live; 404 if no recording exists; 422 if the
-    JSONL has no parseable launch record.
-    """
-    sid = request.path_params["id"]
-    pool = state.pool
-    if pool.has_session(sid):
-        return JSONResponse(
-            {"error": f"session {sid!r} is still live; relaunch only applies to closed sessions"},
-            status_code=409,
-        )
-
-    jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
-    if jsonl is None:
-        return JSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
-
-    launch = _read_first_launch(jsonl)
-    if launch is None:
-        return JSONResponse(
-            {"error": f"recording for {sid!r} has no parseable launch record"},
-            status_code=422,
-        )
-
-    launch_kwargs = _relaunch_kwargs_from_record(launch)
-
-    try:
-        result = await pool.launch(**launch_kwargs)
-    except Exception as e:
-        state.log.exception("octowright.http.session_relaunch_failed", session_id=sid)
-        return JSONResponse({"error": f"relaunch failed: {e}"}, status_code=500)
-
-    summary = _live_summary_from_launch(result)
-    state.log.info(
-        "octowright.http.session_relaunched",
-        original_session_id=sid,
-        instance_id=result["instance_id"],
-        kind=result["kind"],
-    )
-    await publish_dashboard_invalidation("sessions")
-    return JSONResponse(summary, status_code=201)
-
-
 def routes() -> list[Route]:
     return [
         Route("/api/sessions", guard_sensitive_http(list_sessions), methods=["GET"]),
@@ -538,8 +421,6 @@ def routes() -> list[Route]:
             guard_sensitive_http(session_detail, side_effect_get=True),
             methods=["GET"],
         ),
-        Route("/api/sessions/{id}/recording", guard_sensitive_http(recording_delete), methods=["DELETE"]),
-        Route("/api/sessions/{id}/relaunch", guard_sensitive_http(session_relaunch), methods=["POST"]),
         Route("/api/sessions/{id}", guard_sensitive_http(session_close), methods=["DELETE"]),
         Route("/api/sessions/{id}/navigate", guard_sensitive_http(session_navigate), methods=["POST"]),
         Route(
