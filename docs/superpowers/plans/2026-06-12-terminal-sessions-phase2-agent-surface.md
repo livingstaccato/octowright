@@ -218,7 +218,10 @@ async def terminal_snapshot(instance_id: str) -> dict[str, Any]:
     return await _pool().get(instance_id).engine.snapshot()
 
 
-@mcp.tool(structured_output=False, description="Return the current screen text of a terminal session (alias of snapshot's screen).")
+@mcp.tool(
+    structured_output=False,
+    description="Return the current screen text of a terminal session (alias of snapshot's screen).",
+)
 async def terminal_read(instance_id: str) -> dict[str, Any]:
     snap = await _pool().get(instance_id).engine.snapshot()
     return {"screen": snap["screen"]}
@@ -236,7 +239,9 @@ async def terminal_wait_for(
     return {"matched": matched, "screen": snap["screen"]}
 
 
-@mcp.tool(structured_output=False, description="Close a terminal session. Refuses a protected session unless force=True.")
+@mcp.tool(
+    structured_output=False, description="Close a terminal session. Refuses a protected session unless force=True."
+)
 async def terminal_close(instance_id: str, force: bool = False) -> dict[str, Any]:
     try:
         await _pool().close(instance_id, force=force)
@@ -318,8 +323,15 @@ from octowright.server.terminal import lifecycle
 
 def test_ssh_connector_config_maps_to_uterm_keys() -> None:
     cfg = lifecycle._ssh_connector_config(
-        host="h", port=2222, user="me", key_path="/k", password=None,
-        known_hosts="/kh", insecure_no_host_check=False, cols=80, rows=24,
+        host="h",
+        port=2222,
+        user="me",
+        key_path="/k",
+        password=None,
+        known_hosts="/kh",
+        insecure_no_host_check=False,
+        cols=80,
+        rows=24,
     )
     assert cfg["host"] == "h"
     assert cfg["port"] == 2222
@@ -341,9 +353,16 @@ async def test_ssh_launch_without_known_hosts_returns_clean_error() -> None:
 
 ```python
 def _ssh_connector_config(
-    *, host: str | None, port: int, user: str | None, key_path: str | None,
-    password: str | None, known_hosts: str | None, insecure_no_host_check: bool,
-    cols: int, rows: int,
+    *,
+    host: str | None,
+    port: int,
+    user: str | None,
+    key_path: str | None,
+    password: str | None,
+    known_hosts: str | None,
+    insecure_no_host_check: bool,
+    cols: int,
+    rows: int,
 ) -> dict[str, Any]:
     cfg: dict[str, Any] = {"cols": cols, "rows": rows, "port": port}
     if host is not None:
@@ -364,20 +383,28 @@ def _ssh_connector_config(
 Then route by `kind` in `terminal_launch`, and convert the connector's `ValueError` (raised in `TerminalEngine.__init__` → `build_connector`) into a clean error dict:
 
 ```python
-    if kind == "ssh":
-        cfg = _ssh_connector_config(host=host, port=port, user=user, key_path=key_path,
-                                    password=password, known_hosts=known_hosts,
-                                    insecure_no_host_check=insecure_no_host_check, cols=cols, rows=rows)
-    else:
-        if command is None:
-            command = "/bin/bash"
-        cfg = {"cols": cols, "rows": rows, "command": command}
-    try:
-        result = await _pool().launch(kind=kind, connector_config=cfg, label=label, profile=profile, protected=protected)
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    publish_dashboard_invalidation_nowait("sessions")
-    return result
+if kind == "ssh":
+    cfg = _ssh_connector_config(
+        host=host,
+        port=port,
+        user=user,
+        key_path=key_path,
+        password=password,
+        known_hosts=known_hosts,
+        insecure_no_host_check=insecure_no_host_check,
+        cols=cols,
+        rows=rows,
+    )
+else:
+    if command is None:
+        command = "/bin/bash"
+    cfg = {"cols": cols, "rows": rows, "command": command}
+try:
+    result = await _pool().launch(kind=kind, connector_config=cfg, label=label, profile=profile, protected=protected)
+except ValueError as exc:
+    return {"ok": False, "error": str(exc)}
+publish_dashboard_invalidation_nowait("sessions")
+return result
 ```
 
 (Note: `TerminalEngine.__init__` calls `build_connector`, which constructs the connector and raises `ValueError` for a missing `known_hosts` before any network I/O — so the error is synchronous and catchable here. Add `asyncssh` to the `[terminal]` extra in the publish-time follow-up.)

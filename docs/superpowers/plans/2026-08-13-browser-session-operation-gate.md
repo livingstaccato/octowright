@@ -671,6 +671,7 @@ Add these fields and methods to `BrowserSession`:
 operation_queue_timeout_seconds: float | None = field(default=None, repr=False)
 _operation_gate: SessionOperationGate = field(init=False, repr=False)
 
+
 def __post_init__(self) -> None:
     self._operation_gate = SessionOperationGate(
         self.instance_id,
@@ -678,6 +679,7 @@ def __post_init__(self) -> None:
         queue_timeout_seconds=resolve_operation_queue_timeout_seconds(self.operation_queue_timeout_seconds),
     )
     # Preserve the existing browser/page/start-time initialization below this block.
+
 
 def operation(
     self,
@@ -687,8 +689,10 @@ def operation(
 ) -> AbstractAsyncContextManager[None]:
     return self._operation_gate.operation(operation_name, wait_timeout_seconds=wait_timeout_seconds)
 
+
 def operation_snapshot(self) -> OperationGateSnapshot:
     return self._operation_gate.snapshot()
+
 
 async def set_protected_state(
     self,
@@ -719,9 +723,7 @@ def __init__(
     recordings_dir: Path | None = None,
     operation_queue_timeout_seconds: float | None = None,
 ) -> None:
-    self._operation_queue_timeout_seconds = resolve_operation_queue_timeout_seconds(
-        operation_queue_timeout_seconds
-    )
+    self._operation_queue_timeout_seconds = resolve_operation_queue_timeout_seconds(operation_queue_timeout_seconds)
 ```
 
 Pass `pool._operation_queue_timeout_seconds` through `_build_session_object` to `BrowserSession(operation_queue_timeout_seconds=...)`. Add a read-only `operation_queue_timeout_seconds` property beside `recordings_dir` so embedders and tests can inspect the effective value.
@@ -997,6 +999,7 @@ async def add_viewer(self, *, fps: int | None = None) -> ScreencastViewer:
         async with self._lock:
             return await self._add_viewer_locked(fps=fps)
 
+
 async def rebind(self, new_page: _ScreencastPage) -> None:
     async with self._session.operation("screencast_rebind"):
         async with self._lock:
@@ -1072,7 +1075,9 @@ Add deterministic event-based tests for accepted-close draining, later rejection
 
 ```python
 @pytest.mark.asyncio
-async def test_cancelled_close_caller_does_not_cancel_accepted_close(pool: BrowserPool, session: BrowserSession) -> None:
+async def test_cancelled_close_caller_does_not_cancel_accepted_close(
+    pool: BrowserPool, session: BrowserSession
+) -> None:
     active_release = asyncio.Event()
     active = asyncio.create_task(hold_operation(session, "long_action", active_release))
     await wait_for_active(session._operation_gate, "long_action")
@@ -1111,7 +1116,10 @@ async def test_close_all_reserves_every_session_before_waiting(pool_with_two_ses
     pool_with_two_sessions.release_first.set()
     pool_with_two_sessions.release_second.set()
     result = await result_task
-    assert set(result["closed"]) == {pool_with_two_sessions.first.instance_id, pool_with_two_sessions.second.instance_id}
+    assert set(result["closed"]) == {
+        pool_with_two_sessions.first.instance_id,
+        pool_with_two_sessions.second.instance_id,
+    }
 ```
 
 The protection test must run both orderings: protection commits first and unforced close raises `ProtectedBrowserCloseError` while state remains open; close reserves first and later protection raises `SessionClosingError`.
@@ -1766,8 +1774,7 @@ Test a synthetic file for each acceptance/rejection mode:
 def test_rejects_ungated_session_page_access(tmp_path: Path) -> None:
     source = tmp_path / "bad.py"
     source.write_text(
-        "async def leak(session):\n"
-        "    await session.page.locator('#secret').click()\n",
+        "async def leak(session):\n    await session.page.locator('#secret').click()\n",
         encoding="utf-8",
     )
     violations = scan_paths([source], bypasses={})
@@ -1815,14 +1822,49 @@ The scanner must ignore comments/string literals, `TYPE_CHECKING` bodies, and `P
 PLAYWRIGHT_ROOT_ATTRS = frozenset({"page", "pages", "context", "browser", "active_frame"})
 PLAYWRIGHT_CHAIN_ATTRS = frozenset(
     {
-        "locator", "keyboard", "screencast", "frames", "goto", "click", "fill",
-        "press", "evaluate", "aria_snapshot", "screenshot", "new_page", "title",
-        "wait_for_selector", "query_selector", "wait_for_url", "route", "unroute",
-        "set_input_files", "hover", "drag_and_drop", "select_option", "go_back",
-        "set_viewport_size", "expect_popup", "wait_for_load_state", "inner_text",
-        "count", "close", "is_closed", "opener", "on", "add_init_script",
-        "expose_binding", "start", "stop", "save_as", "suggested_filename",
-        "url", "main_frame", "video", "path", "tracing",
+        "locator",
+        "keyboard",
+        "screencast",
+        "frames",
+        "goto",
+        "click",
+        "fill",
+        "press",
+        "evaluate",
+        "aria_snapshot",
+        "screenshot",
+        "new_page",
+        "title",
+        "wait_for_selector",
+        "query_selector",
+        "wait_for_url",
+        "route",
+        "unroute",
+        "set_input_files",
+        "hover",
+        "drag_and_drop",
+        "select_option",
+        "go_back",
+        "set_viewport_size",
+        "expect_popup",
+        "wait_for_load_state",
+        "inner_text",
+        "count",
+        "close",
+        "is_closed",
+        "opener",
+        "on",
+        "add_init_script",
+        "expose_binding",
+        "start",
+        "stop",
+        "save_as",
+        "suggested_filename",
+        "url",
+        "main_frame",
+        "video",
+        "path",
+        "tracing",
     }
 )
 APPROVED_BYPASS_CLASSES = frozenset(
@@ -2052,9 +2094,7 @@ def test_status_uses_pool_snapshots_without_page_access(monkeypatch: pytest.Monk
     rows = [{"instance_id": "one", "kind": "chromium", "operation_gate": BUSY_SNAPSHOT}]
     monkeypatch.setattr(status_pool, "list_sessions", lambda: rows)
     result = octowright_status()
-    assert result["pool"]["operation_gates"] == [
-        {"instance_id": "one", "kind": "chromium", **BUSY_SNAPSHOT}
-    ]
+    assert result["pool"]["operation_gates"] == [{"instance_id": "one", "kind": "chromium", **BUSY_SNAPSHOT}]
 ```
 
 Assert browser-list summary rows retain the optional snapshot, while a terminal `_live_summary` row with no `operation_snapshot` omits `operation_gate` rather than fabricating idle state.
