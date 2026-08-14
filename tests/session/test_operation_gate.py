@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -710,6 +711,7 @@ async def test_external_close_invalidates_pending_close_ticket_and_teardown_reus
 
     teardown = gate.reserve_external_teardown("session_external_teardown")
     assert teardown is reservation
+    assert teardown.teardown_only is True
 
     gate.complete_close(reservation, None)
     assert await reservation.wait() is None
@@ -815,3 +817,138 @@ async def test_break_locked_fails_queued_waiters_with_invariant_error() -> None:
         await foreign_task
         release_owner.set()
         await owner_task
+
+
+@pytest.mark.asyncio
+async def test_cancelled_close_coordinator_does_not_wedge_the_gate() -> None:
+    """Regression test for the CRITICAL review finding: cancelling the close
+    coordinator inside ``close_operation`` must not leave the gate in a
+    ``closing`` limbo that (a) makes a retry raise a false "broken" invariant
+    error and (b) leaves duplicate ``reservation.wait()`` callers hanging
+    forever. The gate must become explicitly, terminally ``closed`` instead.
+    """
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def coordinator() -> None:
+        reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+        async with gate.close_operation(reservation):
+            entered.set()
+            await never.wait()
+
+    coordinator_task = asyncio.create_task(coordinator())
+    await entered.wait()
+    coordinator_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator_task
+
+    assert gate.snapshot()["state"] == "closed"
+
+    reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+    with pytest.raises(SessionClosedError):
+        await asyncio.wait_for(reservation.wait(), timeout=1)
+
+    with pytest.raises(SessionClosedError):
+        async with gate.close_operation(reservation):
+            raise AssertionError("a failed close ticket must not be re-entered")
+
+
+@pytest.mark.asyncio
+async def test_double_close_operation_after_normal_completion_raises_session_closed_error() -> None:
+    """Regression test for IMPORTANT #3: a second ``close_operation`` call on
+    an already-completed reservation must raise ``SessionClosedError`` (the
+    gate is simply closed), not ``OperationGateInvariantError`` claiming the
+    gate is broken.
+    """
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+    async with gate.close_operation(reservation):
+        pass
+    gate.complete_close(reservation, None)
+
+    with pytest.raises(SessionClosedError):
+        async with gate.close_operation(reservation):
+            raise AssertionError("a completed close ticket must not be re-entered")
+
+
+@pytest.mark.asyncio
+async def test_close_operation_enters_body_for_reserve_external_teardown_result() -> None:
+    """Regression test for IMPORTANT #2: a fresh ``reserve_external_teardown``
+    reservation (no prior ``reserve_close``) must let ``close_operation``
+    take its bare-yield teardown path.
+    """
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    gate.mark_closed_external()
+    reservation = gate.reserve_external_teardown("session_external_teardown")
+
+    entered = False
+    async with gate.close_operation(reservation):
+        entered = True
+    assert entered is True
+
+
+@pytest.mark.asyncio
+async def test_close_operation_enters_body_for_teardown_of_invalidated_fifo_reservation() -> None:
+    """Regression test for IMPORTANT #2: the retained reservation from an
+    earlier ``reserve_close`` that external close invalidated must ALSO let
+    ``close_operation`` take its bare-yield teardown path once handed back
+    through ``reserve_external_teardown`` -- Task 7's cleanup coordinator
+    needs one pattern (``close_operation(reserve_external_teardown(...))``)
+    that works for both the fresh and the FIFO-origin case.
+    """
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    release_owner = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("owner"):
+            await release_owner.wait()
+
+    owner_task = asyncio.create_task(owner())
+    await wait_for_active(gate, "owner")
+
+    reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+    gate.mark_closed_external()
+
+    teardown = gate.reserve_external_teardown("session_external_teardown")
+    assert teardown is reservation
+    assert teardown.teardown_only is True
+
+    entered = False
+    async with gate.close_operation(teardown):
+        entered = True
+    assert entered is True
+
+    release_owner.set()
+    await owner_task
+
+
+@pytest.mark.asyncio
+async def test_unobserved_close_outcome_exception_does_not_reach_loop_handler() -> None:
+    """Regression test for IMPORTANT #5: a failed close outcome that nobody
+    ever inspects must not reach the event loop's exception handler when
+    garbage collected -- proving ``_observe_future_exception`` actually
+    suppresses it, not merely that a later ``.exception()`` call (which
+    itself would retrieve it) sees the same object.
+    """
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    reservation = await gate.reserve_close("browser_close", preflight=lambda: None)
+    async with gate.close_operation(reservation):
+        pass
+
+    loop = asyncio.get_running_loop()
+    handled: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: handled.append(context))
+    try:
+        gate.fail_close(reservation, RuntimeError("boom"))
+        outcome = reservation.outcome
+        del reservation
+        await asyncio.sleep(0)
+        del outcome
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert handled == []
