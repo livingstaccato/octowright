@@ -33,6 +33,16 @@ def test_extracts_the_new_stability_metrics() -> None:
     } <= names
 
 
+def test_extracts_operation_gate_metrics() -> None:
+    assert {
+        "octowright_operation_queue_wait_seconds",
+        "octowright_operation_active_duration_seconds",
+        "octowright_operation_queue_timeout_total",
+        "octowright_operation_rejected_total",
+        "octowright_operation_queue_depth",
+    } <= checker.metric_names()
+
+
 def test_extracts_all_notification_methods() -> None:
     assert {"browser_crashed", "browser_recovered", "driver_died", "session_closed"} <= checker.notification_methods()
 
