@@ -103,9 +103,10 @@ async def test_launch_failure_closes_context_browser_and_recorder(
         return recorder
 
     monkeypatch.setattr("octowright.browser_pool.pool.RECORDINGS_DIR", tmp_path)
-    # Recorder construction lives in launch_pipeline.post_context_setup after
-    # the _launch_impl → launch_pipeline split.
-    monkeypatch.setattr("octowright.browser_pool.launch_pipeline.Recorder", fake_recorder)
+    # Recorder construction lives in launch_publish._prepare_session_before_publication
+    # (Task 10 split, keeps launch_pipeline.py under the LOC ceiling), called
+    # from launch_pipeline.post_context_setup after the _launch_impl split.
+    monkeypatch.setattr("octowright.browser_pool.launch_publish.Recorder", fake_recorder)
 
     # Navigation failures no longer tear down the browser — the session stays
     # registered and the error is surfaced as nav_warning in the result.
@@ -120,6 +121,7 @@ async def test_launch_failure_closes_context_browser_and_recorder(
 async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
     """Redirector must call wait_for_load_state, not asyncio.sleep."""
     from octowright.browser_pool.launch_pipeline import _make_new_tab_redirector
+    from tests._operation_gate_fakes import OperationAwareFake
 
     waited: list[str] = []
     navigated: list[str] = []
@@ -136,7 +138,7 @@ async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
         async def goto(self, url: str) -> None:
             navigated.append(url)
 
-    handler = _make_new_tab_redirector()
+    handler = _make_new_tab_redirector(OperationAwareFake())
     handler(FakePage())
     await asyncio.sleep(0.05)  # let the async task run
 
@@ -148,6 +150,7 @@ async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
 async def test_new_tab_redirector_skips_programmatic_popups() -> None:
     """A popup with an opener (window.open) must NOT be redirected."""
     from octowright.browser_pool.launch_pipeline import _make_new_tab_redirector
+    from tests._operation_gate_fakes import OperationAwareFake
 
     navigated: list[str] = []
     opener_page = object()
@@ -164,7 +167,7 @@ async def test_new_tab_redirector_skips_programmatic_popups() -> None:
         async def goto(self, url: str) -> None:
             navigated.append(url)
 
-    handler = _make_new_tab_redirector()
+    handler = _make_new_tab_redirector(OperationAwareFake())
     handler(FakePopup())
     await asyncio.sleep(0.05)
 
