@@ -497,7 +497,7 @@ async def _apply_fixtures(browser_pool: Any, live: LiveScenario, fixtures: dict[
             return  # dialog policy + mock routes are browser-only
         session = browser_pool.get(p["instance_id"])
         if dialog_policy:
-            session.set_dialog_policy(dialog_policy)
+            await session.set_dialog_policy(dialog_policy)
         for mr in mock_routes:
             await session.mock_route(
                 mr["pattern"],

@@ -42,7 +42,7 @@ class _Session:
     async def mock_route(self, pattern: str, **kwargs):
         self.routes.append(pattern)
 
-    def set_dialog_policy(self, policy: str):
+    async def set_dialog_policy(self, policy: str):
         self.dialogs.append(policy)
 
 

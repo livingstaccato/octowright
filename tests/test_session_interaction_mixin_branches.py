@@ -85,45 +85,51 @@ def _record_calls(session: BrowserSession) -> list[tuple[str, dict[str, Any]]]:
 
 
 class TestSetDialogPolicy:
+    @pytest.mark.anyio
     @pytest.mark.parametrize("bad", ["", "ACCEPT", "Dismiss", "ignore", "auto", "yes", "no"])
-    def test_invalid_policies_raise_value_error(self, tmp_path: Path, bad: str) -> None:
+    async def test_invalid_policies_raise_value_error(self, tmp_path: Path, bad: str) -> None:
         """Anything outside the {accept, dismiss, manual} set raises with exact whitelist text."""
         session = _make_session(tmp_path)
         with pytest.raises(ValueError, match=r"accept\|dismiss\|manual"):
-            session.set_dialog_policy(bad)
+            await session.set_dialog_policy(bad)
 
-    def test_valid_policy_records_set_dialog_policy(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_valid_policy_records_set_dialog_policy(self, tmp_path: Path) -> None:
         """The state-change emits a 'set_dialog_policy' record with the new policy + prompt_text."""
         session = _make_session(tmp_path)
         captured = _record_calls(session)
-        session.set_dialog_policy("accept", "ok")
+        await session.set_dialog_policy("accept", "ok")
         assert ("set_dialog_policy", {"policy": "accept", "prompt_text": "ok"}) in captured
 
-    def test_prompt_text_defaults_to_none(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_prompt_text_defaults_to_none(self, tmp_path: Path) -> None:
         """No prompt_text passed → stored as None, not as ''."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("dismiss")
+        await session.set_dialog_policy("dismiss")
         assert session._dialog_prompt_text is None
 
-    def test_explicit_prompt_text_stored(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_explicit_prompt_text_stored(self, tmp_path: Path) -> None:
         """Caller-supplied prompt_text is stored verbatim."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("accept", "answer-42")
+        await session.set_dialog_policy("accept", "answer-42")
         assert session._dialog_prompt_text == "answer-42"
 
-    def test_return_shape_pinned(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_return_shape_pinned(self, tmp_path: Path) -> None:
         """Mutating any return-dict key would change the wire-facing shape."""
         session = _make_session(tmp_path)
-        result = session.set_dialog_policy("manual", "foo")
+        result = await session.set_dialog_policy("manual", "foo")
         assert result == {"ok": True, "policy": "manual", "prompt_text": "foo"}
 
-    def test_invalid_policy_does_not_record_or_mutate_state(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_invalid_policy_does_not_record_or_mutate_state(self, tmp_path: Path) -> None:
         """A rejected policy must leave the previous state intact."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("accept", "first")
+        await session.set_dialog_policy("accept", "first")
         captured = _record_calls(session)
         with pytest.raises(ValueError):
-            session.set_dialog_policy("nope")
+            await session.set_dialog_policy("nope")
         # Recorder didn't fire.
         assert captured == []
         # State unchanged.
@@ -167,7 +173,7 @@ class TestHandleDialog:
     async def test_accept_alert_calls_accept_no_arg(self, tmp_path: Path) -> None:
         """Non-prompt dialog with accept policy → dialog.accept() with NO argument."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("accept")
+        await session.set_dialog_policy("accept")
         dialog = _FakeDialog(dtype="alert")
         session._handle_dialog(dialog)
         await _drain(session)
@@ -179,7 +185,7 @@ class TestHandleDialog:
     async def test_accept_prompt_uses_prompt_text(self, tmp_path: Path) -> None:
         """Prompt + accept policy + prompt_text → dialog.accept(prompt_text)."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("accept", "the answer")
+        await session.set_dialog_policy("accept", "the answer")
         dialog = _FakeDialog(dtype="prompt")
         session._handle_dialog(dialog)
         await _drain(session)
@@ -190,7 +196,7 @@ class TestHandleDialog:
     async def test_accept_prompt_with_none_prompt_text_uses_empty_string(self, tmp_path: Path) -> None:
         """Prompt + accept + prompt_text=None → accept('') not accept(None)."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("accept", None)
+        await session.set_dialog_policy("accept", None)
         dialog = _FakeDialog(dtype="prompt")
         session._handle_dialog(dialog)
         await _drain(session)
@@ -200,7 +206,7 @@ class TestHandleDialog:
     async def test_dismiss_policy_calls_dismiss(self, tmp_path: Path) -> None:
         """Dismiss policy invokes dialog.dismiss(), not accept."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("dismiss")
+        await session.set_dialog_policy("dismiss")
         dialog = _FakeDialog(dtype="confirm")
         session._handle_dialog(dialog)
         await _drain(session)
@@ -211,7 +217,7 @@ class TestHandleDialog:
     async def test_manual_policy_does_nothing_to_dialog(self, tmp_path: Path) -> None:
         """Manual policy: no accept, no dismiss — handler just records."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("manual")
+        await session.set_dialog_policy("manual")
         dialog = _FakeDialog(dtype="alert")
         session._handle_dialog(dialog)
         await _drain(session)
@@ -222,7 +228,7 @@ class TestHandleDialog:
     async def test_records_dialog_handled_with_full_kwargs(self, tmp_path: Path) -> None:
         """The dialog_handled record carries dtype/message/policy/prompt_text."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("accept", "yes")
+        await session.set_dialog_policy("accept", "yes")
         captured = _record_calls(session)
         dialog = _FakeDialog(dtype="prompt", message="enter name")
         session._handle_dialog(dialog)
@@ -241,7 +247,7 @@ class TestHandleDialog:
     async def test_accept_failure_records_handler_error(self, tmp_path: Path) -> None:
         """If dialog.accept() raises, error is swallowed and recorded as dialog_handler_error."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("accept")
+        await session.set_dialog_policy("accept")
         captured = _record_calls(session)
 
         class _BoomDialog:
@@ -261,7 +267,7 @@ class TestHandleDialog:
     async def test_dismiss_failure_records_handler_error(self, tmp_path: Path) -> None:
         """Same swallow path for dismiss-failure."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("dismiss")
+        await session.set_dialog_policy("dismiss")
         captured = _record_calls(session)
 
         class _BoomDialog:
@@ -281,7 +287,7 @@ class TestHandleDialog:
     async def test_dialog_task_added_to_bg_tasks(self, tmp_path: Path) -> None:
         """The async _act task is registered in self._bg_tasks for GC safety."""
         session = _make_session(tmp_path)
-        session.set_dialog_policy("manual")
+        await session.set_dialog_policy("manual")
         # Snapshot before
         before = len(session._bg_tasks)
         dialog = _FakeDialog()

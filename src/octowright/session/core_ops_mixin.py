@@ -15,6 +15,7 @@ from octowright._tracing import counter, span
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
+from octowright.session.operation_gate import gated_operation
 
 _SESSION_CLOSED = counter(
     "octowright_browser_closed_total",
@@ -57,6 +58,7 @@ class SessionOpsMixin(SessionLike):
     # ship (the producer dies after the closed page rejects its work).
     _BG_TASK_DRAIN_MAX_PASSES = 3
 
+    @gated_operation("browser_diagnostic_bundle")
     async def diagnostic_bundle(
         self,
         *,
@@ -95,6 +97,7 @@ class SessionOpsMixin(SessionLike):
         await self._capture_diagnostic_screenshot(bundle, screenshot_dir=screenshot_dir)
         return bundle
 
+    @gated_operation("browser_diagnostic_bundle")
     async def _capture_diagnostic_page_meta(self, bundle: dict[str, Any]) -> None:
         try:
             bundle["url"] = self.page.url
@@ -105,6 +108,7 @@ class SessionOpsMixin(SessionLike):
         except Exception:
             pass
 
+    @gated_operation("browser_diagnostic_bundle")
     async def _capture_diagnostic_html(
         self,
         bundle: dict[str, Any],
@@ -130,6 +134,7 @@ class SessionOpsMixin(SessionLike):
         except Exception as e:
             bundle["html_error"] = repr(e)
 
+    @gated_operation("browser_diagnostic_bundle")
     async def _capture_diagnostic_screenshot(
         self,
         bundle: dict[str, Any],
@@ -144,6 +149,7 @@ class SessionOpsMixin(SessionLike):
         except Exception as e:
             bundle["screenshot_error"] = repr(e)
 
+    @gated_operation("browser_switch_frame")
     async def switch_frame(
         self,
         *,
@@ -155,7 +161,7 @@ class SessionOpsMixin(SessionLike):
         from octowright.session import frames as _frames
 
         frame, info = await _frames.switch_frame_impl(
-            self.page,
+            self,
             selector=selector,
             name=name,
             url_pattern=url_pattern,
@@ -172,22 +178,26 @@ class SessionOpsMixin(SessionLike):
         )
         return info
 
+    @gated_operation("browser_reset_frame")
     async def reset_frame(self) -> dict[str, Any]:
         """Clear active_frame so tools target the top-level page again."""
         self.active_frame = None
         self.recorder.record("reset_frame")
         return {"ok": True, "active_frame": None}
 
-    def list_frames(self) -> list[dict[str, Any]]:
+    @gated_operation("browser_list_frames")
+    async def list_frames(self) -> list[dict[str, Any]]:
         """Return [{index, name, url, is_active}, ...] for every frame on the active page."""
         from octowright.session import frames as _frames
 
-        return _frames.list_frames_impl(self.page, self.active_frame)
+        return await _frames.list_frames_impl(self)
 
+    @gated_operation("browser_hover")
     async def hover(self, selector: str) -> None:
         await self._target().hover(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("hover", selector=selector)
 
+    @gated_operation("browser_select_option")
     async def select_option(
         self,
         selector: str,
@@ -218,10 +228,12 @@ class SessionOpsMixin(SessionLike):
         )
         return {"ok": True, "selected": selected}
 
+    @gated_operation("browser_drag")
     async def drag(self, source_selector: str, target_selector: str) -> None:
         await self._target().drag_and_drop(source_selector, target_selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("drag", source=source_selector, target=target_selector)
 
+    @gated_operation("browser_navigate_back")
     async def navigate_back(self) -> dict[str, Any]:
         response = await self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
         url = self.page.url
@@ -229,11 +241,13 @@ class SessionOpsMixin(SessionLike):
         self.recorder.record("navigate_back", url=url)
         return {"ok": response is not None, "url": url, "title": title}
 
+    @gated_operation("browser_resize")
     async def resize(self, width: int, height: int) -> dict[str, Any]:
         await self.page.set_viewport_size({"width": width, "height": height})
         self.recorder.record("resize", width=width, height=height)
         return {"ok": True, "width": width, "height": height}
 
+    @gated_operation("browser_viewport_status")
     async def viewport_status(self) -> dict[str, Any]:
         measured = await self.page.evaluate(
             """() => ({
@@ -269,6 +283,7 @@ class SessionOpsMixin(SessionLike):
             "mismatch": mismatch,
         }
 
+    @gated_operation("browser_viewport_sync")
     async def viewport_sync(self) -> dict[str, Any]:
         status = await self.viewport_status()
         outer = status["outer"]
@@ -283,6 +298,7 @@ class SessionOpsMixin(SessionLike):
         self.recorder.record("resize", width=width, height=height)
         return {"ok": True, "mode": "fixed", "width": width, "height": height}
 
+    @gated_operation("browser_open_url")
     async def open_url(
         self,
         url: str,

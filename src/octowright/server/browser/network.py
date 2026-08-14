@@ -167,12 +167,12 @@ def _problem_host_row(
         "the response string. Default policy is 'dismiss'."
     ),
 )
-def browser_set_dialog_policy(
+async def browser_set_dialog_policy(
     instance_id: str,
     policy: str,
     prompt_text: str | None = None,
 ) -> dict[str, Any]:
-    return pool.get(instance_id).set_dialog_policy(policy, prompt_text)
+    return await pool.get(instance_id).set_dialog_policy(policy, prompt_text)
 
 
 @mcp.tool(
