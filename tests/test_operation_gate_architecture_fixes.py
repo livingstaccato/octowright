@@ -144,6 +144,46 @@ def test_with_as_binding_still_flagged_by_name_without_ambiguous_import(tmp_path
     assert _violations([source], {}) == [("handler", 3)]
 
 
+def test_annotated_local_does_not_suppress_a_genuinely_tainted_value(tmp_path: Path) -> None:
+    # Regression for a bug this fix round's own AnnAssign override introduced:
+    # an explicit non-Playwright annotation must only beat the conventional-
+    # NAME heuristic, never a genuinely tainted RHS value. Otherwise a
+    # misleading local annotation (page: MyPage = session.page) silently
+    # blinds every later use of the name.
+    source = tmp_path / "annotated_tainted_value.py"
+    source.write_text(
+        "from some.other.module import MyPage\n\n"
+        "async def leak(session):\n"
+        "    page: MyPage = session.page\n"
+        "    await page.click('#x')\n",
+        encoding="utf-8",
+    )
+    violations = [(item.function, item.line) for item in scan_paths([source], bypasses={})]
+    assert ("leak", 4) in violations
+    assert ("leak", 5) in violations
+
+
+def test_with_as_binding_does_not_clobber_preexisting_taint_on_the_same_name(tmp_path: Path) -> None:
+    # Regression for a bug this fix round's own with-as propagation
+    # introduced: an untainted context expression is not proof the bound
+    # name isn't Playwright-shaped (an arbitrary __enter__ return type is
+    # invisible to this scanner), so it must never ERASE taint a prior
+    # statement already established on the same name.
+    source = tmp_path / "with_as_clobber.py"
+    source.write_text(
+        "import contextlib\n\n"
+        "async def leak(session):\n"
+        "    handle = session._target()\n"
+        "    with contextlib.suppress(Exception) as handle:\n"
+        "        pass\n"
+        "    await handle.click('#x')\n",
+        encoding="utf-8",
+    )
+    violations = [(item.function, item.line) for item in scan_paths([source], bypasses={})]
+    assert ("leak", 4) in violations
+    assert ("leak", 7) in violations
+
+
 def test_annotated_local_with_explicit_non_playwright_type_is_not_flagged(tmp_path: Path) -> None:
     source = tmp_path / "annotated_local.py"
     source.write_text(
