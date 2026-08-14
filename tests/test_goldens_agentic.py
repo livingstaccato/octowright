@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import octowright.goldens
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture
@@ -23,13 +24,26 @@ def temp_goldens(monkeypatch, tmp_path):
     return octowright.goldens.GOLDENS_DIR
 
 
+class _FakeGoldenSession(OperationAwareFake):
+    """Real-gate session fake — golden_save/golden_assert/golden_verify_loop
+    await ``session.operation()`` as an async context manager, which a bare
+    ``MagicMock`` does not exercise meaningfully (it silently accepts
+    ``async with`` without proving any real serialization)."""
+
+
+def _fake_golden_session() -> _FakeGoldenSession:
+    session = _FakeGoldenSession()
+    session.snapshot = AsyncMock(return_value={"role": "Root"})
+    session.page = MagicMock()
+    session.page.url = "https://octowright.com"
+    return session
+
+
 @pytest.fixture
 def mock_pool(monkeypatch):
     from octowright.server import _state, goldens
 
-    mock_session = MagicMock()
-    mock_session.snapshot = AsyncMock(return_value={"role": "Root"})
-    mock_session.page.url = "https://octowright.com"
+    mock_session = _fake_golden_session()
 
     mpool = MagicMock()
     mpool.get.return_value = mock_session
@@ -46,7 +60,7 @@ async def test_golden_save_url_follows_snapshotted_document(monkeypatch, temp_go
     from octowright.server import _state, goldens
     from octowright.server.goldens import golden_save
 
-    session = MagicMock()
+    session = _fake_golden_session()
     # snapshot() is frame-aware and surfaces the frame's url in the returned tree.
     session.snapshot = AsyncMock(return_value={"role": "Root", "url": "https://widget.octowright.com/inner"})
     session.page.url = "https://top.octowright.com/"  # top page differs from the frame

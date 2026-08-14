@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.server import captures as _tools
+from tests._operation_gate_fakes import OperationAwareFake
 
 
 @pytest.fixture(autouse=True)
@@ -21,8 +22,14 @@ def _patch_pool(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return fake_pool
 
 
-def _session(tmp_path: Path) -> MagicMock:
-    s = MagicMock()
+class _FakeCaptureSession(OperationAwareFake):
+    """Real-gate session fake — capture_create awaits ``session.operation()``
+    as an async context manager, which a bare ``MagicMock`` does not provide."""
+
+
+def _session(tmp_path: Path) -> _FakeCaptureSession:
+    s = _FakeCaptureSession()
+    s.page = MagicMock()
     s.page.url = "https://warp.undef.games/customize"
     s.page.title = AsyncMock(return_value="Warp")
     s.page.locator.return_value.aria_snapshot = AsyncMock(return_value='- button "Save"')
@@ -35,7 +42,7 @@ def _session(tmp_path: Path) -> MagicMock:
     s.log_path = tmp_path / "session.jsonl"
     s.log_path.write_text('{"action":"launch"}\n')
     # _target() defaults to the page when no frame is switched.
-    s._target.return_value = s.page
+    s._target = MagicMock(return_value=s.page)
     return s
 
 
