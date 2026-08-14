@@ -44,6 +44,7 @@ package "domain modules" #ecfccb {
 }
 
 package "session modules" #fdf4ff {
+  [session/operation_gate.py\nSessionOperationGate: FIFO per-session\nserialization, exact-task reentrancy] as GATE
   [session/frames.py] as SF
   [session/downloads.py] as SD
   [session/locators.py] as SL
@@ -69,6 +70,7 @@ SERVER --> SPOOL
 ' ── live state composition ──
 POOL "1" *-- "*" SESSION : owns
 SPOOL "1" o-- "*" SESSION : participants
+SESSION "1" *-- "1" GATE : owns
 SESSION ..> SF
 SESSION ..> SD
 SESSION ..> SL
