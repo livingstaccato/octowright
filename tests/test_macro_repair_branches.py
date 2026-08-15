@@ -430,12 +430,17 @@ class TestRepairPreviewReplacementBranch:
         assert "'#x'" in s["prompt"]
 
     def test_action_preview_present_when_replacement_present(self) -> None:
-        """The ternary `replacement_preview(replacement) if replacement else None` branch."""
+        """The ternary `replacement_preview(replacement) if replacement else None` branch.
+
+        The fill_by replacement's `value` is credential-bearing, so both the
+        returned `replacement_action` and the `action_preview` string built
+        from it must carry the redacted placeholder, not the literal value.
+        """
         macro = _macro(actions=[{"action": "fill", "selector": "#x", "label": "Email", "value": "me@x"}])
         result = repair_preview("demo", load_macro=lambda _: macro, semantic_keys=SEMANTIC_KEYS)
         s = result["suggestions"][0]
-        assert s["replacement_action"] == {"action": "fill_by", "label": "Email", "value": "me@x"}
-        assert s["action_preview"] == "Fill by 'Email' with 'me@x'"
+        assert s["replacement_action"] == {"action": "fill_by", "label": "Email", "value": "<redacted>"}
+        assert s["action_preview"] == "Fill by 'Email' with '<redacted>'"
 
 
 # ─── repair_apply ────────────────────────────────────────────────────────────
@@ -474,15 +479,23 @@ class TestRepairApply:
         assert writer.calls[0]["macro"]["actions"][0] == {"action": "click_by", "label": "Save"}
         assert writer.calls[0]["name"] == "demo"
 
-    def test_uses_macro_name_field_for_write(self) -> None:
-        """macro.get('name') is the write target, not the lookup argument."""
+    def test_uses_loaded_name_for_write_not_internal_name_field(self) -> None:
+        """The LOADED name is always the write target — never the macro's own
+        internal 'name' field.
+
+        Regression guard: `load_macro(name)` reads the file at
+        `macro_path(name)`. Writing back under a mismatched internal name
+        would silently move the macro to a DIFFERENT file, orphaning the one
+        at `name` and potentially clobbering an unrelated macro whose slug
+        happens to match that internal name.
+        """
         macro = _macro(name="from-field", actions=[{"action": "click", "selector": "#x", "label": "L"}])
         writer = _Writer()
         result = repair_apply(
             "from-arg", 0, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS
         )
-        assert result["macro"] == "from-field"
-        assert writer.calls[0]["name"] == "from-field"
+        assert result["macro"] == "from-arg"
+        assert writer.calls[0]["name"] == "from-arg"
 
     def test_out_of_range_index_raises_and_does_not_write(self) -> None:
         """An index past the action list raises before any write side effect."""
@@ -521,6 +534,52 @@ class TestRepairApply:
         persisted = writer.calls[0]["macro"]["actions"]
         assert persisted[0] == {"action": "navigate", "url": "https://octowright.com"}
         assert persisted[1] == {"action": "fill_by", "label": "Email", "value": "me@x"}
+
+
+# ─── credential redaction in the MCP-client-facing response ────────────────
+
+
+class TestRepairPreviewCredentialRedaction:
+    """repair_preview returns suggestions verbatim to the MCP client. A
+    literal credential in a fill action's value must never appear in
+    original_action, replacement_action, or the action_preview string."""
+
+    def test_original_and_replacement_and_preview_do_not_leak_literal_value(self) -> None:
+        macro = _macro(actions=[{"action": "fill", "selector": "#pw", "label": "Password", "value": "hunter2"}])
+        result = repair_preview("demo", load_macro=lambda _: macro, semantic_keys=SEMANTIC_KEYS)
+        s = result["suggestions"][0]
+        assert s["original_action"]["value"] == "<redacted>"
+        assert s["replacement_action"]["value"] == "<redacted>"
+        assert "hunter2" not in s["action_preview"]
+        assert "hunter2" not in str(s)
+
+    def test_non_credential_fields_still_present_alongside_redaction(self) -> None:
+        """Only value/text are scrubbed -- selector, label, action kind survive."""
+        macro = _macro(actions=[{"action": "fill", "selector": "#pw", "label": "Password", "value": "hunter2"}])
+        result = repair_preview("demo", load_macro=lambda _: macro, semantic_keys=SEMANTIC_KEYS)
+        s = result["suggestions"][0]
+        assert s["original_action"]["selector"] == "#pw"
+        assert s["original_action"]["label"] == "Password"
+        assert s["replacement_action"]["label"] == "Password"
+
+
+class TestRepairApplyCredentialRedaction:
+    """repair_apply persists the macro with real values (so it still runs)
+    but the RESPONSE handed back to the MCP client must be redacted."""
+
+    def test_response_redacts_but_persisted_macro_keeps_real_value(self) -> None:
+        writer = _Writer()
+        macro = _macro(actions=[{"action": "fill", "selector": "#pw", "label": "Password", "value": "hunter2"}])
+        result = repair_apply("demo", 0, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS)
+
+        # Response to the MCP client: redacted.
+        assert result["original_action"]["value"] == "<redacted>"
+        assert result["replacement_action"]["value"] == "<redacted>"
+        assert "hunter2" not in str(result)
+
+        # What actually landed on disk: the real value, or the macro stops working.
+        persisted = writer.calls[0]["macro"]["actions"][0]
+        assert persisted["value"] == "hunter2"
 
 
 class TestRepairPreviewLoaderInteraction:

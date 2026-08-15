@@ -144,6 +144,24 @@ def write_macro(*, name: str, macro: dict[str, Any]) -> Path:
     to_write.setdefault("created_at", now)
     to_write["updated_at"] = now
     dest = macro_path(name)
+    if dest.exists():
+        try:
+            existing = json.loads(dest.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = None
+        if existing is not None:
+            # Same collision guard as save_macro: slug() collapses distinct
+            # display names onto the same file (e.g. "nightly backup" and
+            # "nightly!backup" both -> nightly-backup.json). Re-writing under
+            # the SAME display name is an update; a DIFFERENT name would
+            # silently clobber an unrelated macro, so reject it.
+            existing_name = existing.get("name")
+            if existing_name is not None and existing_name != name:
+                raise ValueError(
+                    f"macro name {name!r} collides with existing macro {existing_name!r} "
+                    f"(both map to {dest.name}); choose a distinct name or delete the existing "
+                    f"macro first with `macro_delete name={existing_name!r}`"
+                )
     dest.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(dest, json.dumps(to_write, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("octowright.macro.written", name=name, path=str(dest), action_count=len(to_write.get("actions", [])))
