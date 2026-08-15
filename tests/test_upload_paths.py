@@ -25,10 +25,13 @@ from octowright.session.upload_paths import validate_upload_path
 
 @pytest.fixture(autouse=True)
 def _isolate_upload_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point both default upload roots (staging dir + cwd) at the test's
-    tmp_path. Without this, the test inherits the operator's real staging
-    dir and any extra OCTOWRIGHT_UPLOAD_ROOTS, which makes the symlink-
-    escape assertion order-dependent across machines.
+    """Point the default upload root (the staging dir) at the test's
+    tmp_path, and chdir into it too. Without this, the test inherits the
+    operator's real staging dir and any extra OCTOWRIGHT_UPLOAD_ROOTS, which
+    makes the symlink-escape assertion order-dependent across machines. The
+    chdir is no longer load-bearing for the allowlist itself -- CWD is not
+    a default upload root (see test_validate_rejects_cwd_only_path) -- but
+    is kept so no test here accidentally depends on the real process CWD.
     """
     monkeypatch.setattr(defaults, "UPLOAD_STAGING_DIR", tmp_path)
     monkeypatch.setattr(defaults, "UPLOAD_EXTRA_ROOTS_RAW", "")
@@ -42,14 +45,28 @@ def test_validate_accepts_path_inside_staging_dir(tmp_path: Path) -> None:
     assert resolved == target.resolve()
 
 
-def test_validate_accepts_path_inside_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A separate cwd (not the staging dir) is also allowlisted by default."""
-    other_dir = tmp_path / "elsewhere"
-    other_dir.mkdir()
-    monkeypatch.chdir(other_dir)
-    target = other_dir / "from_cwd.txt"
-    target.write_text("x")
-    assert validate_upload_path(str(target)) == target.resolve()
+def test_validate_rejects_cwd_only_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: CWD alone must NOT grant upload access.
+
+    Before the fix, ``_allowed_upload_roots`` unconditionally included
+    ``Path.cwd()``, so any file under the daemon's working directory could
+    be uploaded regardless of the staging-dir allowlist -- including a
+    project's ``.env`` file or an SSH key that happened to live in the
+    working tree an agent's page-driven `browser_set_input_files` call
+    could name. A file that lives only under a fresh CWD -- not under the
+    staging dir, not in OCTOWRIGHT_UPLOAD_ROOTS -- must now be rejected.
+    """
+    cwd_only_dir = tmp_path.parent / "octowright_cwd_only_test_dir"
+    cwd_only_dir.mkdir(exist_ok=True)
+    target = cwd_only_dir / "not_staged.txt"
+    target.write_text("should not be uploadable")
+    monkeypatch.chdir(cwd_only_dir)
+    try:
+        with pytest.raises(ValueError, match="outside the allowed roots"):
+            validate_upload_path(str(target))
+    finally:
+        target.unlink()
+        cwd_only_dir.rmdir()
 
 
 def test_validate_accepts_extra_root_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
