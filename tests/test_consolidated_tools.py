@@ -202,6 +202,27 @@ async def test_browser_launch_outline_mode_returns_page_outline(
 
 
 @pytest.mark.anyio
+async def test_browser_launch_forwards_channel_executable_path_launch_args(
+    _patch_state: dict[str, MagicMock],
+) -> None:
+    pool = _patch_state["pool"]
+    pool.launch = AsyncMock(return_value={"instance_id": "inst-1"})
+
+    await _lifecycle.browser_launch(
+        url="https://x.com",
+        ephemeral=True,
+        channel="chrome",
+        executable_path="/opt/chrome/chrome",
+        launch_args=["--foo"],
+    )
+
+    _, kwargs = pool.launch.call_args
+    assert kwargs["channel"] == "chrome"
+    assert kwargs["executable_path"] == "/opt/chrome/chrome"
+    assert kwargs["launch_args"] == ["--foo"]
+
+
+@pytest.mark.anyio
 async def test_browser_capture_and_close(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """browser_capture_and_close now routes through the REAL close
     coordinator (Task 8: capture runs as a preparation callback inside the
