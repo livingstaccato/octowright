@@ -135,7 +135,16 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
         "to retry navigation or go to a different URL without re-launching. "
         "Pass response_mode='outline' to include a compact browser_page_outline in the "
-        "same call when launch produced an instance_id."
+        "same call when launch produced an instance_id. "
+        "channel picks a real installed browser build instead of Playwright's bundled one "
+        "(one of chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, "
+        "msedge-dev, msedge-canary) — use for native GPU/DRM/codec parity the bundled build "
+        "lacks. executable_path points at a specific browser binary directly, bypassing both "
+        "the bundled build and channel. launch_args are extra native CLI flags appended after "
+        "octowright's own required Chromium args (new-tab override, tiling, /dev/shm "
+        "workaround) — a flag here can override one of those if you deliberately choose to. "
+        "All three are launch-time only: never persisted into the recording, so macro replay, "
+        "handoff, and fluid relaunch of this instance do NOT carry them forward."
     ),
 )
 async def browser_launch(
@@ -160,6 +169,9 @@ async def browser_launch(
     ephemeral: bool = False,
     session: bool = False,
     protected: bool | None = None,
+    channel: str | None = None,
+    executable_path: str | None = None,
+    launch_args: list[str] | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
@@ -210,6 +222,9 @@ async def browser_launch(
         ephemeral=ephemeral,
         session=session,
         protected=protected,
+        channel=channel,
+        executable_path=executable_path,
+        launch_args=launch_args,
     )
     result = await _pool_launch_with_deadline(**options.to_pool_kwargs())
     publish_dashboard_invalidation_nowait("sessions")
