@@ -149,8 +149,8 @@ def reset_macro_label_seen() -> int:
     Operator escape hatch for the situation where dynamic macro names (e.g.
     ``migrate-table-{uuid}``) have permanently filled the
     :data:`METRICS_MACRO_LABEL_CAP`-slot cap, forcing every real macro
-    metric into the ``(overflow)`` bucket. The only alternative used to be
-    a daemon restart.
+    metric into the ``(overflow)`` bucket. The only other fix is a daemon
+    restart.
 
     Intentionally NOT exposed as a remote MCP tool — keeps the agent-facing
     API surface lean. This helper is here for tests and for an operator

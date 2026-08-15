@@ -176,7 +176,7 @@ def publish_close_once(session: BrowserSession, instance_id: str, reason: Sessio
     """Log + publish exactly once. ``reason`` picks the log line/metric:
     explicit close keeps ``octowright.browser.closed``; an external-origin
     reason is ``octowright.browser.evicted_externally`` plus the eviction
-    counter -- what the listeners used to emit directly before this task."""
+    counter -- centralizing what each listener would otherwise emit directly."""
     if is_external_reason(reason):
         EVICTED.add(1, attributes={"kind": session.kind})
         log.info(

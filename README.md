@@ -75,8 +75,8 @@ on your desktop. The result includes the `instance_id` so the client can target 
 actions.
 
 **2. Drive it.** Ask: *"click the 'More information' link"*. The client calls
-`browser_click_by text="More information"`. The window navigates. Every action lands
-in a JSONL recording on disk.
+`browser_click text="More information"` (an ARIA locator — no CSS selector needed).
+The window navigates. Every action lands in a JSONL recording on disk.
 
 **3. List what's open.** Ask: *"what browsers are running?"*. `browser_list` returns a
 one-line summary like `1 browser: 8a3f.../webkit @ iana.org/help/example-domains`.
@@ -261,8 +261,8 @@ appends a record to that instance's JSONL log.
 
 | Tool | What |
 |---|---|
-| `browser_click` / `browser_type` / `browser_fill` / `browser_press_key` | CSS-selector input. |
-| `browser_click_by` / `browser_fill_by` / `browser_get_text_by` | ARIA-locator input (role / label / text / data-testid). |
+| `browser_click` / `browser_type` / `browser_fill` / `browser_press_key` | CSS-selector input. `browser_click` / `browser_fill` also accept ARIA locators (`role` / `label` / `text` / `test_id`) instead of `selector`. |
+| `browser_get_text_by` | ARIA-locator text read (role / label / text / data-testid) — no CSS-selector equivalent. |
 | `browser_hover` | Hover the cursor over a CSS selector (triggers `:hover` / hover-reveal menus / tooltips). |
 | `browser_select_option` | Select one option in a native `<select>` by `value`, `label`, or 0-based `index`. |
 | `browser_drag` | Drag-and-drop from `source_selector` onto `target_selector` (Playwright `drag_and_drop`). |
@@ -406,6 +406,9 @@ without going through an MCP client:
 | `octowright takeover [--apply --scope=session\|project\|global --name=<n>]` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json` and offer to disable them in favour of octowright. Default is read-only report; `--apply` rewrites the config (with timestamped backup). Reversible — rename back to re-enable. |
 | `octowright persona list\|show\|create\|delete` | Manage personas from the terminal. |
 | `octowright scenario list\|start [--test --out <xml>] [--watch]` | Start a scenario; `--watch` streams participant events to stdout in real-time; the command blocks until Ctrl-C. |
+| `octowright restart [--keep-browsers] [--kill-followers]` | Stop the running daemon, sweep orphans, start a fresh one. `--kill-followers` also severs connected MCP client transports for a full reset. |
+| `octowright dashboard [--open]` | Mint a single-use dashboard pairing code and print the `/pair` URL. Only needed with `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`. |
+| `octowright skill install\|status\|doctor` | Install/inspect the packaged skill and plugin manifests. |
 
 ## Capability profiles
 
