@@ -881,6 +881,40 @@ class TestCloseAll:
         assert pool._sessions["a"].instance_id == "a"
 
     @pytest.mark.anyio
+    async def test_exclude_labels_spares_matching_sessions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A session whose label matches exclude_labels is never reserved."""
+        from octowright.browser_pool import close_helpers as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        pool = BrowserPool()
+        a = _fake_session(instance_id="a", label="keep-me")
+        b = _fake_session(instance_id="b", label="close-me")
+        pool._sessions["a"] = a
+        pool._sessions["b"] = b
+
+        result = await close_all(pool, exclude_labels=["keep-me"])
+        assert result == {"closed": ["b"]}
+        a._teardown_after_close_cutoff.assert_not_awaited()
+        b._teardown_after_close_cutoff.assert_awaited_once()
+        assert pool._sessions["a"].instance_id == "a"
+
+    @pytest.mark.anyio
+    async def test_exclude_profiles_spares_matching_sessions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A session whose profile matches exclude_profiles is never reserved."""
+        from octowright.browser_pool import close_helpers as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        pool = BrowserPool()
+        a = _fake_session(instance_id="a", profile="keep-profile")
+        b = _fake_session(instance_id="b", profile="close-profile")
+        pool._sessions["a"] = a
+        pool._sessions["b"] = b
+
+        result = await close_all(pool, exclude_profiles=["keep-profile"])
+        assert result == {"closed": ["b"]}
+        a._teardown_after_close_cutoff.assert_not_awaited()
+
+    @pytest.mark.anyio
     async def test_reports_non_protected_close_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """close_all returns failures so callers can distinguish them from an empty pool."""
         from octowright.browser_pool import close_helpers as _lc

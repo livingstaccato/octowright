@@ -332,9 +332,17 @@ class BrowserPool:
         self,
         *,
         force: bool = False,
+        exclude_labels: list[str] | None = None,
+        exclude_profiles: list[str] | None = None,
         _reason: SessionCloseReason = "agent_close",
     ) -> dict[str, Any]:
-        return await _close_all(self, force=force, _reason=_reason)
+        return await _close_all(
+            self,
+            force=force,
+            exclude_labels=exclude_labels,
+            exclude_profiles=exclude_profiles,
+            _reason=_reason,
+        )
 
     async def handoff(
         self,
