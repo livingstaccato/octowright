@@ -28,12 +28,16 @@ from octowright import defaults
 def _allowed_upload_roots() -> list[Path]:
     """Resolve every directory an LLM-driven upload may read from.
 
-    Always includes the daemon's CWD and the configured staging dir. Extra
-    roots come from OCTOWRIGHT_UPLOAD_ROOTS (os.pathsep-separated). Each root
+    Defaults to only the configured staging dir. Extra roots come from
+    OCTOWRIGHT_UPLOAD_ROOTS (os.pathsep-separated) — the opt-in mechanism for
+    deployments that need more than the staging dir. The daemon's CWD is
+    deliberately NOT included: an agent browsing an attacker-controlled page
+    could otherwise be tricked into uploading arbitrary files (.env, SSH
+    keys, credentials) that happen to live under the project tree. Each root
     is .resolve()'d so symlink games at the root level don't bypass the
     allowlist comparison below.
     """
-    roots: list[Path] = [Path.cwd().resolve(), defaults.UPLOAD_STAGING_DIR.expanduser().resolve()]
+    roots: list[Path] = [defaults.UPLOAD_STAGING_DIR.expanduser().resolve()]
     extra_raw = defaults.UPLOAD_EXTRA_ROOTS_RAW
     if extra_raw:
         for chunk in extra_raw.split(os.pathsep):
