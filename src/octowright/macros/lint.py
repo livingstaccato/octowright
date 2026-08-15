@@ -185,7 +185,7 @@ def _check_credentials(action: dict[str, Any], outer_index: int, issues: list[Is
                     severity="warning",
                     code="looks_like_credential",
                     message=(
-                        f"value {val!r} in field {key!r} looks like a literal credential — "
+                        f"field {key!r} looks like a literal credential (value redacted) — "
                         "consider {{email}} parameterization"
                     ),
                     action_index=outer_index,

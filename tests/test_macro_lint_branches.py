@@ -220,11 +220,17 @@ def test_message_substrings(macro_in: dict[str, Any], code: str, must_contain: s
     assert must_contain in issue.message, f"{code} message should contain {must_contain!r}, got {issue.message!r}"
 
 
-def test_credential_warning_includes_field_and_value() -> None:
-    """The credential warning quotes the literal value AND the field key."""
+def test_credential_warning_includes_field_but_redacts_value() -> None:
+    """The credential warning quotes the field key but NEVER the literal value.
+
+    Regression guard: `macro_lint`'s own docstring recommends running it
+    whenever a macro JSON file is hand-edited — exactly when a literal
+    secret is most likely present, so the warning message itself must not
+    become a second leak of that secret.
+    """
     issues = lint_macro(_macro([{"action": "fill", "selector": "#e", "value": "me@octowright.test"}]))
     issue = _only(issues, "looks_like_credential")
-    assert "me@octowright.test" in issue.message
+    assert "me@octowright.test" not in issue.message
     assert "'value'" in issue.message
     assert "{{email}}" in issue.message
 

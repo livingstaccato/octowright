@@ -16,6 +16,7 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
+from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
 from octowright.macros.descriptions import describe_action
 from octowright.macros.repair import repair_apply as repair_apply_impl
@@ -42,26 +43,9 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-# Action kinds whose ``value`` field carries user-supplied data that often
-# resolves to a credential (``{{password}}``-style placeholders are resolved
-# in-place by ``substitute()`` before dispatch). Redacted before the action
-# dict is embedded in the RuntimeError payload, sent to the macro-pill, or
-# emitted in any log line.
-_REDACTED_MACRO_VALUE = "<redacted>"
-_REDACT_VALUE_ACTIONS: frozenset[str] = frozenset({"fill", "type", "fill_by"})
-
-
-def _redact_action(action: dict[str, Any]) -> dict[str, Any]:
-    """Return a shallow copy of ``action`` with credential-bearing fields
-    replaced by ``<redacted>``. Non-redacted actions return a copy unchanged
-    so callers can mutate freely without aliasing back into the macro list."""
-    redacted = dict(action)
-    if redacted.get("action") in _REDACT_VALUE_ACTIONS:
-        for key in ("value", "text"):
-            if key in redacted:
-                redacted[key] = _REDACTED_MACRO_VALUE
-    return redacted
-
+# _redact_action / _REDACTED_MACRO_VALUE now live in octowright.macros._redact
+# (imported above) so repair.py can redact the same way without a circular
+# import back into this module.
 
 _SENSITIVE_ARG_KEY_PARTS = (
     "password",
@@ -371,13 +355,16 @@ async def _run_macro_impl(
                 )
             except Exception as exc:
                 bundle = await session.diagnostic_bundle()
-                fix_suggestion = await _suggest_fix(session, action)
                 # The action dict reaches the MCP client AND the structured
                 # log line below. ``substitute()`` has already resolved
                 # ``{{password}}``-style placeholders into the action, so
                 # the raw value field can be a literal credential — strip
-                # it before exposing the payload to either sink.
+                # it before exposing the payload to either sink, AND before
+                # handing it to _suggest_fix: summarize_action() embeds the
+                # raw value/text verbatim into the healing_suggestion string,
+                # which is a third sink for the same credential.
                 redacted_action = _redact_action(action)
+                fix_suggestion = await _suggest_fix(session, redacted_action)
                 payload: dict[str, Any] = {
                     "macro": name,
                     "failed_at_step": index,
