@@ -20,7 +20,7 @@ uv run playwright install webkit firefox chromium
 
 When a launch fails immediately, suspect the engine binary first. Today
 engine management is CLI-driven (`playwright install`, `playwright install --list`);
-Octowright does not currently expose dedicated MCP tools for install/reinstall.
+Octowright does not expose dedicated MCP tools for install/reinstall.
 
 ## Custom channel / binary / launch flags
 
