@@ -86,6 +86,14 @@ def test_daemon_survives_parent_sigkill(tmp_path: Path) -> None:
     env["OCTOWRIGHT_HTTP_PORT"] = str(test_port)
     # Long idle grace so the daemon doesn't quit on its own during the test.
     env["OCTOWRIGHT_IDLE_GRACE"] = "300"
+    # Isolate the state dir too (POSIX-only test, hence XDG_STATE_HOME — see the
+    # skipif above). Without this, the detached daemon this spawns opens its
+    # stderr via daemonize._open_daemon_log(), which resolves user_state_dir()
+    # from the INHERITED real environment: every run of this test wrote a real
+    # "octowright.http.listening ... port=<random>" line into the developer's
+    # actual ~/.local/state/octowright/logs/octowright-daemon.log, indistinguishable
+    # from a genuine daemon startup on a random port.
+    env["XDG_STATE_HOME"] = str(tmp_path)
 
     stderr_log = (tmp_path / "parent-stderr.log").open("wb")
     parent = subprocess.Popen(
