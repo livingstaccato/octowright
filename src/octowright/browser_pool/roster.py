@@ -59,10 +59,29 @@ async def _await_reserved_or_return_error(entry: Any) -> Any:
     return cast(CloseCoordinatorOutcome, outcome).response
 
 
+def _close_all_candidate_ids(
+    pool: BrowserPool,
+    *,
+    exclude_labels: list[str] | None,
+    exclude_profiles: list[str] | None,
+) -> list[str]:
+    """Sessions eligible for ``close_all``, minus any excluded by label/profile."""
+    label_set = set(exclude_labels) if exclude_labels else None
+    profile_set = set(exclude_profiles) if exclude_profiles else None
+    return [
+        session.instance_id
+        for session in pool.iter_sessions()
+        if (label_set is None or session.label not in label_set)
+        and (profile_set is None or session.profile not in profile_set)
+    ]
+
+
 async def close_all(
     pool: BrowserPool,
     *,
     force: bool = False,
+    exclude_labels: list[str] | None = None,
+    exclude_profiles: list[str] | None = None,
     _reason: SessionCloseReason = "agent_close",
 ) -> dict[str, Any]:
     # Two-stage: reserve every session's close cutoff FIRST (so every session
@@ -70,7 +89,7 @@ async def close_all(
     # other), THEN await every outcome. Never hold one session's lease while
     # reserving or awaiting another's -- a single hung browser's teardown
     # must not block the others from even being cut off.
-    ids = [session.instance_id for session in pool.iter_sessions()]
+    ids = _close_all_candidate_ids(pool, exclude_labels=exclude_labels, exclude_profiles=exclude_profiles)
     entries = await asyncio.gather(
         *(reserve_close_browser(pool, iid, force=force, reason=_reason) for iid in ids),
         return_exceptions=True,

@@ -414,11 +414,21 @@ async def browser_close(instance_id: str, force: bool = False) -> dict[str, Any]
     description=(
         "Close every live browser instance. "
         "If any browser was launched with protected=True (or OCTOWRIGHT_PROTECT_BROWSERS=1 "
-        "is set), you must pass force=True to confirm — skips protected browsers otherwise."
+        "is set), you must pass force=True to confirm — skips protected browsers otherwise. "
+        "Pass exclude_labels and/or exclude_profiles to spare specific sessions (matched "
+        "against each session's label/profile) from the bulk close."
     ),
 )
-async def browser_close_all(force: bool = False) -> dict[str, Any]:
-    result = await pool.close_all(force=force)
+async def browser_close_all(
+    force: bool = False,
+    exclude_labels: list[str] | None = None,
+    exclude_profiles: list[str] | None = None,
+) -> dict[str, Any]:
+    result = await pool.close_all(
+        force=force,
+        exclude_labels=exclude_labels,
+        exclude_profiles=exclude_profiles,
+    )
     publish_dashboard_invalidation_nowait("sessions")
     return result
 
