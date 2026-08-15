@@ -260,6 +260,48 @@ def test_resolve_artifact_path_rejects_closed_session_path_outside_recordings(
     assert discovery._resolve_artifact_path("artoutsidex1", "video_path") is None
 
 
+def test_resolve_session_artifacts_returns_manifest_for_live_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A live session's manifest comes straight from its own attrs."""
+    from types import SimpleNamespace
+
+    log_path = tmp_path / "rec" / "x.jsonl"
+    video_path = tmp_path / "rec" / "videos" / "x" / "x.webm"
+    fake = SimpleNamespace(
+        log_path=str(log_path),
+        video_path=str(video_path),
+        trace_path=None,
+        har_path=None,
+    )
+    monkeypatch.setattr(discovery, "_live_session_or_none", lambda _sid: fake)
+    monkeypatch.setattr(discovery, "safe_under", lambda _p, _root: True)
+
+    manifest = discovery.resolve_session_artifacts("live1")
+
+    assert manifest == {
+        "log_path": str(log_path),
+        "video_path": str(video_path),
+        "trace_path": None,
+        "har_path": None,
+    }
+
+
+def test_resolve_session_artifacts_returns_all_none_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No live session and no matching recording on disk -> every field null."""
+    monkeypatch.setattr(discovery, "_live_session_or_none", lambda _sid: None)
+    monkeypatch.setattr(discovery, "_find_recording_for", lambda _sid, _root: None)
+
+    manifest = discovery.resolve_session_artifacts("missingxxxxx")
+
+    assert manifest == {
+        "log_path": None,
+        "video_path": None,
+        "trace_path": None,
+        "har_path": None,
+    }
+
+
 def test_recordings_beyond_cache_cap_stay_addressable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """With more recordings than the bounded index holds, a recording evicted
     from the index must STILL resolve — the dashboard lists it, so its detail

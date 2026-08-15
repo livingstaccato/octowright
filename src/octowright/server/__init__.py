@@ -36,6 +36,7 @@ from octowright.server._state import log, mcp, pool, scenario_pool
 # Re-export every tool function at the package level for direct test access
 # (e.g. `from octowright import server; server.browser_open_trace(...)`).
 from octowright.server.browser import (
+    browser_artifact_manifest,
     browser_brief,
     browser_capture_and_close,
     browser_click,
@@ -164,6 +165,7 @@ from octowright.server.scenarios import (
 from octowright.server.web import web_find_links, web_page_outline, web_site_links
 
 __all__ = [
+    "browser_artifact_manifest",
     "browser_brief",
     "browser_capture_and_close",
     "browser_click",

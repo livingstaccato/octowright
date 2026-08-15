@@ -80,6 +80,7 @@ PROFILES: dict[str, list[str]] = {
         "capture_list",
         "capture_search",
         "capture_summary",
+        "browser_artifact_manifest",
         "browser_console_messages",
         "browser_console_summary",
         "browser_downloads",

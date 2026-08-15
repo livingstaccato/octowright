@@ -332,9 +332,17 @@ class BrowserPool:
         self,
         *,
         force: bool = False,
+        exclude_labels: list[str] | None = None,
+        exclude_profiles: list[str] | None = None,
         _reason: SessionCloseReason = "agent_close",
     ) -> dict[str, Any]:
-        return await _close_all(self, force=force, _reason=_reason)
+        return await _close_all(
+            self,
+            force=force,
+            exclude_labels=exclude_labels,
+            exclude_profiles=exclude_profiles,
+            _reason=_reason,
+        )
 
     async def handoff(
         self,
@@ -368,8 +376,18 @@ class BrowserPool:
     async def shutdown(self) -> None:
         await shutdown_pool(self)
 
-    async def _build_launch_kwargs(self, *, tile: bool, kind: str, headless: bool) -> dict[str, Any]:
-        """Chromium-only window tiling + new-tab-page override extension.
+    async def _build_launch_kwargs(
+        self,
+        *,
+        tile: bool,
+        kind: str,
+        headless: bool,
+        channel: str | None = None,
+        executable_path: str | None = None,
+        launch_args: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Chromium-only window tiling + new-tab-page override extension, plus
+        any caller-supplied channel/executable_path/launch_args passthrough.
 
         Headed Chromium loads a tiny unpacked extension that overrides the
         new-tab page to redirect to the daemon's /new-tab. Chromium's
@@ -378,27 +396,39 @@ class BrowserPool:
         can't load extensions, so it's skipped there (no user pressing Cmd+T in
         headless anyway). Firefox/WebKit have no equivalent CLI hook; their new
         tabs are handled by the page-event redirector in launch_pipeline.py.
+
+        channel/executable_path/launch_args apply to every engine (unlike the
+        Chromium-only args above) and are appended AFTER octowright's own
+        required args, so a caller-supplied flag can override one of ours
+        (e.g. its own --disable-extensions-except) if it deliberately chooses
+        to — the reverse would silently break tiling/new-tab-override/shm.
         """
-        out: dict[str, Any] = {}
-        if kind != "chromium":
-            return out
         args: list[str] = []
-        # Linux/CI: the default /dev/shm (often 64MB in containers) is too small
-        # for Chromium's shared-memory transport; exhaustion surfaces as random
-        # renderer crashes. Route shared memory to a regular tmpfile instead.
-        # Needed on Linux only (no-op risk on macOS/Windows), and it applies to
-        # headless too — the early "headless returns nothing" path used to skip it.
-        if sys.platform.startswith("linux"):
-            args.append("--disable-dev-shm-usage")
-        if not headless:
-            args.extend(self._headed_chromium_args())
-        if tile and not headless:
-            async with self._tile_lock:
-                tile_index = self._tile_counter
-                self._tile_counter += 1
-            args.extend(_tile_args_for_chromium(tile_index))
+        if kind == "chromium":
+            # Linux/CI: the default /dev/shm (often 64MB in containers) is too
+            # small for Chromium's shared-memory transport; exhaustion surfaces
+            # as random renderer crashes. Route shared memory to a regular
+            # tmpfile instead. Needed on Linux only (no-op risk on
+            # macOS/Windows), and it applies to headless too — the early
+            # "headless returns nothing" path used to skip it.
+            if sys.platform.startswith("linux"):
+                args.append("--disable-dev-shm-usage")
+            if not headless:
+                args.extend(self._headed_chromium_args())
+            if tile and not headless:
+                async with self._tile_lock:
+                    tile_index = self._tile_counter
+                    self._tile_counter += 1
+                args.extend(_tile_args_for_chromium(tile_index))
+        if launch_args:
+            args.extend(launch_args)
+        out: dict[str, Any] = {}
         if args:
             out["args"] = args
+        if channel:
+            out["channel"] = channel
+        if executable_path:
+            out["executable_path"] = executable_path
         return out
 
     def _headed_chromium_args(self) -> list[str]:
