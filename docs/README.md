@@ -14,11 +14,13 @@ see the [top-level README](../README.md); come here for deep-dives on specific f
 - [macros.md](macros.md) — record/replay, parameterization, conditional actions, linting, test runner
 - [scenarios.md](scenarios.md) — YAML spec, participant roles, fixtures, lifecycle, JUnit output
 - [goldens.md](goldens.md) — accessibility-tree baseline capture, verify policy, CI vs local rules
+- [dashboard.md](dashboard.md) — web UI: live sessions, per-session debugger, trace deep-dive
 
 ## Operations & Quality
 
 - [ci-quality.md](ci-quality.md) — local quality gates (`make ci`), coverage floor, `act` subset parity
 - [troubleshooting.md](troubleshooting.md) — common failure modes and fast diagnosis
+- [telemetry.md](telemetry.md) — structured logging, OTLP export, HTTP metrics
 
 ## Architecture & Internals
 
