@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.14.3] - 2026-08-12
+## [0.14.2] - 2026-08-15
 
 ### Added
 - **Per-session browser operation gate.** Every browser session now
@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `octowright_operation_rejected_total`, `octowright_operation_queue_depth`
   — see AGENTS.md's **Browser Session Operation Gate** section for the full
   contract.
+- **Opt-in, origin-scoped dashboard pairing.** Set
+  `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING=1`, then run `octowright dashboard` to
+  mint a single-use fragment code that becomes a short-lived bearer held only
+  in the exact origin's `sessionStorage`. HTTP APIs, streaming SSE, tail and
+  screencast WebSockets, recordings, screenshots, video, downloads, and write
+  controls all enforce the bearer. Dashboard and debugger tabs claim exclusive
+  per-tab browser locks so a cloned tab must pair independently. This protects
+  against another local user or sandbox that can reach loopback but cannot read
+  the 0600 leader lockfile; it does **not** protect against a same-user process
+  that can read or replace daemon state. Pairing remains off by default, and
+  remote dashboard exposure still requires `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1`.
 
 ### Changed
 - **Embedder API migration.** `BrowserSession.list_pages()`, `list_frames()`,
@@ -47,8 +58,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `notifications/octowright/session_closed` (with the recorder getting a
   terminal `close` row), alongside the existing `octowright_driver_lost_total`
   and the single `driver_died` notification.
+- **The optional terminal extra is explicitly experimental and source-only.**
+  Its unpublished `provide-uterm` dependencies are documented instead of being
+  presented as a working external wheel extra.
 
 ### Fixed
+- **The "fixed mismatch" viewport badge no longer fires on every headed
+  session.** It compared the OS window against the viewport with a fixed
+  24×80px chrome allowance; real browser chrome is taller than that (~85px on
+  Linux/Wayland Chromium), so the badge read "mismatch" from the moment a
+  headed fixed-viewport session launched, permanently masking the real drift
+  it exists to catch. The chrome is now measured once at launch (and
+  re-measured after every resize, since fluid and fixed viewports report
+  different chrome) and subtracted before comparing, with no measurement
+  meaning "decline to warn" rather than guessing. `viewport_sync` also no
+  longer grows the browser window by a full chrome on every call — it now
+  converges in one step and is idempotent after.
+- **`browser_resize` no longer leaves the session describing a size it no
+  longer is.** `viewport_status` and the in-page pill kept reporting the
+  launch-time width/height indefinitely after a resize, and a **fluid**
+  session that was resized kept calling itself fluid — silently switching off
+  drift detection at exactly the moment resizing a fluid viewport causes
+  drift (Playwright pins the viewport without moving the OS window). Resize
+  now records the new size and moves the session to fixed mode, matching what
+  actually happened.
 - **Paired dashboard access now expires on live connections too.** Established
   event, recording-tail, and screencast streams revalidate their bearer lease
   and close when it expires or is evicted. Protected recordings retain HTTP
@@ -71,23 +104,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Credential failures stay private.** Credential-helper stderr is never
   persisted in telemetry, and daemon logs are created or repaired with `0600`
   permissions.
-
-## [0.14.2] - 2026-08-11
-
-### Added
-- **Opt-in, origin-scoped dashboard pairing.** Set
-  `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING=1`, then run `octowright dashboard` to
-  mint a single-use fragment code that becomes a short-lived bearer held only
-  in the exact origin's `sessionStorage`. HTTP APIs, streaming SSE, tail and
-  screencast WebSockets, recordings, screenshots, video, downloads, and write
-  controls all enforce the bearer. Dashboard and debugger tabs claim exclusive
-  per-tab browser locks so a cloned tab must pair independently. This protects
-  against another local user or sandbox that can reach loopback but cannot read
-  the 0600 leader lockfile; it does **not** protect against a same-user process
-  that can read or replace daemon state. Pairing remains off by default, and
-  remote dashboard exposure still requires `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1`.
-
-### Fixed
 - **Browser and profile lifecycle failures now clean up deterministically.** URL
   policy rejection happens before allocation; cancellation after registration
   closes the session; last-page close performs full teardown; crash-recovery
@@ -108,11 +124,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Deterministic frontend and supply-chain gates.** CI/release use the tracked
   lockfile with `npm ci`, audit high-severity advisories, and build explicit SPA
   outputs; vulnerable transitive frontend dependencies were updated.
-
-### Changed
-- **The optional terminal extra is explicitly experimental and source-only.**
-  Its unpublished `provide-uterm` dependencies are documented instead of being
-  presented as a working external wheel extra.
 
 ## [0.14.1] - 2026-08-10
 

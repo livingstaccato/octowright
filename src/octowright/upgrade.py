@@ -40,19 +40,23 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
-    "0.14.3": [
-        "Dashboard pairing now expires everywhere it should: already-open SSE and WebSocket streams close "
-        "when their bearer expires, while protected recordings keep Range requests and progressive playback "
-        "instead of buffering the complete video in memory.",
-        "The follow-up correctness pass closes the remaining duplicate-mutation, keep-id browser replacement, "
-        "bridge and launch-manifest lost-update races. Credential-helper stderr stays out of logs, and daemon "
-        "logs are private even when upgrading a legacy installation.",
-    ],
     "0.14.2": [
+        "Every browser session now serializes its own actions through a per-session FIFO gate: a manual "
+        "action can no longer interleave mid-macro, and a closing session rejects new work instead of "
+        "racing it. Live gate state is visible per-session and, all at once, from octowright_status and "
+        "the dashboard.",
+        "The 'fixed mismatch' viewport badge stopped crying wolf: it compared the whole OS window against "
+        "the viewport with a chrome allowance too small for real browsers, so it flagged every headed "
+        "session from the moment it launched. It now measures the real chrome and only warns on genuine "
+        "drift — including a resize on a fluid session, which previously turned off drift detection "
+        "without saying so.",
         "Opt-in dashboard pairing now protects the browser-facing control plane end to end: a one-use "
         "fragment becomes an origin-scoped bearer for APIs, SSE, WebSockets and protected media, and cloned "
         "tabs must pair independently. It stays off by default; the loopback daemon and same-user 0600 "
         "lockfile remain the trust boundary, and remote exposure still requires its separate explicit opt-in.",
+        "Dashboard pairing now expires everywhere it should: already-open SSE and WebSocket streams close "
+        "when their bearer expires, while protected recordings keep Range requests and progressive playback "
+        "instead of buffering the complete video in memory.",
         "The correctness review closes lifecycle and concurrency gaps across browser launch/close, persona "
         "deletion, bridge snapshots, idempotent dispatch, scenario and terminal teardown, saturated recording "
         "discovery, replay classification, and dashboard degradation. Frontend installs/builds are now "

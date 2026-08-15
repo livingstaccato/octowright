@@ -125,7 +125,7 @@ Validation, before any interaction with the page:
 
 ```python
 {
-    "ok": bool,              # convenience alias for `verified`
+    "ok": bool,  # convenience alias for `verified`
     "grabbed": bool,
     "dropped": bool,
     "verified": bool,
