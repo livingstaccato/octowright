@@ -220,6 +220,7 @@ markers = [
     "engine_matrix: tests that exercise chromium/firefox/webkit matrices",
     "integration_local: tests that run against the local demo playground server",
     "terminal: optional terminal-session tests; require the octowright[terminal] extra (provide-uterm). Auto-applied to everything under tests/terminal/. Select with -m terminal / exclude with -m 'not terminal'.",
+    "memory_isolated: tests whose assertion is a process-wide tracemalloc heap diff, so they must run in their own pytest process rather than interleaved with the rest of the suite (thousands of unrelated tests' retained state otherwise pollutes the measurement window). Run alone in CI; excluded from the main suite invocation.",
 ]
 filterwarnings = [
     "ignore:websockets\\.legacy is deprecated;.*:DeprecationWarning:websockets\\.legacy",
