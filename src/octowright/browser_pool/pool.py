@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import sys
 from collections.abc import Iterable
 from pathlib import Path
@@ -266,6 +267,20 @@ class BrowserPool:
             return
 
         async def _viewport_action(_source: Any, payload: dict[str, Any]) -> dict[str, Any]:
+            # ``expose_binding`` installs this on ``window`` for every frame of
+            # every page in the context -- init-script-injected code and
+            # page-loaded (including hostile/third-party) code share the same
+            # global object, so there is no caller-identity check at the
+            # binding layer itself. The per-launch capability token is the
+            # identity check: only the trusted init script (viewport_pill.js)
+            # has it, held purely in its own closure and never assigned to
+            # ``window``, so it isn't discoverable by page-script enumeration.
+            # Applied uniformly to every action (not just the destructive
+            # ``relaunch-fluid``) -- simpler and more defensible than
+            # special-casing.
+            token = payload.get("token")
+            if not isinstance(token, str) or not hmac.compare_digest(token, session.viewport_action_token):
+                raise ValueError("invalid viewport action token")
             action = payload.get("action")
             if action == "sync":
                 return await session.viewport_sync()
