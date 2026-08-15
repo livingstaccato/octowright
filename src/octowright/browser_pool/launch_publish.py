@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
-from octowright.browser_pool.launch_helpers import _measure_frame_inset, _record_launch_event
+from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
 from octowright.browser_pool.visuals import wire_init_scripts
 from octowright.recorder import Recorder
@@ -271,7 +271,7 @@ async def _prepare_session_before_publication(
         operation_queue_timeout_seconds=pool.operation_queue_timeout_seconds,
     )
     new_session.attach_console()
-    await _measure_frame_inset(new_session, page)
+    await new_session.measure_frame_inset(page)
     await pool._expose_viewport_binding(context, new_session)
     # Order matters: the close-evictor and user-nav logger publish handler
     # factories on the session so that subsequent _wire_listeners calls

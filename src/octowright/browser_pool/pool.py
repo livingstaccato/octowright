@@ -271,6 +271,20 @@ class BrowserPool:
                 return await session.viewport_sync()
             if action == "relaunch-fluid":
                 return await self.relaunch_fluid(session.instance_id)
+            if action == "state":
+                # The pill's init script is injected once and re-run on every
+                # document with the values baked in at LAUNCH, so a mode or
+                # chrome change made since -- by resize() or viewport_sync() --
+                # is undone by the next navigation. The binding, unlike the
+                # script text, is live, so the pill asks instead of trusting
+                # what it was born with.
+                return {
+                    "mode": session.viewport_mode,
+                    "width": session.viewport_width,
+                    "height": session.viewport_height,
+                    "inset_w": session.viewport_frame_inset_w,
+                    "inset_h": session.viewport_frame_inset_h,
+                }
             raise ValueError(f"unknown viewport action: {action!r}")
 
         await expose_binding("__octowright_viewport_action", _viewport_action)

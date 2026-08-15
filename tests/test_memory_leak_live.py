@@ -30,6 +30,17 @@ Two properties keep it honest rather than merely quiet:
 
 Marked ``live_browser``; skipped where no engine is installed. Also runnable as a
 standalone investigation harness (bump ``_CYCLES`` and read the printed report).
+
+Also marked ``memory_isolated``: the assertion is a process-wide ``tracemalloc``
+heap diff, so running it interleaved with the other ~5000 tests in one pytest
+process contaminates the measurement — a full-suite CI run consistently showed
+700KB-2MB "growth" here (band: 500KB) while every standalone run of this file
+alone passed clean at the ~20KB the band was calibrated against. That is not
+this test's confirm-before-failing mechanism catching a real leak reproducing
+across two windows; it is thousands of unrelated tests' retained state (import
+caches, log-capture buffers, etc.) still live in the same process when this
+file's window opens. CI runs ``memory_isolated`` tests in their own pytest
+invocation (see ``ci/run_integration_and_main.sh``) for exactly this reason.
 """
 
 from __future__ import annotations
@@ -41,7 +52,7 @@ import pytest
 
 from tests._pool_invariants import assert_pool_consistent
 
-pytestmark = pytest.mark.live_browser
+pytestmark = [pytest.mark.live_browser, pytest.mark.memory_isolated]
 
 # Warmup cycles excluded from the measurement window: the first launches fill
 # one-time import caches, lru_caches, and lazy singletons that are NOT leaks.
