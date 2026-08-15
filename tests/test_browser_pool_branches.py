@@ -972,6 +972,27 @@ class TestCloseAll:
         a._teardown_after_close_cutoff.assert_not_awaited()
 
     @pytest.mark.anyio
+    async def test_exclude_labels_and_exclude_profiles_combine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Both filters active at once: a session is spared if EITHER matches,
+        not only when both do."""
+        from octowright.browser_pool import close_helpers as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        pool = BrowserPool()
+        a = _fake_session(instance_id="a", label="keep-me", profile="close-profile")
+        b = _fake_session(instance_id="b", label="close-me", profile="keep-profile")
+        c = _fake_session(instance_id="c", label="close-me", profile="close-profile")
+        pool._sessions["a"] = a
+        pool._sessions["b"] = b
+        pool._sessions["c"] = c
+
+        result = await close_all(pool, exclude_labels=["keep-me"], exclude_profiles=["keep-profile"])
+        assert result == {"closed": ["c"]}
+        a._teardown_after_close_cutoff.assert_not_awaited()
+        b._teardown_after_close_cutoff.assert_not_awaited()
+        c._teardown_after_close_cutoff.assert_awaited_once()
+
+    @pytest.mark.anyio
     async def test_reports_non_protected_close_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """close_all returns failures so callers can distinguish them from an empty pool."""
         from octowright.browser_pool import close_helpers as _lc
