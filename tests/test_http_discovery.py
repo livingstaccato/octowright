@@ -287,6 +287,44 @@ def test_resolve_session_artifacts_returns_manifest_for_live_session(
     }
 
 
+def test_resolve_session_artifacts_finds_closed_session_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the feature: no live session, but a real recording on
+    disk carries the close event's video/trace paths. This is the actual novel
+    behavior browser_artifact_manifest exists for -- finding artifacts for a
+    session the caller no longer holds a live handle to."""
+    from octowright.http import state as http_state
+
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    jsonl = rec / "20260101T000000Z-chromium-closedsess1.jsonl"
+    video_path = rec / "videos" / "closedsess1" / "closedsess1.webm"
+    trace_path = rec / "closedsess1.trace.zip"
+    jsonl.write_text(
+        "\n".join(
+            [
+                json.dumps({"action": "launch", "kind": "chromium", "ts": "2026-01-01T00:00:00Z"}),
+                json.dumps({"action": "close", "video_path": str(video_path), "trace_path": str(trace_path)}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(http_state, "RECORDINGS_DIR", rec)
+    monkeypatch.setattr(discovery, "_live_session_or_none", lambda _sid: None)
+
+    manifest = discovery.resolve_session_artifacts("closedsess1")
+
+    assert manifest == {
+        "log_path": str(jsonl),
+        "video_path": str(video_path),
+        "trace_path": str(trace_path),
+        "har_path": None,
+    }
+
+
 def test_resolve_session_artifacts_returns_all_none_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """No live session and no matching recording on disk -> every field null."""
     monkeypatch.setattr(discovery, "_live_session_or_none", lambda _sid: None)
