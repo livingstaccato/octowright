@@ -302,6 +302,7 @@ async def _prepare_session_before_publication(
         viewport_height=new_session.viewport_height,
         viewport_frame_inset_w=new_session.viewport_frame_inset_w,
         viewport_frame_inset_h=new_session.viewport_frame_inset_h,
+        viewport_token=new_session.viewport_action_token,
     )
 
     if launch_options.trace:
