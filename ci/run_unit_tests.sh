@@ -8,7 +8,11 @@
 
 set -euo pipefail
 
+# memory_isolated tests assert on a process-wide tracemalloc heap diff and must
+# run alone, not interleaved with the rest of the suite — see
+# ci/run_integration_and_main.sh for the full explanation.
 uv run --active pytest -q tests/ \
+    -m "not memory_isolated" \
     --ignore=tests/test_engine_matrix_live.py \
     --ignore=tests/test_badge.py \
     --ignore=tests/test_pill.py \
@@ -18,3 +22,5 @@ uv run --active pytest -q tests/ \
     --ignore=tests/test_session_mode.py \
     --ignore=tests/test_title_prefix.py \
     --ignore=tests/test_label_promotion.py
+
+uv run --active pytest -q tests/ -m memory_isolated --no-cov
