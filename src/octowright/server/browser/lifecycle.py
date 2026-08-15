@@ -135,7 +135,16 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
         "to retry navigation or go to a different URL without re-launching. "
         "Pass response_mode='outline' to include a compact browser_page_outline in the "
-        "same call when launch produced an instance_id."
+        "same call when launch produced an instance_id. "
+        "channel picks a real installed browser build instead of Playwright's bundled one "
+        "(one of chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, "
+        "msedge-dev, msedge-canary) — use for native GPU/DRM/codec parity the bundled build "
+        "lacks. executable_path points at a specific browser binary directly, bypassing both "
+        "the bundled build and channel. launch_args are extra native CLI flags appended after "
+        "octowright's own required Chromium args (new-tab override, tiling, /dev/shm "
+        "workaround) — a flag here can override one of those if you deliberately choose to. "
+        "All three are launch-time only: never persisted into the recording, so macro replay, "
+        "handoff, and fluid relaunch of this instance do NOT carry them forward."
     ),
 )
 async def browser_launch(
@@ -160,6 +169,9 @@ async def browser_launch(
     ephemeral: bool = False,
     session: bool = False,
     protected: bool | None = None,
+    channel: str | None = None,
+    executable_path: str | None = None,
+    launch_args: list[str] | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
@@ -210,6 +222,9 @@ async def browser_launch(
         ephemeral=ephemeral,
         session=session,
         protected=protected,
+        channel=channel,
+        executable_path=executable_path,
+        launch_args=launch_args,
     )
     result = await _pool_launch_with_deadline(**options.to_pool_kwargs())
     publish_dashboard_invalidation_nowait("sessions")
@@ -414,11 +429,21 @@ async def browser_close(instance_id: str, force: bool = False) -> dict[str, Any]
     description=(
         "Close every live browser instance. "
         "If any browser was launched with protected=True (or OCTOWRIGHT_PROTECT_BROWSERS=1 "
-        "is set), you must pass force=True to confirm — skips protected browsers otherwise."
+        "is set), you must pass force=True to confirm — skips protected browsers otherwise. "
+        "Pass exclude_labels and/or exclude_profiles to spare specific sessions (matched "
+        "against each session's label/profile) from the bulk close."
     ),
 )
-async def browser_close_all(force: bool = False) -> dict[str, Any]:
-    result = await pool.close_all(force=force)
+async def browser_close_all(
+    force: bool = False,
+    exclude_labels: list[str] | None = None,
+    exclude_profiles: list[str] | None = None,
+) -> dict[str, Any]:
+    result = await pool.close_all(
+        force=force,
+        exclude_labels=exclude_labels,
+        exclude_profiles=exclude_profiles,
+    )
     publish_dashboard_invalidation_nowait("sessions")
     return result
 

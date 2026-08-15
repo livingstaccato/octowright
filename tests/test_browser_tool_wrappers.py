@@ -241,7 +241,7 @@ async def test_browser_close_all_calls_pool(_patch_pool: MagicMock) -> None:
 
     result = await _lifecycle.browser_close_all()
 
-    _patch_pool.close_all.assert_awaited_once_with(force=False)
+    _patch_pool.close_all.assert_awaited_once_with(force=False, exclude_labels=None, exclude_profiles=None)
     assert result == {"closed": ["a", "b"]}
 
 
@@ -251,7 +251,7 @@ async def test_browser_close_all_force_calls_pool_force(_patch_pool: MagicMock) 
 
     result = await _lifecycle.browser_close_all(force=True)
 
-    _patch_pool.close_all.assert_awaited_once_with(force=True)
+    _patch_pool.close_all.assert_awaited_once_with(force=True, exclude_labels=None, exclude_profiles=None)
     assert result == {"closed": ["a", "b"]}
 
 
@@ -263,9 +263,21 @@ async def test_browser_close_all_skips_protected_and_closes_unprotected_with_for
 
     result = await _lifecycle.browser_close_all()
 
-    _patch_pool.close_all.assert_awaited_once_with(force=False)
+    _patch_pool.close_all.assert_awaited_once_with(force=False, exclude_labels=None, exclude_profiles=None)
     assert result["closed"] == ["unprotected"]
     assert result["skipped_protected"] == ["protected"]
+
+
+@pytest.mark.anyio
+async def test_browser_close_all_forwards_exclusions(_patch_pool: MagicMock) -> None:
+    _patch_pool.close_all = AsyncMock(return_value={"closed": ["b"]})
+
+    result = await _lifecycle.browser_close_all(exclude_labels=["keep-me"], exclude_profiles=["keep-profile"])
+
+    _patch_pool.close_all.assert_awaited_once_with(
+        force=False, exclude_labels=["keep-me"], exclude_profiles=["keep-profile"]
+    )
+    assert result == {"closed": ["b"]}
 
 
 @pytest.mark.anyio

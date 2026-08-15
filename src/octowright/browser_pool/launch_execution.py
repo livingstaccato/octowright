@@ -66,7 +66,14 @@ async def launch_profile_locked(
         log_path=log_path,
         recordings_dir=pool._recordings_dir,
     )
-    launch_kwargs = await pool._build_launch_kwargs(tile=launch_options.tile, kind=kind, headless=headless)
+    launch_kwargs = await pool._build_launch_kwargs(
+        tile=launch_options.tile,
+        kind=kind,
+        headless=headless,
+        channel=launch_options.channel,
+        executable_path=launch_options.executable_path,
+        launch_args=launch_options.launch_args,
+    )
 
     browser: Any | None = None
     context: Any | None = None

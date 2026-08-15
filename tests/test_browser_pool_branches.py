@@ -181,6 +181,26 @@ class TestLaunchOptionsValidate:
         """Bare default LaunchOptions validates clean."""
         LaunchOptions().validate()
 
+    def test_unknown_channel_raises(self) -> None:
+        """channel is a fixed allowlist, not passthrough."""
+        with pytest.raises(ValueError, match=r"channel must be one of"):
+            LaunchOptions(channel="opera-gx").validate()
+
+    def test_known_channel_passes(self) -> None:
+        LaunchOptions(channel="chrome").validate()
+
+    def test_missing_executable_path_raises(self, tmp_path: Path) -> None:
+        """A nonexistent executable_path is rejected at validate() time, not
+        surfaced as an opaque Playwright launch failure."""
+        missing = tmp_path / "no-such-browser"
+        with pytest.raises(ValueError, match=r"does not exist or is not a file"):
+            LaunchOptions(executable_path=str(missing)).validate()
+
+    def test_existing_executable_path_passes(self, tmp_path: Path) -> None:
+        binary = tmp_path / "fake-browser"
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        LaunchOptions(executable_path=str(binary)).validate()
+
 
 class TestLaunchOptionsPromotedProfile:
     def test_returns_explicit_profile_when_provided(self) -> None:
@@ -490,6 +510,43 @@ class TestBuildLaunchKwargs:
         monkeypatch.setattr(sys, "platform", "linux")
         pool = BrowserPool()
         assert await pool._build_launch_kwargs(tile=False, kind="firefox", headless=True) == {}
+
+    @pytest.mark.anyio
+    async def test_channel_and_executable_path_passed_through(self) -> None:
+        pool = BrowserPool()
+        out = await pool._build_launch_kwargs(
+            tile=False,
+            kind="chromium",
+            headless=True,
+            channel="chrome",
+            executable_path="/opt/chrome/chrome",
+        )
+        assert out["channel"] == "chrome"
+        assert out["executable_path"] == "/opt/chrome/chrome"
+
+    @pytest.mark.anyio
+    async def test_channel_and_executable_path_apply_to_non_chromium_too(self) -> None:
+        """channel/executable_path aren't chromium-only, unlike tiling/new-tab args."""
+        pool = BrowserPool()
+        out = await pool._build_launch_kwargs(
+            tile=False, kind="firefox", headless=True, executable_path="/opt/firefox/firefox"
+        )
+        assert out == {"executable_path": "/opt/firefox/firefox"}
+
+    @pytest.mark.anyio
+    async def test_launch_args_appended_after_internal_chromium_args(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Caller-supplied launch_args come after octowright's own required
+        args, so a caller can deliberately override one positionally."""
+        monkeypatch.setattr(sys, "platform", "linux")
+        pool = BrowserPool()
+        out = await pool._build_launch_kwargs(tile=False, kind="chromium", headless=True, launch_args=["--user-flag"])
+        assert out["args"] == ["--disable-dev-shm-usage", "--user-flag"]
+
+    @pytest.mark.anyio
+    async def test_launch_args_alone_for_non_chromium(self) -> None:
+        pool = BrowserPool()
+        out = await pool._build_launch_kwargs(tile=False, kind="webkit", headless=True, launch_args=["--foo"])
+        assert out == {"args": ["--foo"]}
 
 
 # ─── _resolve_session_dir ────────────────────────────────────────────────────
@@ -879,6 +936,40 @@ class TestCloseAll:
         assert "force=True" in result["message"]
         # The refused protected session was never reserved -- still fully open.
         assert pool._sessions["a"].instance_id == "a"
+
+    @pytest.mark.anyio
+    async def test_exclude_labels_spares_matching_sessions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A session whose label matches exclude_labels is never reserved."""
+        from octowright.browser_pool import close_helpers as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        pool = BrowserPool()
+        a = _fake_session(instance_id="a", label="keep-me")
+        b = _fake_session(instance_id="b", label="close-me")
+        pool._sessions["a"] = a
+        pool._sessions["b"] = b
+
+        result = await close_all(pool, exclude_labels=["keep-me"])
+        assert result == {"closed": ["b"]}
+        a._teardown_after_close_cutoff.assert_not_awaited()
+        b._teardown_after_close_cutoff.assert_awaited_once()
+        assert pool._sessions["a"].instance_id == "a"
+
+    @pytest.mark.anyio
+    async def test_exclude_profiles_spares_matching_sessions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A session whose profile matches exclude_profiles is never reserved."""
+        from octowright.browser_pool import close_helpers as _lc
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        pool = BrowserPool()
+        a = _fake_session(instance_id="a", profile="keep-profile")
+        b = _fake_session(instance_id="b", profile="close-profile")
+        pool._sessions["a"] = a
+        pool._sessions["b"] = b
+
+        result = await close_all(pool, exclude_profiles=["keep-profile"])
+        assert result == {"closed": ["b"]}
+        a._teardown_after_close_cutoff.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_reports_non_protected_close_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
