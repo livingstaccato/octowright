@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,28 @@ SUPPORTED_CHANNELS = frozenset(
         "msedge-canary",
     }
 )
+
+# Env var gating `executable_path`/`launch_args` on the LIVE browser_launch
+# call path. Both are a code-execution primitive (an arbitrary local binary +
+# arbitrary argv, spawned as a child of the octowright daemon) -- see the
+# docstrings on LaunchOptions.executable_path / .launch_args, which are
+# already excluded from untrusted JSONL replay (from_launch_record) for the
+# same reason. The identical risk on the live MCP call path (equally
+# reachable via an agent whose tool args are steered by indirect prompt
+# injection from a page it's browsing) had no mitigation until this gate.
+# OFF by default -- matches the OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS /
+# OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS / OCTOWRIGHT_ALLOW_PY_SCENARIOS
+# precedent for exactly this class of risky-but-legitimate power-user
+# feature. Falsey tokens mirror recorder._PRIVATE_OFF.
+ALLOW_EXECUTABLE_PATH_ENV = "OCTOWRIGHT_ALLOW_EXECUTABLE_PATH"
+_ALLOW_EXECUTABLE_PATH_TOKENS_OFF = frozenset({"", "0", "off", "false", "no", "never", "none", "disabled"})
+
+
+def _executable_path_allowed() -> bool:
+    """Return True iff OCTOWRIGHT_ALLOW_EXECUTABLE_PATH opts into
+    executable_path/launch_args on the live browser_launch call path. Read at
+    call time (not cached) so tests can monkeypatch the env var freely."""
+    return os.environ.get(ALLOW_EXECUTABLE_PATH_ENV, "").strip().lower() not in _ALLOW_EXECUTABLE_PATH_TOKENS_OFF
 
 
 def resolve_protected(explicit: bool | None, *, headed: bool, ephemeral: bool) -> tuple[bool, str]:
@@ -204,6 +227,11 @@ class LaunchOptions:
     def _validate_browser_selection(self) -> None:
         if self.channel is not None and self.channel not in SUPPORTED_CHANNELS:
             raise ValueError(f"channel must be one of {sorted(SUPPORTED_CHANNELS)}, got {self.channel!r}")
+        if (self.executable_path is not None or self.launch_args is not None) and not _executable_path_allowed():
+            raise ValueError(
+                "executable_path/launch_args are disabled by default (arbitrary local "
+                f"process execution) -- set {ALLOW_EXECUTABLE_PATH_ENV}=1 to opt in"
+            )
         if self.executable_path is not None and not Path(self.executable_path).expanduser().is_file():
             raise ValueError(f"executable_path {self.executable_path!r} does not exist or is not a file")
 
