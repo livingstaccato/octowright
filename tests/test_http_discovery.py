@@ -260,13 +260,17 @@ def test_resolve_artifact_path_rejects_closed_session_path_outside_recordings(
     assert discovery._resolve_artifact_path("artoutsidex1", "video_path") is None
 
 
-def test_resolve_session_artifacts_returns_manifest_for_live_session(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_session_artifacts_returns_manifest_for_live_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """A live session's manifest comes straight from its own attrs."""
     from types import SimpleNamespace
 
+    log_path = tmp_path / "rec" / "x.jsonl"
+    video_path = tmp_path / "rec" / "videos" / "x" / "x.webm"
     fake = SimpleNamespace(
-        log_path="/rec/x.jsonl",
-        video_path="/rec/videos/x/x.webm",
+        log_path=str(log_path),
+        video_path=str(video_path),
         trace_path=None,
         har_path=None,
     )
@@ -276,8 +280,8 @@ def test_resolve_session_artifacts_returns_manifest_for_live_session(monkeypatch
     manifest = discovery.resolve_session_artifacts("live1")
 
     assert manifest == {
-        "log_path": "/rec/x.jsonl",
-        "video_path": "/rec/videos/x/x.webm",
+        "log_path": str(log_path),
+        "video_path": str(video_path),
         "trace_path": None,
         "har_path": None,
     }
