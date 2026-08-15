@@ -433,6 +433,24 @@ def _resolve_artifact_path(session_id: str, attr: str) -> Path | None:
     return candidate if safe_under(candidate, state.RECORDINGS_DIR) else None
 
 
+def resolve_session_artifacts(session_id: str) -> dict[str, str | None]:
+    """Public one-call artifact manifest: every known path for ``session_id``,
+    live or closed. Reuses the same live-attr/recording/cached-scan resolution
+    as the dashboard media routes, so an MCP caller sees the identical set of
+    paths the dashboard would serve for this session.
+    """
+
+    def _str_or_none(path: Path | None) -> str | None:
+        return str(path) if path is not None else None
+
+    return {
+        "log_path": _str_or_none(_resolve_log_path(session_id)),
+        "video_path": _str_or_none(_resolve_artifact_path(session_id, "video_path")),
+        "trace_path": _str_or_none(_resolve_artifact_path(session_id, "trace_path")),
+        "har_path": _str_or_none(_resolve_artifact_path(session_id, "har_path")),
+    }
+
+
 # ---------------------------------------------------------------------------
 # JSONL tail (matches `browser_tail_recording` semantics so the WS payloads
 # look identical to the existing MCP tool — the frontend can speak one shape).
