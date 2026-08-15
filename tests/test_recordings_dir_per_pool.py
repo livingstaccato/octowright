@@ -53,7 +53,10 @@ def test_build_video_kwargs_routes_to_explicit_root(monkeypatch: pytest.MonkeyPa
     """An explicit recordings_dir wins over the module global for the video dir."""
     monkeypatch.setattr(launch_helpers, "RECORDINGS_DIR", tmp_path / "global")
     pool_root = tmp_path / "pool-b"
-    _kwargs, video_dir = launch_helpers._build_video_kwargs(True, True, False, 1280, 800, recordings_dir=pool_root)
+    log_path = pool_root / "20260101T000000Z-chromium-abc123-mylabel.jsonl"
+    _kwargs, video_dir = launch_helpers._build_video_kwargs(
+        True, True, False, 1280, 800, log_path=log_path, recordings_dir=pool_root
+    )
     assert video_dir is not None
     assert video_dir.is_relative_to(pool_root / "videos")
 
@@ -61,9 +64,21 @@ def test_build_video_kwargs_routes_to_explicit_root(monkeypatch: pytest.MonkeyPa
 def test_build_video_kwargs_defaults_to_global(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """No recordings_dir → resolves the module global at call time (monkeypatchable)."""
     monkeypatch.setattr(launch_helpers, "RECORDINGS_DIR", tmp_path)
-    _kwargs, video_dir = launch_helpers._build_video_kwargs(True, True, False, 1280, 800)
+    log_path = tmp_path / "20260101T000000Z-chromium-abc123-mylabel.jsonl"
+    _kwargs, video_dir = launch_helpers._build_video_kwargs(True, True, False, 1280, 800, log_path=log_path)
     assert video_dir is not None
     assert video_dir.is_relative_to(tmp_path / "videos")
+
+
+def test_build_video_kwargs_dir_name_carries_the_launch_identity(tmp_path: Path) -> None:
+    """The video dir is findable by label/instance_id like every other artifact
+    type, instead of a random id only recoverable from the launch/close result."""
+    log_path = tmp_path / "20260101T000000Z-chromium-abc123-mylabel.jsonl"
+    _kwargs, video_dir = launch_helpers._build_video_kwargs(
+        True, True, False, 1280, 800, log_path=log_path, recordings_dir=tmp_path
+    )
+    assert video_dir is not None
+    assert video_dir.name == log_path.stem
 
 
 def test_build_har_kwargs_routes_to_explicit_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
