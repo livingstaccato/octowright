@@ -4,7 +4,7 @@ A **persona** is a named identity that owns persistent browser profiles across
 one or more engines, plus metadata: display name, default URL, startup macros,
 credential references, and free-form app metadata.
 
-Think of a persona as *"dante — my Discord power user across all three engines"*,
+Think of a persona as *"Dante — my Discord power user across all three engines"*,
 and a profile as *one engine-specific piece of that identity*.
 
 The persona tools (`persona_create`, `persona_get`, `persona_list`,
@@ -126,6 +126,35 @@ values are never included in the report.**
 
 This catches the classic "logged in 6 of 7 windows, then discovered the env var
 was unset on #7" failure mode before any browser launches.
+
+## Window title and corner badge
+
+Every page's `document.title` is rewritten on the fly to end with
+` (<persona-emoji><engine-emoji>) [<profile>]` — the page's own title leads,
+the badge tails. Example: `Yahoo | Mail, Weather, … (🐬🦊) [microdosing]` in
+Firefox, or `Yahoo | Mail, Weather, … (🐬🧭) [microdosing]` in WebKit. The
+persona emoji is hash-picked from a curated 33-pick pool keyed off the
+persona name (deterministic, same emoji every time); the engine emoji is
+fixed (🌐 chromium · 🦊 firefox · 🧭 webkit). When parallel windows pile up in
+cmd-` / the Window menu / a tab strip, the suffix lets you tell them apart at
+a glance even after deep navigation. Override the emoji with `emoji:` in
+`profile.yaml`, or disable the corner badge entirely with `badge=False` on
+`browser_launch` (the title injection has no separate off-switch — it's a
+string rewrite, no DOM nodes).
+
+## Protected sessions
+
+Protected sessions are intended for user-facing windows. Any close-capable
+tool refuses them unless the call explicitly confirms with `force=True`;
+this includes `browser_close`, `browser_close_all`, and
+`browser_capture_and_close`. `browser_close_all` also takes
+`exclude_labels=[...]` / `exclude_profiles=[...]` to spare specific sessions
+from an otherwise-blanket close. Headed browsers are protected by default —
+see `OCTOWRIGHT_PROTECT_HEADED` in the [main README's Configuration section](../README.md#configuration).
+
+Exported replay scripts embed the absolute `user_data_dir` path, so they
+work on the same machine but are **not portable across machines** when a
+profile is involved.
 
 ## Tools
 
