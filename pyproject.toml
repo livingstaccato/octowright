@@ -97,7 +97,13 @@ Issues = "https://github.com/livingstaccato/octowright/issues"
 octowright = "octowright.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+# hatchling>=1.32.0 emits Metadata-Version 2.5, which pypa/gh-action-pypi-publish
+# v1.14.0's bundled validator rejects outright ("InvalidDistribution: '2.5' is
+# not a valid metadata version") -- confirmed by building locally with 1.31.0
+# (Metadata-Version 2.4, accepted) vs 1.32.0 (2.5, rejected). Upper-bound until
+# the publish tooling catches up to the newer metadata spec; safe to lift once
+# a release note there confirms 2.5 support.
+requires = ["hatchling<1.32"]
 build-backend = "hatchling.build"
 
 # Single source of truth for the version is the top-level VERSION file, matching
