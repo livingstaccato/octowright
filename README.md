@@ -162,7 +162,7 @@ live WebSocket updates, and a Playwright trace-viewer deep-dive.
 Ask your MCP client `"give me the octowright dashboard URL"` (it'll call the
 `octowright_dashboard_url` MCP tool), or just open the URL directly.
 
-Full reference: [docs/dashboard.md](https://github.com/livingstaccato/octowright/blob/main/docs/dashboard.md).
+Full reference: [docs/dashboard.md](docs/dashboard.md).
 
 ## Concepts: how the pieces relate
 
@@ -479,7 +479,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 uv run octowright serve
 ```
 
-Full reference: [docs/telemetry.md](https://github.com/livingstaccato/octowright/blob/main/docs/telemetry.md).
+Full reference: [docs/telemetry.md](docs/telemetry.md).
 
 ## Safari caveat
 
@@ -505,8 +505,8 @@ Prints the list of registered tools without needing a live MCP client.
 - [docs/macros.md](https://github.com/livingstaccato/octowright/blob/main/docs/macros.md): macro record/replay, linting, and test execution.
 - [docs/scenarios.md](https://github.com/livingstaccato/octowright/blob/main/docs/scenarios.md): multi-browser orchestration lifecycle.
 - [docs/goldens.md](https://github.com/livingstaccato/octowright/blob/main/docs/goldens.md): baseline capture vs verify policy.
-- [docs/dashboard.md](https://github.com/livingstaccato/octowright/blob/main/docs/dashboard.md): web UI, per-session debugger, trace deep-dive.
-- [docs/telemetry.md](https://github.com/livingstaccato/octowright/blob/main/docs/telemetry.md): structured logging, OTLP export, HTTP metrics.
+- [docs/dashboard.md](docs/dashboard.md): web UI, per-session debugger, trace deep-dive.
+- [docs/telemetry.md](docs/telemetry.md): structured logging, OTLP export, HTTP metrics.
 - [docs/ci-quality.md](https://github.com/livingstaccato/octowright/blob/main/docs/ci-quality.md): quality gates and local CI parity commands.
 - [docs/troubleshooting.md](https://github.com/livingstaccato/octowright/blob/main/docs/troubleshooting.md): fast diagnosis for common failures.
 - [docs/architecture/](https://github.com/livingstaccato/octowright/tree/main/docs/architecture/): system diagrams and architecture references.
