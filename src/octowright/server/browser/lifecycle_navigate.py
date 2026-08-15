@@ -4,8 +4,7 @@
 #
 
 """Navigate / resize / viewport / open-url tools, split out of
-``lifecycle.py`` to keep that module under the repository's LOC ceiling
-(it was already at 549/550 before this task's operation-gate wrapping).
+``lifecycle.py`` to keep that module under the repository's LOC ceiling.
 
 Same pattern as ``discovery.py``/``discovery_links.py`` and
 ``inspect.py``/``inspect_capture.py``: this module registers its own
