@@ -7,7 +7,8 @@ install: ## uv sync --all-groups (deps + dev tools)
 	uv sync --all-groups
 
 test: ## Run Python unit + integration tests (no live browsers)
-	uv run --active pytest -q tests/
+	uv run --active pytest -q tests/ -m "not memory_isolated"
+	uv run --active pytest -q tests/ -m memory_isolated --no-cov
 
 test-frontend: ## Run TypeScript frontend tests with coverage gating
 	cd packages/octowright-frontend && npm test

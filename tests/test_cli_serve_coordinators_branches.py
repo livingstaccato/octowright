@@ -619,13 +619,24 @@ class TestRunLeaderBranches:
 
     @pytest.mark.anyio
     async def test_singleton_writes_lock_on_bind_and_removes_on_exit(self, leader_stubs: _LeaderStubs) -> None:
-        """Default path: on_bound writes lock; finally removes it."""
+        """Default path: on_bound writes lock; finally removes it.
+
+        Unlike its three siblings above, this is the only one of the four that
+        exercises BOTH subsystems at once (no_http=False, no_singleton=False) —
+        the full HTTP-serve + singleton-lock lifecycle, not a shortcut around
+        one of them. That is real, if mocked, extra scheduling work, and it is
+        the only one of the four observed flaking on CI's Windows runners with
+        a bare TimeoutError at the shared 2.0s budget while the other three
+        (each skipping a whole subsystem) do not. Wider budget here only,
+        rather than raising all four — nothing here does real I/O, so 5s still
+        fails fast on an actual hang.
+        """
         leader_task = asyncio.create_task(_serve._run_leader(**_leader_kwargs(keep_alive=True)))
         # Give serve_app a chance to call on_bound.
         await asyncio.sleep(0.05)
         # End stdio + http to wind down.
         leader_stubs.stdio_done.set()
         leader_stubs.http_done.set()
-        await asyncio.wait_for(leader_task, timeout=2.0)
+        await asyncio.wait_for(leader_task, timeout=5.0)
         assert len(leader_stubs.lock_writes) == 1
         assert len(leader_stubs.lock_removes) == 1
