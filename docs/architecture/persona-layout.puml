@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml persona-layout
-title On-disk persona layout (post-migration)
+title On-disk persona layout
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -51,12 +51,6 @@ note right of DW
   This is what Playwright's `user_data_dir`
   points at when `browser_launch(profile=dante, kind=webkit)`.
   Browser writes only here; octowright never touches it.
-end note
-
-note bottom of ROOT
-  Legacy layout was `profiles/<kind>/<name>/`. Migrated
-  by the explicit `octowright migrate-profiles` command.
-  Idempotent and safe to re-run.
 end note
 
 @enduml
