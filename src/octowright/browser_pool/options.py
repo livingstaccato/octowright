@@ -13,6 +13,24 @@ from octowright import defaults
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
 
+#: Playwright's ``channel`` param picks a real installed browser build instead
+#: of the bundled one (e.g. system Chrome/Edge, for native GPU/DRM/codec
+#: parity a bundled headless build lacks). Fixed allowlist, not passthrough --
+#: an unrecognized string here is almost certainly a typo the caller wants to
+#: know about immediately rather than as an opaque Playwright launch failure.
+SUPPORTED_CHANNELS = frozenset(
+    {
+        "chrome",
+        "chrome-beta",
+        "chrome-dev",
+        "chrome-canary",
+        "msedge",
+        "msedge-beta",
+        "msedge-dev",
+        "msedge-canary",
+    }
+)
+
 
 def resolve_protected(explicit: bool | None, *, headed: bool, ephemeral: bool) -> tuple[bool, str]:
     """Decide a browser's effective `protected` flag + the reason it was chosen.
@@ -59,6 +77,25 @@ class LaunchOptions:
     session: bool = False
     protected: bool | None = None
     protected_reason: str = "explicit"
+    #: Real installed browser build (see SUPPORTED_CHANNELS) instead of the
+    #: Playwright-bundled one -- e.g. native Metal/GPU parity a bundled
+    #: headless build lacks. Launch-time only: never read back from a JSONL
+    #: recording (see from_launch_record) or carried across handoff/relaunch,
+    #: since a persisted browser-selection setting has no way to notice the
+    #: named channel became uninstalled/unavailable on a later run.
+    channel: str | None = None
+    #: Absolute path to a specific browser binary, bypassing both the bundled
+    #: build and `channel`. NEVER read from a JSONL recording (see
+    #: from_launch_record) -- an untrusted recording able to name an arbitrary
+    #: local executable is a code-execution primitive, not a browser choice.
+    #: Live-call/library-caller only.
+    executable_path: str | None = None
+    #: Extra native CLI flags appended after octowright's own required
+    #: Chromium args (new-tab extension, tiling, /dev/shm workaround -- see
+    #: BrowserPool._build_launch_kwargs). Same untrusted-JSONL exclusion as
+    #: channel/executable_path: replaying a poisoned recording must not be
+    #: able to inject launch flags that weaken the sandbox.
+    launch_args: list[str] | None = None
 
     @classmethod
     def from_mapping(cls, options: dict[str, Any]) -> LaunchOptions:
@@ -85,6 +122,9 @@ class LaunchOptions:
             ephemeral=options.get("ephemeral", False),
             session=options.get("session", False),
             protected=options.get("protected"),
+            channel=options.get("channel"),
+            executable_path=options.get("executable_path"),
+            launch_args=options.get("launch_args"),
         )
         launch_options.validate()
         return launch_options
@@ -159,6 +199,13 @@ class LaunchOptions:
             raise ValueError("har_mode must be one of ['full', 'minimal']")
         if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
             raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
+        self._validate_browser_selection()
+
+    def _validate_browser_selection(self) -> None:
+        if self.channel is not None and self.channel not in SUPPORTED_CHANNELS:
+            raise ValueError(f"channel must be one of {sorted(SUPPORTED_CHANNELS)}, got {self.channel!r}")
+        if self.executable_path is not None and not Path(self.executable_path).expanduser().is_file():
+            raise ValueError(f"executable_path {self.executable_path!r} does not exist or is not a file")
 
     def promoted_profile(self) -> str | None:
         if self.profile is None and self.label is not None and not self.ephemeral and not self.session:
@@ -198,6 +245,9 @@ class LaunchOptions:
             "ephemeral": self.ephemeral,
             "session": self.session,
             "protected": self.protected,
+            "channel": self.channel,
+            "executable_path": self.executable_path,
+            "launch_args": self.launch_args,
         }
 
     def with_har_rotated(self) -> LaunchOptions:

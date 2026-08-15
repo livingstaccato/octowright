@@ -55,6 +55,9 @@ class TestToPoolKwargs:
             ephemeral=False,
             session=True,
             protected=True,
+            channel="chrome",
+            executable_path="/opt/chrome/chrome",
+            launch_args=["--foo"],
         )
         assert opts.to_pool_kwargs() == {
             "kind": "firefox",
@@ -78,6 +81,9 @@ class TestToPoolKwargs:
             "ephemeral": False,
             "session": True,
             "protected": True,
+            "channel": "chrome",
+            "executable_path": "/opt/chrome/chrome",
+            "launch_args": ["--foo"],
         }
 
     def test_defaults(self) -> None:
