@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml mcp-tool-surface
-title MCP tool inventory by capability profile (125 tools total — slim with --profile=core,...)
+title MCP tool inventory by capability profile (126 tools total — slim with --profile=core,...)
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -33,8 +33,8 @@ package "Row 1 — profiles you usually compose" as ROW1 #ffffff {
   package "core (24)" as P_CORE #eff6ff {
     rectangle "minimum browser-driving + cheap orientation:\nbrowser_launch / list / close / close_all\nbrowser_navigate / suggest_for_url / quick_launch\nbrowser_click / fill / type / press_key\nbrowser_screenshot / brief / read_markdown\nbrowser_wait_for / set_protected\nbrowser_links / find_link / fields / find_field\nbrowser_page_outline / web_page_outline / web_find_links / web_site_links" as R_CORE
   }
-  package "advanced (30)" as P_ADV #fef3c7 {
-    rectangle "inspection, ARIA locators, assertions,\nsummaries, viewport sync, capture cache,\nexport script, relaunch, fan-out:\nbrowser_get_text_by / evaluate / snapshot\nbrowser_expect_url / _text / _selector / _js\nbrowser_console_messages / console_summary / each\nbrowser_network_requests / network_summary\nbrowser_downloads / downloads_summary / observe\nbrowser_recording_path / tail_recording\nbrowser_resize / viewport_status / sync\nbrowser_export_script / relaunch_fluid\ncapture_create / get / lines / list / search /\nsummary / cleanup" as R_ADV
+  package "advanced (31)" as P_ADV #fef3c7 {
+    rectangle "inspection, ARIA locators, assertions,\nsummaries, viewport sync, capture cache,\nexport script, relaunch, fan-out:\nbrowser_get_text_by / evaluate / snapshot\nbrowser_expect_url / _text / _selector / _js\nbrowser_console_messages / console_summary / each\nbrowser_network_requests / network_summary\nbrowser_downloads / downloads_summary / observe\nbrowser_recording_path / artifact_manifest / tail_recording\nbrowser_resize / viewport_status / sync\nbrowser_export_script / relaunch_fluid\ncapture_create / get / lines / list / search /\nsummary / cleanup" as R_ADV
   }
   package "macros (15)" as P_MAC #e0f2fe {
     rectangle "record → save → repair → replay + artifacts:\nmacro_save / list / run / delete\nmacro_run_sequence\nmacro_lint / repair_preview / repair_apply\nmacro_compile / explain\nmacro_artifact_plan / run / list\nmacro_digest / export_cli" as R_MAC

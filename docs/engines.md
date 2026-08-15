@@ -22,6 +22,28 @@ When a launch fails immediately, suspect the engine binary first. Today
 engine management is CLI-driven (`playwright install`, `playwright install --list`);
 Octowright does not currently expose dedicated MCP tools for install/reinstall.
 
+## Custom channel / binary / launch flags
+
+`browser_launch` takes three optional launch-time-only params for cases where
+the bundled Playwright binary isn't what you want:
+
+- `channel` — use a real installed browser channel instead of Playwright's
+  bundled binary (`chrome`, `chrome-beta`, `chrome-dev`, `chrome-canary`,
+  `msedge`, `msedge-beta`, `msedge-dev`, `msedge-canary`). Unknown channel
+  strings are rejected at launch with a clear error.
+- `executable_path` — point at a specific browser binary on disk. Validated
+  to exist at launch time (a fast, clear failure instead of an opaque
+  Playwright error).
+- `launch_args` — extra CLI flags appended after Octowright's own internal
+  chromium args (new-tab extension, tiling, `--disable-dev-shm-usage`), so a
+  user-supplied flag can deliberately override one of those if it conflicts.
+
+All three apply to every engine (`chromium`/`firefox`/`webkit`). They are
+**launch-time only**: never written to the JSONL recording, never read back
+from a saved launch record, and never carried across handoff/relaunch — a
+poisoned recording can't turn into an `executable_path` code-execution
+primitive, and replay can't silently weaken sandboxing via `launch_args`.
+
 ## Launch mode (headed vs headless)
 
 Mode is environment-driven, with one explicit override:

@@ -22,7 +22,7 @@ skinparam noteBackgroundColor #f9fafb
 top to bottom direction
 
 package "user surfaces" #eff6ff {
-  [server.py\nFastMCP (125 tools, slimmable via --profile)] as SERVER
+  [server.py\nFastMCP (126 tools, slimmable via --profile)] as SERVER
   [cli.py\nclick: serve / test / scenario / persona] as CLI
 }
 
