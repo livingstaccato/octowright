@@ -300,10 +300,10 @@ appends a record to that instance's JSONL log.
 
 | Tool | What |
 |---|---|
-| `browser_launch` | Launch a new headed browser. `kind` = `chromium` / `firefox` / `webkit`. Returns `instance_id`. |
+| `browser_launch` | Launch a new headed browser. `kind` = `chromium` / `firefox` / `webkit`. Optional `channel` (e.g. `chrome`, `msedge`), `executable_path` (custom binary), `launch_args` (extra CLI flags) — launch-time only, never persisted to recordings or replayed on handoff. Returns `instance_id`. |
 | `browser_suggest_for_url` | Pre-launch: which saved persona owns this URL? Disambiguates `"open discord.com"` requests. |
 | `browser_list` | List all live instances. |
-| `browser_close` / `browser_close_all` | Close one / all. Protected browsers require `force=True`; `browser_close_all` skips protected browsers unless forced and reports failures. |
+| `browser_close` / `browser_close_all` | Close one / all. Protected browsers require `force=True`; `browser_close_all` skips protected browsers unless forced and reports failures. `browser_close_all` also takes `exclude_labels` / `exclude_profiles` to spare matching sessions. |
 | `browser_spawn_roster` | Launch N browsers in parallel from a list of launch specs. |
 | `browser_navigate` | Navigate a specific instance. |
 | `browser_navigate_back` | Go back one entry in the browser's history. Returns `{ok, url, title}`; `ok=False` when there's no previous page. |
@@ -336,6 +336,7 @@ ARIA locator first, then fall back to the original CSS selector.
 | `browser_console_messages` | Collected console output since launch (cursor pagination). |
 | `browser_wait_for` | Wait for selector / text / network-idle. |
 | `browser_recording_path` | Path to the JSONL action log for this instance. |
+| `browser_artifact_manifest` | One-call artifact manifest (log/video/trace/har paths) for a session, live or already closed. |
 | `browser_tail_recording` | Stream new JSONL events appended since a byte cursor — for live monitoring without `tail -f`. |
 | `browser_export_script` | Emit a Playwright Python (or TS) script that replays the log. |
 | `browser_open_trace` | Open the Playwright trace viewer (`npx playwright show-trace`) on this session's `.zip`. |
@@ -436,7 +437,9 @@ browser_launch kind=webkit profile=disc-1 url=https://discord.com/app
 Protected sessions are intended for user-facing windows. Any close-capable
 tool refuses them unless the call explicitly confirms with `force=True`;
 this includes `browser_close`, `browser_close_all`, and
-`browser_capture_and_close`.
+`browser_capture_and_close`. `browser_close_all` also takes
+`exclude_labels=[...]` / `exclude_profiles=[...]` to spare specific sessions
+from an otherwise-blanket close.
 
 `profile_list` enumerates saved profiles; `profile_delete` wipes one (refuses while a
 live instance is using it). Exported replay scripts embed the absolute `user_data_dir`
@@ -668,7 +671,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 125 tools on a core install — every workflow Octowright supports
+The full MCP tool surface is currently 126 tools on a core install — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
@@ -680,14 +683,14 @@ find the dashboard, and surface local guidance even under narrow profiles.
 | Profile | What | Tool count |
 |---|---|---|
 | `core` | Minimum to drive a browser end-to-end, including compact DOM and HTTP-first discovery. | 24 |
-| `advanced` | Inspection, cached captures, summaries, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 30 |
+| `advanced` | Inspection, cached captures, summaries, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 31 |
 | `macros` | Macro record / list / run / lint / repair / compile + artifact bundles. | 15 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
 | `personas` | Persona + on-disk profile management. | 8 |
 | `goldens` | Accessibility-tree snapshot baselines + diff. | 5 |
 | `terminals` | Optional terminal sessions (**experimental**; the `octowright[terminal]` extra is not yet on PyPI — source-install only, see AGENTS.md). | 7 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
-| `all` (or unset) | Default — every core-install tool registers. | 125 |
+| `all` (or unset) | Default — every core-install tool registers. | 126 |
 
 ```bash
 octowright serve --profile=core              # 31 tools — core + always-on
