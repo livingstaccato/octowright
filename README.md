@@ -155,67 +155,14 @@ Notes:
 
 `octowright serve` boots two things in one process: the MCP stdio server (what
 your client talks to) and a Starlette HTTP server on `http://127.0.0.1:6286/` (what
-*you* look at). One stable URL, pinned in your browser, replaces the old dance
-of copying log paths and shelling out to `npx playwright show-trace` by hand.
+*you* look at) — every live browser and scenario, closed-session cleanup, a
+per-session debugger (video, action timeline, console/downloads/screenshots),
+live WebSocket updates, and a Playwright trace-viewer deep-dive.
 
 Ask your MCP client `"give me the octowright dashboard URL"` (it'll call the
-`octowright_dashboard_url` MCP tool), or just open the URL directly. You get:
+`octowright_dashboard_url` MCP tool), or just open the URL directly.
 
-- **Top-level dashboard** — every live browser, every live scenario, recent
-  closed sessions, all your personas, all your saved macros. Auto-refreshes
-  every 5 seconds.
-- **Persona management** — each persona card shows engine list, last-used
-  time, and on-disk size (chromium + firefox + webkit + yaml). Hover the
-  card and click the edit (✎) icon to open an in-page YAML editor; save
-  writes back to `<persona>/profile.yaml` via `PUT /api/personas/{name}`.
-  Disk sizes are loaded lazily after first paint via
-  `GET /api/personas/sizes` (a single directory-size scan over Octowright's
-  profile config dir).
-- **Closed-session cleanup** — closed-session rows expose an `⊗` delete
-  button on hover; clicking removes the JSONL recording, video, trace, and
-  screenshots from disk via `DELETE /api/sessions/{id}/recording`. Live
-  sessions reject the call with 409 (close them first).
-- **Per-session debugger** — click any session for a two-column page with the
-	  live browser preview or embedded session video on the left, action timeline
-	  on the right. Live previews stream JPEG frames over one WebSocket at
-	  `/api/sessions/{id}/screencast`, with bounded screenshot polling as a
-	  compatibility fallback.
-  Controls include pause/resume plus fullscreen in panel or native browser
-  mode. Click any action in the timeline to seek the video to that moment.
-  Tabs underneath the timeline switch between **console messages** (filtered
-  by level), **downloads** (with a "missing" badge if the file was moved),
-  **markdown export**, and **screenshots** (lazy-loaded thumbnail grid).
-- **Live updates** — for currently-running sessions, the page opens a
-  WebSocket to `/api/sessions/{id}/tail` and appends new events as they
-  arrive (no manual refresh). WebSocket frame payloads that are binary are
-  intentionally hidden in the UI preview as `[binary payload hidden]`. Full frames
-  are still cached to the websocket cache using base64 for safe replay and
-  debugging.
-- **Trace deep-dive** — a button on each session page spawns
-  `npx playwright show-trace` against that session's `.zip` trace, opening
-  the official Playwright trace viewer for full per-action inspection
-  (network, snapshots, source links). Requires `npx` on PATH.
-
-The markdown tab uses the new `GET /api/sessions/{id}/markdown` endpoint; the
-server captures cached markdown on page load and user navigation, and generates
-it on demand if a live session hasn't populated the cache yet.
-
-The dashboard is a TypeScript SPA built into `packages/octowright-frontend/`
-(Vite + strict tsc + Biome + vitest). It uses `@provide-io/telemetry` for structured
-logging so frontend log lines are correlated with the Python server's
-`provide.telemetry` calls. The compiled bundle ships inside the wheel; the
-frontend has zero runtime dependency on Node — Node is only needed at build
-time and for the optional `npx playwright show-trace` deep-dive.
-
-If port 6286 is taken, the server walks up to 5 higher ports and picks the
-first free one (or logs a warning and continues without the HTTP layer if all
-are busy — MCP keeps running). Override the default with `OCTOWRIGHT_HTTP_PORT`
-or bind to a different host with `OCTOWRIGHT_HTTP_HOST` (default `127.0.0.1`).
-Binding to `0.0.0.0` only exposes health/static assets by default; sensitive
-dashboard, API, and MCP access from another machine also requires
-`OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1`. Only enable that opt-in on trusted
-networks because it exposes live browser state, recordings, traces, downloads,
-and the MCP tool surface.
+Full reference: [docs/dashboard.md](docs/dashboard.md).
 
 ## Concepts: how the pieces relate
 
@@ -232,7 +179,7 @@ that stores cookies, localStorage, IndexedDB, and service-worker state
 between browser runs. When you pass `profile=dante` to `browser_launch`, the
 browser uses a **persistent context** pointed at that directory — close the
 browser, re-launch tomorrow, and you're still logged in. Profiles are scoped
-per engine; dante on WebKit and dante on Firefox are two distinct profile
+per engine; Dante on WebKit and Dante on Firefox are two distinct profile
 dirs under the same persona.
 
 **3. Persona.** A *named identity* that owns profiles across one or more
@@ -241,7 +188,7 @@ context's Playwright `base_url`, so a macro can navigate `/orders` and stay
 portable across deployments), `default_macros` to run at launch,
 `credentials` (references to env vars or shell commands — secrets themselves
 are never stored on disk), and an `app` dict for
-domain metadata. Think of a persona as "dante — my Discord power
+domain metadata. Think of a persona as "Dante — my Discord power
 user across all three engines", and a profile as one engine-specific piece
 of that identity. You launch it with `browser_launch profile=dante`;
 the resolver (`browser_suggest_for_url`) works out which persona to reuse
@@ -386,236 +333,27 @@ ARIA locator first, then fall back to the original CSS selector.
 | `octowright_check_takeover` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json`; report scope + suggested actions. |
 | `recordings_cleanup` | Prune old recording artefacts older than N days. Dry-run by default. |
 
-## Persistent profiles (Discord, Slack, N-login-per-app)
+## Persistent profiles, personas, macros, scenarios
 
-By default `browser_launch` creates an ephemeral browser — cookies, localStorage, and
-IndexedDB die on close. To **keep login state across runs**, pass a `profile` name:
+Quick orientation — each links to its full reference:
 
-```
-browser_launch kind=webkit profile=disc-1 url=https://discord.com/login
-```
-
-Each `(kind, profile)` pair gets its own on-disk user-data-dir under Octowright's config dir.
-First launch opens a fresh browser; after you log in manually, closing the browser flushes
-state to disk. The next launch with the same `profile` skips the login (Discord /
-Slack / etc. treat it as a returning session).
-
-**Cookie isolation:** each live browser has its own `BrowserContext`, so seven logged-in
-Discord tabs you run in parallel never share cookies, localStorage, or IndexedDB — even
-if they're all `kind=webkit`.
-
-**Window title format.** Every page's `document.title` is rewritten on the fly to
-end with ` (<persona-emoji><engine-emoji>) [<profile>]` — so the page's own title
-leads and the badge tails. Example: `Yahoo | Mail, Weather, … (🐬🦊) [microdosing]`
-in firefox, or `Yahoo | Mail, Weather, … (🐬🧭) [microdosing]` in webkit. The
-persona emoji is hash-picked from a curated 33-pick pool keyed off the persona
-name (deterministic, same emoji every time); the engine emoji is fixed
-(🌐 chromium · 🦊 firefox · 🧭 webkit). When parallel windows pile up in cmd-` /
-the Window menu / a tab strip, the suffix lets you tell them apart at a
-glance even after deep navigation. Override the emoji by setting `emoji:` in
-the persona's `profile.yaml`, or disable the corner badge entirely with
-`badge=False` on `browser_launch` (the title injection has no off-switch
-short of editing the launch — it's purely a string rewrite, no DOM nodes).
-
-Example — seven Discord accounts on seven WebKit windows, reusable later:
-
-```
-# First time: open all seven, log each one in manually
-browser_launch kind=webkit profile=disc-1 url=https://discord.com/login label=acct-1
-browser_launch kind=webkit profile=disc-2 url=https://discord.com/login label=acct-2
-...
-browser_launch kind=webkit profile=disc-7 url=https://discord.com/login label=acct-7
-
-# Close them — profiles flush to disk
-browser_close_all
-
-# Days later: re-launch and skip login entirely
-browser_launch kind=webkit profile=disc-1 url=https://discord.com/app
-...
-```
-
-Protected sessions are intended for user-facing windows. Any close-capable
-tool refuses them unless the call explicitly confirms with `force=True`;
-this includes `browser_close`, `browser_close_all`, and
-`browser_capture_and_close`. `browser_close_all` also takes
-`exclude_labels=[...]` / `exclude_profiles=[...]` to spare specific sessions
-from an otherwise-blanket close.
-
-`profile_list` enumerates saved profiles; `profile_delete` wipes one (refuses while a
-live instance is using it). Exported replay scripts embed the absolute `user_data_dir`
-path, so they work on the same machine but are **not portable across machines** when a
-profile is involved.
-
-## Personas — identity layer over engine profiles
-
-Every browser profile belongs to a **persona**: a named identity with metadata,
-credential references, and optional default URL + startup macros. A persona can
-have browser profiles for multiple engines (WebKit, Firefox, Chromium); each
-engine profile is a child directory.
-
-```
-<octowright-config>/profiles/
-├── dante/
-│   ├── profile.yaml     # persona metadata
-│   ├── webkit/          # dante's WebKit browser state
-│   └── chromium/        # dante's Chromium browser state
-└── tim/
-    ├── profile.yaml
-    └── webkit/
-```
-
-`profile.yaml` declares display name, default URL + macros, credential
-references (read from env vars or shell commands at use time; never stored),
-and free-form app metadata:
-
-```yaml
-name: dante
-display_name: Dante Alighieri
-default_url: https://discord.com/app
-default_macros: [discord-login]
-credentials:
-  email_env: DANTE_EMAIL
-  password_cmd: "op read op://Personal/dante/password"
-app:
-  discord_user_id: "1234"
-  role: player
-```
-
-MCP tools: `persona_list` / `persona_get` / `persona_create` / `persona_delete` /
-`persona_credentials_check`.
-CLI: `octowright persona list|show|create|delete`.
-
-**Credentials pre-flight.** Before launching a scenario whose startup macros
-need logins, call `persona_credentials_check name=dante` to verify every
-`*_env` / `*_cmd` reference actually resolves. The report lists each
-credential, its source (env var or shell command) and the reference itself,
-plus per-field `ok`/`error` — the resolved secret is never included. Use
-this to avoid the classic "logged in 6 of 7 windows, then discovered the
-env var was unset on #7" failure mode.
-
-Full reference: [docs/personas.md](https://github.com/livingstaccato/octowright/blob/main/docs/personas.md).
-
-## Macros — reusable parameterized action sequences
-
-Turn a recorded browser session into a named, reusable macro. Capture a login flow
-once, replay it with different credentials later. Example workflow:
-
-```
-# 1. Manually log into Discord on a live instance
-browser_launch kind=webkit profile=disc-1 url=https://discord.com/login label=acct-1
-# ... fill email, password, submit ...
-
-# 2. Snapshot those actions as a macro, telling Octowright which literal values
-#    to treat as parameters:
-macro_save instance_id=<id> name=discord-login \
-           parameters={"email":"me@octowright.test","password":"hunter2"}
-
-# 3. Days later, against a fresh instance, replay it with different creds:
-browser_launch kind=webkit profile=disc-2 url=https://discord.com/login label=acct-2
-macro_run instance_id=<new-id> name=discord-login \
-          args={"email":"other@octowright.test","password":"correcthorsebatterystaple"}
-```
-
-`macro_list` enumerates saved macros; `macro_delete` removes one. Macros live at
-`${XDG_CONFIG_HOME:-~/.config}/octowright/macros/<name>.json` on POSIX, or
-`%APPDATA%\octowright\macros\<name>.json` on Windows. Override with
-`OCTOWRIGHT_MACROS_DIR`.
-
-Lifecycle actions (`launch`, `close`, `snapshot`) are dropped by default — macros
-are the reusable middle of a flow, not the wrapper. Pass `include_launch=True` on
-`macro_save` if you need the initial navigation baked in.
-
-**Caveat:** JSONL macros break when the target site changes its DOM (Discord
-rewrites its CSS classes frequently). Recorded `click` and `fill` actions use
-captured ARIA metadata first when available, then fall back to CSS, but macros
-are still short-term automation — when a macro breaks, re-record rather than
-hand-patch.
-
-### Conditional / branching actions
-
-For sites that ship multiple DOM versions of the same flow, three action types
-let one macro cover all of them. Hand-author these by editing the JSON; record
-the linear baseline first, then wrap fragile steps:
-
-- **`if_selector`** — predicate on selector presence; runs `then` or `else`.
-  ```json
-  {"action": "if_selector", "selector": ".cookie-banner", "present": true,
-   "then": [{"action": "click", "selector": ".accept-cookies"}]}
-  ```
-- **`try`** — best-effort sub-sequence that SUPPRESSES errors. Use for
-  optional steps like dismissing a one-off banner that may or may not exist.
-  ```json
-  {"action": "try", "actions": [
-      {"action": "click", "selector": "#optional-popup-close"}
-  ]}
-  ```
-- **`try_each`** — branches in order; succeeds on the first whose every
-  action completes; raises if all fail. The "v1 OR v2 OR v3" hammer.
-  ```json
-  {"action": "try_each", "branches": [
-      [{"action": "click", "selector": "[aria-label='Close']"}],
-      [{"action": "click", "selector": "button.dismiss"}],
-      [{"action": "press_key", "key": "Escape"}]
-  ]}
-  ```
-
-These nest freely — `if_selector` inside `try_each` inside `try` works as you
-would expect. See `examples/macros/conditional-discord-modal-dismiss.json` for
-a real-world pattern.
-
-Full reference: [docs/macros.md](https://github.com/livingstaccato/octowright/blob/main/docs/macros.md).
-
-## Scenarios — coordinated multi-browser orchestration
-
-A scenario is a named group of browser instances launched together. Spin up N
-players + a monitoring window + a main-site window with one call; each
-instance is a regular `BrowserSession` you can drive per-participant (via
-`instance_id`) using all the normal `browser_*` tools.
-
-Declare scenarios in Octowright's config dir:
-
-```yaml
-name: discord-raid
-description: 7 players + 1 monitor + 1 main-site spectator
-participants:
-  - persona: dante
-    kind: webkit
-    role: player
-  - persona: ops
-    kind: firefox
-    role: monitor
-    url: https://octowright.com/monitor
-fixtures:
-  mock_routes:
-    - pattern: "**/api/time"
-      body: '{"now":"2026-04-24T00:00:00Z"}'
-  dialog_policy: dismiss
-teardown:
-  macro: cleanup-session
-verify:
-  player: assert-in-server
-  monitor: assert-monitor-healthy
-```
-
-Or as Python for dynamic participant lists — `<name>.py` exposes `def build() -> Scenario`.
-
-Lifecycle:
-
-- `scenario_start <name>` launches all participants in parallel, applies
-  fixtures, runs per-participant startup macros. Browsers **stay open**.
-- `scenario_run_macro <id> <macro> [role=...]` broadcasts a macro across
-  participants (optionally role-filtered). Per-participant results returned.
-- Any single participant can still be driven by `instance_id` with the regular
-  `browser_*` tools.
-- `scenario_stop <id>` runs the teardown macro per participant, closes every
-  window, returns a summary.
-- `scenario_run_as_test <id>` (or `--test` on the CLI) runs `verify` macros
-  and produces JUnit XML.
-
-CLI: `octowright scenario list|start [--test --out <xml>]`; the `start`
-command blocks until Ctrl-C, then runs teardown and exits.
-
-Full reference: [docs/scenarios.md](https://github.com/livingstaccato/octowright/blob/main/docs/scenarios.md).
+- **Persistent profiles.** Pass `profile=<name>` to `browser_launch` and
+  cookies/localStorage/IndexedDB survive close/relaunch (`(kind, profile)` is
+  the identity; each live browser still has its own isolated `BrowserContext`).
+  Window titles get a `(<persona-emoji><engine-emoji>) [<profile>]` badge so
+  parallel windows are distinguishable, and protected sessions refuse a close
+  without `force=True`. Full reference: [docs/personas.md](https://github.com/livingstaccato/octowright/blob/main/docs/personas.md#window-title-and-corner-badge).
+- **Personas.** A named identity that owns profiles across engines, plus
+  display name, `default_url`, startup macros, and credential references
+  (never secrets themselves — `persona_credentials_check` pre-flights them).
+  Full reference: [docs/personas.md](https://github.com/livingstaccato/octowright/blob/main/docs/personas.md).
+- **Macros.** Record a flow once (`macro_save`), replay it with different
+  args later (`macro_run`), across any persona/profile. `if_selector` /
+  `try` / `try_each` cover multi-DOM-version flows. Full reference: [docs/macros.md](https://github.com/livingstaccato/octowright/blob/main/docs/macros.md).
+- **Scenarios.** A named, declared group of personas launched together with
+  roles, fixtures, and verify macros — `scenario_start` brings up N
+  participants in parallel; `scenario_run_macro` broadcasts across them.
+  Full reference: [docs/scenarios.md](https://github.com/livingstaccato/octowright/blob/main/docs/scenarios.md).
 
 ## Configuration
 
@@ -730,77 +468,18 @@ that JSON state file for tests or separate deployments.
 
 ## Telemetry
 
-Both halves of Octowright use the `provide.telemetry` family for structured
-logging:
-
-- **Python server** uses `provide-telemetry>=0.4.8` (structlog under the hood).
-  `setup_telemetry()` is called by `octowright serve`; every module gets a
-  logger via `get_logger(__name__)`. Logs land on stderr in development,
-  JSON in production (auto-detected).
-- **TypeScript dashboard** uses `@provide-io/telemetry@^0.4.7` (pino under
-  the hood). `setupTelemetry()` runs at the top of each entrypoint;
-  `getLogger('octowright.frontend.{api,tail,dashboard,session,global}')` per
-  module. Logger names mirror the Python convention so log lines are easy
-  to correlate across the stack.
-
-### Log level and format
-
-```bash
-# Human-readable local debugging
-export PROVIDE_LOG_LEVEL=DEBUG
-export PROVIDE_LOG_FORMAT=pretty
-uv run octowright serve
-```
-
-```bash
-# Machine-friendly production logs
-export PROVIDE_LOG_LEVEL=INFO
-export PROVIDE_LOG_FORMAT=json
-uv run octowright serve
-```
-
-`octowright serve --log-level DEBUG` is a convenience wrapper that sets
-`PROVIDE_LOG_LEVEL` for the process and spawned daemon.
-
-### OTLP export
-
-Telemetry export is opt-in. To send OpenTelemetry signals to an OTLP collector:
+Both halves of Octowright (Python server, TypeScript dashboard) use the
+`provide.telemetry` family for structured logging, with opt-in OpenTelemetry
+trace/metric export to any OTLP collector:
 
 ```bash
 export PROVIDE_TRACE_ENABLED=1
 export PROVIDE_METRICS_ENABLED=1
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
-# optional auth/tenant headers
-export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer%20TOKEN,x-tenant-id=dev"
 uv run octowright serve
 ```
 
-Signals are no-op if telemetry exporters are not configured/available.
-
-### Playwright traces vs telemetry traces
-
-- **Playwright trace**: per-session browser artifact (`*.trace.zip`) produced
-  by Playwright when session tracing is enabled; inspect with
-  `npx playwright show-trace`.
-- **Telemetry trace**: OpenTelemetry spans emitted by `provide.telemetry`
-  (when `PROVIDE_TRACE_ENABLED=1`) and exported to OTLP.
-
-These are separate systems and can be enabled independently.
-
-### HTTP metrics
-
-HTTP request metrics for the debugger/API server are recorded through
-`provide.telemetry`'s `TelemetryMiddleware` and exported via OTLP alongside the
-rest of octowright's telemetry — RED metrics (`http.requests.total`,
-`http.errors.total`, `http.request.duration_ms`) attributed by route, method,
-and status code, plus request-id/session-id log correlation and W3C trace
-propagation. There is no separate Prometheus scrape endpoint; point an OTLP
-collector at the process to consume them. Disable metric recording (propagation
-stays on) with:
-
-```bash
-export OCTOWRIGHT_HTTP_METRICS=0
-```
+Full reference: [docs/telemetry.md](docs/telemetry.md).
 
 ## Safari caveat
 
@@ -826,6 +505,8 @@ Prints the list of registered tools without needing a live MCP client.
 - [docs/macros.md](https://github.com/livingstaccato/octowright/blob/main/docs/macros.md): macro record/replay, linting, and test execution.
 - [docs/scenarios.md](https://github.com/livingstaccato/octowright/blob/main/docs/scenarios.md): multi-browser orchestration lifecycle.
 - [docs/goldens.md](https://github.com/livingstaccato/octowright/blob/main/docs/goldens.md): baseline capture vs verify policy.
+- [docs/dashboard.md](docs/dashboard.md): web UI, per-session debugger, trace deep-dive.
+- [docs/telemetry.md](docs/telemetry.md): structured logging, OTLP export, HTTP metrics.
 - [docs/ci-quality.md](https://github.com/livingstaccato/octowright/blob/main/docs/ci-quality.md): quality gates and local CI parity commands.
 - [docs/troubleshooting.md](https://github.com/livingstaccato/octowright/blob/main/docs/troubleshooting.md): fast diagnosis for common failures.
 - [docs/architecture/](https://github.com/livingstaccato/octowright/tree/main/docs/architecture/): system diagrams and architecture references.
