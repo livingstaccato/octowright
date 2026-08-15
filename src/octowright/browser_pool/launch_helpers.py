@@ -10,7 +10,6 @@ write."""
 
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -56,17 +55,26 @@ def _build_video_kwargs(
     viewport_w: int | None,
     viewport_h: int | None,
     *,
+    log_path: Path,
     recordings_dir: Path | None = None,
 ) -> tuple[dict[str, Any], Path | None]:
     """Allocate a per-launch videos/ dir and assemble the record_video_*
     context kwargs. Pins video size to the viewport so Playwright doesn't
     auto-scale to its 800x800 default. ``recordings_dir`` defaults to the
     process-global root (resolved at call time so monkeypatching works); the
-    pool passes its own so per-pool routing works."""
+    pool passes its own so per-pool routing works.
+
+    The directory reuses ``log_path.stem`` (``{timestamp}-{kind}-{instance_id}
+    {-label}``, from ``recorder.new_log_path``) rather than a random id, so a
+    video is findable by label/instance_id on disk the same way the JSONL,
+    trace, and HAR for the same launch already are — a random UUID here was
+    the one artifact type that didn't carry the label, so it could only be
+    found via the launch/close result's returned path, not by convention.
+    """
     if not record_video:
         return {}, None
     root = recordings_dir if recordings_dir is not None else RECORDINGS_DIR
-    video_dir = root / "videos" / uuid.uuid4().hex[:8]
+    video_dir = root / "videos" / log_path.stem
     video_dir.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {"record_video_dir": str(video_dir)}
     if headless or explicit_size:
@@ -163,6 +171,7 @@ def build_recording_kwargs(
         explicit_size,
         launch_options.viewport_w,
         launch_options.viewport_h,
+        log_path=log_path,
         recordings_dir=recordings_dir,
     )
     har_path, har_kwargs = _build_har_kwargs(
