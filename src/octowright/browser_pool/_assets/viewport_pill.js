@@ -60,6 +60,14 @@
     const labelFor = () => {
         if (current.mode === "fluid") return "fluid";
         if (isMismatch()) return "fixed mismatch";
+        // MEASURE the size rather than printing the one baked into this
+        // script at launch. For a fixed viewport the two are the same thing --
+        // that is what fixed means -- but only one of them can go stale, and
+        // it did: a browser_resize left the pill announcing the launch size
+        // for the rest of the session, and a navigation re-ran this script
+        // with the same stale constant, so it never self-corrected.
+        const m = measure();
+        if (m.innerWidth > 0 && m.innerHeight > 0) return `fixed ${m.innerWidth}x${m.innerHeight}`;
         if (current.width && current.height) return `fixed ${current.width}x${current.height}`;
         return "fixed";
     };
@@ -212,14 +220,44 @@
         return root;
     };
 
+    // Ask Python what the session's viewport actually is now. INITIAL is baked
+    // into this script at launch, and this script re-runs on every document,
+    // so without this a mode or chrome change made after launch is undone by
+    // the next navigation. Best-effort: if the binding is not there (an
+    // isolated page, an old session) the launch values still stand.
+    const refresh = async () => {
+        if (!window.__octowright_viewport_action) return;
+        try {
+            const state = await window.__octowright_viewport_action({ action: "state" });
+            if (state && state.mode) {
+                current = { ...current, ...state };
+                render();
+            }
+        } catch {
+            /* the pill is a diagnostic; it never breaks the page */
+        }
+    };
+
     build();
+    refresh();
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", build, { once: true });
     }
     new MutationObserver(() => {
         if (document.body && !document.getElementById(ROOT_ID)) build();
     }).observe(document.documentElement || document, { childList: true, subtree: true });
-    window.addEventListener("resize", render);
+    // Re-render immediately (the size is measured, so this is free and exact)
+    // and re-ask Python for the mode, debounced. A resize is how the mode
+    // changes: set_viewport_size pins a fluid viewport, and until the pill
+    // hears about it the badge keeps saying "fluid" about a session that is
+    // no longer fluid. Debounced because a human dragging a window edge fires
+    // this continuously and each refresh is a round trip.
+    let refreshTimer = null;
+    window.addEventListener("resize", () => {
+        render();
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(refresh, 150);
+    });
     window.addEventListener(
         "keydown",
         (event) => {
