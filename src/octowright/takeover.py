@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from octowright._paths import atomic_write_text
+
 # Anything case-insensitive-matching one of these in the server *name* counts.
 # Word boundaries (\b) guard against false positives on unrelated server names.
 # The negative lookahead on `chromium` excludes `chromium-extension*` style
@@ -352,7 +354,8 @@ def apply_takeover(
     if backup:
         ts = time.strftime("%Y%m%d-%H%M%S")
         backup_path = config_path.with_suffix(config_path.suffix + f".bak.{ts}")
-        backup_path.write_text(original_text, encoding="utf-8")
+        # symlink replaced, not followed (see atomic_write_text).
+        atomic_write_text(backup_path, original_text, encoding="utf-8")
 
     # Preserve insertion order: rebuild the dict so the renamed entry sits
     # where the old one did, rather than getting appended at the end.
@@ -365,7 +368,8 @@ def apply_takeover(
     servers.clear()
     servers.update(new_servers)
 
-    config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    # symlink replaced, not followed (see atomic_write_text).
+    atomic_write_text(config_path, json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     return {
         "disabled": True,

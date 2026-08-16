@@ -255,6 +255,42 @@ def test_apply_refuses_to_clobber_existing_disabled(tmp_path: Path) -> None:
     assert "already exists" in res.get("error", "")
 
 
+def test_apply_does_not_follow_symlink_at_config_path(tmp_path: Path) -> None:
+    """Regression test: apply_takeover must replace a symlink at config_path,
+    not write through it.
+
+    Before the fix, ``config_path.write_text(...)`` truncated and wrote
+    through a symlink, meaning a same-user attacker who swapped the config
+    for a symlink could redirect the rewrite onto an arbitrary target file.
+    ``atomic_write_text`` uses ``os.replace``, which replaces the symlink
+    directory entry itself instead of following it.
+    """
+    sibling_target = tmp_path / "sibling_target.json"
+    sibling_original_content = json.dumps(
+        _project_payload({"playwright": {"command": "npx", "args": ["@playwright/mcp"]}}),
+        indent=2,
+    )
+    sibling_target.write_text(sibling_original_content, encoding="utf-8")
+
+    config_path = tmp_path / ".mcp.json"
+    config_path.symlink_to(sibling_target)
+    assert config_path.is_symlink()
+
+    detections = tk.detect_competing_servers(project_config=config_path, global_config=tmp_path / "n")
+    assert len(detections) == 1
+
+    res = tk.apply_takeover(detections[0], backup=False)
+    assert res["disabled"] is True
+
+    # The symlink itself was replaced with a real file, not followed.
+    assert config_path.is_symlink() is False
+    after = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "_playwright_disabled_by_octowright" in after["mcpServers"]
+
+    # The sibling file the symlink used to point at is completely untouched.
+    assert sibling_target.read_text(encoding="utf-8") == sibling_original_content
+
+
 def test_apply_handles_nested_project_overrides(tmp_path: Path) -> None:
     glob = _write_config(
         tmp_path / "claude.json",
