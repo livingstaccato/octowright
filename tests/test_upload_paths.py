@@ -65,6 +65,11 @@ def test_validate_rejects_cwd_only_path(tmp_path: Path, monkeypatch: pytest.Monk
         with pytest.raises(ValueError, match="outside the allowed roots"):
             validate_upload_path(str(target))
     finally:
+        # Windows refuses to remove a directory that is the process's current
+        # working directory (WinError 32) -- monkeypatch only restores the
+        # original cwd at test teardown, after this block runs, so step out
+        # of cwd_only_dir explicitly before deleting it.
+        os.chdir(tmp_path)
         target.unlink()
         cwd_only_dir.rmdir()
 
