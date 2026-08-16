@@ -90,6 +90,58 @@ class TestAllowlist:
             ssrf.check_navigation_url("http://10.0.0.6/")
 
 
+class TestWhatwgIpv4Encodings:
+    """Every browser engine octowright drives (Chromium/Firefox/WebKit) implements
+    the WHATWG URL Standard's IPv4 parser, which accepts decimal/hex/octal/
+    shorthand IPv4 forms and resolves them to the canonical address before
+    connecting. ``ipaddress.ip_address`` only accepts strict dotted-quad, so
+    these alternate encodings must be classified via the WHATWG fallback
+    parser rather than slipping through to the hostname check."""
+
+    # (encoded host, canonical dotted-quad it resolves to) — one per numeric
+    # encoding class, plus the shorthand form.
+    _NUMERIC_ENCODINGS = [
+        ("2130706433", "127.0.0.1"),  # decimal
+        ("0x7f000001", "127.0.0.1"),  # hex
+        ("017700000001", "127.0.0.1"),  # octal
+        ("0xA9FEA9FE", "169.254.169.254"),  # hex metadata
+        ("2852039166", "169.254.169.254"),  # decimal metadata
+        ("127.1", "127.0.0.1"),  # shorthand
+        ("0", "0.0.0.0"),  # decimal, unspecified/reserved
+    ]
+
+    @pytest.mark.parametrize(("host", "canonical"), _NUMERIC_ENCODINGS)
+    def test_blocks_alternate_ipv4_encodings(self, host: str, canonical: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(POLICY, "block-private")
+        monkeypatch.delenv(ALLOW, raising=False)
+        with pytest.raises(ValueError, match="SSRF"):
+            ssrf.check_navigation_url(f"http://{host}/")
+        # Sanity: the canonical dotted-quad form is blocked too (same address).
+        with pytest.raises(ValueError, match="SSRF"):
+            ssrf.check_navigation_url(f"http://{canonical}/")
+
+    def test_public_ip_literal_still_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(POLICY, "block-private")
+        monkeypatch.delenv(ALLOW, raising=False)
+        ssrf.check_navigation_url("http://8.8.8.8/")  # no raise
+
+    @pytest.mark.parametrize("host", ["example.com", "octowright.com"])
+    def test_real_hostname_not_misclassified_as_numeric(self, host: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The most important non-regression: a real hostname must not be
+        # mistaken for a numeric IPv4 host by the WHATWG fallback parser.
+        monkeypatch.setenv(POLICY, "block-private")
+        monkeypatch.delenv(ALLOW, raising=False)
+        ssrf.check_navigation_url(f"http://{host}/")  # no raise
+
+    @pytest.mark.parametrize("host", ["1.2.3.4.5", "999.1.1.1"])
+    def test_malformed_numeric_host_does_not_crash(self, host: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Too many parts, or a part out of range — must never raise anything
+        # other than the intentional SSRF ValueError, and must not crash.
+        monkeypatch.setenv(POLICY, "block-private")
+        monkeypatch.delenv(ALLOW, raising=False)
+        ssrf.check_navigation_url(f"http://{host}/")  # no raise — falls through to hostname check, not blocked
+
+
 class TestUnknownValueFailsSafe:
     def test_typo_fails_to_protective_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The operator set the var on purpose; an unrecognized token honors the

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -93,10 +94,16 @@ def test_repair_preview_suggests_structured_semantic_replacement(
     macros_dir.mkdir()
     monkeypatch.setattr(macro_storage, "MACROS_DIR", macros_dir)
     macro_path = macros_dir / "login.json"
-    original_action = {
+    # repair_preview redacts value/text on fill/fill_by actions before
+    # returning them to the MCP client (macros/_redact.py) -- the redaction
+    # is blind to whether the stored value is a literal credential or an
+    # already-parameterized `{{placeholder}}`, since a repair suggestion is
+    # not the place to make that call. The macro file on disk keeps the
+    # real (here, placeholder) value; only the response is scrubbed.
+    original_action_redacted = {
         "action": "fill",
         "selector": "#email",
-        "value": "{{email}}",
+        "value": "<redacted>",
         "role": "textbox",
         "role_name": "Email Address",
     }
@@ -113,11 +120,11 @@ def test_repair_preview_suggests_structured_semantic_replacement(
     assert preview["macro"] == "login"
     assert preview["suggestions"][0]["macro"] == "login"
     assert preview["suggestions"][0]["action_index"] == 0
-    assert preview["suggestions"][0]["original_action"] == original_action
+    assert preview["suggestions"][0]["original_action"] == original_action_redacted
     assert preview["suggestions"][0]["source"] == "stored_heuristic"
     assert preview["suggestions"][0]["replacement_action"] == {
         "action": "fill_by",
-        "value": "{{email}}",
+        "value": "<redacted>",
         "role": "textbox",
         "role_name": "Email Address",
     }
@@ -125,6 +132,11 @@ def test_repair_preview_suggests_structured_semantic_replacement(
     assert "Review selector '#email'" in preview["suggestions"][0]["prompt"]
     assert preview["suggestions"][1]["replacement_action"] is None
     assert "Review selector '#submit'" in preview["suggestions"][1]["prompt"]
+
+    # The macro on disk is untouched by preview (non-mutating) and keeps the
+    # real, still-parameterized value.
+    on_disk = json.loads(macro_path.read_text(encoding="utf-8"))
+    assert on_disk["actions"][0]["value"] == "{{email}}"
 
 
 @pytest.fixture

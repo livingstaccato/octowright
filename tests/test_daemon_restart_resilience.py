@@ -87,6 +87,16 @@ def _hermetic_env(tmp_path: Path, port: int) -> dict[str, str]:
             "OCTOWRIGHT_HTTP_PORT": str(port),
             "OCTOWRIGHT_IDLE_GRACE": "120",
             "OCTOWRIGHT_HEADLESS": "1",
+            # Without this, the detached daemon this spawns opens its stderr via
+            # daemonize._open_daemon_log(), which resolves user_state_dir() from
+            # the INHERITED real environment: every run leaked a real
+            # "octowright.http.listening ... port=<random>" line into the
+            # developer's actual ~/.local/state/octowright/logs/octowright-daemon.log
+            # (see tests/test_daemonize.py's identical fix). Also isolates
+            # bridge-state.json so this test's follower snapshots (random
+            # ephemeral port, ConnectError at teardown) don't pollute the real
+            # daemon's bridge summary that octowright_status() reports.
+            "XDG_STATE_HOME": str(tmp_path),
         }
     )
     return env
