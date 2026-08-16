@@ -143,6 +143,10 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "the bundled build and channel. launch_args are extra native CLI flags appended after "
         "octowright's own required Chromium args (new-tab override, tiling, /dev/shm "
         "workaround) — a flag here can override one of those if you deliberately choose to. "
+        "executable_path/launch_args are a code-execution primitive (an arbitrary local binary "
+        "plus arbitrary argv) and are DISABLED BY DEFAULT — passing either raises ValueError "
+        "unless the operator has set OCTOWRIGHT_ALLOW_EXECUTABLE_PATH=1 on the daemon; channel "
+        "alone (fixed allowlist) needs no opt-in. "
         "All three are launch-time only: never persisted into the recording, so macro replay, "
         "handoff, and fluid relaunch of this instance do NOT carry them forward."
     ),
