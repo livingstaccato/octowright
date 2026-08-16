@@ -4,6 +4,13 @@
     const ROOT_ID = "__octowright_viewport_status__";
     const MODAL_ID = "__octowright_viewport_modal__";
     const INITIAL = __VIEWPORT_INFO__;
+    // Per-launch capability token for __octowright_viewport_action. Lives only
+    // in this closure -- never assigned to `window` -- so page script cannot
+    // read it via property enumeration; it can still CALL the binding (it's a
+    // real global function) but cannot supply a matching token, which the
+    // Python side now requires on every action. See BrowserSession.
+    // viewport_action_token / BrowserPool._expose_viewport_binding.
+    const VIEWPORT_TOKEN = __VIEWPORT_TOKEN__;
     const CLICK_MODIFIER = "altKey";
     const ALT_HOLD_MS = 1000;
     // CSS pixels of slack when comparing the viewport against the window's
@@ -113,7 +120,11 @@
             return;
         }
         try {
-            const result = await window.__octowright_viewport_action({ action: name, measured: measure() });
+            const result = await window.__octowright_viewport_action({
+                action: name,
+                measured: measure(),
+                token: VIEWPORT_TOKEN,
+            });
             if (name === "sync") {
                 // Spread `current` first: the chrome inset was measured at
                 // launch and is still valid after a sync. Replacing the whole
@@ -228,7 +239,7 @@
     const refresh = async () => {
         if (!window.__octowright_viewport_action) return;
         try {
-            const state = await window.__octowright_viewport_action({ action: "state" });
+            const state = await window.__octowright_viewport_action({ action: "state", token: VIEWPORT_TOKEN });
             if (state && state.mode) {
                 current = { ...current, ...state };
                 render();

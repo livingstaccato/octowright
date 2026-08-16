@@ -22,9 +22,17 @@ version. Two pieces, both on by default:
    ``Retry-After``. Legit clients create ~1 session and reuse it, so they never
    approach the limit; a storming follower is throttled instead of taking down
    the shared leader. Source = the ``X-Octowright-Follower`` header a current
-   follower sends (its pid) so each gets its own bucket; old followers omit it
-   and share the ``anonymous`` bucket — which is exactly the storm, collectively
-   throttled.
+   follower sends (its pid) so each gets its own bucket. A request that omits
+   the header (an old follower, or any non-follower direct HTTP-MCP client —
+   e.g. a hand-rolled client that skips the follower handshake entirely) buckets
+   by its TCP peer (``scope["client"]``, i.e. remote host:port) instead of one
+   shared ``anonymous`` bucket: a single connection issuing repeated
+   session-creates — the actual storm pattern, whether from an old follower or a
+   misbehaving direct client that never sends ``DELETE /mcp`` to close a session
+   — still throttles together (same connection, same key), but two unrelated
+   headerless clients on different connections no longer share fate and 429 each
+   other. Only a scope with no peer info at all (e.g. some ASGI test transports)
+   falls back to the fully shared ``anonymous`` bucket.
 
 2. **Session-table cap + LRU evict** (``select_eviction_victims`` here, driven
    by a housekeeping job): when the manager's live session table exceeds
@@ -177,15 +185,24 @@ def is_new_session_request(scope: dict) -> bool:
 
 
 def source_key(scope: dict) -> str:
-    """Rate-limit bucket: the follower's self-reported id, else ``anonymous``
-    (shared by every follower that doesn't send the header — i.e. old ones)."""
+    """Rate-limit bucket: the follower's self-reported id when present and
+    valid; else a per-connection anonymous key (``anonymous:host:port`` from
+    ``scope["client"]``) so unrelated headerless sources don't share one
+    global bucket; else the fully shared ``anonymous`` bucket when the scope
+    carries no peer info at all."""
     for name, value in scope.get("headers", []):
         if name.lower() == _FOLLOWER_HEADER:
             try:
                 decoded = value.decode("ascii").strip()
             except UnicodeDecodeError:
-                return _ANONYMOUS_SOURCE
-            return decoded or _ANONYMOUS_SOURCE
+                decoded = ""
+            if decoded:
+                return decoded
+            break
+    client = scope.get("client")
+    if client:
+        host, port = client[0], client[1]
+        return f"{_ANONYMOUS_SOURCE}:{host}:{port}"
     return _ANONYMOUS_SOURCE
 
 

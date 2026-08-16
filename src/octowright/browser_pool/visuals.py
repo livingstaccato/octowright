@@ -297,6 +297,7 @@ async def wire_init_scripts(
     viewport_height: int | None = None,
     viewport_frame_inset_w: int | None = None,
     viewport_frame_inset_h: int | None = None,
+    viewport_token: str = "",
 ) -> None:
     """Inject title-tag, badge, macro-pill, and (optional) stabilize scripts."""
     import json as _json
@@ -349,7 +350,11 @@ async def wire_init_scripts(
         "inset_w": viewport_frame_inset_w,
         "inset_h": viewport_frame_inset_h,
     }
-    viewport_script = _viewport_pill_script().replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
+    viewport_script = (
+        _viewport_pill_script()
+        .replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
+        .replace("__VIEWPORT_TOKEN__", _json.dumps(viewport_token))
+    )
     await context.add_init_script(script=viewport_script)
 
     # WebKit has no browser-chrome Cmd+T; inject a page-level handler so the

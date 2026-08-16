@@ -501,3 +501,40 @@ def test_write_macro_keeps_extra_keys(monkeypatch: pytest.MonkeyPatch, tmp_path:
     out = s.write_macro(name="extra-keys", macro={"actions": [], "custom": {"k": 1}})
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["custom"] == {"k": 1}
+
+
+def test_write_macro_rejects_slug_collision_with_different_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """write_macro() had NO collision guard, unlike save_macro -- mirrors
+    test_save_macro_rejects_slug_collision_with_different_name.
+
+    "nightly backup" and "nightly!backup" both slug to nightly-backup.json.
+    Writing the second under a different display name targets the first
+    macro's file -- reject it instead of silently clobbering.
+    """
+    s = _import_storage(monkeypatch, tmp_path)
+
+    s.write_macro(name="nightly backup", macro={"actions": []})
+    assert s.macro_path("nightly backup") == s.macro_path("nightly!backup")
+
+    with pytest.raises(ValueError, match="nightly backup"):
+        s.write_macro(name="nightly!backup", macro={"actions": []})
+
+    # The original macro is left intact -- its name was not clobbered.
+    data = json.loads(s.macro_path("nightly backup").read_text(encoding="utf-8"))
+    assert data["name"] == "nightly backup"
+
+
+def test_write_macro_same_name_rewrite_does_not_trip_collision_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Re-writing under the identical name is an update, not a collision."""
+    s = _import_storage(monkeypatch, tmp_path)
+
+    s.write_macro(name="same-name", macro={"actions": []})
+    # Must not raise -- same display name maps to the same file by design.
+    out = s.write_macro(name="same-name", macro={"actions": [{"action": "navigate", "url": "https://x"}]})
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["name"] == "same-name"
+    assert data["actions"] == [{"action": "navigate", "url": "https://x"}]

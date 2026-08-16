@@ -80,7 +80,10 @@ def test_python_export_compiles_with_full_action_set(tmp_path: Path) -> None:
 
     # Spot-check that each action mapped to the expected Playwright API call.
     assert "async with async_playwright() as p:" in src
-    assert "await p.webkit.launch(headless=False)" in src
+    # kind is validated + looked up safely (getattr(p, _kind)), never spliced
+    # as a bare attribute — see test_export_rejects_unsupported_kind.
+    assert "_kind = 'webkit'" in src
+    assert "await getattr(p, _kind).launch(headless=False)" in src
     assert "viewport={'width': 1024, 'height': 768}" in src
     assert "await page.goto(_resolve_bundle_url('https://octowright.com'))" in src  # initial nav from launch
     assert "await page.goto(_resolve_bundle_url('https://octowright.com/home'))" in src  # explicit navigate
@@ -117,8 +120,9 @@ def test_python_export_persistent_context_branch(tmp_path: Path) -> None:
     out = export_script(log, tmp_path / "out.py", fmt="python")
     src = out.read_text()
     assert _python_compiles(src)
-    # launch_persistent_context not launch().
-    assert "p.chromium.launch_persistent_context(" in src
+    # launch_persistent_context not launch(), via the safe getattr lookup.
+    assert "_kind = 'chromium'" in src
+    assert "getattr(p, _kind).launch_persistent_context(" in src
     assert "'/tmp/profiles/chromium/dante'" in src
     assert "headless=True" in src  # headed=False inverts to headless=True
     # Persistent path must also pre-populate the page from ctx.pages[0].
@@ -277,8 +281,11 @@ def test_ts_export_full_action_set(tmp_path: Path) -> None:
 
     # Header imports each engine plus types.
     assert 'import { chromium, firefox, webkit, Browser, BrowserContext, Page } from "playwright";' in src
+    # kind is validated + looked up safely at runtime, never spliced as a bare
+    # identifier — see test_export_rejects_unsupported_kind.
+    assert 'const kind = "firefox";' in src
     # Engine launch path (lowercase headless boolean — ts is case-sensitive).
-    assert "browser = await firefox.launch({ headless: false })" in src
+    assert "browser = await engine.launch({ headless: false })" in src
     assert 'await page.goto(resolveBundleUrl("https://octowright.com"));' in src  # initial nav
     assert 'await page.goto(resolveBundleUrl("https://octowright.com/home"));' in src
     assert 'await page.click("#login");' in src
@@ -309,7 +316,8 @@ def test_ts_export_persistent_context_branch(tmp_path: Path) -> None:
     )
     out = export_script(log, tmp_path / "out.ts", fmt="ts")
     src = out.read_text()
-    assert "webkit.launchPersistentContext(" in src
+    assert 'const kind = "webkit";' in src
+    assert "engine.launchPersistentContext(" in src
     assert '"/tmp/profiles/webkit/dante"' in src
     assert "headless: true" in src  # headed=False → headless=true
     assert "viewport: { width: 1024, height: 768 }" in src
@@ -513,7 +521,7 @@ def test_export_missing_actions_python(tmp_path: Path) -> None:
     assert "await page.close()" in src
     assert "lambda route: route.fulfill(status=200, body='hi')" in src
     assert "await page.unroute('*')" in src
-    assert "lambda dialog: asyncio.create_task(dialog.accept())" in src
+    assert "lambda dialog, _policy='accept': asyncio.create_task(getattr(dialog, _policy)())" in src
     assert "await page.set_input_files('input', ['/tmp/x'])" in src
     assert "if await page.locator('#foo').count() > 0:" in src
     assert "    await page.click('#bar')" in src
@@ -538,3 +546,227 @@ def test_export_missing_actions_ts(tmp_path: Path) -> None:
     assert 'if (await page.locator("#foo").count() > 0) {' in src
     assert '    await page.click("#bar");' in src
     assert "  }" in src
+
+
+# ---------------------------------------------------------------------------
+# Security: fields spliced into generated source must not permit injection.
+#
+# Six fields are interpolated into generated Python/TS source text rather than
+# safely embedded via repr()/json.dumps(): launch's `kind`, set_dialog_policy's
+# `policy` (identifier-position fields), and type's `delay_ms`, resize's
+# `width`/`height`, switch_page's `index`, mock_route's `status` (numeric
+# fields). A crafted value in any of these can become executable code in the
+# exported script unless export time validates/coerces them. Recordings and
+# saved macros are potentially attacker-controlled (see ssrf.py's threat
+# model), so every one of these must fail loudly (ValueError) at export time
+# rather than silently splice attacker text as source, and no output file may
+# be left behind.
+# ---------------------------------------------------------------------------
+
+# A payload shaped to break out of a bare numeric splice and run arbitrary
+# code, if it were ever embedded unescaped (pre-fix, "delay=<payload>" would
+# have been valid Python). int() coercion must reject this outright.
+_INJECTION_INT = "0)); __import__('pathlib').Path('/tmp/octowright_pwned').write_text('pwned')  #"
+
+# A payload shaped to break out of an attribute-splice like `p.<kind>.launch(...)`
+# or `dialog.<policy>()`, if it were ever embedded unescaped.
+_INJECTION_IDENT = "chromium.launch()); __import__('pathlib').Path('/tmp/octowright_pwned').write_text('pwned')  #"
+
+
+@pytest.mark.parametrize(("fmt", "ext"), [("python", "py"), ("ts", "ts")])
+def test_export_rejects_unsupported_kind(tmp_path: Path, fmt: str, ext: str) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [{"action": "launch", "kind": _INJECTION_IDENT, "url": "https://x", "headed": True}],
+    )
+    out_path = tmp_path / f"out.{ext}"
+    with pytest.raises(ValueError, match="unsupported kind"):
+        export_script(log, out_path, fmt=fmt)
+    assert not out_path.exists()
+
+
+@pytest.mark.parametrize(("fmt", "ext"), [("python", "py"), ("ts", "ts")])
+def test_export_rejects_dialog_policy_injection(tmp_path: Path, fmt: str, ext: str) -> None:
+    payload = "accept())); __import__('pathlib').Path('/tmp/octowright_pwned').write_text('pwned')  #"
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "webkit", "url": "https://x", "headed": True},
+            {"action": "set_dialog_policy", "policy": payload},
+        ],
+    )
+    out_path = tmp_path / f"out.{ext}"
+    with pytest.raises(ValueError, match="unsupported policy"):
+        export_script(log, out_path, fmt=fmt)
+    assert not out_path.exists()
+
+
+@pytest.mark.parametrize(("fmt", "ext"), [("python", "py"), ("ts", "ts")])
+def test_export_rejects_delay_ms_injection(tmp_path: Path, fmt: str, ext: str) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "type", "selector": "#q", "text": "hi", "delay_ms": _INJECTION_INT},
+        ],
+    )
+    out_path = tmp_path / f"out.{ext}"
+    with pytest.raises(ValueError, match="delay_ms"):
+        export_script(log, out_path, fmt=fmt)
+    assert not out_path.exists()
+
+
+@pytest.mark.parametrize(("fmt", "ext"), [("python", "py"), ("ts", "ts")])
+def test_export_rejects_resize_width_injection(tmp_path: Path, fmt: str, ext: str) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "resize", "width": _INJECTION_INT, "height": 600},
+        ],
+    )
+    out_path = tmp_path / f"out.{ext}"
+    with pytest.raises(ValueError, match="width"):
+        export_script(log, out_path, fmt=fmt)
+    assert not out_path.exists()
+
+
+@pytest.mark.parametrize(("fmt", "ext"), [("python", "py"), ("ts", "ts")])
+def test_export_rejects_resize_height_injection(tmp_path: Path, fmt: str, ext: str) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "resize", "width": 800, "height": _INJECTION_INT},
+        ],
+    )
+    out_path = tmp_path / f"out.{ext}"
+    with pytest.raises(ValueError, match="height"):
+        export_script(log, out_path, fmt=fmt)
+    assert not out_path.exists()
+
+
+@pytest.mark.parametrize(("fmt", "ext"), [("python", "py"), ("ts", "ts")])
+def test_export_rejects_switch_page_index_injection(tmp_path: Path, fmt: str, ext: str) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "switch_page", "index": _INJECTION_INT},
+        ],
+    )
+    out_path = tmp_path / f"out.{ext}"
+    with pytest.raises(ValueError, match="index"):
+        export_script(log, out_path, fmt=fmt)
+    assert not out_path.exists()
+
+
+@pytest.mark.parametrize(("fmt", "ext"), [("python", "py"), ("ts", "ts")])
+def test_export_rejects_mock_route_status_injection(tmp_path: Path, fmt: str, ext: str) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "mock_route", "url_pattern": "*", "status": _INJECTION_INT, "body": "hi"},
+        ],
+    )
+    out_path = tmp_path / f"out.{ext}"
+    with pytest.raises(ValueError, match="status"):
+        export_script(log, out_path, fmt=fmt)
+    assert not out_path.exists()
+
+
+def test_python_export_dialog_policy_accept_and_dismiss_use_safe_lookup(tmp_path: Path) -> None:
+    """accept/dismiss must render via getattr(dialog, _policy)(), never dialog.<policy>()."""
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "set_dialog_policy", "policy": "dismiss"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    src = out.read_text()
+    assert _python_compiles(src)
+    assert "_policy='dismiss'" in src
+    assert "getattr(dialog, _policy)()" in src
+    assert "dialog.dismiss()" not in src
+
+
+def test_python_export_dialog_policy_manual_emits_no_auto_handler(tmp_path: Path) -> None:
+    """manual means the session didn't auto-handle dialogs; replay must not either.
+
+    Also a functional-bug regression: Playwright's Dialog has no .manual()
+    method, so the pre-fix unconditional splice would have generated code
+    that raised AttributeError the instant a dialog fired.
+    """
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "set_dialog_policy", "policy": "manual"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    src = out.read_text()
+    assert _python_compiles(src)
+    assert "page.on('dialog'" not in src
+    assert ".manual()" not in src
+
+
+def test_ts_export_dialog_policy_accept_and_manual(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "set_dialog_policy", "policy": "accept"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.ts", fmt="ts")
+    src = out.read_text()
+    assert '(dialog as any)["accept"]()' in src
+    assert "dialog.accept()" not in src
+
+    log2 = _write_recording(
+        tmp_path / "r2.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "set_dialog_policy", "policy": "manual"},
+        ],
+    )
+    out2 = export_script(log2, tmp_path / "out2.ts", fmt="ts")
+    src2 = out2.read_text()
+    assert "page.on('dialog'" not in src2
+    assert ".manual()" not in src2
+
+
+def test_export_normal_recording_still_runs_all_six_guarded_fields(tmp_path: Path) -> None:
+    """Legitimate values for all six guarded fields must still export + compile cleanly."""
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
+            {"action": "type", "selector": "#q", "text": "hi", "delay_ms": 30},
+            {"action": "resize", "width": 1024, "height": 768},
+            {"action": "open_url", "url": "https://y"},
+            {"action": "switch_page", "index": 1},
+            {"action": "mock_route", "url_pattern": "*", "status": 404, "body": "nope"},
+            {"action": "set_dialog_policy", "policy": "accept"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    src = out.read_text()
+    assert _python_compiles(src)
+    assert "delay=30" in src
+    assert "'width': 1024, 'height': 768" in src
+    assert "page = ctx.pages[1]" in src
+    assert "status=404" in src
+    assert "_policy='accept'" in src
+
+    out_ts = export_script(log, tmp_path / "out.ts", fmt="ts")
+    src_ts = out_ts.read_text()
+    assert "delay: 30" in src_ts
+    assert "width: 1024, height: 768" in src_ts
+    assert "page = ctx.pages()[1];" in src_ts
+    assert "status: 404" in src_ts
+    assert '(dialog as any)["accept"]()' in src_ts

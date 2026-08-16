@@ -36,6 +36,7 @@ async def test_launch_with_explicit_executable_path_and_launch_args(
     pytest.importorskip("playwright")
     from playwright.async_api import async_playwright
 
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", "1")
     _configure_runtime_paths(monkeypatch, tmp_path)
 
     async with async_playwright() as pw:
