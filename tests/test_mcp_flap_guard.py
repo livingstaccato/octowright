@@ -53,8 +53,13 @@ def test_limiter_prune_drops_emptied_keys() -> None:
 # ── request classification + source keying ───────────────────────────────────
 
 
-def _scope(method: str, headers: list[tuple[bytes, bytes]] | None = None) -> dict:
-    return {"type": "http", "method": method, "headers": headers or []}
+def _scope(
+    method: str, headers: list[tuple[bytes, bytes]] | None = None, client: tuple[str, int] | None = None
+) -> dict:
+    scope: dict[str, Any] = {"type": "http", "method": method, "headers": headers or []}
+    if client is not None:
+        scope["client"] = client
+    return scope
 
 
 def test_is_new_session_request_post_without_id() -> None:
@@ -81,6 +86,28 @@ def test_source_key_anonymous_without_header() -> None:
 def test_source_key_anonymous_on_bad_encoding_or_empty() -> None:
     assert fg.source_key(_scope("POST", [(b"x-octowright-follower", b"\xff\xfe")])) == fg._ANONYMOUS_SOURCE
     assert fg.source_key(_scope("POST", [(b"x-octowright-follower", b"  ")])) == fg._ANONYMOUS_SOURCE
+
+
+def test_source_key_headerless_buckets_by_peer() -> None:
+    key = fg.source_key(_scope("POST", client=("127.0.0.1", 54321)))
+    assert key == "anonymous:127.0.0.1:54321"
+
+
+def test_source_key_headerless_different_peers_get_different_buckets() -> None:
+    a = fg.source_key(_scope("POST", client=("127.0.0.1", 111)))
+    b = fg.source_key(_scope("POST", client=("127.0.0.1", 222)))
+    assert a != b
+
+
+def test_source_key_headerless_same_peer_shares_bucket() -> None:
+    a = fg.source_key(_scope("POST", client=("127.0.0.1", 111)))
+    b = fg.source_key(_scope("POST", client=("127.0.0.1", 111)))
+    assert a == b == "anonymous:127.0.0.1:111"
+
+
+def test_source_key_bad_header_still_buckets_by_peer_when_available() -> None:
+    key = fg.source_key(_scope("POST", [(b"x-octowright-follower", b"  ")], client=("127.0.0.1", 999)))
+    assert key == "anonymous:127.0.0.1:999"
 
 
 # ── select_eviction_victims ──────────────────────────────────────────────────

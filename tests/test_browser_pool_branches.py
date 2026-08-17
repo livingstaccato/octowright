@@ -189,17 +189,52 @@ class TestLaunchOptionsValidate:
     def test_known_channel_passes(self) -> None:
         LaunchOptions(channel="chrome").validate()
 
-    def test_missing_executable_path_raises(self, tmp_path: Path) -> None:
+    def test_missing_executable_path_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A nonexistent executable_path is rejected at validate() time, not
-        surfaced as an opaque Playwright launch failure."""
+        surfaced as an opaque Playwright launch failure. Gate opted in so this
+        test still exercises the file-exists check, not the gate itself."""
+        monkeypatch.setenv("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", "1")
         missing = tmp_path / "no-such-browser"
         with pytest.raises(ValueError, match=r"does not exist or is not a file"):
             LaunchOptions(executable_path=str(missing)).validate()
 
-    def test_existing_executable_path_passes(self, tmp_path: Path) -> None:
+    def test_existing_executable_path_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", "1")
         binary = tmp_path / "fake-browser"
         binary.write_text("#!/bin/sh\n", encoding="utf-8")
         LaunchOptions(executable_path=str(binary)).validate()
+
+    def test_executable_path_disabled_by_default_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """executable_path is a code-execution primitive: disabled unless
+        OCTOWRIGHT_ALLOW_EXECUTABLE_PATH opts in, even for a real, existing binary."""
+        monkeypatch.delenv("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", raising=False)
+        binary = tmp_path / "fake-browser"
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        with pytest.raises(ValueError, match=r"disabled by default"):
+            LaunchOptions(executable_path=str(binary)).validate()
+
+    def test_executable_path_explicitly_off_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", "0")
+        binary = tmp_path / "fake-browser"
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        with pytest.raises(ValueError, match=r"disabled by default"):
+            LaunchOptions(executable_path=str(binary)).validate()
+
+    def test_launch_args_disabled_by_default_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """launch_args alone (no executable_path) is gated too -- it's an
+        arbitrary-argv injection primitive on its own."""
+        monkeypatch.delenv("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", raising=False)
+        with pytest.raises(ValueError, match=r"disabled by default"):
+            LaunchOptions(launch_args=["--foo"]).validate()
+
+    def test_launch_args_allowed_when_opted_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", "1")
+        LaunchOptions(launch_args=["--foo"]).validate()
+
+    def test_neither_field_set_passes_without_opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The gate only fires when executable_path/launch_args are actually set."""
+        monkeypatch.delenv("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", raising=False)
+        LaunchOptions().validate()
 
 
 class TestLaunchOptionsPromotedProfile:

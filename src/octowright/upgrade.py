@@ -40,6 +40,20 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.14.3": [
+        "A full security review closed out seven findings across the codebase: "
+        "exported macro scripts can no longer be turned into executable code via "
+        "a crafted recorded field, launching a custom browser executable now "
+        "requires an explicit opt-in, macro repair/lint/healing stopped echoing "
+        "literal credentials back at you, the takeover config write and the "
+        "viewport-pill control binding are hardened against symlink-swap and "
+        "unauthenticated-page-script attacks respectively, and file-upload "
+        "targeting no longer defaults to the daemon's own working directory.",
+        "The leader's new-session rate limiter no longer lumps every headerless "
+        "MCP client into one shared bucket — a noisy direct client that skips "
+        "the follower handshake can no longer 429 an unrelated client's "
+        "legitimate new session.",
+    ],
     "0.14.2": [
         "Every browser session now serializes its own actions through a per-session FIFO gate: a manual "
         "action can no longer interleave mid-macro, and a closing session rejects new work instead of "

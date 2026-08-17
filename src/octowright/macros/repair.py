@@ -11,6 +11,7 @@ import copy
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from octowright.macros._redact import _redact_action
 from octowright.macros.semantic import summarize_action
 from octowright.mcp_types import MacroRepairApplyResult, MacroRepairPreviewResult, MacroRepairSuggestion
 
@@ -87,14 +88,20 @@ def repair_preview(
             f"Review selector {selector!r} for action {idx}. "
             "If it no longer matches, compare the stored semantic fields against the current page."
         )
+        # This suggestion is returned verbatim to the MCP client — redact
+        # credential-bearing fields on both the original and the proposed
+        # replacement (and the preview string built from it) before it
+        # leaves this function. The stored macro on disk is untouched;
+        # only the response is scrubbed.
+        redacted_replacement = _redact_action(replacement) if replacement is not None else None
         suggestions.append(
             {
                 "macro": macro_name,
                 "action_index": idx,
-                "original_action": copy.deepcopy(action),
+                "original_action": _redact_action(copy.deepcopy(action)),
                 "source": "stored_heuristic",
-                "replacement_action": replacement,
-                "action_preview": replacement_preview(replacement) if replacement else None,
+                "replacement_action": redacted_replacement,
+                "action_preview": replacement_preview(redacted_replacement) if redacted_replacement else None,
                 "prompt": prompt,
             }
         )
@@ -142,12 +149,23 @@ def repair_apply(
     original = copy.deepcopy(action)
     actions[action_index] = replacement
     macro["actions"] = actions
-    path = write_macro(name=macro_name, macro=macro)
+    # Persist under the name this macro was LOADED under (`name`), never the
+    # macro's own internal "name" field (`macro_name`, used above only for
+    # display in error messages). load_macro(name) reads the file at
+    # macro_path(name); writing back under a different internal name would
+    # silently move the macro to a DIFFERENT file, orphaning the one at
+    # `name` and potentially colliding with (and clobbering) an unrelated
+    # macro whose slug matches that internal name — write_macro's collision
+    # guard exists precisely to catch that, so don't hand it the footgun.
+    path = write_macro(name=name, macro=macro)
     return {
-        "macro": macro_name,
+        "macro": name,
         "action_index": action_index,
         "applied": True,
-        "original_action": original,
-        "replacement_action": replacement,
+        # Returned to the MCP client: redact credential-bearing fields.
+        # The macro already persisted above (unredacted, as it must be to
+        # replay correctly) — only this response is scrubbed.
+        "original_action": _redact_action(original),
+        "replacement_action": _redact_action(replacement),
         "path": str(path),
     }
