@@ -147,6 +147,10 @@ def test_each_candidate_key_can_trigger_credential_warning(candidate_key: str) -
     action = {"action": "fill", "selector": "#x", "value": "ok", candidate_key: "you@somewhere.com"}
     if candidate_key == "value":
         action = {"action": "fill", "selector": "#x", "value": "you@somewhere.com"}
+    if candidate_key == "url":
+        # `url` is inspected by part rather than as a blob, so the credential
+        # has to sit where a URL can actually carry one (see lint_urls).
+        action = {"action": "fill", "selector": "#x", "value": "ok", "url": "https://u:pw@somewhere.com/x"}
     issues = lint_macro(_macro([action]))
     creds = [i for i in issues if i.code == "looks_like_credential"]
     assert len(creds) >= 1, f"key {candidate_key!r} should be inspected for credentials"

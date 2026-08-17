@@ -330,6 +330,11 @@ tests_dir = [
     "tests/test_macro_runtime_branches.py",
     "tests/test_macro_recording_import_branches.py",
     "tests/test_hypo_parsers.py",
+    "tests/macro_lint/test_url_credentials.py",
+    "tests/macro_lint/test_unknown_fields.py",
+    "tests/macro_lint/test_fields_edges.py",
+    "tests/macro_lint/test_urls_edges.py",
+    "tests/macro_lint/test_token_like_boundaries.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]

@@ -72,11 +72,11 @@ class FakePage:
     def get_by_role(self, role: str, **kwargs: Any) -> FakeLocator:
         return self._record("get_by_role", role, **kwargs)
 
-    def get_by_label(self, text: str) -> FakeLocator:
-        return self._record("get_by_label", text)
+    def get_by_label(self, text: str, **kwargs: Any) -> FakeLocator:
+        return self._record("get_by_label", text, **kwargs)
 
-    def get_by_text(self, text: str) -> FakeLocator:
-        return self._record("get_by_text", text)
+    def get_by_text(self, text: str, **kwargs: Any) -> FakeLocator:
+        return self._record("get_by_text", text, **kwargs)
 
     def get_by_test_id(self, test_id: str) -> FakeLocator:
         return self._record("get_by_test_id", test_id)
@@ -189,7 +189,7 @@ async def test_locator_label(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
     await session._locator(label="Email")
-    assert page.calls == [("get_by_label", ("Email",), {})]
+    assert page.calls == [("get_by_label", ("Email",), {"exact": False})]
 
 
 @pytest.mark.anyio
@@ -197,7 +197,7 @@ async def test_locator_text(tmp_path: Path) -> None:
     page = FakePage()
     session = _make_session(page, tmp_path)
     await session._locator(text="Hi")
-    assert page.calls == [("get_by_text", ("Hi",), {})]
+    assert page.calls == [("get_by_text", ("Hi",), {"exact": False})]
 
 
 @pytest.mark.anyio
