@@ -20,9 +20,17 @@ async def build_locator(
     role_name: str | None = None,
     role_exact: bool = False,
     label: str | None = None,
+    label_exact: bool = False,
     text: str | None = None,
+    text_exact: bool = False,
     test_id: str | None = None,
 ) -> Locator:
+    """Resolve one semantic finder to a Playwright locator.
+
+    The ``*_exact`` flags are modifiers, not finders: they never satisfy the
+    one-finder requirement below, and each defaults to False so the matching
+    stays substring-based exactly as Playwright does by default.
+    """
     provided = [k for k, v in (("role", role), ("label", label), ("text", text), ("test_id", test_id)) if v is not None]
     if len(provided) != 1:
         raise ValueError(f"exactly one of role/label/text/test_id must be set; got: {provided}")
@@ -39,8 +47,8 @@ async def build_locator(
                 kwargs["exact"] = role_exact
             return target.get_by_role(cast(Any, role), **kwargs)
         if label is not None:
-            return target.get_by_label(label)
+            return target.get_by_label(label, exact=label_exact)
         if text is not None:
-            return target.get_by_text(text)
+            return target.get_by_text(text, exact=text_exact)
         assert test_id is not None  # nosec B101
         return target.get_by_test_id(test_id)

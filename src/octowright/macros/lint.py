@@ -25,6 +25,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .lint_fields import unknown_fields
+from .lint_urls import url_carries_credential
 from .runtime import _ACTION_MAP
 
 # ---------------------------------------------------------------------------
@@ -144,6 +146,16 @@ def _looks_like_password(s: str) -> bool:
     return len(s) >= 20 and _shannon_entropy(s) > 4.0
 
 
+def _token_like(s: str) -> bool:
+    """Password heuristic minus rule 2 — for values that live inside a URL.
+
+    Rule 2 ("12+ chars mixing letter/digit/special") describes ordinary URL
+    syntax as readily as it describes a password, so it is dropped here; the
+    prefix and entropy signals carry no such ambiguity.
+    """
+    return bool(_TOKEN_PREFIX_RE.match(s)) or (len(s) >= 20 and _shannon_entropy(s) > 4.0)
+
+
 def _looks_like_email(s: str) -> bool:
     return bool(_EMAIL_RE.match(s))
 
@@ -170,6 +182,17 @@ class Issue:
 # ---------------------------------------------------------------------------
 
 
+def _field_carries_credential(key: str, val: str) -> bool:
+    """Whether one candidate field's value looks like a literal credential.
+
+    A URL is scanned by PART (userinfo / query) rather than as one blob — see
+    ``lint_urls`` for why the generic heuristic can't be applied to one.
+    """
+    if key == "url":
+        return url_carries_credential(val, token_like=_token_like)
+    return _looks_like_email(val) or _looks_like_password(val)
+
+
 def _check_credentials(action: dict[str, Any], outer_index: int, issues: list[Issue]) -> None:
     """Scan candidate string fields for things that look like literal credentials."""
     for key, val in action.items():
@@ -179,18 +202,19 @@ def _check_credentials(action: dict[str, Any], outer_index: int, issues: list[Is
             continue
         if _is_placeholder(val):
             continue
-        if _looks_like_email(val) or _looks_like_password(val):
-            issues.append(
-                Issue(
-                    severity="warning",
-                    code="looks_like_credential",
-                    message=(
-                        f"field {key!r} looks like a literal credential (value redacted) — "
-                        "consider {{email}} parameterization"
-                    ),
-                    action_index=outer_index,
-                )
+        if not _field_carries_credential(key, val):
+            continue
+        issues.append(
+            Issue(
+                severity="warning",
+                code="looks_like_credential",
+                message=(
+                    f"field {key!r} looks like a literal credential (value redacted) — "
+                    "consider {{email}} parameterization"
+                ),
+                action_index=outer_index,
             )
+        )
 
 
 def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
@@ -209,6 +233,27 @@ def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: l
     _check_simple_locator_fields(action, kind, _append_missing)
     _check_simple_drag_fields(action, kind, _append_missing)
     _check_simple_required_fields(action, kind, _append_missing)
+    _check_unknown_fields(action, kind, outer_index, issues)
+
+
+def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
+    """Flag fields the runtime would splat at a session method that rejects them.
+
+    Severity is error, not warning: this is a certain ``TypeError`` on replay,
+    and catching it at save time is the whole point (see lint_fields).
+    """
+    for field in sorted(unknown_fields(kind, frozenset(action))):
+        issues.append(
+            Issue(
+                severity="error",
+                code="unknown_field",
+                message=(
+                    f"action {kind!r} does not accept field {field!r} — "
+                    "replay would fail with TypeError; check the spelling against the tool's parameters"
+                ),
+                action_index=outer_index,
+            )
+        )
 
 
 def _check_simple_locator_fields(action: dict[str, Any], kind: str, append_missing: Callable[[str], None]) -> None:
