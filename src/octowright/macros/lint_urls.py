@@ -67,9 +67,10 @@ def url_carries_credential(raw: str, *, token_like: Callable[[str], bool]) -> bo
         # Malformed netloc (e.g. a bad port) — same reasoning as above.
         return False
 
-    for name, value in parse_qsl(parsed.query, keep_blank_values=True):
-        if not value:
-            continue
+    # keep_blank_values is deliberately left at its False default: a blank
+    # value can never carry a credential, so whether parse_qsl yields
+    # ("name", "") or drops the pair entirely is unobservable here either way.
+    for name, value in parse_qsl(parsed.query):
         if _has_secret_param_name(name):
             return True
         if token_like(value):

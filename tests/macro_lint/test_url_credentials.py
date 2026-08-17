@@ -63,3 +63,40 @@ def test_non_url_fields_keep_the_original_heuristic() -> None:
     """Narrowing applies to `url` only — a typed value is unchanged."""
     assert "looks_like_credential" in _codes({"action": "fill", "value": "hunter2-P@ssw0rd"})
     assert "looks_like_credential" in _codes({"action": "fill", "value": "user@example.com"})
+
+
+def test_username_only_userinfo_is_flagged() -> None:
+    """A bare username (no colon/password) is still basic-auth credential shape."""
+    assert "looks_like_credential" in _codes({"action": "navigate", "url": "https://api-key-abc@example.com/x"})
+
+
+def test_password_only_userinfo_is_flagged() -> None:
+    """A bare password (empty username) is still a credential."""
+    assert "looks_like_credential" in _codes({"action": "navigate", "url": "https://:hunter2pass@example.com/x"})
+
+
+def test_issue_carries_the_action_index_not_a_stale_default() -> None:
+    """The Issue for a later action in the macro must point AT that action."""
+    issues: list[Issue] = []
+    _check_credentials({"action": "navigate", "url": "https://a:b@example.com/x"}, 7, issues)
+    assert [i.action_index for i in issues] == [7]
+
+
+def test_issue_message_names_the_field_and_the_remediation_verbatim() -> None:
+    issues: list[Issue] = []
+    _check_credentials({"action": "navigate", "url": "https://a:b@example.com/x"}, 0, issues)
+    assert issues[0].message == (
+        "field 'url' looks like a literal credential (value redacted) — consider {{email}} parameterization"
+    )
+
+
+def test_a_non_string_candidate_field_does_not_abort_the_rest_of_the_scan() -> None:
+    """One bad-typed field earlier in the dict must not hide a real credential
+    in a LATER field — proves the loop uses `continue`, not a full `break`."""
+    action = {"action": "fill", "expression": 123, "value": "hunter2-P@ssw0rd"}
+    assert _codes(action) == ["looks_like_credential"]
+
+
+def test_a_placeholder_candidate_field_does_not_abort_the_rest_of_the_scan() -> None:
+    action = {"action": "fill", "text": "{{email}}", "value": "hunter2-P@ssw0rd"}
+    assert _codes(action) == ["looks_like_credential"]

@@ -70,6 +70,27 @@ async def test_browser_get_text_by_forwards_text_exact(_patch_pool_input: MagicM
     assert s.get_text_by.await_args.kwargs["text_exact"] is True
 
 
+@pytest.mark.anyio
+async def test_truncated_get_text_by_next_action_preserves_text_exact(_patch_pool_input: MagicMock) -> None:
+    """A truncated result's suggested retry must keep the exact flag the caller
+
+    set -- otherwise following next_actions silently widens the match back to
+    substring, the exact opposite of what the caller asked for.
+    """
+    s = _FakeSession()
+    _patch_pool_input.get.return_value = s
+    s.get_text_by = AsyncMock(return_value={"ok": True, "text": "x" * 20})
+
+    out = await _input.browser_get_text_by("i", text="Ada", text_exact=True, max_chars=5)
+
+    assert out["next_actions"] == [
+        {
+            "tool": "browser_get_text_by",
+            "args": {"instance_id": "i", "full": True, "text": "Ada", "text_exact": True},
+        }
+    ]
+
+
 def test_macro_substitution_treats_exact_flags_as_semantic_locator_keys() -> None:
     """Otherwise a recorded exact flag is stripped on macro save/replay."""
     assert "text_exact" in SEMANTIC_LOCATOR_KEYS
