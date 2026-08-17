@@ -57,7 +57,7 @@ Octowright's user config directory.
 A four-call smoke test that exercises launch, drive, list, and close:
 
 1. Ask your MCP client to call `browser_launch` with `kind=webkit` and `url=https://octowright.com`.
-2. Call `browser_click_by` on the link text "More information".
+2. Call `browser_click` with `text="More information"` (an ARIA locator, no CSS selector needed).
 3. Call `browser_list` and confirm exactly one live instance.
 4. Call `browser_close` with the `instance_id` from step 1.
 
@@ -81,6 +81,8 @@ Octowright ships a Click-based CLI. Useful subcommands:
 | `octowright cleanup` | Prune old recording artefacts. |
 | `octowright takeover` | Detect and disable competing Playwright MCP plugins. |
 | `octowright test` | Run `[test]`-tagged macros and emit JUnit XML. |
+| `octowright restart` | Stop the running daemon, sweep orphans, start a fresh one. |
+| `octowright dashboard` | Mint a single-use dashboard pairing code and print the `/pair` URL. |
 
 ## Slimming the LLM tool surface
 
