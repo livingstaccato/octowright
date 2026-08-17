@@ -50,7 +50,9 @@ class ClickAction(MacroActionBase):
     role_name: NotRequired[str]
     role_exact: NotRequired[bool]
     label: NotRequired[str]
+    label_exact: NotRequired[bool]
     text: NotRequired[str]
+    text_exact: NotRequired[bool]
     test_id: NotRequired[str]
     timeout_ms: NotRequired[int | None]
 
@@ -62,7 +64,9 @@ class ClickByAction(MacroActionBase):
     role_name: NotRequired[str]
     role_exact: NotRequired[bool]
     label: NotRequired[str]
+    label_exact: NotRequired[bool]
     text: NotRequired[str]
+    text_exact: NotRequired[bool]
     test_id: NotRequired[str]
     timeout_ms: NotRequired[int | None]
 
@@ -82,7 +86,9 @@ class FillAction(MacroActionBase):
     role_name: NotRequired[str]
     role_exact: NotRequired[bool]
     label: NotRequired[str]
+    label_exact: NotRequired[bool]
     text: NotRequired[str]
+    text_exact: NotRequired[bool]
     test_id: NotRequired[str]
     timeout_ms: NotRequired[int | None]
 
@@ -95,7 +101,9 @@ class FillByAction(MacroActionBase):
     role_name: NotRequired[str]
     role_exact: NotRequired[bool]
     label: NotRequired[str]
+    label_exact: NotRequired[bool]
     text: NotRequired[str]
+    text_exact: NotRequired[bool]
     test_id: NotRequired[str]
     timeout_ms: NotRequired[int | None]
 

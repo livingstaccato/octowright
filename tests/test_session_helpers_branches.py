@@ -522,7 +522,7 @@ class TestBuildLocatorDispatch:
         target = MagicMock()
         target.get_by_label.return_value = "lbl"
         assert await build_locator(_LocatorSessionFake(target), label="Email") == "lbl"
-        target.get_by_label.assert_called_once_with("Email")
+        target.get_by_label.assert_called_once_with("Email", exact=False)
 
     @pytest.mark.anyio
     async def test_text_dispatch(self) -> None:
@@ -530,7 +530,7 @@ class TestBuildLocatorDispatch:
         target = MagicMock()
         target.get_by_text.return_value = "t"
         assert await build_locator(_LocatorSessionFake(target), text="Click me") == "t"
-        target.get_by_text.assert_called_once_with("Click me")
+        target.get_by_text.assert_called_once_with("Click me", exact=False)
 
     @pytest.mark.anyio
     async def test_test_id_dispatch(self) -> None:
