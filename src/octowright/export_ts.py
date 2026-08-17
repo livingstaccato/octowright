@@ -51,22 +51,32 @@ _TS_FOOTER = """\
 """
 
 
+def _ts_role_locator(entry: dict) -> str:
+    args = [json.dumps(entry["role"])]
+    opts: dict[str, object] = {}
+    if entry.get("role_name") is not None:
+        opts["name"] = entry["role_name"]
+        if entry.get("role_exact"):
+            opts["exact"] = True
+    if opts:
+        rendered_opts = ", ".join(f"{key}: {json.dumps(value)}" for key, value in opts.items())
+        args.append(f"{{ {rendered_opts} }}")
+    return f"page.getByRole({', '.join(args)})"
+
+
+def _ts_exact_opt(entry: dict, flag: str) -> str:
+    """`, { exact: true }` when set, else empty — so exports of pre-existing
+    (substring) recordings stay byte-identical to what they produced before."""
+    return ", { exact: true }" if entry.get(flag) else ""
+
+
 def _ts_locator(entry: dict) -> str | None:
     if entry.get("role"):
-        args = [json.dumps(entry["role"])]
-        opts: dict[str, object] = {}
-        if entry.get("role_name") is not None:
-            opts["name"] = entry["role_name"]
-            if entry.get("role_exact"):
-                opts["exact"] = True
-        if opts:
-            rendered_opts = ", ".join(f"{key}: {json.dumps(value)}" for key, value in opts.items())
-            args.append(f"{{ {rendered_opts} }}")
-        return f"page.getByRole({', '.join(args)})"
+        return _ts_role_locator(entry)
     if entry.get("label"):
-        return f"page.getByLabel({json.dumps(entry['label'])})"
+        return f"page.getByLabel({json.dumps(entry['label'])}{_ts_exact_opt(entry, 'label_exact')})"
     if entry.get("text"):
-        return f"page.getByText({json.dumps(entry['text'])})"
+        return f"page.getByText({json.dumps(entry['text'])}{_ts_exact_opt(entry, 'text_exact')})"
     if entry.get("test_id"):
         return f"page.getByTestId({json.dumps(entry['test_id'])})"
     return None

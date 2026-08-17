@@ -57,10 +57,14 @@ def _py_locator(entry: dict) -> str | None:
             if entry.get("role_exact"):
                 args.append("exact=True")
         return f"page.get_by_role({', '.join(args)})"
+    # exact= is emitted only when set, so scripts exported from pre-existing
+    # (substring) recordings stay byte-identical to what they produced before.
     if entry.get("label"):
-        return f"page.get_by_label({entry['label']!r})"
+        exact = ", exact=True" if entry.get("label_exact") else ""
+        return f"page.get_by_label({entry['label']!r}{exact})"
     if entry.get("text"):
-        return f"page.get_by_text({entry['text']!r})"
+        exact = ", exact=True" if entry.get("text_exact") else ""
+        return f"page.get_by_text({entry['text']!r}{exact})"
     if entry.get("test_id"):
         return f"page.get_by_test_id({entry['test_id']!r})"
     return None

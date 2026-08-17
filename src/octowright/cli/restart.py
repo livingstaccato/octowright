@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""``octowright restart`` — stop the running leader, sweep orphan browsers,
+"""``octowright restart`` — stop the running leader, sweep browsers,
 optionally start a fresh detached daemon.
 
 Use case: an agent (Claude Code, Codex CLI, etc.) sees ``Transport closed``
@@ -18,7 +18,8 @@ motivated this command). ``octowright restart`` does the full dance:
 2. SIGTERM it. Wait up to ``--timeout`` seconds for graceful exit.
 3. SIGKILL anything still alive.
 4. Remove a stale lockfile if present.
-5. Reap orphan Playwright browsers (skip with ``--keep-browsers``).
+5. Reap Playwright browsers -- ``scope="all"``, so every browser on the box,
+   protected or not (skip with ``--keep-browsers``).
 6. Spawn a fresh detached daemon (skip with ``--no-start``).
 7. Probe ``/api/health`` until 200 OK, up to ``--timeout`` seconds.
 
@@ -442,7 +443,10 @@ def _wait_for_health(host: str, port: int, timeout: float) -> str | None:
 @click.option(
     "--keep-browsers",
     is_flag=True,
-    help="Don't sweep orphan Playwright browsers after stopping the daemon.",
+    help=(
+        "Skip the browser sweep. Without this the restart kills every Playwright "
+        "browser on the machine, protected ones included."
+    ),
 )
 @click.option(
     "--no-start",
@@ -488,11 +492,17 @@ def restart(
     http_host: str,
     http_port: int,
 ) -> None:
-    """Stop the running octowright daemon, sweep orphans, start a fresh one.
+    """Stop the running octowright daemon, sweep browsers, start a fresh one.
 
     Useful when the daemon is wedged or needs a clean restart. The command
     preserves bare follower transports owned by MCP clients unless
     --kill-followers is passed (full reset).
+
+    DESTRUCTIVE: the browser sweep kills every Playwright browser on this
+    machine, not just leftovers from the dead daemon, and a protected browser
+    is NOT spared -- the sweep signals raw pids, a layer that never sees the
+    pool's protection flag. (protected only holds against cleanup and
+    close_strays.) Pass --keep-browsers to leave browsers running.
     """
     # When we're going to spawn, also reclaim the spawn port from a split-brain
     # leader squatting on it (otherwise the bind below fails and nothing starts).

@@ -9,8 +9,19 @@ import copy
 import re
 from typing import Any
 
-SEMANTIC_LOCATOR_KEYS = ("role", "role_name", "label", "text", "test_id", "role_exact")
-NON_ARIA_NOISE_KEYS = ("role", "role_name", "test_id", "role_exact")
+SEMANTIC_LOCATOR_KEYS = (
+    "role",
+    "role_name",
+    "label",
+    "text",
+    "test_id",
+    "role_exact",
+    "label_exact",
+    "text_exact",
+)
+# Keys that carry no human-readable ARIA text and so are noise in a digest.
+# The *_exact flags are modifiers on another key, never a name themselves.
+NON_ARIA_NOISE_KEYS = ("role", "role_name", "test_id", "role_exact", "label_exact", "text_exact")
 RECORDING_NOISE_KEYS = ("action", "ts", "kind", "profile", "instance_id")
 
 
