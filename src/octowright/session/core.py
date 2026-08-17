@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
@@ -108,6 +109,18 @@ class BrowserSession(
     # old 80px bar), and a permanent warning cannot warn.
     viewport_frame_inset_w: int | None = None
     viewport_frame_inset_h: int | None = None
+    # Per-launch capability token the viewport pill's init script must present
+    # on every ``__octowright_viewport_action`` binding call. The binding is
+    # installed on ``window`` for every frame of every page in the context
+    # (Playwright's ``expose_binding`` has no notion of caller identity), so
+    # without this a hostile/compromised page could call it directly and, via
+    # ``relaunch-fluid``, force a ``protected`` browser closed. The token is
+    # generated once per launch, spliced into the init script text (never
+    # assigned to ``window`` -- see ``viewport_pill.js``'s ``VIEWPORT_TOKEN``
+    # closure const), and checked with a constant-time compare in
+    # ``BrowserPool._expose_viewport_binding``. ``repr=False`` keeps it out of
+    # any ``repr(session)``/logging that might stringify the dataclass.
+    viewport_action_token: str = field(default_factory=lambda: secrets.token_urlsafe(24), repr=False)
     console: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=1000))
     video_path: Path | None = None
     trace_path: Path | None = None

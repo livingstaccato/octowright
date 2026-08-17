@@ -58,7 +58,7 @@ jobs:
     name: 🎨 Lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/bootstrap-uv
       - name: Ruff check
         run: uv run --active ruff check .
@@ -98,8 +98,8 @@ jobs:
     name: 🧪 Frontend tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
       # Reproducible install from the committed root package-lock.json. The
@@ -125,7 +125,7 @@ jobs:
       TARGET_OS: ${{ inputs.os || 'all' }}
       TARGET_ARCH: ${{ inputs.arch || 'all' }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: matrix
         # Filter the canonical runner list against the workflow_dispatch inputs.
         name: Build matrix JSON
@@ -139,7 +139,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-test-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/bootstrap-uv
       # Linux needs --with-deps: the downloaded browsers link against system
       # libraries (libgbm.so.1 and friends) that neither a GitHub runner nor an
@@ -182,7 +182,7 @@ jobs:
         run: bash ci/run_integration_and_main.sh
       - name: Upload integration-local media + reports
         if: ${{ env.ACT != 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-local-${{ runner.os }}-${{ matrix.arch }}
           path: |
@@ -210,7 +210,7 @@ jobs:
       # Attach the XML + HTML report so PR reviewers can download it.
       - name: Upload coverage report artifact
         if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-report
           path: |
@@ -222,7 +222,7 @@ jobs:
       # The built SPA at src/octowright/server/frontend/ is gitignored —
       # build it before the wheel so check_wheel_assets.py finds the
       # dashboard HTML/JS/CSS.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
       - name: Build frontend SPA
