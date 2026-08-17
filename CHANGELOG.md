@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] - 2026-08-16
+
+### Fixed
+- **`browser_export_script` no longer generates executable code from
+  recorded field values.** Six action fields (dialog policy, engine kind,
+  `delay_ms`, resize width/height, switch-page index, mock-route status)
+  were spliced into generated Python/TS source as bare, unescaped text
+  instead of through `repr()`/`json.dumps()` like every other field — a
+  crafted value in a recording or macro became executable code the instant
+  the exported script ran. Numeric fields are now coerced via `int()` at
+  export time; `kind`/policy values are validated against a fixed
+  allowlist and resolved via `getattr()`/index lookup at runtime rather
+  than spliced as identifiers. Also fixes a latent bug where
+  `policy="manual"` generated a call to a nonexistent `Dialog.manual()`
+  method.
+- **`browser_launch`'s `executable_path`/`launch_args` are now gated
+  behind an opt-in.** The only prior validation was "file exists" — no
+  allowlist, no gate — despite `executable_path` being a code-execution
+  primitive already excluded from JSONL replay for that reason. Any
+  caller, including an agent whose tool arguments are steered by indirect
+  prompt injection from a page it's browsing, could spawn an arbitrary
+  local executable with arbitrary argv as a child of the daemon. Both
+  fields now require `OCTOWRIGHT_ALLOW_EXECUTABLE_PATH`, off by default,
+  matching the existing `OCTOWRIGHT_ALLOW_PY_SCENARIOS` /
+  `OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS` convention.
+- **Macro tooling stopped leaking literal credentials.** Four related
+  redaction gaps, all rooted in discipline that existed in `execution.py`
+  but wasn't propagated to sibling modules touching the same action data:
+  a failed macro run's `healing_suggestion` leaked a raw fill/type value
+  one line before the same action was redacted for the rest of the error
+  payload; `macro_repair_preview`/`macro_repair_apply` returned the full
+  unredacted action (no failure required to reach it); `macro_lint`'s
+  credential heuristic printed the literal value it detected back into
+  its own warning; and `write_macro` had no collision guard against
+  `save_macro`'s slug namespace, so a crafted macro name could silently
+  overwrite an unrelated trusted macro.
+- **`octowright takeover --apply` writes its config atomically.** It
+  previously used a plain `Path.write_text()`, which follows a symlink at
+  the target path instead of replacing it — the same same-user
+  symlink-swap threat already guarded against elsewhere (goldens,
+  captures, screenshots, upgrade-state). Now routed through the shared
+  `atomic_write_text` temp-sibling + `os.replace()` helper.
+- **`browser_set_input_files` no longer defaults to reading the daemon's
+  working directory.** Its allowed-roots list unconditionally included the
+  daemon CWD alongside the dedicated upload-staging dir, letting a page an
+  agent is browsing (indirect prompt injection) name a sensitive path
+  under CWD — `.env`, an SSH key — targeting an attacker-controlled form
+  and exfiltrate it on submit. Default is now the upload-staging dir only;
+  `OCTOWRIGHT_UPLOAD_ROOTS` remains the opt-in for anything wider.
+- **The viewport-pill binding now requires a capability token.**
+  `context.expose_binding` installs `__octowright_viewport_action` on
+  `window` for every frame, so init-script-injected code and page-loaded
+  (including hostile third-party) code shared the same global with no
+  caller-identity check — any page script could call it directly and, via
+  relaunch-fluid, force a protected browser closed and reopened without
+  confirmation. A per-launch random token is now generated per session,
+  spliced into the init script inside its own closure (never assigned to
+  `window`, so page-script enumeration can't discover it), and checked
+  with a constant-time compare before any action dispatches.
+- **The leader's new-session rate limiter no longer lumps unrelated
+  headerless MCP clients into one shared bucket.** A session-creating
+  request without an `X-Octowright-Follower` header (an old follower, or
+  any direct HTTP-MCP client that skips the follower handshake) was keyed
+  into a single global `anonymous` bucket, so one noisy headerless
+  client — e.g. one that never sends `DELETE /mcp` to close its
+  sessions — could trip the per-source limit and `429` an unrelated
+  headerless client's legitimate new session. Headerless requests now
+  bucket by TCP peer instead: a single connection issuing repeated
+  session-creates (the actual storm pattern) still throttles together,
+  but two unrelated headerless sources on different connections no longer
+  share fate.
+- Isolated `test_daemon_restart_resilience`'s hermetic environment
+  (`XDG_STATE_HOME`), fixing the same daemon-log/bridge-state leak
+  already fixed for `test_daemonize.py` in 0.14.2 — this test's spawned
+  daemon was still writing real startup lines and bridge-state snapshots
+  into the developer's actual daemon log / `bridge-state.json`.
+
 ## [0.14.2] - 2026-08-15
 
 ### Added

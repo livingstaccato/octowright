@@ -73,12 +73,112 @@ def _ip_is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
 
 
+_HEX_DIGITS = "0123456789abcdefABCDEF"  # pragma: allowlist secret
+_OCTAL_DIGITS = "01234567"
+_DECIMAL_DIGITS = "0123456789"
+
+
+def _digits_in(text: str, alphabet: str) -> bool:
+    """True if ``text`` is non-empty and every character is in ``alphabet``."""
+    return bool(text) and all(c in alphabet for c in text)
+
+
+def _parse_hex_part(part: str) -> int | None:
+    digits = part[2:]
+    return int(digits, 16) if _digits_in(digits, _HEX_DIGITS) else None
+
+
+def _parse_octal_part(part: str) -> int | None:
+    return int(part, 8) if _digits_in(part, _OCTAL_DIGITS) else None
+
+
+def _parse_decimal_part(part: str) -> int | None:
+    return int(part) if _digits_in(part, _DECIMAL_DIGITS) else None
+
+
+def _parse_ipv4_number(part: str) -> int | None:
+    """Parse one dot-separated component of a WHATWG IPv4 host per the URL
+    Standard's numeric-part rules: ``0x``/``0X`` prefix → hex, a leading ``0``
+    with more than one digit → octal, otherwise decimal. Returns ``None`` if
+    ``part`` contains a character invalid for its base (this is how a real
+    hostname label like ``"example"`` is distinguished from a numeric part)."""
+    if part[:2].lower() == "0x":
+        return _parse_hex_part(part)
+    if len(part) > 1 and part[0] == "0":
+        return _parse_octal_part(part)
+    return _parse_decimal_part(part)
+
+
+def _expand_last_octets(numbers: list[int]) -> list[int] | None:
+    """The WHATWG parser's last dotted part absorbs every remaining byte
+    (e.g. ``127.1`` == ``127.0.0.1``: 2 parts, last part is a 3-byte value).
+    Returns the trailing ``5 - len(numbers)`` big-endian octets, or ``None``
+    if the last part doesn't fit in that many bytes."""
+    remaining_bytes = 5 - len(numbers)
+    last = numbers[-1]
+    if last > (256**remaining_bytes) - 1:
+        return None
+    tail = [0] * remaining_bytes
+    value = last
+    for i in range(remaining_bytes - 1, -1, -1):
+        tail[i] = value & 0xFF
+        value >>= 8
+    return tail
+
+
+def _parse_ipv4_parts(host: str) -> list[int] | None:
+    """Split ``host`` on ``.`` and parse each part per WHATWG numeric-part
+    rules. Returns ``None`` if there are more than 4 parts, any part is
+    empty, or any part isn't a valid hex/octal/decimal number."""
+    parts = host.split(".")
+    if not parts or len(parts) > 4 or any(p == "" for p in parts):
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        number = _parse_ipv4_number(part)
+        if number is None:
+            return None
+        numbers.append(number)
+    return numbers
+
+
+def _parse_whatwg_ipv4(host: str) -> ipaddress.IPv4Address | None:
+    """Parse ``host`` as a WHATWG URL Standard IPv4 address — the parser every
+    browser engine (Chromium/Firefox/WebKit) actually uses before connecting.
+    Unlike ``ipaddress.ip_address``, this accepts decimal (``2130706433``),
+    hex (``0x7f000001``), octal (``017700000001``), and shorthand
+    (``127.1``) forms. Returns ``None`` when ``host`` is not a numeric IPv4
+    host at all (e.g. a real hostname), so callers must treat ``None`` as
+    "not an IP" rather than "blocked" or "allowed"."""
+    numbers = _parse_ipv4_parts(host)
+    if numbers is None or any(n > 255 for n in numbers[:-1]):
+        return None
+    tail = _expand_last_octets(numbers)
+    if tail is None:
+        return None
+    octets = [*numbers[:-1], *tail]
+    try:
+        return ipaddress.IPv4Address(bytes(octets))
+    except ValueError:
+        return None
+
+
 def _host_is_blocked(host: str) -> bool:
     """True if ``host`` is a non-public literal IP, or a blocked hostname
-    (``localhost`` / ``*.localhost`` / a well-known metadata name)."""
+    (``localhost`` / ``*.localhost`` / a well-known metadata name).
+
+    Checks the strict dotted-quad/IPv6 form first, then falls back to the
+    WHATWG (browser) IPv4 parser: every engine octowright drives resolves
+    decimal/hex/octal/shorthand IPv4 forms (e.g. ``2130706433`` ==
+    ``127.0.0.1``) before connecting, so those forms must be classified the
+    same as their dotted-quad equivalent rather than mistaken for a hostname.
+    """
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
+        whatwg_ip = _parse_whatwg_ipv4(host)
+        if whatwg_ip is not None:
+            return _ip_is_non_public(whatwg_ip)
         return host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")
     return _ip_is_non_public(ip)
 
