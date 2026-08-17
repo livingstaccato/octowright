@@ -95,8 +95,8 @@ mismatch means local drift from the shipped copy).
 
 - **Shared store with Gemini CLI.** agy uses the same `~/.gemini/config/plugins/` directory
   that Gemini CLI manages. Changes to plugins there may affect both tools.
-- **No hooks support yet.** The agy plugin manifest supports a `hooks.json` but Octowright
-  does not currently ship any hooks for agy. Session-start guidance is delivered via the
+- **No hooks support.** The agy plugin manifest supports a `hooks.json` but Octowright
+  does not ship any hooks for agy. Session-start guidance is delivered via the
   `octowright` skill instead.
 - **`uvx` required for the default config.** The default `mcp_config.json` uses
   `uvx octowright serve` for portability. Without `uv` installed, edit `mcp_config.json`

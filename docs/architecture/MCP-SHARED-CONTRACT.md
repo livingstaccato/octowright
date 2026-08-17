@@ -167,7 +167,7 @@ dict generally, built by `build_launch_result`) additionally includes
 `"protected_reason": str` beside `"protected"` — the reason the effective
 `protected` value was chosen: `"explicit"` (caller passed `protected=`),
 `"all_default"` (`OCTOWRIGHT_PROTECT_BROWSERS`), `"headed_default"` (headed +
-non-ephemeral auto-protect), or `"unprotected"`. This reason is not currently
+non-ephemeral auto-protect), or `"unprotected"`. This reason is not
 threaded through the HTTP `SessionSummary` shape above — only the plain
 `protected` bool is.
 

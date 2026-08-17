@@ -16,9 +16,9 @@ skinparam noteBorderColor #d1d5db
 skinparam noteBackgroundColor #f9fafb
 
 ' Force top-to-bottom layering so user surfaces sit above live state
-' above session modules above the Playwright SDK boundary. This stops
-' the Playwright cloud from being placed off to a side, which used to
-' force session→PW and pool→PW arrows to cross multiple layers.
+' above session modules above the Playwright SDK boundary. Without this,
+' the Playwright cloud gets placed off to a side, forcing session→PW
+' and pool→PW arrows to cross multiple layers.
 top to bottom direction
 
 package "user surfaces" #eff6ff {
