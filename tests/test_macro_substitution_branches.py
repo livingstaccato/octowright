@@ -39,24 +39,42 @@ from octowright.macros.substitution import (
 class TestSemanticLocatorKeys:
     def test_exact_membership(self) -> None:
         """Mutating any tuple element would break the locator-key gate."""
-        assert SEMANTIC_LOCATOR_KEYS == ("role", "role_name", "label", "text", "test_id", "role_exact")
+        assert SEMANTIC_LOCATOR_KEYS == (
+            "role",
+            "role_name",
+            "label",
+            "text",
+            "test_id",
+            "role_exact",
+            "label_exact",
+            "text_exact",
+        )
 
-    @pytest.mark.parametrize("key", ["role", "role_name", "label", "text", "test_id", "role_exact"])
+    @pytest.mark.parametrize(
+        "key", ["role", "role_name", "label", "text", "test_id", "role_exact", "label_exact", "text_exact"]
+    )
     def test_each_key_present(self, key: str) -> None:
         """Each individual member must remain in the tuple."""
         assert key in SEMANTIC_LOCATOR_KEYS
 
     def test_no_extra_keys(self) -> None:
-        """Tuple length is exactly 6 — adding/removing would shift behaviour."""
-        assert len(SEMANTIC_LOCATOR_KEYS) == 6
+        """Tuple length is exactly 8 — adding/removing would shift behaviour."""
+        assert len(SEMANTIC_LOCATOR_KEYS) == 8
 
 
 class TestNonAriaNoiseKeys:
     def test_exact_membership(self) -> None:
         """The set stripped from non-click/fill kinds is fixed."""
-        assert NON_ARIA_NOISE_KEYS == ("role", "role_name", "test_id", "role_exact")
+        assert NON_ARIA_NOISE_KEYS == (
+            "role",
+            "role_name",
+            "test_id",
+            "role_exact",
+            "label_exact",
+            "text_exact",
+        )
 
-    @pytest.mark.parametrize("key", ["role", "role_name", "test_id", "role_exact"])
+    @pytest.mark.parametrize("key", ["role", "role_name", "test_id", "role_exact", "label_exact", "text_exact"])
     def test_each_key_present(self, key: str) -> None:
         """Every member must be stripped for non-locator kinds."""
         assert key in NON_ARIA_NOISE_KEYS

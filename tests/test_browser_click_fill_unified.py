@@ -100,7 +100,9 @@ async def test_browser_click_role_calls_session_click_by(_patch_pool: MagicMock)
         role_name="Submit",
         role_exact=False,
         label=None,
+        label_exact=False,
         text=None,
+        text_exact=False,
         test_id=None,
         timeout_ms=None,
     )
@@ -187,6 +189,7 @@ async def test_browser_fill_label_calls_session_fill_by(_patch_pool: MagicMock) 
         role=None,
         role_name=None,
         label="Email",
+        label_exact=False,
         test_id=None,
         timeout_ms=None,
     )

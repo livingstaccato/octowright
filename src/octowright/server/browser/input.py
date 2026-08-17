@@ -45,7 +45,9 @@ def _get_text_by_full_action(
     role_name: str | None = None,
     role_exact: bool = False,
     label: str | None = None,
+    label_exact: bool = False,
     text: str | None = None,
+    text_exact: bool = False,
     test_id: str | None = None,
     timeout_ms: int | None = None,
 ) -> list[dict[str, Any]]:
@@ -60,8 +62,12 @@ def _get_text_by_full_action(
     ):
         if value is not None:
             args[key] = value
-    if role_exact:
-        args["role_exact"] = True
+    # Exact flags are only emitted when set, so the suggested follow-up call
+    # stays as short as the original — but a set flag MUST survive, or the
+    # retry would silently widen back to substring matching.
+    for flag_name, flag in (("role_exact", role_exact), ("label_exact", label_exact), ("text_exact", text_exact)):
+        if flag:
+            args[flag_name] = True
     return annotate_next_actions_for_profile([{"tool": "browser_get_text_by", "args": args}])
 
 
@@ -76,7 +82,9 @@ def _get_text_by_full_action(
         "  role      — ARIA role ('button', 'link', 'checkbox', …); "
         "combine with role_name to target by accessible name.\n"
         "  label     — element associated with an <label> or aria-label.\n"
-        "  text      — element whose visible text matches (partial by default).\n"
+        "  text      — element whose visible text matches (SUBSTRING by default, so "
+        "'Ada' also matches 'Ada Lovelace (old)'; pass text_exact=True for whole-string "
+        "matching, and label_exact=True for the same on label).\n"
         "  test_id   — element with a matching data-testid attribute.\n"
         "  selector  — CSS / XPath selector (fallback for ARIA-less elements).\n"
         "Pass response_mode='outline' to get a compact browser_page_outline in the "
@@ -90,7 +98,9 @@ async def browser_click(
     role_name: str | None = None,
     role_exact: bool = False,
     label: str | None = None,
+    label_exact: bool = False,
     text: str | None = None,
+    text_exact: bool = False,
     test_id: str | None = None,
     timeout_ms: int | None = None,
     response_mode: str | None = None,
@@ -104,7 +114,9 @@ async def browser_click(
                 role_name=role_name,
                 role_exact=role_exact,
                 label=label,
+                label_exact=label_exact,
                 text=text,
+                text_exact=text_exact,
                 test_id=test_id,
                 timeout_ms=timeout_ms,
             )
@@ -167,6 +179,7 @@ async def browser_fill(
     role: str | None = None,
     role_name: str | None = None,
     label: str | None = None,
+    label_exact: bool = False,
     test_id: str | None = None,
     timeout_ms: int | None = None,
     response_mode: str | None = None,
@@ -180,6 +193,7 @@ async def browser_fill(
                 role=role,
                 role_name=role_name,
                 label=label,
+                label_exact=label_exact,
                 test_id=test_id,
                 timeout_ms=timeout_ms,
             )
@@ -227,7 +241,9 @@ async def browser_get_text_by(
     role_name: str | None = None,
     role_exact: bool = False,
     label: str | None = None,
+    label_exact: bool = False,
     text: str | None = None,
+    text_exact: bool = False,
     test_id: str | None = None,
     timeout_ms: int | None = None,
     max_chars: int | None = None,
@@ -239,7 +255,9 @@ async def browser_get_text_by(
             role_name=role_name,
             role_exact=role_exact,
             label=label,
+            label_exact=label_exact,
             text=text,
+            text_exact=text_exact,
             test_id=test_id,
             timeout_ms=timeout_ms,
         )
@@ -251,7 +269,9 @@ async def browser_get_text_by(
             role_name=role_name,
             role_exact=role_exact,
             label=label,
+            label_exact=label_exact,
             text=text,
+            text_exact=text_exact,
             test_id=test_id,
             timeout_ms=timeout_ms,
         )
