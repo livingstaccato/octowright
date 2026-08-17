@@ -50,8 +50,26 @@ def test_unknown_field_message_names_the_field_and_the_action() -> None:
     issues = lint_macro(_macro([{"action": "wait_for", "js": "x"}]))
     unknown = [i for i in issues if i.code == "unknown_field"]
     assert len(unknown) == 1
-    assert "js" in unknown[0].message
-    assert "wait_for" in unknown[0].message
+    assert unknown[0].message == (
+        "action 'wait_for' does not accept field 'js' — "
+        "replay would fail with TypeError; check the spelling against the tool's parameters"
+    )
+
+
+def test_unknown_field_action_index_points_at_the_offending_action() -> None:
+    """A later action in the same macro must be reported with ITS index,
+    not action 0 — proves outer_index is threaded through, not discarded."""
+    issues = lint_macro(
+        _macro(
+            [
+                {"action": "navigate", "url": "https://example.com"},
+                {"action": "navigate", "url": "https://example.com"},
+                {"action": "wait_for", "js": "x"},
+            ]
+        )
+    )
+    unknown = [i for i in issues if i.code == "unknown_field"]
+    assert [i.action_index for i in unknown] == [2]
 
 
 def test_unknown_field_is_an_error_not_a_warning() -> None:
@@ -91,6 +109,19 @@ def test_realistic_recorded_actions_produce_no_unknown_field(action: dict[str, A
     `source`/`target`) alongside ordinary parameters.
     """
     assert "unknown_field" not in _codes(action)
+
+
+def test_click_by_selector_fallback_is_allowed_alongside_a_semantic_locator() -> None:
+    """A **finders method also accepts the CSS `selector` fallback the runtime
+    uses when the semantic locator path fails (see runtime._dispatch_click_or_fill).
+    Exercises the exact literal, not a near-miss spelling."""
+    assert "unknown_field" not in _codes({"action": "click_by", "role": "button", "selector": "#save"})
+
+
+def test_click_by_rejects_a_near_miss_spelling_of_selector() -> None:
+    """Guards the allowed-set literal itself: a typo'd/miscased key must still
+    be flagged, proving the set contains the exact string 'selector'."""
+    assert "unknown_field" in _codes({"action": "click_by", "role": "button", "SELECTOR": "#save"})
 
 
 def test_every_dispatchable_action_has_a_derived_allowed_set() -> None:

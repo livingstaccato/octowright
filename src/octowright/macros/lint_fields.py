@@ -32,7 +32,6 @@ family) has no enumerable parameter list, so its finder keys come from
 from __future__ import annotations
 
 import inspect
-from functools import cache
 
 from octowright.macros.substitution import RECORDING_NOISE_KEYS, SEMANTIC_LOCATOR_KEYS
 
@@ -81,12 +80,16 @@ def _session_method_params(method_name: str) -> tuple[frozenset[str], bool] | No
     return frozenset(names), takes_kwargs
 
 
-@cache
 def allowed_fields_for(kind: str) -> frozenset[str]:
     """Field names a macro action of *kind* may carry.
 
     Returns an empty set for an action this module cannot reason about, which
     callers must treat as "don't check" rather than "nothing is allowed".
+
+    Not cached: lint runs once per macro save over a handful of actions, so
+    the introspection cost is negligible, and caching a function this small
+    only buys a footgun -- it lets the *first* test to touch a given `kind`
+    quietly own that line's coverage for every later test in the same run.
     """
     method_name = _ACTION_MAP.get(kind)
     if method_name is None:
