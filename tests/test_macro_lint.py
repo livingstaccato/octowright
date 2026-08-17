@@ -211,13 +211,20 @@ def test_looks_like_credential_email() -> None:
     issues = lint_macro(_macro([{"action": "fill", "selector": "input[name=email]", "value": "me@octowright.test"}]))
     assert _codes(issues) == ["looks_like_credential"]
     assert issues[0].severity == "warning"
-    assert "me@octowright.test" in issues[0].message
+    # The literal value must NOT be echoed back into the warning — the field
+    # name is fine (not sensitive), the value is what leaks a credential.
+    assert "me@octowright.test" not in issues[0].message
+    assert "'value'" in issues[0].message
 
 
 def test_looks_like_credential_password() -> None:
     # 12+ chars, has letters, digits, special
     issues = lint_macro(_macro([{"action": "fill", "selector": "input[name=password]", "value": "Hunter2!secret"}]))
     assert _codes(issues) == ["looks_like_credential"]
+    assert issues[0].severity == "warning"
+    # The issue still fires (detection unchanged) but the literal password
+    # itself must never be echoed back in the warning text.
+    assert "Hunter2!secret" not in issues[0].message
 
 
 def test_placeholder_value_not_flagged_as_credential() -> None:

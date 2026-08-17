@@ -604,6 +604,51 @@ class TestCredentialRedaction:
             text = call[0][1].get("text", "")
             assert "hunter2" not in text
 
+    @pytest.mark.anyio
+    async def test_suggest_fix_receives_redacted_action_not_raw(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """``_suggest_fix`` must be called with the REDACTED action, not the
+        raw one. ``suggest_fix`` (macros/repair.py) calls ``summarize_action``,
+        whose fill/type formatters embed ``value``/``text`` verbatim into the
+        string that lands in ``healing_suggestion`` -- a third sink for the
+        same credential the ``failed_action``/``executed_actions`` fields
+        already redact. Regression guard for a redact-after-suggest bug."""
+        patched_runners["register"](
+            "m",
+            [{"action": "fill", "selector": "#pw", "value": "hunter2"}],
+        )
+        patched_runners["raise_on"]["fill"] = ValueError("boom")
+        with pytest.raises(RuntimeError):
+            await run_macro(fake_session, "m")
+        assert patched_runners["suggest_calls"][0]["value"] == "<redacted>"
+        assert patched_runners["suggest_calls"][0]["selector"] == "#pw"
+
+    @pytest.mark.anyio
+    async def test_healing_suggestion_does_not_leak_literal_credential_value(
+        self, fake_session: _FakeSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end: with the REAL suggest_fix (unmocked), the raised
+        RuntimeError's healing_suggestion must never contain the literal
+        credential value, only the redacted placeholder."""
+
+        def fake_load(name: str) -> dict[str, Any]:
+            return {"name": name, "actions": [{"action": "fill", "selector": "#pw", "value": "hunter2"}]}
+
+        async def fake_dispatch_one(session: Any, action: dict[str, Any], **_kwargs: Any) -> tuple[int, int]:
+            raise ValueError("boom")
+
+        monkeypatch.setattr(_execution, "load_macro", fake_load)
+        monkeypatch.setattr(_execution, "_dispatch_one", fake_dispatch_one)
+        fake_session.snapshot = AsyncMock(return_value={"aria": "- textbox 'Password'"})
+
+        with pytest.raises(RuntimeError) as exc_info:
+            await run_macro(fake_session, "m")
+
+        healing = exc_info.value.args[0].get("healing_suggestion", "")
+        assert "hunter2" not in healing
+        assert "<redacted>" in healing
+
 
 # ─── run_macro: pill push sequencing ────────────────────────────────────────
 
