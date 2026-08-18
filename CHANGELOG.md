@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.4] - 2026-08-17
+
+### Added
+- **`text_exact` / `label_exact` locator flags**, mirroring the existing
+  `role_exact`. `click_by`/`fill_by`/`get_text_by` (and the underlying
+  `browser_click`/`browser_fill`/`browser_get_text_by` tools) matched
+  `text`/`label` by substring with no way to opt into exact matching — a
+  superstring silently matched too, so renaming a colliding element to
+  `"<name> (old)"` left the original locator still matching both. Default
+  stays substring (`False`), so every existing macro and exported script is
+  unaffected.
+
+### Fixed
+- **`macro_lint` now reports fields a macro action can't actually dispatch.**
+  The lint schema only ever encoded which fields were *required*, never which
+  were *allowed* — the runtime splats the action's fields straight at the
+  session method, so a misspelled or invented field (`wait_for` with `js:`
+  instead of `expression:`) was a guaranteed `TypeError` on the first live
+  replay, potentially long after authoring and after the macro's earlier
+  actions already ran their side effects. The allowed-field set for each
+  action is derived from the real dispatch-target signature (plus the
+  runtime's own recorded-field rename/drop maps), not hand-mirrored, so it
+  can't silently drift the way a copied table has before.
+- **`octowright restart --help` now states its real blast radius.** It read
+  as "sweep orphan browsers," reading like a cleanup of leftovers from the
+  dead daemon; the sweep is actually `scope="all"` — every Playwright browser
+  on the machine, including a `protected` one, since the reaper is a raw-PID
+  signal sweep that never sees the pool's protection flag.
+- **`looks_like_credential` no longer fires on ordinary navigation URLs.**
+  Its "12+ chars mixing letter/digit/special" heuristic describes ordinary
+  URL syntax as readily as it describes a password, so any public HTTPS URL
+  containing a single digit warned on `macro_lint` — including the local
+  dashboard URL. A URL is now inspected by part: basic-auth userinfo and
+  secret-shaped query parameters (`token=`, `api_key=`, …) still warn; the
+  path and host no longer do.
+
 ## [0.14.3] - 2026-08-16
 
 ### Fixed
