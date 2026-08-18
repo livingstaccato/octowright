@@ -310,6 +310,66 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+def _process_identity() -> tuple[frozenset[int], frozenset[int]] | None:
+    """``(all live pids, octowright-daemon pids)`` from one process-table read.
+
+    Both halves come from the same scan because the caller must distinguish
+    "listed, and not an octowright daemon" (proof the recorded pid was recycled)
+    from "not listed at all" (a scan race, or a process this user cannot see),
+    which is not proof of anything.
+
+    ``None`` means the table could not be read — NOT "no daemons are running".
+    The caller keeps the entry in that case, matching how ``_pid_alive`` fails
+    closed. Reuses ``process_reaper._list_processes``, the repo's existing
+    cross-platform reader, rather than adding a third implementation; the import
+    is local so this module stays import-light at leader boot.
+    """
+    try:
+        from octowright.process_reaper import _list_processes
+
+        table = _list_processes()
+    except Exception:
+        return None
+    return (
+        frozenset(pid for pid, _ppid, _command in table),
+        frozenset(pid for pid, _ppid, command in table if "octowright serve" in command),
+    )
+
+
+def _daemon_is_gone(pid: int, identity: tuple[frozenset[int], frozenset[int]] | None) -> bool:
+    """Whether the daemon that recorded ``pid`` is provably gone.
+
+    Liveness alone is only half the test. The OS recycles a pid after the daemon
+    dies, so an entry whose pid now belongs to an unrelated process looked
+    "alive" forever and was never reaped — observed live, a July daemon's pid
+    handed to a ``-zsh`` still holding its entry four weeks later.
+
+    Gone when the pid is dead, OR when it is alive and the process actually
+    holding it is demonstrably not an octowright daemon. Anything short of proof
+    keeps the entry.
+    """
+    if not _pid_alive(pid):
+        return True
+    if identity is None:
+        return False
+    live_pids, octowright_pids = identity
+    return pid in live_pids and pid not in octowright_pids
+
+
+def _prune_candidates(manifest: SessionManifest, current_pid: int) -> list[tuple[str, int]]:
+    """``(session_id, daemon_pid)`` for entries eligible to be examined.
+
+    Skips entries with no usable ``daemon_pid`` (pre-schema rows) and the
+    running daemon's own, so the process doing the prune can never delete its
+    live sessions regardless of what the process table says about it.
+    """
+    return [
+        (session_id, raw["daemon_pid"])
+        for session_id, raw in sorted(manifest["sessions"].items())
+        if isinstance(raw, dict) and isinstance(raw.get("daemon_pid"), int) and raw["daemon_pid"] != current_pid
+    ]
+
+
 def prune_dead_daemon_entries(current_pid: int | None = None, path: Path | None = None) -> list[str]:
     """Drop entries stranded by a daemon generation that is gone. Returns the ids.
 
@@ -321,23 +381,23 @@ def prune_dead_daemon_entries(current_pid: int | None = None, path: Path | None 
     Orphanhood is decided by the recorded ``daemon_pid``, NOT by absence from
     the live pool: this runs at leader boot when the pool is empty, so
     pool-absence alone would flag every entry, including ones a concurrently
-    live daemon owns. Conservative by construction — an entry is removed only
-    when its owning pid is *provably* gone, so a recycled pid or a missing
-    ``daemon_pid`` (pre-schema entries) leaves a stale entry rather than
-    deleting a live one.
+    live daemon owns.
+
+    Still conservative by construction — an entry goes only when its owning
+    daemon is *provably* gone — but see ``_daemon_is_gone`` for what counts as
+    proof. Liveness alone did not: a recycled pid kept an entry alive forever.
+    A missing ``daemon_pid`` (pre-schema entries), an unreadable process table,
+    or a pid the table does not list all still leave the entry in place.
     """
     resolved = _resolve_path(path)
     with _manifest_lock(resolved):
         manifest = read_manifest(resolved)
         current_pid = os.getpid() if current_pid is None else current_pid
-        removed: list[str] = []
-        for session_id, raw in sorted(manifest["sessions"].items()):
-            if not isinstance(raw, dict):
-                continue
-            pid = raw.get("daemon_pid")
-            if not isinstance(pid, int) or pid == current_pid or _pid_alive(pid):
-                continue
-            removed.append(session_id)
+        candidates = _prune_candidates(manifest, current_pid)
+        # One process-table read for the whole manifest, and none at all when
+        # there is nothing to check (the common leader-boot case).
+        identity = _process_identity() if candidates else None
+        removed = [session_id for session_id, pid in candidates if _daemon_is_gone(pid, identity)]
         if not removed:
             return []
         for session_id in removed:

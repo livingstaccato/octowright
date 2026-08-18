@@ -254,11 +254,21 @@ def test_keeps_entries_owned_by_the_current_process(tmp_path: Path) -> None:
     assert "mine" in sm.read_manifest(path)["sessions"]
 
 
-def test_keeps_entries_whose_daemon_is_still_alive(tmp_path: Path) -> None:
+def test_keeps_entries_whose_daemon_is_still_alive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A concurrently-live daemon (e.g. --no-singleton sharing this manifest path)
     # must not have its entries pruned by another process booting.
+    #
+    # The stand-in for that daemon is this test process, which is pytest, not an
+    # `octowright serve` — so the process table is stubbed to say what the real
+    # scenario would. Liveness alone is no longer proof of ownership (a recycled
+    # pid is alive too), and without this the proxy tests the opposite case.
+    # See tests/test_manifest_prune_pid_identity.py.
     path = tmp_path / "manifest.json"
     _write(path, {"other": _entry("other", os.getpid())})
+    monkeypatch.setattr(
+        "octowright.process_reaper._list_processes",
+        lambda: [(os.getpid(), 1, "/venv/bin/python /venv/bin/octowright serve")],
+    )
 
     assert sm.prune_dead_daemon_entries(current_pid=os.getpid() + 1, path=path) == []
     assert "other" in sm.read_manifest(path)["sessions"]
