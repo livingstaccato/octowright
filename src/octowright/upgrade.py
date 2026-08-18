@@ -40,6 +40,17 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.14.4": [
+        "click_by/fill_by/get_text_by gained text_exact and label_exact flags "
+        "mirroring role_exact — matching stayed substring-by-default the whole "
+        "time, this just adds an opt-in for exact instead of leaving you to "
+        "hand-craft a selector.",
+        "macro_lint now catches a field a macro action can't actually accept "
+        "before you replay it, instead of a live TypeError days later.",
+        "restart --help says plainly what the browser sweep actually kills "
+        "(every Playwright browser on the machine, protected or not), and "
+        "macro_lint stopped warning on ordinary navigate URLs.",
+    ],
     "0.14.3": [
         "A full security review closed out seven findings across the codebase: "
         "exported macro scripts can no longer be turned into executable code via "
