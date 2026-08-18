@@ -19,15 +19,20 @@ from `octowright.macros._dispatch_simple`; conditional action shapes mirror
 
 from __future__ import annotations
 
-import math
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .lint_fields import unknown_fields
-from .lint_urls import url_carries_credential
+from .lint_credentials import (
+    _CREDENTIAL_CANDIDATE_KEYS,
+    _is_placeholder,
+    _looks_like_email,
+    _looks_like_password,
+)
+from .lint_fields import ambiguous_rename_fields, unknown_fields
+from .lint_urls import code_carries_credential, url_carries_credential
 from .runtime import _ACTION_MAP
+from .substitution import SEMANTIC_FINDER_KEYS
 
 # ---------------------------------------------------------------------------
 # Action catalogues — kept in sync with macros/runtime.py and conditional.py manually.
@@ -72,96 +77,20 @@ _CONDITIONAL_ACTIONS: frozenset[str] = frozenset({"if_selector", "try", "try_eac
 
 _MACRO_CALL_ACTION = "macro_call"
 
+#: Candidate fields that hold a URL, and so are scanned by URL part.
+_URL_LIKE_KEYS: frozenset[str] = frozenset({"url", "pattern"})
+#: Candidate fields that hold JavaScript, scanned for embedded tokens only.
+_CODE_LIKE_KEYS: frozenset[str] = frozenset({"expression"})
+
+#: The finder keys a click_by/fill_by must set at least one of. Derived from
+#: substitution rather than listed: `role_name` used to be in this set, so
+#: `{"action": "click_by", "role_name": "Save"}` passed lint and then raised
+#: `ValueError: exactly one of role/label/text/test_id must be set` on replay.
+_ARIA_LOCATOR_KEYS: frozenset[str] = frozenset(SEMANTIC_FINDER_KEYS)
+
 _KNOWN_ACTIONS: frozenset[str] = (
     frozenset(_SIMPLE_REQUIRED) | frozenset(_ACTION_MAP) | _REPLAY_SKIP | _CONDITIONAL_ACTIONS | {_MACRO_CALL_ACTION}
 )
-
-# ---------------------------------------------------------------------------
-# Credential heuristics
-# ---------------------------------------------------------------------------
-
-_EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+\.\w+$")
-_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
-_HAS_DIGIT = re.compile(r"\d")
-_HAS_LETTER = re.compile(r"[A-Za-z]")
-_HAS_SPECIAL = re.compile(r"[^A-Za-z0-9]")
-
-# Well-known credential prefixes — small, high-precision set that catches
-# vendor token shapes the digit+letter+special heuristic misses (no special
-# characters, or short overall). Tuned for false-negative reduction, not
-# exhaustive coverage; the runtime ``OCTOWRIGHT_REDACT_INPUTS`` policy is the
-# real defence.
-_TOKEN_PREFIX_RE = re.compile(
-    r"^(?:"
-    r"AKIA[0-9A-Z]{16}"  # AWS access key ID
-    r"|ghp_[A-Za-z0-9]{20,}"  # GitHub personal access token
-    r"|gho_[A-Za-z0-9]{20,}"  # GitHub OAuth token
-    r"|ghu_[A-Za-z0-9]{20,}"  # GitHub user-to-server token
-    r"|ghs_[A-Za-z0-9]{20,}"  # GitHub server-to-server token
-    r"|ghr_[A-Za-z0-9]{20,}"  # GitHub refresh token
-    r"|github_pat_[A-Za-z0-9_]{20,}"  # GitHub fine-grained PAT
-    r"|glpat-[A-Za-z0-9_-]{20,}"  # GitLab personal access token
-    r"|xox[abprs]-[A-Za-z0-9-]{10,}"  # Slack tokens
-    r"|ya29\.[A-Za-z0-9_-]{20,}"  # Google OAuth access token
-    r"|sk-[A-Za-z0-9]{20,}"  # OpenAI / Anthropic-style secret key
-    r"|(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{20,}"  # Stripe API keys
-    r")$"
-)
-
-
-def _shannon_entropy(s: str) -> float:
-    if not s:
-        return 0.0
-    freq: dict[str, int] = {}
-    for ch in s:
-        freq[ch] = freq.get(ch, 0) + 1
-    n = len(s)
-    return -sum((c / n) * math.log2(c / n) for c in freq.values())
-
-
-# Fields that are NEVER credentials even if they happen to look like one
-# (e.g. a CSS selector containing `[id="user@host"]` — unlikely, but cheap
-# to skip). We only inspect string fields whose KEY plausibly carries
-# user-supplied values.
-_CREDENTIAL_CANDIDATE_KEYS: frozenset[str] = frozenset(
-    {"value", "text", "url", "expression", "pattern", "body", "key", "prompt_text"}
-)
-_ARIA_LOCATOR_KEYS: frozenset[str] = frozenset({"role", "role_name", "label", "text", "test_id"})
-
-
-def _looks_like_password(s: str) -> bool:
-    """True if *s* looks like a literal credential.
-
-    Combines three independent signals:
-      1. Known token prefixes (AWS, GitHub, Slack, Google OAuth, sk-...).
-      2. Classic password shape: >=12 chars with digits + letters + special.
-      3. High Shannon entropy (>4.0 bits/char) for strings >=20 chars — catches
-         bare hex API keys and alphanumeric bearer tokens that have no special
-         characters and so slip past (2).
-    """
-    if _TOKEN_PREFIX_RE.match(s):
-        return True
-    if len(s) >= 12 and _HAS_DIGIT.search(s) and _HAS_LETTER.search(s) and _HAS_SPECIAL.search(s):
-        return True
-    return len(s) >= 20 and _shannon_entropy(s) > 4.0
-
-
-def _token_like(s: str) -> bool:
-    """Password heuristic minus rule 2 — for values that live inside a URL.
-
-    Rule 2 ("12+ chars mixing letter/digit/special") describes ordinary URL
-    syntax as readily as it describes a password, so it is dropped here; the
-    prefix and entropy signals carry no such ambiguity.
-    """
-    return bool(_TOKEN_PREFIX_RE.match(s)) or (len(s) >= 20 and _shannon_entropy(s) > 4.0)
-
-
-def _looks_like_email(s: str) -> bool:
-    return bool(_EMAIL_RE.match(s))
-
-
-def _is_placeholder(s: str) -> bool:
-    return bool(_PLACEHOLDER_RE.search(s))
 
 
 # ---------------------------------------------------------------------------
@@ -185,11 +114,22 @@ class Issue:
 def _field_carries_credential(key: str, val: str) -> bool:
     """Whether one candidate field's value looks like a literal credential.
 
-    A URL is scanned by PART (userinfo / query) rather than as one blob — see
-    ``lint_urls`` for why the generic heuristic can't be applied to one.
+    Dispatch is by field KIND, not by one special-cased name. The 0.14.4 fix
+    special-cased the literal key ``url``, which left the other URL-shaped and
+    code-shaped candidates (``pattern`` on expect_url/mock_route/unmock_route,
+    ``expression`` on evaluate/expect_js) still running the blob heuristic --
+    so the noise relocated instead of going away. A route glob and a JS
+    expression satisfy "12+ chars mixing letter/digit/special" exactly as
+    readily as a URL does.
     """
-    if key == "url":
-        return url_carries_credential(val, token_like=_token_like)
+    if key in _URL_LIKE_KEYS:
+        verdict = url_carries_credential(val)
+        # None == "not parseable as a URL"; fall through rather than assert
+        # that an unparsable string is credential-free (see lint_urls).
+        if verdict is not None:
+            return verdict
+    elif key in _CODE_LIKE_KEYS:
+        return code_carries_credential(val)
     return _looks_like_email(val) or _looks_like_password(val)
 
 
@@ -233,23 +173,51 @@ def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: l
     _check_simple_locator_fields(action, kind, _append_missing)
     _check_simple_drag_fields(action, kind, _append_missing)
     _check_simple_required_fields(action, kind, _append_missing)
-    _check_unknown_fields(action, kind, outer_index, issues)
 
 
 def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
     """Flag fields the runtime would splat at a session method that rejects them.
 
-    Severity is error, not warning: this is a certain ``TypeError`` on replay,
-    and catching it at save time is the whole point (see lint_fields).
+    Severity is error, not warning: replay cannot do what the action says, and
+    catching that at save time is the whole point (see lint_fields).
     """
-    for field in sorted(unknown_fields(kind, frozenset(action))):
+    # `screenshot` is the one kind _dispatch_standard special-cases: it forwards
+    # only `path`, so a stray field there is dropped instead of raising. Naming
+    # a TypeError would send the author hunting a crash that never happens.
+    consequence = (
+        "replay ignores it, so the action will not do what the field says"
+        if kind == "screenshot"
+        else "replay would fail with TypeError"
+    )
+    # key=str: a YAML macro can carry a non-string key (YAML 1.1 resolves a
+    # bare `on:`/`yes:`/`no:` to a bool), and a bare sorted() raises TypeError
+    # on the mixed set -- an analyzer crashing on its input instead of
+    # reporting on it, unlike every other malformed-input guard in this file.
+    for field in sorted(unknown_fields(kind, frozenset(action)), key=str):
         issues.append(
             Issue(
                 severity="error",
                 code="unknown_field",
                 message=(
                     f"action {kind!r} does not accept field {field!r} — "
-                    "replay would fail with TypeError; check the spelling against the tool's parameters"
+                    f"{consequence}; check the spelling against the tool's parameters"
+                ),
+                action_index=outer_index,
+            )
+        )
+
+
+def _check_ambiguous_fields(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
+    """Flag an action carrying both spellings of a renamed field."""
+    for recorded, param in ambiguous_rename_fields(kind, frozenset(action)):
+        issues.append(
+            Issue(
+                severity="error",
+                code="ambiguous_field",
+                message=(
+                    f"action {kind!r} carries both {recorded!r} and {param!r}, which are the same field — "
+                    "replay keeps whichever comes last in the JSON, so the effective value is not stable; "
+                    "keep one"
                 ),
                 action_index=outer_index,
             )
@@ -460,6 +428,12 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
             )
         )
         return
+
+    # Every dispatchable kind, not just the _SIMPLE_REQUIRED subset: get_text_by,
+    # switch_frame, navigate_back and reset_frame are in _ACTION_MAP and in
+    # neither. These fail open outside _ACTION_MAP, so conditionals are unaffected.
+    _check_unknown_fields(action, kind, outer_index, issues)
+    _check_ambiguous_fields(action, kind, outer_index, issues)
 
     if kind in _SIMPLE_REQUIRED:
         _check_simple(action, kind, outer_index, issues)

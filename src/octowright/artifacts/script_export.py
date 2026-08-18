@@ -114,6 +114,28 @@ def _resolve(value: Any, args: dict[str, str]) -> Any:
         return [_resolve(item, args) for item in value]
     return value
 
+
+# Resolve a semantic (ARIA) locator, mirroring session/locators.build_locator.
+# `exact` is forwarded because dropping it silently changes WHICH element the
+# script acts on: Playwright renders exact matching as a case-sensitive
+# whole-string selector and inexact as a case-insensitive substring one.
+def _locator(page: Any, action: dict[str, Any]) -> Any:
+    if action.get("role") is not None:
+        options: dict[str, Any] = {{}}
+        if action.get("role_name") is not None:
+            options["name"] = action["role_name"]
+            if action.get("role_exact"):
+                options["exact"] = True
+        return page.get_by_role(action["role"], **options)
+    if action.get("label") is not None:
+        return page.get_by_label(action["label"], exact=bool(action.get("label_exact")))
+    if action.get("text") is not None:
+        return page.get_by_text(action["text"], exact=bool(action.get("text_exact")))
+    if action.get("test_id") is not None:
+        return page.get_by_test_id(action["test_id"])
+    raise RuntimeError(f"action has no ARIA locator: {{action!r}}")
+
+
 {evidence_helpers}
 async def {fn_name}({signature}) -> dict[str, int]:
     args = {_args_dict(parameters)}
@@ -196,6 +218,15 @@ async def {fn_name}({signature}) -> dict[str, int]:
                         raise RuntimeError(f"JS assertion failed: expected {{action['equals']!r}}, got {{result!r}}")
                     if "equals" not in action and not result:
                         raise RuntimeError(f"JS assertion failed: got {{result!r}}")
+                    executed += 1
+                elif kind == "click_by":
+                    await _locator(page, action).click(timeout=action.get("timeout_ms"))
+                    executed += 1
+                elif kind == "fill_by":
+                    await _locator(page, action).fill(action.get("value", ""), timeout=action.get("timeout_ms"))
+                    executed += 1
+                elif kind == "get_text_by":
+                    await _locator(page, action).inner_text()
                     executed += 1
                 else:
                     raise RuntimeError(f"unsupported macro action in exported CLI: {{kind!r}}")

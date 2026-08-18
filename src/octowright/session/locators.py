@@ -30,6 +30,14 @@ async def build_locator(
     The ``*_exact`` flags are modifiers, not finders: they never satisfy the
     one-finder requirement below, and each defaults to False so the matching
     stays substring-based exactly as Playwright does by default.
+
+    ``exact`` changes TWO things at once, because Playwright ties them
+    together: ``escape_for_text_selector`` renders the selector with an ``s``
+    suffix when exact and an ``i`` suffix otherwise, so exact matching is also
+    CASE-SENSITIVE matching. A caller that flips ``text_exact=True`` purely to
+    stop ``"Ada"`` matching ``"Ada Lovelace (old)"`` simultaneously loses the
+    case-insensitivity it had, and ``text="submit", text_exact=True`` no longer
+    matches ``<button>Submit</button>``.
     """
     provided = [k for k, v in (("role", role), ("label", label), ("text", text), ("test_id", test_id)) if v is not None]
     if len(provided) != 1:

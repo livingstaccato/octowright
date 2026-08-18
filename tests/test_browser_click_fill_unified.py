@@ -188,6 +188,7 @@ async def test_browser_fill_label_calls_session_fill_by(_patch_pool: MagicMock) 
         "hello",
         role=None,
         role_name=None,
+        role_exact=False,
         label="Email",
         label_exact=False,
         test_id=None,

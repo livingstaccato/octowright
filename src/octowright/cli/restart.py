@@ -18,8 +18,9 @@ motivated this command). ``octowright restart`` does the full dance:
 2. SIGTERM it. Wait up to ``--timeout`` seconds for graceful exit.
 3. SIGKILL anything still alive.
 4. Remove a stale lockfile if present.
-5. Reap Playwright browsers -- ``scope="all"``, so every browser on the box,
-   protected or not (skip with ``--keep-browsers``).
+5. Reap Playwright browsers -- ``scope="orphaned"``, so the ones the dead
+   daemon left reparented to init, protected or not (skip with
+   ``--keep-browsers``). Not ``"all"``, which also hit unrelated browsers.
 6. Spawn a fresh detached daemon (skip with ``--no-start``).
 7. Probe ``/api/health`` until 200 OK, up to ``--timeout`` seconds.
 
@@ -374,7 +375,11 @@ def _stop_leader(timeout: float, *, kill_followers: bool = False, spawn_port: in
 
 
 def _reap_browsers() -> None:
-    summary = reap_orphan_browsers(scope="all")
+    # "orphaned", not "all": this runs AFTER _stop_leader, so the dead daemon's
+    # browsers are already reparented to init -- exactly this scope, the one the
+    # boot/housekeeping sweeps use and the one this command's own output claims.
+    # "all" also killed unrelated browsers. Full sweep: `octowright cleanup`.
+    summary = reap_orphan_browsers(scope="orphaned")
     click.echo(
         f"orphan browsers: killed={len(summary['killed'])} "
         f"still_alive={len(summary['still_alive'])} "
@@ -444,8 +449,8 @@ def _wait_for_health(host: str, port: int, timeout: float) -> str | None:
     "--keep-browsers",
     is_flag=True,
     help=(
-        "Skip the browser sweep. Without this the restart kills every Playwright "
-        "browser on the machine, protected ones included."
+        "Skip the browser sweep. Without this the restart kills the browsers the "
+        "dead daemon orphaned, protected ones included."
     ),
 )
 @click.option(
@@ -498,11 +503,10 @@ def restart(
     preserves bare follower transports owned by MCP clients unless
     --kill-followers is passed (full reset).
 
-    DESTRUCTIVE: the browser sweep kills every Playwright browser on this
-    machine, not just leftovers from the dead daemon, and a protected browser
-    is NOT spared -- the sweep signals raw pids, a layer that never sees the
-    pool's protection flag. (protected only holds against cleanup and
-    close_strays.) Pass --keep-browsers to leave browsers running.
+    DESTRUCTIVE: the sweep kills the browsers the dead daemon orphaned, and
+    `protected` does NOT spare them -- it signals raw pids, a layer that never
+    sees the pool's protection flag. Browsers owned by a live driver survive.
+    Skip it with --keep-browsers; `octowright cleanup` is the full sweep.
     """
     # When we're going to spawn, also reclaim the spawn port from a split-brain
     # leader squatting on it (otherwise the bind below fails and nothing starts).
