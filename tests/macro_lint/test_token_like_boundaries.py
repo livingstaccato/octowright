@@ -3,65 +3,65 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Boundary tests for ``_token_like`` (the ``_looks_like_password`` heuristic
-minus its URL-inappropriate rule 2 -- see ``lint.py`` for why).
+"""Boundary tests for ``lint_urls._value_is_token_shaped``.
 
-Each test isolates ONE of the two remaining signals so a fixed-length or
-fixed-entropy input can't hide a broken threshold on the other:
+This replaced an entropy threshold that was wrong in both directions. The old
+signal was ``len >= 20 and shannon_entropy > 4.0``; max entropy over a
+16-symbol alphabet is exactly ``log2(16) == 4.0``, so against a strict ``>`` it
+could NEVER fire on a hex digest, while a percent-encoded ``redirect_uri`` or a
+human-readable ``title`` cleared it easily. (The previous version of this file
+asserted the hex case returned False, locking the blind spot in as intent.)
 
-* the token-prefix signal, with entropy deliberately kept LOW so the OR
-  between the two signals is load-bearing (a known token prefix must count
-  even when the rest of the heuristic wouldn't fire on its own);
-* the length threshold (>= 20), with entropy held constant and HIGH so only
-  the length comparison changes between cases;
-* the entropy threshold (> 4.0, strict), with length held constant and >= 20
-  so only the entropy comparison changes -- including the exact value 4.0,
-  which the `>` (not `>=`) must reject.
+The replacement is structural: a token is an unbroken run of alphanumerics
+mixing letter and digit classes. Each test isolates ONE discriminator so a
+fixed-length or fixed-alphabet input can't hide a broken threshold on another:
+
+* the known-prefix signal, with shape deliberately kept NON-token-like, so the
+  OR between the signals is load-bearing;
+* the length threshold (>= 24), with the alphabet held constant;
+* the punctuation rule, which is what keeps a UUID and a hyphenated slug out;
+* the class-mix rule, which is what keeps a long word out.
 """
 
 from __future__ import annotations
 
-from octowright.macros.lint import _token_like
+import pytest
+
+from octowright.macros.lint_urls import _value_is_token_shaped
 
 
-def test_known_prefix_counts_even_with_low_entropy() -> None:
-    """A real leaked-token SHAPE (prefix + run of one repeated char) has
-    entropy nowhere near 4.0 -- only the prefix signal can catch it, so this
-    also proves the OR (not AND) between the two signals."""
-    assert _token_like("ghp_" + "a" * 20) is True
+def test_known_prefix_counts_even_when_the_shape_alone_would_not() -> None:
+    """A real leaked-token shape (prefix + a run of one repeated char) has no
+    class mix at all past the prefix, so only the prefix signal can catch it.
+    This also proves the OR (not AND) between the signals."""
+    assert _value_is_token_shaped("ghp_" + "a" * 20) is True
 
 
-def test_no_prefix_and_low_entropy_short_string_is_not_token_like() -> None:
-    assert _token_like("plain-url-path") is False
+def test_hex_digest_counts() -> None:
+    """The exact case the old entropy threshold could not reach."""
+    # The md5 of the empty string -- a fixture, not a key.
+    assert _value_is_token_shaped("d41d8cd98f00b204e9800998ecf8427e") is True  # pragma: allowlist secret
 
 
-def test_length_boundary_at_exactly_twenty_with_high_entropy_counts() -> None:
-    s = "0123456789abcdefghij"  # 20 distinct chars, len 20, entropy > 4.0
-    assert len(s) == 20
-    assert _token_like(s) is True
+@pytest.mark.parametrize(
+    ("value", "expected", "why"),
+    [
+        ("a1" * 12, True, "24 chars, mixed classes -- exactly at the length threshold"),
+        (("a1" * 12)[:23], False, "23 chars, same alphabet -- one below the threshold"),
+        ("abcdefghijklmnopqrstuvwxyz", False, "26 letters, no digit: a word, not a token"),  # pragma: allowlist secret
+        ("550e8400-e29b-41d4-a716-446655440000", False, "a UUID is punctuated, so it is an identifier"),
+        ("summer-2026-launch-promo-email", False, "a hyphenated slug is not opaque"),
+        ("Quarterly Business Review 2026", False, "spaces mean human text"),
+        ("https%3A%2F%2Fclient.example.org", False, "percent-encoding means a nested URL"),
+    ],
+)
+def test_shape_discriminators(value: str, expected: bool, why: str) -> None:
+    assert _value_is_token_shaped(value) is expected, why
 
 
-def test_length_one_below_boundary_with_same_high_entropy_does_not_count() -> None:
-    s = "0123456789abcdefghij"[:19]  # same alphabet, one char short
-    assert len(s) == 19
-    assert _token_like(s) is False
-
-
-def test_entropy_exactly_at_threshold_does_not_count() -> None:
-    """16 distinct chars over 32 positions (each twice) -> entropy == 4.0
-    exactly. The threshold is a strict `>`, so this must NOT count."""
-    s = "0123456789abcdef" * 2  # pragma: allowlist secret
-    assert len(s) == 32
-    assert _token_like(s) is False
-
-
-def test_entropy_just_above_threshold_counts() -> None:
-    s = "0123456789abcdefghijklmnopqrstuv"  # pragma: allowlist secret -- 32 distinct chars, entropy 5.0
-    assert len(s) == 32
-    assert _token_like(s) is True
-
-
-def test_entropy_below_threshold_with_sufficient_length_does_not_count() -> None:
-    s = "01234567" * 3  # 8 distinct chars, len 24, entropy 3.0
-    assert len(s) == 24
-    assert _token_like(s) is False
+def test_length_threshold_is_evaluated_on_one_unchanging_alphabet() -> None:
+    """Length is the ONLY thing that differs between these two inputs."""
+    token = "a1" * 12
+    assert len(token) == 24
+    assert _value_is_token_shaped(token) is True
+    assert _value_is_token_shaped(token[:23]) is False
