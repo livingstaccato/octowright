@@ -111,9 +111,10 @@ _REPLAY_DROP_KEYS: dict[str, tuple[str, ...]] = {
     "navigate_back": ("url",),
     "switch_page": ("url",),
     "close_page": ("was_active",),
-    # open_url records the resulting page index alongside the inputs; the
-    # method signature only accepts (url, target, width, height).
-    "open_url": ("page_index",),
+    # open_url records the resulting page index AND any navigation error
+    # alongside the inputs; the method signature only accepts
+    # (url, target, width, height), so both are recorded-only observations.
+    "open_url": ("page_index", "error"),
     # switch_frame records which frame it LANDED on next to the selector that
     # chose it; replay re-resolves that from the live page.
     "switch_frame": ("index", "frame_url", "frame_name"),

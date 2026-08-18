@@ -19,10 +19,20 @@ SEMANTIC_LOCATOR_KEYS = (
     "label_exact",
     "text_exact",
 )
+#: The keys that can actually RESOLVE an element. build_locator requires
+#: exactly one of these; everything else in SEMANTIC_LOCATOR_KEYS is a modifier
+#: (`role_name` narrows a role, the `*_exact` flags narrow the match), so
+#: "has a semantic key" must never be read as "has a locator".
+SEMANTIC_FINDER_KEYS = ("role", "label", "text", "test_id")
 # Keys that carry no human-readable ARIA text and so are noise in a digest.
 # The *_exact flags are modifiers on another key, never a name themselves.
 NON_ARIA_NOISE_KEYS = ("role", "role_name", "test_id", "role_exact", "label_exact", "text_exact")
-RECORDING_NOISE_KEYS = ("action", "ts", "kind", "profile", "instance_id")
+# Bookkeeping the recorder and the scenario layer stamp onto an event. None is
+# an input to any session method, so all of them are stripped before dispatch.
+# `persona` comes from scenarios_pool, which stamps it (with `role`) onto every
+# merged tail event; without it here, replaying a scenario-derived recording
+# raises TypeError: navigate() got an unexpected keyword argument 'persona'.
+RECORDING_NOISE_KEYS = ("action", "ts", "kind", "profile", "instance_id", "persona")
 
 
 def normalise_parameters(parameters: list[str] | dict[str, str] | None) -> dict[str, str]:
