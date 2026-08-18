@@ -40,6 +40,31 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.15.0": [
+        "The follower bridge no longer hands your client a second frame for a "
+        "request it already failed. A tool call that timed out, then finished "
+        "on the leader anyway, used to deliver BOTH the bridge error and the "
+        "real response under one JSON-RPC id — and a late progress ping could "
+        "arrive carrying a bridge-internal token your client never asked for.",
+        "Opening a long-lived session's recording in the dashboard no longer "
+        "reads the whole file into the daemon at once. Recordings are "
+        "unbounded by default, so a busy session could pull gigabytes into the "
+        "process that owns every live browser; reads are now windowed "
+        "(OCTOWRIGHT_TAIL_MAX_BYTES, 8 MiB) and page on the cursor they "
+        "already returned.",
+        "SSRF blocking now canonicalizes a URL the way the browser will. "
+        "Backslashes and stray tabs/newlines let `http:/\\169.254.169.254/` "
+        "read as harmless to the guard and as cloud-metadata to Chromium, so "
+        "block-private said ALLOWED on the one request it exists to stop.",
+        "macro_lint stopped refusing saves it had no business refusing — a "
+        "prefilled `?email=` signup link, a 32-digit order id, an ignored "
+        'screenshot field and `text: ""` are no longer errors. It also '
+        "finally catches the magic-link and reset tokens its own docs "
+        "promised, which the old path scan could never match.",
+        "`octowright restart` actually sweeps the browsers it owns. It "
+        "enumerated the daemon's children AFTER signalling it, by which point "
+        "they had reparented and nothing was found.",
+    ],
     "0.14.4": [
         "click_by/fill_by/get_text_by gained text_exact and label_exact flags "
         "mirroring role_exact — matching stayed substring-by-default the whole "
