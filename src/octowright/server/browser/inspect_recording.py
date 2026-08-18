@@ -33,7 +33,9 @@ def _count_items(counter: Counter[str]) -> list[dict[str, Any]]:
         "cursor stops at the start of the partial fragment so it will be re-read once "
         "completed; `complete` is True iff cursor == total_bytes. Pass max_events=N to "
         "bound raw event output, or response_mode='summary' for action counts and recent "
-        "sanitized events without dumping the raw JSONL rows."
+        "sanitized events without dumping the raw JSONL rows. A summary describes the "
+        "bytes scanned by that ONE call, not the whole file — check summary.partial "
+        "and keep resuming from `cursor` until it is false before reporting totals."
     ),
 )
 def browser_tail_recording(
@@ -63,6 +65,14 @@ def browser_tail_recording(
         recent = events[-capped_recent:] if capped_recent else []
         return {
             "summary": {
+                # Counts describe the bytes scanned by THIS call, not the whole
+                # recording: tail_log reads a bounded window (0.15.0,
+                # OCTOWRIGHT_TAIL_MAX_BYTES) so one `since=0` on a long-lived
+                # session cannot pull gigabytes into the leader. `partial` sits
+                # beside the counts rather than only at the top level, because a
+                # reader that sees `event_count` without it reports a prefix as
+                # the total. Resume from `cursor` until `partial` is false.
+                "partial": new_cursor < total_bytes,
                 "event_count": len(events),
                 "by_action": _count_items(Counter(str(event.get("action") or "unknown") for event in events)),
                 "recent": [_recording_summary_event(event) for event in recent],
