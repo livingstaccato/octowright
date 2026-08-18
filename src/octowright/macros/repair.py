@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from octowright.macros._redact import _redact_action
 from octowright.macros.semantic import summarize_action
+from octowright.macros.substitution import SEMANTIC_FINDER_KEYS
 from octowright.mcp_types import MacroRepairApplyResult, MacroRepairPreviewResult, MacroRepairSuggestion
 
 if TYPE_CHECKING:
@@ -39,15 +40,26 @@ async def suggest_fix(session: SessionLike, action: dict[str, Any]) -> str | Non
     )
 
 
+def _has_resolvable_finder(action: dict[str, Any]) -> bool:
+    """Whether *action* carries something that can actually resolve an element.
+
+    The guard here used to be `if not semantic` over every semantic key, which
+    `text_exact: False` satisfies (the filter tests `is not None`, not
+    truthiness) -- so a click carrying only a modifier was "repaired" into a
+    finder-less click_by with its working CSS selector dropped, and replay then
+    raised `ValueError: exactly one of role/label/text/test_id must be set`.
+    """
+    return any(action.get(key) is not None for key in SEMANTIC_FINDER_KEYS)
+
+
 def semantic_replacement(action: dict[str, Any], *, semantic_keys: tuple[str, ...]) -> dict[str, Any] | None:
     kind = action.get("action")
     if kind not in {"click", "fill"} or not action.get("selector"):
         return None
-
-    semantic = {k: action[k] for k in semantic_keys if k in action and action[k] is not None}
-    if not semantic:
+    if not _has_resolvable_finder(action):
         return None
 
+    semantic = {k: action[k] for k in semantic_keys if k in action and action[k] is not None}
     replacement: dict[str, Any] = {"action": f"{kind}_by", **semantic}
     if kind == "fill" and "value" in action:
         replacement["value"] = action["value"]
