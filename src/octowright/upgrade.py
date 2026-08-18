@@ -40,6 +40,17 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.15.1": [
+        "A stale session that outlived its daemon no longer haunts "
+        "octowright_status forever. The cleanup only asked whether the recorded "
+        "pid was still alive, and the OS recycles pids — one entry here was "
+        "kept for four weeks because its dead daemon's pid had become a shell. "
+        "It now checks that the process is actually an octowright daemon.",
+        "A tail recording summary says when it only covers part of the file. "
+        "0.15.0 bounded the read so a huge recording could not be pulled into "
+        "the daemon whole, which quietly made event_count describe one window "
+        "rather than the recording — so it read as a total when it was not.",
+    ],
     "0.15.0": [
         "The follower bridge no longer hands your client a second frame for a "
         "request it already failed. A tool call that timed out, then finished "
