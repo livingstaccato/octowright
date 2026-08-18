@@ -141,16 +141,24 @@ def test_is_placeholder_rejects_single_braces() -> None:
 # ---------------------------------------------------------------------------
 
 
+#: A credential of the right SHAPE for each candidate key's kind. A URL-shaped
+#: key only carries a secret in a part a URL can hold one in, and a code-shaped
+#: key only in a token embedded in the expression -- feeding a bare email to
+#: either tests nothing (see lint.py's _URL_LIKE_KEYS / _CODE_LIKE_KEYS).
+_CREDENTIAL_FOR_KIND = {
+    "url": "https://u:pw@somewhere.com/x",
+    "pattern": "https://u:pw@somewhere.com/x",
+    "expression": "fetch('/x', {headers: {a: 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'}})",  # pragma: allowlist secret
+}
+
+
 @pytest.mark.parametrize("candidate_key", sorted(_CREDENTIAL_CANDIDATE_KEYS))
 def test_each_candidate_key_can_trigger_credential_warning(candidate_key: str) -> None:
     """Mutating the candidate set (removing a key) should be caught here."""
-    action = {"action": "fill", "selector": "#x", "value": "ok", candidate_key: "you@somewhere.com"}
+    credential = _CREDENTIAL_FOR_KIND.get(candidate_key, "you@somewhere.com")
+    action = {"action": "fill", "selector": "#x", "value": "ok", candidate_key: credential}
     if candidate_key == "value":
-        action = {"action": "fill", "selector": "#x", "value": "you@somewhere.com"}
-    if candidate_key == "url":
-        # `url` is inspected by part rather than as a blob, so the credential
-        # has to sit where a URL can actually carry one (see lint_urls).
-        action = {"action": "fill", "selector": "#x", "value": "ok", "url": "https://u:pw@somewhere.com/x"}
+        action = {"action": "fill", "selector": "#x", "value": credential}
     issues = lint_macro(_macro([action]))
     creds = [i for i in issues if i.code == "looks_like_credential"]
     assert len(creds) >= 1, f"key {candidate_key!r} should be inspected for credentials"
