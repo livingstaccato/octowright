@@ -23,6 +23,7 @@ import pytest
 
 from octowright.macros.lint import lint_macro
 from octowright.macros.lint_urls import url_carries_credential
+from tests.macro_lint._secret_shapes import fake_jwt
 
 
 def _issues(action: dict[str, Any]) -> list[Any]:
@@ -111,8 +112,7 @@ def test_magic_link_token_after_a_credential_context_segment_is_flagged() -> Non
 
 def test_a_jwt_anywhere_in_the_path_is_flagged() -> None:
     """`eyJ` + two dot-separated base64url runs is unambiguous, context-free."""
-    # pragma: allowlist nextline secret -- jwt.io sample payload, not a live token
-    url = "https://app.test/v2/eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r"
+    url = f"https://app.test/v2/{fake_jwt(subject='1234567890')}"
     assert url_carries_credential(url) is True
 
 
