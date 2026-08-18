@@ -55,42 +55,125 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlsplit
 
-from octowright.artifacts.redaction import is_sensitive_key
+from octowright.artifacts.redaction import _NON_ALNUM, is_sensitive_key
 
-from .lint_credentials import _TOKEN_PREFIX_RE, _TOKEN_PREFIX_SEARCH_RE
+from .lint_credentials import (
+    _HAS_DIGIT,
+    _HAS_LETTER,
+    _HAS_SPECIAL,
+    _TOKEN_PREFIX_RE,
+    _TOKEN_PREFIX_SEARCH_RE,
+)
 
 #: Query-string idioms `is_sensitive_key` does not cover, because they are only
 #: secret-ish in a URL. Kept deliberately small; anything general belongs in
 #: `is_sensitive_key` so every caller benefits.
 _URL_PARAM_SECRET_NAMES = frozenset({"key", "sig", "signature", "jwt", "bearer", "csrf", "sid", "sessionid"})
 
+#: Exact `is_sensitive_key` matches that name an IDENTITY, not a secret.
+#: Reusing that helper was right for camelCase/plural coverage but imported its
+#: `email`/`username` entries into URL parameter matching, where they mean
+#: something else: a TYPED field called `email` is half of a credential pair,
+#: while `?email=` in a URL is a prefilled signup/invite/unsubscribe link --
+#: among the most common links a macro navigates to. Warning on every save of
+#: every one of them is precisely the cry-wolf this module exists to remove.
+#: The VALUE side is untouched, so `?email=<token-shaped>` still fires.
+_URL_PARAM_IDENTITY_NAMES = frozenset({"email", "username"})
+
 #: An opaque token: one unbroken run of alphanumerics. Any `.`, `/`, `%`, `:`
 #: or space means the value has URL or human structure and is not a bare token.
 #: Hyphens and underscores are excluded too, which is what keeps a UUID and a
 #: `summer-2026-launch-promo-email` campaign slug out of the net.
 _OPAQUE_TOKEN_RE = re.compile(r"^[A-Za-z0-9]{24,}$")
-#: A hex digest/key is opaque even when it happens to contain no letters.
+#: A hex digest/key is opaque even when it is mostly digits -- but a 32+ run of
+#: characters that are ALL digits is an order id, an epoch-nanos timestamp or a
+#: concatenated numeric key far more often than a digest (a real digest comes
+#: out all-digits with probability (10/16)**32, about 1e-7). So the charset
+#: test is paired with `_HAS_HEX_LETTER`, mirroring the letter+digit mix the
+#: opaque-run branch below already demands, and costing no true positives.
 _HEX_SECRET_RE = re.compile(r"^[0-9a-fA-F]{32,}$")
-_HAS_DIGIT = re.compile(r"\d")
-_HAS_LETTER = re.compile(r"[A-Za-z]")
+_HAS_HEX_LETTER = re.compile(r"[a-fA-F]")
+#: A JWT — the shape `_OPAQUE_TOKEN_RE` structurally cannot see, because
+#: base64url puts `.`, `-` and `_` inside the token. It is also the shape this
+#: module's docstring names as the reason the fragment is scanned at all (the
+#: OAuth implicit grant returns one there BY SPECIFICATION), so missing it
+#: defeated the fragment rule for every token that wasn't under a `*_token`
+#: parameter name. Anchored on the `eyJ` header prefix (base64url of `{"`),
+#: which is what keeps this from matching an ordinary dotted identifier.
+_JWT_RE = re.compile(r"^eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*$")
+_JWT_SEARCH_RE = re.compile(r"(?:^|[^A-Za-z0-9_.-])(eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*)")
 
-_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+#: Quoted string literals inside a JS expression, with the identifier (if any)
+#: they are assigned to or compared against.
+_JS_NAMED_LITERAL_RE = re.compile(r"""([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:={1,3}|:)\s*(['"])(.*?)\2""")
+_JS_LITERAL_RE = re.compile(r"""(['"])(.*?)\1""")
+
+#: Path segments that announce "the NEXT segment is a token". A magic-link,
+#: password-reset or email-verification URL is the documented reason the path
+#: is scanned at all, and its token is an opaque segment with no vendor prefix
+#: — indistinguishable BY SHAPE from a resource id, which is why the shape test
+#: runs only where one of these words has already said what follows is a
+#: secret. Deliberately verbs and nouns of the credential flow, not generic
+#: routing words: `/api/` or `/v2/` would put the whole site back in scope.
+_CREDENTIAL_PATH_CONTEXT = frozenset(
+    {
+        "reset",
+        "resetpassword",
+        "passwordreset",
+        "forgot",
+        "verify",
+        "verifyemail",
+        "confirm",
+        "confirmation",
+        "activate",
+        "activation",
+        "magic",
+        "magiclink",
+        "invite",
+        "invitation",
+        "unsubscribe",
+        "token",
+        "signin",
+    }
+)
+
+#: Characters that a selector, URL, sentence or code fragment carries and a
+#: password essentially never does. The generic password heuristic ("12+ chars
+#: mixing letter/digit/special") is true of `#main .row > td:nth-child(2)`, so
+#: without this exclusion it fires on the ordinary contents of an `evaluate`.
+_STRUCTURAL_CHARS = frozenset(" \t\r\n#.>:/[](){}<>,;=|&?%\\'\"`")
 
 
 def _param_name_is_secret(name: str) -> bool:
-    return is_sensitive_key(name) or _NON_ALNUM.sub("", name.lower()) in _URL_PARAM_SECRET_NAMES
+    compact = _NON_ALNUM.sub("", name.lower())
+    if compact in _URL_PARAM_IDENTITY_NAMES:
+        return False
+    return is_sensitive_key(name) or compact in _URL_PARAM_SECRET_NAMES
 
 
 def _value_is_token_shaped(value: str) -> bool:
     """Structural test for "this is an opaque secret, not a word or a URL"."""
-    if _TOKEN_PREFIX_RE.match(value):
+    if _TOKEN_PREFIX_RE.match(value) or _JWT_RE.match(value):
         return True
-    if _HEX_SECRET_RE.match(value):
+    if _HEX_SECRET_RE.match(value) and _HAS_HEX_LETTER.search(value):
         return True
     if not _OPAQUE_TOKEN_RE.match(value):
         return False
     # A 24+ char run of pure letters is a word or a slug; a token mixes classes.
     return bool(_HAS_DIGIT.search(value) and _HAS_LETTER.search(value))
+
+
+def _literal_is_password_shaped(value: str) -> bool:
+    """The classic password shape, minus everything that is really punctuation.
+
+    ``len >= 12 and digit and letter and special`` describes a password AND a CSS
+    selector AND a URL AND most sentences — which is why running it on a whole
+    ``expression`` blob was pure noise. Applied to a single quoted literal with
+    the structural characters excluded, what is left is a password.
+    """
+    if len(value) < 12 or _STRUCTURAL_CHARS & set(value):
+        return False
+    return bool(_HAS_DIGIT.search(value) and _HAS_LETTER.search(value) and _HAS_SPECIAL.search(value))
 
 
 def _params_carry_credential(blob: str) -> bool:
@@ -99,8 +182,28 @@ def _params_carry_credential(blob: str) -> bool:
 
 
 def _path_carries_credential(path: str) -> bool:
-    """Known token prefixes only — see the module docstring on path noise."""
-    return any(_TOKEN_PREFIX_RE.match(segment) for segment in path.split("/") if segment)
+    """Unambiguous shapes anywhere; an opaque token only in a credential context.
+
+    The module docstring justifies scanning the path by naming magic-link and
+    password-reset tokens — and then scanned with the vendor-prefix signal
+    ONLY, which no magic-link token carries. The branch could never fire on the
+    one thing it existed for.
+
+    The reason it was written that way is real: a path segment is normally a
+    resource name, so an unqualified shape test flags ``/v2/reports/8f3a91c2``
+    as a key. The missing discriminator is the PRECEDING segment. ``/reset/``,
+    ``/verify/``, ``/invite/`` announce that what follows is a token, so the
+    shape test is scoped to exactly there. Two shapes need no context at all: a
+    vendor prefix and a JWT are self-identifying wherever they appear.
+    """
+    previous = ""
+    for segment in (s for s in path.split("/") if s):
+        if _TOKEN_PREFIX_RE.match(segment) or _JWT_RE.match(segment):
+            return True
+        if _NON_ALNUM.sub("", previous.lower()) in _CREDENTIAL_PATH_CONTEXT and _value_is_token_shaped(segment):
+            return True
+        previous = segment
+    return False
 
 
 def url_carries_credential(raw: str) -> bool | None:
@@ -126,17 +229,41 @@ def url_carries_credential(raw: str) -> bool | None:
         return True
     if _params_carry_credential(parsed.query):
         return True
-    if _params_carry_credential(parsed.fragment) or _TOKEN_PREFIX_SEARCH_RE.search(parsed.fragment):
+    # The fragment is scanned as a param blob AND as a bare value: an implicit
+    # -grant callback often lands as `#<token>` with no `name=` at all, which
+    # parse_qsl reports as zero pairs.
+    if _params_carry_credential(parsed.fragment):
+        return True
+    if _TOKEN_PREFIX_SEARCH_RE.search(parsed.fragment) or _JWT_SEARCH_RE.search(parsed.fragment):
         return True
     return _path_carries_credential(parsed.path)
 
 
 def code_carries_credential(expression: str) -> bool:
-    """True if a JS expression has a known credential shape embedded in it.
+    """True if a JS expression has a credential embedded in it.
 
     A JS expression is not a URL and not a password, so neither of the other
-    detectors describes it. Only the high-precision prefix signal is used: the
-    shape heuristics would fire on ordinary code (``document.querySelector(…)``
-    is 12+ characters mixing letters, digits and punctuation).
+    detectors describes the blob as a whole — running ``_looks_like_password``
+    over it fired on ordinary code (``document.querySelector(…)`` is 12+
+    characters mixing letters, digits and punctuation). But narrowing to the
+    vendor-prefix signal alone left ``evaluate``/``expect_js`` with no detection
+    at all for anything that isn't a recognised vendor token, and
+    ``OCTOWRIGHT_REDACT_INPUTS`` only scrubs ``evaluate`` under ``all`` — so in
+    the default ``passwords`` mode a cleartext secret was on disk AND unflagged.
+
+    So the expression is inspected the way a URL is: by the parts that can hold
+    a secret. Those are its quoted string LITERALS, judged on the same value
+    shapes a query parameter is (plus the password shape, which is meaningful
+    once it is applied to a literal rather than to surrounding syntax), and on
+    the identifier they are bound to — the code analogue of a secret-ish
+    parameter name.
     """
-    return bool(_TOKEN_PREFIX_SEARCH_RE.search(expression))
+    if _TOKEN_PREFIX_SEARCH_RE.search(expression):
+        return True
+    for name, _quote, literal in _JS_NAMED_LITERAL_RE.findall(expression):
+        if literal and is_sensitive_key(name):
+            return True
+    return any(
+        _value_is_token_shaped(literal) or _literal_is_password_shaped(literal)
+        for _quote, literal in _JS_LITERAL_RE.findall(expression)
+    )

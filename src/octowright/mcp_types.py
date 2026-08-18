@@ -226,7 +226,10 @@ class ScenarioWaitForSyncResult(TypedDict):
 class ScenarioTailEntry(TypedDict, total=False):
     instance_id: str
     persona: str
-    role: str
+    # The participant's scenario role. NOT `role`: that is the ARIA locator key
+    # on click/fill/click_by/fill_by, and stamping it here overwrote the
+    # recorded value (see macros/substitution.RECORDING_NOISE_KEYS).
+    scenario_role: str
     ts: str
     action: str
 

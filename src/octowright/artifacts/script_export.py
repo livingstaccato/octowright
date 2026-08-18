@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from octowright._paths import atomic_write_text
+from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 
 _SENSITIVE_DEFAULT_PARTS = ("password", "passwd", "pwd", "token", "secret", "email", "username")
 
@@ -32,6 +33,10 @@ def render_macro_cli(
     doc = f"Import-safe CLI wrapper for Octowright macro {name}."
     placeholder_re = r"\{\{([^}]+)\}\}"
     evidence_helpers, evidence_setup, evidence_close = _evidence_render_parts(include_evidence)
+    state_helpers = STATE_HELPERS
+    # 16 spaces: inside `for ... in enumerate(ACTIONS)` inside `try` inside
+    # `async with` inside the function body.
+    dispatch_chain = render_dispatch_chain(" " * 16)
 
     return f"""\
 {doc!r}
@@ -135,7 +140,7 @@ def _locator(page: Any, action: dict[str, Any]) -> Any:
         return page.get_by_test_id(action["test_id"])
     raise RuntimeError(f"action has no ARIA locator: {{action!r}}")
 
-
+{state_helpers}
 {evidence_helpers}
 async def {fn_name}({signature}) -> dict[str, int]:
     args = {_args_dict(parameters)}
@@ -143,6 +148,17 @@ async def {fn_name}({signature}) -> dict[str, int]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
+        # Tabs, the active iframe, installed route mocks and the dialog policy
+        # are session state live; in a standalone script they live here.
+        state: dict[str, Any] = {{
+            "pages": [page],
+            "index": 0,
+            "frame": None,
+            "routes": {{}},
+            "dialog_policy": "manual",
+            "dialog_prompt_text": None,
+            "dialog_pages": [],
+        }}
         executed = 0
         skipped = 0
         try:
@@ -155,81 +171,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
                     evidence.record(log_record)
                 if kind in _LIFECYCLE_SKIP:
                     skipped += 1
-                elif kind == "navigate":
-                    await page.goto(action["url"])
-                    executed += 1
-                elif kind == "click":
-                    await page.click(action["selector"])
-                    executed += 1
-                elif kind == "fill":
-                    await page.fill(action["selector"], action.get("value", ""))
-                    executed += 1
-                elif kind == "type":
-                    await page.type(action["selector"], action.get("text", ""), delay=action.get("delay_ms") or 0)
-                    executed += 1
-                elif kind == "press_key":
-                    await page.keyboard.press(action["key"])
-                    executed += 1
-                elif kind == "wait_for":
-                    if action.get("selector"):
-                        await page.wait_for_selector(action["selector"], timeout=action.get("timeout_ms"))
-                    elif action.get("text"):
-                        await page.wait_for_function(
-                            "text => document.body && document.body.innerText.includes(text)",
-                            arg=action["text"],
-                            timeout=action.get("timeout_ms"),
-                        )
-                    else:
-                        await page.wait_for_load_state("networkidle", timeout=action.get("timeout_ms"))
-                    executed += 1
-                elif kind == "expect_url":
-                    pattern = action["pattern"]
-                    mode = action.get("mode", "regex")
-                    actual = page.url
-                    if mode == "equals" and actual != pattern:
-                        raise RuntimeError(f"URL mismatch: expected {{pattern!r}}, got {{actual!r}}")
-                    if mode == "contains" and pattern not in actual:
-                        raise RuntimeError(f"URL mismatch: expected substring {{pattern!r}}, got {{actual!r}}")
-                    if mode == "regex" and re.search(pattern, actual) is None:
-                        raise RuntimeError(f"URL mismatch: expected pattern {{pattern!r}}, got {{actual!r}}")
-                    executed += 1
-                elif kind == "expect_selector":
-                    present = bool(action.get("present", True))
-                    if present:
-                        await page.wait_for_selector(action["selector"], timeout=action.get("timeout_ms"))
-                    elif await page.query_selector(action["selector"]) is not None:
-                        raise RuntimeError(f"selector should be absent: {{action['selector']!r}}")
-                    executed += 1
-                elif kind == "expect_text":
-                    element = await page.wait_for_selector(action["selector"], timeout=action.get("timeout_ms"))
-                    actual = await element.inner_text()
-                    expected = action["text"]
-                    mode = action.get("mode", "contains")
-                    if mode == "equals" and actual != expected:
-                        raise RuntimeError(f"text mismatch: expected {{expected!r}}, got {{actual!r}}")
-                    if mode == "contains" and expected not in actual:
-                        raise RuntimeError(f"text mismatch: expected substring {{expected!r}}, got {{actual!r}}")
-                    if mode == "regex" and re.search(expected, actual) is None:
-                        raise RuntimeError(f"text mismatch: expected pattern {{expected!r}}, got {{actual!r}}")
-                    executed += 1
-                elif kind == "expect_js":
-                    result = await page.evaluate(action["expression"])
-                    if "equals" in action and result != action["equals"]:
-                        raise RuntimeError(f"JS assertion failed: expected {{action['equals']!r}}, got {{result!r}}")
-                    if "equals" not in action and not result:
-                        raise RuntimeError(f"JS assertion failed: got {{result!r}}")
-                    executed += 1
-                elif kind == "click_by":
-                    await _locator(page, action).click(timeout=action.get("timeout_ms"))
-                    executed += 1
-                elif kind == "fill_by":
-                    await _locator(page, action).fill(action.get("value", ""), timeout=action.get("timeout_ms"))
-                    executed += 1
-                elif kind == "get_text_by":
-                    await _locator(page, action).inner_text()
-                    executed += 1
-                else:
-                    raise RuntimeError(f"unsupported macro action in exported CLI: {{kind!r}}")
+{dispatch_chain}
             result = {{"executed": executed, "skipped": skipped}}
 {evidence_close}            return result
         except Exception as exc:

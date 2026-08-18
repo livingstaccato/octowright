@@ -129,8 +129,18 @@ async def test_shared_canvas_claims_propagate_between_two_browsers(
         assert state["canvas"][1][1] == "#009ad6"
         assert state["canvas"][1][2] == "#64c85a"
 
-        counter_1 = await page_1.locator("#claim-counter").inner_text()
-        counter_2 = await page_2.locator("#claim-counter").inner_text()
+        # The /api/state poll above establishes that the SERVER holds both
+        # claims. It says nothing about either BROWSER having received the
+        # broadcast and re-rendered, so reading the DOM straight after it waits
+        # on one observable and asserts a different one -- which failed roughly
+        # one run in three, counter_2 still showing "1" (its own claim only).
+        for _ in range(30):
+            counter_1 = await page_1.locator("#claim-counter").inner_text()
+            counter_2 = await page_2.locator("#claim-counter").inner_text()
+            if counter_1 == "2" and counter_2 == "2":
+                break
+            await asyncio.sleep(0.1)
+
         assert counter_1 == "2"
         assert counter_2 == "2"
     finally:

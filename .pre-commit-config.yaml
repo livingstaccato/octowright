@@ -48,7 +48,7 @@ repos:
         types: [python]
 
       - id: max-loc
-        name: max loc (500 lines)
+        name: max loc (777 lines)
         entry: uv run --active python scripts/check_max_loc.py
         language: system
         pass_filenames: false

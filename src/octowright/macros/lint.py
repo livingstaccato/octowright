@@ -82,10 +82,11 @@ _URL_LIKE_KEYS: frozenset[str] = frozenset({"url", "pattern"})
 #: Candidate fields that hold JavaScript, scanned for embedded tokens only.
 _CODE_LIKE_KEYS: frozenset[str] = frozenset({"expression"})
 
-#: The finder keys a click_by/fill_by must set at least one of. Derived from
-#: substitution rather than listed: `role_name` used to be in this set, so
-#: `{"action": "click_by", "role_name": "Save"}` passed lint and then raised
-#: `ValueError: exactly one of role/label/text/test_id must be set` on replay.
+#: The finder keys a click_by/fill_by must set EXACTLY one of — the arity
+#: `build_locator` enforces. Derived from substitution rather than listed:
+#: `role_name` used to be in this set, so `{"action": "click_by", "role_name":
+#: "Save"}` passed lint and then raised `ValueError: exactly one of
+#: role/label/text/test_id must be set` on replay.
 _ARIA_LOCATOR_KEYS: frozenset[str] = frozenset(SEMANTIC_FINDER_KEYS)
 
 _KNOWN_ACTIONS: frozenset[str] = (
@@ -104,6 +105,13 @@ class Issue:
     code: str  # short stable identifier, e.g. "missing_required_field"
     message: str
     action_index: int | None  # None for whole-macro issues, index into actions[] for per-action
+
+
+#: Report one problem on the action under inspection. Every ``_check_simple_*``
+#: helper reports through this single callback — they used to mix a callback for
+#: "missing field" with direct ``issues.append`` for anything else, so one family
+#: of checks had two ways to say the same thing.
+_Report = Callable[..., None]
 
 
 # ---------------------------------------------------------------------------
@@ -160,35 +168,34 @@ def _check_credentials(action: dict[str, Any], outer_index: int, issues: list[Is
 def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
     """Validate a known simple action's required fields."""
 
-    def _append_missing(message: str) -> None:
-        issues.append(
-            Issue(
-                severity="error",
-                code="missing_required_field",
-                message=message,
-                action_index=outer_index,
-            )
-        )
+    def _report(message: str, code: str = "missing_required_field") -> None:
+        issues.append(Issue(severity="error", code=code, message=message, action_index=outer_index))
 
-    _check_simple_locator_fields(action, kind, _append_missing)
-    _check_simple_drag_fields(action, kind, _append_missing)
-    _check_simple_required_fields(action, kind, _append_missing)
+    _check_simple_locator_fields(action, kind, _report)
+    _check_simple_drag_fields(action, kind, _report)
+    _check_simple_required_fields(action, kind, _report)
 
 
 def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
     """Flag fields the runtime would splat at a session method that rejects them.
 
-    Severity is error, not warning: replay cannot do what the action says, and
-    catching that at save time is the whole point (see lint_fields).
+    Severity is error where replay really raises: it cannot do what the action
+    says, and catching that at save time is the whole point (see lint_fields).
     """
     # `screenshot` is the one kind _dispatch_standard special-cases: it forwards
     # only `path`, so a stray field there is dropped instead of raising. Naming
-    # a TypeError would send the author hunting a crash that never happens.
+    # a TypeError would send the author hunting a crash that never happens --
+    # and error severity does worse than mislead. `PUT /api/macros/{name}` gates
+    # the save on `error_count == 0` (http/routes/meta._validation_body), so an
+    # error here makes the macro UNSAVABLE through the dashboard over a field
+    # this very message calls harmless. Report the drop; do not block on it.
+    ignored_by_replay = kind == "screenshot"
     consequence = (
         "replay ignores it, so the action will not do what the field says"
-        if kind == "screenshot"
+        if ignored_by_replay
         else "replay would fail with TypeError"
     )
+    severity = "warning" if ignored_by_replay else "error"
     # key=str: a YAML macro can carry a non-string key (YAML 1.1 resolves a
     # bare `on:`/`yes:`/`no:` to a bool), and a bare sorted() raises TypeError
     # on the mixed set -- an analyzer crashing on its input instead of
@@ -196,7 +203,7 @@ def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, i
     for field in sorted(unknown_fields(kind, frozenset(action)), key=str):
         issues.append(
             Issue(
-                severity="error",
+                severity=severity,
                 code="unknown_field",
                 message=(
                     f"action {kind!r} does not accept field {field!r} — "
@@ -224,24 +231,54 @@ def _check_ambiguous_fields(action: dict[str, Any], kind: str, outer_index: int,
         )
 
 
-def _check_simple_locator_fields(action: dict[str, Any], kind: str, append_missing: Callable[[str], None]) -> None:
-    if kind in {"click_by", "fill_by"} and not any(action.get(k) for k in _ARIA_LOCATOR_KEYS):
-        append_missing(f"action {kind!r} is missing required locator field (one of role, label, text, or test_id)")
+def _provided_locator_keys(action: dict[str, Any]) -> list[str]:
+    """The finders ``build_locator`` counts as set, computed the way it does.
+
+    Membership is ``is not None``, NOT truthiness: ``build_locator`` filters on
+    ``v is not None``, so ``text=""`` is a provided finder there. Linting it as
+    missing produced an error-severity issue for an action replay accepts, and
+    ``PUT /api/macros/{name}`` rejects a macro on any error — making it
+    unsavable through the dashboard.
+    """
+    return sorted(k for k in _ARIA_LOCATOR_KEYS if action.get(k) is not None)
 
 
-def _check_simple_drag_fields(action: dict[str, Any], kind: str, append_missing: Callable[[str], None]) -> None:
+def _check_simple_locator_fields(action: dict[str, Any], kind: str, report: _Report) -> None:
+    """Locator ARITY, not just presence.
+
+    ``build_locator`` requires EXACTLY one of role/label/text/test_id. Checking
+    only "at least one" let a two-finder ``click_by`` lint clean and then raise
+    ``ValueError: exactly one of role/label/text/test_id must be set`` on
+    replay — and with no ``selector`` to fall back to, ``_dispatch_click_or_fill``
+    re-raises it. Same lint↔replay parity defect that ``role_name``-only had,
+    in the other direction.
+    """
+    if kind not in {"click_by", "fill_by"}:
+        return
+    provided = _provided_locator_keys(action)
+    if not provided:
+        report(f"action {kind!r} is missing required locator field (one of role, label, text, or test_id)")
+    elif len(provided) > 1:
+        report(
+            f"action {kind!r} sets {len(provided)} locator fields ({', '.join(provided)}) — "
+            "replay requires exactly one of role/label/text/test_id and raises ValueError otherwise; keep one",
+            "ambiguous_locator",
+        )
+
+
+def _check_simple_drag_fields(action: dict[str, Any], kind: str, report: _Report) -> None:
     if kind != "drag":
         return
     if not (action.get("source") or action.get("source_selector")):
-        append_missing("action 'drag' is missing required field 'source' (or 'source_selector')")
+        report("action 'drag' is missing required field 'source' (or 'source_selector')")
     if not (action.get("target") or action.get("target_selector")):
-        append_missing("action 'drag' is missing required field 'target' (or 'target_selector')")
+        report("action 'drag' is missing required field 'target' (or 'target_selector')")
 
 
-def _check_simple_required_fields(action: dict[str, Any], kind: str, append_missing: Callable[[str], None]) -> None:
+def _check_simple_required_fields(action: dict[str, Any], kind: str, report: _Report) -> None:
     for field in _SIMPLE_REQUIRED[kind]:
         if field not in action or action.get(field) in (None, ""):
-            append_missing(f"action {kind!r} is missing required field {field!r}")
+            report(f"action {kind!r} is missing required field {field!r}")
 
 
 def _check_if_selector(action: dict[str, Any], outer_index: int, issues: list[Issue]) -> None:
