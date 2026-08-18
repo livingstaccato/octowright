@@ -73,6 +73,19 @@ _MAX_SESSIONS_DEFAULT: Final[int] = 256
 _NEW_SESSION_MAX_DEFAULT: Final[int] = 10
 _NEW_SESSION_WINDOW_DEFAULT: Final[float] = 10.0
 
+# Ceiling on distinct rate-limit buckets held at once. `source_key` derives the
+# bucket from client-chosen input (the follower header, else the TCP peer), and
+# `allow` allocated a tracker for every distinct key it saw; the sweep that
+# reclaims emptied ones runs at most once per window, so the map could grow
+# unbounded WITHIN a window — a leak inside the guard built to stop a leak.
+# This does not (and cannot) stop a local process from side-stepping the rate
+# limit by rotating the header: `/mcp` needs the capability token out of the
+# 0600 lockfile, so anything reaching it is same-user and already trusted at
+# the RCE-equivalent level. What the guard defends against is a buggy/old
+# follower, which reports a stable pid and buckets correctly. 4096 buckets is
+# far past any real client population and costs well under a megabyte.
+_MAX_TRACKED_SOURCES: Final[int] = 4096
+
 _ANONYMOUS_SOURCE: Final[str] = "anonymous"
 _FOLLOWER_HEADER: Final[bytes] = b"x-octowright-follower"
 _SESSION_ID_HEADER: Final[bytes] = b"mcp-session-id"
@@ -135,9 +148,15 @@ def mcp_new_session_rate() -> tuple[int, float] | None:
 class NewSessionRateLimiter:
     """Per-source sliding-window limiter. Thread-safe under one lock."""
 
-    def __init__(self, max_events: int, window_seconds: float) -> None:
+    def __init__(
+        self,
+        max_events: int,
+        window_seconds: float,
+        max_sources: int = _MAX_TRACKED_SOURCES,
+    ) -> None:
         self._max = max_events
         self._window = window_seconds
+        self._max_sources = max_sources
         self._events: dict[str, deque[float]] = {}
         self._last_prune = 0.0
         self._lock = Lock()
@@ -146,13 +165,20 @@ class NewSessionRateLimiter:
         """Record + admit an event for ``key`` at ``now``; False if over the
         window rate (the event is NOT recorded when refused, so a throttled
         source that backs off recovers cleanly). Sweeps emptied keys at most
-        once per window so per-source state stays bounded as followers churn."""
+        once per window so per-source state stays bounded as followers churn,
+        and refuses an unseen key outright once `max_sources` buckets are live
+        rather than allocating another — being at the cap means a key flood is
+        already underway, which is when shedding load is the whole point."""
         cutoff = now - self._window
         with self._lock:
             if now - self._last_prune >= self._window:
                 self._prune_locked(cutoff)
                 self._last_prune = now
-            dq = self._events.setdefault(key, deque())
+            dq = self._events.get(key)
+            if dq is None:
+                if len(self._events) >= self._max_sources:
+                    return False
+                dq = self._events.setdefault(key, deque())
             while dq and dq[0] < cutoff:
                 dq.popleft()
             if len(dq) >= self._max:

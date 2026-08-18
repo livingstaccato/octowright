@@ -92,9 +92,9 @@ def test_multi_participant_events_tagged(tmp_path: Path) -> None:
     out = pool.tail(scenario_id="abc123")
     events_by_iid = {e["instance_id"]: e for e in out["events"]}
     assert events_by_iid["i-a"]["persona"] == "cosmo"
-    assert events_by_iid["i-a"]["role"] == "player"
+    assert events_by_iid["i-a"]["scenario_role"] == "player"
     assert events_by_iid["i-b"]["persona"] == "ziggy"
-    assert events_by_iid["i-b"]["role"] == "monitor"
+    assert events_by_iid["i-b"]["scenario_role"] == "monitor"
 
 
 def test_missing_log_file_preserves_cursor(tmp_path: Path) -> None:

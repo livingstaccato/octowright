@@ -88,9 +88,19 @@ class TestNonAriaNoiseKeys:
 class TestRecordingNoiseKeys:
     def test_exact_membership(self) -> None:
         """The recording-noise set is the canonical action-bookkeeping fields."""
-        # `persona` is stamped by scenarios_pool onto every merged tail event and
-        # is not an input to any session method, so replay must strip it.
-        assert RECORDING_NOISE_KEYS == ("action", "ts", "kind", "profile", "instance_id", "persona")
+        # `persona` and `scenario_role` are stamped by scenarios_pool onto every
+        # merged tail event and are not inputs to any session method, so replay
+        # must strip them. `scenario_role` is NOT spelled `role`: that is the ARIA
+        # locator key, and stripping cannot undo a collision (see substitution.py).
+        assert RECORDING_NOISE_KEYS == (
+            "action",
+            "ts",
+            "kind",
+            "profile",
+            "instance_id",
+            "persona",
+            "scenario_role",
+        )
 
     @pytest.mark.parametrize("key", ["action", "ts", "kind", "profile", "instance_id"])
     def test_each_key_present(self, key: str) -> None:

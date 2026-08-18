@@ -29,10 +29,18 @@ SEMANTIC_FINDER_KEYS = ("role", "label", "text", "test_id")
 NON_ARIA_NOISE_KEYS = ("role", "role_name", "test_id", "role_exact", "label_exact", "text_exact")
 # Bookkeeping the recorder and the scenario layer stamp onto an event. None is
 # an input to any session method, so all of them are stripped before dispatch.
-# `persona` comes from scenarios_pool, which stamps it (with `role`) onto every
-# merged tail event; without it here, replaying a scenario-derived recording
-# raises TypeError: navigate() got an unexpected keyword argument 'persona'.
-RECORDING_NOISE_KEYS = ("action", "ts", "kind", "profile", "instance_id", "persona")
+# `persona` and `scenario_role` come from scenarios_pool, which stamps both onto
+# every merged tail event; without them here, replaying a scenario-derived
+# recording raises TypeError: navigate() got an unexpected keyword argument.
+#
+# `scenario_role` is spelled that way BECAUSE stripping cannot fix a collision.
+# The label was originally written to `role`, which is also the ARIA locator key
+# on click/fill/click_by/fill_by/get_text_by — and `strip_non_aria_noise` returns
+# those actions untouched precisely because `role` is their locator. So the label
+# both destroyed a recorded ARIA role and injected one where there was none, with
+# nothing downstream able to tell the two apart. Renaming at the source is the
+# only fix; do not re-add a bare `role` here.
+RECORDING_NOISE_KEYS = ("action", "ts", "kind", "profile", "instance_id", "persona", "scenario_role")
 
 
 def normalise_parameters(parameters: list[str] | dict[str, str] | None) -> dict[str, str]:

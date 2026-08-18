@@ -25,7 +25,7 @@ from octowright._bridge_message_helpers import (
     BRIDGE_ERROR_PREFIX,  # noqa: F401
     bridge_error,
     is_request,
-    is_response,  # noqa: F401
+    is_response,
     message_method,
     message_request_id,
     message_root,
@@ -63,6 +63,14 @@ _BRIDGE_SUSPENSION = counter(
 # The frozen time would otherwise blow monotonic-based in-flight deadlines and
 # strand the now-stale leader session. (defaults.py is at its LOC ceiling.)
 SUSPEND_THRESHOLD_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_SUSPEND_THRESHOLD_SECONDS", "5.0"))
+
+# Reserved namespace for progressTokens the BRIDGE invents (see _inject_meta).
+# A token bearing it is bridge-internal by construction and must never reach the
+# local client, which never asked for progress and cannot resolve the token.
+# Membership in `_synthetic_progress_tokens` is the fast path, but that set is
+# deliberately torn down when a request finishes, so the prefix is the durable
+# test — see forward_remote_message.
+SYNTHETIC_PROGRESS_PREFIX = "owpt-"
 
 log = get_logger(__name__)
 
@@ -283,7 +291,7 @@ class BridgeSupervisor:
             token = client_token
             self._progress_tokens[client_token] = request_id
         else:
-            token = f"owpt-{request_id}-{next(self._progress_token_counter)}"
+            token = f"{SYNTHETIC_PROGRESS_PREFIX}{request_id}-{next(self._progress_token_counter)}"
             self._synthetic_progress_tokens.add(token)
             self._progress_tokens[token] = request_id
             meta["progressToken"] = token
@@ -309,6 +317,20 @@ class BridgeSupervisor:
         in_flight = self._in_flight.get(request_id)
         if in_flight is not None and not in_flight.responded:
             in_flight.deadline = time.monotonic() + (in_flight.timeout or self.request_timeout_seconds)
+
+    def _is_synthetic_progress_token(self, token: Any) -> bool:
+        """Whether ``token`` is one the bridge invented rather than the client.
+
+        The membership set alone is not enough: `_discard_progress_token` empties
+        it the moment a request finishes, so a progress frame the leader emits
+        after that (it has not learned of the follower's timeout, and its
+        heartbeat keeps pinging) failed the test and was forwarded — handing the
+        client a progressToken it never issued, for a request already errored.
+        The prefix is reserved, so it stays true after the bookkeeping is gone.
+        """
+        if token in self._synthetic_progress_tokens:
+            return True
+        return isinstance(token, str) and token.startswith(SYNTHETIC_PROGRESS_PREFIX)
 
     def _discard_progress_token(self, in_flight: InFlightRequest) -> None:
         """Drop a finished request's progressToken bookkeeping so the maps don't
@@ -364,16 +386,52 @@ class BridgeSupervisor:
         if self._initialized_message is not None:
             await remote_write.send(self._initialized_message)
 
+    async def _forward_progress(self, message: SessionMessage, progress_token: Any) -> None:
+        """Progress means the op is alive: re-arm its deadline. A bridge-synthetic
+        token is swallowed (the client never asked for it); a client-supplied one
+        is forwarded through unchanged."""
+        self._rearm_deadline(progress_token)
+        if self._is_synthetic_progress_token(progress_token):
+            return
+        await self.local_write.send(message)
+
+    def _settle_in_flight(self, request_id: str | int, message: SessionMessage) -> bool:
+        """Close out ``request_id``; return whether ``message`` may be forwarded.
+
+        Every path that finishes a request early (deadline expiry, connection
+        reset, stream close) POPS the entry and sends the client a synthetic
+        bridge_error, spending the one response this id is allowed. So an id
+        that is no longer here has already been answered, and a response for it
+        would be a duplicate on the wire.
+
+        The drop is gated on ``is_response``, NOT on "unknown id": the leader
+        also sends the client genuine REQUESTS (sampling/createMessage,
+        elicitation, roots/list) whose ids are its own and were never tracked
+        here. Those must pass through untouched.
+        """
+        in_flight = self._in_flight.pop(request_id, None)
+        if in_flight is None:
+            return not is_response(message)
+        if in_flight.responded:
+            return False
+        in_flight.responded = True
+        self._discard_progress_token(in_flight)
+        # End-to-end RPC latency: from when the follower forwarded the request
+        # to when the matching response arrived from the leader. Outcome label
+        # distinguishes success (JSONRPCResponse) from leader-side error.
+        _BRIDGE_RPC_DURATION.record(
+            time.monotonic() - in_flight.started_at,
+            attributes={
+                "method": in_flight.method or "unknown",
+                "outcome": "error" if isinstance(message_root(message), JSONRPCError) else "ok",
+            },
+        )
+        return True
+
     async def forward_remote_message(self, message: SessionMessage) -> None:
         progress_token = self._progress_token_of(message)
         if progress_token is not None:
-            # Progress means the op is alive: re-arm its deadline. A bridge-
-            # synthetic token is swallowed (the client never asked for it); a
-            # client-supplied token is forwarded through unchanged.
-            self._rearm_deadline(progress_token)
-            if progress_token in self._synthetic_progress_tokens:
-                return
-            await self.local_write.send(message)
+            await self._forward_progress(message, progress_token)
             return
         request_id = message_request_id(message)
         if request_id is not None and request_id in self._internal_replay_ids:
@@ -382,23 +440,8 @@ class BridgeSupervisor:
             # response would be a duplicate id from the client's perspective.
             self._internal_replay_ids.discard(request_id)
             return
-        if request_id is not None:
-            in_flight = self._in_flight.pop(request_id, None)
-            if in_flight is not None:
-                if in_flight.responded:
-                    return
-                in_flight.responded = True
-                self._discard_progress_token(in_flight)
-                # End-to-end RPC latency: from when the follower forwarded
-                # the request to when the matching response arrived from
-                # the leader. Outcome label distinguishes success
-                # (JSONRPCResponse) from leader-side error (JSONRPCError).
-                elapsed = time.monotonic() - in_flight.started_at
-                outcome = "error" if isinstance(message_root(message), JSONRPCError) else "ok"
-                _BRIDGE_RPC_DURATION.record(
-                    elapsed,
-                    attributes={"method": in_flight.method or "unknown", "outcome": outcome},
-                )
+        if request_id is not None and not self._settle_in_flight(request_id, message):
+            return
         await self.local_write.send(message)
 
     def _handle_suspension(self, gap: float) -> None:

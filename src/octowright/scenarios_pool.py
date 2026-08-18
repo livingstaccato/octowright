@@ -378,7 +378,7 @@ class ScenarioPool:
             for entry in p_events:
                 entry["instance_id"] = iid
                 entry["persona"] = p["persona"]
-                entry["role"] = p["role"]
+                entry["scenario_role"] = p["role"]  # NOT "role" — that is the ARIA locator key
                 events.append(entry)
         return {
             "scenario_id": scenario_id,

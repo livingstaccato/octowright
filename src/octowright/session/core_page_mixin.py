@@ -114,6 +114,37 @@ def _sanitize_url_for_span(url: str) -> str:
         return url
 
 
+#: ASCII tab / LF / CR. The WHATWG URL parser REMOVES these from a URL outright
+#: (they are not encoded, not rejected — deleted), so they can be used to hide
+#: the second slash of an authority from a naive string test.
+_URL_STRIPPED_CONTROLS = {0x09: None, 0x0A: None, 0x0D: None}
+
+
+def _canonicalize_for_guard(url: str) -> str:
+    """Fold a URL into the one spelling the guard's string tests reason about.
+
+    The guard decides "is this same-origin?" by looking for a leading ``//``.
+    That is a valid reading of RFC 3986 and the wrong reading of the WHATWG URL
+    Standard, which is what Chromium/Firefox/WebKit and Playwright's ``base_url``
+    resolution actually implement. WHATWG gives an authority several spellings:
+
+    * ``\\`` is equivalent to ``/`` for a special scheme (http/https), so
+      ``/\\evil.test/x`` is an authority — it resolves to host ``evil.test``;
+    * tab/LF/CR are deleted before parsing, so ``/<TAB>/evil.test/x`` becomes
+      ``//evil.test/x`` — also host ``evil.test``.
+
+    Both passed a ``startswith("//")`` test while reaching a different host, which
+    turned the host-relative relaxation into an SSRF-policy bypass (a poisoned
+    macro navigating ``/\\169.254.169.254/latest/meta-data/`` skipped the host
+    check entirely). Canonicalizing first makes the string test agree with the
+    parser that ultimately resolves the value.
+
+    Note this is used ONLY to classify and check the URL; the original string is
+    what gets handed to Playwright, so no caller's URL is rewritten.
+    """
+    return url.strip().translate(_URL_STRIPPED_CONTROLS).replace("\\", "/")
+
+
 def _reject_unsafe_url(url: str) -> None:
     """Raise ValueError if ``url`` is on the deny-list of unsafe schemes, or the
     active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every navigation entry
@@ -121,13 +152,17 @@ def _reject_unsafe_url(url: str) -> None:
     one call covers them all."""
     if not isinstance(url, str) or not url:
         raise ValueError("navigate url must be a non-empty string")
-    stripped = url.strip()
+    stripped = _canonicalize_for_guard(url)
     # One leading slash is a path on the context's own base_url: same origin by
     # construction, so there is no scheme to deny and no new host to check. This
     # is what lets a macro navigate '/orders' and stay portable across
     # deployments. TWO slashes is protocol-relative -- '//evil.test/x' resolves
     # to a DIFFERENT host -- so it falls through to the absolute checks below.
     # The base_url it resolves against is validated where it is set.
+    #
+    # This test is only sound on a CANONICALIZED string: WHATWG has more than one
+    # spelling of an authority, and `_canonicalize_for_guard` folds them all into
+    # the `//` form before we get here (see its docstring).
     if stripped.startswith("/") and not stripped.startswith("//"):
         return
     scheme, sep, _rest = stripped.partition(":")
