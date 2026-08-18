@@ -72,6 +72,10 @@ def test_tail_recording_summary_mode_bounds_payload_and_suggests_next_actions(st
 
     assert "events" not in result
     assert result["summary"] == {
+        # A short recording is read in one window, so the summary covers all of
+        # it. `partial` is asserted here (not just in the truncated case) so the
+        # honest-scope flag cannot be dropped without a test noticing.
+        "partial": False,
         "event_count": 4,
         "by_action": [
             {"key": "click", "count": 2},
