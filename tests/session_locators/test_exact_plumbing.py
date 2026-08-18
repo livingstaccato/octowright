@@ -117,3 +117,21 @@ def test_ts_export_emits_exact_for_text() -> None:
 
 def test_ts_export_omits_exact_when_substring() -> None:
     assert _ts_locator({"text": "Ada"}) == 'page.getByText("Ada")'
+
+
+def test_browser_fill_exposes_role_exact_like_every_other_locator_tool() -> None:
+    """`browser_fill` gained `label_exact` in 0.14.4 but not `role_exact`,
+    while `browser_click` and `browser_get_text_by` got both.
+
+    `text`/`text_exact` are correctly absent — a fill targets one field, it
+    does not search page text — but `role`/`role_name` ARE accepted, so the
+    modifier that disambiguates them has to be too, or a role name that is a
+    prefix of another cannot be pinned on a fill at all.
+    """
+    import inspect
+
+    from octowright.server.browser.input import browser_fill
+
+    params = inspect.signature(browser_fill).parameters
+    assert "role_exact" in params, "role/role_name are accepted, so their exact modifier must be too"
+    assert "text" not in params, "a fill targets a field, not page text"

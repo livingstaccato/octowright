@@ -261,7 +261,7 @@ appends a record to that instance's JSONL log.
 
 | Tool | What |
 |---|---|
-| `browser_click` / `browser_type` / `browser_fill` / `browser_press_key` | CSS-selector input. `browser_click` / `browser_fill` also accept ARIA locators (`role` / `label` / `text` / `test_id`) instead of `selector`. |
+| `browser_click` / `browser_type` / `browser_fill` / `browser_press_key` | CSS-selector input. `browser_click` also accepts ARIA locators (`role` / `label` / `text` / `test_id`) instead of `selector`; `browser_fill` accepts `role` / `label` / `test_id` (there is no `text` — a fill targets one field, it does not search page text). `role_exact` / `label_exact` / `text_exact` switch that finder from substring to whole-string **and case-sensitive** matching. |
 | `browser_get_text_by` | ARIA-locator text read (role / label / text / data-testid) — no CSS-selector equivalent. |
 | `browser_hover` | Hover the cursor over a CSS selector (triggers `:hover` / hover-reveal menus / tooltips). |
 | `browser_select_option` | Select one option in a native `<select>` by `value`, `label`, or 0-based `index`. |
