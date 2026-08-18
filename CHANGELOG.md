@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-08-18
+
+### Added
+- **`OCTOWRIGHT_TAIL_MAX_BYTES`** — per-call read window for `recorder.tail_log`,
+  **on by default at 8 MiB**. The read was an unbounded `fh.read()`, and
+  recordings have no ceiling by default (`OCTOWRIGHT_RECORDING_MAX_BYTES` is
+  off), so a single `GET /api/sessions/{id}/events?since=0` on a long-lived
+  session pulled the entire file into the leader — the process that owns every
+  live browser — then multiplied it by parsing each line into a dict. Every
+  caller already loops on the returned cursor, so the window costs a round trip
+  rather than correctness. A falsey token restores the unbounded read.
+
+### Fixed
+- **The follower bridge no longer emits two frames for one JSON-RPC id.** Every
+  path that finishes a request early — deadline expiry, connection reset,
+  stream close — pops the entry from `_in_flight` and sends the client a
+  synthetic `bridge_error`, spending the one response that id is allowed.
+  `forward_remote_message` then found nothing, skipped the settle block and
+  fell through to an unconditional send, so the leader's tardy response arrived
+  as a duplicate. The drop is gated on `is_response`, not on "unknown id", so
+  server→client requests (`sampling/createMessage`, elicitation, `roots/list`)
+  still pass through.
+- **Bridge-internal progress tokens no longer leak to the client.**
+  `_discard_progress_token` empties `_synthetic_progress_tokens` when a request
+  finishes, so a progress frame the leader emitted afterwards failed the
+  membership test and was forwarded, handing the client an `owpt-` token it
+  never issued. Matched on the reserved prefix, which survives the teardown.
+- **SSRF blocking canonicalizes a URL the way the browser will.**
+  `_reject_unsafe_url` inspected the raw string while Playwright uses a WHATWG
+  parser, which folds `\` to `/` for special schemes and *deletes* ASCII
+  tab/LF/CR before parsing. `http:/\169.254.169.254/latest/` therefore read as
+  scheme-plus-path to the guard and as authority `169.254.169.254` to the
+  browser: `block-private` returned ALLOWED on a cloud-metadata navigation.
+- **The new-session rate limiter's per-source map is bounded.** It allocated a
+  tracker per distinct bucket key and swept at most once per window, so the map
+  could grow unbounded *within* one. Capped at 4096; an unseen key past the cap
+  is refused rather than allocated. This is a memory bound, not anti-bypass —
+  `/mcp` requires the lockfile capability token, so anything reaching it is
+  same-user and already trusted at the RCE-equivalent level.
+- **`macro_lint` stopped refusing saves it had no business refusing.**
+  `PUT /api/macros/{name}` gates on `error_count == 0`, so each false error made
+  a macro unsavable from the dashboard: an unknown field on `screenshot` (which
+  replay *drops*, so now a warning), `text: ""` (a provided finder to
+  `build_locator`, which tests `is not None`), an `?email=`/`?username=` URL
+  parameter, and a 32+ run of pure digits read as a hex digest. Setting more
+  than one locator field is now reported as ambiguous, matching the `ValueError`
+  replay raises.
+- **`macro_lint` now catches the tokens its own docs promised.** The path scan
+  was justified by magic-link and password-reset tokens while matching only
+  vendor prefixes — a shape no such token carries — so the branch could never
+  fire on the thing it existed for. A token *shape* is now accepted after a
+  credential-context segment (`/reset/`, `/verify/`, `/invite/`, …), and a JWT
+  is recognised anywhere, including in the fragment where the OAuth implicit
+  grant puts one by specification.
+- **`macro_repair`'s finder guard is derived from the keys it guards.** It read
+  the module-level `SEMANTIC_FINDER_KEYS` while the replacement is built from
+  the injected `semantic_keys` — two sources for one decision, the drift that
+  produces a finder-less `click_by` with its working selector already dropped.
+- **`octowright restart` actually sweeps the browsers it owns.** It enumerated
+  the daemon's descendants *after* signalling it, by which point they had
+  reparented and nothing matched. The ownership snapshot is now taken before
+  the first signal, and both signal stages re-verify identity against a live
+  scan so a recycled pid cannot be friendly-fired.
+- **Scenario tail no longer overwrites the ARIA locator key.**
+  `ScenarioPool.tail` wrote each participant's scenario role into
+  `entry["role"]`, so a tailed `click_by` came back naming a role that does not
+  exist. Renamed to `scenario_role` and stripped before dispatch.
+- **`browser_fill` documents `role_exact` / `label_exact`.** It accepted both
+  and described neither, so an agent hitting `label='Email'` matching
+  `'Email (optional)'` had no discoverable fix. Its description now carries the
+  same substring-default and case-sensitivity caveat `browser_click` got.
+
+### Changed
+- Per-file LOC ceiling raised from 550 to 777.
+- Locked dependencies upgraded (mypy 2.3.1, ty 0.0.72, httpx2 2.12.0,
+  provide-telemetry 0.7.2, and seven others).
+
 ## [0.14.4] - 2026-08-17
 
 ### Added
