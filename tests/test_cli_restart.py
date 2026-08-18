@@ -40,6 +40,10 @@ def _no_real_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     # to "no squatter" so these non-split-brain tests don't shell out to lsof.
     # test_restart_split_brain.py stubs this explicitly where it matters.
     monkeypatch.setattr("octowright.cli.port_owner._pid_listening_on_port", lambda _port: None)
+    # The browser sweep now reads the process table twice (a pre-stop snapshot of
+    # this daemon's browsers, plus the orphan scan); neither should shell out here.
+    monkeypatch.setattr(_restart_mod, "browser_pids_owned_by", lambda _pids: [])
+    monkeypatch.setattr("octowright.process_reaper.find_browser_pids", lambda _scope, **_kw: [])
 
 
 @pytest.fixture
@@ -69,7 +73,7 @@ def test_no_start_skips_spawn_and_reaps_browsers(
     reap_calls: list[None] = []
     monkeypatch.setattr(
         _restart_mod,
-        "reap_orphan_browsers",
+        "reap_daemon_browsers",
         lambda *_a, **_kw: (reap_calls.append(None), {"killed": [], "still_alive": [], "errors": []})[1],
     )
     monkeypatch.setattr(
@@ -94,7 +98,7 @@ def test_keep_browsers_skips_reaper(
     """``--keep-browsers`` must skip the reaper sweep."""
     monkeypatch.setattr(
         _restart_mod,
-        "reap_orphan_browsers",
+        "reap_daemon_browsers",
         lambda *_a, **_kw: pytest.fail("must not reap when --keep-browsers is set"),
     )
     monkeypatch.setattr(
@@ -119,7 +123,7 @@ def test_stop_escalates_to_sigkill_on_holdouts(
     monkeypatch.setattr(_restart_mod.singleton, "remove_lock", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         _restart_mod,
-        "reap_orphan_browsers",
+        "reap_daemon_browsers",
         lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
     )
 
@@ -338,7 +342,7 @@ def test_spawn_passes_http_host_and_port_through(
     monkeypatch.setattr(_restart_mod, "_resolve_octowright_entry", lambda: "/fake/octowright")
     monkeypatch.setattr(
         _restart_mod,
-        "reap_orphan_browsers",
+        "reap_daemon_browsers",
         lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
     )
     monkeypatch.setattr(_restart_mod, "_wait_for_health", lambda *_a, **_kw: "http://127.0.0.1:9876/")
@@ -367,7 +371,7 @@ def test_health_probe_failure_returns_nonzero(
     """If the spawned daemon never serves HTTP 200, restart exits non-zero."""
     monkeypatch.setattr(
         _restart_mod,
-        "reap_orphan_browsers",
+        "reap_daemon_browsers",
         lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
     )
     monkeypatch.setattr(_restart_mod, "_spawn_daemon", lambda *_a, **_kw: 9999)
@@ -387,7 +391,7 @@ def test_restart_refuses_fallback_port_when_requested_port_busy(
 ) -> None:
     monkeypatch.setattr(
         _restart_mod,
-        "reap_orphan_browsers",
+        "reap_daemon_browsers",
         lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
     )
     monkeypatch.setattr(_restart_mod, "_wait_for_port_free", lambda *_a, **_kw: False)
@@ -500,7 +504,7 @@ def test_kill_followers_flag_sweeps_follower_pids(
     monkeypatch.setattr(_restart_mod.singleton, "pid_is_alive", lambda _pid: False)
     monkeypatch.setattr(
         _restart_mod,
-        "reap_orphan_browsers",
+        "reap_daemon_browsers",
         lambda *_a, **_kw: {"killed": [], "still_alive": [], "errors": []},
     )
 

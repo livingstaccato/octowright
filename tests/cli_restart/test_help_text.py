@@ -43,17 +43,24 @@ def _help_text(runner: CliRunner) -> str:
     return result.output
 
 
-def test_sweep_targets_only_browsers_the_dead_daemon_orphaned(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The scope, not just the help text — this is the finding's real half."""
+def test_sweep_never_targets_every_browser_on_the_box(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The blast radius, not just the help text — this is the finding's real half.
+
+    The sweep is now an explicit pid list (this daemon's browsers, snapshotted
+    before it was stopped, plus anything an earlier generation orphaned), so the
+    assertion is on the pids rather than on a scope string. What must stay true
+    is that a browser nobody here owns is never in it.
+    """
     seen: dict[str, object] = {}
 
-    def _fake_reap(scope: str, **kwargs: object) -> dict[str, list[int]]:
-        seen["scope"] = scope
+    def _fake_reap(pids: object = (), **kwargs: object) -> dict[str, list[int]]:
+        seen["pids"] = list(pids)  # type: ignore[call-overload]
         return {"killed": [], "still_alive": [], "errors": []}
 
-    monkeypatch.setattr(restart_mod, "reap_orphan_browsers", _fake_reap)
-    restart_mod._reap_browsers()
-    assert seen["scope"] == "orphaned"
+    # restart.py imports the name directly, so patch ITS binding, not the module's.
+    monkeypatch.setattr(restart_mod, "reap_daemon_browsers", _fake_reap)
+    restart_mod._reap_browsers([300])
+    assert seen["pids"] == [300]
 
 
 def test_help_does_not_reference_a_symbol_that_does_not_exist(runner: CliRunner) -> None:

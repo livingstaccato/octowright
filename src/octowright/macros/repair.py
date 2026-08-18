@@ -40,7 +40,19 @@ async def suggest_fix(session: SessionLike, action: dict[str, Any]) -> str | Non
     )
 
 
-def _has_resolvable_finder(action: dict[str, Any]) -> bool:
+def _resolvable_finder_keys(semantic_keys: tuple[str, ...]) -> tuple[str, ...]:
+    """The subset of the INJECTED keys that can actually resolve an element.
+
+    Derived from `semantic_keys` rather than read off the module constant so
+    the guard and the thing it guards cannot disagree. `semantic_replacement`
+    copies only the injected keys; a guard consulting the full
+    `SEMANTIC_FINDER_KEYS` could pass an action whose only finder the builder
+    then drops, re-creating a finder-less `click_by` by a different route.
+    """
+    return tuple(key for key in semantic_keys if key in SEMANTIC_FINDER_KEYS)
+
+
+def _has_resolvable_finder(action: dict[str, Any], finder_keys: tuple[str, ...]) -> bool:
     """Whether *action* carries something that can actually resolve an element.
 
     The guard here used to be `if not semantic` over every semantic key, which
@@ -49,14 +61,14 @@ def _has_resolvable_finder(action: dict[str, Any]) -> bool:
     finder-less click_by with its working CSS selector dropped, and replay then
     raised `ValueError: exactly one of role/label/text/test_id must be set`.
     """
-    return any(action.get(key) is not None for key in SEMANTIC_FINDER_KEYS)
+    return any(action.get(key) is not None for key in finder_keys)
 
 
 def semantic_replacement(action: dict[str, Any], *, semantic_keys: tuple[str, ...]) -> dict[str, Any] | None:
     kind = action.get("action")
     if kind not in {"click", "fill"} or not action.get("selector"):
         return None
-    if not _has_resolvable_finder(action):
+    if not _has_resolvable_finder(action, _resolvable_finder_keys(semantic_keys)):
         return None
 
     semantic = {k: action[k] for k in semantic_keys if k in action and action[k] is not None}

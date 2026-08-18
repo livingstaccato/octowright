@@ -18,9 +18,9 @@ motivated this command). ``octowright restart`` does the full dance:
 2. SIGTERM it. Wait up to ``--timeout`` seconds for graceful exit.
 3. SIGKILL anything still alive.
 4. Remove a stale lockfile if present.
-5. Reap Playwright browsers -- ``scope="orphaned"``, so the ones the dead
-   daemon left reparented to init, protected or not (skip with
-   ``--keep-browsers``). Not ``"all"``, which also hit unrelated browsers.
+5. Reap Playwright browsers -- the ones the dead daemon owned (snapshotted
+   before step 2) plus anything an earlier generation orphaned, protected or
+   not (skip with ``--keep-browsers``). Never every browser on the box.
 6. Spawn a fresh detached daemon (skip with ``--no-start``).
 7. Probe ``/api/health`` until 200 OK, up to ``--timeout`` seconds.
 
@@ -39,6 +39,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import click
@@ -47,7 +48,7 @@ from octowright import singleton
 from octowright.cli import port_owner
 from octowright.cli._root import cli
 from octowright.defaults import HTTP_HOST, HTTP_PORT
-from octowright.process_reaper import reap_orphan_browsers
+from octowright.process_reaper import browser_pids_owned_by, reap_daemon_browsers
 
 # Poll interval while waiting for graceful shutdown or health-probe success.
 _POLL_INTERVAL_S = 0.25
@@ -352,7 +353,9 @@ def _escalate_survivors(pids: set[int], timeout: float) -> list[int]:
     return survivors
 
 
-def _stop_leader(timeout: float, *, kill_followers: bool = False, spawn_port: int | None = None) -> tuple[int, int]:
+def _stop_leader(
+    timeout: float, *, kill_followers: bool = False, spawn_port: int | None = None
+) -> tuple[int, int, list[int]]:
     """SIGTERM all known leader pids, escalate to SIGKILL on holdouts.
 
     When *kill_followers* is True, also sweeps bare MCP follower processes
@@ -360,26 +363,27 @@ def _stop_leader(timeout: float, *, kill_followers: bool = False, spawn_port: in
     clients don't accumulate. ``spawn_port`` lets the sweep also reclaim a
     split-brain leader squatting on the port the fresh daemon will bind.
 
-    Returns ``(stopped_count, kill9_count)``.
+    Returns ``(stopped_count, kill9_count, owned_browser_pids)``. The third
+    element is a snapshot taken BEFORE the first signal — see ``_reap_browsers``.
     """
     pids = _collect_target_pids(kill_followers, spawn_port=spawn_port)
     if not pids:
         click.echo("no running octowright daemon found", err=True)
-        return 0, 0
+        return 0, 0, []
+    # Snapshot first: once these pids are gone, their Playwright node driver is
+    # still alive for a while yet, and until IT exits their browsers do not read
+    # as orphaned to any post-stop scan.
+    owned_browsers = browser_pids_owned_by(pids)
     click.echo(f"stopping {len(pids)} octowright process(es): {sorted(pids)}")
     for pid in pids:
         _send_signal(pid, signal.SIGTERM)
     survivors = _escalate_survivors(pids, timeout)
     singleton.remove_lock()
-    return len(pids) - len(survivors), len(survivors)
+    return len(pids) - len(survivors), len(survivors), owned_browsers
 
 
-def _reap_browsers() -> None:
-    # "orphaned", not "all": this runs AFTER _stop_leader, so the dead daemon's
-    # browsers are already reparented to init -- exactly this scope, the one the
-    # boot/housekeeping sweeps use and the one this command's own output claims.
-    # "all" also killed unrelated browsers. Full sweep: `octowright cleanup`.
-    summary = reap_orphan_browsers(scope="orphaned")
+def _reap_browsers(owned_browser_pids: Sequence[int] = ()) -> None:
+    summary = reap_daemon_browsers(owned_browser_pids)
     click.echo(
         f"orphan browsers: killed={len(summary['killed'])} "
         f"still_alive={len(summary['still_alive'])} "
@@ -511,9 +515,9 @@ def restart(
     # When we're going to spawn, also reclaim the spawn port from a split-brain
     # leader squatting on it (otherwise the bind below fails and nothing starts).
     spawn_port = None if no_start else http_port
-    stopped, killed = _stop_leader(timeout, kill_followers=kill_followers, spawn_port=spawn_port)
+    stopped, killed, owned_browsers = _stop_leader(timeout, kill_followers=kill_followers, spawn_port=spawn_port)
     if not keep_browsers:
-        _reap_browsers()
+        _reap_browsers(owned_browsers)
 
     if no_start:
         click.echo(f"done (stopped={stopped} sigkilled={killed}; not starting a new daemon)")

@@ -13,6 +13,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from provide.telemetry import get_logger
+
+log = get_logger(__name__)
+
 # Restrict label characters to alphanumeric + dot/underscore/hyphen so a
 # caller-supplied label can never inject path separators, NUL bytes, or
 # other characters that would escape base_dir on disk.
@@ -144,9 +148,103 @@ class Recorder:
             self._fh.close()
 
 
-def tail_log(path: Path, cursor: int) -> tuple[list[dict], int, int]:
+#: Bytes ``tail_log`` will read in ONE call. The read used to be an unbounded
+#: ``fh.read()``, so a single ``?since=0`` on a recording that had grown for
+#: hours pulled the whole file into the leader — the process that owns every
+#: live browser — and then multiplied it by parsing every line into dicts.
+#: Recordings have no ceiling by default (``OCTOWRIGHT_RECORDING_MAX_BYTES`` is
+#: off), so nothing else bounded it. Every caller already loops on the returned
+#: cursor, so a window costs an extra round trip, not correctness. 8 MiB is
+#: ~40k typical events per call. (defaults.py is at its LOC ceiling.)
+_TAIL_MAX_BYTES_DEFAULT = 8 * 1024 * 1024
+_TAIL_DISABLE_TOKENS = frozenset({"", "0", "off", "false", "no", "never", "none", "disabled"})
+
+
+def _tail_max_bytes() -> int | None:
+    """Per-call read window; ``None`` = unbounded (the pre-bound behaviour).
+
+    ``OCTOWRIGHT_TAIL_MAX_BYTES``. Unset → the default (ON, unlike the recording
+    ceiling: this one costs a caller nothing, since they all page on the cursor
+    already). A falsey token or a non-positive/unparsable value → unbounded.
+    """
+    raw = os.environ.get("OCTOWRIGHT_TAIL_MAX_BYTES")
+    if raw is None:
+        return _TAIL_MAX_BYTES_DEFAULT
+    if raw.strip().lower() in _TAIL_DISABLE_TOKENS:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return _TAIL_MAX_BYTES_DEFAULT
+    return value if value > 0 else None
+
+
+def _offset_after_next_newline(fh: Any, start: int, chunk: int) -> int | None:
+    """Scan forward from ``start`` for the end of the current line.
+
+    Reads a chunk at a time and DISCARDS it — the point is to get past a line
+    too big to hold, so holding it to find its end would defeat the exercise.
+    ``None`` means the file ended without one, i.e. the writer is still
+    producing that line and the caller must not skip it yet.
+    """
+    position = start
+    while True:
+        block = fh.read(chunk)
+        if not block:
+            return None
+        index = block.find(b"\n")
+        if index != -1:
+            return position + index + 1
+        position += len(block)
+
+
+def _cursor_past_unterminated_window(fh: Any, path: Path, cursor: int, data: bytes, limit: int | None) -> int:
+    """Where to resume when the window held no line boundary at all.
+
+    Two different situations look identical here. Either the writer is mid-line
+    and the newline is simply not on disk yet — the long-standing behaviour is
+    to hold the cursor and re-read once it lands — or this single line is bigger
+    than the entire window, which only became possible once the read was bounded.
+    Holding still in THAT case makes every future poll re-read the same bytes and
+    return nothing, forever, so the line is stepped over instead: it cannot be
+    parsed at this window size, and buffering it to try is the exact allocation
+    the bound exists to prevent.
+    """
+    if limit is None or len(data) < limit:
+        return cursor
+    skip_to = _offset_after_next_newline(fh, cursor + len(data), limit)
+    if skip_to is None:
+        return cursor  # still being written; not yet safe to skip
+    log.warning(
+        "octowright.recorder.tail_line_too_large",
+        path=str(path),
+        skipped_bytes=skip_to - cursor,
+        limit_bytes=limit,
+    )
+    return skip_to
+
+
+def _parse_events(blob: bytes) -> list[dict]:
+    """Parse whole JSONL lines, skipping any the recorder wrote malformed."""
+    events = []
+    for raw_bytes in blob.splitlines():
+        raw = raw_bytes.strip()
+        if not raw:
+            continue
+        try:
+            events.append(json.loads(raw.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+    return events
+
+
+def tail_log(path: Path, cursor: int, max_bytes: int | None = -1) -> tuple[list[dict], int, int]:
     """
     Reads new JSONL events from a file since the given byte offset.
+
+    At most ``max_bytes`` are read per call (``-1`` = use ``_tail_max_bytes()``,
+    ``None`` = unbounded); the cursor always lands on a line boundary, so a
+    caller that keeps passing the returned cursor back sees every event.
 
     Returns:
         tuple[events, new_cursor, total_bytes]
@@ -157,31 +255,20 @@ def tail_log(path: Path, cursor: int) -> tuple[list[dict], int, int]:
     if not path.exists():
         return [], cursor, 0
 
+    limit = _tail_max_bytes() if max_bytes == -1 else max_bytes
     total_bytes = path.stat().st_size
     with path.open("rb") as fh:
         fh.seek(cursor)
-        data = fh.read()
+        data = fh.read() if limit is None else fh.read(limit)
 
-    if not data:
-        return [], cursor, total_bytes
+        if not data:
+            return [], cursor, total_bytes
 
-    last_newline = data.rfind(b"\n")
-    if last_newline == -1:
-        return [], cursor, total_bytes
+        last_newline = data.rfind(b"\n")
+        if last_newline == -1:
+            return [], _cursor_past_unterminated_window(fh, path, cursor, data, limit), total_bytes
 
-    complete_data = data[:last_newline]
-    new_cursor = cursor + last_newline + 1
-    events = []
-    for raw_bytes in complete_data.splitlines():
-        raw = raw_bytes.strip()
-        if not raw:
-            continue
-        try:
-            events.append(json.loads(raw.decode("utf-8")))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            continue
-
-    return events, new_cursor, total_bytes
+    return _parse_events(data[:last_newline]), cursor + last_newline + 1, total_bytes
 
 
 def new_log_path(base_dir: Path, instance_id: str, label: str | None, kind: str) -> Path:

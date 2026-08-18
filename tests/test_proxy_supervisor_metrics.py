@@ -91,7 +91,13 @@ async def test_forward_remote_message_records_error_outcome(captured_duration: _
 async def test_forward_remote_message_without_matching_request_does_not_record(
     captured_duration: _RecordingHistogram,
 ) -> None:
-    """Stray response with no in-flight entry must not record a histogram point."""
+    """Stray response with no in-flight entry must not record a histogram point.
+
+    It is also not forwarded: an id absent from ``_in_flight`` has already been
+    answered (expiry/reset/close pop the entry and send a bridge_error), so
+    passing the leader's late response through would put two frames for one id
+    on the wire. See tests/test_proxy_supervisor_tardy.py.
+    """
     _local_send, local_recv = anyio.create_memory_object_stream[SessionMessage](10)
     outgoing_send, outgoing_recv = anyio.create_memory_object_stream[SessionMessage](10)
     supervisor_obj = supervisor.BridgeSupervisor(
@@ -100,8 +106,10 @@ async def test_forward_remote_message_without_matching_request_does_not_record(
         request_timeout_seconds=1.0,
     )
     await supervisor_obj.forward_remote_message(_response("orphan-id"))
-    _ = await outgoing_recv.receive()
     assert captured_duration.records == []
+    with anyio.move_on_after(0.05) as scope:
+        await outgoing_recv.receive()
+    assert scope.cancelled_caught, "a stray response must not be forwarded to the client"
 
 
 @pytest.mark.anyio

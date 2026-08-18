@@ -39,6 +39,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from typing import Any, Literal, TypedDict
 
 from octowright._tracing import counter
@@ -175,11 +176,21 @@ def _list_processes_windows() -> list[tuple[int, int, str]]:
     return rows
 
 
+def _children_by_parent(table: list[tuple[int, int, str]]) -> dict[int, list[int]]:
+    """ppid -> child pids. Built once per table, not once per walk."""
+    index: dict[int, list[int]] = {}
+    for pid, ppid, _cmd in table:
+        index.setdefault(ppid, []).append(pid)
+    return index
+
+
 def _descendants_of(root_pid: int, table: list[tuple[int, int, str]]) -> set[int]:
     """BFS down the process tree from ``root_pid``."""
-    children_by_parent: dict[int, list[int]] = {}
-    for pid, ppid, _cmd in table:
-        children_by_parent.setdefault(ppid, []).append(pid)
+    return _descendants_with_index(root_pid, _children_by_parent(table))
+
+
+def _descendants_with_index(root_pid: int, children_by_parent: dict[int, list[int]]) -> set[int]:
+    """``_descendants_of`` against a prebuilt index, for walking many roots."""
     seen: set[int] = set()
     frontier = [root_pid]
     while frontier:
@@ -281,6 +292,105 @@ def _signal_pids(pids: list[int], signum: int, stage: str) -> list[dict[str, str
     return errors
 
 
+def browser_pids_owned_by(leader_pids: Iterable[int]) -> list[int]:
+    """Browser pids descended from *leader_pids*, as a pre-teardown snapshot.
+
+    ``scope="orphaned"`` only recognises a browser once its owning Playwright
+    node driver is gone, and the driver outlives the daemon python process it
+    was a child of — the kernel reparents it to init and it exits on its own
+    schedule (or hangs). A sweep that runs the instant the daemon's pids exit
+    therefore sees every browser as still-parented and reaps nothing.
+
+    Taking this snapshot BEFORE signalling removes the race: these pids are
+    exactly the browsers those daemons own, no matter what the driver does
+    next. It is strictly narrower than ``scope="all"`` — a concurrent daemon's
+    browsers are never descendants of ours.
+    """
+    table = _list_processes()
+    candidate_pids = [pid for pid, _ppid, cmd in table if _is_browser_command(cmd)]
+    # One index for every leader: `_descendants_of` would rebuild it per call.
+    index = _children_by_parent(table)
+    owned: set[int] = set()
+    for leader_pid in leader_pids:
+        descendants = _descendants_with_index(leader_pid, index)
+        owned.update(pid for pid in candidate_pids if pid in descendants)
+    return sorted(owned)
+
+
+def _reap_verified(targets: list[int], grace_seconds: float, scope_label: str) -> ReapSummary:
+    """Two-stage SIGTERM → grace → SIGKILL over pids already verified as browsers.
+
+    The escalation re-verifies again: the grace window is another chance for a pid
+    to exit and be recycled before the stronger signal lands.
+    """
+    if not targets:
+        return ReapSummary(killed=[], still_alive=[], errors=[])
+    errors = _signal_pids(targets, signal.SIGTERM, "sigterm")
+    time.sleep(grace_seconds)
+    errors.extend(_signal_pids(_still_browser_pids(targets), KILL_SIGNAL, "sigkill"))
+    return _reap_summary(targets, errors, scope_label)
+
+
+def _still_browser_pids(pids: list[int]) -> list[int]:
+    """Subset of *pids* that a fresh scan still sees as a Playwright browser.
+
+    Called before EACH signal stage, so a pid that died and was recycled between
+    the caller's snapshot and this moment is dropped rather than signalled. The
+    scan is taken once per call, not once per pid — inside a comprehension it
+    would re-read the whole process table for every candidate.
+    """
+    still_browsers = set(find_browser_pids("all"))
+    return [pid for pid in pids if pid in still_browsers]
+
+
+def _reap_summary(targets: list[int], errors: list[dict[str, str]], scope_label: str) -> ReapSummary:
+    """Split the signalled pids into killed/still-alive and record the metric."""
+    final = set(find_browser_pids("all"))
+    killed = [pid for pid in targets if pid not in final]
+    if killed:
+        _ORPHAN_REAPED.add(len(killed), attributes={"scope": scope_label})
+    return ReapSummary(
+        killed=killed,
+        still_alive=[pid for pid in targets if pid in final],
+        errors=errors,
+    )
+
+
+def reap_daemon_browsers(owned_browser_pids: Iterable[int] = (), *, grace_seconds: float = 0.4) -> ReapSummary:
+    """The sweep ``octowright restart`` runs after stopping a daemon.
+
+    Not ``scope="all"``: that killed unrelated Playwright runs, including
+    browsers a concurrent daemon owns and windows the user was watching.
+
+    Not ``scope="orphaned"`` alone either. That scope only recognises a browser
+    once its owning node driver is gone, and the driver outlives the daemon
+    python pids ``_stop_leader`` waits on — so the sweep ran while every browser
+    still had a live parent, reported ``killed=0``, and left every window up.
+    With ``--no-start`` there is no boot sweep behind it to catch them later.
+
+    So the target set is the union of two things: *owned_browser_pids*, a
+    snapshot taken BEFORE the daemon was signalled (naming its browsers
+    regardless of what the driver does next), and whatever is genuinely orphaned
+    now (leftovers from an earlier dead generation). Full sweep of the box
+    remains ``octowright cleanup``.
+
+    **Ownership comes from the snapshot; IDENTITY comes from a fresh scan.** The
+    snapshot may be seconds old — stopping a daemon means SIGTERM, waiting out
+    ``--timeout``, then escalating — and a browser can exit in that window and
+    have its pid recycled by the OS to an unrelated process. Signalling the raw
+    snapshot would then SIGTERM a foreign pid, the same hazard
+    ``restart._locked_pid_is_octowright`` exists for. Both halves are resolved
+    from ONE process-table read: the orphan set is derived from it, and the
+    snapshot is intersected with it.
+    """
+    table = _list_processes()
+    browser_pids = [pid for pid, _ppid, cmd in table if _is_browser_command(cmd)]
+    live_browsers = set(browser_pids)
+    orphaned = _orphaned_browser_pids(table, browser_pids)
+    verified_snapshot = [pid for pid in owned_browser_pids if pid in live_browsers]
+    return _reap_verified(sorted({*orphaned, *verified_snapshot}), grace_seconds, "owned")
+
+
 def reap_orphan_browsers(
     scope: Scope,
     *,
@@ -297,21 +407,9 @@ def reap_orphan_browsers(
     pids = find_browser_pids(scope, root_pid=root_pid)
     if dry_run or not pids:
         return ReapSummary(killed=[], still_alive=pids, errors=[])
-
-    errors = _signal_pids(pids, signal.SIGTERM, "sigterm")
-    time.sleep(grace_seconds)
-    survivors = [pid for pid in pids if pid in find_browser_pids(scope, root_pid=root_pid)]
-    errors.extend(_signal_pids(survivors, KILL_SIGNAL, "sigkill"))
-
-    final = find_browser_pids(scope, root_pid=root_pid)
-    killed = [pid for pid in pids if pid not in final]
-    if killed:
-        _ORPHAN_REAPED.add(len(killed), attributes={"scope": scope})
-    return ReapSummary(
-        killed=killed,
-        still_alive=[pid for pid in pids if pid in final],
-        errors=errors,
-    )
+    # Straight to the signalling stages: `pids` IS a live scan filtered by
+    # `_is_browser_command`, so it needs no separate identity re-check.
+    return _reap_verified(pids, grace_seconds, scope)
 
 
 async def shutdown_browser_pool_on_shutdown(pool: Any, *, log: Any) -> None:
