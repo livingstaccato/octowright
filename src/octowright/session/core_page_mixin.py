@@ -119,6 +119,13 @@ def _sanitize_url_for_span(url: str) -> str:
 #: the second slash of an authority from a naive string test.
 _URL_STRIPPED_CONTROLS = {0x09: None, 0x0A: None, 0x0D: None}
 
+#: Every C0 control or space (U+0000-U+0020). The WHATWG parser strips all of
+#: these from both ends BEFORE parsing; ``str.strip()`` removes only Python
+#: whitespace, so ``\x01file:///etc/passwd`` partitioned to a scheme of
+#: ``\x01file`` -- absent from the deny-list -- while Chromium stripped the
+#: control and loaded the file. Confirmed live against headless Chromium.
+_C0_OR_SPACE = "".join(chr(c) for c in range(0x21))
+
 
 def _canonicalize_for_guard(url: str) -> str:
     """Fold a URL into the one spelling the guard's string tests reason about.
@@ -142,7 +149,7 @@ def _canonicalize_for_guard(url: str) -> str:
     Note this is used ONLY to classify and check the URL; the original string is
     what gets handed to Playwright, so no caller's URL is rewritten.
     """
-    return url.strip().translate(_URL_STRIPPED_CONTROLS).replace("\\", "/")
+    return url.strip(_C0_OR_SPACE).translate(_URL_STRIPPED_CONTROLS).replace("\\", "/")
 
 
 def _reject_unsafe_url(url: str) -> None:
