@@ -68,6 +68,23 @@ _RUNTIME_HOST: str | None = None
 _RUNTIME_PORT: int | None = None
 _RUNTIME_ERROR: str | None = None
 
+# The live app's pairing store, published by ``build_app`` so the
+# ``octowright_dashboard_url`` MCP tool can mint a pairing code without
+# reaching into a Starlette app it has no handle on. A fresh app replaces
+# this, which is also what invalidates every prior code and bearer.
+_DASHBOARD_PAIRING: DashboardPairingState | None = None
+
+
+def set_dashboard_pairing(store: DashboardPairingState | None) -> None:
+    """Publish (or clear) the pairing store for the current app."""
+    global _DASHBOARD_PAIRING
+    _DASHBOARD_PAIRING = store
+
+
+def dashboard_pairing_store() -> DashboardPairingState | None:
+    """Return the live app's pairing store, or None before one is built."""
+    return _DASHBOARD_PAIRING
+
 
 def runtime_url() -> str | None:
     """Return the dashboard URL the HTTP server is bound to, or None if not running."""
@@ -148,6 +165,8 @@ _sys.modules[__name__].__class__ = _StateModule
 # under TYPE_CHECKING makes ``state.pool`` and ``state.scenario_pool`` valid
 # at static-analysis time without affecting runtime behavior.
 if TYPE_CHECKING:
+    from octowright.http.pairing import DashboardPairingState
+
     pool: Any
     scenario_pool: Any
     terminal_pool: Any

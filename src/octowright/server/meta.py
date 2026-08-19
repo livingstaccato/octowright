@@ -159,7 +159,49 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
         result["error"] = status["error"]
     elif not status["running"]:
         result["error"] = "HTTP debugger sidecar not running (call `octowright serve` to start it)"
+    _attach_pairing_url(result, base_url)
     return result
+
+
+def _attach_pairing_url(result: dict[str, Any], base_url: str | None) -> None:
+    """Turn the plain dashboard URL into one the user can actually open.
+
+    The dashboard requires pairing by default, so handing the user the bare
+    URL gives them a 401 -- the agent would be reporting a broken dashboard.
+    Mint a pairing code here instead, so "show me the dashboard" works in one
+    step from a chat client with no terminal.
+
+    Minting from MCP grants nothing new: the ``/mcp`` transport is gated by the
+    same capability token this pairing store checks, so an MCP caller is
+    already inside the trust boundary -- and where that gate is disabled, the
+    caller can already drive browsers, which is strictly more than reading the
+    dashboard. ``plain_url`` is kept so a caller that only wants the address
+    (logging, deep links) does not have to parse the fragment back off.
+    """
+    from octowright.http import state as _http_state
+    from octowright.http.pairing import (
+        MCP_PAIR_CODE_TTL_SECONDS,
+        pairing_anchor_available,
+        pairing_required,
+    )
+
+    result["plain_url"] = base_url
+    store = _http_state.dashboard_pairing_store()
+    result["pairing_required"] = bool(pairing_required() and pairing_anchor_available(store))
+    # `store is None` is already covered by pairing_anchor_available; repeating
+    # it keeps the narrowing visible to the type checker.
+    if not result["pairing_required"] or base_url is None or store is None:
+        return
+    try:
+        code = store.mint_code(ttl=MCP_PAIR_CODE_TTL_SECONDS)
+    except Exception as exc:  # pragma: no cover - defensive; store is in-process
+        log.warning("octowright.dashboard.mcp_pairing_mint_failed", error=repr(exc))
+        result["pairing_hint"] = "run `octowright dashboard` to mint a pairing URL"
+        return
+    # The fragment never leaves the browser during navigation.
+    result["url"] = f"{base_url.rstrip('/')}/pair#{code}"
+    result["pairing_expires_in"] = int(MCP_PAIR_CODE_TTL_SECONDS)
+    result["pairing_hint"] = "single-use link; open it before it expires, or run `octowright dashboard` for a fresh one"
 
 
 @mcp.tool(
