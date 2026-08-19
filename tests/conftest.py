@@ -99,6 +99,23 @@ def _loopback_dashboard_testclient(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_dashboard_pairing_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep one test's built app from lending its pairing store to the next.
+
+    ``build_app`` publishes the app's ``DashboardPairingState`` into module
+    state so ``octowright_dashboard_url`` can mint a pairing code without a
+    handle on the Starlette app. That is process-global: any test that builds
+    a token-carrying app would otherwise leave one behind, and an unrelated
+    test calling the tool would get a ``/pair#<code>`` URL instead of the
+    plain address it expected. Snapshotting through monkeypatch restores the
+    prior value at teardown.
+    """
+    from octowright.http import state as _http_state
+
+    monkeypatch.setattr(_http_state, "_DASHBOARD_PAIRING", None, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_canonical_http_port(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the CANONICAL dashboard port away from any real local daemon.
 

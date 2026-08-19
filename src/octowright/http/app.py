@@ -154,9 +154,13 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
 
     # Pairing credentials belong to this app instance. A new leader/app gets a
     # fresh state and therefore invalidates every prior code and bearer.
+    from octowright.http import state as _state_module
     from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState
 
     dashboard_pairing = DashboardPairingState(expected_token=mcp_token)
+    # Publish it so octowright_dashboard_url can mint a pairing code; the MCP
+    # tool has no handle on this Starlette app.
+    _state_module.set_dashboard_pairing(dashboard_pairing)
 
     routes: list[Any] = list(all_routes(mcp_token=mcp_token))
 

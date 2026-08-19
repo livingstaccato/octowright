@@ -37,6 +37,9 @@ PAIRING_REQUIRE_ENV = "OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING"
 _DISABLED_TOKENS = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
 
 PAIR_CODE_TTL_SECONDS = 60.0
+# A human reading an agent's message needs longer than an operator pasting
+# from their own terminal. Still single-use and loopback-only.
+MCP_PAIR_CODE_TTL_SECONDS = 600.0
 DASHBOARD_SESSION_TTL_SECONDS = 8 * 60 * 60.0
 MAX_PAIR_CODES = 32
 MAX_DASHBOARD_SESSIONS = 32
@@ -127,14 +130,23 @@ class DashboardPairingState:
             return False
         return hmac.compare_digest(self._digest(candidate), self._expected_token_digest)
 
-    def mint_code(self) -> str:
+    def mint_code(self, *, ttl: float | None = None) -> str:
+        """Mint a single-use pairing code.
+
+        *ttl* overrides the default window. The CLI keeps the short default
+        because the operator is already at a terminal and pastes immediately;
+        an agent surfacing the link through MCP is handing it to a human who
+        may not look for a while, and a code that expires before it is clicked
+        is worse than useless -- it reads as a broken dashboard. The code stays
+        single-use and loopback-only either way.
+        """
         self._prune_expired()
         while True:
             code = secrets.token_urlsafe(24)
             digest = self._digest(code)
             if digest not in self._codes:
                 break
-        self._codes[digest] = self._monotonic_clock() + self._code_ttl
+        self._codes[digest] = self._monotonic_clock() + (self._code_ttl if ttl is None else ttl)
         self._trim(self._codes, self._max_codes)
         return code
 
