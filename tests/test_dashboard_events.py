@@ -18,7 +18,13 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from octowright.dashboard_events import DashboardEventBus
-from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState, dashboard_access_ok
+from octowright.http.pairing import (
+    DASHBOARD_STATE_ATTR,
+    DASHBOARD_STREAM_LEASE_ATTR,
+    DashboardPairingState,
+    DashboardStreamLease,
+    dashboard_access_ok,
+)
 from octowright.http.routes import events as event_routes
 from octowright.http.routes.events import dashboard_events_endpoint
 
@@ -27,6 +33,10 @@ class _FakeRequest:
     def __init__(self, *, disconnected: bool = False) -> None:
         self.disconnect_checks = 0
         self.disconnected = disconnected
+        # The SSE endpoint revalidates the admission lease on every frame.
+        # These tests call it directly, so nothing attaches one; model an
+        # already-admitted connection.
+        self.state = SimpleNamespace(**{DASHBOARD_STREAM_LEASE_ATTR: DashboardStreamLease.bypass()})
 
     async def is_disconnected(self) -> bool:
         self.disconnect_checks += 1
