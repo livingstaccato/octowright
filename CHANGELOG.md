@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-08-18
+
+### Fixed
+- **A recycled pid no longer strands a session-manifest entry forever.**
+  `prune_dead_daemon_entries` decided orphanhood on pid *liveness* alone, so an
+  entry survived whenever any process still held its recorded `daemon_pid` —
+  and the OS recycles pids. Observed live: an entry from a daemon that died on
+  2026-07-21 was still present four weeks later because its pid had since been
+  handed to a `-zsh`; `octowright cleanup` only prunes recording files by age
+  and never touches the manifest, so the only remedy was editing the JSON.
+  An entry now goes when its pid is dead **or** when the pid is alive and the
+  process holding it is demonstrably not an `octowright serve` — the same
+  command-line identity check `restart` already applied to the lockfile pid.
+  Every ambiguous case still keeps the entry: an unreadable process table, a
+  pid the table does not list, a missing `daemon_pid`, and the running daemon's
+  own entries.
+- **A tail-recording summary now declares when it covers only part of the
+  file.** 0.15.0 bounded `recorder.tail_log` to a per-call window, which
+  silently changed what `browser_tail_recording(response_mode="summary")`
+  means: `event_count` and `by_action` describe the bytes that call scanned,
+  not the whole recording. The top-level `complete` flag sits outside the
+  `summary` block, so the counts still presented as authoritative. The summary
+  now carries a `partial` flag beside the counts, and the tool description says
+  to resume from `cursor` until it is false before reporting totals. Scanning
+  the whole file instead would reinstate the allocation the bound prevents.
+
 ## [0.15.0] - 2026-08-18
 
 ### Added
