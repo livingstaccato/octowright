@@ -27,8 +27,44 @@ log = get_logger(__name__)
 __all__ = ["DEFAULT_PREVIEW_CHARS", "SessionOpsMixin"]
 
 
+# Console levels that explain a failure. Playwright reports ``msg.type``
+# verbatim from the browser, so these are the CDP/WebKit spelling.
+_DIAGNOSTIC_CONSOLE_LEVELS = frozenset({"error", "warning", "assert"})
+
+
 def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _is_diagnostic_console(message: Any) -> bool:
+    """Whether a console entry is one that explains a failure.
+
+    Tolerates a non-dict entry: this runs while another failure is being
+    reported, so it must never be the thing that raises.
+    """
+    return isinstance(message, dict) and message.get("level") in _DIAGNOSTIC_CONSOLE_LEVELS
+
+
+def _select_console_tail(messages: list[Any], limit: int) -> list[Any]:
+    """Pick ``limit`` console messages, never dropping an error for a log line.
+
+    A plain tail is fragile exactly where it matters: the one line that
+    explains a failure (``net::ERR_NETWORK_CHANGED``) can be pushed out of
+    the window by a chatty page before anything reads it, leaving the caller
+    with a bare selector timeout and no cause. Diagnostic-level messages are
+    therefore claimed first and the most recent remaining messages fill the
+    rest. The result stays in chronological order so it still reads as a log.
+    """
+    if limit <= 0:
+        return []
+    indexed = list(enumerate(messages))
+    diagnostics = [pair for pair in indexed if _is_diagnostic_console(pair[1])]
+    keep: dict[int, Any] = dict(diagnostics[-limit:])
+    for index, message in reversed(indexed):
+        if len(keep) >= limit:
+            break
+        keep.setdefault(index, message)
+    return [message for _, message in sorted(keep.items())]
 
 
 def _html_preview(html: str, html_preview_chars: int) -> str | None:
@@ -73,7 +109,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         includes the full HTML inline (rarely needed; mostly for tests).
         """
         bundle: dict[str, Any] = {
-            "console_tail": list(self.console)[-console_tail:] if console_tail > 0 else [],
+            "console_tail": _select_console_tail(list(self.console), console_tail),
             "url": None,
             "title": None,
             "html_path": None,
