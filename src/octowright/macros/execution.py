@@ -90,13 +90,20 @@ _MACRO_RUN_DURATION = histogram(
 # on the per-macro metrics above. Once the size hits METRICS_MACRO_LABEL_CAP,
 # any further unseen name collapses to ``"(overflow)"`` so the time-series
 # count for these metrics stays bounded in long-lived deployments.
-# Console messages attached to a macro failure payload. Errors are claimed
-# first (see ``_select_console_tail``), so this is a cap on payload size
-# rather than a window a chatty page can flush the useful line out of.
-MACRO_FAILURE_CONSOLE_TAIL = 10
-
 _MACRO_LABEL_SEEN: set[str] = set()
 _MACRO_LABEL_OVERFLOW = "(overflow)"
+
+# Console messages attached to a macro failure payload. Errors are claimed
+# first (see ``_select_console_tail``), so this bounds payload size rather
+# than being a window a chatty page can flush the useful line out of.
+MACRO_FAILURE_CONSOLE_TAIL = 10
+# Per-message character cap. The count bound above does not bound SIZE: a page
+# that console.logs a stringified API response or a base64 data URL would put
+# ten unbounded strings into the RuntimeError payload and push them over the
+# MCP transport, on the failure path where the agent is already in trouble.
+# Generous next to capture_summaries' 88-char digest cap because this text is
+# meant to be read as the cause, not skimmed as a summary.
+MACRO_FAILURE_CONSOLE_TEXT_CHARS = 2000
 # Running count of macro-name lookups that collapsed to the overflow bucket
 # because the cap was already saturated. Surfaces in ``octowright_status``
 # so an operator can see when dynamic macro names are filling the cap with
@@ -308,6 +315,24 @@ async def _report_progress(ctx: Any | None, progress: float, total: float, messa
         await ctx.report_progress(progress, total=total, message=message)
 
 
+def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Cap each console message's text so a chatty page can't bloat the error.
+
+    Mutates in place: the bundle is freshly built for this one failure payload
+    and has no other reader.
+    """
+    messages = bundle.get("console_tail")
+    if not isinstance(messages, list):
+        return bundle
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        text = message.get("text")
+        if isinstance(text, str) and len(text) > MACRO_FAILURE_CONSOLE_TEXT_CHARS:
+            message["text"] = text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"
+    return bundle
+
+
 async def run_macro(
     session: SessionLike,
     name: str,
@@ -365,7 +390,9 @@ async def _run_macro_impl(
                 # session's ring buffer, so a whole class of CI failures needs
                 # the raw JSONL opened by hand to diagnose. Only built on the
                 # failure path, so the happy path pays nothing.
-                bundle = await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL)
+                bundle = _truncate_bundle_console(
+                    await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL)
+                )
                 # The action dict reaches the MCP client AND the structured
                 # log line below. ``substitute()`` has already resolved
                 # ``{{password}}``-style placeholders into the action, so

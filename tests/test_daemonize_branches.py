@@ -15,6 +15,7 @@ Pins:
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -210,11 +211,19 @@ class TestSpawnDaemonArgv:
 
 class TestSpawnDaemonPopenKwargs:
     def test_starts_new_session(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """start_new_session=True so the daemon survives parent SIGKILL."""
+        """The daemon is detached so it survives parent SIGKILL.
+
+        Asserted per-platform: ``start_new_session`` is the POSIX mechanism and
+        is absent on Windows, which uses creation flags instead (asserting it
+        unconditionally made the Windows leg fail on its own fix).
+        """
         monkeypatch.setattr(_daemon, "_DAEMON_LOG", tmp_path / "d.log")
         _, captured = _capture_popen(monkeypatch)
         _daemon.spawn_daemon(http_host=None, http_port=None, idle_grace=None)
-        assert captured["kwargs"]["start_new_session"] is True
+        if sys.platform == "win32":
+            assert captured["kwargs"]["creationflags"] & _daemon._DETACHED_PROCESS
+        else:
+            assert captured["kwargs"]["start_new_session"] is True
 
     def test_close_fds_true(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """close_fds=True closes inherited descriptors (clean detach)."""

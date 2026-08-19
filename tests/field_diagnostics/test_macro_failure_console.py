@@ -52,8 +52,11 @@ def test_selection_stays_chronological() -> None:
     assert _select_console_tail(messages, 4) == messages
 
 
-def test_warnings_and_asserts_count_as_diagnostic() -> None:
-    for level in ("error", "warning", "assert"):
+def test_all_engine_spellings_of_a_diagnostic_level_count() -> None:
+    """Firefox says "warn" where Chromium says "warning", and casing is not
+    guaranteed -- the shared predicate covers both, which a level set local
+    to this module had already got wrong."""
+    for level in ("error", "warning", "warn", "ERROR", "Warn"):
         marker = {"level": level, "text": "explains the failure"}
         messages = [marker, *(_log(index) for index in range(20))]
         assert marker in _select_console_tail(messages, 3), level
@@ -75,3 +78,31 @@ def test_non_dict_entries_never_raise_into_the_failure_path() -> None:
 
     assert NETWORK_ERROR in selected
     assert len(selected) == 3
+
+
+def test_a_huge_console_message_is_capped_before_it_reaches_the_client() -> None:
+    """The count bound does not bound size: a page that logs a stringified API
+    response or a base64 data URL would otherwise put multi-MB strings into the
+    error payload and push them over the MCP transport."""
+    from octowright.macros.execution import (
+        MACRO_FAILURE_CONSOLE_TEXT_CHARS,
+        _truncate_bundle_console,
+    )
+
+    bundle = _truncate_bundle_console(
+        {"console_tail": [{"level": "error", "text": "x" * 50_000}, {"level": "log", "text": "short"}]}
+    )
+
+    capped, short = bundle["console_tail"]
+    assert len(capped["text"]) < MACRO_FAILURE_CONSOLE_TEXT_CHARS + 32
+    assert capped["text"].endswith("[truncated]")
+    assert short["text"] == "short"
+
+
+def test_truncation_tolerates_a_malformed_bundle() -> None:
+    """Runs on the failure path; it must not become the failure."""
+    from octowright.macros.execution import _truncate_bundle_console
+
+    assert _truncate_bundle_console({"url": "x"}) == {"url": "x"}
+    assert _truncate_bundle_console({"console_tail": None}) == {"console_tail": None}
+    assert _truncate_bundle_console({"console_tail": ["junk", {"level": "error"}]})["console_tail"][0] == "junk"

@@ -133,15 +133,18 @@ def playwright_failure_sanity(error_text: str, kind: str | None = None) -> Playw
     target = kind if kind in SUPPORTED_KINDS else "<engine>"
     detectors = (
         _detect_binaries_missing,
+        # First past the generic detectors on purpose. The real Server Core
+        # text is `browserType.launch: Target page, context or browser has
+        # been closed` followed by the WSALookupServiceBegin line in the
+        # browser log, so _detect_target_closed (and _detect_sandbox_blocked,
+        # when the log mentions sandboxing) would claim it and send the
+        # reader off relaunching a browser that cannot start on this image.
+        # The match is specific enough that ordering it first costs nothing.
+        _detect_windows_media_stack_missing,
         _detect_sandbox_blocked,
         _detect_target_closed,
         _detect_navigation_timeout,
         _detect_os_dependencies_missing,
-        # Ordered before the generic network detector: the Windows failure
-        # can carry net:: noise, and "check your DNS/proxy" is actively
-        # misleading when the real answer is that the image lacks the OS
-        # components Chromium's network stack needs.
-        _detect_windows_media_stack_missing,
         _detect_network_unreachable,
         _detect_permission_error,
     )
