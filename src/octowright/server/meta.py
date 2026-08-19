@@ -163,6 +163,18 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
     return result
 
 
+def _dashboard_pairing_required() -> bool:
+    """Whether opening ``dashboard_url`` needs a pairing code.
+
+    True means the agent should call ``octowright_dashboard_url`` for a
+    ready-to-open link rather than showing the bare address.
+    """
+    from octowright.http import state as _http_state
+    from octowright.http.pairing import pairing_anchor_available, pairing_required
+
+    return bool(pairing_required() and pairing_anchor_available(_http_state.dashboard_pairing_store()))
+
+
 def _attach_pairing_url(result: dict[str, Any], base_url: str | None) -> None:
     """Turn the plain dashboard URL into one the user can actually open.
 
@@ -181,13 +193,11 @@ def _attach_pairing_url(result: dict[str, Any], base_url: str | None) -> None:
     from octowright.http import state as _http_state
     from octowright.http.pairing import (
         MCP_PAIR_CODE_TTL_SECONDS,
-        pairing_anchor_available,
-        pairing_required,
     )
 
     result["plain_url"] = base_url
     store = _http_state.dashboard_pairing_store()
-    result["pairing_required"] = bool(pairing_required() and pairing_anchor_available(store))
+    result["pairing_required"] = _dashboard_pairing_required()
     # `store is None` is already covered by pairing_anchor_available; repeating
     # it keeps the narrowing visible to the type checker.
     if not result["pairing_required"] or base_url is None or store is None:
@@ -452,6 +462,12 @@ def octowright_status() -> dict[str, Any]:
             "macro_label_cap": _macro_execution.METRICS_MACRO_LABEL_CAP,
         },
         "dashboard_url": _http.runtime_url() if http_status["running"] else None,
+        # The dashboard requires pairing by default, so `dashboard_url` above is
+        # the plain address and will answer 401 in a browser. Status is polled
+        # often, and the pairing-code store is a bounded LRU, so minting here
+        # would churn through it (and could evict a code the user was handed);
+        # the flag points at the tool that mints one on demand instead.
+        "dashboard_pairing_required": _dashboard_pairing_required(),
         # Present only on the first run after an update (version changed since
         # last seen) — {kind, previous_version, current_version, highlights}.
         # Surface these highlights to the user as a "what's new" banner.

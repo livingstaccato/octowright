@@ -44,7 +44,7 @@ def _runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
 
     monkeypatch.setattr(defaults, "RECORDINGS_DIR", recordings)
 
-    fake_pool = SimpleNamespace(active_count=lambda: 0)
+    fake_pool = SimpleNamespace(active_count=lambda: 0, iter_sessions=lambda: [], list_sessions=lambda: [])
     fake_spool = SimpleNamespace(list_live=lambda: [])
     for module in (_state, meta):
         monkeypatch.setattr(module, "pool", fake_pool)
@@ -165,3 +165,40 @@ def test_repeated_calls_keep_the_latest_link_working() -> None:
     assert store.redeem_code(codes[-1]) is not None
     # The oldest ones fell out of the bounded store, as designed.
     assert store.redeem_code(codes[0]) is None
+
+
+def test_status_and_tool_share_one_pairing_answer() -> None:
+    """octowright_status also hands out a dashboard URL.
+
+    It reports the *plain* address (status is polled often, and minting there
+    would churn the bounded code store and could evict a code the user was
+    handed), so it carries `dashboard_pairing_required` to tell the agent the
+    address needs pairing and that `octowright_dashboard_url` mints one.
+
+    Both answers come from `_dashboard_pairing_required`, exercised here
+    directly: building a full `octowright_status()` needs a broad live-pool
+    surface that is not what this is about.
+    """
+    from octowright.server.meta import _dashboard_pairing_required
+
+    assert _dashboard_pairing_required() is True
+    assert _call()["pairing_required"] is True
+
+
+def test_status_pairing_flag_follows_the_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.server.meta import _dashboard_pairing_required
+
+    monkeypatch.setenv(_ENV, "off")
+    assert _dashboard_pairing_required() is False
+    assert _call()["pairing_required"] is False
+
+
+def test_status_exposes_the_flag_alongside_the_url() -> None:
+    """The wiring itself: the key must be in the status payload, not just the helper."""
+    import inspect
+
+    from octowright.server import meta
+
+    source = inspect.getsource(meta.octowright_status)
+    assert '"dashboard_pairing_required": _dashboard_pairing_required()' in source
+    assert '"dashboard_url"' in source
