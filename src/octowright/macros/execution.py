@@ -90,6 +90,11 @@ _MACRO_RUN_DURATION = histogram(
 # on the per-macro metrics above. Once the size hits METRICS_MACRO_LABEL_CAP,
 # any further unseen name collapses to ``"(overflow)"`` so the time-series
 # count for these metrics stays bounded in long-lived deployments.
+# Console messages attached to a macro failure payload. Errors are claimed
+# first (see ``_select_console_tail``), so this is a cap on payload size
+# rather than a window a chatty page can flush the useful line out of.
+MACRO_FAILURE_CONSOLE_TAIL = 10
+
 _MACRO_LABEL_SEEN: set[str] = set()
 _MACRO_LABEL_OVERFLOW = "(overflow)"
 # Running count of macro-name lookups that collapsed to the overflow bucket
@@ -354,7 +359,13 @@ async def _run_macro_impl(
                     slowmo_ms=resolved_slowmo,
                 )
             except Exception as exc:
-                bundle = await session.diagnostic_bundle()
+                # Ship the console tail: without it the payload reports the
+                # symptom ("timed out waiting for #foo") while the line that
+                # explains it ("net::ERR_NETWORK_CHANGED") sits unread in the
+                # session's ring buffer, so a whole class of CI failures needs
+                # the raw JSONL opened by hand to diagnose. Only built on the
+                # failure path, so the happy path pays nothing.
+                bundle = await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL)
                 # The action dict reaches the MCP client AND the structured
                 # log line below. ``substitute()`` has already resolved
                 # ``{{password}}``-style placeholders into the action, so

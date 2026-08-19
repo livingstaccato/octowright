@@ -137,6 +137,11 @@ def playwright_failure_sanity(error_text: str, kind: str | None = None) -> Playw
         _detect_target_closed,
         _detect_navigation_timeout,
         _detect_os_dependencies_missing,
+        # Ordered before the generic network detector: the Windows failure
+        # can carry net:: noise, and "check your DNS/proxy" is actively
+        # misleading when the real answer is that the image lacks the OS
+        # components Chromium's network stack needs.
+        _detect_windows_media_stack_missing,
         _detect_network_unreachable,
         _detect_permission_error,
     )
@@ -210,6 +215,32 @@ def _detect_sandbox_blocked(txt: str, _target: str) -> PlaywrightFailureHint | N
         "recommended_actions": [
             "run in an environment that supports Chromium sandboxing",
             "if this is CI/container-only, use the project workflow's Playwright install/deps setup",
+        ],
+    }
+
+
+def _detect_windows_media_stack_missing(txt: str, _target: str) -> PlaywrightFailureHint | None:
+    """Windows images (notably Server Core) missing components Chromium needs.
+
+    ``WSALookupServiceBegin failed with: 10091`` (WSASYSNOTREADY) and a failure
+    to load ``mf.dll``/``mfplat.dll`` both mean the same thing in practice: the
+    base image omits OS components Chromium initializes at startup. Raw, this
+    reads as a transient network fault and sends the reader off chasing DNS and
+    proxies; named, it points at the image.
+    """
+    if not re.search(r"(WSALookupServiceBegin|\bmfplat\.dll\b|\bmf\.dll\b)", txt, flags=re.IGNORECASE):
+        return None
+    return {
+        "category": "windows_media_stack_missing",
+        "probable_cause": (
+            "This Windows image cannot initialize Chromium's network/media stack "
+            "(missing OS components -- typical of Server Core and other minimal images)"
+        ),
+        "recommended_actions": [
+            "use a Windows image with the desktop/media components (e.g. windows-2022 "
+            "hosted runner, or a Server image with the Media Foundation feature installed)",
+            "on Server Core, install the Server-Media-Foundation feature",
+            "if only a Linux/macOS engine is needed, run this leg on that platform instead",
         ],
     }
 
