@@ -13,6 +13,7 @@ from typing import Any, cast
 from octowright.mcp_types import BrowserConsoleMessagesResult, ConsoleMessage
 from octowright.server._state import mcp, pool
 from octowright.server.profiles import annotate_next_actions_for_profile
+from octowright.session._constants import is_diagnostic_console_message
 
 
 @mcp.tool(
@@ -91,7 +92,7 @@ def _important_console_messages(
         (index, msg)
         for index, msg in enumerate(msgs[start:], start=start)
         if (level_filter is None or str(msg.get("level") or "").lower() == level_filter)
-        and str(msg.get("level", "")).lower() in {"error", "warning", "warn"}
+        and is_diagnostic_console_message(msg)
     ]
 
 

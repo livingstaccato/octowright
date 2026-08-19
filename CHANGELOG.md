@@ -106,11 +106,21 @@ Every one was reproduced against running code before it was fixed.
   in the session's ring buffer, findable only by opening the raw JSONL
   afterward. Errors, warnings, and asserts are claimed first, so a chatty page
   can no longer flush the useful line out of the window. Failure path only.
-- **The daemon actually detaches on Windows.** `start_new_session=True` is POSIX
+- **The daemon detaches on Windows.** `start_new_session=True` is POSIX
   (`setsid`); CPython accepts it on Windows and silently does nothing, so the
-  "daemon" stayed inside the launching console's process tree — on a CI runner,
-  the step's job object — and died with it. Windows now gets
-  `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`.
+  "daemon" kept the launching console and its process group. Windows now gets
+  `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`, plus
+  `CREATE_BREAKAWAY_FROM_JOB` to escape a CI runner's job object — with a
+  retry without it, since a job lacking `JOB_OBJECT_LIMIT_BREAKAWAY_OK` makes
+  `CreateProcess` refuse the spawn outright. Honest limit: a job that forbids
+  breakaway still takes the daemon down with the step, and this is not yet
+  verified on real Windows CI.
+- **Console-level classification is no longer duplicated three ways.**
+  `capture_summaries`, `inspect_console`, and the new diagnostic tail each had
+  their own idea of which levels matter, and they had drifted: Firefox reports
+  `console.warn` as level `warn` where Chromium says `warning`, so a set that
+  missed it buried Firefox warnings. One predicate now, in
+  `session._constants`.
 - **A failed daemon spawn says why.** Daemon stderr goes to a separate 0600 log,
   so the file the error message points you at holds the *follower's* output and
   is empty by design on exactly this failure. The inline fallback, the

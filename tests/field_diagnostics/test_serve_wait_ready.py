@@ -23,12 +23,15 @@ from octowright.cli._root import cli
 
 
 @contextlib.asynccontextmanager
-async def _lock_granted() -> Any:
+async def _lock_granted(*_args: Any, **_kwargs: Any) -> Any:
     yield
 
 
 class _LockContended:
     """Another instance already holds the election lock."""
+
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        pass
 
     async def __aenter__(self) -> None:
         raise TimeoutError
@@ -139,7 +142,12 @@ def test_ready_timeout_flag_is_exported_for_every_wait(wired: dict[str, Any], mo
         return LEADER
 
     monkeypatch.setattr(_daemon, "wait_for_daemon", _wait)
-    monkeypatch.delenv(_daemon.DAEMON_READY_TIMEOUT_ENV, raising=False)
+    # setenv, not delenv: monkeypatch.delenv(raising=False) records NOTHING
+    # when the variable is absent, so the CLI's own os.environ[...] = "90.0"
+    # would survive teardown and give every later test in this worker a 90s
+    # readiness budget.
+    monkeypatch.setenv(_daemon.DAEMON_READY_TIMEOUT_ENV, "")
+    monkeypatch.delenv(_daemon.DAEMON_READY_TIMEOUT_ENV)
 
     assert _run("--ready-timeout", "90").exit_code == 0
     assert seen["env"] == "90.0"
@@ -164,3 +172,25 @@ def test_wait_ready_never_falls_back_to_serving_inline(wired: dict[str, Any], mo
 
     assert result.exit_code == 1
     assert ran_inline is False
+
+
+def test_ready_timeout_does_not_leak_into_later_tests(wired: dict[str, Any]) -> None:
+    """monkeypatch.delenv(raising=False) records no restore when the variable
+    is absent, so a naive test left the CLI's own export in place and gave
+    every later test in the worker a 90s readiness budget."""
+    import os
+
+    from octowright import daemonize as _daemon
+
+    assert os.environ.get(_daemon.DAEMON_READY_TIMEOUT_ENV) in (None, "")
+
+
+def test_election_lock_wait_exceeds_the_readiness_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The holder keeps the election lock across wait_for_daemon, so a raised
+    --ready-timeout must not make every other `serve` give up on the lock
+    first and treat ordinary contention as an error."""
+    from octowright.cli import _daemon_ready as _ready
+
+    monkeypatch.setenv("OCTOWRIGHT_DAEMON_READY_TIMEOUT", "60")
+
+    assert _ready._election_lock_timeout() > 60.0
