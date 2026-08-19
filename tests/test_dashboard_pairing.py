@@ -45,8 +45,14 @@ _ENV = "OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING"
 
 @pytest.fixture(autouse=True)
 def _fresh_pairing_state(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Default the opt-in knob to unset (off)."""
-    monkeypatch.delenv(_ENV, raising=False)
+    """Pin this file's baseline to pairing OFF.
+
+    The gate now ships ON, so an unset variable no longer means disabled;
+    the off-cases below have to say so explicitly. Tests that exercise the
+    enabled gate set the variable themselves. The shipped default is
+    asserted in tests/test_dashboard_pairing_default.py.
+    """
+    monkeypatch.setenv(_ENV, "off")
     yield
 
 
@@ -174,10 +180,21 @@ def test_pairing_required_enabled_tokens(monkeypatch: pytest.MonkeyPatch, value:
     assert pairing_required()
 
 
-@pytest.mark.parametrize("value", ["0", "off", "false", "no", ""])
+@pytest.mark.parametrize("value", ["0", "off", "false", "no", "never", "none", "disabled"])
 def test_pairing_required_falsey_tokens(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv(_ENV, value)
     assert not pairing_required()
+
+
+def test_empty_value_means_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty value is not a disable token, matching the sibling knobs.
+
+    ``OCTOWRIGHT_RECORDINGS_PRIVATE`` and ``OCTOWRIGHT_BRIDGE_REQUIRE_TOKEN``
+    resolve the same way: only an explicit falsey token turns the control off,
+    so a stray ``VAR=`` cannot silently disable a security default.
+    """
+    monkeypatch.setenv(_ENV, "")
+    assert pairing_required()
 
 
 # --- access decision ----------------------------------------------------------

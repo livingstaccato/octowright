@@ -20,7 +20,12 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
-from octowright.http.pairing import dashboard_access_ok, pairing_required
+from octowright.http.pairing import (
+    dashboard_access_ok,
+    dashboard_pairing_state,
+    pairing_anchor_available,
+    pairing_required,
+)
 
 ResponseT = TypeVar("ResponseT", bound=Response)
 
@@ -227,7 +232,7 @@ def guard_sensitive_http(
                 headers={"WWW-Authenticate": "Bearer"},
             )
         response = await handler(request)
-        if pairing_required():
+        if pairing_required() and pairing_anchor_available(dashboard_pairing_state(request)):
             # Every admitted response is authorization-scoped. Chromium's
             # private cache is shared by same-origin tabs, so a bare
             # FileResponse could otherwise be replayed to an unpaired tab

@@ -28,10 +28,13 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from provide.telemetry import get_logger
 from starlette.requests import HTTPConnection
 
+log = get_logger(__name__)
+
 PAIRING_REQUIRE_ENV = "OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING"
-_ENABLED_TOKENS = frozenset({"1", "on", "true", "yes"})
+_DISABLED_TOKENS = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
 
 PAIR_CODE_TTL_SECONDS = 60.0
 DASHBOARD_SESSION_TTL_SECONDS = 8 * 60 * 60.0
@@ -49,8 +52,24 @@ _BASE64URL_TOKEN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def pairing_required() -> bool:
-    """Return whether the opt-in browser dashboard credential gate is on."""
-    return os.environ.get(PAIRING_REQUIRE_ENV, "").strip().lower() in _ENABLED_TOKENS
+    """Return whether the browser dashboard credential gate is on.
+
+    **ON by default.** Loopback binding plus the Host/Origin guards stop a
+    remote attacker and a malicious web page, but they are not authentication:
+    any other local process that can open a socket to the port could otherwise
+    enumerate live sessions, read recorded JSONL (typed input, URLs, console),
+    fetch video, subscribe to the live screencast, and drive the browser. That
+    made the on-by-default 0600 recording permission and 0700 profile
+    permissions misleading -- the daemon handed the same bytes out over HTTP.
+
+    Set ``OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING`` to a falsey token
+    (``0``/``off``/``false``/``no``/``never``/``none``/``disabled``) for a
+    single-user host that wants the type-the-URL flow back.
+
+    Note this is the *policy*; enforcement additionally requires a capability
+    token to pair against -- see ``dashboard_access_ok``.
+    """
+    return os.environ.get(PAIRING_REQUIRE_ENV, "on").strip().lower() not in _DISABLED_TOKENS
 
 
 @dataclass(frozen=True)
@@ -251,14 +270,71 @@ def authorization_bearer(connection: HTTPConnection) -> str | None:
     return bearer
 
 
+def pairing_explicitly_enabled() -> bool:
+    """Whether an operator turned the gate on by hand (vs. the shipped default).
+
+    The distinction matters when there is no credential to pair against: an
+    explicit opt-in keeps its original fail-closed behaviour (you asked for a
+    locked door, you get one), while the default degrades to unenforced so an
+    inline ``--no-singleton`` leader -- which has no lockfile and therefore no
+    token -- does not ship with a permanently unusable dashboard.
+    """
+    raw = os.environ.get(PAIRING_REQUIRE_ENV)
+    return raw is not None and raw.strip().lower() not in _DISABLED_TOKENS
+
+
+def pairing_anchor_available(state: DashboardPairingState | None) -> bool:
+    """Whether there is a credential to pair against on this app.
+
+    The pairing gate is bootstrapped by ``octowright dashboard``, which
+    authenticates with the leader's capability token from the 0600 lockfile.
+    With no state and no token there is no minter, so the gate is a lockout
+    rather than a control.
+    """
+    return state is not None and state.token_configured
+
+
+_pairing_unenforceable_warned = False
+
+
+def _warn_pairing_unenforceable() -> None:
+    """Say once that the gate is on but has nothing to gate against."""
+    global _pairing_unenforceable_warned
+    if _pairing_unenforceable_warned:
+        return
+    _pairing_unenforceable_warned = True
+    log.warning(
+        "octowright.dashboard.pairing_unenforceable",
+        reason="leader has no capability token (inline/--no-singleton mode)",
+        hint="run a normal daemon leader for a gated dashboard",
+    )
+
+
 def dashboard_access_ok(connection: HTTPConnection) -> bool:
     """Authorize a guarded HTTP request using bearer or capability token."""
     if not pairing_required():
         _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
         return True
     state = dashboard_pairing_state(connection)
-    if state is None:
-        return False
+    if not pairing_anchor_available(state):
+        if pairing_explicitly_enabled():
+            # Explicit opt-in stays fail-closed.
+            return False
+        # Nothing to pair against, so the gate cannot be bootstrapped: an
+        # inline (--no-singleton) leader has no lockfile and therefore no
+        # capability token, and an embedder mounting these routes on its own
+        # Starlette app has no pairing state at all. `octowright dashboard`
+        # could never mint a code in either case, so enforcing would lock the
+        # dashboard out permanently rather than protect anything.
+        #
+        # This is only safe because the anchor is not request-controlled:
+        # `build_app` attaches the state unconditionally at construction. A
+        # refactor that dropped it would silently disable the gate, which is
+        # what tests/test_dashboard_pairing_default.py exists to prevent.
+        _warn_pairing_unenforceable()
+        _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
+        return True
+    assert state is not None  # narrowed by pairing_anchor_available  # nosec B101
     if state.capability_token_ok(connection.headers.get(CAPABILITY_TOKEN_HEADER)):
         _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
         return True
@@ -308,8 +384,14 @@ def dashboard_websocket_auth(connection: HTTPConnection) -> tuple[bool, str | No
         _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
         return True, public_protocol
     state = dashboard_pairing_state(connection)
-    if state is None:
-        return False, public_protocol
+    if not pairing_anchor_available(state):
+        if pairing_explicitly_enabled():
+            return False, public_protocol
+        # No credential to pair against — same reasoning as dashboard_access_ok.
+        _warn_pairing_unenforceable()
+        _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
+        return True, public_protocol
+    assert state is not None  # narrowed by pairing_anchor_available  # nosec B101
     if state.capability_token_ok(connection.headers.get(CAPABILITY_TOKEN_HEADER)):
         _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
         return True, public_protocol

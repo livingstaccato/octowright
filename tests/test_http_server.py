@@ -96,6 +96,20 @@ def client(isolated_recordings: Path, empty_pool: dict[str, Any]) -> TestClient:
     return TestClient(app)
 
 
+_PAIRED_CLIENT_TOKEN = "test-cap-token"  # pragma: allowlist secret (synthetic fixture)
+
+
+@pytest.fixture
+def paired_client(isolated_recordings: Path, empty_pool: dict[str, Any]) -> TestClient:
+    """A client whose app carries a capability token, like a real daemon leader.
+
+    The pairing gate can only be enforced where there is a credential to pair
+    against, so a tokenless app (the default fixture, standing in for an inline
+    --no-singleton leader) never reaches the bearer path.
+    """
+    return TestClient(_http.build_app(mcp_token=_PAIRED_CLIENT_TOKEN))
+
+
 @pytest.fixture(autouse=True)
 def _reset_slo_counters() -> Iterator[None]:
     """Isolate provide.telemetry's process-global SLO instrument registry per test.
@@ -672,7 +686,7 @@ def test_session_video_returns_file(client: TestClient, isolated_recordings: Pat
 
 
 def test_paired_session_video_is_not_cacheable_and_still_supports_range(
-    client: TestClient,
+    paired_client: TestClient,
     isolated_recordings: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -686,11 +700,11 @@ def test_paired_session_video_is_not_cacheable_and_still_supports_range(
     ]
     (isolated_recordings / name).write_text("".join(json.dumps(row) + "\n" for row in rows))
     monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
-    pairing = client.app.state.dashboard_pairing
+    pairing = paired_client.app.state.dashboard_pairing
     grant = pairing.redeem_code(pairing.mint_code())
     assert grant is not None
 
-    response = client.get(
+    response = paired_client.get(
         "/api/sessions/vidpaired001/video",
         headers={
             "Authorization": f"Bearer {grant.bearer}",
@@ -853,14 +867,14 @@ def test_session_trace_returns_file(client: TestClient, isolated_recordings: Pat
 
 
 def test_pairing_protected_non_video_files_are_not_cache_reusable(
-    client: TestClient, isolated_recordings: Path, monkeypatch: pytest.MonkeyPatch
+    paired_client: TestClient, isolated_recordings: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     name = "20260101T000000Z-chromium-pairedfiles01"
     (isolated_recordings / f"{name}.jsonl").write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
     (isolated_recordings / f"{name}.trace.zip").write_bytes(b"PK\x03\x04PAIR")
     (isolated_recordings / "pairedfiles01-shot.png").write_bytes(_TINY_PNG)
     monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
-    pairing = client.app.state.dashboard_pairing
+    pairing = paired_client.app.state.dashboard_pairing
     grant = pairing.redeem_code(pairing.mint_code())
     assert grant is not None
     headers = {"Authorization": f"Bearer {grant.bearer}"}
@@ -869,7 +883,7 @@ def test_pairing_protected_non_video_files_are_not_cache_reusable(
         "/api/sessions/pairedfiles01/trace",
         "/api/sessions/pairedfiles01/screenshots/pairedfiles01-shot.png",
     ):
-        response = client.get(path, headers=headers)
+        response = paired_client.get(path, headers=headers)
         assert response.status_code == 200
         assert response.headers["cache-control"] == "private, no-store"
         assert {item.strip().lower() for item in response.headers["vary"].split(",")} == {

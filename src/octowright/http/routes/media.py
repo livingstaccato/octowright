@@ -24,7 +24,11 @@ from octowright.http.discovery import (
     _resolve_log_path,
 )
 from octowright.http.exposure import guard_sensitive_http
-from octowright.http.pairing import pairing_required
+from octowright.http.pairing import (
+    dashboard_pairing_state,
+    pairing_anchor_available,
+    pairing_required,
+)
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool
 from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 
@@ -110,7 +114,7 @@ async def session_video(request: Request) -> Response:
     # 200/206 response for an unpaired caller. Keep pairing-off playback
     # cacheable for backwards-compatible local performance.
     headers = None
-    if pairing_required():
+    if pairing_required() and pairing_anchor_available(dashboard_pairing_state(request)):
         headers = {
             "Cache-Control": "private, no-store",
             "Vary": "Authorization, X-Octowright-Token",
