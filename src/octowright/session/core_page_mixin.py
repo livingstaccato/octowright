@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -21,6 +20,13 @@ from octowright.defaults import (
     REDACTED_INPUT_PLACEHOLDER,
 )
 from octowright.session._protocols import SessionLike
+from octowright.session.aria_redaction import (
+    REDACTION_MODES,
+    resolve_redaction_mode,
+)
+from octowright.session.aria_redaction import (
+    aria_snapshot as redacted_aria_snapshot,
+)
 from octowright.session.operation_gate import gated_operation
 from octowright.session.screencast import notify_active_page
 
@@ -29,27 +35,10 @@ log = get_logger(__name__)
 # Recognised values for the OCTOWRIGHT_REDACT_INPUTS env var. Re-read on
 # every type/fill call so monkeypatched env changes (and operator
 # adjustments without a restart) take effect immediately.
-_REDACTION_MODES: frozenset[str] = frozenset({"off", "passwords", "all"})
-
-
-def _current_redaction_mode() -> str:
-    """Return the effective input-redaction mode for the current call.
-
-    Reads ``OCTOWRIGHT_REDACT_INPUTS`` at call time. Unknown values fall
-    back to ``"passwords"`` (safer default than silently disabling
-    redaction) and emit a one-time debug log so a typo is at least
-    observable.
-    """
-    raw = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower() or "passwords"
-    if raw not in _REDACTION_MODES:
-        log.debug(
-            "core_page_mixin.unknown_redaction_mode",
-            value=raw,
-            fallback="passwords",
-            supported=sorted(_REDACTION_MODES),
-        )
-        return "passwords"
-    return raw
+# The aria scrubber and the record-time scrubber must never disagree about
+# what "passwords" means, so both read the one resolver.
+_REDACTION_MODES = REDACTION_MODES
+_current_redaction_mode = resolve_redaction_mode
 
 
 def _redact_sink_value(value: str | None) -> str | None:
@@ -67,6 +56,25 @@ def _redact_sink_value(value: str | None) -> str | None:
     if value is None:
         return None
     return REDACTED_INPUT_PLACEHOLDER if _current_redaction_mode() == "all" else value
+
+
+def _parse_semantic_line(line: str) -> dict[str, str]:
+    """Split one aria-snapshot line into ``role`` and ``role_name``.
+
+    Playwright renders an accessible name two ways and only the first was
+    handled before, so the second left the whole ``role: name`` string in
+    ``role``:
+
+    * ``button "Confirm Order"`` -- a name from content or aria-label
+    * ``textbox: tanuki-tim``    -- a text control, whose name is its value
+    """
+    quoted_role, sep, quoted_name = line.partition(' "')
+    if sep:
+        return {"role": quoted_role, "role_name": quoted_name.rstrip('"')}
+    colon_role, sep, colon_name = line.partition(": ")
+    if sep:
+        return {"role": colon_role, "role_name": colon_name.strip().strip('"')}
+    return {"role": line, "role_name": ""}
 
 
 _NAVIGATE_DURATION = histogram(
@@ -314,19 +322,19 @@ class SessionPageMixin(SessionLike):
 
     @gated_operation("session_input_metadata")
     async def _resolve_semantic_metadata(self, selector: str) -> dict[str, str]:
-        """Attempt to resolve the role and role_name of the element at selector."""
+        """Attempt to resolve the role and role_name of the element at selector.
+
+        Goes through the credential scrubber because this metadata is written
+        straight into the JSONL recording by ``click`` -- a filled password
+        box snapshots as ``- textbox: hunter2``, so an unscrubbed read here
+        put cleartext credentials in the recording regardless of
+        ``OCTOWRIGHT_REDACT_INPUTS``.
+        """
         try:
-            # Playwright 1.50+ aria_snapshot() returns a YAML-like string for the locator.
-            # Example: '- button "Confirm Order"'
             loc = self._target().locator(selector)
-            snapshot = await loc.aria_snapshot()
+            snapshot = await redacted_aria_snapshot(self, loc)
             if snapshot and snapshot.startswith("- "):
-                line = snapshot[2:].strip()
-                # line is e.g. 'button "Confirm Order"'
-                parts = line.split(' "', 1)
-                role = parts[0]
-                role_name = parts[1].rstrip('"') if len(parts) > 1 else ""
-                return {"role": role, "role_name": role_name}
+                return _parse_semantic_line(snapshot[2:].strip())
         except Exception:
             pass
         return {}
@@ -450,7 +458,7 @@ class SessionPageMixin(SessionLike):
         # selector=None preserves the legacy "html"-root JSONL event so existing
         # macro replays / golden diffs don't drift; explicit selectors are recorded.
         target = self._target()
-        aria_yaml = await target.locator(selector or "html").aria_snapshot()
+        aria_yaml = await redacted_aria_snapshot(self, target.locator(selector or "html"))
         record_kwargs = {"selector": selector} if selector is not None else {}
         self.recorder.record("snapshot", **record_kwargs)
         # url comes from the snapshotted document (frame when active); title is

@@ -60,6 +60,13 @@ def _policy() -> str:
     return "block-private"
 
 
+def policy_enabled() -> bool:
+    """Whether any SSRF policy is active. Public so callers that install
+    enforcement machinery (the per-hop redirect guard) can skip the work
+    entirely on the default ``off`` deployment."""
+    return _policy() != "off"
+
+
 def _allowlist() -> set[str]:
     raw = os.environ.get("OCTOWRIGHT_SSRF_ALLOW", "")
     return {h.strip().lower() for h in raw.split(",") if h.strip()}

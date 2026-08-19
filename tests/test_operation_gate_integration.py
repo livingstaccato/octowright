@@ -991,6 +991,8 @@ class _CaptureGateTarget:
 class _CaptureGateLocator:
     def __init__(self, fake: CaptureGateFake) -> None:
         self._fake = fake
+        # The scrubber scans for credential values before snapshotting.
+        self.first = SimpleNamespace(evaluate=AsyncMock(return_value=[]))
 
     async def aria_snapshot(self) -> str:
         self._fake.observed_roots.append(self._fake.operation_snapshot()["active_operation"])

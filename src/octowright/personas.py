@@ -19,6 +19,7 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
+from octowright.private_paths import secure_profile_tree
 from octowright.types import CredentialCheckEntry, CredentialCheckReport, PersonaListEntry
 
 log = get_logger(__name__)
@@ -289,6 +290,8 @@ def create_persona(
     """
     pdir = persona_dir(name)
     pdir.mkdir(parents=True, exist_ok=True)
+    # A persona dir grows engine profiles holding live session cookies.
+    secure_profile_tree(pdir, PROFILES_DIR)
     yaml_path = pdir / "profile.yaml"
     if yaml_path.exists():
         raise FileExistsError(f"persona {name!r} already has profile.yaml at {yaml_path}")
