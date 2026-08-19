@@ -14,8 +14,8 @@ The fix: when a ``serve`` invocation decides it should become the leader,
 it instead **forks a fully-detached background process** that becomes the
 real leader. The original client-launched process becomes a follower
 bridging to the daemon. Closing the MCP client kills the bridge but the
-daemon — running in its own session, with stdin/out/err pointed at
-``/dev/null`` — is unaffected.
+daemon — detached from the parent's process tree, with stdin/out/err
+pointed at ``/dev/null`` — is unaffected.
 
 The daemon is invoked with ``--daemon-mode``, which tells it to skip the
 lock check (it knows it's the leader) and arm the idle watchdog
@@ -30,7 +30,8 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import IO
+from pathlib import Path
+from typing import IO, Any
 
 import octowright.singleton as _sn
 from octowright.config_paths import user_state_dir
@@ -40,6 +41,73 @@ from octowright.config_paths import user_state_dir
 # avoid unbounded growth on dev machines.
 _DAEMON_LOG = user_state_dir() / "logs" / "octowright-daemon.log"
 _DAEMON_LOG_MAX_BYTES = 1_000_000
+# Lines of daemon stderr worth quoting back when a spawn fails. The log is the
+# only record of WHY (the caller's own stderr holds the follower's output, not
+# the daemon's), so a failure that doesn't surface this is undiagnosable from
+# the outside -- the exact dead end a CI runner hits.
+_DAEMON_LOG_TAIL_LINES = 20
+
+# How long to wait for a spawned daemon to bind and answer HTTP. The default
+# suits a warm dev machine; a cold container running ``uv run octowright serve``
+# routinely needs longer, and exceeding it silently degrades to fragile inline
+# mode. ``defaults.py`` is at its LOC ceiling, so the knob lives here (matching
+# how ``incidents``/``health`` keep their own OCTOWRIGHT_* vars).
+DAEMON_READY_TIMEOUT_ENV = "OCTOWRIGHT_DAEMON_READY_TIMEOUT"
+DAEMON_READY_TIMEOUT_SECONDS = 10.0
+
+# Windows process-creation flags (winbase.h). Named here rather than imported
+# from ``subprocess`` because those attributes only exist on Windows builds.
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+def daemon_ready_timeout() -> float:
+    """Seconds to wait for a spawned daemon, from the environment."""
+    raw = os.environ.get(DAEMON_READY_TIMEOUT_ENV)
+    if raw is None:
+        return DAEMON_READY_TIMEOUT_SECONDS
+    try:
+        parsed = float(raw.strip())
+    except ValueError:
+        return DAEMON_READY_TIMEOUT_SECONDS
+    return parsed if parsed > 0 else DAEMON_READY_TIMEOUT_SECONDS
+
+
+def daemon_log_path() -> Path:
+    """Where the detached daemon's stderr lands."""
+    return _DAEMON_LOG
+
+
+def daemon_log_tail(max_lines: int = _DAEMON_LOG_TAIL_LINES) -> str:
+    """Last few lines of the daemon log, or a note saying why there are none.
+
+    Callers print this when a spawn fails, so it must never raise: a missing
+    or unreadable log is itself the diagnostic.
+    """
+    try:
+        lines = _DAEMON_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        return f"(no daemon log at {_DAEMON_LOG}; the daemon may never have started)"
+    except OSError as exc:
+        return f"(daemon log at {_DAEMON_LOG} unreadable: {exc})"
+    tail = [line for line in lines if line.strip()][-max_lines:]
+    if not tail:
+        return f"(daemon log at {_DAEMON_LOG} is empty)"
+    return "\n".join(tail)
+
+
+def _detach_kwargs() -> dict[str, Any]:
+    """Popen kwargs that put the daemon outside the parent's lifecycle.
+
+    ``start_new_session`` is POSIX-only -- CPython accepts it on Windows and
+    silently does nothing, so the "detached" daemon stayed inside the launching
+    console's process tree and died with it. On a CI runner that tree is a job
+    object the step tears down, which is why a Windows leg saw the daemon
+    vanish and then fall back to inline mode.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
 
 
 def _resolve_daemon_entrypoint() -> list[str]:
@@ -94,9 +162,10 @@ def spawn_daemon(
 ) -> int:
     """Spawn a fully detached background ``octowright serve --daemon-mode`` process.
 
-    Returns the spawned PID. The process is in a new session with no
-    controlling terminal and with stdin/stdout pointed at /dev/null, so
-    nothing about the parent's lifecycle can reach it.
+    Returns the spawned PID. The process is detached from the parent's
+    lifecycle (a new session on POSIX, DETACHED_PROCESS on Windows -- see
+    ``_detach_kwargs``) with stdin/stdout pointed at /dev/null, so nothing
+    about the parent's lifecycle can reach it.
 
     ``keep_alive``/``idle_grace`` are forwarded to the daemon's argv so the
     follower's choice actually reaches the process that owns the watchdog (the
@@ -119,21 +188,25 @@ def spawn_daemon(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=_open_daemon_log(),
-        start_new_session=True,
         close_fds=True,
         env=os.environ.copy(),
+        **_detach_kwargs(),
     )
     return proc.pid
 
 
-async def wait_for_daemon(timeout: float = 10.0, poll_seconds: float = 0.2) -> _sn.LeaderInfo | None:
+async def wait_for_daemon(timeout: float | None = None, poll_seconds: float = 0.2) -> _sn.LeaderInfo | None:
     """Poll the lockfile + HTTP probe until the daemon is ready, or give up.
 
     Returns the leader info on success, or None if the daemon failed to come
     up within ``timeout`` seconds. The caller can then fall back to running
     the leader inline (the legacy non-daemonized path).
+
+    ``timeout`` defaults to :func:`daemon_ready_timeout`, so a cold container
+    can raise it via ``OCTOWRIGHT_DAEMON_READY_TIMEOUT`` or ``--ready-timeout``
+    instead of silently degrading to inline mode.
     """
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + (daemon_ready_timeout() if timeout is None else timeout)
     while time.monotonic() < deadline:
         await asyncio.sleep(poll_seconds)
         info = _sn.read_lock()
