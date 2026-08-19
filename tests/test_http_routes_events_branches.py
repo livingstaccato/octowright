@@ -33,6 +33,7 @@ from starlette.testclient import TestClient
 
 from octowright import http as _http
 from octowright.http import state as _http_state
+from octowright.http.pairing import DASHBOARD_STREAM_LEASE_ATTR, DashboardStreamLease
 from octowright.http.routes import events as _events
 from octowright.server import _state
 
@@ -288,6 +289,9 @@ async def test_dashboard_events_first_emits_hello_frame() -> None:
             return True  # disconnect immediately so the loop ends after hello
 
         query_params: dict[str, Any] = {}
+        # The endpoint reads its admission lease off request.state; this test
+        # bypasses the route guard that would normally attach it.
+        state = SimpleNamespace(**{DASHBOARD_STREAM_LEASE_ATTR: DashboardStreamLease.bypass()})
 
     response = await _events.dashboard_events_endpoint(_Req())  # type: ignore[arg-type]
     body_iter = response.body_iterator  # type: ignore[attr-defined]
@@ -551,7 +555,7 @@ class TestStreamTailHeartbeat:
             live_after_tick=[True] * 5 + [False],
         )
         ws = _FakeWebSocket()
-        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0, lease=DashboardStreamLease.bypass())
         # Only the live→closed transition should have triggered a send.
         assert len(ws.sent) == 1
         assert ws.sent[0]["events"] == []
@@ -574,7 +578,7 @@ class TestStreamTailHeartbeat:
             live_after_tick=[True, False],
         )
         ws = _FakeWebSocket()
-        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0, lease=DashboardStreamLease.bypass())
         # Two sends: events + close-with-complete.
         assert len(ws.sent) == 2
         assert ws.sent[0]["events"] == events_payload
@@ -596,7 +600,7 @@ class TestStreamTailHeartbeat:
             live_after_tick=[True, True, True, False],
         )
         ws = _FakeWebSocket()
-        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0, lease=DashboardStreamLease.bypass())
         # 1 heartbeat (tick 3) + 1 closing push (tick 4) = 2 sends.
         assert len(ws.sent) == 2
         assert all(s["events"] == [] for s in ws.sent)
@@ -624,7 +628,7 @@ class TestStreamTailHeartbeat:
             live_after_tick=[True, True, True, True, True, False],
         )
         ws = _FakeWebSocket()
-        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0, lease=DashboardStreamLease.bypass())
         # Sends: events frame at tick 2 + close frame at tick 5. No heartbeat
         # fired in between since counter was reset.
         assert len(ws.sent) == 2
@@ -647,7 +651,7 @@ class TestStreamTailHeartbeat:
             live_after_tick=[True, False],
         )
         ws = _FakeWebSocket()
-        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0, lease=DashboardStreamLease.bypass())
         # heartbeat_every=1 → heartbeat on every tick → 2 sends.
         assert len(ws.sent) == 2
 
@@ -663,7 +667,7 @@ class TestStreamTailHeartbeat:
             live_after_tick=[False],
         )
         ws = _FakeWebSocket()
-        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0)
+        await _events._stream_tail(ws, "sid", Path("/tmp/x.jsonl"), cursor=0, lease=DashboardStreamLease.bypass())
         assert len(ws.sent) == 1
         assert ws.sent[0]["complete"] is True
         assert ws.closed is True
