@@ -25,6 +25,7 @@ immediately (so an unused daemon exits after the grace period).
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import shutil
 import subprocess
@@ -55,10 +56,25 @@ _DAEMON_LOG_TAIL_LINES = 20
 DAEMON_READY_TIMEOUT_ENV = "OCTOWRIGHT_DAEMON_READY_TIMEOUT"
 DAEMON_READY_TIMEOUT_SECONDS = 10.0
 
+# Bytes read from the end of the daemon log to produce a tail. The 1 MB cap
+# in ``_open_daemon_log`` is only applied at spawn time, so a long-lived or
+# crash-looping daemon can append far past it; reading the whole file to show
+# 20 lines would allocate all of it inside an already-degraded follower.
+_DAEMON_LOG_TAIL_BYTES = 64 * 1024
+
 # Windows process-creation flags (winbase.h). Named here rather than imported
 # from ``subprocess`` because those attributes only exist on Windows builds.
 _DETACHED_PROCESS = 0x00000008
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+
+def _read_log_tail_bytes(max_bytes: int = _DAEMON_LOG_TAIL_BYTES) -> bytes:
+    """Read at most ``max_bytes`` from the end of the daemon log."""
+    with open(_DAEMON_LOG, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        handle.seek(max(0, handle.tell() - max_bytes), os.SEEK_SET)
+        return handle.read()
 
 
 def daemon_ready_timeout() -> float:
@@ -70,7 +86,15 @@ def daemon_ready_timeout() -> float:
         parsed = float(raw.strip())
     except ValueError:
         return DAEMON_READY_TIMEOUT_SECONDS
-    return parsed if parsed > 0 else DAEMON_READY_TIMEOUT_SECONDS
+    # Must be finite as well as positive. ``inf`` (and anything that
+    # overflows to it, e.g. ``1e400``) passes a bare ``> 0`` check and makes
+    # wait_for_daemon's deadline unreachable -- so a daemon that never binds
+    # spins forever while holding the election lock, blocking every other
+    # client's election instead of failing over. Matches how the operation
+    # gate validates its own "positive finite seconds" budget.
+    if not math.isfinite(parsed) or parsed <= 0:
+        return DAEMON_READY_TIMEOUT_SECONDS
+    return parsed
 
 
 def daemon_log_path() -> Path:
@@ -85,7 +109,7 @@ def daemon_log_tail(max_lines: int = _DAEMON_LOG_TAIL_LINES) -> str:
     or unreadable log is itself the diagnostic.
     """
     try:
-        lines = _DAEMON_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _read_log_tail_bytes().decode("utf-8", errors="replace").splitlines()
     except FileNotFoundError:
         return f"(no daemon log at {_DAEMON_LOG}; the daemon may never have started)"
     except OSError as exc:
@@ -96,18 +120,37 @@ def daemon_log_tail(max_lines: int = _DAEMON_LOG_TAIL_LINES) -> str:
     return "\n".join(tail)
 
 
-def _detach_kwargs() -> dict[str, Any]:
+def _detach_kwargs(*, breakaway: bool = True) -> dict[str, Any]:
     """Popen kwargs that put the daemon outside the parent's lifecycle.
 
     ``start_new_session`` is POSIX-only -- CPython accepts it on Windows and
-    silently does nothing, so the "detached" daemon stayed inside the launching
-    console's process tree and died with it. On a CI runner that tree is a job
-    object the step tears down, which is why a Windows leg saw the daemon
-    vanish and then fall back to inline mode.
+    silently does nothing, so on Windows the "detached" daemon kept the
+    launching console and its process group.
+
+    On Windows two separate things can tie the daemon to its parent, and they
+    need different flags:
+
+    * the **console** -- ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP``
+      gives the child no console and its own Ctrl-C group.
+    * the **job object** -- a child is assigned to the parent's job by
+      default, and a CI runner that tears its job down with
+      ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` kills the daemon with the step
+      regardless of console detachment. Escaping that needs
+      ``CREATE_BREAKAWAY_FROM_JOB``, and *only works if the job itself sets*
+      ``JOB_OBJECT_LIMIT_BREAKAWAY_OK``. When it does not, ``CreateProcess``
+      fails outright with ``ERROR_ACCESS_DENIED``, so the caller retries with
+      ``breakaway=False`` rather than failing the spawn.
+
+    Honest limit: a job that forbids breakaway still takes the daemon down
+    with the step. Nothing a child process can do changes that; the fallback
+    keeps it no worse than console detachment alone.
     """
-    if sys.platform == "win32":
-        return {"creationflags": _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP}
-    return {"start_new_session": True}
+    if sys.platform != "win32":
+        return {"start_new_session": True}
+    flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP
+    if breakaway:
+        flags |= _CREATE_BREAKAWAY_FROM_JOB
+    return {"creationflags": flags}
 
 
 def _resolve_daemon_entrypoint() -> list[str]:
@@ -182,17 +225,39 @@ def spawn_daemon(
     if keep_alive:
         args.append("--keep-alive")
 
-    # Fixed argv (sys.argv[0] + flags); no shell. Daemon spawn for octowright serve.
-    proc = subprocess.Popen(  # nosec B603
-        args,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=_open_daemon_log(),
-        close_fds=True,
-        env=os.environ.copy(),
-        **_detach_kwargs(),
-    )
-    return proc.pid
+    return _spawn_detached(args)
+
+
+def _spawn_detached(args: list[str]) -> int:
+    """Popen the daemon detached, retrying without job breakaway if refused.
+
+    The parent's copy of the log handle is closed once Popen has duplicated
+    it into the child; leaving it to the garbage collector leaked a
+    descriptor (and kept a replaced log file's inode alive) on every spawn,
+    which a long-lived follower does repeatedly via the respawn path.
+    """
+    for breakaway in (True, False):
+        with _open_daemon_log() as log_handle:
+            try:
+                # Fixed argv (resolved entrypoint + flags); no shell.
+                proc = subprocess.Popen(  # nosec B603
+                    args,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=log_handle,
+                    close_fds=True,
+                    env=os.environ.copy(),
+                    **_detach_kwargs(breakaway=breakaway),
+                )
+            except OSError:
+                # Only CREATE_BREAKAWAY_FROM_JOB is retryable: a job without
+                # JOB_OBJECT_LIMIT_BREAKAWAY_OK refuses the whole spawn with
+                # ERROR_ACCESS_DENIED. Anything else is a real failure.
+                if not breakaway:
+                    raise
+                continue
+        return proc.pid
+    raise AssertionError("unreachable: the non-breakaway attempt either returns or raises")
 
 
 async def wait_for_daemon(timeout: float | None = None, poll_seconds: float = 0.2) -> _sn.LeaderInfo | None:

@@ -12,7 +12,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
-from octowright.session._constants import DEFAULT_PREVIEW_CHARS
+from octowright.session._constants import DEFAULT_PREVIEW_CHARS, is_diagnostic_console_message
 from octowright.session._protocols import SessionLike
 from octowright.session.operation_gate import gated_operation
 from octowright.session.viewport_ops import SessionViewportMixin
@@ -27,22 +27,8 @@ log = get_logger(__name__)
 __all__ = ["DEFAULT_PREVIEW_CHARS", "SessionOpsMixin"]
 
 
-# Console levels that explain a failure. Playwright reports ``msg.type``
-# verbatim from the browser, so these are the CDP/WebKit spelling.
-_DIAGNOSTIC_CONSOLE_LEVELS = frozenset({"error", "warning", "assert"})
-
-
 def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-
-
-def _is_diagnostic_console(message: Any) -> bool:
-    """Whether a console entry is one that explains a failure.
-
-    Tolerates a non-dict entry: this runs while another failure is being
-    reported, so it must never be the thing that raises.
-    """
-    return isinstance(message, dict) and message.get("level") in _DIAGNOSTIC_CONSOLE_LEVELS
 
 
 def _select_console_tail(messages: list[Any], limit: int) -> list[Any]:
@@ -58,7 +44,7 @@ def _select_console_tail(messages: list[Any], limit: int) -> list[Any]:
     if limit <= 0:
         return []
     indexed = list(enumerate(messages))
-    diagnostics = [pair for pair in indexed if _is_diagnostic_console(pair[1])]
+    diagnostics = [pair for pair in indexed if is_diagnostic_console_message(pair[1])]
     keep: dict[int, Any] = dict(diagnostics[-limit:])
     for index, message in reversed(indexed):
         if len(keep) >= limit:

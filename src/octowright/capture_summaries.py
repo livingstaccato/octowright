@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from octowright.session._constants import is_diagnostic_console_message
+
 MAX_LINE_SLICE_LINES = 200
 MAX_SUMMARY_ITEMS = 100
 SUMMARY_TEXT_CHARS = 240
@@ -152,7 +154,7 @@ def _extract_console_messages(data: Any) -> list[dict[str, Any]]:
 
 
 def _is_important_console_message(message: dict[str, Any]) -> bool:
-    return str(message.get("level", "")).lower() in {"error", "warning", "warn"}
+    return is_diagnostic_console_message(message)
 
 
 def _console_recent(capture_id: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

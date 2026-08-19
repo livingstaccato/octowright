@@ -22,6 +22,7 @@ from typing import Any
 import click
 from provide.telemetry import get_logger, setup_telemetry, shutdown_telemetry
 
+from octowright.cli import _daemon_ready as _ready
 from octowright.cli import _leader_election as _election
 from octowright.cli._leader_runtime import _run_leader_phases
 from octowright.cli._root import cli
@@ -41,14 +42,6 @@ _INLINE_FALLBACK_WARNING = (
     "failure (check the HTTP port and daemon logs) or start a standalone "
     "`octowright serve` leader, then reconnect."
 )
-
-
-def _echo_daemon_log_tail() -> None:
-    """Quote the detached daemon's stderr so a spawn failure states a reason."""
-    from octowright import daemonize as _daemon
-
-    click.echo(f"octowright: last lines of {_daemon.daemon_log_path()}:", err=True)
-    click.echo(_daemon.daemon_log_tail(), err=True)
 
 
 @cli.command()
@@ -172,6 +165,22 @@ def serve(
     if profile is not None:
         _os.environ["OCTOWRIGHT_PROFILE"] = profile
 
+    # --wait-ready short-circuits before the leader/follower dispatch, so
+    # flags that only shape a served leader would be silently ignored rather
+    # than doing what the reader expects (--no-singleton in particular is what
+    # _daemon_ready.wait_ready's own docs point at for an inline leader).
+    if wait_ready and no_singleton:
+        raise click.UsageError(
+            "--wait-ready ensures a detached daemon leader and exits; it cannot be combined "
+            "with --no-singleton, which serves an inline leader in the foreground. "
+            "Use one or the other."
+        )
+    if wait_ready and no_http:
+        raise click.UsageError(
+            "--wait-ready confirms readiness over HTTP, so it cannot be combined with "
+            "--no-http. Drop one of the two flags."
+        )
+
     # Export so the readiness budget reaches every wait_for_daemon() call in
     # this process (including the post-bridge respawn), not just the first.
     if ready_timeout is not None:
@@ -181,7 +190,9 @@ def serve(
     try:
         if wait_ready:
             _asyncio.run(
-                _wait_ready(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
+                _ready.wait_ready(
+                    http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive
+                )
             )
             return
         _asyncio.run(
@@ -197,70 +208,6 @@ def serve(
         )
     finally:
         shutdown_telemetry()
-
-
-async def _wait_ready(
-    *,
-    http_host: str | None,
-    http_port: int | None,
-    idle_grace: float | None,
-    keep_alive: bool,
-) -> None:
-    """Ensure a daemon leader exists and is answering, then exit.
-
-    The scripting/CI counterpart to the stdio bridge: every workflow that
-    wanted "start it and tell me when it's ready" had to background ``serve``
-    and hand-roll a lockfile poll in bash/pwsh, then guess at the reason when
-    the file never appeared. Here the readiness probe is the same
-    ``wait_for_daemon`` the follower already uses, and a failure quotes the
-    daemon log -- the only place the reason was ever written.
-
-    Deliberately does NOT share ``_ensure_leader_or_inline``'s inline
-    fallback: that path keeps serving in the foreground forever, which is
-    right for an MCP client that wants *a* working server and wrong for a
-    script whose whole contract is "return an exit code". A caller that
-    wants the fragile inline leader can still ask for it with
-    ``--no-singleton``.
-
-    Prints the leader's MCP URL on stdout so a workflow can capture it, and
-    the human-readable status on stderr. Raises ``SystemExit(1)`` when no
-    leader is reachable within the budget.
-    """
-    from octowright import daemonize as _daemon
-    from octowright import singleton as _sn
-
-    def _ready(info: Any) -> None:
-        click.echo(f"octowright: leader ready at {info.mcp_url}", err=True)
-        click.echo(info.mcp_url)
-
-    if (found := await _election._probe_alive_leader(_sn)) is not None:
-        _ready(found)
-        return
-    try:
-        async with _sn.async_election_lock():
-            if (found := await _election._probe_alive_leader(_sn)) is not None:
-                _ready(found)
-                return
-            if (found := await _election._adopt_canonical_leader(_sn, http_host, http_port)) is not None:
-                _ready(found)
-                return
-            click.echo("octowright: no live leader; spawning daemon", err=True)
-            _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
-            spawned = await _daemon.wait_for_daemon()
-    except TimeoutError:
-        click.echo("octowright: another instance is electing a leader; not ready", err=True)
-        raise SystemExit(1) from None
-    if spawned is None:
-        click.echo(
-            f"octowright: daemon did not become ready within "
-            f"{_daemon.daemon_ready_timeout():g}s "
-            f"(raise it with --ready-timeout or {_daemon.DAEMON_READY_TIMEOUT_ENV})",
-            err=True,
-        )
-        click.echo(f"octowright: last lines of {_daemon.daemon_log_path()}:", err=True)
-        click.echo(_daemon.daemon_log_tail(), err=True)
-        raise SystemExit(1)
-    _ready(spawned)
 
 
 async def _serve_async(
@@ -310,29 +257,33 @@ async def _ensure_leader_or_inline(
     idle_grace: float | None,
 ) -> Any:
     """Find or spawn a daemon leader. Returns leader info, OR None when
-    we fell back to running the leader inline (caller returns immediately)."""
-    from octowright import daemonize as _daemon
-    from octowright import singleton as _sn
+    we fell back to running the leader inline (caller returns immediately).
 
-    # Probe outside the lock; recheck under it to avoid duplicate spawn.
-    if (found := await _election._probe_alive_leader(_sn)) is not None:
-        return found
-    async with _sn.async_election_lock():
-        if (found := await _election._probe_alive_leader(_sn)) is not None:
-            return found
-        # Split-brain guard: the lockfile says no leader, but a healthy octowright
-        # may already hold the canonical port (lockfile lag / stale lock). Adopt it
-        # rather than spawn a competitor on a bumped port (same guard as respawn).
-        if (found := await _election._adopt_canonical_leader(_sn, http_host, http_port)) is not None:
-            click.echo("octowright: adopted existing leader on canonical port; not spawning", err=True)
-            return found
-        click.echo("octowright: no live leader; spawning daemon", err=True)
-        keep_alive = bool(leader_kwargs.get("keep_alive"))
-        _daemon.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive)
-        # Confirm the daemon is up while still holding the election lock, so a
-        # concurrent starter blocks until the leader exists and then adopts it
-        # instead of spawning a competitor on a bumped port (split-brain).
-        spawned = await _daemon.wait_for_daemon()
+    Shares one split-brain-guarded election with ``--wait-ready``
+    (:mod:`cli._daemon_ready`); only the never-answered branch differs.
+    """
+    try:
+        spawned = await _ready.elect_leader(
+            http_host=http_host,
+            http_port=http_port,
+            idle_grace=idle_grace,
+            keep_alive=bool(leader_kwargs.get("keep_alive")),
+        )
+    except TimeoutError:
+        # Another instance holds the election lock. Letting this propagate
+        # would hand an MCP client a traceback, and returning None would make
+        # _serve_singleton exit without bridging -- dropping the client
+        # silently. Wait for the leader THAT instance is electing and follow
+        # it; spawning our own here is exactly the split-brain the lock exists
+        # to prevent. Reachable in practice now that --ready-timeout can hold
+        # the lock longer than a concurrent starter's acquire wait.
+        from octowright import daemonize as _daemon
+
+        click.echo("octowright: another instance is electing a leader; waiting for it", err=True)
+        elected = await _daemon.wait_for_daemon()
+        if elected is not None:
+            return elected
+        spawned = None
     if spawned is None:
         # Daemon didn't come up — run leader inline so the user at least gets
         # a working server (browsers die on this process's exit). Surface the
@@ -341,10 +292,8 @@ async def _ensure_leader_or_inline(
 
         click.echo(_INLINE_FALLBACK_WARNING, err=True)
         # The warning above says THAT the spawn failed; only the daemon's own
-        # log says WHY, and it is written to a file the caller is not reading
-        # (the caller's stderr holds this follower's output, not the daemon's).
-        # Quote it here or the failure is undiagnosable from the outside.
-        _echo_daemon_log_tail()
+        # log says WHY. Quote it or the failure is undiagnosable from outside.
+        _ready.echo_daemon_log_tail()
         _state.set_leader_mode("inline", inline_reason="daemon_spawn_failed")
         await _run_leader(**leader_kwargs, no_singleton=False)
         return None
@@ -391,7 +340,7 @@ async def _respawn_if_leader_gone(
             # the healthy leader and defer.
             if await _daemon.wait_for_daemon() is None:
                 click.echo("octowright: replacement daemon spawn timed out", err=True)
-                _echo_daemon_log_tail()
+                _ready.echo_daemon_log_tail()
     except TimeoutError:
         # Another follower already holds the election lock (electing/spawning).
         # Defer — spawning here would race a second leader onto a bumped port.
