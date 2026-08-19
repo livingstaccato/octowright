@@ -449,7 +449,10 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
     if not target_run_id:
         return {"ok": False, "error": "No runs exist to verify."}
 
-    run_dir = artifact_dir / "runs" / target_run_id
+    try:
+        run_dir = store.existing_run_dir(artifact_dir, target_run_id)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
     if not (run_dir / "result.json").exists() or not (run_dir / "evidence.json").exists():
         return {"ok": False, "error": "Run bundle incomplete."}
 

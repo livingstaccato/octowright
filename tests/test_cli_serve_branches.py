@@ -553,7 +553,7 @@ class TestEnsureLeaderOrInline:
     @pytest.mark.anyio
     async def test_existing_alive_leader_returned_directly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If lockfile exists + pid alive + http alive → return that LeaderInfo."""
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         _patch_sn_daemon(
             monkeypatch,
             read_lock=lambda: info,
@@ -568,7 +568,7 @@ class TestEnsureLeaderOrInline:
     @pytest.mark.anyio
     async def test_no_leader_spawns_daemon_and_returns_spawned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Missing lockfile → spawn daemon → wait_for_daemon returns info → return it."""
-        spawned = SimpleNamespace(pid=99, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        spawned = SimpleNamespace(pid=99, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         spawn_daemon = MagicMock()
         _patch_sn_daemon(
             monkeypatch,
@@ -613,7 +613,7 @@ class TestEnsureLeaderOrInline:
     @pytest.mark.anyio
     async def test_stale_pid_triggers_spawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Lock exists but is_stale=True → treat as no leader → spawn."""
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         spawned = SimpleNamespace(mcp_url="new")
         spawn_daemon = MagicMock()
         _patch_sn_daemon(
@@ -631,7 +631,7 @@ class TestEnsureLeaderOrInline:
     @pytest.mark.anyio
     async def test_alive_pid_dead_http_triggers_spawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Lock alive but probe_http_alive=False → spawn replacement."""
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         spawned = SimpleNamespace(mcp_url="new")
         spawn_daemon = MagicMock()
         _patch_sn_daemon(
@@ -666,7 +666,7 @@ class TestBridgeToLeader:
             captured.append(text)
 
         monkeypatch.setattr(_serve.click, "echo", fake_echo)
-        await _serve._bridge_to_leader(SimpleNamespace(mcp_url="http://x/mcp/"))
+        await _serve._bridge_to_leader(SimpleNamespace(mcp_url="http://127.0.0.1:8765/mcp/"))
         assert any("bridge closed" in line for line in captured)
         assert not any("bridge ended" in line for line in captured)
 
@@ -681,7 +681,7 @@ class TestBridgeToLeader:
         captured: list[str] = []
         monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: captured.append(text))
         # Must not raise.
-        await _serve._bridge_to_leader(SimpleNamespace(mcp_url="http://x/mcp/"))
+        await _serve._bridge_to_leader(SimpleNamespace(mcp_url="http://127.0.0.1:8765/mcp/"))
         assert any("bridge ended" in line and "boom" in line for line in captured)
 
 
@@ -692,7 +692,7 @@ class TestRespawnIfLeaderGone:
     @pytest.mark.anyio
     async def test_no_spawn_when_leader_still_healthy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Recheck shows alive leader → echo + return without spawn."""
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         spawn_daemon = MagicMock(side_effect=AssertionError("should not spawn"))
         _patch_sn_daemon(
             monkeypatch,
@@ -729,7 +729,7 @@ class TestRespawnIfLeaderGone:
     @pytest.mark.anyio
     async def test_spawns_when_pid_alive_but_http_dead(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """is_stale=False but probe_http_alive=False → still considered gone."""
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         spawn_daemon = MagicMock()
         _patch_sn_daemon(
             monkeypatch,
@@ -759,7 +759,7 @@ class TestEnsureLeaderProbeOutsideLock:
         """Happy path: live leader → return immediately, election lock never entered."""
         import contextlib as _ctxlib
 
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         lock_entered: list[bool] = []
 
         @_ctxlib.asynccontextmanager
@@ -831,7 +831,7 @@ class TestEnsureLeaderProbeOutsideLock:
         This is exactly the race the recheck-under-lock pattern exists to fix.
         Without the recheck, both followers would spawn duplicate daemons.
         """
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         # First read (outside lock): no leader. Second read (under lock): a leader exists.
         reads = [None, info]
 
@@ -866,7 +866,7 @@ class TestRespawnProbeOutsideLock:
         """Outside probe alive → return immediately, never acquire the lock."""
         import contextlib as _ctxlib
 
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         lock_entered: list[bool] = []
 
         @_ctxlib.asynccontextmanager
@@ -894,7 +894,7 @@ class TestRespawnProbeOutsideLock:
     @pytest.mark.anyio
     async def test_race_window_recheck_finds_now_live_leader(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Outside: no leader. Under lock: someone else already respawned one."""
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/mcp/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         reads = [None, info]
 
         def fake_read_lock() -> Any:

@@ -31,6 +31,7 @@ from octowright.mcp_types import BrowserCaptureAndCloseResult, BrowserToolAction
 from octowright.server._state import mcp, pool
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session import DEFAULT_PREVIEW_CHARS
+from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 
 if TYPE_CHECKING:
     from octowright.session import BrowserSession
@@ -87,11 +88,15 @@ async def _capture_before_close(
         await session.screenshot(target)
         captured: dict[str, Any] = {"title": title, "url": url, "screenshot_path": str(target)}
         if snapshot:
+            # asyncio.timeout, NOT wait_for: the scrubber re-enters this
+            # session's gate, and wait_for would run it in a separate Task via
+            # ensure_future -- a different owner as far as the gate is
+            # concerned, so it would queue behind the lease held right here and
+            # block until the queue timeout. Same reasoning as inspect.py's
+            # snapshot boundary.
             try:
-                aria_full = await asyncio.wait_for(
-                    frame_target.locator("html").aria_snapshot(),
-                    timeout=SNAPSHOT_TIMEOUT_S,
-                )
+                async with asyncio.timeout(SNAPSHOT_TIMEOUT_S):
+                    aria_full = await redacted_aria_snapshot(session, frame_target.locator("html"))
                 captured["aria"] = aria_full[:DEFAULT_PREVIEW_CHARS]
             except TimeoutError:
                 captured.update(snapshot_timeout_fields(instance_id))

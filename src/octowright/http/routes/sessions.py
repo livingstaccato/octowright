@@ -33,6 +33,7 @@ from octowright.http.discovery import (
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool, _read_json_body
 from octowright.http.session_artifacts import session_artifact_cache
+from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 from octowright.session.screencast_config import screencast_config_block
 from octowright.terminal.errors import ProtectedTerminalCloseError
@@ -114,7 +115,7 @@ async def _live_session_detail_response(live: Any) -> JSONResponse:
     timeout = _dashboard_operation_timeout_seconds()
     try:
         async with live.operation("dashboard_session_detail", wait_timeout_seconds=timeout):
-            detail["aria"] = await live.page.locator("html").aria_snapshot()
+            detail["aria"] = await redacted_aria_snapshot(live, live.page.locator("html"))
     except Exception as exc:
         state.log.debug(
             "octowright.http.live_aria_snapshot_failed",

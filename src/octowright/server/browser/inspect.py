@@ -49,6 +49,7 @@ from octowright.server.browser.network import browser_network_summary
 from octowright.server.browser.views import browser_downloads_summary
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session import DEFAULT_PREVIEW_CHARS
+from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 
 # Module-level alias so tests can monkeypatch the snapshot timeout cheaply.
 SNAPSHOT_TIMEOUT_S = SNAPSHOT_TIMEOUT_SECONDS
@@ -405,7 +406,7 @@ async def browser_brief(instance_id: str) -> BrowserBriefResult:
         target = session._target()
         title = await session.page.title()
         # Pull a tiny slice of the body snapshot to provide basic orientation
-        aria = await target.locator("body").aria_snapshot()
+        aria = await redacted_aria_snapshot(session, target.locator("body"))
         elements = aria[:500] + ("..." if len(aria) > 500 else "")
 
         return {

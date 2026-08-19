@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.session.core import BrowserSession
+from tests._aria_stubs import stub_credential_scan
 
 
 @pytest.fixture
@@ -48,6 +49,7 @@ async def test_click_records_semantic_metadata(mock_session: BrowserSession):
     # page.locator(selector) returns a Locator object.
     locator_mock = MagicMock()
     locator_mock.aria_snapshot = AsyncMock(return_value='- button "Confirm Order"')
+    stub_credential_scan(locator_mock)
     mock_session.page.locator.return_value = locator_mock
 
     # Action: Click the button
@@ -72,6 +74,7 @@ async def test_fill_records_semantic_metadata(mock_session: BrowserSession):
     # Setup: Mock the aria_snapshot return value
     locator_mock = MagicMock()
     locator_mock.aria_snapshot = AsyncMock(return_value='- textbox "Email Address"')
+    stub_credential_scan(locator_mock)
     mock_session.page.locator.return_value = locator_mock
 
     # Action: Fill the input

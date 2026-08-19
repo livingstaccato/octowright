@@ -33,6 +33,7 @@ import pytest
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
+from tests._aria_stubs import stub_credential_scan
 from tests._operation_gate_fakes import OperationAwareFake
 
 REDACT_INPUTS_ENV = "OCTOWRIGHT_REDACT_INPUTS"
@@ -59,6 +60,7 @@ def _locator_with_input_info(evaluate_return: Any, *, raises: bool = False) -> M
     """
     locator = MagicMock()
     locator.aria_snapshot = AsyncMock(return_value="")
+    stub_credential_scan(locator)
     first = MagicMock()
     if raises:
         first.evaluate = AsyncMock(side_effect=RuntimeError("locator detached"))

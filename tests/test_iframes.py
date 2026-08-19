@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,10 +21,15 @@ from octowright.session import BrowserSession
 
 
 class _FakeLocator:
-    """Minimal locator whose aria_snapshot() returns a fixed string."""
+    """Minimal locator whose aria_snapshot() returns a fixed string.
+
+    Also answers the credential-value scan the scrubber runs before
+    snapshotting; see tests/_aria_stubs.py.
+    """
 
     def __init__(self, aria: str) -> None:
         self._aria = aria
+        self.first = SimpleNamespace(evaluate=AsyncMock(return_value=[]))
 
     async def aria_snapshot(self) -> str:
         return self._aria

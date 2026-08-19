@@ -33,6 +33,7 @@ import pytest
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session.core_expect_mixin import SessionExpectMixin
 from octowright.session.core_page_mixin import SessionPageMixin
+from tests._aria_stubs import credential_aware_evaluate, stub_credential_scan
 from tests._operation_gate_fakes import OperationAwareFake
 
 
@@ -149,6 +150,7 @@ class TestResolveSemanticMetadata:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(return_value='- button "Save"')
+        stub_credential_scan(loc)
         subj._target = lambda: MagicMock(locator=lambda _s: loc)  # type: ignore[attr-defined]
         meta = await subj._resolve_semantic_metadata("#submit")
         assert meta == {"role": "button", "role_name": "Save"}
@@ -159,6 +161,7 @@ class TestResolveSemanticMetadata:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(return_value="- button")
+        stub_credential_scan(loc)
         subj._target = lambda: MagicMock(locator=lambda _s: loc)  # type: ignore[attr-defined]
         meta = await subj._resolve_semantic_metadata("#submit")
         assert meta == {"role": "button", "role_name": ""}
@@ -169,6 +172,7 @@ class TestResolveSemanticMetadata:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(side_effect=RuntimeError("playwright"))
+        stub_credential_scan(loc)
         subj._target = lambda: MagicMock(locator=lambda _s: loc)  # type: ignore[attr-defined]
         assert await subj._resolve_semantic_metadata("#submit") == {}
 
@@ -178,6 +182,7 @@ class TestResolveSemanticMetadata:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(return_value="")
+        stub_credential_scan(loc)
         subj._target = lambda: MagicMock(locator=lambda _s: loc)  # type: ignore[attr-defined]
         assert await subj._resolve_semantic_metadata("#submit") == {}
 
@@ -187,6 +192,7 @@ class TestResolveSemanticMetadata:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(return_value='button "Save"')
+        stub_credential_scan(loc)
         subj._target = lambda: MagicMock(locator=lambda _s: loc)  # type: ignore[attr-defined]
         assert await subj._resolve_semantic_metadata("#submit") == {}
 
@@ -196,6 +202,7 @@ class TestResolveSemanticMetadata:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(return_value='- link "Click here"')
+        stub_credential_scan(loc)
         subj._target = lambda: MagicMock(locator=lambda _s: loc)  # type: ignore[attr-defined]
         meta = await subj._resolve_semantic_metadata("a#x")
         assert meta == {"role": "link", "role_name": "Click here"}
@@ -315,6 +322,7 @@ def _make_input_target(input_type: str | None) -> MagicMock:
     #   - _is_password_input:         ``.first.evaluate(js)``
     locator_mock = MagicMock()
     locator_mock.aria_snapshot = AsyncMock(return_value="")
+    stub_credential_scan(locator_mock)
     first_mock = MagicMock()
     if input_type is None:
         first_mock.evaluate = AsyncMock(side_effect=RuntimeError("locator gone"))
@@ -329,7 +337,9 @@ def _make_action_locator(snapshot: str = "", input_type: str = "text") -> MagicM
     locator = MagicMock()
     locator.aria_snapshot = AsyncMock(return_value=snapshot)
     locator.first = MagicMock()
-    locator.first.evaluate = AsyncMock(return_value=input_type)
+    # first.evaluate serves two probes: the record-time password check
+    # (returns input_type) and the aria credential scan (returns a list).
+    locator.first.evaluate = credential_aware_evaluate(other=input_type)
     return locator
 
 
@@ -524,6 +534,7 @@ class TestArtifactCalls:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(return_value="- root")
+        stub_credential_scan(loc)
         subj.page.locator = MagicMock(return_value=loc)
         result = await subj.snapshot()
         subj.page.locator.assert_called_with("html")
@@ -535,6 +546,7 @@ class TestArtifactCalls:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(return_value="- y")
+        stub_credential_scan(loc)
         subj.page.locator = MagicMock(return_value=loc)
         subj.page.title = AsyncMock(return_value="Title")
         result = await subj.snapshot()
@@ -546,6 +558,7 @@ class TestArtifactCalls:
         subj = _make_subject(tmp_path)
         loc = MagicMock()
         loc.aria_snapshot = AsyncMock(return_value="")
+        stub_credential_scan(loc)
         subj.page.locator = MagicMock(return_value=loc)
         await subj.snapshot()
         subj.recorder.record.assert_called_once_with("snapshot")

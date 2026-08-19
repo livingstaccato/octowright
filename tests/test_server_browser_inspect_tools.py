@@ -23,6 +23,7 @@ from octowright.server.browser import inspect_capture as _inspect_capture
 from octowright.server.browser import inspect_console as _inspect_console
 from octowright.server.browser import inspect_recording as _inspect_recording
 from octowright.session.operation_gate import SessionClosingError
+from tests._aria_stubs import stub_credential_scan
 from tests._pool_invariants import wait_for_active, wait_for_state
 
 
@@ -60,6 +61,7 @@ def _session(log_root: Path | None = None) -> MagicMock:
     s.page.url = "https://octowright.com"
     s.page.title = AsyncMock(return_value="Example")
     s.page.locator.return_value.aria_snapshot = AsyncMock(return_value="aria-content")
+    stub_credential_scan(s.page.locator.return_value)
     # _target() defaults to the page (no frame switched); brief routes through it.
     s._target.return_value = s.page
     s.snapshot = AsyncMock(return_value={"aria": "aria-content", "url": "https://octowright.com", "title": "Example"})
@@ -687,6 +689,7 @@ async def test_browser_capture_and_close_uses_active_frame(capture_pool: Browser
     frame = MagicMock()
     frame.url = "https://widget.octowright.com/inner"
     frame.locator.return_value.aria_snapshot = AsyncMock(return_value="frame-html-aria")
+    stub_credential_scan(frame.locator.return_value)
     s._target.return_value = frame
     capture_pool._sessions["i"] = s
 
@@ -711,6 +714,7 @@ async def test_browser_capture_and_close_snapshot_timeout_still_closes(
         return "late aria"
 
     s.page.locator.return_value.aria_snapshot = AsyncMock(side_effect=slow_snapshot)
+    stub_credential_scan(s.page.locator.return_value)
     capture_pool._sessions["i"] = s
     monkeypatch.setattr(_inspect_capture, "SNAPSHOT_TIMEOUT_S", 0.01)
 
@@ -901,6 +905,7 @@ async def test_browser_snapshot_records_event_in_jsonl(_patch_pool: MagicMock, t
     page.title = AsyncMock(return_value="Ex")
     page.locator = MagicMock()
     page.locator.return_value.aria_snapshot = AsyncMock(return_value="- main")
+    stub_credential_scan(page.locator.return_value)
 
     session = BrowserSession(
         instance_id="inst",
@@ -941,6 +946,7 @@ async def test_browser_brief_uses_frame_when_active(_patch_pool: MagicMock) -> N
     frame = MagicMock()
     frame.url = "https://widget.octowright.com"
     frame.locator.return_value.aria_snapshot = AsyncMock(return_value="frame-body-aria")
+    stub_credential_scan(frame.locator.return_value)
     s._target.return_value = frame  # simulate an active frame
     _patch_pool.get.return_value = s
     out = await _inspect.browser_brief("i")

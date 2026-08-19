@@ -24,9 +24,30 @@ _CANONICAL_LEADER_WAIT_INTERVAL = 0.2
 
 
 async def _probe_alive_leader(sn: Any) -> Any | None:
-    """Return LeaderInfo iff lockfile + HTTP probe both confirm live."""
+    """Return LeaderInfo iff lockfile + HTTP probe both confirm live AND the
+    recorded leader is loopback.
+
+    The host check belongs here, before anything DIALS the recorded URL. The
+    0600 lockfile is writable by any same-user process, and this info flows two
+    ways: into ``serve._run_follower`` (the MCP bridge, carrying tool arguments
+    with persona credentials substituted in) and into the ``/api/health`` probe
+    on the line below. Validating only inside the bridge still lets the health
+    GET reach an attacker-chosen host, and lets a 200 from that host make a
+    poisoned lock look live.
+
+    Rejecting returns ``None`` -- "no live leader" -- so ``serve`` goes on to
+    elect a real one rather than being wedged by the poisoned lock.
+    """
     info = sn.read_lock()
-    return info if info and not sn.is_stale(info) and await sn.probe_http_alive(info) else None
+    if info is None or sn.is_stale(info):
+        return None
+    # Lazy import: keeps `octowright.cli` free of the heavy stack the follower
+    # never needs (see tests/test_follower_import_weight.py).
+    from octowright.proxy_runtime import _leader_url_is_safe
+
+    if not _leader_url_is_safe(info.mcp_url):
+        return None
+    return info if await sn.probe_http_alive(info) else None
 
 
 async def _canonical_port_serves_octowright(http_host: str | None, http_port: int | None) -> bool:

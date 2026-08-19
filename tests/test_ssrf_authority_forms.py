@@ -131,3 +131,32 @@ def test_canonicalization_applies_with_the_policy_off_too(monkeypatch: pytest.Mo
         page_mixin._reject_unsafe_url("/\\example.com/x")
     # A genuine path is still fine with the policy off.
     page_mixin._reject_unsafe_url("/orders")
+
+
+# ---------------------------------------------------------------------------
+# C0 controls before the scheme (WHATWG strips them; str.strip() does not)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["\x00", "\x01", "\x08", "\x0b", "\x0e", "\x1b", "\x1f", " ", "\x01\x02 "],
+)
+@pytest.mark.parametrize("scheme_url", ["file:///etc/passwd", "javascript:alert(1)", "view-source:http://x/"])
+def test_a_c0_control_before_the_scheme_does_not_defeat_the_deny_list(prefix: str, scheme_url: str) -> None:
+    """`str.strip()` removes only Python whitespace, but the WHATWG parser
+    strips every C0 control or space (U+0000-U+0020) before parsing. So
+    `\\x01file:///etc/passwd` read as scheme `\\x01file` to the guard -- not on
+    the deny-list -- and as `file` to Chromium, which loaded the file. Confirmed
+    live: the browser returned the file's contents.
+    """
+    from octowright.session.core_page_mixin import _reject_unsafe_url
+
+    with pytest.raises(ValueError):
+        _reject_unsafe_url(prefix + scheme_url)
+
+
+def test_an_ordinary_url_with_surrounding_whitespace_still_works() -> None:
+    from octowright.session.core_page_mixin import _reject_unsafe_url
+
+    _reject_unsafe_url("  https://example.com/  ")

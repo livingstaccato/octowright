@@ -16,6 +16,7 @@ import pytest
 from octowright.browser_pool import BrowserPool
 from octowright.server.browser import inspect as _inspect
 from octowright.server.browser import lifecycle as _lifecycle
+from tests._aria_stubs import stub_credential_scan
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +57,7 @@ def _gated_session(*, instance_id: str = "inst-1", kind: str = "chromium") -> Ma
     # Mock aria_snapshot on page.locator("html")
     html_locator = MagicMock()
     html_locator.aria_snapshot = AsyncMock(return_value="aria tree content")
+    stub_credential_scan(html_locator)
     session.page.locator = MagicMock(return_value=html_locator)
     # _target() defaults to the page when no frame is switched (capture_and_close
     # reads url + aria through it).

@@ -35,7 +35,8 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from urllib.parse import urlsplit
+import unicodedata
+from urllib.parse import unquote, urlsplit
 
 # Tokens that mean "policy disabled". Empty/unset is the default → off.
 _OFF = frozenset({"", "off", "0", "false", "no", "never", "none", "disabled"})
@@ -57,6 +58,13 @@ def _policy() -> str:
     if raw in _OFF:
         return "off"
     return "block-private"
+
+
+def policy_enabled() -> bool:
+    """Whether any SSRF policy is active. Public so callers that install
+    enforcement machinery (the per-hop redirect guard) can skip the work
+    entirely on the default ``off`` deployment."""
+    return _policy() != "off"
 
 
 def _allowlist() -> set[str]:
@@ -183,6 +191,41 @@ def _host_is_blocked(host: str) -> bool:
     return _ip_is_non_public(ip)
 
 
+#: Non-ASCII code points UTS46 maps to ``.`` before a browser parses the host.
+#: NFKC alone does NOT fold U+3002, so the map is explicit rather than implied.
+_HOST_DOTS = {0x3002: ".", 0xFF0E: ".", 0xFF61: "."}
+
+
+def normalize_host_for_policy(host: str) -> str:
+    """The host the BROWSER will resolve, from the host ``urlsplit`` reports.
+
+    ``urlsplit`` does none of what WHATWG host parsing does, and each gap was a
+    live bypass of ``block-private`` (all three confirmed reaching a loopback
+    server through headless Chromium while the guard said the navigation was
+    allowed):
+
+    * percent-decoding -- ``127.0.0.%31`` is ``127.0.0.1``;
+    * UTS46 mapping -- non-ASCII full stops (U+3002, U+FF0E, U+FF61) and
+      fullwidth digits both map to their ASCII forms, so a host spelled with
+      them is the metadata IP or loopback to a browser and an opaque string
+      to urlsplit;
+    * the empty trailing label -- ``169.254.169.254.`` is dropped by the WHATWG
+      IPv4 parser, while ``_parse_ipv4_parts`` rejected the empty part and let
+      the host through as an opaque public name. ``localhost.`` likewise
+      resolves to loopback without DNS (Chromium's ``net::IsLocalHostname``).
+
+    Normalizing here rather than at each call site keeps the string test and the
+    resolver agreed, which is the whole premise of a synchronous host check.
+    """
+    decoded = unquote(host)
+    mapped = unicodedata.normalize("NFKC", decoded.translate(_HOST_DOTS))
+    # One trailing dot is the FQDN root label; the browser drops it before
+    # classifying. Strip only that, so `..` stays malformed rather than valid.
+    if mapped.endswith(".") and not mapped.endswith(".."):
+        mapped = mapped[:-1]
+    return mapped.lower()
+
+
 def check_navigation_url(url: str) -> None:
     """Raise ``ValueError`` if the active SSRF policy refuses ``url``.
 
@@ -199,6 +242,6 @@ def check_navigation_url(url: str) -> None:
         return
     if parts.scheme.lower() not in _CHECKED_SCHEMES:
         return
-    host = (parts.hostname or "").lower()
+    host = normalize_host_for_policy(parts.hostname or "")
     if host and host not in _allowlist() and _host_is_blocked(host):
         raise ValueError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")

@@ -78,6 +78,18 @@ def _within_recovery_window(leader_down_since: float | None, now: float, window:
 
 
 def resolve_leader_url(fallback_url: str) -> str:
+    """The leader URL to bridge to: the live lock's, else ``fallback_url``.
+
+    Raises ``ValueError`` rather than returning a non-loopback URL from either
+    source. The fallback is NOT a trusted constant: on the production path
+    ``cli/serve._bridge_to_leader`` passes ``leader_info.mcp_url`` -- the value
+    read straight out of the same same-user-writable lockfile -- into
+    ``_run_follower``, which hands it here. So a poisoned lock arrived as BOTH
+    the lock and the fallback, and returning the fallback unexamined handed back
+    exactly the URL the check above had just rejected, warning line and all.
+
+    A function that logs "rejected" must not return the rejected value.
+    """
     info = singleton.read_lock()
     if info is not None and not singleton.is_stale(info):
         if _leader_url_is_safe(info.mcp_url):
@@ -86,6 +98,14 @@ def resolve_leader_url(fallback_url: str) -> str:
             "octowright.bridge.leader_url_rejected",
             mcp_url=info.mcp_url,
             reason="non-loopback host without OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1",
+        )
+    if not _leader_url_is_safe(fallback_url):
+        raise ValueError(
+            f"refusing to bridge to non-loopback leader url {fallback_url!r}; "
+            "the lockfile is writable by any same-user process, so this may be a "
+            "redirect of MCP traffic (including credentials substituted into tool "
+            "args). Set OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1 only if this is your "
+            "own remote leader."
         )
     return fallback_url
 
