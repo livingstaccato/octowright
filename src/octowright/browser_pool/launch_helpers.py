@@ -18,11 +18,13 @@ from provide.telemetry import get_logger
 from octowright._paths import reject_unsafe_path
 from octowright.browser_pool.singleton_locks import prune_stale_singleton_locks
 from octowright.browser_pool.viewport import ViewportInfo, ViewportMode
-from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, RECORDINGS_DIR
+from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, PROFILES_DIR, RECORDINGS_DIR
 from octowright.personas import engine_profile_dir, load_persona
+from octowright.private_paths import secure_profile_tree
 from octowright.recorder import Recorder
 from octowright.session_manifest import record_launch as _manifest_record_launch
 from octowright.session_manifest import run_manifest_transaction_async
+from octowright.ssrf_guard import install_navigation_guard
 
 if TYPE_CHECKING:
     # Annotation only — avoids the launch_helpers → options runtime cycle
@@ -261,6 +263,9 @@ async def _open_browser_context(
         if profile:
             pdir = engine_profile_dir(persona=profile, kind=kind)
             pdir.mkdir(parents=True, exist_ok=True)
+            # Live session cookies live here; Firefox/WebKit write them 0644
+            # into an 0755 tree. See octowright.private_paths.
+            secure_profile_tree(pdir, PROFILES_DIR)
             user_data_dir: str | None = str(pdir)
             # A profile whose browser died without cleaning up — or whose lock
             # socket went with a temp-dir sweep — keeps a lock naming a pid that
@@ -293,6 +298,9 @@ async def _open_browser_context(
         )
         page = await context.new_page()
         user_data_dir = None
+    # Pre-flight SSRF checks only see the URL that was asked for; a redirect
+    # is a different host. No-op unless a policy is enabled.
+    await install_navigation_guard(context)
     return browser, context, page, user_data_dir
 
 

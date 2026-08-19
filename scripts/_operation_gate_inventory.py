@@ -27,6 +27,20 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "launch-time-before-session-publication",
         "best-effort cleanup of a context/browser whose launch never published a session",
     ),
+    "ssrf_guard.py:install_navigation_guard": (
+        "launch-time-before-session-publication",
+        "registers the context route guard before BrowserSession construction and registry publication",
+    ),
+    "ssrf_guard.py:_handle_route": (
+        "event-critical",
+        "Playwright route callback: must answer the intercepted request promptly or the navigation "
+        "hangs, and it holds no BrowserSession to take a lease from -- the navigation it is deciding "
+        "on is itself running under that session's gate",
+    ),
+    "ssrf_guard.py:_validate_chain": (
+        "event-critical",
+        "runs inside the same route callback to resolve redirect hops before the request is released",
+    ),
     "browser_pool/launch_helpers.py:_open_browser_context": (
         "launch-time-before-session-publication",
         "creates context/page before BrowserSession construction and registry publication",

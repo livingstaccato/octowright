@@ -38,6 +38,7 @@ from octowright.http.routes import sessions_recording as session_recording_route
 from octowright.recorder import Recorder
 from octowright.server import _state
 from octowright.session.operation_gate import SessionOperationGate
+from tests._aria_stubs import stub_credential_scan
 
 # ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -861,6 +862,7 @@ class TestSessionDetailLiveEdges:
         page = MagicMock()
         locator = MagicMock()
         locator.aria_snapshot = AsyncMock(return_value="- button 'OK'")
+        stub_credential_scan(locator)
         page.locator = MagicMock(return_value=locator)
         page.url = "https://octowright.com"
         recorder = SimpleNamespace(event_count=5, action_count=3)

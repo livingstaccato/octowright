@@ -53,6 +53,20 @@ class ArtifactStore:
         run_dir.mkdir(parents=False, exist_ok=False)
         return run_dir
 
+    def existing_run_dir(self, artifact_dir: Path, run_id: str) -> Path:
+        """Resolve a caller-supplied *run_id* to a run directory.
+
+        ``run_id`` reaches this from an MCP tool argument, so joining it raw
+        let ``../..`` escape the recordings root -- the verify path then wrote
+        ``verification.json`` wherever the traversal pointed. Runs are always
+        named by ``next_run_dir`` as ``run_NNNN``, so the name shape is
+        checked first (cheap, and it rejects the traversal outright) and
+        containment is still enforced behind it.
+        """
+        if not _RUN_RE.match(run_id):
+            raise ValueError(f"run_id {run_id!r} is not a valid run directory name")
+        return self._contained(artifact_dir / "runs" / run_id, label=f"artifact run {run_id!r}")
+
     def resolve_macro_export_path(self, name: str, out_path: str | None) -> Path:
         if out_path:
             target = Path(out_path).expanduser()
