@@ -14,11 +14,16 @@ at 0644 into an 0755 tree, so the directory mode is the control.
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
 
 import pytest
 
 from octowright.private_paths import PROFILES_PRIVATE_ENV, profiles_private, secure_profile_tree
+
+# Windows ignores POSIX mode bits on directories, so the assertions below say
+# nothing there. The production helper is best-effort and simply no-ops.
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission-bit assertion")
 
 
 def _mode(path: Path) -> int:
