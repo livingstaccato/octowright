@@ -17,12 +17,13 @@ from octowright.server._state import mcp, pool
 from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session._protocols import SessionLike
+from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 
 
 async def _capture_snapshot(session: SessionLike, _meta: dict[str, Any], _expression: str | None) -> str:
     # _target() so a snapshot capture descends into a switched frame, like browser_snapshot.
     async with session.operation("capture_create"):
-        return await session._target().locator("body").aria_snapshot()
+        return await redacted_aria_snapshot(session, session._target().locator("body"))
 
 
 async def _capture_text(session: SessionLike, _meta: dict[str, Any], _expression: str | None) -> str:

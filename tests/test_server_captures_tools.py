@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.server import captures as _tools
+from tests._aria_stubs import stub_credential_scan
 from tests._operation_gate_fakes import OperationAwareFake
 
 
@@ -33,6 +34,7 @@ def _session(tmp_path: Path) -> _FakeCaptureSession:
     s.page.url = "https://warp.undef.games/customize"
     s.page.title = AsyncMock(return_value="Warp")
     s.page.locator.return_value.aria_snapshot = AsyncMock(return_value='- button "Save"')
+    stub_credential_scan(s.page.locator.return_value)
     s.page.locator.return_value.inner_text = AsyncMock(return_value="Enter your alias")
     s.evaluate = AsyncMock(return_value={"ok": True})
     s.console = [{"level": "error", "text": "boom"}]
@@ -51,6 +53,7 @@ def _frame() -> MagicMock:
     f = MagicMock()
     f.url = "https://widget.undef.games/inner"
     f.locator.return_value.aria_snapshot = AsyncMock(return_value='- button "Frame Save"')
+    stub_credential_scan(f.locator.return_value)
     f.locator.return_value.inner_text = AsyncMock(return_value="Frame alias field")
     return f
 
