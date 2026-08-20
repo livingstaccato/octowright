@@ -68,10 +68,29 @@ def test_all_engine_spellings_of_a_diagnostic_level_count() -> None:
 
 def test_diagnostics_beyond_the_limit_keep_the_most_recent() -> None:
     errors = [{"level": "error", "text": f"boom {index}"} for index in range(5)]
+    tail = _log(0)
 
-    selected = _select_console_tail([*errors, _log(0)], 2)
+    selected = _select_console_tail([*errors, tail], 2)
 
-    assert selected == errors[-2:]
+    # Half the window is reserved for the plain tail; the diagnostic slot goes
+    # to the NEWEST error, not the oldest.
+    assert selected == [errors[-1], tail]
+
+
+def test_load_time_noise_cannot_crowd_out_the_failure_itself() -> None:
+    """The mirrored failure mode: a page that logs `limit` warnings at load
+    (favicon 404, CSP report, deprecation notices) would fill the whole window
+    diagnostics-first, so a click failing twenty minutes later shipped ten
+    load-time warnings and nothing from around the failure."""
+    load_noise = [{"level": "warning", "text": f"deprecated {index}"} for index in range(10)]
+    at_the_failure = [_log(index) for index in range(4)]
+
+    selected = _select_console_tail([*load_noise, *at_the_failure], 10)
+
+    assert at_the_failure[-1] in selected
+    assert sum(1 for message in selected if message in at_the_failure) >= len(at_the_failure)
+    # ...and the diagnostics still get the rest of the window.
+    assert any(message in load_noise for message in selected)
 
 
 def test_non_dict_entries_never_raise_into_the_failure_path() -> None:

@@ -313,24 +313,6 @@ async def _report_progress(ctx: Any | None, progress: float, total: float, messa
         await ctx.report_progress(progress, total=total, message=message)
 
 
-def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
-    """Cap each console message's text so a chatty page can't bloat the error.
-
-    Safe to edit in place: ``_select_console_tail`` hands back copies, not the
-    session's live ring-buffer entries.
-    """
-    messages = bundle.get("console_tail")
-    if not isinstance(messages, list):
-        return bundle
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        text = message.get("text")
-        if isinstance(text, str) and len(text) > MACRO_FAILURE_CONSOLE_TEXT_CHARS:
-            message["text"] = text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"
-    return bundle
-
-
 def _truncate_console_message(message: Any) -> Any:
     """Return ``message`` with an over-long ``text`` capped, never mutated."""
     if not isinstance(message, dict):
@@ -339,6 +321,22 @@ def _truncate_console_message(message: Any) -> Any:
     if not isinstance(text, str) or len(text) <= MACRO_FAILURE_CONSOLE_TEXT_CHARS:
         return message
     return {**message, "text": text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"}
+
+
+def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Cap each console message's text so a chatty page can't bloat the error.
+
+    Replaces the list rather than editing the messages, so this holds no
+    opinion about whether the producer handed back copies or the session's
+    live ring-buffer entries. It did copy them -- but an invariant maintained
+    across two modules by a comment is how the buffer got rewritten the first
+    time, and only this function needed to know.
+    """
+    messages = bundle.get("console_tail")
+    if not isinstance(messages, list):
+        return bundle
+    bundle["console_tail"] = [_truncate_console_message(message) for message in messages]
+    return bundle
 
 
 async def run_macro(

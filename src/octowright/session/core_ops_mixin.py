@@ -36,27 +36,42 @@ def _select_console_tail(messages: list[Any], limit: int) -> list[Any]:
     """Pick ``limit`` console messages, never dropping an error for a log line.
 
     A plain tail is fragile exactly where it matters: the one line that
-    explains a failure (``net::ERR_NETWORK_CHANGED``) can be pushed out of
-    the window by a chatty page before anything reads it, leaving the caller
-    with a bare selector timeout and no cause. Diagnostic-level messages are
-    therefore claimed first and the most recent remaining messages fill the
-    rest. The result stays in chronological order so it still reads as a log.
+    explains a failure (``net::ERR_NETWORK_CHANGED``) can be pushed out of the
+    window by a chatty page before anything reads it, leaving the caller with a
+    bare selector timeout and no cause. Diagnostic-level messages are therefore
+    claimed ahead of ordinary ones.
+
+    But claiming them FIRST, unbounded, is the same failure mirrored: a page
+    that logs ``limit`` warnings at load (favicon 404, CSP report, deprecation
+    notices -- routine) fills the whole window, and a click that fails twenty
+    minutes later ships ten load-time warnings and nothing from around the
+    failure. So part of the budget is reserved for the most recent messages
+    whatever their level, diagnostics fill the rest newest-first, and anything
+    still spare falls back to the plain tail. The result stays in chronological
+    order so it reads as a log.
 
     Entries are COPIED. ``list(session.console)`` copies the list, not the
-    dicts inside it, so returning the originals hands a caller live
-    ring-buffer entries -- and one consumer editing an entry (to cap its
-    length, say) silently rewrote the session's console history for every
-    later reader.
+    dicts inside it, so returning the originals hands a caller live ring-buffer
+    entries -- and one consumer editing an entry (to cap its length, say)
+    silently rewrote the session's console history for every later reader. The
+    entries are flat ``{level, text}`` (plus ``page_index``), so a shallow copy
+    covers every value there is; see ``core_io_mixin.attach_console``.
     """
     if limit <= 0:
         return []
-    diagnostic = [index for index, message in enumerate(messages) if is_diagnostic_console_message(message)]
-    keep = set(diagnostic[-limit:])
-    for index in reversed(range(len(messages))):
-        if len(keep) >= limit:
-            break
-        keep.add(index)
+    keep = set(range(max(0, len(messages) - _console_recent_reserve(limit)), len(messages)))
+    for wanted in (is_diagnostic_console_message, lambda _message: True):
+        for index in reversed(range(len(messages))):
+            if len(keep) >= limit:
+                break
+            if wanted(messages[index]):
+                keep.add(index)
     return [_copy_console_message(messages[index]) for index in sorted(keep)]
+
+
+def _console_recent_reserve(limit: int) -> int:
+    """How much of the window is held for the most recent messages."""
+    return max(1, limit // 2)
 
 
 def _copy_console_message(message: Any) -> Any:
