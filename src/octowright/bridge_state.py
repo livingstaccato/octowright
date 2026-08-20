@@ -239,6 +239,7 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
 
     in_flight, reconnect_attempts, request_timeouts, latest_error = _follower_totals(followers)
     versions = _follower_version_counts(followers)
+    stale = sum(count for version, count in versions.items() if version != VERSION)
     return {
         "follower_count": len(followers),
         "event_count": len(events),
@@ -253,8 +254,21 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
         # session until the same manual reconnect).
         "leader_version": VERSION,
         "follower_versions": versions,
-        "stale_follower_count": sum(count for version, count in versions.items() if version != VERSION),
+        "stale_follower_count": stale,
+        # A count alone leaves the reader with nothing to do, and the action is
+        # not the obvious one: restarting the DAEMON cannot fix this, since a
+        # follower survives that by design. Only its own client respawning it
+        # can.
+        "stale_follower_hint": _STALE_FOLLOWER_HINT if stale else None,
     }
+
+
+_STALE_FOLLOWER_HINT = (
+    "These followers are running older code than the leader. A daemon restart cannot update them -- "
+    "a follower is a subprocess its MCP client owns and it survives a leader restart by design. "
+    "Each client must reconnect to octowright (Claude Code: /mcp -> octowright -> Reconnect) to spawn "
+    "a fresh follower. Leader-side behaviour is already current; this only affects follower-side code."
+)
 
 
 def _follower_version_counts(followers: dict[str, Any]) -> dict[str, int]:

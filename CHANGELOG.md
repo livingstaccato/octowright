@@ -30,7 +30,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory, as the checkout the daemon started from. An installed
   (non-editable) package still shows `?`, exactly as before.
 
+- **The post-upgrade what's-new notice was consumed by the test suite.** Five
+  live-daemon test modules spawn a real daemon and carefully isolate
+  `XDG_STATE_HOME`, the lockfile, bridge state, recordings, profiles, macros,
+  scenarios, captures and Advisor state — but not `XDG_CONFIG_HOME`, where the
+  last-seen-version marker lives. So every `make ci` run wrote the developer's
+  real `~/.config/octowright/upgrade.json` and marked the current version seen,
+  and the notice never fired for an actual upgrade. Isolating the XDG root
+  rather than adding one more env var, because enumerating a var per path is
+  precisely how this was missed.
+
 ### Added
+- `octowright_status()["daemon"]["version"]` — the version the answering process
+  is **running**. An agent previously had no way to ask what it was talking to:
+  the daemon block carried pid/uptime/mode and no version, and
+  `upgrade.current_version` appears only on the first run after a change. Same
+  import-time constant as the health endpoint, for the same reason.
+- `octowright_status()["bridge"]["summary"]["stale_follower_hint"]` — present
+  only when there are stale followers. The count alone left the reader with
+  nothing to do, and the action is not the obvious one: restarting the daemon
+  cannot update a follower, since it survives that by design. Only its own
+  client respawning it can.
 - `GET /api/health` gains an optional `installed_version`, present **only** when
   the on-disk package differs from the running one — the "restart to pick this
   up" signal the old behaviour was reaching for, now named honestly instead of

@@ -66,6 +66,13 @@ def _isolated_env(root: Path, port: int) -> dict[str, str]:
     # tmpdir (user_state_dir honors XDG_STATE_HOME) instead of polluting the
     # user's shared ~/.local/state/octowright/logs/octowright-daemon.log.
     env["XDG_STATE_HOME"] = str(root)
+    # And the CONFIG dir, which is a different XDG root. Enumerating one env var
+    # per config path is exactly how the upgrade marker was missed: the daemon
+    # this test spawns wrote the developer's real ~/.config/octowright/upgrade.json,
+    # marking the version "seen" -- so the post-upgrade what's-new notice was
+    # consumed on every `make ci` run and never fired for a real upgrade.
+    # Isolating the root covers every config path, including future ones.
+    env["XDG_CONFIG_HOME"] = str(root / "config")
     env.update(
         {
             "OCTOWRIGHT_HEADLESS": "1",

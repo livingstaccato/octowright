@@ -53,6 +53,14 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "whatever directory the daemon was launched from, at request time -- so "
         "switching branches under a running daemon changed the commit it "
         "claimed while the running code did not change.",
+        "This what's-new notice can finally reach you. Five live-daemon test "
+        "modules spawned a real daemon without isolating the config dir, so "
+        "every `make ci` run wrote the marker in your real ~/.config and marked "
+        "the version already seen -- the notice was consumed before an upgrade "
+        "ever happened.",
+        "octowright_status() now reports the daemon's running version, and tells "
+        "you when connected followers are on older code and which action fixes "
+        "it (their client reconnecting -- a daemon restart cannot).",
     ],
     "0.16.1": [
         "Browsers can carry custom HTTP headers now, at three scopes. "
