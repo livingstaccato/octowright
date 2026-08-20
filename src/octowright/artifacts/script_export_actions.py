@@ -283,6 +283,56 @@ if handler is None:
 await _page(state).unroute(pattern, handler)
 executed += 1
 """,
+    # Per-endpoint injection. Order matters and silently: route handlers run
+    # last-registered-first and a fulfilling mock ends the chain, so a mock
+    # installed after this on an overlapping pattern suppresses it.
+    "inject_headers": """
+pattern = action.get("pattern") or action["url_pattern"]
+headers = action["headers"]
+scrubbed = sorted(k for k, v in headers.items() if v == "<redacted:header>")
+if scrubbed:
+    raise RuntimeError(
+        f"header(s) {', '.join(scrubbed)} hold the recorder's redaction placeholder; "
+        "parameterize the macro and pass the real value at run time"
+    )
+
+
+def _make_header_injector(extra):
+    async def _inject(route):
+        await route.fallback(headers={**route.request.headers, **extra})
+
+    return _inject
+
+
+handler = _make_header_injector(dict(headers))
+if pattern in state["header_routes"]:
+    await _page(state).unroute(pattern, state["header_routes"][pattern])
+await _page(state).route(pattern, handler)
+state["header_routes"][pattern] = handler
+executed += 1
+""",
+    "uninject_headers": """
+pattern = action.get("pattern") or action["url_pattern"]
+handler = state["header_routes"].pop(pattern, None)
+if handler is None:
+    raise RuntimeError(f"no active header injection for pattern {pattern!r}")
+await _page(state).unroute(pattern, handler)
+executed += 1
+""",
+    # Page-level, matching the session method: a popup opened later does not
+    # inherit these. A value the recorder scrubbed is refused rather than sent,
+    # since it would authenticate as nobody and surface as a puzzling 401.
+    "set_extra_http_headers": """
+headers = action["headers"]
+scrubbed = sorted(k for k, v in headers.items() if v == "<redacted:header>")
+if scrubbed:
+    raise RuntimeError(
+        f"header(s) {', '.join(scrubbed)} hold the recorder's redaction placeholder; "
+        "parameterize the macro and pass the real value at run time"
+    )
+await _page(state).set_extra_http_headers(dict(headers))
+executed += 1
+""",
     "set_dialog_policy": """
 policy = action["policy"]
 if policy not in ("accept", "dismiss", "manual"):
