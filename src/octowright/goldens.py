@@ -13,6 +13,7 @@ from typing import Any
 
 from octowright import defaults
 from octowright._paths import atomic_write_text, reject_unsafe_path
+from octowright.private_paths import secure_artifact_tree
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -43,6 +44,9 @@ def save_golden(
 ) -> Path:
     """Write / overwrite <slug(name)>.json. Preserves created_at on overwrite."""
     GOLDENS_DIR.mkdir(parents=True, exist_ok=True)
+    # A golden is a stored accessibility tree -- page content, kept
+    # indefinitely. Flat directory, so the leaf IS the root.
+    secure_artifact_tree(GOLDENS_DIR, GOLDENS_DIR)
     # slug() preserves "." and "-" so a literal "../etc/passwd" slugs to
     # itself; the containment check is the security boundary, not slug().
     path = reject_unsafe_path(
