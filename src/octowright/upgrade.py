@@ -40,6 +40,43 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.16.0": [
+        "The dashboard now asks who you are. Binding to loopback stops the "
+        "internet, not the machine — any other local process could list your "
+        "live browsers, read recordings (typed input, URLs, console), pull "
+        "video, and watch your screencast. Run `octowright dashboard` for a "
+        "single-use link, or ask your agent for it. Set "
+        "OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING=off for the old flow.",
+        "Passwords stopped leaking into accessibility snapshots. Playwright "
+        "renders a text control's value as its accessible name and the tree "
+        "cannot say `type=password`, so a filled login form came back as "
+        "`- textbox: hunter2` from snapshot, brief, captures, goldens, and the "
+        "dashboard — and clicking a password field wrote it into the JSONL "
+        "recording, which is the file redaction exists to protect.",
+        "Persona profiles are owner-only now. Firefox and WebKit wrote "
+        "cookies.sqlite 0644 inside an 0755 tree, so on a shared host another "
+        "local user could copy a logged-in session straight off disk — a "
+        "stronger credential than the password already protected at 0600.",
+        "SSRF checks follow redirects. The policy only ever inspected the URL "
+        "you asked for, so a public page answering `302 Location: "
+        "http://169.254.169.254/...` reached the metadata service and the read "
+        "tools handed back the body.",
+        "Four more holes closed: a trailing dot or a fullwidth digit walked "
+        "past the SSRF host check, a leading control byte defeated the "
+        "file:// deny-list, a rejected leader URL was returned anyway, and a "
+        "macro could expand a credential into a navigate URL.",
+        "A failed macro now tells you why. The payload reported the symptom "
+        '("timed out waiting for #save") while the line explaining it '
+        "(net::ERR_NETWORK_CHANGED) sat unread in the console buffer -- you "
+        "had to open the raw JSONL to find it. Errors are picked first, so a "
+        "chatty page cannot bury the useful line.",
+        "CI can finally ask if the daemon is up: `octowright serve "
+        "--wait-ready` prints the URL and exits 0/1 instead of every workflow "
+        "hand-rolling a lockfile poll. On Windows the daemon now actually "
+        "detaches (the POSIX flag was a silent no-op there), a slow cold start "
+        "can be given more time with --ready-timeout, and a failed spawn "
+        "quotes the daemon log instead of pointing at an empty one.",
+    ],
     "0.15.1": [
         "A stale session that outlived its daemon no longer haunts "
         "octowright_status forever. The cleanup only asked whether the recorded "

