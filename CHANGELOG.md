@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correctly, because it always reported the newest package present. Observed: a
   leader started the previous evening reported a version a `uv sync` had written
   to disk seconds earlier, while still executing week-old code.
+- **The `/new-tab` status strip had the same bug, in two forms.** Its version
+  came from the same on-disk metadata read, so it advertised a newly installed
+  version the daemon was not running. And its commit hash shelled out to
+  `git rev-parse HEAD` **in the daemon's current working directory** at request
+  time — wherever the process happened to be launched, which need not be the
+  package at all — so switching branches under a running daemon silently changed
+  the commit the strip claimed, while the loaded modules of course did not
+  change. Both now describe the running process: the version is the import-time
+  constant, and the commit is resolved once, against this package's own
+  directory, as the checkout the daemon started from. An installed
+  (non-editable) package still shows `?`, exactly as before.
 
 ### Added
 - `GET /api/health` gains an optional `installed_version`, present **only** when
