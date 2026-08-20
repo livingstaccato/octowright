@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-08-20
+
+### Fixed
+- **`GET /api/health` reports the version the daemon is actually running.** It
+  called `importlib.metadata.version("octowright")` on every request — reading
+  dist-info off disk — with the stated intent that "a `pip install --upgrade` is
+  reflected without a server restart". But an upgrade on disk does not change a
+  running process: the daemon keeps executing the code it imported until it is
+  restarted. So the one question an operator asks this endpoint after deploying —
+  *is the daemon on the new version yet?* — was the one it could never answer
+  correctly, because it always reported the newest package present. Observed: a
+  leader started the previous evening reported a version a `uv sync` had written
+  to disk seconds earlier, while still executing week-old code.
+
+### Added
+- `GET /api/health` gains an optional `installed_version`, present **only** when
+  the on-disk package differs from the running one — the "restart to pick this
+  up" signal the old behaviour was reaching for, now named honestly instead of
+  impersonating the running version. The ordinary response shape is unchanged.
+
 ## [0.16.1] - 2026-08-20
 
 ### Added
