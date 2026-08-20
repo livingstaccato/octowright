@@ -40,6 +40,33 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.16.3": [
+        "Launch headers can be scoped to URL globs: browser_launch("
+        "extra_http_headers_urls=[...]). Context-level headers ride EVERY request "
+        "including cross-origin subresources, and on Chromium that makes them "
+        "CORS-preflighted -- a CDN or font host that doesn't echo "
+        "Access-Control-Allow-Headers rejects them outright and the page never "
+        "finishes rendering. Scoping moves them onto context routes that still "
+        "follow popups and new tabs.",
+        "browser_inject_headers is a CONTEXT route now, so it follows popups and "
+        "tabs opened later instead of dying at the page boundary. One caveat worth "
+        "knowing: browser_mock_route is a page route, page routes are evaluated "
+        "ahead of context ones, and a fulfilling handler ends the chain -- so a "
+        "mock on an overlapping pattern silently wins in EITHER order. Both "
+        "install sites now warn.",
+        "browser_network_requests can prove a header applied: pass "
+        "include_headers=True. It's off by default because a header map is ~7x the "
+        "size of the row it rides on, which turned an unfiltered read of an "
+        "ordinary page from ~6.6k tokens into ~45k. The same call had no row cap "
+        "at all and could return the whole 5000-entry buffer; it now pages 200 at "
+        "a time with returned/truncated in the payload.",
+        "Captures, goldens and macros are locked to 0700, governed by the same "
+        "OCTOWRIGHT_RECORDINGS_PRIVATE knob recordings already use. They hold page "
+        "text, accessibility trees and now request headers, but sat world-readable "
+        "while recordings and profiles were locked. The directory is the control "
+        "because atomic writes preserve an existing file's mode -- a golden first "
+        "written at 0644 keeps 0644 forever, and no later save heals it.",
+    ],
     "0.16.2": [
         "/api/health now reports the version the daemon is actually RUNNING. It "
         "used to read package metadata off disk on every request, so right after "

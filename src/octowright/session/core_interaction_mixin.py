@@ -142,7 +142,17 @@ class SessionInteractionMixin(SessionLike):
     ) -> dict[str, Any]:
         """Install a page.route handler that fulfills matching requests with the given
         response. Store the handler in self._active_routes keyed by url_pattern so we can
-        remove it later."""
+        remove it later.
+
+        Warns when it shadows a header injector on the same pattern. While both
+        were page routes, last-registered-first decided the winner and only the
+        mock-then-inject order lost -- which is the one ``inject_headers``
+        already warns about. ``inject_headers`` is a CONTEXT route now, and page
+        routes are evaluated ahead of context ones, so this mock wins in BOTH
+        orders and the injector never runs (measured on chromium, firefox and
+        webkit; pinned by ``tests/test_route_order_live.py``). Without this
+        mirror, installing the mock second would silently drop the headers.
+        """
 
         async def _handler(route: Any) -> None:
             await route.fulfill(
@@ -152,6 +162,13 @@ class SessionInteractionMixin(SessionLike):
                 headers=headers or {},
             )
 
+        if url_pattern in self._header_routes:
+            log.warning(
+                "octowright.session.header_injection_shadowed_by_mock",
+                instance_id=self.instance_id,
+                pattern=url_pattern,
+                hint="a page-level mock fulfills ahead of the context-level injector, so its headers will not be applied",
+            )
         if url_pattern in self._active_routes:
             await self.page.unroute(url_pattern, self._active_routes[url_pattern])
         await self.page.route(url_pattern, _handler)
@@ -170,10 +187,27 @@ class SessionInteractionMixin(SessionLike):
     async def inject_headers(self, url_pattern: str, headers: dict[str, str]) -> dict[str, Any]:
         """Add headers to requests matching ``url_pattern``, leaving others alone.
 
-        The per-endpoint layer. Prefer the launch-time option (whole browser)
-        or ``set_extra_http_headers`` (whole page) unless the headers genuinely
-        have to vary by URL -- this one intercepts, which costs a round trip
-        through the handler on every matching request.
+        Registered on the **context**, so it follows popups and pages opened
+        later. It was originally a ``page.route`` and died at the page
+        boundary: a caller had to re-register after every page switch and hope
+        they caught them all, and the interesting traffic is often exactly in
+        the popup (a field report hit this with a test player that runs in
+        one). Measured: a context route sees a popup's requests on chromium,
+        firefox and webkit; a page route does not.
+
+        This is also the scoped alternative to launch-time
+        ``extra_http_headers``, which has no URL filter and therefore rides
+        CROSS-ORIGIN subresource requests too. On Chromium that makes them
+        CORS-preflighted, and a third party that does not echo
+        ``Access-Control-Allow-Headers`` rejects them outright -- measured, and
+        observed in the field as blocked font/CDN requests. (Firefox and WebKit
+        applied the header below the CORS check and were unaffected, so the
+        breakage is Chromium-specific rather than universal.) Scoping the
+        pattern narrowly is what avoids that.
+
+        It intercepts, so every matching request pays a handler round trip --
+        the reason the pattern is caller-supplied and narrow rather than a
+        default-on wildcard.
 
         ORDER MATTERS, and silently. Measured on chromium, firefox and webkit:
         page route handlers run LAST-REGISTERED FIRST, and a handler that
@@ -196,8 +230,8 @@ class SessionInteractionMixin(SessionLike):
             await route.fallback(headers={**route.request.headers, **headers})
 
         if url_pattern in self._header_routes:
-            await self.page.unroute(url_pattern, self._header_routes[url_pattern])
-        await self.page.route(url_pattern, _handler)
+            await self.context.unroute(url_pattern, self._header_routes[url_pattern])
+        await self.context.route(url_pattern, _handler)
         self._header_routes[url_pattern] = _handler
         self.recorder.record(
             "inject_headers",
@@ -212,7 +246,7 @@ class SessionInteractionMixin(SessionLike):
         handler = self._header_routes.pop(url_pattern, None)
         if handler is None:
             raise KeyError(f"no active header injection for pattern {url_pattern!r}")
-        await self.page.unroute(url_pattern, handler)
+        await self.context.unroute(url_pattern, handler)
         self.recorder.record("uninject_headers", pattern=url_pattern)
         return {"ok": True, "pattern": url_pattern}
 

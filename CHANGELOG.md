@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] - 2026-08-20
+
+### Added
+- **Launch headers can be scoped to URL globs** — `browser_launch(extra_http_headers_urls=[...])`.
+  Context-level `extra_http_headers` has no URL filter, so it rides **every** request the
+  browser makes, cross-origin subresources included. On Chromium that makes those requests
+  CORS-preflighted, and a third party that does not echo `Access-Control-Allow-Headers`
+  rejects them outright — measured, and reported from the field as blocked font/CDN requests
+  with a page that never finished rendering. Firefox and WebKit applied the header *below*
+  the CORS check and were unaffected, so this is Chromium-specific rather than universal.
+  Passing globs moves the headers onto scoped **context routes** that still follow popups and
+  new tabs while leaving everyone else's requests untouched; the context then carries no
+  unscoped headers at all, or they would apply twice. It exists alongside
+  `browser_inject_headers` because the launch navigation happens *during* launch, which a
+  post-launch call cannot cover.
+- **`browser_network_requests` can prove a header applied** — pass `include_headers=True`.
+  Recorded rows carry request headers, scrubbed by header **name** with the same policy the
+  JSONL recorder uses. Before this, every header feature was unverifiable from the tool
+  surface: a field report set a launch header, looked here to confirm it applied, saw
+  nothing, and nearly concluded the feature was broken.
+
+### Changed
+- **`browser_inject_headers` is a context route, not a page route.** A page route dies at the
+  page boundary, so a caller had to re-register after every page switch and hope they caught
+  them all — and the interesting traffic is often exactly in a popup (a field report hit this
+  with a test player that runs in one). Measured on all three engines: a context route sees a
+  popup's requests and the popup receives the header.
+- **`browser_network_requests` withholds headers by default and pages at 200 rows.** A header
+  map is most of a row's size — ~900 JSON chars against ~130 without, measured on a typical
+  Chromium navigation set — and nearly all of it is identical boilerplate (`user-agent`,
+  `sec-ch-ua*`, `accept`) repeated per row, so returning them always took an unfiltered read
+  of an ordinary 200-request page from roughly 6.6k tokens to 45k. The same call had **no row
+  cap at all** and could return the whole 5000-entry buffer; it now returns 200 rows per call
+  with `returned`/`truncated` in the payload and `limit` up to 1000. A non-positive `limit`
+  falls back to the default rather than meaning unbounded — an LLM must not be able to remove
+  the cap by passing `0`. `browser_network_summary` and `capture_create(kind="network")` still
+  read everything: the first aggregates and would otherwise report wrong counts, and the
+  second is the full-fidelity sink, read back through `capture_lines`/`capture_search` rather
+  than dumped inline.
+- **Captures, goldens and macros are locked to `0700`**, governed by the existing
+  `OCTOWRIGHT_RECORDINGS_PRIVATE` knob rather than a third env var. They hold the same class
+  of data the JSONL recording does — page text, accessibility trees, `evaluate` results, and
+  now request headers — but sat at `0755` while recordings and profiles were already locked,
+  so the protection was inconsistent rather than absent. The **directory** is the control, not
+  the file mode: `atomic_write_text` deliberately preserves an existing target's mode (an
+  atomic write must be a content replacement, not a silent permission change), so a golden
+  first written at `0644` keeps `0644` through every later rewrite, forever — observed on a
+  real goldens directory, one legacy `0644` file sitting beside a dozen `0600` ones.
+
+### Fixed
+- **The SSRF guard and the browser were checking different requests.** Playwright runs context
+  route handlers last-registered-first, and `install_navigation_guard` is itself a context
+  route. The scoped launch-header routes were registered *before* it, so they ran *after* —
+  the guard's own `route.fetch(max_redirects=0)` validation hop carried none of the headers
+  while the browser's real request carried all of them. An unauthenticated validation fetch can
+  be answered with an allowed redirect to a login page while the authenticated request the
+  browser actually makes redirects somewhere the policy would have refused, unseen. Both
+  installs now go through one `install_context_routes` helper whose only reason to exist is
+  pinning that order.
+- **`extra_http_headers_urls` was never validated.** It reached `context.route` verbatim from
+  both the `POST /api/sessions` body and the MCP `browser_launch` args. A bare **string** is
+  the dangerous shape: it iterates *characters*, so `"**/api/**"` registers one route per
+  character — `*`, `/`, `a` — and sprays the credential at unrelated origins, the exact
+  opposite of what scoping is for. Relatedly, `LaunchOptions.validate()` was only reached from
+  `from_mapping`, so even the pre-existing header validation was unreached on the surface an
+  LLM drives; the header checks now run from `to_pool_kwargs`, which every launch path funnels
+  through.
+- **An empty `extra_http_headers_urls` failed open.** A truthiness check conflated `None` ("no
+  scoping asked for") with `[]` ("scope to nothing") and sent the headers on every request.
+  For a security-adjacent knob, failing open in the credential-spraying direction is the wrong
+  way to be wrong; `[]` is now refused outright.
+- **A header route whose page navigated away escaped into Playwright's dispatcher.** Such a
+  route raises on `fallback` and `abort` alike — the same reason `ssrf_guard._handle_route`
+  wraps its own body. Unwrapped, the intercepted request was never answered and the load hung
+  to timeout.
+- **A page-level mock silently shadows a context-level injector in either order.** Measured on
+  chromium, firefox and webkit: page routes are evaluated ahead of context routes and a
+  fulfilling handler ends the chain, so `browser_mock_route` on an overlapping pattern
+  suppresses `browser_inject_headers` completely and the injector is not invoked at all. While
+  both were page routes, last-registered-first meant only one order lost — which is the single
+  direction `inject_headers` warned about — so installing the mock second dropped the headers
+  with nothing logged. `mock_route` gains the mirror warning, and a new leg of the
+  `test_route_order_live.py` canary pins the precedence.
+- **The exported standalone script had diverged from the live session.** `inject_headers` moved
+  to `context.route` but the export still emitted `page.route`/`page.unroute`, so a macro
+  recorded against the popup case this work exists to fix would pass live and silently drop
+  the header in the exported script.
+- **Returned network rows are copies.** `list(deque)` copies the list and not the dicts inside
+  it, so handing back originals let one reader's in-place edit rewrite the session's history
+  for every later reader.
+
 ## [0.16.2] - 2026-08-20
 
 ### Fixed

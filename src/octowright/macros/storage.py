@@ -19,6 +19,7 @@ from octowright._paths import atomic_write_text, reject_unsafe_path
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
 from octowright.mcp_types import MacroListEntry
+from octowright.private_paths import secure_artifact_tree
 
 log = get_logger(__name__)
 
@@ -98,6 +99,7 @@ def save_macro(
     }
 
     MACROS_DIR.mkdir(parents=True, exist_ok=True)
+    secure_artifact_tree(MACROS_DIR, MACROS_DIR)
     atomic_write_text(dest, json.dumps(macro, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("octowright.macro.saved", name=name, path=str(dest), action_count=len(actions))
     return dest
@@ -163,6 +165,7 @@ def write_macro(*, name: str, macro: dict[str, Any]) -> Path:
                     f"macro first with `macro_delete name={existing_name!r}`"
                 )
     dest.parent.mkdir(parents=True, exist_ok=True)
+    secure_artifact_tree(dest.parent, MACROS_DIR)
     atomic_write_text(dest, json.dumps(to_write, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("octowright.macro.written", name=name, path=str(dest), action_count=len(to_write.get("actions", [])))
     return dest
