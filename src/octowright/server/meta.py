@@ -22,6 +22,7 @@ from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool, upgrade_notice_snapshot
 from octowright.server.registry import registered_tool_names
 from octowright.session.screencast_config import screencast_config_block
+from octowright.version import VERSION
 
 log = get_logger(__name__)
 
@@ -367,6 +368,13 @@ def octowright_status() -> dict[str, Any]:
         "health": health_verdict,
         "daemon": {
             "pid": daemon_pid,
+            # The version of the code THIS PROCESS IS RUNNING -- a module
+            # constant bound at import, not a read of on-disk package metadata,
+            # which reports whatever is installed and so can never tell you a
+            # daemon is out of date (the bug /api/health carried). An agent had
+            # no way at all to ask what it was talking to: upgrade.current_version
+            # appears only on the first run after a change.
+            "version": VERSION,
             "this_pid": os.getpid(),
             "is_daemon_self": daemon_pid == os.getpid(),
             "uptime_seconds": round(daemon_uptime, 1) if daemon_uptime is not None else None,
