@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, cast
 
+from octowright.console_levels import count_errors, count_warnings, is_diagnostic_console_message
 from octowright.mcp_types import BrowserConsoleMessagesResult, ConsoleMessage
 from octowright.server._state import mcp, pool
 from octowright.server.profiles import annotate_next_actions_for_profile
@@ -91,7 +92,7 @@ def _important_console_messages(
         (index, msg)
         for index, msg in enumerate(msgs[start:], start=start)
         if (level_filter is None or str(msg.get("level") or "").lower() == level_filter)
-        and str(msg.get("level", "")).lower() in {"error", "warning", "warn"}
+        and is_diagnostic_console_message(msg)
     ]
 
 
@@ -107,10 +108,6 @@ def _console_recent_rows(
         }
         for index, msg in recent
     ]
-
-
-def _console_warning_count(messages: list[dict[str, Any]]) -> int:
-    return sum(1 for msg in messages if str(msg.get("level", "")).lower() in {"warning", "warn"})
 
 
 @mcp.tool(
@@ -140,8 +137,8 @@ def browser_console_summary(
         "count": len(sliced),
         "next_cursor": len(msgs),
         "by_level": _count_items(Counter(str(msg.get("level") or "unknown") for msg in sliced)),
-        "error_count": sum(1 for msg in sliced if str(msg.get("level", "")).lower() == "error"),
-        "warning_count": _console_warning_count(sliced),
+        "error_count": count_errors(sliced),
+        "warning_count": count_warnings(sliced),
         "recent": _console_recent_rows(instance_id, recent, capped_text),
         "recent_limit": capped_recent,
         "next_actions": _console_summary_next_actions(instance_id, len(msgs)),

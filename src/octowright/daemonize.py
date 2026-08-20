@@ -14,8 +14,8 @@ The fix: when a ``serve`` invocation decides it should become the leader,
 it instead **forks a fully-detached background process** that becomes the
 real leader. The original client-launched process becomes a follower
 bridging to the daemon. Closing the MCP client kills the bridge but the
-daemon — running in its own session, with stdin/out/err pointed at
-``/dev/null`` — is unaffected.
+daemon — detached from the parent's process tree, with stdin/out/err
+pointed at ``/dev/null`` — is unaffected.
 
 The daemon is invoked with ``--daemon-mode``, which tells it to skip the
 lock check (it knows it's the leader) and arm the idle watchdog
@@ -25,12 +25,14 @@ immediately (so an unused daemon exits after the grace period).
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import shutil
 import subprocess
 import sys
 import time
-from typing import IO
+from pathlib import Path
+from typing import IO, Any
 
 import octowright.singleton as _sn
 from octowright.config_paths import user_state_dir
@@ -40,6 +42,149 @@ from octowright.config_paths import user_state_dir
 # avoid unbounded growth on dev machines.
 _DAEMON_LOG = user_state_dir() / "logs" / "octowright-daemon.log"
 _DAEMON_LOG_MAX_BYTES = 1_000_000
+# Lines of daemon stderr worth quoting back when a spawn fails. The log is the
+# only record of WHY (the caller's own stderr holds the follower's output, not
+# the daemon's), so a failure that doesn't surface this is undiagnosable from
+# the outside -- the exact dead end a CI runner hits.
+_DAEMON_LOG_TAIL_LINES = 20
+
+# How long to wait for a spawned daemon to bind and answer HTTP. The default
+# suits a warm dev machine; a cold container running ``uv run octowright serve``
+# routinely needs longer, and exceeding it silently degrades to fragile inline
+# mode. ``defaults.py`` is at its LOC ceiling, so the knob lives here (matching
+# how ``incidents``/``health`` keep their own OCTOWRIGHT_* vars).
+DAEMON_READY_TIMEOUT_ENV = "OCTOWRIGHT_DAEMON_READY_TIMEOUT"
+DAEMON_READY_TIMEOUT_SECONDS = 10.0
+
+# Bytes read from the end of the daemon log to produce a tail. The 1 MB cap
+# in ``_open_daemon_log`` is only applied at spawn time, so a long-lived or
+# crash-looping daemon can append far past it; reading the whole file to show
+# 20 lines would allocate all of it inside an already-degraded follower.
+_DAEMON_LOG_TAIL_BYTES = 64 * 1024
+
+# Windows process-creation flags (winbase.h). Named here rather than imported
+# from ``subprocess`` because those attributes only exist on Windows builds.
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+# CreateProcess refuses the whole spawn with this when the parent's job object
+# lacks JOB_OBJECT_LIMIT_BREAKAWAY_OK -- the ONE failure the candidate ladder
+# exists to retry.
+_ERROR_ACCESS_DENIED = 5
+
+
+def _read_log_tail_bytes(max_bytes: int = _DAEMON_LOG_TAIL_BYTES) -> tuple[bytes, bool]:
+    """Read at most ``max_bytes`` from the end of the daemon log.
+
+    Also reports whether the window started mid-file, because the first line
+    is then the tail of a line whose head was never read. A daemon that dies
+    on a long traceback or one multi-KB structured-log line puts the boundary
+    inside that line, and printing the remainder as a complete log line is how
+    the surface that exists to state the cause hands back half a JSON object.
+    """
+    with open(_DAEMON_LOG, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        start = max(0, handle.tell() - max_bytes)
+        handle.seek(start, os.SEEK_SET)
+        return handle.read(), start > 0
+
+
+def daemon_ready_timeout() -> float:
+    """Seconds to wait for a spawned daemon, from the environment."""
+    raw = os.environ.get(DAEMON_READY_TIMEOUT_ENV)
+    if raw is None:
+        return DAEMON_READY_TIMEOUT_SECONDS
+    try:
+        parsed = float(raw.strip())
+    except ValueError:
+        return DAEMON_READY_TIMEOUT_SECONDS
+    # Must be finite as well as positive. ``inf`` (and anything that
+    # overflows to it, e.g. ``1e400``) passes a bare ``> 0`` check and makes
+    # wait_for_daemon's deadline unreachable -- so a daemon that never binds
+    # spins forever while holding the election lock, blocking every other
+    # client's election instead of failing over. Matches how the operation
+    # gate validates its own "positive finite seconds" budget.
+    if not math.isfinite(parsed) or parsed <= 0:
+        return DAEMON_READY_TIMEOUT_SECONDS
+    return parsed
+
+
+def daemon_log_path() -> Path:
+    """Where the detached daemon's stderr lands."""
+    return _DAEMON_LOG
+
+
+def daemon_log_tail(max_lines: int = _DAEMON_LOG_TAIL_LINES) -> str:
+    """Last few lines of the daemon log, or a note saying why there are none.
+
+    Callers print this when a spawn fails, so it must never raise: a missing
+    or unreadable log is itself the diagnostic.
+    """
+    try:
+        raw, started_mid_file = _read_log_tail_bytes()
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        return f"(no daemon log at {_DAEMON_LOG}; the daemon may never have started)"
+    except OSError as exc:
+        return f"(daemon log at {_DAEMON_LOG} unreadable: {exc})"
+    if started_mid_file and lines:
+        lines = lines[1:]
+    tail: list[str] = []
+    for line in reversed(lines):
+        if len(tail) >= max_lines:
+            break
+        if line.strip():
+            tail.append(line)
+    tail.reverse()
+    if not tail:
+        return f"(daemon log at {_DAEMON_LOG} is empty)"
+    return "\n".join(tail)
+
+
+def _detach_candidates() -> list[dict[str, Any]]:
+    """Ordered Popen-kwarg candidates to try, most-detached first.
+
+    The retry ladder is data owned by the platform function, so POSIX gets
+    exactly ONE attempt -- a blanket ``except OSError: retry`` would silently
+    run a second identical Popen for a genuine failure (missing entrypoint,
+    EMFILE) and report the second exception.
+    """
+    if sys.platform != "win32":
+        return [_detach_kwargs()]
+    return [_detach_kwargs(breakaway=True), _detach_kwargs(breakaway=False)]
+
+
+def _detach_kwargs(*, breakaway: bool = True) -> dict[str, Any]:
+    """Popen kwargs that put the daemon outside the parent's lifecycle.
+
+    ``start_new_session`` is POSIX-only -- CPython accepts it on Windows and
+    silently does nothing, so on Windows the "detached" daemon kept the
+    launching console and its process group.
+
+    On Windows two separate things can tie the daemon to its parent, and they
+    need different flags:
+
+    * the **console** -- ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP``
+      gives the child no console and its own Ctrl-C group.
+    * the **job object** -- a child is assigned to the parent's job by
+      default, and a CI runner that tears its job down with
+      ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` kills the daemon with the step
+      regardless of console detachment. Escaping that needs
+      ``CREATE_BREAKAWAY_FROM_JOB``, and *only works if the job itself sets*
+      ``JOB_OBJECT_LIMIT_BREAKAWAY_OK``. When it does not, ``CreateProcess``
+      fails outright with ``ERROR_ACCESS_DENIED``, so the caller retries with
+      ``breakaway=False`` rather than failing the spawn.
+
+    Honest limit: a job that forbids breakaway still takes the daemon down
+    with the step. Nothing a child process can do changes that; the fallback
+    keeps it no worse than console detachment alone.
+    """
+    if sys.platform != "win32":
+        return {"start_new_session": True}
+    flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP
+    if breakaway:
+        flags |= _CREATE_BREAKAWAY_FROM_JOB
+    return {"creationflags": flags}
 
 
 def _resolve_daemon_entrypoint() -> list[str]:
@@ -94,9 +239,10 @@ def spawn_daemon(
 ) -> int:
     """Spawn a fully detached background ``octowright serve --daemon-mode`` process.
 
-    Returns the spawned PID. The process is in a new session with no
-    controlling terminal and with stdin/stdout pointed at /dev/null, so
-    nothing about the parent's lifecycle can reach it.
+    Returns the spawned PID. The process is detached from the parent's
+    lifecycle (a new session on POSIX, DETACHED_PROCESS on Windows -- see
+    ``_detach_kwargs``) with stdin/stdout pointed at /dev/null, so nothing
+    about the parent's lifecycle can reach it.
 
     ``keep_alive``/``idle_grace`` are forwarded to the daemon's argv so the
     follower's choice actually reaches the process that owns the watchdog (the
@@ -113,31 +259,73 @@ def spawn_daemon(
     if keep_alive:
         args.append("--keep-alive")
 
-    # Fixed argv (sys.argv[0] + flags); no shell. Daemon spawn for octowright serve.
-    proc = subprocess.Popen(  # nosec B603
-        args,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=_open_daemon_log(),
-        start_new_session=True,
-        close_fds=True,
-        env=os.environ.copy(),
-    )
-    return proc.pid
+    return _spawn_detached(args)
 
 
-async def wait_for_daemon(timeout: float = 10.0, poll_seconds: float = 0.2) -> _sn.LeaderInfo | None:
+def _spawn_detached(args: list[str]) -> int:
+    """Popen the daemon detached, walking the platform's candidate flag sets.
+
+    The parent's copy of the log handle is closed once Popen has duplicated it
+    into the child; leaving it to the garbage collector leaked a descriptor
+    (and kept a replaced log file's inode alive) on every spawn, which a
+    long-lived follower does repeatedly via the respawn path.
+    """
+    candidates = _detach_candidates()
+    with _open_daemon_log() as log_handle:
+        env = os.environ.copy()
+        for index, detach_kwargs in enumerate(candidates):
+            try:
+                # Fixed argv (resolved entrypoint + flags); no shell.
+                proc = subprocess.Popen(  # nosec B603
+                    args,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=log_handle,
+                    close_fds=True,
+                    env=env,
+                    **detach_kwargs,
+                )
+            except OSError as exc:
+                # Retry ONLY the failure the ladder exists for: a job that
+                # forbids breakaway, whose next candidate drops that flag.
+                # Anything else (missing entrypoint, EMFILE, an antivirus
+                # block) would be retried identically and then reported from
+                # the SECOND attempt, discarding the exception that is the
+                # actual cause -- the silent swallow this repo's policy
+                # forbids in a user-action path.
+                if getattr(exc, "winerror", None) != _ERROR_ACCESS_DENIED or index == len(candidates) - 1:
+                    raise
+                continue
+            return proc.pid
+    raise AssertionError("unreachable: the last candidate either returns or raises")
+
+
+async def wait_for_daemon(timeout: float | None = None, poll_seconds: float = 0.2) -> _sn.LeaderInfo | None:
     """Poll the lockfile + HTTP probe until the daemon is ready, or give up.
 
     Returns the leader info on success, or None if the daemon failed to come
     up within ``timeout`` seconds. The caller can then fall back to running
     the leader inline (the legacy non-daemonized path).
+
+    ``timeout`` defaults to :func:`daemon_ready_timeout`, so a cold container
+    can raise it via ``OCTOWRIGHT_DAEMON_READY_TIMEOUT`` or ``--ready-timeout``
+    instead of silently degrading to inline mode.
+
+    The recorded leader URL is checked for loopback before it is probed or
+    returned, matching ``_probe_alive_leader`` and ``resolve_leader_url``. The
+    0600 lockfile is writable by any same-user process, and this function is
+    what ``serve --wait-ready`` prints to stdout for a CI job to consume, so
+    skipping the check here was the one path that handed a poisoned URL out
+    unvalidated (and dialled it for the health probe on the way).
     """
-    deadline = time.monotonic() + timeout
+    # Lazy: keeps the heavy proxy stack out of a plain ``spawn_daemon`` import.
+    from octowright.proxy_runtime import _leader_url_is_safe
+
+    deadline = time.monotonic() + (daemon_ready_timeout() if timeout is None else timeout)
     while time.monotonic() < deadline:
         await asyncio.sleep(poll_seconds)
         info = _sn.read_lock()
-        if info is None or _sn.is_stale(info):
+        if info is None or _sn.is_stale(info) or not _leader_url_is_safe(info.mcp_url):
             continue
         if await _sn.probe_http_alive(info):
             return info

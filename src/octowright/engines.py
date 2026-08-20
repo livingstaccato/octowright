@@ -133,6 +133,14 @@ def playwright_failure_sanity(error_text: str, kind: str | None = None) -> Playw
     target = kind if kind in SUPPORTED_KINDS else "<engine>"
     detectors = (
         _detect_binaries_missing,
+        # First past the generic detectors on purpose. The real Server Core
+        # text is `browserType.launch: Target page, context or browser has
+        # been closed` followed by the WSALookupServiceBegin line in the
+        # browser log, so _detect_target_closed (and _detect_sandbox_blocked,
+        # when the log mentions sandboxing) would claim it and send the
+        # reader off relaunching a browser that cannot start on this image.
+        # The match is specific enough that ordering it first costs nothing.
+        _detect_windows_media_stack_missing,
         _detect_sandbox_blocked,
         _detect_target_closed,
         _detect_navigation_timeout,
@@ -210,6 +218,51 @@ def _detect_sandbox_blocked(txt: str, _target: str) -> PlaywrightFailureHint | N
         "recommended_actions": [
             "run in an environment that supports Chromium sandboxing",
             "if this is CI/container-only, use the project workflow's Playwright install/deps setup",
+        ],
+    }
+
+
+def _running_on_windows() -> bool:
+    """Whether this process launches browsers on Windows.
+
+    Split out so it can be faked in tests; the browser that produced the error
+    text ran in THIS process (see ``browser_pool.errors``), so the host
+    platform is the right thing to gate on.
+    """
+    return platform.system() == "Windows"
+
+
+def _detect_windows_media_stack_missing(txt: str, _target: str) -> PlaywrightFailureHint | None:
+    """Windows images (notably Server Core) missing components Chromium needs.
+
+    ``WSALookupServiceBegin failed with: 10091`` (WSASYSNOTREADY) and a failure
+    to load ``mf.dll``/``mfplat.dll`` both mean the same thing in practice: the
+    base image omits OS components Chromium initializes at startup. Raw, this
+    reads as a transient network fault and sends the reader off chasing DNS and
+    proxies; named, it points at the image.
+
+    Gated on the host platform because this is ordered AHEAD of the generic
+    detectors: an error text that merely happens to carry one of these tokens
+    on Linux or macOS would otherwise be answered with "install the
+    Server-Media-Foundation feature" and would suppress the correct
+    sandbox/target-closed diagnosis -- the misdiagnosis this detector exists
+    to prevent, pointed the other way.
+    """
+    if not _running_on_windows():
+        return None
+    if not re.search(r"(WSALookupServiceBegin|\bmfplat\.dll\b|\bmf\.dll\b)", txt, flags=re.IGNORECASE):
+        return None
+    return {
+        "category": "windows_media_stack_missing",
+        "probable_cause": (
+            "This Windows image cannot initialize Chromium's network/media stack "
+            "(missing OS components -- typical of Server Core and other minimal images)"
+        ),
+        "recommended_actions": [
+            "use a Windows image with the desktop/media components (e.g. windows-2022 "
+            "hosted runner, or a Server image with the Media Foundation feature installed)",
+            "on Server Core, install the Server-Media-Foundation feature",
+            "if only a Linux/macOS engine is needed, run this leg on that platform instead",
         ],
     }
 

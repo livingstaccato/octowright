@@ -440,6 +440,37 @@ class TestRunMacroFailurePath:
         assert exc_info.value.args[0]["bundle"] == {"hint": "yo"}
 
     @pytest.mark.anyio
+    async def test_failure_payload_requests_a_console_tail(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """The bundle must be asked for console context.
+
+        Built with the default console_tail=0 the payload reports the symptom
+        ("timed out waiting for #foo") while the line that explains it
+        ("net::ERR_NETWORK_CHANGED") stays in the session's ring buffer --
+        the field report this guards against.
+        """
+        from octowright.macros.execution import MACRO_FAILURE_CONSOLE_TAIL
+
+        patched_runners["register"]("m", [{"action": "click", "selector": "#x"}])
+        patched_runners["raise_on"]["click"] = ValueError("boom")
+        seen: dict[str, Any] = {}
+
+        async def _bundle(**kwargs: Any) -> dict[str, Any]:
+            seen.update(kwargs)
+            return {"console_tail": [{"level": "error", "text": "net::ERR_NETWORK_CHANGED"}]}
+
+        fake_session.diagnostic_bundle = _bundle  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError) as exc_info:
+            await run_macro(fake_session, "m")
+
+        assert seen == {"console_tail": MACRO_FAILURE_CONSOLE_TAIL}
+        assert MACRO_FAILURE_CONSOLE_TAIL > 0
+        assert exc_info.value.args[0]["bundle"]["console_tail"] == [
+            {"level": "error", "text": "net::ERR_NETWORK_CHANGED"}
+        ]
+
+    @pytest.mark.anyio
     async def test_healing_suggestion_added_when_suggest_returns_string(
         self, fake_session: _FakeSession, patched_runners: dict[str, Any]
     ) -> None:

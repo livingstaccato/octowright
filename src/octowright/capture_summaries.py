@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from octowright.console_levels import count_errors, count_warnings, is_diagnostic_console_message
+
 MAX_LINE_SLICE_LINES = 200
 MAX_SUMMARY_ITEMS = 100
 SUMMARY_TEXT_CHARS = 240
@@ -151,12 +153,8 @@ def _extract_console_messages(data: Any) -> list[dict[str, Any]]:
     return [item for item in data if isinstance(item, dict)]
 
 
-def _is_important_console_message(message: dict[str, Any]) -> bool:
-    return str(message.get("level", "")).lower() in {"error", "warning", "warn"}
-
-
 def _console_recent(capture_id: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    important = [message for message in messages if _is_important_console_message(message)]
+    important = [message for message in messages if is_diagnostic_console_message(message)]
     return [
         {
             "level": message.get("level"),
@@ -167,14 +165,6 @@ def _console_recent(capture_id: str, messages: list[dict[str, Any]]) -> list[dic
     ]
 
 
-def _console_error_count(messages: list[dict[str, Any]]) -> int:
-    return sum(1 for message in messages if str(message.get("level", "")).lower() == "error")
-
-
-def _console_warning_count(messages: list[dict[str, Any]]) -> int:
-    return sum(1 for message in messages if str(message.get("level", "")).lower() in {"warning", "warn"})
-
-
 def _console_json_summary(capture_id: str, content: str) -> dict[str, Any] | None:
     messages = _extract_console_messages(_load_json_object(content))
     if not messages:
@@ -182,8 +172,8 @@ def _console_json_summary(capture_id: str, content: str) -> dict[str, Any] | Non
     return {
         "type": "console",
         "message_count": len(messages),
-        "error_count": _console_error_count(messages),
-        "warning_count": _console_warning_count(messages),
+        "error_count": count_errors(messages),
+        "warning_count": count_warnings(messages),
         "by_level": _sorted_counts(Counter(str(message.get("level") or "unknown") for message in messages)),
         "recent": _console_recent(capture_id, messages),
     }

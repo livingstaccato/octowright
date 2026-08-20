@@ -15,6 +15,7 @@ Pins:
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -210,11 +211,19 @@ class TestSpawnDaemonArgv:
 
 class TestSpawnDaemonPopenKwargs:
     def test_starts_new_session(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """start_new_session=True so the daemon survives parent SIGKILL."""
+        """The daemon is detached so it survives parent SIGKILL.
+
+        Asserted per-platform: ``start_new_session`` is the POSIX mechanism and
+        is absent on Windows, which uses creation flags instead (asserting it
+        unconditionally made the Windows leg fail on its own fix).
+        """
         monkeypatch.setattr(_daemon, "_DAEMON_LOG", tmp_path / "d.log")
         _, captured = _capture_popen(monkeypatch)
         _daemon.spawn_daemon(http_host=None, http_port=None, idle_grace=None)
-        assert captured["kwargs"]["start_new_session"] is True
+        if sys.platform == "win32":
+            assert captured["kwargs"]["creationflags"] & _daemon._DETACHED_PROCESS
+        else:
+            assert captured["kwargs"]["start_new_session"] is True
 
     def test_close_fds_true(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """close_fds=True closes inherited descriptors (clean detach)."""
@@ -273,7 +282,7 @@ class TestWaitForDaemon:
     @pytest.mark.anyio
     async def test_returns_info_when_ready_first_poll(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Lockfile present + pid alive + http alive → return info."""
-        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://x/")
+        info = SimpleNamespace(pid=42, http_host="127.0.0.1", http_port=8765, mcp_url="http://127.0.0.1:8765/mcp/")
         import octowright.singleton as _sn
 
         monkeypatch.setattr(_sn, "read_lock", lambda: info)
@@ -281,6 +290,23 @@ class TestWaitForDaemon:
         monkeypatch.setattr(_sn, "probe_http_alive", AsyncMock(return_value=True))
         result = await _daemon.wait_for_daemon(timeout=1.0, poll_seconds=0.01)
         assert result is info
+
+    @pytest.mark.anyio
+    async def test_a_non_loopback_leader_url_is_never_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The 0600 lockfile is writable by any same-user process, and
+        ``serve --wait-ready`` prints this URL to stdout for a CI job to
+        consume. Skipping the loopback check here was the one path that handed
+        a poisoned URL out unvalidated (and dialled it for the health probe)."""
+        info = SimpleNamespace(pid=42, mcp_url="http://attacker.test/mcp")
+        import octowright.singleton as _sn
+
+        monkeypatch.setattr(_sn, "read_lock", lambda: info)
+        monkeypatch.setattr(_sn, "is_stale", lambda _i: False)
+        probe = AsyncMock(return_value=True)
+        monkeypatch.setattr(_sn, "probe_http_alive", probe)
+
+        assert await _daemon.wait_for_daemon(timeout=0.05, poll_seconds=0.01) is None
+        probe.assert_not_awaited()  # never even dialled
 
     @pytest.mark.anyio
     async def test_returns_none_on_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -296,7 +322,7 @@ class TestWaitForDaemon:
     @pytest.mark.anyio
     async def test_skips_stale_lockfiles(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Lockfile present but is_stale=True → keep polling, don't return."""
-        info = SimpleNamespace(pid=42)
+        info = SimpleNamespace(pid=42, mcp_url="http://127.0.0.1:6286/mcp/")
         import octowright.singleton as _sn
 
         monkeypatch.setattr(_sn, "read_lock", lambda: info)
@@ -311,7 +337,7 @@ class TestWaitForDaemon:
     @pytest.mark.anyio
     async def test_skips_when_http_not_alive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """PID alive but HTTP not yet ready → keep polling."""
-        info = SimpleNamespace(pid=42)
+        info = SimpleNamespace(pid=42, mcp_url="http://127.0.0.1:6286/mcp/")
         import octowright.singleton as _sn
 
         monkeypatch.setattr(_sn, "read_lock", lambda: info)
@@ -323,7 +349,7 @@ class TestWaitForDaemon:
     @pytest.mark.anyio
     async def test_succeeds_after_initial_misses(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """First poll: lockfile missing. Second poll: lockfile present + alive."""
-        info = SimpleNamespace(pid=42)
+        info = SimpleNamespace(pid=42, mcp_url="http://127.0.0.1:6286/mcp/")
         import octowright.singleton as _sn
 
         attempts = {"n": 0}

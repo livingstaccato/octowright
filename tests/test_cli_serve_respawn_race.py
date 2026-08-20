@@ -44,7 +44,7 @@ async def test_concurrent_respawn_followers_spawn_one_replacement(monkeypatch: p
         return None
 
     @asynccontextmanager
-    async def fake_election_lock() -> Any:
+    async def fake_election_lock(*_args: Any, **_kwargs: Any) -> Any:
         nonlocal in_lock
         await both_followers_saw_dead_leader.wait()
         async with election_lock:
