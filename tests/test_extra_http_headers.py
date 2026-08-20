@@ -14,8 +14,11 @@ the hop the browser makes carry the same headers.
 from __future__ import annotations
 
 import inspect
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -453,3 +456,71 @@ class TestExportedScriptParity:
         """``mock_route`` is a PAGE route live, and page routes take precedence
         over context ones -- moving it would change which handler wins."""
         assert "_page(state).route(" in EXPORT_DISPATCH["mock_route"]
+
+
+class _StubRoutes:
+    """Minimal session surface the two route-installing methods touch.
+
+    ``gated_operation`` reads ``self.operation`` dynamically, so an object with
+    an async context-manager ``operation()`` is enough -- no real gate, page or
+    browser needed.
+    """
+
+    def __init__(self) -> None:
+        self.instance_id = "i"
+        self._header_routes: dict[str, object] = {}
+        self._active_routes: dict[str, object] = {}
+        self.page = SimpleNamespace(route=self._noop, unroute=self._noop)
+        self.context = SimpleNamespace(route=self._noop, unroute=self._noop)
+        self.recorder = SimpleNamespace(record=lambda *a, **k: None)
+
+    async def _noop(self, *args: object, **kwargs: object) -> None:
+        return None
+
+    def operation(self, *args: object, **kwargs: object) -> Any:
+        @asynccontextmanager
+        async def _cm() -> Any:
+            yield None
+
+        return _cm()
+
+    inject_headers = SessionInteractionMixin.inject_headers
+    uninject_headers = SessionInteractionMixin.uninject_headers
+    mock_route = SessionInteractionMixin.mock_route
+
+
+class TestMockShadowWarning:
+    """A page-level mock wins over a context-level injector in EITHER order.
+
+    While both were page routes, last-registered-first meant only the
+    mock-then-inject order lost, so a single warning on ``inject_headers``
+    covered it. With the injector on the context, page-before-context decides
+    it instead and the other order loses silently -- hence the mirror.
+    """
+
+    async def test_installing_an_injector_over_a_mock_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        subject = _StubRoutes()
+        await subject.mock_route("**/api/**", body="{}")
+
+        with caplog.at_level(logging.WARNING):
+            await subject.inject_headers("**/api/**", {"X-A": "1"})
+
+        assert "header_injection_shadowed_by_mock" in caplog.text
+
+    async def test_installing_a_mock_over_an_injector_warns_too(self, caplog: pytest.LogCaptureFixture) -> None:
+        subject = _StubRoutes()
+        await subject.inject_headers("**/api/**", {"X-A": "1"})
+
+        with caplog.at_level(logging.WARNING):
+            await subject.mock_route("**/api/**", body="{}")
+
+        assert "header_injection_shadowed_by_mock" in caplog.text
+
+    async def test_no_warning_without_a_collision(self, caplog: pytest.LogCaptureFixture) -> None:
+        subject = _StubRoutes()
+        await subject.inject_headers("**/api/**", {"X-A": "1"})
+
+        with caplog.at_level(logging.WARNING):
+            await subject.mock_route("**/other/**", body="{}")
+
+        assert "header_injection_shadowed_by_mock" not in caplog.text

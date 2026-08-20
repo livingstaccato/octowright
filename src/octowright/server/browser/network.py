@@ -230,12 +230,16 @@ async def browser_mock_route(
     structured_output=False,
     description=(
         "Add HTTP headers to requests matching `url_pattern` only, leaving other requests "
-        "untouched. Use this ONLY when headers must vary by URL — for a whole browser pass "
-        "extra_http_headers to browser_launch, for a whole page use "
-        "browser_set_extra_http_headers; both are cheaper and cover popups and subresources. "
-        "ORDER MATTERS: route handlers run last-registered-first and browser_mock_route ends "
-        "the chain, so a mock installed after this on an overlapping pattern silently "
-        "suppresses it."
+        "untouched. Registered on the browser CONTEXT, so it follows popups and tabs opened "
+        "later. Use it ONLY when headers must vary by URL: it intercepts, so every matching "
+        "request pays a handler round trip — for a whole browser pass extra_http_headers to "
+        "browser_launch (add extra_http_headers_urls to scope those without intercepting), "
+        "for a single page use browser_set_extra_http_headers. "
+        "browser_mock_route SILENTLY WINS over this on an overlapping pattern, in either "
+        "registration order: a mock is a page-level route, page routes are evaluated ahead "
+        "of context ones, and a fulfilling handler ends the chain — so the injector never "
+        "runs and its headers never apply. Do not mock and inject on the same pattern. "
+        "Verify with browser_network_requests(include_headers=True)."
     ),
 )
 async def browser_inject_headers(instance_id: str, url_pattern: str, headers: dict[str, str]) -> dict[str, Any]:

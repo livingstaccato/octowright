@@ -148,7 +148,18 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "unless the operator has set OCTOWRIGHT_ALLOW_EXECUTABLE_PATH=1 on the daemon; channel "
         "alone (fixed allowlist) needs no opt-in. "
         "All three are launch-time only: never persisted into the recording, so macro replay, "
-        "handoff, and fluid relaunch of this instance do NOT carry them forward."
+        "handoff, and fluid relaunch of this instance do NOT carry them forward. "
+        "extra_http_headers sets headers for the WHOLE browser — every page, popup, tab and "
+        "subresource, for its entire life — which is the cheapest way to carry an API key or "
+        "a test-env header. It is also never restored from a recording (an attacker-supplied "
+        "launch record could otherwise attach an Authorization to every site visited). "
+        "extra_http_headers_urls limits them to matching URL globs. Reach for it when a "
+        "third-party origin breaks: unscoped context headers ride CROSS-ORIGIN subresource "
+        "requests too, and on Chromium that makes them CORS-preflighted, so a CDN or font "
+        "host that does not echo Access-Control-Allow-Headers rejects them outright and the "
+        "page never finishes rendering (Firefox and WebKit are unaffected). Scoping moves "
+        "the headers onto context routes that still follow popups and new tabs. "
+        "Verify either with browser_network_requests(include_headers=True)."
     ),
 )
 async def browser_launch(
