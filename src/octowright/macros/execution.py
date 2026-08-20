@@ -318,19 +318,28 @@ async def _report_progress(ctx: Any | None, progress: float, total: float, messa
 def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
     """Cap each console message's text so a chatty page can't bloat the error.
 
-    Mutates in place: the bundle is freshly built for this one failure payload
-    and has no other reader.
+    Copies each capped entry rather than editing it. ``list(self.console)``
+    copies the LIST, not the dicts inside it, so the bundle's messages are the
+    very objects still held in the session's console ring buffer -- truncating
+    one in place permanently rewrote the live buffer, and every later
+    ``browser_console_messages`` / ``capture_create`` call on that session
+    would return the shortened text.
     """
     messages = bundle.get("console_tail")
     if not isinstance(messages, list):
         return bundle
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        text = message.get("text")
-        if isinstance(text, str) and len(text) > MACRO_FAILURE_CONSOLE_TEXT_CHARS:
-            message["text"] = text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"
+    bundle["console_tail"] = [_truncate_console_message(message) for message in messages]
     return bundle
+
+
+def _truncate_console_message(message: Any) -> Any:
+    """Return ``message`` with an over-long ``text`` capped, never mutated."""
+    if not isinstance(message, dict):
+        return message
+    text = message.get("text")
+    if not isinstance(text, str) or len(text) <= MACRO_FAILURE_CONSOLE_TEXT_CHARS:
+        return message
+    return {**message, "text": text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"}
 
 
 async def run_macro(

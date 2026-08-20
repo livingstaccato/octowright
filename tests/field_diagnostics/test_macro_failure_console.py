@@ -106,3 +106,23 @@ def test_truncation_tolerates_a_malformed_bundle() -> None:
     assert _truncate_bundle_console({"url": "x"}) == {"url": "x"}
     assert _truncate_bundle_console({"console_tail": None}) == {"console_tail": None}
     assert _truncate_bundle_console({"console_tail": ["junk", {"level": "error"}]})["console_tail"][0] == "junk"
+
+
+def test_truncation_does_not_corrupt_the_live_console_buffer() -> None:
+    """``list(session.console)`` copies the LIST, not the dicts inside it, so
+    the bundle's messages ARE the session's ring-buffer entries. Truncating one
+    in place permanently shortened the live buffer, and every later
+    browser_console_messages / capture_create call returned the cut text.
+    """
+    from collections import deque
+
+    from octowright.macros.execution import _truncate_bundle_console
+
+    ring: deque[dict[str, Any]] = deque([{"level": "error", "text": "X" * 50_000}], maxlen=1000)
+    selected = _select_console_tail(list(ring), 10)
+    assert selected[0] is ring[0], "precondition: the selector aliases the ring buffer"
+
+    bundle = _truncate_bundle_console({"console_tail": selected})
+
+    assert len(ring[0]["text"]) == 50_000, "the live console buffer must be untouched"
+    assert bundle["console_tail"][0]["text"].endswith("[truncated]")
