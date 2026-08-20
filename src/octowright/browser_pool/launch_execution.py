@@ -94,6 +94,7 @@ async def launch_profile_locked(
             launch_kwargs=launch_kwargs,
             base_url=effective_base_url,
             extra_http_headers=launch_options.extra_http_headers,
+            extra_http_headers_urls=launch_options.extra_http_headers_urls,
         )
     except asyncio.CancelledError:
         await cleanup_failed_launch(

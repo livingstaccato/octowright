@@ -19,7 +19,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from octowright.http_headers import redact_header_values
 from octowright.session._protocols import SessionLike
+from octowright.session.aria_redaction import resolve_redaction_mode
 
 
 def _matches_url(url_filter: str) -> Callable[[dict[str, Any]], bool]:
@@ -35,6 +37,28 @@ def _matches_resource_type(resource_type_filter: str) -> Callable[[dict[str, Any
     return lambda r: r.get("resource_type") == resource_type_filter
 
 
+def _recorded_headers(request: Any) -> dict[str, str]:
+    """Request headers as they should be RECORDED, scrubbed by header name.
+
+    These records had no headers at all, which made every header feature
+    unverifiable from the tool surface: a field report set a launch header,
+    looked here to confirm it applied, saw nothing, and nearly concluded the
+    feature was broken -- it took a local echo server to prove otherwise.
+
+    Scrubbed with the same name-based policy the JSONL recorder uses, because
+    the headers a browser sends include ``Cookie`` and ``Authorization`` and
+    this output goes to an LLM. ``request.headers`` is the synchronous
+    property (``all_headers()`` is async and this runs in an event handler);
+    it can omit a few values the async form would return, which is an accepted
+    cost for not blocking the handler.
+    """
+    try:
+        raw = dict(request.headers)
+    except Exception:
+        return {}
+    return redact_header_values(raw, resolve_redaction_mode())
+
+
 class SessionNetworkMixin(SessionLike):
     def _handle_response(self, response: Any) -> None:
         request = response.request
@@ -45,6 +69,7 @@ class SessionNetworkMixin(SessionLike):
                 "resource_type": request.resource_type,
                 "status": response.status,
                 "status_text": response.status_text,
+                "headers": _recorded_headers(request),
             }
         )
 
@@ -56,6 +81,7 @@ class SessionNetworkMixin(SessionLike):
                 "resource_type": request.resource_type,
                 "status": None,
                 "failure": request.failure,
+                "headers": _recorded_headers(request),
             }
         )
 
