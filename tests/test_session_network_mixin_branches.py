@@ -99,6 +99,10 @@ class TestHandleResponse:
             "resource_type": "fetch",
             "status": 200,
             "status_text": "OK",
+            # Header capture: these records carried none, which made every
+            # header feature unverifiable from the tool surface. The stub
+            # request exposes no headers, so the scrubber yields {}.
+            "headers": {},
         }
 
     def test_response_record_does_not_set_failure(self) -> None:
@@ -185,11 +189,19 @@ class TestGetRequestsBasic:
         assert [r["url"] for r in result["requests"]] == ["/a", "/b"]
 
     def test_return_shape_pins(self) -> None:
-        """Return dict has these five keys exactly."""
+        """Return dict has these keys exactly."""
         subj = _make_subject()
         _fill(subj, [{"url": "/x"}])
         result = subj.get_network_requests()
-        assert set(result.keys()) == {"requests", "next_cursor", "total", "total_retained", "dropped"}
+        assert set(result.keys()) == {
+            "requests",
+            "next_cursor",
+            "total",
+            "total_retained",
+            "dropped",
+            "returned",
+            "truncated",
+        }
 
     def test_total_and_retained_equal_before_drop(self) -> None:
         """When nothing dropped, total == total_retained == len(deque)."""
@@ -284,3 +296,128 @@ class TestGetRequestsCursor:
         subj = _make_subject(maxlen=2)
         _fill(subj, [{"url": f"/u{i}"} for i in range(5)])
         assert subj.get_network_requests()["dropped"] == 3
+
+
+# ─── get_network_requests: headers + row cap ───────────────────────────────
+
+
+_HEADERS = {"user-agent": "Mozilla/5.0", "authorization": "<redacted:header>"}
+
+
+class TestHeaderProjection:
+    """Recorded rows carry a full header map -- ~900 JSON chars/row against
+    ~130 without, measured on a typical Chromium navigation header set. An
+    unfiltered dump of an ordinary page therefore went from ~6.6k tokens to
+    ~45k, so the reader opts IN to them instead of always paying."""
+
+    def test_headers_are_withheld_by_default(self) -> None:
+        subj = _make_subject()
+        _fill(subj, [{"url": "/a", "headers": dict(_HEADERS)}])
+
+        assert "headers" not in subj.get_network_requests()["requests"][0]
+
+    def test_headers_are_returned_when_asked_for(self) -> None:
+        subj = _make_subject()
+        _fill(subj, [{"url": "/a", "headers": dict(_HEADERS)}])
+
+        assert subj.get_network_requests(include_headers=True)["requests"][0]["headers"] == _HEADERS
+
+    def test_a_row_without_headers_is_unaffected(self) -> None:
+        subj = _make_subject()
+        _fill(subj, [{"url": "/a"}])
+
+        assert subj.get_network_requests()["requests"][0] == {"url": "/a"}
+
+    def test_returned_rows_are_copies(self) -> None:
+        """`list(deque)` copies the list, not the dicts inside it -- handing back
+        originals lets one reader's edit rewrite the session's history for every
+        later reader (the same trap `_select_console_tail` had)."""
+        subj = _make_subject()
+        _fill(subj, [{"url": "/a", "headers": dict(_HEADERS)}])
+
+        row = subj.get_network_requests(include_headers=True)["requests"][0]
+        row["url"] = "/mutated"
+        row["headers"]["user-agent"] = "mutated"
+
+        stored = subj.get_network_requests(include_headers=True)["requests"][0]
+        assert stored["url"] == "/a"
+        assert stored["headers"]["user-agent"] == "Mozilla/5.0"
+
+
+class TestRowLimit:
+    """There was no row cap at all: an unfiltered read returned every retained
+    request, up to the 5000-entry deque."""
+
+    def test_no_limit_returns_everything(self) -> None:
+        subj = _make_subject()
+        _fill(subj, [{"url": f"/u{i}"} for i in range(10)])
+
+        result = subj.get_network_requests()
+
+        assert result["returned"] == 10
+        assert result["truncated"] is False
+
+    def test_a_limit_caps_the_rows(self) -> None:
+        subj = _make_subject()
+        _fill(subj, [{"url": f"/u{i}"} for i in range(10)])
+
+        result = subj.get_network_requests(limit=3)
+
+        assert [r["url"] for r in result["requests"]] == ["/u0", "/u1", "/u2"]
+        assert result["returned"] == 3
+        assert result["truncated"] is True
+
+    def test_totals_still_describe_everything_retained(self) -> None:
+        """`total` must not shrink to the page size, or a caller cannot tell a
+        capped read from a quiet page."""
+        subj = _make_subject()
+        _fill(subj, [{"url": f"/u{i}"} for i in range(10)])
+
+        result = subj.get_network_requests(limit=3)
+
+        assert result["total"] == 10
+        assert result["total_retained"] == 10
+
+    def test_the_cursor_resumes_exactly_where_the_page_stopped(self) -> None:
+        """Otherwise a capped read advances the cursor past rows it never
+        returned and an incremental poll silently loses them."""
+        subj = _make_subject()
+        _fill(subj, [{"url": f"/u{i}"} for i in range(10)])
+
+        first = subj.get_network_requests(limit=4)
+        second = subj.get_network_requests(since=first["next_cursor"], limit=4)
+
+        assert [r["url"] for r in second["requests"]] == ["/u4", "/u5", "/u6", "/u7"]
+
+    def test_paging_reaches_the_end_without_gaps_or_repeats(self) -> None:
+        subj = _make_subject()
+        _fill(subj, [{"url": f"/u{i}"} for i in range(10)])
+
+        seen: list[str] = []
+        cursor: int | None = None
+        for _ in range(10):
+            page = subj.get_network_requests(since=cursor, limit=3)
+            seen.extend(r["url"] for r in page["requests"])
+            cursor = page["next_cursor"]
+            if not page["truncated"]:
+                break
+
+        assert seen == [f"/u{i}" for i in range(10)]
+
+    def test_the_cursor_skips_filtered_out_rows_when_capped(self) -> None:
+        """The cursor is an index into the UNFILTERED stream, so it must land on
+        the first unreturned MATCHING row, not on the row after the last match."""
+        subj = _make_subject()
+        _fill(subj, [{"url": "/api/1"}, {"url": "/img"}, {"url": "/api/2"}, {"url": "/api/3"}])
+
+        page = subj.get_network_requests(url_filter="/api", limit=2)
+
+        assert [r["url"] for r in page["requests"]] == ["/api/1", "/api/2"]
+        assert page["next_cursor"] == 3
+        assert page["truncated"] is True
+
+    def test_a_limit_larger_than_the_deque_is_not_truncated(self) -> None:
+        subj = _make_subject()
+        _fill(subj, [{"url": "/a"}])
+
+        assert subj.get_network_requests(limit=99)["truncated"] is False
