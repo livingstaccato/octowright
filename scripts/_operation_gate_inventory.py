@@ -138,6 +138,10 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "event-critical",
         "route fulfill must unblock the network request awaited by the active operation",
     ),
+    "session/core_interaction_mixin.py:SessionInteractionMixin.inject_headers._handler": (
+        "event-critical",
+        "route fallback must unblock the network request awaited by the active operation",
+    ),
     "browser_pool/listeners.py:_wire_listeners": (
         "event-critical",
         "attaches passive listeners to a page created by a popup event or admitted recovery",

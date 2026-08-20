@@ -58,6 +58,7 @@ class TestToPoolKwargs:
             channel="chrome",
             executable_path="/opt/chrome/chrome",
             launch_args=["--foo"],
+            extra_http_headers={"X-Env": "staging"},
         )
         assert opts.to_pool_kwargs() == {
             "kind": "firefox",
@@ -84,6 +85,7 @@ class TestToPoolKwargs:
             "channel": "chrome",
             "executable_path": "/opt/chrome/chrome",
             "launch_args": ["--foo"],
+            "extra_http_headers": {"X-Env": "staging"},
         }
 
     def test_defaults(self) -> None:

@@ -40,6 +40,26 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.16.1": [
+        "Browsers can carry custom HTTP headers now, at three scopes. "
+        "browser_launch(extra_http_headers=...) covers every request the browser "
+        "makes including popups and subresources; browser_set_extra_http_headers "
+        "covers one page and can change mid-run, for a token you only get after "
+        "logging in; browser_inject_headers covers just the URLs matching a "
+        "pattern. All three replay in macros and export to a script.",
+        "A failed console.assert now counts as an error. Every engine reports it "
+        "under its own 'assert' level, and the classifier only knew 'error' -- so "
+        "the one line naming a broken invariant was neither counted nor included "
+        "in the console tail a macro failure ships.",
+        "The dashboard's console Warn filter works again. It matched the raw level "
+        "against 'warn' while every engine emits 'warning', so choosing Warn showed "
+        "an empty list.",
+        "octowright_status() now tells you which followers are running old code. "
+        "A follower survives a daemon restart by design, so restarting the daemon "
+        "never deploys follower-side fixes -- and nothing reported the skew, since "
+        "a follower identified itself by pid alone. The bridge summary now carries "
+        "leader_version, follower_versions and stale_follower_count.",
+    ],
     "0.16.0": [
         "The dashboard now asks who you are. Binding to loopback stops the "
         "internet, not the machine — any other local process could list your "

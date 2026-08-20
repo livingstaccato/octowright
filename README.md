@@ -300,6 +300,9 @@ ARIA locator first, then fall back to the original CSS selector.
 |---|---|
 | `browser_set_dialog_policy` | accept / dismiss / manual for `confirm()` / `alert()` / `prompt()`. Default: dismiss. |
 | `browser_mock_route` / `browser_unmock_route` | Stub network responses for deterministic tests. |
+| `browser_launch(extra_http_headers=…)` | Headers on **every** request the browser makes — pages, popups, subresources. The one to reach for first. |
+| `browser_set_extra_http_headers` | Headers for **this page**, overriding the launch ones. For a token the run only learns partway through (log in, then carry it). Per page: a popup opened later does not inherit it. |
+| `browser_inject_headers` / `browser_uninject_headers` | Headers for requests matching a **URL pattern** only. Costs a route interception per matching request; note a later `browser_mock_route` on an overlapping pattern silently suppresses it. |
 | `browser_network_requests` | List captured HTTP/HTTPS requests for an instance. Optional substring `url` / `method` / `resource_type` filters; pass `since` cursor for incremental polling. |
 
 ### Pages, frames, downloads

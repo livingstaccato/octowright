@@ -123,14 +123,17 @@ class TestConstantTables:
         """_ACTION_MAP must keep its kind→method-name binding stable."""
         assert _ACTION_MAP[kind] == method
 
-    def test_action_map_size_is_exactly_29(self) -> None:
+    def test_action_map_size_is_exactly_32(self) -> None:
         """Adding/removing keys to _ACTION_MAP is a contract change — fail loudly.
 
         Went 27 -> 29 when switch_frame and get_text_by became replayable. Both
         were already recorded and classified nowhere, so every recording that
-        used them tallied an error instead of replaying the action.
+        used them tallied an error instead of replaying the action. 29 -> 30
+        with set_extra_http_headers (page-level headers a run learns partway
+        through, e.g. a token obtained by logging in), and 30 -> 32 with
+        inject_headers/uninject_headers (per-endpoint injection).
         """
-        assert len(_ACTION_MAP) == 29
+        assert len(_ACTION_MAP) == 32
 
     def test_type_kind_maps_to_type_text_not_type(self) -> None:
         """Pin the rename from 'type' kind → session.type_text method (not session.type)."""
