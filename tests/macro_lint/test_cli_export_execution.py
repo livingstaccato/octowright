@@ -130,6 +130,9 @@ class _FakePage:
     async def set_input_files(self, selector: str, paths: list[str]) -> None:
         self._log("set_input_files", selector, paths)
 
+    async def set_extra_http_headers(self, headers: dict[str, str]) -> None:
+        self._log("set_extra_http_headers", headers)
+
     async def set_viewport_size(self, size: dict[str, int]) -> None:
         self._log("set_viewport_size", size)
 
@@ -240,6 +243,9 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "navigate_back"},
     {"action": "mock_route", "pattern": "**/api/*", "status": 201, "body": "{}"},
     {"action": "unmock_route", "pattern": "**/api/*"},
+    {"action": "set_extra_http_headers", "headers": {"X-Env": "staging"}},
+    {"action": "inject_headers", "pattern": "**/api/*", "headers": {"X-Trace": "abc"}},
+    {"action": "uninject_headers", "pattern": "**/api/*"},
     {"action": "set_dialog_policy", "policy": "accept"},
     {"action": "open_url", "url": "https://example.test/tab"},
     {"action": "switch_page", "index": 1},

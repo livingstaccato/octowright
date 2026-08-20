@@ -155,6 +155,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
             "index": 0,
             "frame": None,
             "routes": {{}},
+            "header_routes": {{}},
             "dialog_policy": "manual",
             "dialog_prompt_text": None,
             "dialog_pages": [],

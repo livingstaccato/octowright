@@ -13,6 +13,7 @@ from typing import Any
 from octowright import defaults
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
+from octowright.http_headers import validate_extra_http_headers
 
 #: Playwright's ``channel`` param picks a real installed browser build instead
 #: of the bundled one (e.g. system Chrome/Edge, for native GPU/DRM/codec
@@ -119,6 +120,20 @@ class LaunchOptions:
     #: channel/executable_path: replaying a poisoned recording must not be
     #: able to inject launch flags that weaken the sandbox.
     launch_args: list[str] | None = None
+    #: Extra HTTP headers on EVERY request this browser makes -- Playwright's
+    #: context-level ``extra_http_headers``. Chosen over a route interceptor
+    #: because it is the only layer that also covers popups, new tabs and
+    #: subresources, and because it was measured to apply to the SSRF guard's
+    #: own validation fetch too (chromium/firefox/webkit, Playwright 1.62), so
+    #: the hop the guard checks and the hop the browser makes carry the same
+    #: headers. A route-level injector could diverge from the guard.
+    #:
+    #: NEVER read back from a JSONL recording (see ``from_launch_record``),
+    #: for the reason ``channel``/``executable_path``/``launch_args`` are not:
+    #: a poisoned recording that can set an arbitrary request header on a
+    #: relaunched browser could attach an ``Authorization`` or ``Cookie`` of
+    #: its choosing to every site that browser subsequently visits.
+    extra_http_headers: dict[str, str] | None = None
 
     @classmethod
     def from_mapping(cls, options: dict[str, Any]) -> LaunchOptions:
@@ -148,6 +163,7 @@ class LaunchOptions:
             channel=options.get("channel"),
             executable_path=options.get("executable_path"),
             launch_args=options.get("launch_args"),
+            extra_http_headers=options.get("extra_http_headers"),
         )
         launch_options.validate()
         return launch_options
@@ -223,6 +239,7 @@ class LaunchOptions:
         if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
             raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
+        validate_extra_http_headers(self.extra_http_headers)
 
     def _validate_browser_selection(self) -> None:
         if self.channel is not None and self.channel not in SUPPORTED_CHANNELS:
@@ -276,6 +293,7 @@ class LaunchOptions:
             "channel": self.channel,
             "executable_path": self.executable_path,
             "launch_args": self.launch_args,
+            "extra_http_headers": self.extra_http_headers,
         }
 
     def with_har_rotated(self) -> LaunchOptions:
