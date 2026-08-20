@@ -11,8 +11,9 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.console_levels import is_diagnostic_console_message
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
-from octowright.session._constants import DEFAULT_PREVIEW_CHARS, is_diagnostic_console_message
+from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 from octowright.session.operation_gate import gated_operation
 from octowright.session.viewport_ops import SessionViewportMixin
@@ -40,17 +41,26 @@ def _select_console_tail(messages: list[Any], limit: int) -> list[Any]:
     with a bare selector timeout and no cause. Diagnostic-level messages are
     therefore claimed first and the most recent remaining messages fill the
     rest. The result stays in chronological order so it still reads as a log.
+
+    Entries are COPIED. ``list(session.console)`` copies the list, not the
+    dicts inside it, so returning the originals hands a caller live
+    ring-buffer entries -- and one consumer editing an entry (to cap its
+    length, say) silently rewrote the session's console history for every
+    later reader.
     """
     if limit <= 0:
         return []
-    indexed = list(enumerate(messages))
-    diagnostics = [pair for pair in indexed if is_diagnostic_console_message(pair[1])]
-    keep: dict[int, Any] = dict(diagnostics[-limit:])
-    for index, message in reversed(indexed):
+    diagnostic = [index for index, message in enumerate(messages) if is_diagnostic_console_message(message)]
+    keep = set(diagnostic[-limit:])
+    for index in reversed(range(len(messages))):
         if len(keep) >= limit:
             break
-        keep.setdefault(index, message)
-    return [message for _, message in sorted(keep.items())]
+        keep.add(index)
+    return [_copy_console_message(messages[index]) for index in sorted(keep)]
+
+
+def _copy_console_message(message: Any) -> Any:
+    return dict(message) if isinstance(message, dict) else message
 
 
 def _html_preview(html: str, html_preview_chars: int) -> str | None:

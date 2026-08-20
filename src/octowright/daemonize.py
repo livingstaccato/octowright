@@ -114,10 +114,29 @@ def daemon_log_tail(max_lines: int = _DAEMON_LOG_TAIL_LINES) -> str:
         return f"(no daemon log at {_DAEMON_LOG}; the daemon may never have started)"
     except OSError as exc:
         return f"(daemon log at {_DAEMON_LOG} unreadable: {exc})"
-    tail = [line for line in lines if line.strip()][-max_lines:]
+    tail: list[str] = []
+    for line in reversed(lines):
+        if len(tail) >= max_lines:
+            break
+        if line.strip():
+            tail.append(line)
+    tail.reverse()
     if not tail:
         return f"(daemon log at {_DAEMON_LOG} is empty)"
     return "\n".join(tail)
+
+
+def _detach_candidates() -> list[dict[str, Any]]:
+    """Ordered Popen-kwarg candidates to try, most-detached first.
+
+    The retry ladder is data owned by the platform function, so POSIX gets
+    exactly ONE attempt -- a blanket ``except OSError: retry`` would silently
+    run a second identical Popen for a genuine failure (missing entrypoint,
+    EMFILE) and report the second exception.
+    """
+    if sys.platform != "win32":
+        return [_detach_kwargs()]
+    return [_detach_kwargs(breakaway=True), _detach_kwargs(breakaway=False)]
 
 
 def _detach_kwargs(*, breakaway: bool = True) -> dict[str, Any]:
@@ -229,15 +248,17 @@ def spawn_daemon(
 
 
 def _spawn_detached(args: list[str]) -> int:
-    """Popen the daemon detached, retrying without job breakaway if refused.
+    """Popen the daemon detached, walking the platform's candidate flag sets.
 
-    The parent's copy of the log handle is closed once Popen has duplicated
-    it into the child; leaving it to the garbage collector leaked a
-    descriptor (and kept a replaced log file's inode alive) on every spawn,
-    which a long-lived follower does repeatedly via the respawn path.
+    The parent's copy of the log handle is closed once Popen has duplicated it
+    into the child; leaving it to the garbage collector leaked a descriptor
+    (and kept a replaced log file's inode alive) on every spawn, which a
+    long-lived follower does repeatedly via the respawn path.
     """
-    for breakaway in (True, False):
-        with _open_daemon_log() as log_handle:
+    candidates = _detach_candidates()
+    with _open_daemon_log() as log_handle:
+        env = os.environ.copy()
+        for index, detach_kwargs in enumerate(candidates):
             try:
                 # Fixed argv (resolved entrypoint + flags); no shell.
                 proc = subprocess.Popen(  # nosec B603
@@ -246,18 +267,19 @@ def _spawn_detached(args: list[str]) -> int:
                     stdout=subprocess.DEVNULL,
                     stderr=log_handle,
                     close_fds=True,
-                    env=os.environ.copy(),
-                    **_detach_kwargs(breakaway=breakaway),
+                    env=env,
+                    **detach_kwargs,
                 )
             except OSError:
-                # Only CREATE_BREAKAWAY_FROM_JOB is retryable: a job without
-                # JOB_OBJECT_LIMIT_BREAKAWAY_OK refuses the whole spawn with
-                # ERROR_ACCESS_DENIED. Anything else is a real failure.
-                if not breakaway:
+                # A Windows job without JOB_OBJECT_LIMIT_BREAKAWAY_OK refuses
+                # the whole spawn with ERROR_ACCESS_DENIED; the next candidate
+                # drops the breakaway flag. The last one has nothing left to
+                # try, so its failure is the real one.
+                if index == len(candidates) - 1:
                     raise
                 continue
-        return proc.pid
-    raise AssertionError("unreachable: the non-breakaway attempt either returns or raises")
+            return proc.pid
+    raise AssertionError("unreachable: the last candidate either returns or raises")
 
 
 async def wait_for_daemon(timeout: float | None = None, poll_seconds: float = 0.2) -> _sn.LeaderInfo | None:

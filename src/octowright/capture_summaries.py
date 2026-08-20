@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from octowright.session._constants import is_diagnostic_console_message
+from octowright.console_levels import count_errors, count_warnings, is_diagnostic_console_message
 
 MAX_LINE_SLICE_LINES = 200
 MAX_SUMMARY_ITEMS = 100
@@ -153,12 +153,8 @@ def _extract_console_messages(data: Any) -> list[dict[str, Any]]:
     return [item for item in data if isinstance(item, dict)]
 
 
-def _is_important_console_message(message: dict[str, Any]) -> bool:
-    return is_diagnostic_console_message(message)
-
-
 def _console_recent(capture_id: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    important = [message for message in messages if _is_important_console_message(message)]
+    important = [message for message in messages if is_diagnostic_console_message(message)]
     return [
         {
             "level": message.get("level"),
@@ -169,12 +165,8 @@ def _console_recent(capture_id: str, messages: list[dict[str, Any]]) -> list[dic
     ]
 
 
-def _console_error_count(messages: list[dict[str, Any]]) -> int:
-    return sum(1 for message in messages if str(message.get("level", "")).lower() == "error")
-
-
-def _console_warning_count(messages: list[dict[str, Any]]) -> int:
-    return sum(1 for message in messages if str(message.get("level", "")).lower() in {"warning", "warn"})
+_console_error_count = count_errors
+_console_warning_count = count_warnings
 
 
 def _console_json_summary(capture_id: str, content: str) -> dict[str, Any] | None:

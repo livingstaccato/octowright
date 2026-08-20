@@ -32,6 +32,40 @@ def test_windows_image_failures_are_named(text: str) -> None:
     assert any("Media Foundation" in action for action in hint["recommended_actions"])
 
 
+# The text a Server Core runner actually produces: Playwright reports the launch
+# as a closed target and puts the WSALookupServiceBegin line in the browser log.
+# Anything matching _detect_target_closed / _detect_sandbox_blocked first would
+# claim it and tell the reader to relaunch a browser that cannot start here.
+FIELD_TEXT = (
+    "browserType.launch: Target page, context or browser has been closed\n"
+    "Browser logs:\n"
+    "[ERROR:network_change_notifier_win.cc] WSALookupServiceBegin failed with: 10091"
+)
+FIELD_TEXT_WITH_SANDBOX = f"{FIELD_TEXT}\nsandbox: chrome-sandbox is not configured correctly"
+
+
+@pytest.mark.parametrize("text", [FIELD_TEXT, FIELD_TEXT_WITH_SANDBOX])
+def test_it_wins_over_the_detectors_that_match_the_same_field_text(text: str) -> None:
+    """Pins the ordering the comment in engines.py asserts. Without this, moving
+    the detector back next to its generic sibling passes the whole suite while
+    restoring the exact misdiagnosis this change exists to fix."""
+    hint = playwright_failure_sanity(text, kind="chromium")
+
+    assert hint is not None
+    assert hint["category"] == "windows_media_stack_missing"
+
+
+def test_the_masking_detectors_still_claim_their_own_text() -> None:
+    """Ordering first must not steal failures that are genuinely those cases."""
+    closed = playwright_failure_sanity("Target page, context or browser has been closed", kind="chromium")
+    sandboxed = playwright_failure_sanity(
+        "browserType.launch: Target page, context or browser has been closed\nsandbox error", kind="chromium"
+    )
+
+    assert closed is not None and closed["category"] == "playwright_target_closed"
+    assert sandboxed is not None and sandboxed["category"] == "playwright_sandbox_blocked"
+
+
 def test_it_wins_over_the_generic_network_detector() -> None:
     """The regression risk: the Windows text can carry net:: noise, and
     "verify URL, DNS, proxy" is actively misleading for a missing OS feature."""
