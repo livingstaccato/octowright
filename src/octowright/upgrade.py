@@ -40,6 +40,15 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.16.2": [
+        "/api/health now reports the version the daemon is actually RUNNING. It "
+        "used to read package metadata off disk on every request, so right after "
+        "an upgrade it reported the new version while the daemon was still "
+        "executing the old code -- the one question you ask it after deploying "
+        "was the one it could never answer. When an upgrade is sitting on disk "
+        "unadopted, the response now says so separately as installed_version, "
+        "which is your cue to restart.",
+    ],
     "0.16.1": [
         "Browsers can carry custom HTTP headers now, at three scopes. "
         "browser_launch(extra_http_headers=...) covers every request the browser "

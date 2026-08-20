@@ -51,7 +51,8 @@ PUT    /api/macros/{name:path}                   → {"ok": true, "name": str} (
 GET    /api/macros/{name:path}/repair_preview    → {"original": [...], "repaired": [...], "diff": [...]} preview of auto-repair suggestions without applying them. 404 if not found.
 POST   /api/macros/{name:path}/validate          → {"error_count": int, "warning_count": int, "issues": [LintIssue, ...]} for the supplied macro body. 400 if `macro` field missing/non-object.
 POST   /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
-GET    /api/health                               → {"ok": true, "version": str}
+GET    /api/health                               → {"ok": true, "version": str,
+                                                    "installed_version"?: str}
 ```
 
 HTTP request metrics are not exposed as a scrape endpoint: they are recorded
