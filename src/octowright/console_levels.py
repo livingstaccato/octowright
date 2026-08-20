@@ -13,17 +13,29 @@ whether a level is an error.
 
 Why it is shared at all: ``capture_summaries``, ``server.browser.inspect_console``
 and ``session.core_ops_mixin`` each classified levels independently and had
-already drifted. Firefox reports ``console.warn``'s level as ``warn`` where
-Chromium says ``warning``, and casing is not guaranteed, so every check must
-match case-insensitively across both spellings; a copy that missed ``warn``
-silently dropped Firefox warnings.
+already drifted.
+
+On ``warn`` vs ``warning``: **every engine octowright supports reports
+``console.warn`` as ``warning``** -- measured across chromium, firefox and
+webkit on Playwright 1.62. ``warn`` is kept as a defensive alias because it
+predates this module (both earlier copies carried it) and a superset costs
+nothing, but it is not a current Firefox behaviour. Earlier wording here
+claimed it was; that was inherited, not verified, and is corrected rather
+than repeated. Matching stays case-insensitive because the level is a raw
+engine string.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-ERROR_CONSOLE_LEVELS = frozenset({"error"})
+# ``assert`` is error severity, not a category of its own. ``console.assert``
+# fires only when an invariant the page author declared has FAILED, and all
+# three engines report it under its own level rather than folding it into
+# ``error`` (measured on Playwright 1.62). Leaving it out meant the one line
+# naming a broken invariant was neither counted nor claimed by the macro
+# failure tail -- the exact line that tail exists to surface.
+ERROR_CONSOLE_LEVELS = frozenset({"error", "assert"})
 WARNING_CONSOLE_LEVELS = frozenset({"warning", "warn"})
 # Levels that explain a failure: an error, or the warning that preceded it.
 DIAGNOSTIC_CONSOLE_LEVELS = ERROR_CONSOLE_LEVELS | WARNING_CONSOLE_LEVELS

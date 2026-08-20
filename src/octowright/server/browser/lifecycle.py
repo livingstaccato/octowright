@@ -176,6 +176,7 @@ async def browser_launch(
     channel: str | None = None,
     executable_path: str | None = None,
     launch_args: list[str] | None = None,
+    extra_http_headers: dict[str, str] | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
@@ -226,6 +227,7 @@ async def browser_launch(
         ephemeral=ephemeral,
         session=session,
         protected=protected,
+        extra_http_headers=extra_http_headers,
         channel=channel,
         executable_path=executable_path,
         launch_args=launch_args,
