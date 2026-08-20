@@ -15,6 +15,27 @@ from octowright.server._state import mcp, pool
 from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
 
+#: Rows returned by ``browser_network_requests`` in one call when the caller
+#: names no limit. There was previously no cap at all, so a single unfiltered
+#: read could return the whole 5000-entry deque straight into the LLM context.
+NETWORK_REQUESTS_DEFAULT_LIMIT = 200
+#: Ceiling on an explicit ``limit``. A caller wanting more pages the cursor.
+NETWORK_REQUESTS_MAX_LIMIT = 1000
+
+
+def _resolve_row_limit(limit: int | None) -> int:
+    """Row cap for one read. Never unbounded from the tool surface.
+
+    A non-positive value falls back to the default rather than meaning
+    "unlimited": zero most plausibly reads as "no opinion", and an LLM must not
+    be able to remove the cap by passing it. The in-process
+    ``get_network_requests`` still accepts ``limit=None`` for the aggregate
+    summary and full-fidelity captures, which genuinely need every row.
+    """
+    if limit is None or limit <= 0:
+        return NETWORK_REQUESTS_DEFAULT_LIMIT
+    return min(int(limit), NETWORK_REQUESTS_MAX_LIMIT)
+
 
 def _sorted_counts(counter: Counter[str], *, limit: int = 20) -> list[dict[str, Any]]:
     return [
@@ -264,6 +285,14 @@ async def browser_unmock_route(instance_id: str, url_pattern: str) -> dict[str, 
         "resource_type, status, status_text} (status is None for failed requests). "
         "Filter results with: url (substring match), method ('GET'/'POST'/…), "
         "resource_type ('fetch'/'xhr'/'document'/'script'/'image'/…). "
+        "Pass include_headers=True to also get each request's headers — this is how you "
+        "VERIFY a header from browser_launch(extra_http_headers=…), browser_inject_headers, "
+        "or browser_set_extra_http_headers actually rode the request. They are off by "
+        "default because they are ~7x the size of the row itself; credential-named headers "
+        "(Authorization/Cookie/…) come back redacted. "
+        f"At most {NETWORK_REQUESTS_DEFAULT_LIMIT} rows are returned per call (raise or lower "
+        f"with `limit`, max {NETWORK_REQUESTS_MAX_LIMIT}); when `truncated` is true, read the "
+        "next page by passing the returned next_cursor as `since`, or narrow with a filter. "
         "Pass `since` (a cursor from a prior call's next_cursor) to read only new requests — "
         "use this for incremental polling during a test. Pass response_mode='summary' "
         "to return browser_network_summary with the same filters instead of raw rows. "
@@ -277,6 +306,8 @@ def browser_network_requests(
     resource_type: str | None = None,
     since: int | None = None,
     response_mode: str | None = None,
+    include_headers: bool = False,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     if response_mode == "summary":
         return browser_network_summary(
@@ -291,6 +322,8 @@ def browser_network_requests(
         method_filter=method,
         resource_type_filter=resource_type,
         since=since,
+        include_headers=include_headers,
+        limit=_resolve_row_limit(limit),
     )
 
 
@@ -310,11 +343,15 @@ def browser_network_summary(
     since: int | None = None,
     failure_limit: int = 8,
 ) -> dict[str, Any]:
+    # No row cap and no headers: this AGGREGATES, so a capped read would report
+    # wrong counts, and nothing here reads a header.
     result = pool.get(instance_id).get_network_requests(
         url_filter=url,
         method_filter=method,
         resource_type_filter=resource_type,
         since=since,
+        include_headers=False,
+        limit=None,
     )
     requests = list(result.get("requests") or [])
     failures = [request for request in requests if _is_failed_request(request)]

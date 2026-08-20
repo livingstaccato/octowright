@@ -111,6 +111,8 @@ class SessionLike(Protocol):
         method_filter: str | None = None,
         resource_type_filter: str | None = None,
         since: int | None = None,
+        include_headers: bool = False,
+        limit: int | None = None,
     ) -> dict[str, Any]: ...
 
     async def capture_markdown(self, *, page: Page | None = None, force: bool = False) -> Path | None: ...
