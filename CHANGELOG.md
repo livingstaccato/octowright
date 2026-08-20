@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than adding one more env var, because enumerating a var per path is
   precisely how this was missed.
 
+- **`make test` claimed "no live browsers" and never deselected them.** 18 test
+  modules carry the `live_browser` marker and nothing in the Makefile or `ci/`
+  filters it, so wherever the engines are installed the target launches real
+  browsers and spawns detached daemons — which is how the upgrade marker above
+  was being written. The marker is a manual hook, not an applied policy; the
+  target and the `AGENTS.md` command table now say so, and name the
+  `-m "not live_browser"` invocation for a genuinely browser-free run. The tests
+  themselves are left in the default run deliberately: deselecting them would
+  make the comment true at the cost of coverage over exactly the
+  daemon/leader/bridge paths this release fixes.
+
 ### Added
 - `octowright_status()["daemon"]["version"]` — the version the answering process
   is **running**. An agent previously had no way to ask what it was talking to:
