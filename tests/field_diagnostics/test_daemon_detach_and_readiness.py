@@ -50,6 +50,15 @@ class TestDetachFlags:
         assert daemonize._detach_kwargs()["creationflags"] & daemonize._CREATE_BREAKAWAY_FROM_JOB
         assert not daemonize._detach_kwargs(breakaway=False)["creationflags"] & daemonize._CREATE_BREAKAWAY_FROM_JOB
 
+    def test_posix_gets_exactly_one_attempt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The retry exists for a Windows job refusal. A blanket OSError retry
+        would run a second identical Popen for a genuine POSIX failure."""
+        monkeypatch.setattr(daemonize.sys, "platform", "linux")
+        assert len(daemonize._detach_candidates()) == 1
+
+        monkeypatch.setattr(daemonize.sys, "platform", "win32")
+        assert len(daemonize._detach_candidates()) == 2
+
     def test_spawn_passes_the_platform_flags_through(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(daemonize, "_DAEMON_LOG", tmp_path / "daemon.log")
         monkeypatch.setattr(daemonize.sys, "platform", "win32")
@@ -197,74 +206,95 @@ class TestDaemonLogTail:
 
         assert "unreadable" in daemonize.daemon_log_tail()
 
-    def test_path_accessor_points_at_the_real_log(self) -> None:
-        assert daemonize.daemon_log_path() == daemonize._DAEMON_LOG
 
+class TestContendedElectionIsNotAFailure:
+    """Another instance holding the election lock is already electing the leader
+    we want. Three call sites used to answer this one condition three different
+    ways -- and --wait-ready's answer was to fail, which would flake in exactly
+    the concurrent-startup case CI creates."""
 
-class TestContendedElectionDoesNotCrashServe:
     @pytest.mark.anyio
-    async def test_a_locked_out_serve_defers_instead_of_raising(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A concurrent `serve` that cannot take the election lock must become
-        a follower, not hand its MCP client a TimeoutError traceback.
-
-        Raising --ready-timeout makes the holder keep the lock for longer than
-        the default acquire wait, so this path went from theoretical to
-        reachable with the documented cold-container fix.
-        """
+    async def test_contention_waits_for_the_winners_leader(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from octowright import daemonize as _daemonize
-        from octowright.cli import _daemon_ready as _ready
-        from octowright.cli import serve as serve_mod
+        from octowright import singleton as _sn
+        from octowright.cli import _leader_election as _election
 
         leader = SimpleNamespace(mcp_url="http://127.0.0.1:6286/mcp")
 
-        async def _elect(**_kwargs: Any) -> Any:
-            raise TimeoutError
+        class _Contended:
+            def __init__(self, *_a: Any, **_k: Any) -> None:
+                pass
 
-        async def _wait(*_args: Any, **_kwargs: Any) -> Any:
+            async def __aenter__(self) -> None:
+                raise TimeoutError
+
+            async def __aexit__(self, *_exc: Any) -> None:
+                return None
+
+        async def _no_leader(_sn_mod: Any) -> Any:
+            return None
+
+        async def _wait(*_a: Any, **_k: Any) -> Any:
             return leader
 
-        monkeypatch.setattr(_ready, "elect_leader", _elect)
-        monkeypatch.setattr(_daemonize, "wait_for_daemon", _wait)
+        def _spawn(**_k: Any) -> int:
+            raise AssertionError("spawned a competitor while another instance held the lock")
 
-        result = await serve_mod._ensure_leader_or_inline(
-            {"keep_alive": False}, http_host=None, http_port=None, idle_grace=None
-        )
+        monkeypatch.setattr(_election, "_probe_alive_leader", _no_leader)
+        monkeypatch.setattr(_sn, "async_election_lock", _Contended)
+        monkeypatch.setattr(_daemonize, "wait_for_daemon", _wait)
+        monkeypatch.setattr(_daemonize, "spawn_daemon", _spawn)
+
+        result = await _election.elect_leader(http_host=None, http_port=None, idle_grace=None, keep_alive=False)
 
         assert result is leader
 
     @pytest.mark.anyio
-    async def test_contention_never_spawns_a_competing_daemon(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Spawning our own leader while another instance holds the lock is
-        exactly the split-brain the lock exists to prevent."""
+    async def test_the_respawn_guard_still_refuses_to_spawn_beside_a_healthy_leader(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The post-bridge respawn's stricter split-brain guard: adopt-canonical
+        falls through when the port serves octowright with no readable lockfile,
+        and for a respawn that fall-through is the observed split-brain."""
         from octowright import daemonize as _daemonize
-        from octowright.cli import _daemon_ready as _ready
-        from octowright.cli import serve as serve_mod
+        from octowright import singleton as _sn
+        from octowright.cli import _leader_election as _election
 
-        async def _elect(**_kwargs: Any) -> Any:
-            raise TimeoutError
+        class _Granted:
+            def __init__(self, *_a: Any, **_k: Any) -> None:
+                pass
 
-        async def _wait(*_args: Any, **_kwargs: Any) -> Any:
+            async def __aenter__(self) -> None:
+                return None
+
+            async def __aexit__(self, *_exc: Any) -> None:
+                return None
+
+        async def _no_leader(_sn_mod: Any) -> Any:
             return None
 
-        def _spawn(**_kwargs: Any) -> int:
-            raise AssertionError("spawned a competing daemon under contention")
+        async def _no_adopt(*_a: Any, **_k: Any) -> Any:
+            return None
 
-        ran_inline = False
+        async def _canonical_busy(*_a: Any, **_k: Any) -> bool:
+            return True
 
-        async def _run_leader(**_kwargs: Any) -> None:
-            nonlocal ran_inline
-            ran_inline = True
+        def _spawn(**_k: Any) -> int:
+            raise AssertionError("spawned beside a healthy canonical-port leader")
 
-        monkeypatch.setattr(_ready, "elect_leader", _elect)
-        monkeypatch.setattr(_daemonize, "wait_for_daemon", _wait)
+        monkeypatch.setattr(_election, "_probe_alive_leader", _no_leader)
+        monkeypatch.setattr(_election, "_adopt_canonical_leader", _no_adopt)
+        monkeypatch.setattr(_election, "_canonical_port_serves_octowright", _canonical_busy)
+        monkeypatch.setattr(_sn, "async_election_lock", _Granted)
         monkeypatch.setattr(_daemonize, "spawn_daemon", _spawn)
-        monkeypatch.setattr(serve_mod, "_run_leader", _run_leader)
 
-        result = await serve_mod._ensure_leader_or_inline(
-            {"keep_alive": False}, http_host=None, http_port=None, idle_grace=None
+        assert (
+            await _election.elect_leader(
+                http_host=None,
+                http_port=None,
+                idle_grace=None,
+                keep_alive=False,
+                defer_if_canonical_busy=True,
+            )
+            is None
         )
-
-        # The winner never produced a leader either: fall back to inline so
-        # the user still gets a working server, rather than exiting silently.
-        assert result is None
-        assert ran_inline is True

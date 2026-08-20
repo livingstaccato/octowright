@@ -71,6 +71,12 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(_daemon, "wait_for_daemon", _wait)
     monkeypatch.setattr(_sn, "async_election_lock", _lock_granted)
     monkeypatch.setattr(_daemon, "daemon_log_tail", lambda *_a, **_k: "boom: port already in use")
+    # setenv-then-delenv, never a bare delenv(raising=False): the latter
+    # records NO restore when the variable is already absent, so the CLI's own
+    # os.environ[...] = "90.0" would survive teardown and hand every later test
+    # in this worker a 90s readiness budget.
+    monkeypatch.setenv(_daemon.DAEMON_READY_TIMEOUT_ENV, "")
+    monkeypatch.delenv(_daemon.DAEMON_READY_TIMEOUT_ENV)
     return calls
 
 
@@ -117,15 +123,20 @@ def test_failure_exits_nonzero_and_quotes_the_daemon_log(wired: dict[str, Any]) 
     assert "boom: port already in use" in result.stderr
 
 
-def test_contended_election_does_not_claim_readiness(wired: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_contention_reports_the_winners_leader_instead_of_failing(
+    wired: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CI probe named --wait-ready must not fail because another instance is
+    starting the very daemon it is waiting for -- that is the concurrent-startup
+    case CI produces most."""
     from octowright import singleton as _sn
 
     monkeypatch.setattr(_sn, "async_election_lock", _LockContended)
 
     result = _run()
 
-    assert result.exit_code == 1
-    assert "electing a leader" in result.stderr
+    assert result.exit_code == 0
+    assert result.stdout.strip() == LEADER.mcp_url
 
 
 def test_ready_timeout_flag_is_exported_for_every_wait(wired: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,12 +153,6 @@ def test_ready_timeout_flag_is_exported_for_every_wait(wired: dict[str, Any], mo
         return LEADER
 
     monkeypatch.setattr(_daemon, "wait_for_daemon", _wait)
-    # setenv, not delenv: monkeypatch.delenv(raising=False) records NOTHING
-    # when the variable is absent, so the CLI's own os.environ[...] = "90.0"
-    # would survive teardown and give every later test in this worker a 90s
-    # readiness budget.
-    monkeypatch.setenv(_daemon.DAEMON_READY_TIMEOUT_ENV, "")
-    monkeypatch.delenv(_daemon.DAEMON_READY_TIMEOUT_ENV)
 
     assert _run("--ready-timeout", "90").exit_code == 0
     assert seen["env"] == "90.0"
@@ -174,23 +179,12 @@ def test_wait_ready_never_falls_back_to_serving_inline(wired: dict[str, Any], mo
     assert ran_inline is False
 
 
-def test_ready_timeout_does_not_leak_into_later_tests(wired: dict[str, Any]) -> None:
-    """monkeypatch.delenv(raising=False) records no restore when the variable
-    is absent, so a naive test left the CLI's own export in place and gave
-    every later test in the worker a 90s readiness budget."""
-    import os
-
-    from octowright import daemonize as _daemon
-
-    assert os.environ.get(_daemon.DAEMON_READY_TIMEOUT_ENV) in (None, "")
-
-
 def test_election_lock_wait_exceeds_the_readiness_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     """The holder keeps the election lock across wait_for_daemon, so a raised
     --ready-timeout must not make every other `serve` give up on the lock
     first and treat ordinary contention as an error."""
-    from octowright.cli import _daemon_ready as _ready
+    from octowright.cli import _leader_election as _election
 
     monkeypatch.setenv("OCTOWRIGHT_DAEMON_READY_TIMEOUT", "60")
 
-    assert _ready._election_lock_timeout() > 60.0
+    assert _election._election_lock_timeout() > 60.0

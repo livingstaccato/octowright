@@ -97,12 +97,10 @@ _MACRO_LABEL_OVERFLOW = "(overflow)"
 # first (see ``_select_console_tail``), so this bounds payload size rather
 # than being a window a chatty page can flush the useful line out of.
 MACRO_FAILURE_CONSOLE_TAIL = 10
-# Per-message character cap. The count bound above does not bound SIZE: a page
-# that console.logs a stringified API response or a base64 data URL would put
-# ten unbounded strings into the RuntimeError payload and push them over the
-# MCP transport, on the failure path where the agent is already in trouble.
-# Generous next to capture_summaries' 88-char digest cap because this text is
-# meant to be read as the cause, not skimmed as a summary.
+# Per-message cap: the count above bounds the number of messages, not their
+# SIZE, and one console.log of a stringified response would otherwise push
+# megabytes over the MCP transport. Generous next to capture_summaries' 88-char
+# digest cap because this text is read as the cause, not skimmed as a summary.
 MACRO_FAILURE_CONSOLE_TEXT_CHARS = 2000
 # Running count of macro-name lookups that collapsed to the overflow bucket
 # because the cap was already saturated. Surfaces in ``octowright_status``
@@ -318,17 +316,18 @@ async def _report_progress(ctx: Any | None, progress: float, total: float, messa
 def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
     """Cap each console message's text so a chatty page can't bloat the error.
 
-    Copies each capped entry rather than editing it. ``list(self.console)``
-    copies the LIST, not the dicts inside it, so the bundle's messages are the
-    very objects still held in the session's console ring buffer -- truncating
-    one in place permanently rewrote the live buffer, and every later
-    ``browser_console_messages`` / ``capture_create`` call on that session
-    would return the shortened text.
+    Safe to edit in place: ``_select_console_tail`` hands back copies, not the
+    session's live ring-buffer entries.
     """
     messages = bundle.get("console_tail")
     if not isinstance(messages, list):
         return bundle
-    bundle["console_tail"] = [_truncate_console_message(message) for message in messages]
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        text = message.get("text")
+        if isinstance(text, str) and len(text) > MACRO_FAILURE_CONSOLE_TEXT_CHARS:
+            message["text"] = text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"
     return bundle
 
 
