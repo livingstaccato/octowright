@@ -104,8 +104,11 @@ Every one was reproduced against running code before it was fixed.
   was unconditionally empty. So the payload reported the symptom ("timed out
   waiting for `#student-name-edit`") while `net::ERR_NETWORK_CHANGED` sat unread
   in the session's ring buffer, findable only by opening the raw JSONL
-  afterward. Errors, warnings, and asserts are claimed first, so a chatty page
-  can no longer flush the useful line out of the window. Failure path only.
+  afterward. Half the window is reserved for the plain tail and the rest goes
+  to the newest errors and warnings, so neither a chatty page flushing the
+  useful line out of the window nor a page that logs ten warnings at load
+  (favicon 404, CSP report, deprecations) can crowd out the other. Failure
+  path only.
 - **The daemon detaches on Windows.** `start_new_session=True` is POSIX
   (`setsid`); CPython accepts it on Windows and silently does nothing, so the
   "daemon" kept the launching console and its process group. Windows now gets
@@ -119,8 +122,9 @@ Every one was reproduced against running code before it was fixed.
   `capture_summaries`, `inspect_console`, and the new diagnostic tail each had
   their own idea of which levels matter, and they had drifted: Firefox reports
   `console.warn` as level `warn` where Chromium says `warning`, so a set that
-  missed it buried Firefox warnings. One predicate now, in
-  `session._constants`.
+  missed it buried Firefox warnings. One predicate now, in the package-root
+  `octowright.console_levels` — kept out of `session/` so a pure summarization
+  module does not import the browser stack to classify a log level.
 - **A failed daemon spawn says why.** Daemon stderr goes to a separate 0600 log,
   so the file the error message points you at holds the *follower's* output and
   is empty by design on exactly this failure. The inline fallback, the
@@ -130,7 +134,9 @@ Every one was reproduced against running code before it was fixed.
   both mean the image lacks OS components Chromium initializes at startup
   (typical of Server Core), but read as a transient network problem and sent
   people off checking DNS and proxies. Detected ahead of the generic network
-  detector, since the raw text can carry `net::` noise.
+  detector, since the raw text can carry `net::` noise — and gated on the host
+  platform precisely because it runs first, so it cannot answer a Linux or
+  macOS failure with a Windows-only remedy.
 
 - `browser_capture_and_close` no longer risks stalling on its own session gate.
   The aria scrubber takes the session lease, and the call site wrapped it in
@@ -150,7 +156,9 @@ Every one was reproduced against running code before it was fixed.
   readiness budget is now reachable. It was hardcoded at 10s in
   `wait_for_daemon`'s signature *and* every caller invoked it with no arguments,
   so a cold container that needed longer silently degraded to fragile inline
-  mode instead of being given more time.
+  mode instead of being given more time. A non-positive or non-finite
+  `--ready-timeout` is refused rather than floored back to the default, which
+  would leave the caller believing a flag took effect.
 - `OCTOWRIGHT_PROFILES_PRIVATE` — owner-only persona/profile directories (default on).
 - `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` — refuse credential args in navigation/code
   sinks (default on).
