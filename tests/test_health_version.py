@@ -13,6 +13,8 @@ yet?") was the one it could never answer correctly.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from octowright.http.routes import health
@@ -125,3 +127,55 @@ class TestNewTabIdentity:
                 assert new_tab._commit() == "?"
         finally:
             new_tab._commit.cache_clear()
+
+
+# ─── the same theme, agent-facing and test-facing ────────────────────────────
+
+
+def test_status_reports_the_running_version() -> None:
+    """An agent had no way to ask what it was talking to: the daemon block had
+    pid/uptime/mode and no version, and `upgrade.current_version` appears only
+    on the first run after a change."""
+    from octowright.server import meta
+
+    assert "VERSION" in Path(meta.__file__).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "test_bridge_heartbeat_live",
+        "test_bridge_idempotency_live",
+        "test_bridge_leader_restart_live",
+        "test_mcp_events_daemon_live",
+        "test_mcp_notifications_daemon_live",
+    ],
+)
+def test_live_daemon_tests_isolate_the_config_dir(module: str) -> None:
+    """These spawn a REAL daemon. They isolated XDG_STATE_HOME but not
+    XDG_CONFIG_HOME, so the spawned daemon wrote the developer's real
+    ~/.config/octowright/upgrade.json and marked the version seen — consuming
+    the post-upgrade what's-new notice on every `make ci` run, so it never
+    fired for an actual upgrade.
+
+    Asserted on the source rather than by spawning daemons: these suites are
+    slow and often skipped, and the leak must be caught even then.
+    """
+    source = (Path(__file__).parent / f"{module}.py").read_text(encoding="utf-8")
+
+    assert 'env["XDG_CONFIG_HOME"]' in source, f"{module} would pollute the real config dir"
+
+
+def test_stale_followers_come_with_an_action() -> None:
+    """A count alone leaves the reader with nothing to do, and the action is not
+    the obvious one — restarting the daemon cannot update a follower."""
+    from octowright import bridge_state
+
+    stale = bridge_state.summarize_state({"followers": {"1": {"follower_version": "0.0.1"}}, "events": []})
+    current = bridge_state.summarize_state(
+        {"followers": {"1": {"follower_version": VERSION}}, "events": []},
+    )
+
+    assert "reconnect" in stale["stale_follower_hint"].lower()
+    assert "daemon restart cannot" in stale["stale_follower_hint"]
+    assert current["stale_follower_hint"] is None
