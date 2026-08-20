@@ -6,7 +6,13 @@ help: ## Show this help
 install: ## uv sync --all-groups (deps + dev tools)
 	uv sync --all-groups
 
-test: ## Run Python unit + integration tests (no live browsers)
+# NOT a browser-free run, despite what this target used to claim. 18 test
+# modules carry the `live_browser` marker and NOTHING deselects it here or in
+# ci/, so wherever the engines are installed this launches real browsers and
+# spawns detached daemons. The marker is a manual hook: add
+# -m "not live_browser and not memory_isolated" for a genuinely browser-free run.
+# The second line splits out the one suite that needs a clean process.
+test: ## Run the Python test suite (launches real browsers where engines are installed)
 	uv run --active pytest -q tests/ -m "not memory_isolated"
 	uv run --active pytest -q tests/ -m memory_isolated --no-cov
 
