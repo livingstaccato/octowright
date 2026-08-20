@@ -60,8 +60,8 @@ package "Row 3 — always available regardless of profile" as ROW3 #ffffff {
   package "always-on meta + Advisor (7)" as P_META #f5f5f4 {
     rectangle "registers under every profile:\noctowright_status / storage_report\noctowright_dashboard_url / check_takeover\noctowright_advisor_status\noctowright_advisor_set_preference\noctowright_advisor_record_macro_observation" as R_META
   }
-  package "all-only (24)" as P_ALL #f0fdf4 {
-    rectangle "registers only when no --profile filter is active:\nframes/tabs/popups (browser_switch_frame /\nreset_frame / list_frames /\npage_list / page_switch / page_close),\nnetwork + dialogs (browser_mock_route /\nunmock_route / set_dialog_policy),\ntrace (browser_open_trace),\nroster (browser_spawn_roster /\nbrowser_open_url / navigate_back),\ninteraction extras (hover / drag /\nselect_option / set_input_files /\ncapture_and_close),\nmacro artifact extras (macro_artifact_status /\nverify / critical_points_get / set),\nrecordings_cleanup, run_test_suite" as R_ALL
+  package "all-only (27)" as P_ALL #f0fdf4 {
+    rectangle "registers only when no --profile filter is active:\nframes/tabs/popups (browser_switch_frame /\nreset_frame / list_frames /\npage_list / page_switch / page_close),\nnetwork + dialogs (browser_mock_route /\nunmock_route / set_dialog_policy),\nrequest headers (browser_set_extra_http_headers /\ninject_headers / uninject_headers),\ntrace (browser_open_trace),\nroster (browser_spawn_roster /\nbrowser_open_url / navigate_back),\ninteraction extras (hover / drag /\nselect_option / set_input_files /\ncapture_and_close),\nmacro artifact extras (macro_artifact_status /\nverify / critical_points_get / set),\nrecordings_cleanup, run_test_suite" as R_ALL
   }
 }
 
