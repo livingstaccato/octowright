@@ -72,7 +72,17 @@ def test_build_app_non_leader_clears_session_tracker() -> None:
     assert _http_app.get_mcp_active_session_count() == 0
 
 
-def test_health_route_returns_unknown_when_metadata_version_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_health_route_survives_unreadable_package_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Liveness probes depend on this answering, and the RUNNING version is a
+    module constant, so unreadable metadata can no longer affect it.
+
+    This used to assert ``version == "unknown"`` -- which was the bug: the
+    version came from on-disk metadata rather than from the running process,
+    so the endpoint reported whatever was installed and a read failure erased
+    the answer entirely.
+    """
+    from octowright.version import VERSION
+
     def _raise(_name: str) -> str:
         raise RuntimeError("boom")
 
@@ -80,7 +90,20 @@ def test_health_route_returns_unknown_when_metadata_version_raises(monkeypatch: 
     with TestClient(_http_app.build_app()) as client:
         res = client.get("/api/health")
     assert res.status_code == 200
-    assert res.json()["version"] == "unknown"
+    assert res.json() == {"ok": True, "version": VERSION}
+
+
+def test_health_route_flags_an_upgrade_waiting_on_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A newer package on disk is the "restart to pick it up" signal -- reported
+    separately, never as the running version."""
+    from octowright.version import VERSION
+
+    monkeypatch.setattr("importlib.metadata.version", lambda _name: "99.0.0")
+    with TestClient(_http_app.build_app()) as client:
+        body = client.get("/api/health").json()
+
+    assert body["version"] == VERSION
+    assert body["installed_version"] == "99.0.0"
 
 
 @pytest.mark.skipif(not socket.has_ipv6, reason="IPv6 is not available")
