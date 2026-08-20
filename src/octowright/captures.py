@@ -25,6 +25,7 @@ from octowright._paths import atomic_write_text
 from octowright.capture_actions import base_capture_next_actions, capture_search_next_actions, listed_capture_actions
 from octowright.capture_summaries import summarize_capture_payload
 from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CAPTURES_DIR
+from octowright.private_paths import secure_artifact_tree
 
 # Capture-specific preview cap. Intentionally smaller than the session-level
 # ``DEFAULT_PREVIEW_CHARS`` (4000) in ``octowright.session._constants``: a
@@ -135,6 +136,11 @@ def save_capture(
     capture_id = f"cap_{int(time.time() * 1000):x}_{uuid.uuid4().hex[:10]}"
     path = _capture_path(root, host, instance_id, capture_id)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # A capture holds page text, accessibility trees, evaluate results and
+    # request headers -- the same class of data the JSONL recording does, and
+    # governed by the same knob. The 0700 tree, not the 0600 file, is the
+    # control: see private_paths.secure_artifact_tree.
+    secure_artifact_tree(path.parent, root)
     created_at = time.time()
     cleanup_captures(root=root, ttl_seconds=ttl_seconds, max_total_bytes=max_total_bytes, apply=True)
     payload = {
