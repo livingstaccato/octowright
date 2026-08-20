@@ -142,7 +142,17 @@ class SessionInteractionMixin(SessionLike):
     ) -> dict[str, Any]:
         """Install a page.route handler that fulfills matching requests with the given
         response. Store the handler in self._active_routes keyed by url_pattern so we can
-        remove it later."""
+        remove it later.
+
+        Warns when it shadows a header injector on the same pattern. While both
+        were page routes, last-registered-first decided the winner and only the
+        mock-then-inject order lost -- which is the one ``inject_headers``
+        already warns about. ``inject_headers`` is a CONTEXT route now, and page
+        routes are evaluated ahead of context ones, so this mock wins in BOTH
+        orders and the injector never runs (measured on chromium, firefox and
+        webkit; pinned by ``tests/test_route_order_live.py``). Without this
+        mirror, installing the mock second would silently drop the headers.
+        """
 
         async def _handler(route: Any) -> None:
             await route.fulfill(
@@ -152,6 +162,13 @@ class SessionInteractionMixin(SessionLike):
                 headers=headers or {},
             )
 
+        if url_pattern in self._header_routes:
+            log.warning(
+                "octowright.session.header_injection_shadowed_by_mock",
+                instance_id=self.instance_id,
+                pattern=url_pattern,
+                hint="a page-level mock fulfills ahead of the context-level injector, so its headers will not be applied",
+            )
         if url_pattern in self._active_routes:
             await self.page.unroute(url_pattern, self._active_routes[url_pattern])
         await self.page.route(url_pattern, _handler)
