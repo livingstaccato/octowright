@@ -26,7 +26,7 @@ from octowright.browser_pool.lifecycle import (
     close_browser,
     shutdown_pool,
 )
-from octowright.browser_pool.options import LaunchOptions
+from octowright.browser_pool.options import GPU_DISABLE_ARGS, LaunchOptions, resolve_disable_gpu
 from octowright.browser_pool.relaunch import handoff_browser, relaunch_fluid_browser
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
@@ -400,6 +400,7 @@ class BrowserPool:
         channel: str | None = None,
         executable_path: str | None = None,
         launch_args: list[str] | None = None,
+        disable_gpu: bool | None = None,
     ) -> dict[str, Any]:
         """Chromium-only window tiling + new-tab-page override extension, plus
         any caller-supplied channel/executable_path/launch_args passthrough.
@@ -418,23 +419,7 @@ class BrowserPool:
         (e.g. its own --disable-extensions-except) if it deliberately chooses
         to — the reverse would silently break tiling/new-tab-override/shm.
         """
-        args: list[str] = []
-        if kind == "chromium":
-            # Linux/CI: the default /dev/shm (often 64MB in containers) is too
-            # small for Chromium's shared-memory transport; exhaustion surfaces
-            # as random renderer crashes. Route shared memory to a regular
-            # tmpfile instead. Needed on Linux only (no-op risk on
-            # macOS/Windows), and it applies to headless too — the early
-            # "headless returns nothing" path used to skip it.
-            if sys.platform.startswith("linux"):
-                args.append("--disable-dev-shm-usage")
-            if not headless:
-                args.extend(self._headed_chromium_args())
-            if tile and not headless:
-                async with self._tile_lock:
-                    tile_index = self._tile_counter
-                    self._tile_counter += 1
-                args.extend(_tile_args_for_chromium(tile_index))
+        args = await self._chromium_args(kind=kind, tile=tile, headless=headless, disable_gpu=disable_gpu)
         if launch_args:
             args.extend(launch_args)
         out: dict[str, Any] = {}
@@ -445,6 +430,36 @@ class BrowserPool:
         if executable_path:
             out["executable_path"] = executable_path
         return out
+
+    async def _chromium_args(self, *, kind: str, tile: bool, headless: bool, disable_gpu: bool | None) -> list[str]:
+        """Chromium-only argv: shm workaround, GPU escape hatch, new-tab
+        extension, tiling. EMPTY for every other engine -- Firefox and WebKit
+        would be handed argv they do not understand."""
+        if kind != "chromium":
+            return []
+        args: list[str] = []
+        # Linux/CI: the default /dev/shm (often 64MB in containers) is too
+        # small for Chromium's shared-memory transport; exhaustion surfaces
+        # as random renderer crashes. Route shared memory to a regular
+        # tmpfile instead. Needed on Linux only (no-op risk on
+        # macOS/Windows), and it applies to headless too — the early
+        # "headless returns nothing" path used to skip it.
+        if sys.platform.startswith("linux"):
+            args.append("--disable-dev-shm-usage")
+        if resolve_disable_gpu(disable_gpu):
+            # Escape hatch for the headed-Chromium crash (native macOS UI +
+            # Metal). Before octowright's own args so a caller-supplied
+            # launch_args flag can still override it, matching the ordering
+            # rule documented below.
+            args.extend(GPU_DISABLE_ARGS)
+        if not headless:
+            args.extend(self._headed_chromium_args())
+        if tile and not headless:
+            async with self._tile_lock:
+                tile_index = self._tile_counter
+                self._tile_counter += 1
+            args.extend(_tile_args_for_chromium(tile_index))
+        return args
 
     def _headed_chromium_args(self) -> list[str]:
         """New-tab-override extension args for headed Chromium (tile args are
