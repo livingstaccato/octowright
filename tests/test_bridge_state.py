@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from octowright import bridge_state
+from octowright.version import VERSION
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX flock semantics")
@@ -237,6 +238,10 @@ def test_summarize_state_totals_followers_and_latest_error() -> None:
         "total_reconnect_attempts": 7,
         "total_request_timeouts": 9,
         "latest_error": "newer",
+        "leader_version": VERSION,
+        # Neither snapshot reports a version, so both predate the field.
+        "follower_versions": {bridge_state.UNKNOWN_FOLLOWER_VERSION: 2},
+        "stale_follower_count": 2,
     }
 
 
@@ -262,6 +267,9 @@ def test_summarize_state_ignores_bad_shapes() -> None:
         "total_reconnect_attempts": 0,
         "total_request_timeouts": 2,
         "latest_error": None,
+        "leader_version": VERSION,
+        "follower_versions": {bridge_state.UNKNOWN_FOLLOWER_VERSION: 2},
+        "stale_follower_count": 2,
     }
 
 
@@ -273,7 +281,52 @@ def test_summarize_state_handles_non_dict_followers() -> None:
         "total_reconnect_attempts": 0,
         "total_request_timeouts": 0,
         "latest_error": None,
+        "leader_version": VERSION,
+        "follower_versions": {},
+        "stale_follower_count": 0,
     }
+
+
+def test_a_follower_records_its_own_version(tmp_path: Path) -> None:
+    path = tmp_path / "bridge-state.json"
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=os.getpid(),
+        remote_url="http://127.0.0.1:6286/mcp/",
+        remote_session_id=None,
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+
+    snapshot = bridge_state.read_state(path)["followers"][str(os.getpid())]
+
+    assert snapshot["follower_version"] == VERSION
+
+
+def test_version_skew_is_reported_rather_than_left_to_forensics() -> None:
+    """A follower is a subprocess its MCP CLIENT owns; it survives a leader
+    restart by design, so a daemon restart cannot deploy follower-side code.
+    The self-identifying header carries a pid and nothing else, so working out
+    which followers were stale meant reading process start times against commit
+    timestamps by hand."""
+    data = {
+        "followers": {
+            "1": {"ts": 1.0, "follower_version": VERSION},
+            "2": {"ts": 2.0, "follower_version": "0.14.4"},
+            "3": {"ts": 3.0, "follower_version": "0.14.4"},
+            "4": {"ts": 4.0},  # predates the field entirely
+        },
+        "events": [],
+    }
+
+    summary = bridge_state.summarize_state(data)
+
+    assert summary["leader_version"] == VERSION
+    assert summary["follower_versions"] == {"0.14.4": 2, VERSION: 1, bridge_state.UNKNOWN_FOLLOWER_VERSION: 1}
+    assert summary["stale_follower_count"] == 3
+    assert summary["follower_count"] == 4
 
 
 def test_concurrent_snapshots_with_reused_pid_dont_collide(tmp_path: Path) -> None:

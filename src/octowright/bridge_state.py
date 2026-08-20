@@ -20,7 +20,15 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.version import VERSION
+
 log = get_logger(__name__)
+
+# What a snapshot written before followers reported their version looks like.
+# Such a follower is stale BY DEFINITION -- the field was added in the same
+# release that made staleness visible -- so the unknown bucket is counted as
+# stale rather than excused.
+UNKNOWN_FOLLOWER_VERSION = "unknown"
 
 # Bound on the cross-process state-lock wait. Both callers run the locked
 # transaction on an asyncio event loop, so an unbounded wait lets one frozen
@@ -203,6 +211,24 @@ def read_state(path: Path) -> dict[str, Any]:
     return {"followers": followers, "events": events}
 
 
+def _follower_totals(followers: dict[str, Any]) -> tuple[int, int, int, str | None]:
+    """Summed counters plus the newest non-empty ``last_error`` across followers."""
+    latest_error: str | None = None
+    latest_ts: float | None = None
+    totals = [0, 0, 0]
+    for item in followers.values():
+        if not isinstance(item, dict):
+            continue
+        for index, key in enumerate(("in_flight", "reconnect_attempts", "request_timeouts")):
+            totals[index] += _int_value(item.get(key))
+        error = item.get("last_error")
+        ts = item.get("ts")
+        if isinstance(error, str) and error and isinstance(ts, (int, float)) and (latest_ts is None or ts >= latest_ts):
+            latest_error = error
+            latest_ts = float(ts)
+    return totals[0], totals[1], totals[2], latest_error
+
+
 def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
     followers = state.get("followers")
     events = state.get("events")
@@ -211,32 +237,34 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(events, list):
         events = []
 
-    latest_error: str | None = None
-    latest_ts: float | None = None
-    total_in_flight = 0
-    total_reconnect_attempts = 0
-    total_request_timeouts = 0
-
-    for item in followers.values():
-        if not isinstance(item, dict):
-            continue
-        total_in_flight += _int_value(item.get("in_flight"))
-        total_reconnect_attempts += _int_value(item.get("reconnect_attempts"))
-        total_request_timeouts += _int_value(item.get("request_timeouts"))
-        error = item.get("last_error")
-        ts = item.get("ts")
-        if isinstance(error, str) and error and isinstance(ts, (int, float)) and (latest_ts is None or ts >= latest_ts):
-            latest_error = error
-            latest_ts = float(ts)
-
+    in_flight, reconnect_attempts, request_timeouts, latest_error = _follower_totals(followers)
+    versions = _follower_version_counts(followers)
     return {
         "follower_count": len(followers),
         "event_count": len(events),
-        "total_in_flight": total_in_flight,
-        "total_reconnect_attempts": total_reconnect_attempts,
-        "total_request_timeouts": total_request_timeouts,
+        "total_in_flight": in_flight,
+        "total_reconnect_attempts": reconnect_attempts,
+        "total_request_timeouts": request_timeouts,
         "latest_error": latest_error,
+        # Version skew. The leader answers this call, so ``VERSION`` is the
+        # leader's own -- a follower reporting anything else is running code
+        # the running daemon is not, and only ITS client restarting can
+        # change that (killing the subprocess just breaks that client's
+        # session until the same manual reconnect).
+        "leader_version": VERSION,
+        "follower_versions": versions,
+        "stale_follower_count": sum(count for version, count in versions.items() if version != VERSION),
     }
+
+
+def _follower_version_counts(followers: dict[str, Any]) -> dict[str, int]:
+    """Followers per reported version, newest-schema first, sorted for stability."""
+    counts: dict[str, int] = {}
+    for item in followers.values():
+        version = item.get("follower_version") if isinstance(item, dict) else None
+        key = version if isinstance(version, str) and version else UNKNOWN_FOLLOWER_VERSION
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _int_value(value: Any) -> int:
@@ -323,11 +351,25 @@ def record_snapshot(
     reconnect_attempts: int,
     request_timeouts: int,
     max_events: int = 50,
+    follower_version: str = VERSION,
 ) -> None:
+    """Record one follower's bridge snapshot.
+
+    ``follower_version`` defaults to this process's own version because the
+    only caller is a follower describing itself. It exists because a follower
+    is a subprocess its MCP CLIENT owns and supervises: it survives a leader
+    restart by design (that is what the leader-recovery window is for), so a
+    daemon restart can never deploy follower-side code, and the leader had no
+    way to tell a three-day-old follower from one spawned a minute ago -- the
+    self-identifying header carries a pid and nothing else. Diagnosing a
+    version skew meant reading process start times against commit timestamps
+    by hand.
+    """
     snapshot = {
         "ts": time.time(),
         "event": "snapshot",
         "follower_pid": follower_pid,
+        "follower_version": follower_version,
         "remote_url": remote_url,
         "remote_session_id": remote_session_id,
         "last_error": last_error,
