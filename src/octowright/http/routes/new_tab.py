@@ -13,7 +13,6 @@ are refreshed client-side every 10 s via fetch(/api/sessions).
 
 from __future__ import annotations
 
-import importlib.metadata
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -21,25 +20,44 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse
 
+from octowright.version import VERSION
+
 _OTTO_SVG = Path(__file__).resolve().parent.parent / "otto.svg"
 
 
-@lru_cache(maxsize=1)
 def _version() -> str:
-    try:
-        return importlib.metadata.version("octowright")
-    except Exception:
-        return "?"
+    """The version this PROCESS is running.
+
+    Was ``importlib.metadata.version("octowright")``, which reads dist-info off
+    disk -- so after an upgrade the strip advertised the newly INSTALLED version
+    while the daemon went on executing the code it had imported. ``VERSION`` is
+    bound at import, so it describes the running code by construction.
+    """
+    return VERSION
 
 
 @lru_cache(maxsize=1)
 def _commit() -> str:
+    """Short commit of the checkout this daemon STARTED from, or ``"?"``.
+
+    Two things were wrong with reading it per request. It ran ``git`` in the
+    daemon's *current working directory*, which is wherever the process happened
+    to be launched and need not be this package at all; and it reported HEAD *at
+    request time*, so switching branches under a running daemon silently changed
+    the commit the strip claimed to be running -- while the loaded modules of
+    course did not change. Resolved once, against this package's own directory,
+    and cached: the honest answer is the checkout the daemon started from.
+
+    ``"?"`` for an installed (non-editable) package, which has no repository --
+    the same answer it has always given there.
+    """
     try:
         r = subprocess.run(  # nosec B603 B607 - fixed git argv, no user input
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,
             timeout=2,
+            cwd=Path(__file__).resolve().parent,
         )
         return r.stdout.strip() or "?"
     except Exception:

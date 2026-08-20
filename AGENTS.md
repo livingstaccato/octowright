@@ -13,7 +13,9 @@ This file provides guidance to coding agents when working with code in this repo
 make install              # uv sync --all-groups
 
 # Test & quality
-make test                 # pytest (no live browsers)
+make test                 # pytest — DOES launch real browsers where engines are installed
+                          # (18 modules are marked live_browser and nothing deselects it);
+                          # add -m "not live_browser and not memory_isolated" to skip them
 make lint                 # ruff/format/mypy/ty/bandit/codespell/SPDX/LOC/vulture/xenon/secrets
 make format               # ruff format + ruff --fix
 make typecheck            # mypy only
