@@ -283,6 +283,20 @@ if handler is None:
 await _page(state).unroute(pattern, handler)
 executed += 1
 """,
+    # Page-level, matching the session method: a popup opened later does not
+    # inherit these. A value the recorder scrubbed is refused rather than sent,
+    # since it would authenticate as nobody and surface as a puzzling 401.
+    "set_extra_http_headers": """
+headers = action["headers"]
+scrubbed = sorted(k for k, v in headers.items() if v == "<redacted:header>")
+if scrubbed:
+    raise RuntimeError(
+        f"header(s) {', '.join(scrubbed)} hold the recorder's redaction placeholder; "
+        "parameterize the macro and pass the real value at run time"
+    )
+await _page(state).set_extra_http_headers(dict(headers))
+executed += 1
+""",
     "set_dialog_policy": """
 policy = action["policy"]
 if policy not in ("accept", "dismiss", "manual"):

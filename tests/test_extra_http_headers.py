@@ -16,7 +16,14 @@ from __future__ import annotations
 import pytest
 
 from octowright.browser_pool.launch_helpers import extra_http_headers_kwargs
-from octowright.browser_pool.options import MAX_EXTRA_HTTP_HEADERS, LaunchOptions
+from octowright.browser_pool.options import LaunchOptions
+from octowright.http_headers import (
+    MAX_EXTRA_HTTP_HEADERS,
+    REDACTED_HEADER_PLACEHOLDER,
+    is_credential_header,
+    redact_header_values,
+)
+from octowright.session.core_interaction_mixin import _reject_redacted_headers
 
 
 def test_headers_reach_the_pool_kwargs() -> None:
@@ -97,3 +104,63 @@ def test_a_poisoned_recording_cannot_inject_headers_on_relaunch() -> None:
     restored = LaunchOptions.from_launch_record(record)
 
     assert restored.extra_http_headers is None
+
+
+# ─── page-level override (the macro action) ──────────────────────────────────
+
+
+class TestPageLevelHeaders:
+    """Measured page-over-context precedence on chromium, firefox and webkit
+    (Playwright 1.62). Per PAGE, so a popup opened afterwards does not inherit
+    them -- that is why the launch-time option exists alongside this."""
+
+    def test_the_action_maps_to_a_method_that_exists(self) -> None:
+        """The replay invariant: an entry in _ACTION_MAP whose method is missing
+        makes every recorded occurrence a silent skip."""
+        from octowright.macros.runtime import _ACTION_MAP
+        from octowright.session.core_interaction_mixin import SessionInteractionMixin
+
+        method = _ACTION_MAP["set_extra_http_headers"]
+
+        assert hasattr(SessionInteractionMixin, method)
+
+    def test_a_credential_header_is_scrubbed_under_the_default_policy(self) -> None:
+        """Unlike press_key/evaluate -- selector-less sinks that cannot classify
+        their own value and so are scrubbed only under `all` -- a header carries
+        its NAME, and the name says whether the value is a secret."""
+        scrubbed = redact_header_values({"Authorization": "Bearer s3cret", "X-Env": "staging"}, "passwords")
+
+        assert scrubbed == {"Authorization": REDACTED_HEADER_PLACEHOLDER, "X-Env": "staging"}
+
+    def test_all_scrubs_every_value_and_off_scrubs_none(self) -> None:
+        headers = {"Authorization": "Bearer s3cret", "X-Env": "staging"}
+
+        assert redact_header_values(headers, "all") == {
+            "Authorization": REDACTED_HEADER_PLACEHOLDER,
+            "X-Env": REDACTED_HEADER_PLACEHOLDER,
+        }
+        assert redact_header_values(headers, "off") == headers
+
+    def test_names_are_never_scrubbed(self) -> None:
+        """Which headers a run set is the diagnostic value; the name is not the secret."""
+        assert sorted(redact_header_values({"Authorization": "x"}, "all")) == ["Authorization"]
+
+    @pytest.mark.parametrize(
+        "name", ["Authorization", "authorization", "Cookie", "X-Api-Key", "X-Session-Token", "proxy-authorization"]
+    )
+    def test_credential_header_names_are_recognised(self, name: str) -> None:
+        assert is_credential_header(name)
+
+    @pytest.mark.parametrize("name", ["X-Env", "Accept-Language", "X-Request-Id", "User-Agent"])
+    def test_benign_header_names_are_not(self, name: str) -> None:
+        assert not is_credential_header(name)
+
+    def test_replaying_a_scrubbed_value_fails_with_the_fix_in_the_message(self) -> None:
+        """A macro saved from a recording carries the placeholder, not the token.
+        Sending it would authenticate as nobody and surface as a confusing 401
+        several actions later."""
+        with pytest.raises(ValueError, match="redaction placeholder"):
+            _reject_redacted_headers({"Authorization": REDACTED_HEADER_PLACEHOLDER})
+
+    def test_a_real_value_replays_normally(self) -> None:
+        _reject_redacted_headers({"Authorization": "Bearer real", "X-Env": "staging"})
