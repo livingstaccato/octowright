@@ -21,6 +21,11 @@ from typing import Any
 MAX_EXTRA_HTTP_HEADERS = 32
 MAX_EXTRA_HTTP_HEADER_VALUE_CHARS = 4096
 
+# Bounds on the URL globs that SCOPE a header map. Each one becomes a context
+# route, so the count is capped for the same reason the header map is.
+MAX_EXTRA_HTTP_HEADER_URLS = 32
+MAX_EXTRA_HTTP_HEADER_URL_CHARS = 2048
+
 # RFC 7230 token: the characters a header NAME may legally contain.
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
@@ -71,6 +76,40 @@ def validate_extra_http_headers(headers: Any) -> None:
         raise ValueError(f"extra_http_headers accepts at most {MAX_EXTRA_HTTP_HEADERS}, got {len(headers)}")
     for name, value in headers.items():
         validate_one_header(name, value)
+
+
+def validate_extra_http_header_urls(url_patterns: Any) -> None:
+    """Validate the URL globs that scope a header map, or raise ``ValueError``.
+
+    Unvalidated, this reached ``context.route`` verbatim from both the HTTP
+    ``POST /api/sessions`` body and the MCP ``browser_launch`` args. A bare
+    STRING is the dangerous shape: it iterates CHARACTERS, so ``"**/api/**"``
+    registers one route per character -- ``*``, ``/``, ``a`` -- and sprays the
+    header at unrelated origins, the exact opposite of what scoping is for.
+
+    An empty list is refused rather than treated as "no scoping". ``[]`` most
+    naturally reads as "scope to nothing", and the truthiness check it used to
+    meet read it as "send them everywhere"; for a security-adjacent knob,
+    failing open in the credential-spraying direction is the wrong way to be
+    wrong. Omit the argument for deliberate context-level headers.
+    """
+    if url_patterns is None:
+        return
+    if isinstance(url_patterns, str) or not isinstance(url_patterns, list | tuple):
+        raise ValueError("extra_http_headers_urls must be a list of URL glob patterns")
+    if not url_patterns:
+        raise ValueError("extra_http_headers_urls must be non-empty -- omit it entirely for context-level headers")
+    if len(url_patterns) > MAX_EXTRA_HTTP_HEADER_URLS:
+        raise ValueError(
+            f"extra_http_headers_urls accepts at most {MAX_EXTRA_HTTP_HEADER_URLS}, got {len(url_patterns)}"
+        )
+    for pattern in url_patterns:
+        if not isinstance(pattern, str):
+            raise ValueError(f"extra_http_headers_urls entries must be string patterns, got {type(pattern).__name__}")
+        if not pattern.strip():
+            raise ValueError("extra_http_headers_urls entries must not be empty")
+        if len(pattern) > MAX_EXTRA_HTTP_HEADER_URL_CHARS:
+            raise ValueError(f"URL pattern exceeds {MAX_EXTRA_HTTP_HEADER_URL_CHARS} chars")
 
 
 def redact_header_values(headers: dict[str, str], mode: str) -> dict[str, str]:

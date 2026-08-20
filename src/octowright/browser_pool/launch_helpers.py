@@ -246,18 +246,53 @@ async def install_scoped_header_routes(
     Context scope rather than page scope so the routes follow popups and pages
     opened later -- the property page-level routing lacks and the reason the
     page-scoped version of this had to be re-registered after every page switch.
+
+    ``None`` and ``[]`` are deliberately different: ``None`` means "no scoping
+    was asked for" (the headers stay context-level), while an empty list means
+    "scope to nothing" and registers nothing. A truthiness check conflated the
+    two and sent the headers on EVERY request -- failing open in the
+    credential-spraying direction. ``LaunchOptions`` refuses ``[]`` outright;
+    this helper is callable on its own and must not fail open either.
     """
-    if not headers or not url_patterns:
+    if not headers or url_patterns is None:
         return
 
     def _make(extra: dict[str, str]) -> Any:
         async def _handler(route: Any) -> None:
-            await route.fallback(headers={**route.request.headers, **extra})
+            try:
+                await route.fallback(headers={**route.request.headers, **extra})
+            except Exception as exc:  # pragma: no cover - route already gone
+                # A route whose page navigated away raises on fallback and abort
+                # alike (the same reason ssrf_guard._handle_route wraps its own
+                # body). Let loose, the exception escapes into Playwright's route
+                # dispatcher, the intercepted request is never answered, and the
+                # load hangs until it times out.
+                log.debug("octowright.session.header_route_failed", error=repr(exc))
 
         return _handler
 
     for pattern in url_patterns:
         await context.route(pattern, _make(dict(headers)))
+
+
+async def install_context_routes(context: Any, headers: dict[str, str] | None, url_patterns: list[str] | None) -> None:
+    """Install every launch-time context route, in the ONE order that is correct.
+
+    Playwright runs context route handlers **last-registered-first**, and
+    ``install_navigation_guard`` is itself a context route. Registering the
+    scoped header routes AFTER it therefore makes them run FIRST, so the
+    guard's own ``route.fetch(max_redirects=0)`` validation hop carries the
+    same headers as the request the browser ends up making -- the chain the
+    guard checks and the chain the browser follows are one request.
+
+    Reversed, they are two: an unauthenticated validation fetch can be answered
+    with an allowed redirect (a login page) while the authenticated request the
+    browser actually makes redirects somewhere the policy would have refused,
+    and the guard never sees it. The order is the whole point of this helper
+    existing rather than two calls at the call site.
+    """
+    await install_navigation_guard(context)
+    await install_scoped_header_routes(context, headers, url_patterns)
 
 
 def extra_http_headers_kwargs(
@@ -276,7 +311,9 @@ def extra_http_headers_kwargs(
     """
     # With URL patterns the headers go on scoped context ROUTES instead, so the
     # context must not also carry them unscoped -- that is the whole point.
-    if url_patterns:
+    # ``is not None`` rather than truthiness: an empty list means "scope to
+    # nothing", and reading it as "no scoping" put the headers on every request.
+    if url_patterns is not None:
         return {}
     return {"extra_http_headers": dict(headers)} if headers else {}
 
@@ -347,9 +384,9 @@ async def _open_browser_context(
         page = await context.new_page()
         user_data_dir = None
     # Pre-flight SSRF checks only see the URL that was asked for; a redirect
-    # is a different host. No-op unless a policy is enabled.
-    await install_scoped_header_routes(context, extra_http_headers, extra_http_headers_urls)
-    await install_navigation_guard(context)
+    # is a different host. No-op unless a policy is enabled. Registration order
+    # is load-bearing -- see install_context_routes.
+    await install_context_routes(context, extra_http_headers, extra_http_headers_urls)
     return browser, context, page, user_data_dir
 
 
