@@ -283,9 +283,13 @@ if handler is None:
 await _page(state).unroute(pattern, handler)
 executed += 1
 """,
-    # Per-endpoint injection. Order matters and silently: route handlers run
-    # last-registered-first and a fulfilling mock ends the chain, so a mock
-    # installed after this on an overlapping pattern suppresses it.
+    # Per-endpoint injection, on the CONTEXT so it follows popups and pages
+    # opened later -- matching the live session method. A page route dies at the
+    # page boundary, so the exported script would silently drop the header on
+    # exactly the popup traffic the live run covered.
+    # A fulfilling mock still ends the chain, and mock_route is a PAGE route,
+    # which takes precedence over a context one -- so a mock on an overlapping
+    # pattern suppresses this injector.
     "inject_headers": """
 pattern = action.get("pattern") or action["url_pattern"]
 headers = action["headers"]
@@ -306,8 +310,8 @@ def _make_header_injector(extra):
 
 handler = _make_header_injector(dict(headers))
 if pattern in state["header_routes"]:
-    await _page(state).unroute(pattern, state["header_routes"][pattern])
-await _page(state).route(pattern, handler)
+    await _page(state).context.unroute(pattern, state["header_routes"][pattern])
+await _page(state).context.route(pattern, handler)
 state["header_routes"][pattern] = handler
 executed += 1
 """,
@@ -316,7 +320,7 @@ pattern = action.get("pattern") or action["url_pattern"]
 handler = state["header_routes"].pop(pattern, None)
 if handler is None:
     raise RuntimeError(f"no active header injection for pattern {pattern!r}")
-await _page(state).unroute(pattern, handler)
+await _page(state).context.unroute(pattern, handler)
 executed += 1
 """,
     # Page-level, matching the session method: a popup opened later does not

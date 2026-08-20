@@ -19,9 +19,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from octowright.browser_pool.launch_helpers import extra_http_headers_kwargs
+from octowright.artifacts.script_export_actions import EXPORT_DISPATCH
+from octowright.browser_pool.launch_helpers import (
+    extra_http_headers_kwargs,
+    install_context_routes,
+    install_scoped_header_routes,
+)
 from octowright.browser_pool.options import LaunchOptions
 from octowright.http_headers import (
+    MAX_EXTRA_HTTP_HEADER_URLS,
     MAX_EXTRA_HTTP_HEADERS,
     REDACTED_HEADER_PLACEHOLDER,
     is_credential_header,
@@ -293,3 +299,157 @@ class TestNetworkHeaderObservability:
                 raise RuntimeError("gone")
 
         assert _recorded_headers(_Broken()) == {}
+
+
+class TestGuardOrdering:
+    """The scoped header routes must be registered LAST.
+
+    Playwright runs context route handlers last-registered-first, and
+    ``install_navigation_guard`` is itself a context route. Registered BEFORE
+    the guard, the injector runs after it -- so the guard's own
+    ``route.fetch(max_redirects=0)`` validation hop carries none of the headers
+    while the browser's real request (reached via the guard's ``fallback()``)
+    carries all of them. The chain the guard checked would then not be the
+    chain the browser follows: an unauthenticated validation fetch can be
+    answered with an allowed redirect while the authenticated request the
+    browser actually makes redirects somewhere the policy would have refused.
+    """
+
+    async def test_the_ssrf_guard_registers_before_the_header_routes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
+        registered: list[str] = []
+
+        class _Context:
+            async def route(self, pattern: str, handler: object) -> None:
+                registered.append(pattern)
+
+        await install_context_routes(_Context(), {"X-A": "1"}, ["**/api/**"])
+
+        assert registered == ["**/*", "**/api/**"]
+
+    async def test_the_order_holds_for_several_patterns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
+        registered: list[str] = []
+
+        class _Context:
+            async def route(self, pattern: str, handler: object) -> None:
+                registered.append(pattern)
+
+        await install_context_routes(_Context(), {"X-A": "1"}, ["**/api/**", "**/gql"])
+
+        assert registered[0] == "**/*"
+
+    async def test_a_dead_route_does_not_escape_into_playwrights_dispatcher(self) -> None:
+        """A page that navigated away raises on ``fallback`` and ``abort`` alike
+        -- the same reason ``ssrf_guard._handle_route`` wraps its own body. Let
+        loose, the exception leaves the intercepted request unanswered and the
+        load hangs until it times out."""
+        captured: list[object] = []
+
+        class _Context:
+            async def route(self, pattern: str, handler: object) -> None:
+                captured.append(handler)
+
+        await install_scoped_header_routes(_Context(), {"X-A": "1"}, ["**/api/**"])
+
+        class _DeadRoute:
+            request = SimpleNamespace(headers={})
+
+            async def fallback(self, **kwargs: object) -> None:
+                raise RuntimeError("Target page, context or browser has been closed")
+
+        await captured[0](_DeadRoute())
+
+
+class TestScopedPatternValidation:
+    """``extra_http_headers`` is validated; the patterns that SCOPE it were not.
+
+    ``POST /api/sessions`` feeds a raw JSON body to ``from_mapping``, and the
+    MCP ``browser_launch`` builds a ``LaunchOptions`` directly -- so an
+    unvalidated value reaches ``context.route`` verbatim.
+    """
+
+    def test_a_string_is_refused_rather_than_iterated_per_character(self) -> None:
+        """A bare string iterates CHARACTERS: one context route per char --
+        ``*``, ``/``, ``a`` -- which attaches the credential to unrelated
+        origins, the exact opposite of what scoping is for."""
+        with pytest.raises(ValueError, match="list"):
+            LaunchOptions(
+                extra_http_headers={"Authorization": "Bearer x"},
+                extra_http_headers_urls="**/api/**",  # type: ignore[arg-type]
+            ).to_pool_kwargs()
+
+    def test_a_non_string_element_is_refused_at_the_edge(self) -> None:
+        with pytest.raises(ValueError, match="string"):
+            LaunchOptions(
+                extra_http_headers={"X-A": "1"},
+                extra_http_headers_urls=[None],  # type: ignore[list-item]
+            ).to_pool_kwargs()
+
+    def test_an_empty_pattern_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            LaunchOptions(extra_http_headers={"X-A": "1"}, extra_http_headers_urls=[""]).to_pool_kwargs()
+
+    def test_the_pattern_list_is_bounded(self) -> None:
+        with pytest.raises(ValueError, match="at most"):
+            LaunchOptions(
+                extra_http_headers={"X-A": "1"},
+                extra_http_headers_urls=[f"**/p{i}/**" for i in range(MAX_EXTRA_HTTP_HEADER_URLS + 1)],
+            ).to_pool_kwargs()
+
+    def test_an_empty_list_is_refused_rather_than_failing_open(self) -> None:
+        """``[]`` most naturally reads as "scope to nothing"; the old truthiness
+        check read it as "no scoping" and sent the headers on EVERY request.
+        For a security-adjacent knob, failing open in the credential-spraying
+        direction is the wrong way to be wrong -- so it is an error."""
+        with pytest.raises(ValueError, match="non-empty"):
+            LaunchOptions(extra_http_headers={"X-A": "1"}, extra_http_headers_urls=[]).to_pool_kwargs()
+
+    def test_an_empty_list_never_falls_back_to_unscoped_headers(self) -> None:
+        """The helper is callable on its own; it must not fail open either."""
+        assert extra_http_headers_kwargs({"X-A": "1"}, []) == {}
+
+    async def test_an_empty_list_registers_no_routes(self) -> None:
+        registered: list[str] = []
+
+        class _Context:
+            async def route(self, pattern: str, handler: object) -> None:
+                registered.append(pattern)
+
+        await install_scoped_header_routes(_Context(), {"X-A": "1"}, [])
+
+        assert registered == []
+
+    def test_ordinary_patterns_are_accepted(self) -> None:
+        opts = LaunchOptions(extra_http_headers={"X-A": "1"}, extra_http_headers_urls=["**/api/**"])
+
+        assert opts.to_pool_kwargs()["extra_http_headers_urls"] == ["**/api/**"]
+
+    def test_the_launch_funnel_validates_the_headers_too(self) -> None:
+        """``to_pool_kwargs`` is what every launch path funnels through;
+        ``validate()`` is only reached from ``from_mapping``, so the MCP
+        ``browser_launch`` path was unchecked."""
+        with pytest.raises(ValueError, match="control character"):
+            LaunchOptions(extra_http_headers={"X-A": "one\r\nX-B: two"}).to_pool_kwargs()
+
+
+class TestExportedScriptParity:
+    """A macro recorded against the popup case ``inject_headers`` now covers
+    must not pass live and fail in the exported standalone script."""
+
+    def test_the_exported_injector_routes_on_the_context(self) -> None:
+        body = EXPORT_DISPATCH["inject_headers"]
+
+        assert "_page(state).context.route(" in body
+        assert "_page(state).route(" not in body
+
+    def test_the_exported_remover_unroutes_the_context(self) -> None:
+        body = EXPORT_DISPATCH["uninject_headers"]
+
+        assert "_page(state).context.unroute(" in body
+        assert "_page(state).unroute(" not in body
+
+    def test_mock_route_stays_page_level(self) -> None:
+        """``mock_route`` is a PAGE route live, and page routes take precedence
+        over context ones -- moving it would change which handler wins."""
+        assert "_page(state).route(" in EXPORT_DISPATCH["mock_route"]
