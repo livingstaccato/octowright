@@ -13,7 +13,7 @@ from typing import Any
 from octowright import defaults
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
-from octowright.http_headers import validate_extra_http_headers
+from octowright.http_headers import validate_extra_http_header_urls, validate_extra_http_headers
 
 #: Playwright's ``channel`` param picks a real installed browser build instead
 #: of the bundled one (e.g. system Chrome/Edge, for native GPU/DRM/codec
@@ -289,7 +289,18 @@ class LaunchOptions:
         if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
             raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
+        self._validate_headers()
+
+    def _validate_headers(self) -> None:
+        """Header checks, split out because ``to_pool_kwargs`` needs them too.
+
+        ``validate()`` is only reached from ``from_mapping`` (the HTTP body
+        path); the MCP ``browser_launch`` builds a ``LaunchOptions`` directly
+        and then calls ``to_pool_kwargs``, so anything checked only here was
+        unchecked on the tool surface an LLM drives.
+        """
         validate_extra_http_headers(self.extra_http_headers)
+        validate_extra_http_header_urls(self.extra_http_headers_urls)
 
     def _validate_browser_selection(self) -> None:
         if self.channel is not None and self.channel not in SUPPORTED_CHANNELS:
@@ -318,6 +329,7 @@ class LaunchOptions:
         funnels through, so adding a new field is a one-line edit here +
         one new dataclass attribute above.
         """
+        self._validate_headers()
         return {
             "kind": self.kind,
             "url": self.url,

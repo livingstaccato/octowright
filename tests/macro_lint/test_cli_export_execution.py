@@ -92,6 +92,14 @@ class _FakeContext:
         self._rec.record("context.new_page")
         return _FakePage(self._rec, tag="tab")
 
+    async def route(self, pattern: str, handler: Any) -> None:
+        """`inject_headers` routes on the CONTEXT, matching the live session --
+        a page route would drop the header on popups the live run covered."""
+        self._rec.record("context.route", pattern)
+
+    async def unroute(self, pattern: str, handler: Any = None) -> None:
+        self._rec.record("context.unroute", pattern)
+
 
 class _FakePage:
     """Records every call the generated dispatch bodies can make on a page."""
