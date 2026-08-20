@@ -69,3 +69,59 @@ async def test_unreadable_metadata_never_breaks_the_probe(monkeypatch: pytest.Mo
     monkeypatch.setattr(health, "_installed_version", lambda: None)
 
     assert await _payload() == {"ok": True, "version": VERSION}
+
+
+# ─── the same class on the /new-tab status strip ─────────────────────────────
+
+
+class TestNewTabIdentity:
+    """The landing page's status strip had the same bug in two forms."""
+
+    def test_the_strip_shows_the_running_version(self) -> None:
+        """It read dist-info, so after an upgrade it advertised the newly
+        INSTALLED version while the daemon went on running old code."""
+        from octowright.http.routes import new_tab
+
+        assert new_tab._version() == VERSION
+
+    def test_the_commit_is_resolved_against_this_package_not_the_daemon_cwd(self) -> None:
+        """It shelled out to git in the daemon's *current working directory* --
+        wherever the process happened to be launched, which need not be this
+        package at all -- and did so at request time, so switching branches
+        under a running daemon changed the commit the strip claimed while the
+        loaded modules did not change."""
+        import subprocess
+        from pathlib import Path
+
+        from octowright.http.routes import new_tab
+
+        new_tab._commit.cache_clear()
+        seen: dict[str, object] = {}
+        real = subprocess.run
+
+        def _spy(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+            seen.update(kwargs)
+            return real(*args, **kwargs)  # type: ignore[arg-type]
+
+        try:
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(subprocess, "run", _spy)
+                new_tab._commit()
+        finally:
+            new_tab._commit.cache_clear()
+
+        assert Path(str(seen["cwd"])).resolve() == Path(new_tab.__file__).resolve().parent
+
+    def test_an_unavailable_repository_never_breaks_the_page(self) -> None:
+        """An installed (non-editable) package has no repository at all."""
+        import subprocess
+
+        from octowright.http.routes import new_tab
+
+        new_tab._commit.cache_clear()
+        try:
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("git")))
+                assert new_tab._commit() == "?"
+        finally:
+            new_tab._commit.cache_clear()

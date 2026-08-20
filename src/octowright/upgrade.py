@@ -48,6 +48,11 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "was the one it could never answer. When an upgrade is sitting on disk "
         "unadopted, the response now says so separately as installed_version, "
         "which is your cue to restart.",
+        "The /new-tab status strip tells the truth too: its version came from "
+        "the same on-disk read, and its commit hash ran `git rev-parse HEAD` in "
+        "whatever directory the daemon was launched from, at request time -- so "
+        "switching branches under a running daemon changed the commit it "
+        "claimed while the running code did not change.",
     ],
     "0.16.1": [
         "Browsers can carry custom HTTP headers now, at three scopes. "
