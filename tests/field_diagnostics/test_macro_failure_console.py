@@ -14,6 +14,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from octowright.macros.execution import (
+    MACRO_FAILURE_CONSOLE_TEXT_CHARS,
+    _truncate_bundle_console,
+)
 from octowright.session.core_ops_mixin import _select_console_tail
 
 
@@ -84,11 +88,6 @@ def test_a_huge_console_message_is_capped_before_it_reaches_the_client() -> None
     """The count bound does not bound size: a page that logs a stringified API
     response or a base64 data URL would otherwise put multi-MB strings into the
     error payload and push them over the MCP transport."""
-    from octowright.macros.execution import (
-        MACRO_FAILURE_CONSOLE_TEXT_CHARS,
-        _truncate_bundle_console,
-    )
-
     bundle = _truncate_bundle_console(
         {"console_tail": [{"level": "error", "text": "x" * 50_000}, {"level": "log", "text": "short"}]}
     )
@@ -101,26 +100,23 @@ def test_a_huge_console_message_is_capped_before_it_reaches_the_client() -> None
 
 def test_truncation_tolerates_a_malformed_bundle() -> None:
     """Runs on the failure path; it must not become the failure."""
-    from octowright.macros.execution import _truncate_bundle_console
-
     assert _truncate_bundle_console({"url": "x"}) == {"url": "x"}
     assert _truncate_bundle_console({"console_tail": None}) == {"console_tail": None}
     assert _truncate_bundle_console({"console_tail": ["junk", {"level": "error"}]})["console_tail"][0] == "junk"
 
 
-def test_truncation_does_not_corrupt_the_live_console_buffer() -> None:
+def test_the_selector_copies_so_no_consumer_can_corrupt_the_live_buffer() -> None:
     """``list(session.console)`` copies the LIST, not the dicts inside it, so
-    the bundle's messages ARE the session's ring-buffer entries. Truncating one
-    in place permanently shortened the live buffer, and every later
-    browser_console_messages / capture_create call returned the cut text.
+    returning the originals handed callers live ring-buffer entries -- and one
+    consumer capping an entry's length silently rewrote the session's console
+    history for every later reader. Fixed at the producer so the whole class of
+    bug is gone, not one instance of it.
     """
     from collections import deque
 
-    from octowright.macros.execution import _truncate_bundle_console
-
     ring: deque[dict[str, Any]] = deque([{"level": "error", "text": "X" * 50_000}], maxlen=1000)
     selected = _select_console_tail(list(ring), 10)
-    assert selected[0] is ring[0], "precondition: the selector aliases the ring buffer"
+    assert selected[0] is not ring[0], "the selector must hand back a copy"
 
     bundle = _truncate_bundle_console({"console_tail": selected})
 
