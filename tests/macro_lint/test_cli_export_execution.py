@@ -244,6 +244,8 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "mock_route", "pattern": "**/api/*", "status": 201, "body": "{}"},
     {"action": "unmock_route", "pattern": "**/api/*"},
     {"action": "set_extra_http_headers", "headers": {"X-Env": "staging"}},
+    {"action": "inject_headers", "pattern": "**/api/*", "headers": {"X-Trace": "abc"}},
+    {"action": "uninject_headers", "pattern": "**/api/*"},
     {"action": "set_dialog_policy", "policy": "accept"},
     {"action": "open_url", "url": "https://example.test/tab"},
     {"action": "switch_page", "index": 1},

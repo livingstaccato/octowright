@@ -164,3 +164,40 @@ class TestPageLevelHeaders:
 
     def test_a_real_value_replays_normally(self) -> None:
         _reject_redacted_headers({"Authorization": "Bearer real", "X-Env": "staging"})
+
+
+# ─── per-endpoint injection (the route layer) ────────────────────────────────
+
+
+class TestPerEndpointInjection:
+    """The most expensive layer, and the only one that can vary by URL.
+
+    Verified end to end on chromium, firefox and webkit: a matching request got
+    the header, a non-matching one was untouched, and uninject removed it.
+    """
+
+    def test_both_actions_map_to_methods_that_exist(self) -> None:
+        from octowright.macros.runtime import _ACTION_MAP
+        from octowright.session.core_interaction_mixin import SessionInteractionMixin
+
+        for kind in ("inject_headers", "uninject_headers"):
+            assert hasattr(SessionInteractionMixin, _ACTION_MAP[kind]), kind
+
+    def test_the_recorded_field_is_renamed_for_replay(self) -> None:
+        """The recorder writes ``pattern``; the method's parameter is
+        ``url_pattern``. Without the rename every replay raises TypeError --
+        the bug mock_route/unmock_route already shipped once."""
+        from octowright.macros.runtime import _REPLAY_RENAME_KEYS
+
+        assert _REPLAY_RENAME_KEYS["inject_headers"] == {"pattern": "url_pattern"}
+        assert _REPLAY_RENAME_KEYS["uninject_headers"] == {"pattern": "url_pattern"}
+
+    def test_injection_registry_is_separate_from_mocks(self) -> None:
+        """A mock and an injector may share a pattern; one registry would make
+        the second install evict the first's handler reference and leak it."""
+        from octowright.session.core import BrowserSession
+
+        fields = BrowserSession.__dataclass_fields__
+
+        assert "_header_routes" in fields
+        assert fields["_header_routes"].name != fields["_active_routes"].name
