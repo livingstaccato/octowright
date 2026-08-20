@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,14 @@ SUPPORTED_CHANNELS = frozenset(
 # OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS / OCTOWRIGHT_ALLOW_PY_SCENARIOS
 # precedent for exactly this class of risky-but-legitimate power-user
 # feature. Falsey tokens mirror recorder._PRIVATE_OFF.
+# Bounds on caller-supplied launch headers. This map rides EVERY request the
+# browser makes, so it is capped in count and per-value length rather than
+# trusted to be small.
+MAX_EXTRA_HTTP_HEADERS = 32
+MAX_EXTRA_HTTP_HEADER_VALUE_CHARS = 4096
+# RFC 7230 token: the characters a header NAME may legally contain.
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
 ALLOW_EXECUTABLE_PATH_ENV = "OCTOWRIGHT_ALLOW_EXECUTABLE_PATH"
 _ALLOW_EXECUTABLE_PATH_TOKENS_OFF = frozenset({"", "0", "off", "false", "no", "never", "none", "disabled"})
 
@@ -69,6 +78,18 @@ def resolve_protected(explicit: bool | None, *, headed: bool, ephemeral: bool) -
     if defaults.PROTECT_HEADED_DEFAULT and headed and not ephemeral:
         return True, "headed_default"
     return False, "unprotected"
+
+
+def _validate_one_header(name: Any, value: Any) -> None:
+    """Reject one header that could forge a request rather than decorate one."""
+    if not isinstance(name, str) or not _HEADER_NAME_RE.match(name):
+        raise ValueError(f"invalid HTTP header name: {name!r}")
+    if not isinstance(value, str):
+        raise ValueError(f"extra_http_headers[{name!r}] must be a string, got {type(value).__name__}")
+    if len(value) > MAX_EXTRA_HTTP_HEADER_VALUE_CHARS:
+        raise ValueError(f"extra_http_headers[{name!r}] exceeds {MAX_EXTRA_HTTP_HEADER_VALUE_CHARS} chars")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise ValueError(f"extra_http_headers[{name!r}] contains a control character (header injection)")
 
 
 @dataclass(frozen=True)
@@ -119,6 +140,20 @@ class LaunchOptions:
     #: channel/executable_path: replaying a poisoned recording must not be
     #: able to inject launch flags that weaken the sandbox.
     launch_args: list[str] | None = None
+    #: Extra HTTP headers on EVERY request this browser makes -- Playwright's
+    #: context-level ``extra_http_headers``. Chosen over a route interceptor
+    #: because it is the only layer that also covers popups, new tabs and
+    #: subresources, and because it was measured to apply to the SSRF guard's
+    #: own validation fetch too (chromium/firefox/webkit, Playwright 1.62), so
+    #: the hop the guard checks and the hop the browser makes carry the same
+    #: headers. A route-level injector could diverge from the guard.
+    #:
+    #: NEVER read back from a JSONL recording (see ``from_launch_record``),
+    #: for the reason ``channel``/``executable_path``/``launch_args`` are not:
+    #: a poisoned recording that can set an arbitrary request header on a
+    #: relaunched browser could attach an ``Authorization`` or ``Cookie`` of
+    #: its choosing to every site that browser subsequently visits.
+    extra_http_headers: dict[str, str] | None = None
 
     @classmethod
     def from_mapping(cls, options: dict[str, Any]) -> LaunchOptions:
@@ -148,6 +183,7 @@ class LaunchOptions:
             channel=options.get("channel"),
             executable_path=options.get("executable_path"),
             launch_args=options.get("launch_args"),
+            extra_http_headers=options.get("extra_http_headers"),
         )
         launch_options.validate()
         return launch_options
@@ -223,6 +259,26 @@ class LaunchOptions:
         if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
             raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
+        self._validate_extra_http_headers()
+
+    def _validate_extra_http_headers(self) -> None:
+        """Reject a header map that could forge a request rather than decorate one.
+
+        A CR or LF in a value is header injection -- it ends the header and
+        starts another, so one "harmless" value can add a second header the
+        caller never wrote. The name charset is RFC 7230's token production.
+        The count and length caps exist because this map is caller-supplied
+        and is attached to EVERY request the browser makes.
+        """
+        headers = self.extra_http_headers
+        if headers is None:
+            return
+        if not isinstance(headers, dict):
+            raise ValueError("extra_http_headers must be a mapping of header name to value")
+        if len(headers) > MAX_EXTRA_HTTP_HEADERS:
+            raise ValueError(f"extra_http_headers accepts at most {MAX_EXTRA_HTTP_HEADERS}, got {len(headers)}")
+        for name, value in headers.items():
+            _validate_one_header(name, value)
 
     def _validate_browser_selection(self) -> None:
         if self.channel is not None and self.channel not in SUPPORTED_CHANNELS:
@@ -276,6 +332,7 @@ class LaunchOptions:
             "channel": self.channel,
             "executable_path": self.executable_path,
             "launch_args": self.launch_args,
+            "extra_http_headers": self.extra_http_headers,
         }
 
     def with_har_rotated(self) -> LaunchOptions:

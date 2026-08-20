@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-Comment: Part of octowright.
+#
+
+"""Launch-time extra HTTP headers (Playwright context ``extra_http_headers``).
+
+Chosen over a route interceptor because it is the only layer that also covers
+popups, new tabs and subresources, and because it was measured to apply to the
+SSRF guard's own validation fetch as well -- so the hop the guard checks and
+the hop the browser makes carry the same headers.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from octowright.browser_pool.launch_helpers import extra_http_headers_kwargs
+from octowright.browser_pool.options import MAX_EXTRA_HTTP_HEADERS, LaunchOptions
+
+
+def test_headers_reach_the_pool_kwargs() -> None:
+    opts = LaunchOptions(extra_http_headers={"X-Env": "staging"})
+
+    assert opts.to_pool_kwargs()["extra_http_headers"] == {"X-Env": "staging"}
+
+
+def test_a_launch_without_headers_passes_none_at_all() -> None:
+    """Silent when there is nothing to say: an empty dict is not the same as
+    the argument being absent, and every pre-existing launch must be untouched."""
+    assert extra_http_headers_kwargs(None) == {}
+    assert extra_http_headers_kwargs({}) == {}
+    assert extra_http_headers_kwargs({"X-A": "1"}) == {"extra_http_headers": {"X-A": "1"}}
+
+
+def test_the_context_kwargs_copy_the_mapping() -> None:
+    """The context outlives the caller's dict; a later mutation must not
+    retroactively change what the browser sends."""
+    source = {"X-A": "1"}
+
+    built = extra_http_headers_kwargs(source)
+    source["X-B"] = "2"
+
+    assert built["extra_http_headers"] == {"X-A": "1"}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"X-Bad": "value\r\nX-Injected: evil"},  # CR/LF ends the header, starts another
+        {"X-Bad": "value\nX-Injected: evil"},
+        {"X-Bad": "null\x00byte"},
+        {"Bad Name": "v"},  # space is not an RFC 7230 token character
+        {"Bad:Name": "v"},
+        {"": "v"},
+        {"X-Bad": 1},
+        {"X-Bad": None},
+    ],
+)
+def test_a_header_that_could_forge_a_request_is_refused(headers: dict) -> None:
+    with pytest.raises(ValueError):
+        LaunchOptions(extra_http_headers=headers).validate()
+
+
+def test_the_map_is_bounded() -> None:
+    too_many = {f"X-H{index}": "v" for index in range(MAX_EXTRA_HTTP_HEADERS + 1)}
+
+    with pytest.raises(ValueError, match="at most"):
+        LaunchOptions(extra_http_headers=too_many).validate()
+
+
+def test_an_over_long_value_is_refused() -> None:
+    with pytest.raises(ValueError, match="exceeds"):
+        LaunchOptions(extra_http_headers={"X-Big": "x" * 100_000}).validate()
+
+
+def test_ordinary_headers_are_accepted() -> None:
+    LaunchOptions(
+        extra_http_headers={"Authorization": "Bearer abc.def", "X-Env": "staging", "Accept-Language": "en-GB"}
+    ).validate()
+
+
+def test_a_poisoned_recording_cannot_inject_headers_on_relaunch() -> None:
+    """The security property, and the reason this is not simply restored like
+    ``kind`` or ``har_path``: a JSONL recording is untrusted input (another
+    local user, a poisoned CI step), and a header it could set would ride
+    EVERY request the relaunched browser makes -- an attacker-chosen
+    ``Authorization``/``Cookie`` attached to every site the user then visits.
+    Same exclusion ``channel``/``executable_path``/``launch_args`` already get.
+    """
+    record = {
+        "kind": "chromium",
+        "url": "https://example.test/",
+        "extra_http_headers": {"Authorization": "Bearer attacker-token"},
+    }
+
+    restored = LaunchOptions.from_launch_record(record)
+
+    assert restored.extra_http_headers is None
