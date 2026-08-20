@@ -16,11 +16,36 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from octowright.http_headers import (
+    REDACTED_HEADER_PLACEHOLDER,
+    redact_header_values,
+    validate_extra_http_headers,
+)
 from octowright.session._protocols import SessionLike
+from octowright.session.aria_redaction import resolve_redaction_mode
 from octowright.session.operation_gate import gated_operation
 
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
+
+
+def _reject_redacted_headers(headers: dict[str, str]) -> None:
+    """Refuse to replay a value the recorder scrubbed.
+
+    A macro saved from a recording carries whatever the JSONL holds, and for a
+    credential header that is the placeholder, not the token. Sending it would
+    authenticate as nobody and surface as a confusing 401 several actions
+    later; failing here names the fix instead.
+    """
+    if not isinstance(headers, dict):
+        return
+    scrubbed = sorted(name for name, value in headers.items() if value == REDACTED_HEADER_PLACEHOLDER)
+    if scrubbed:
+        raise ValueError(
+            f"header(s) {', '.join(scrubbed)} still hold the recorder's redaction placeholder -- "
+            "the recording never stored the real value. Parameterize the macro "
+            '(e.g. "Authorization": "Bearer {{token}}") and pass it at run time.'
+        )
 
 
 class SessionInteractionMixin(SessionLike):
@@ -136,6 +161,32 @@ class SessionInteractionMixin(SessionLike):
             headers=headers or {},
         )
         return {"ok": True, "pattern": url_pattern, "status": status}
+
+    @gated_operation("browser_set_extra_http_headers")
+    async def set_extra_http_headers(self, headers: dict[str, str]) -> dict[str, Any]:
+        """Set extra HTTP headers on THIS page, overriding the launch context's.
+
+        The launch-time ``extra_http_headers`` covers the whole browser and
+        cannot change; this exists for the header a run only learns partway
+        through -- log in, then carry the token. Measured page-over-context
+        precedence on chromium, firefox and webkit (Playwright 1.62).
+
+        Scope worth knowing: Playwright's page-level headers are per PAGE, so
+        a popup or a new tab opened afterwards does NOT inherit them; use the
+        launch-time option when a whole browser needs them.
+
+        The page always receives the real values -- only the JSONL record is
+        scrubbed, and by header NAME, so an Authorization is redacted under the
+        default policy while an X-Env is left readable.
+        """
+        _reject_redacted_headers(headers)
+        validate_extra_http_headers(headers)
+        await self.page.set_extra_http_headers(dict(headers))
+        self.recorder.record(
+            "set_extra_http_headers",
+            headers=redact_header_values(headers, resolve_redaction_mode()),
+        )
+        return {"ok": True, "headers": sorted(headers)}
 
     @gated_operation("browser_unmock_route")
     async def unmock_route(self, url_pattern: str) -> dict[str, Any]:
