@@ -99,6 +99,10 @@ class TestHandleResponse:
             "resource_type": "fetch",
             "status": 200,
             "status_text": "OK",
+            # Header capture: these records carried none, which made every
+            # header feature unverifiable from the tool surface. The stub
+            # request exposes no headers, so the scrubber yields {}.
+            "headers": {},
         }
 
     def test_response_record_does_not_set_failure(self) -> None:

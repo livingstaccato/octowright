@@ -169,6 +169,16 @@ class LaunchOptions:
     #: relaunched browser could attach an ``Authorization`` or ``Cookie`` of
     #: its choosing to every site that browser subsequently visits.
     extra_http_headers: dict[str, str] | None = None
+    #: URL glob patterns limiting where ``extra_http_headers`` are sent. With
+    #: none, the headers are context-level and ride EVERY request the browser
+    #: makes -- including cross-origin subresources, which on Chromium makes
+    #: them CORS-preflighted so a third party that does not echo
+    #: ``Access-Control-Allow-Headers`` rejects them (measured; observed in the
+    #: field as blocked font/CDN requests). With patterns, the headers are
+    #: applied by a CONTEXT route matching only those URLs, which still follows
+    #: popups and new tabs but leaves everyone else's requests untouched.
+    #: Ignored when ``extra_http_headers`` is unset.
+    extra_http_headers_urls: list[str] | None = None
     #: Launch Chromium with the GPU disabled (see ``resolve_disable_gpu``).
     #: ``None`` defers to ``OCTOWRIGHT_DISABLE_GPU``; ``True``/``False`` force it.
     disable_gpu: bool | None = None
@@ -202,6 +212,7 @@ class LaunchOptions:
             executable_path=options.get("executable_path"),
             launch_args=options.get("launch_args"),
             extra_http_headers=options.get("extra_http_headers"),
+            extra_http_headers_urls=options.get("extra_http_headers_urls"),
             disable_gpu=options.get("disable_gpu"),
         )
         launch_options.validate()
@@ -333,6 +344,7 @@ class LaunchOptions:
             "executable_path": self.executable_path,
             "launch_args": self.launch_args,
             "extra_http_headers": self.extra_http_headers,
+            "extra_http_headers_urls": self.extra_http_headers_urls,
             "disable_gpu": self.disable_gpu,
         }
 

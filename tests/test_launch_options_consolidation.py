@@ -59,6 +59,7 @@ class TestToPoolKwargs:
             executable_path="/opt/chrome/chrome",
             launch_args=["--foo"],
             extra_http_headers={"X-Env": "staging"},
+            extra_http_headers_urls=["**/api/**"],
             disable_gpu=True,
         )
         assert opts.to_pool_kwargs() == {
@@ -87,6 +88,7 @@ class TestToPoolKwargs:
             "executable_path": "/opt/chrome/chrome",
             "launch_args": ["--foo"],
             "extra_http_headers": {"X-Env": "staging"},
+            "extra_http_headers_urls": ["**/api/**"],
             "disable_gpu": True,
         }
 

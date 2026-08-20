@@ -13,6 +13,10 @@ the hop the browser makes carry the same headers.
 
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from octowright.browser_pool.launch_helpers import extra_http_headers_kwargs
@@ -23,7 +27,8 @@ from octowright.http_headers import (
     is_credential_header,
     redact_header_values,
 )
-from octowright.session.core_interaction_mixin import _reject_redacted_headers
+from octowright.session.core_interaction_mixin import SessionInteractionMixin, _reject_redacted_headers
+from octowright.session.core_network_mixin import _recorded_headers
 
 
 def test_headers_reach_the_pool_kwargs() -> None:
@@ -201,3 +206,90 @@ class TestPerEndpointInjection:
 
         assert "_header_routes" in fields
         assert fields["_header_routes"].name != fields["_active_routes"].name
+
+
+# ─── context scope + observability ───────────────────────────────────────────
+
+
+class TestContextScopedInjection:
+    """`inject_headers` was a `page.route` and died at the page boundary.
+
+    A caller had to re-register after every page switch and hope they caught
+    them all -- and the interesting traffic is often exactly in the popup (a
+    field report hit this with a test player that runs in one). Measured on all
+    three engines: a context route sees a popup's requests; a page route does
+    not, and the end-to-end run confirms the popup now receives the header.
+    """
+
+    def test_it_registers_on_the_context_not_the_page(self) -> None:
+        source = Path(inspect.getsourcefile(SessionInteractionMixin) or "").read_text(encoding="utf-8")
+        body = source.split("async def inject_headers")[1].split("async def uninject_headers")[0]
+
+        assert "self.context.route(" in body
+        assert "self.page.route(" not in body
+
+    def test_removal_unroutes_the_context_too(self) -> None:
+        source = Path(inspect.getsourcefile(SessionInteractionMixin) or "").read_text(encoding="utf-8")
+        body = source.split("async def uninject_headers")[1].split("async def set_extra_http_headers")[0]
+
+        assert "self.context.unroute(" in body
+
+
+class TestScopedLaunchHeaders:
+    """Launch headers with no URL filter are context-level and ride EVERY
+    request, including cross-origin subresources -- which on Chromium makes
+    them CORS-preflighted, so a third party that does not echo
+    Access-Control-Allow-Headers rejects them outright (measured; seen in the
+    field as blocked font/CDN requests). Firefox and WebKit applied the header
+    below the CORS check and were unaffected, so it is Chromium-specific."""
+
+    def test_patterns_move_the_headers_off_the_context(self) -> None:
+        """Otherwise they would apply twice: unscoped AND scoped, which defeats
+        the entire point of scoping them."""
+        assert extra_http_headers_kwargs({"X-A": "1"}, ["**/api/**"]) == {}
+
+    def test_without_patterns_they_stay_context_level(self) -> None:
+        assert extra_http_headers_kwargs({"X-A": "1"}, None) == {"extra_http_headers": {"X-A": "1"}}
+
+    def test_patterns_alone_do_nothing(self) -> None:
+        """A filter with nothing to filter is not an error, just a no-op."""
+        assert extra_http_headers_kwargs(None, ["**/api/**"]) == {}
+
+    def test_they_survive_the_round_trip_to_pool_kwargs(self) -> None:
+        opts = LaunchOptions(extra_http_headers={"X-A": "1"}, extra_http_headers_urls=["**/api/**"])
+
+        assert opts.to_pool_kwargs()["extra_http_headers_urls"] == ["**/api/**"]
+
+
+class TestNetworkHeaderObservability:
+    """These records carried no headers at all, so every header feature was
+    unverifiable from the tool surface: a field report set a launch header,
+    checked here to confirm it applied, saw nothing, and nearly concluded the
+    feature was broken."""
+
+    def test_headers_are_recorded(self) -> None:
+        request = SimpleNamespace(headers={"Trk-ID": "abc", "user-agent": "x"})
+
+        assert _recorded_headers(request)["Trk-ID"] == "abc"
+
+    def test_credentials_are_scrubbed_by_name(self) -> None:
+        """This output goes to an LLM, and a browser sends Cookie and
+        Authorization on ordinary requests."""
+        request = SimpleNamespace(headers={"Authorization": "Bearer s3cret", "Cookie": "sid=1", "X-Env": "staging"})
+
+        recorded = _recorded_headers(request)
+
+        assert recorded["Authorization"] == REDACTED_HEADER_PLACEHOLDER
+        assert recorded["Cookie"] == REDACTED_HEADER_PLACEHOLDER
+        assert recorded["X-Env"] == "staging"
+
+    def test_an_unreadable_request_never_breaks_recording(self) -> None:
+        """This runs in a network event handler; it must not be the thing that
+        raises."""
+
+        class _Broken:
+            @property
+            def headers(self) -> dict[str, str]:
+                raise RuntimeError("gone")
+
+        assert _recorded_headers(_Broken()) == {}

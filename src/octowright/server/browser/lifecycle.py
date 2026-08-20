@@ -177,6 +177,7 @@ async def browser_launch(
     executable_path: str | None = None,
     launch_args: list[str] | None = None,
     extra_http_headers: dict[str, str] | None = None,
+    extra_http_headers_urls: list[str] | None = None,
     disable_gpu: bool | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
@@ -229,6 +230,7 @@ async def browser_launch(
         session=session,
         protected=protected,
         extra_http_headers=extra_http_headers,
+        extra_http_headers_urls=extra_http_headers_urls,
         disable_gpu=disable_gpu,
         channel=channel,
         executable_path=executable_path,
