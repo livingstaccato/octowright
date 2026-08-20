@@ -22,7 +22,7 @@ skinparam noteBackgroundColor #f9fafb
 top to bottom direction
 
 package "user surfaces" #eff6ff {
-  [server.py\nFastMCP (126 tools, slimmable via --profile)] as SERVER
+  [server.py\nMCPServer (129 tools, slimmable via --profile)] as SERVER
   [cli.py\nclick: serve / test / scenario / persona] as CLI
 }
 
@@ -55,6 +55,15 @@ package "infrastructure" #f3f4f6 {
   [recorder.py\nappend-only JSONL] as RECORDER
   [export.py\nrecording → playwright script] as EXPORT
   [upgrade.py\npost-upgrade "what's new" notice] as UPGRADE
+  ' Package-root shared helpers. They sit at the root deliberately: server/,
+  ' session/ and the root summarizers all need them, and putting one inside
+  ' any of those layers makes the others import a layer they have no business
+  ' importing. Measured cost of getting this wrong: routing console levels
+  ' through session/_constants took capture_summaries from 6 stdlib imports
+  ' to 508, including Playwright.
+  [dashboard_events.py\nin-process pub/sub for SSE/WS fanout] as DASHEVENTS
+  [console_levels.py\ncanonical console-level classification] as CONSOLELEVELS
+  [http_headers.py\nheader validation + record-time redaction] as HTTPHEADERS
 }
 
 ' Playwright sits below everything that talks to it; only BrowserSession
