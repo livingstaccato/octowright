@@ -238,6 +238,21 @@ def persona_base_url_kwargs(profile: str | None) -> dict[str, str]:
     return {"base_url": persona.default_url} if persona.default_url else {}
 
 
+def extra_http_headers_kwargs(headers: dict[str, str] | None) -> dict[str, dict[str, str]]:
+    """Playwright context kwargs for launch-time extra headers.
+
+    Returns ``{}`` when there is nothing to say, so a launch that sets no
+    headers passes no ``extra_http_headers`` at all rather than an empty dict
+    -- the same "silent when there is nothing to say" shape ``base_url_kwargs``
+    uses, and the reason every pre-existing launch is untouched.
+
+    Copied, not aliased: the context outlives the caller's dict, and a caller
+    mutating it afterwards must not retroactively change what the browser
+    sends.
+    """
+    return {"extra_http_headers": dict(headers)} if headers else {}
+
+
 async def _open_browser_context(
     *,
     browser_type: Any,
@@ -250,6 +265,7 @@ async def _open_browser_context(
     ctx_har_kwargs: dict[str, Any],
     launch_kwargs: dict[str, Any],
     base_url: str | None = None,
+    extra_http_headers: dict[str, str] | None = None,
 ) -> tuple[Any, Any, Any, str | None]:
     """Open a Playwright BrowserContext + Page. Persistent profile and
     session-tmpdir paths both go through launch_persistent_context (no
@@ -259,6 +275,7 @@ async def _open_browser_context(
     Returns (browser, context, page, user_data_dir). browser is None for the
     persistent path."""
     ctx_base_url_kwargs = base_url_kwargs(profile, base_url)
+    ctx_headers_kwargs = extra_http_headers_kwargs(extra_http_headers)
     if profile or session_user_data_dir:
         if profile:
             pdir = engine_profile_dir(persona=profile, kind=kind)
@@ -280,6 +297,7 @@ async def _open_browser_context(
             headless=headless,
             accept_downloads=True,
             **ctx_base_url_kwargs,
+            **ctx_headers_kwargs,
             **viewport_kwargs,
             **ctx_video_kwargs,
             **ctx_har_kwargs,
@@ -292,6 +310,7 @@ async def _open_browser_context(
         context = await browser.new_context(
             accept_downloads=True,
             **ctx_base_url_kwargs,
+            **ctx_headers_kwargs,
             **viewport_kwargs,
             **ctx_video_kwargs,
             **ctx_har_kwargs,

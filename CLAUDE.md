@@ -146,6 +146,16 @@ Raising the readiness budget has a second-order effect worth knowing: the electi
 | `docs/architecture/MCP-SHARED-CONTRACT.md` | HTTP API spec (endpoints, request/response shapes) |
 | `docs/architecture/` | PlantUML diagrams (render with `make diagrams`) |
 
+### Launch-time extra HTTP headers
+
+`browser_launch(extra_http_headers={...})` sets Playwright's **context-level** `extra_http_headers`, so they ride every request that browser makes — every page, popup, new tab and subresource — for its whole life. Like `base_url`, it is **silent when there is nothing to say**: a launch that passes no headers passes no `extra_http_headers` argument at all, so every pre-existing launch is untouched.
+
+Context level was chosen over a route interceptor on measured grounds, not taste. Across chromium, firefox and webkit (Playwright 1.62, real local server, headers read off the wire): context headers reach the server; a page-level `set_extra_http_headers` overrides them; and — the load-bearing one — the SSRF guard's own `route.fetch()` validation hop carries them too, so the chain the guard checks and the chain the browser follows are not different requests. A route-level injector has no such guarantee for free, and a *fulfilling* route (`mock_route`) suppresses a context route handler entirely, so a route-based injector would silently skip any mocked pattern.
+
+Values are validated before they can forge a request rather than decorate one: header names must match RFC 7230's token production, values may not contain control characters (a CR/LF ends the header and starts another, so one value could append a second header the caller never wrote), and the map is bounded (`MAX_EXTRA_HTTP_HEADERS`, `MAX_EXTRA_HTTP_HEADER_VALUE_CHARS`) because it rides every request.
+
+**Never restored from a JSONL recording.** `LaunchOptions.from_launch_record` drops it, the same exclusion `channel`/`executable_path`/`launch_args` already carry: a recording is untrusted input (another local user, a poisoned CI step), and a header it could set would attach an attacker-chosen `Authorization`/`Cookie` to every site the relaunched browser visits. It *is* carried by `to_pool_kwargs`, which is the in-memory handoff/relaunch path and is trusted.
+
 ### Host-relative navigation
 
 A macro is the behaviour; the persona is the *where*. The browser context resolves relative paths against a `base_url`, so one macro replays against any deployment by launching it as a different persona.
