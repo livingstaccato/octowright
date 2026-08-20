@@ -59,6 +59,46 @@ def _recorded_headers(request: Any) -> dict[str, str]:
     return redact_header_values(raw, resolve_redaction_mode())
 
 
+def _project_request(row: dict[str, Any], include_headers: bool) -> dict[str, Any]:
+    """One returned row: a COPY, with headers dropped unless asked for.
+
+    Copied because ``list(deque)`` copies the list and not the dicts inside it,
+    so handing back originals lets one reader's in-place edit rewrite the
+    session's history for every later reader.
+    """
+    projected = {key: value for key, value in row.items() if key != "headers"}
+    headers = row.get("headers")
+    if include_headers and headers is not None:
+        projected["headers"] = dict(headers)
+    return projected
+
+
+def _page_requests(
+    retained: list[dict[str, Any]],
+    retained_base: int,
+    start: int,
+    predicates: list[Callable[[dict[str, Any]], bool]],
+    include_headers: bool,
+    limit: int | None,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """Rows for one read, plus the cursor to resume from and whether it capped.
+
+    When capped, the cursor is the absolute index of the first MATCHING row not
+    returned -- not the row after the last one returned. The cursor indexes the
+    unfiltered stream, so resuming from the wrong one silently loses every
+    match the cap left behind.
+    """
+    rows: list[dict[str, Any]] = []
+    for offset in range(start, len(retained)):
+        row = retained[offset]
+        if not all(predicate(row) for predicate in predicates):
+            continue
+        if limit is not None and len(rows) >= limit:
+            return rows, retained_base + offset, True
+        rows.append(_project_request(row, include_headers))
+    return rows, retained_base + len(retained), False
+
+
 class SessionNetworkMixin(SessionLike):
     def _handle_response(self, response: Any) -> None:
         request = response.request
@@ -96,7 +136,22 @@ class SessionNetworkMixin(SessionLike):
         method_filter: str | None = None,
         resource_type_filter: str | None = None,
         since: int | None = None,
+        include_headers: bool = False,
+        limit: int | None = None,
     ) -> dict[str, Any]:
+        """Read back a filtered, cursor-paginated slice of the request deque.
+
+        ``include_headers`` is opt-in because a recorded row's header map is
+        most of its size -- ~900 JSON chars against ~130 without, measured on a
+        typical Chromium navigation header set, nearly all of it identical
+        boilerplate (``user-agent``, ``sec-ch-ua*``, ``accept``) repeated per
+        row. Always-on, an unfiltered read of an ordinary page went from
+        roughly 6.6k tokens to 45k. Ask for them to verify a header actually
+        rode the request; leave them off for ordinary traffic inspection.
+
+        ``limit`` caps the rows in ONE read. There was previously no cap at
+        all, so a read could return the whole 5000-entry deque.
+        """
         retained = list(self._network_requests)
         retained_base = self._network_requests_dropped
         start = 0 if since is None else max(0, since - retained_base)
@@ -109,11 +164,15 @@ class SessionNetworkMixin(SessionLike):
             )
             if value
         ]
-        sliced = [r for r in retained[start:] if all(p(r) for p in predicates)]
+        rows, next_cursor, truncated = _page_requests(
+            retained, retained_base, start, predicates, include_headers, limit
+        )
         return {
-            "requests": sliced,
-            "next_cursor": retained_base + len(retained),
+            "requests": rows,
+            "next_cursor": next_cursor,
             "total": len(retained),
             "total_retained": len(retained),
             "dropped": self._network_requests_dropped,
+            "returned": len(rows),
+            "truncated": truncated,
         }
