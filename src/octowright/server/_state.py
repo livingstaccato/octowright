@@ -102,7 +102,7 @@ _LEADER_MODE: dict[str, str | None] = {"mode": "unknown", "inline_reason": None}
 def set_leader_mode(mode: str, *, inline_reason: str | None = None) -> None:
     """Record this process's leader mode. ``mode`` is ``"daemon"`` for a detached
     daemon leader, ``"inline"`` when the leader runs inside this process, or
-    ``"unknown"``. ``inline_reason`` explains an inline leader — ``"no_singleton"``
+    ``"unknown"``. ``inline_reason`` explains an inline leader — ``"no_singleton"``, ``"election_contention"``
     (deliberate) or ``"daemon_spawn_failed"`` (the fragile fallback)."""
     _LEADER_MODE["mode"] = mode
     _LEADER_MODE["inline_reason"] = inline_reason
