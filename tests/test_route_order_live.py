@@ -113,3 +113,59 @@ async def test_a_later_context_route_runs_before_the_guard(kind: str, server: st
     assert order[:2] == ["injector", "guard"], f"{kind}: handler order changed"
     assert guard_saw["header"] == "1", f"{kind}: guard validated a request without the injected header"
     assert rows and all(row["injected"] == "1" for row in rows), f"{kind}: header missing on the wire"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind", ["chromium", "firefox", "webkit"])
+@pytest.mark.parametrize("mock_first", [True, False])
+async def test_a_fulfilling_page_route_shadows_a_context_route_either_way(
+    kind: str, mock_first: bool, server: str
+) -> None:
+    """``mock_route`` is a PAGE route; ``inject_headers`` is a CONTEXT route.
+
+    While both were page routes, last-registered-first decided which won, so a
+    mock could only shadow an injector installed before it. Page routes are
+    evaluated ahead of context routes, so the mock now wins in BOTH orders and
+    the injector never runs at all -- which is why the shadow warning has to
+    fire from both install sites rather than only from ``inject_headers``.
+
+    Measured 2026-08-20 on chromium, firefox and webkit (Playwright 1.62).
+    """
+    pytest.importorskip("playwright")
+    from playwright.async_api import async_playwright
+
+    ran: list[str] = []
+
+    async with async_playwright() as pw:
+        try:
+            browser = await getattr(pw, kind).launch(headless=True)
+        except Exception as exc:  # engine not installed in this environment
+            pytest.skip(f"{kind} unavailable: {exc}")
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        async def injector(route: Any) -> None:
+            ran.append("context-injector")
+            await route.fallback(headers={**route.request.headers, "X-Canary": "1"})
+
+        async def mock(route: Any) -> None:
+            ran.append("page-mock")
+            await route.fulfill(status=200, content_type="text/html", body="<html>mocked</html>")
+
+        if mock_first:
+            await page.route("**/*", mock)
+            await context.route("**/*", injector)
+        else:
+            await context.route("**/*", injector)
+            await page.route("**/*", mock)
+
+        # domcontentloaded, not the default load: the body is a fulfilled stub
+        # with no subresources, and waiting on webkit's load event here was
+        # observed to time out once in ~9 runs for no reason this test is about.
+        await page.goto(f"{server}/shadowed", wait_until="domcontentloaded")
+        body = await page.content()
+        await asyncio.sleep(0.1)
+        await browser.close()
+
+    assert ran == ["page-mock"]
+    assert "mocked" in body

@@ -13,7 +13,7 @@ from typing import Any
 from octowright import defaults
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
-from octowright.http_headers import validate_extra_http_headers
+from octowright.http_headers import validate_extra_http_header_urls, validate_extra_http_headers
 
 #: Playwright's ``channel`` param picks a real installed browser build instead
 #: of the bundled one (e.g. system Chrome/Edge, for native GPU/DRM/codec
@@ -169,6 +169,16 @@ class LaunchOptions:
     #: relaunched browser could attach an ``Authorization`` or ``Cookie`` of
     #: its choosing to every site that browser subsequently visits.
     extra_http_headers: dict[str, str] | None = None
+    #: URL glob patterns limiting where ``extra_http_headers`` are sent. With
+    #: none, the headers are context-level and ride EVERY request the browser
+    #: makes -- including cross-origin subresources, which on Chromium makes
+    #: them CORS-preflighted so a third party that does not echo
+    #: ``Access-Control-Allow-Headers`` rejects them (measured; observed in the
+    #: field as blocked font/CDN requests). With patterns, the headers are
+    #: applied by a CONTEXT route matching only those URLs, which still follows
+    #: popups and new tabs but leaves everyone else's requests untouched.
+    #: Ignored when ``extra_http_headers`` is unset.
+    extra_http_headers_urls: list[str] | None = None
     #: Launch Chromium with the GPU disabled (see ``resolve_disable_gpu``).
     #: ``None`` defers to ``OCTOWRIGHT_DISABLE_GPU``; ``True``/``False`` force it.
     disable_gpu: bool | None = None
@@ -202,6 +212,7 @@ class LaunchOptions:
             executable_path=options.get("executable_path"),
             launch_args=options.get("launch_args"),
             extra_http_headers=options.get("extra_http_headers"),
+            extra_http_headers_urls=options.get("extra_http_headers_urls"),
             disable_gpu=options.get("disable_gpu"),
         )
         launch_options.validate()
@@ -278,7 +289,18 @@ class LaunchOptions:
         if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
             raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
+        self._validate_headers()
+
+    def _validate_headers(self) -> None:
+        """Header checks, split out because ``to_pool_kwargs`` needs them too.
+
+        ``validate()`` is only reached from ``from_mapping`` (the HTTP body
+        path); the MCP ``browser_launch`` builds a ``LaunchOptions`` directly
+        and then calls ``to_pool_kwargs``, so anything checked only here was
+        unchecked on the tool surface an LLM drives.
+        """
         validate_extra_http_headers(self.extra_http_headers)
+        validate_extra_http_header_urls(self.extra_http_headers_urls)
 
     def _validate_browser_selection(self) -> None:
         if self.channel is not None and self.channel not in SUPPORTED_CHANNELS:
@@ -307,6 +329,7 @@ class LaunchOptions:
         funnels through, so adding a new field is a one-line edit here +
         one new dataclass attribute above.
         """
+        self._validate_headers()
         return {
             "kind": self.kind,
             "url": self.url,
@@ -333,6 +356,7 @@ class LaunchOptions:
             "executable_path": self.executable_path,
             "launch_args": self.launch_args,
             "extra_http_headers": self.extra_http_headers,
+            "extra_http_headers_urls": self.extra_http_headers_urls,
             "disable_gpu": self.disable_gpu,
         }
 
