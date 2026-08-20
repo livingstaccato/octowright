@@ -67,14 +67,26 @@ _DAEMON_LOG_TAIL_BYTES = 64 * 1024
 _DETACHED_PROCESS = 0x00000008
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+# CreateProcess refuses the whole spawn with this when the parent's job object
+# lacks JOB_OBJECT_LIMIT_BREAKAWAY_OK -- the ONE failure the candidate ladder
+# exists to retry.
+_ERROR_ACCESS_DENIED = 5
 
 
-def _read_log_tail_bytes(max_bytes: int = _DAEMON_LOG_TAIL_BYTES) -> bytes:
-    """Read at most ``max_bytes`` from the end of the daemon log."""
+def _read_log_tail_bytes(max_bytes: int = _DAEMON_LOG_TAIL_BYTES) -> tuple[bytes, bool]:
+    """Read at most ``max_bytes`` from the end of the daemon log.
+
+    Also reports whether the window started mid-file, because the first line
+    is then the tail of a line whose head was never read. A daemon that dies
+    on a long traceback or one multi-KB structured-log line puts the boundary
+    inside that line, and printing the remainder as a complete log line is how
+    the surface that exists to state the cause hands back half a JSON object.
+    """
     with open(_DAEMON_LOG, "rb") as handle:
         handle.seek(0, os.SEEK_END)
-        handle.seek(max(0, handle.tell() - max_bytes), os.SEEK_SET)
-        return handle.read()
+        start = max(0, handle.tell() - max_bytes)
+        handle.seek(start, os.SEEK_SET)
+        return handle.read(), start > 0
 
 
 def daemon_ready_timeout() -> float:
@@ -109,11 +121,14 @@ def daemon_log_tail(max_lines: int = _DAEMON_LOG_TAIL_LINES) -> str:
     or unreadable log is itself the diagnostic.
     """
     try:
-        lines = _read_log_tail_bytes().decode("utf-8", errors="replace").splitlines()
+        raw, started_mid_file = _read_log_tail_bytes()
+        lines = raw.decode("utf-8", errors="replace").splitlines()
     except FileNotFoundError:
         return f"(no daemon log at {_DAEMON_LOG}; the daemon may never have started)"
     except OSError as exc:
         return f"(daemon log at {_DAEMON_LOG} unreadable: {exc})"
+    if started_mid_file and lines:
+        lines = lines[1:]
     tail: list[str] = []
     for line in reversed(lines):
         if len(tail) >= max_lines:
@@ -270,12 +285,15 @@ def _spawn_detached(args: list[str]) -> int:
                     env=env,
                     **detach_kwargs,
                 )
-            except OSError:
-                # A Windows job without JOB_OBJECT_LIMIT_BREAKAWAY_OK refuses
-                # the whole spawn with ERROR_ACCESS_DENIED; the next candidate
-                # drops the breakaway flag. The last one has nothing left to
-                # try, so its failure is the real one.
-                if index == len(candidates) - 1:
+            except OSError as exc:
+                # Retry ONLY the failure the ladder exists for: a job that
+                # forbids breakaway, whose next candidate drops that flag.
+                # Anything else (missing entrypoint, EMFILE, an antivirus
+                # block) would be retried identically and then reported from
+                # the SECOND attempt, discarding the exception that is the
+                # actual cause -- the silent swallow this repo's policy
+                # forbids in a user-action path.
+                if getattr(exc, "winerror", None) != _ERROR_ACCESS_DENIED or index == len(candidates) - 1:
                     raise
                 continue
             return proc.pid
@@ -292,12 +310,22 @@ async def wait_for_daemon(timeout: float | None = None, poll_seconds: float = 0.
     ``timeout`` defaults to :func:`daemon_ready_timeout`, so a cold container
     can raise it via ``OCTOWRIGHT_DAEMON_READY_TIMEOUT`` or ``--ready-timeout``
     instead of silently degrading to inline mode.
+
+    The recorded leader URL is checked for loopback before it is probed or
+    returned, matching ``_probe_alive_leader`` and ``resolve_leader_url``. The
+    0600 lockfile is writable by any same-user process, and this function is
+    what ``serve --wait-ready`` prints to stdout for a CI job to consume, so
+    skipping the check here was the one path that handed a poisoned URL out
+    unvalidated (and dialled it for the health probe on the way).
     """
+    # Lazy: keeps the heavy proxy stack out of a plain ``spawn_daemon`` import.
+    from octowright.proxy_runtime import _leader_url_is_safe
+
     deadline = time.monotonic() + (daemon_ready_timeout() if timeout is None else timeout)
     while time.monotonic() < deadline:
         await asyncio.sleep(poll_seconds)
         info = _sn.read_lock()
-        if info is None or _sn.is_stale(info):
+        if info is None or _sn.is_stale(info) or not _leader_url_is_safe(info.mcp_url):
             continue
         if await _sn.probe_http_alive(info):
             return info

@@ -373,7 +373,8 @@ def octowright_status() -> dict[str, Any]:
             "lockfile": str(_singleton.LOCK_PATH),
             # "daemon" = detached daemon leader (resilient); "inline" = leader runs
             # inside this process (fragile — see inline_reason); "unknown" before
-            # the leader is wired. inline_reason: "no_singleton" | "daemon_spawn_failed".
+            # the leader is wired. inline_reason: "no_singleton" |
+            # "daemon_spawn_failed" | "election_contention".
             "mode": leader["mode"],
             "inline_reason": leader["inline_reason"],
         },

@@ -51,9 +51,21 @@ async def wait_ready(
     """
     from octowright import daemonize as _daemon
 
-    leader = await _election.elect_leader(
-        http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive
-    )
+    try:
+        leader = await _election.elect_leader(
+            http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive
+        )
+    except _election.ElectionContended:
+        # Another instance was electing and never produced a leader. Do NOT
+        # quote our daemon log: we spawned nothing, so it describes a different
+        # process (or is empty) and would send the reader after the wrong one.
+        click.echo(
+            f"octowright: another instance is electing a leader and it did not become ready "
+            f"within {_daemon.daemon_ready_timeout():g}s; check that instance, "
+            f"or raise --ready-timeout",
+            err=True,
+        )
+        raise SystemExit(1) from None
     if leader is None:
         click.echo(
             f"octowright: daemon did not become ready within {_daemon.daemon_ready_timeout():g}s "

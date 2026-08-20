@@ -23,6 +23,21 @@ import pytest
 from octowright import daemonize
 
 
+def _windows_error(winerror: int, message: str) -> OSError:
+    """An OSError shaped like the one CreateProcess raises on Windows.
+
+    ``winerror`` is the field the retry ladder keys off; it does not exist on
+    POSIX, where this suite runs, so the fake has to carry it explicitly.
+    """
+    exc = OSError(message)
+    exc.winerror = winerror  # type: ignore[attr-defined]
+    return exc
+
+
+def _access_denied() -> OSError:
+    return _windows_error(daemonize._ERROR_ACCESS_DENIED, "Access is denied")
+
+
 class TestDetachFlags:
     def test_posix_uses_a_new_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(daemonize.sys, "platform", "linux")
@@ -93,7 +108,7 @@ class TestDetachFlags:
         def _popen(_args: list[str], **kwargs: Any) -> _Proc:
             attempts.append(kwargs["creationflags"])
             if kwargs["creationflags"] & daemonize._CREATE_BREAKAWAY_FROM_JOB:
-                raise OSError(5, "Access is denied")
+                raise _access_denied()
             return _Proc()
 
         monkeypatch.setattr(subprocess, "Popen", _popen)
@@ -101,6 +116,26 @@ class TestDetachFlags:
         assert daemonize.spawn_daemon(http_host=None, http_port=None, idle_grace=None) == 7
         assert len(attempts) == 2
         assert not attempts[1] & daemonize._CREATE_BREAKAWAY_FROM_JOB
+
+    def test_a_windows_failure_that_is_not_the_breakaway_one_is_not_retried(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The ladder retries ONE failure. Retrying any OSError ran a second
+        identical Popen for a genuine problem and then reported the SECOND
+        exception, discarding the one that named the cause."""
+        monkeypatch.setattr(daemonize, "_DAEMON_LOG", tmp_path / "daemon.log")
+        monkeypatch.setattr(daemonize.sys, "platform", "win32")
+        attempts: list[int] = []
+
+        def _popen(_args: list[str], **kwargs: Any) -> None:
+            attempts.append(kwargs["creationflags"])
+            raise _windows_error(2, "The system cannot find the file specified")
+
+        monkeypatch.setattr(subprocess, "Popen", _popen)
+
+        with pytest.raises(OSError, match="cannot find the file"):
+            daemonize.spawn_daemon(http_host=None, http_port=None, idle_grace=None)
+        assert len(attempts) == 1
 
     def test_a_real_spawn_failure_still_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Only the breakaway flag is retryable; a missing executable is not."""
@@ -250,13 +285,48 @@ class TestContendedElectionIsNotAFailure:
         assert result is leader
 
     @pytest.mark.anyio
-    async def test_the_respawn_guard_still_refuses_to_spawn_beside_a_healthy_leader(
+    async def test_contention_that_never_produces_a_leader_is_reported_as_contention(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The post-bridge respawn's stricter split-brain guard: adopt-canonical
-        falls through when the port serves octowright with no readable lockfile,
-        and for a respawn that fall-through is the observed split-brain."""
+        """We spawned nothing, so this is NOT a spawn failure. Conflating them
+        made the caller quote a daemon log describing a process it never
+        started and record inline_reason="daemon_spawn_failed" for a spawn that
+        did not happen."""
         from octowright import daemonize as _daemonize
+        from octowright import singleton as _sn
+        from octowright.cli import _leader_election as _election
+
+        class _Contended:
+            def __init__(self, *_a: Any, **_k: Any) -> None:
+                pass
+
+            async def __aenter__(self) -> None:
+                raise TimeoutError
+
+            async def __aexit__(self, *_exc: Any) -> None:
+                return None
+
+        async def _no_leader(_sn_mod: Any) -> Any:
+            return None
+
+        async def _never_ready(*_a: Any, **_k: Any) -> Any:
+            return None
+
+        monkeypatch.setattr(_election, "_probe_alive_leader", _no_leader)
+        monkeypatch.setattr(_sn, "async_election_lock", _Contended)
+        monkeypatch.setattr(_daemonize, "wait_for_daemon", _never_ready)
+
+        with pytest.raises(_election.ElectionContended):
+            await _election.elect_leader(http_host=None, http_port=None, idle_grace=None, keep_alive=False)
+
+    @pytest.mark.anyio
+    async def test_a_timeout_from_inside_the_lock_is_not_mistaken_for_contention(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TimeoutError is an OSError subclass (and asyncio.TimeoutError's
+        alias), so wrapping the whole body meant a timeout raised while
+        probing/adopting/spawning printed "someone else is electing" and burned
+        a second readiness budget waiting for a daemon nobody was starting."""
         from octowright import singleton as _sn
         from octowright.cli import _leader_election as _election
 
@@ -270,31 +340,15 @@ class TestContendedElectionIsNotAFailure:
             async def __aexit__(self, *_exc: Any) -> None:
                 return None
 
-        async def _no_leader(_sn_mod: Any) -> Any:
+        async def _no_leader_outside(_sn_mod: Any) -> Any:
             return None
 
-        async def _no_adopt(*_a: Any, **_k: Any) -> Any:
-            return None
+        async def _boom(*_a: Any, **_k: Any) -> Any:
+            raise TimeoutError("the probe itself timed out")
 
-        async def _canonical_busy(*_a: Any, **_k: Any) -> bool:
-            return True
-
-        def _spawn(**_k: Any) -> int:
-            raise AssertionError("spawned beside a healthy canonical-port leader")
-
-        monkeypatch.setattr(_election, "_probe_alive_leader", _no_leader)
-        monkeypatch.setattr(_election, "_adopt_canonical_leader", _no_adopt)
-        monkeypatch.setattr(_election, "_canonical_port_serves_octowright", _canonical_busy)
+        monkeypatch.setattr(_election, "_probe_alive_leader", _no_leader_outside)
         monkeypatch.setattr(_sn, "async_election_lock", _Granted)
-        monkeypatch.setattr(_daemonize, "spawn_daemon", _spawn)
+        monkeypatch.setattr(_election, "_elect_under_lock", _boom)
 
-        assert (
-            await _election.elect_leader(
-                http_host=None,
-                http_port=None,
-                idle_grace=None,
-                keep_alive=False,
-                defer_if_canonical_busy=True,
-            )
-            is None
-        )
+        with pytest.raises(TimeoutError):
+            await _election.elect_leader(http_host=None, http_port=None, idle_grace=None, keep_alive=False)
