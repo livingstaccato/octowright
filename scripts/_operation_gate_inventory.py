@@ -45,6 +45,16 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "launch-time-before-session-publication",
         "creates context/page before BrowserSession construction and registry publication",
     ),
+    "browser_pool/launch_helpers.py:install_scoped_header_routes": (
+        "launch-time-before-session-publication",
+        "registers the scoped header context routes alongside the SSRF guard, before BrowserSession "
+        "construction and registry publication",
+    ),
+    "browser_pool/launch_helpers.py:install_scoped_header_routes._make._handler": (
+        "event-critical",
+        "Playwright route callback: must release the intercepted request promptly or the navigation "
+        "hangs, and it holds no BrowserSession to take a lease from -- same shape as ssrf_guard's",
+    ),
     "browser_pool/visuals.py:wire_init_scripts": (
         "launch-time-before-session-publication",
         "injects context init scripts before BrowserSession registry publication",
