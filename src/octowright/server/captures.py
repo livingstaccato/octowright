@@ -45,7 +45,11 @@ async def _capture_console(session: SessionLike, _meta: dict[str, Any], _express
 
 
 async def _capture_network(session: SessionLike, _meta: dict[str, Any], _expression: str | None) -> str:
-    return json.dumps(session.get_network_requests(), default=str, indent=2)
+    # Headers and every row: a capture is the full-fidelity sink, written to
+    # disk and read back through capture_lines/capture_search rather than
+    # dumped inline, so it pays neither the token cost nor the row cap the
+    # browser_network_requests tool defaults to.
+    return json.dumps(session.get_network_requests(include_headers=True, limit=None), default=str, indent=2)
 
 
 async def _capture_markdown(session: SessionLike, meta: dict[str, Any], _expression: str | None) -> str:

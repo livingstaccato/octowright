@@ -150,6 +150,8 @@ def test_browser_network_requests_forwards_filters_and_cursor(_patch_pool: Magic
         method_filter="post",
         resource_type_filter="xhr",
         since=4,
+        include_headers=False,
+        limit=_network.NETWORK_REQUESTS_DEFAULT_LIMIT,
     )
 
 
@@ -186,6 +188,8 @@ def test_browser_network_requests_summary_mode_returns_compact_summary(_patch_po
         method_filter="GET",
         resource_type_filter="fetch",
         since=3,
+        include_headers=False,
+        limit=None,
     )
 
 
@@ -193,3 +197,87 @@ def test_top_level_server_exports_browser_network_summary() -> None:
     from octowright import server
 
     assert hasattr(server, "browser_network_summary")
+
+
+# ─── header opt-in + row cap ───────────────────────────────────────────────
+
+
+def _limit_passed(session: MagicMock) -> int | None:
+    return session.get_network_requests.call_args.kwargs["limit"]
+
+
+def test_headers_are_withheld_unless_the_caller_asks(_patch_pool: MagicMock) -> None:
+    """A recorded header map is ~7x the JSON size of the row it rides on, and is
+    near-identical boilerplate on every row -- always-on it turned an unfiltered
+    read of an ordinary page from ~6.6k tokens into ~45k."""
+    session = MagicMock()
+    session.get_network_requests.return_value = {"requests": [], "next_cursor": 0, "total": 0}
+    _patch_pool.get.return_value = session
+
+    _network.browser_network_requests("i")
+
+    assert session.get_network_requests.call_args.kwargs["include_headers"] is False
+
+
+def test_headers_are_forwarded_when_the_caller_opts_in(_patch_pool: MagicMock) -> None:
+    session = MagicMock()
+    session.get_network_requests.return_value = {"requests": [], "next_cursor": 0, "total": 0}
+    _patch_pool.get.return_value = session
+
+    _network.browser_network_requests("i", include_headers=True)
+
+    assert session.get_network_requests.call_args.kwargs["include_headers"] is True
+
+
+def test_an_unbounded_read_is_capped_by_default(_patch_pool: MagicMock) -> None:
+    session = MagicMock()
+    session.get_network_requests.return_value = {"requests": [], "next_cursor": 0, "total": 0}
+    _patch_pool.get.return_value = session
+
+    _network.browser_network_requests("i")
+
+    assert _limit_passed(session) == _network.NETWORK_REQUESTS_DEFAULT_LIMIT
+
+
+def test_an_explicit_limit_is_honoured(_patch_pool: MagicMock) -> None:
+    session = MagicMock()
+    session.get_network_requests.return_value = {"requests": [], "next_cursor": 0, "total": 0}
+    _patch_pool.get.return_value = session
+
+    _network.browser_network_requests("i", limit=5)
+
+    assert _limit_passed(session) == 5
+
+
+def test_an_oversized_limit_is_clamped(_patch_pool: MagicMock) -> None:
+    session = MagicMock()
+    session.get_network_requests.return_value = {"requests": [], "next_cursor": 0, "total": 0}
+    _patch_pool.get.return_value = session
+
+    _network.browser_network_requests("i", limit=10_000)
+
+    assert _limit_passed(session) == _network.NETWORK_REQUESTS_MAX_LIMIT
+
+
+def test_a_non_positive_limit_falls_back_to_the_default(_patch_pool: MagicMock) -> None:
+    """Zero/negative most plausibly means "no opinion", not "unbounded" -- and
+    an LLM must not be able to remove the cap by passing 0."""
+    session = MagicMock()
+    session.get_network_requests.return_value = {"requests": [], "next_cursor": 0, "total": 0}
+    _patch_pool.get.return_value = session
+
+    _network.browser_network_requests("i", limit=0)
+
+    assert _limit_passed(session) == _network.NETWORK_REQUESTS_DEFAULT_LIMIT
+
+
+def test_the_summary_reads_every_row(_patch_pool: MagicMock) -> None:
+    """The summary AGGREGATES -- a capped read would silently give wrong counts."""
+    session = MagicMock()
+    session.get_network_requests.return_value = {"requests": [], "next_cursor": 0, "total": 0}
+    _patch_pool.get.return_value = session
+
+    _network.browser_network_summary("i")
+
+    assert _limit_passed(session) is None
+    assert session.get_network_requests.call_args.kwargs["include_headers"] is False
