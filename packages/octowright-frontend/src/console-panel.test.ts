@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { badgeClassForLevel, filterMessages, renderConsolePanel } from "./console-panel.js";
+import { badgeClassForLevel, filterMessages, renderConsolePanel, severityForLevel } from "./console-panel.js";
 import type { ConsoleMessage } from "./types.js";
 
 const SAMPLE: ConsoleMessage[] = [
@@ -27,6 +27,7 @@ describe("badgeClassForLevel", () => {
   });
   it("maps aliases and missing levels", () => {
     expect(badgeClassForLevel("warning")).toBe("console-badge--warn");
+    expect(badgeClassForLevel("assert")).toBe("console-badge--error");
     expect(badgeClassForLevel("debug")).toBe("console-badge--debug");
     expect(badgeClassForLevel(null as unknown as ConsoleMessage["level"])).toBe("console-badge--log");
   });
@@ -110,5 +111,44 @@ describe("renderConsolePanel", () => {
     const rows = container.querySelectorAll("li.console-panel__row");
     expect(rows.length).toBe(1);
     expect(rows[0]?.textContent).toContain("watch out");
+  });
+});
+
+describe("severity mapping matches what the engines emit", () => {
+  // Measured across chromium/firefox/webkit on Playwright 1.62: console.warn
+  // reports as "warning" in ALL THREE, and console.assert as its own "assert".
+  it("matches warning-level messages when the Warn filter is chosen", () => {
+    // Regression: the option value is "warn" and every engine emits "warning",
+    // so raw equality made the dashboard's Warn filter return nothing at all.
+    const messages: ConsoleMessage[] = [
+      { level: "warning", text: "engine spelling", page_index: null },
+      { level: "warn", text: "defensive alias", page_index: null },
+      { level: "log", text: "noise", page_index: null },
+    ];
+
+    expect(filterMessages(messages, "warn").map((m) => m.text)).toEqual([
+      "engine spelling",
+      "defensive alias",
+    ]);
+  });
+
+  it("groups a failed console.assert under Error", () => {
+    const messages: ConsoleMessage[] = [
+      { level: "assert", text: "invariant broke", page_index: null },
+      { level: "error", text: "boom", page_index: null },
+      { level: "warning", text: "careful", page_index: null },
+    ];
+
+    expect(filterMessages(messages, "error").map((m) => m.text)).toEqual([
+      "invariant broke",
+      "boom",
+    ]);
+  });
+
+  it("maps each engine level to a severity", () => {
+    expect(severityForLevel("assert")).toBe("error");
+    expect(severityForLevel("warning")).toBe("warn");
+    expect(severityForLevel("trace")).toBe("log");
+    expect(severityForLevel("debug")).toBe("debug");
   });
 });
