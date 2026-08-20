@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-08-20
+
+### Added
+- **HTTP headers on browser requests, at three scopes.** All three verified end
+  to end against real chromium, firefox and webkit, not just unit-tested.
+  - `browser_launch(extra_http_headers={...})` — Playwright's context-level
+    headers, so they ride **every** request that browser makes: pages, popups,
+    new tabs, subresources. Reach for this first. Silent when unset, so every
+    pre-existing launch is untouched.
+  - `browser_set_extra_http_headers(instance_id, headers)` — the same for **one
+    page**, overriding the launch value, for a header a run only learns partway
+    through (log in, then carry the token). Per page: a popup opened afterwards
+    does *not* inherit it.
+  - `browser_inject_headers` / `browser_uninject_headers` — headers for requests
+    matching a **URL pattern** only. The expensive layer: it intercepts, so every
+    matching request pays a handler round trip.
+
+  All three are replayable macro actions (`set_extra_http_headers`,
+  `inject_headers`, `uninject_headers`) and exportable to a standalone script.
+- **Followers report their version.** A follower is a subprocess its MCP *client*
+  owns, and the leader-recovery window exists so it survives a leader restart —
+  which together mean a daemon restart can never deploy follower-side code.
+  Nothing reported that: a follower identified itself as
+  `X-Octowright-Follower: <pid>` and nothing else, so telling a three-day-old
+  follower from a fresh one meant reading process start times against commit
+  timestamps by hand. `octowright_status()["bridge"]["summary"]` now carries
+  `leader_version`, `follower_versions`, and `stale_follower_count`.
+
+### Fixed
+- **A failed `console.assert` counts as an error.** All three engines report it
+  under its own `assert` level rather than folding it into `error`, and the
+  classifier listed only `error` — so a failed invariant was neither counted in
+  `error_count` nor claimed by the macro failure tail, which is exactly the line
+  that tail exists to surface.
+- **The dashboard's console "Warn" filter returned nothing.** It compared the raw
+  level against its option value `warn` while every engine emits `warning`.
+  Filtering and badge colour now share one severity mapping, which also stops a
+  failed assert rendering as a plain log line.
+
+### Changed
+- The MCP tool surface is 129 tools on a core install (136 with the `terminal`
+  extra). The three new header tools register only when no `--profile` filter is
+  active, matching `browser_mock_route`/`browser_unmock_route`.
+
+### Documentation
+- Corrects a claim 0.16.0 shipped: that Firefox spells `console.warn`'s level
+  `warn` where Chromium says `warning`. Measured across chromium, firefox and
+  webkit on Playwright 1.62, **all three report `warning`**. The `warn` token
+  predates the shared module and is kept as a harmless defensive alias, but the
+  rationale attached to it was inherited rather than verified and should not have
+  been stated as measured fact.
+- Records what the Windows field run actually verified. A self-hosted runner on
+  0.16.0 starts a daemon and gets a ready leader URL from `serve --wait-ready`
+  where 0.14.4 failed with `daemon never wrote a lockfile`. Still unverified:
+  which detach candidate won, and whether the daemon *outlives* a job teardown.
+
 ## [0.16.0] - 2026-08-19
 
 Security release. Ten findings from an adversarial sweep of the SSRF, credential,
@@ -125,6 +181,9 @@ Every one was reproduced against running code before it was fixed.
   missed it buried Firefox warnings. One predicate now, in the package-root
   `octowright.console_levels` — kept out of `session/` so a pure summarization
   module does not import the browser stack to classify a log level.
+  **Correction (0.16.1):** the Firefox `warn` spelling was inherited from the
+  pre-existing sets, not verified. Measured on Playwright 1.62, all three
+  engines report `warning`; the token is kept only as a defensive alias.
 - **A failed daemon spawn says why.** Daemon stderr goes to a separate 0600 log,
   so the file the error message points you at holds the *follower's* output and
   is empty by design on exactly this failure. The inline fallback, the
