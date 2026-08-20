@@ -67,6 +67,7 @@ async def launch_profile_locked(
         recordings_dir=pool._recordings_dir,
     )
     launch_kwargs = await pool._build_launch_kwargs(
+        disable_gpu=launch_options.disable_gpu,
         tile=launch_options.tile,
         kind=kind,
         headless=headless,

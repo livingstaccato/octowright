@@ -56,6 +56,41 @@ def _executable_path_allowed() -> bool:
     return os.environ.get(ALLOW_EXECUTABLE_PATH_ENV, "").strip().lower() not in _ALLOW_EXECUTABLE_PATH_TOKENS_OFF
 
 
+# Escape hatch for the recurring headed-Chromium crash characterised on
+# Chrome 148 / macOS 26: a deterministic main-process CHECK abort reached
+# through native macOS UI plus the Metal GPU path. OFF by default.
+#
+# Deliberately a BOOLEAN with a fixed flag set rather than more `launch_args`.
+# launch_args is arbitrary argv and is therefore gated behind
+# OCTOWRIGHT_ALLOW_EXECUTABLE_PATH (a code-execution opt-in) -- far too heavy a
+# door to make someone open just to turn the GPU off while their browsers are
+# crashing. A boolean grants no new power, so it needs no gate.
+#
+# Chromium-only: these are Chromium flags, and Firefox/WebKit would be handed
+# argv they do not understand.
+DISABLE_GPU_ENV = "OCTOWRIGHT_DISABLE_GPU"
+_DISABLE_GPU_TOKENS_OFF = frozenset({"", "0", "off", "false", "no", "never", "none", "disabled"})
+#: Applied together: disabling the GPU without also disabling GPU compositing
+#: leaves the compositor on a path that still touches the driver.
+GPU_DISABLE_ARGS = ("--disable-gpu", "--disable-gpu-compositing")
+
+
+def resolve_disable_gpu(explicit: bool | None) -> bool:
+    """Whether to launch Chromium with the GPU disabled.
+
+    Precedence: an explicit per-launch arg wins; else ``OCTOWRIGHT_DISABLE_GPU``;
+    else off. Read at call time so an operator can flip it without a restart.
+
+    HONEST SCOPE: this is an escape hatch, not a proven fix. The crash it exists
+    for is characterised (native macOS UI + Metal on Chrome 148 / macOS 26) but
+    this mitigation has NOT been confirmed to prevent it -- it gives an operator
+    whose browsers are crashing something to try in one launch argument.
+    """
+    if explicit is not None:
+        return explicit
+    return os.environ.get(DISABLE_GPU_ENV, "").strip().lower() not in _DISABLE_GPU_TOKENS_OFF
+
+
 def resolve_protected(explicit: bool | None, *, headed: bool, ephemeral: bool) -> tuple[bool, str]:
     """Decide a browser's effective `protected` flag + the reason it was chosen.
 
@@ -134,6 +169,9 @@ class LaunchOptions:
     #: relaunched browser could attach an ``Authorization`` or ``Cookie`` of
     #: its choosing to every site that browser subsequently visits.
     extra_http_headers: dict[str, str] | None = None
+    #: Launch Chromium with the GPU disabled (see ``resolve_disable_gpu``).
+    #: ``None`` defers to ``OCTOWRIGHT_DISABLE_GPU``; ``True``/``False`` force it.
+    disable_gpu: bool | None = None
 
     @classmethod
     def from_mapping(cls, options: dict[str, Any]) -> LaunchOptions:
@@ -164,6 +202,7 @@ class LaunchOptions:
             executable_path=options.get("executable_path"),
             launch_args=options.get("launch_args"),
             extra_http_headers=options.get("extra_http_headers"),
+            disable_gpu=options.get("disable_gpu"),
         )
         launch_options.validate()
         return launch_options
@@ -294,6 +333,7 @@ class LaunchOptions:
             "executable_path": self.executable_path,
             "launch_args": self.launch_args,
             "extra_http_headers": self.extra_http_headers,
+            "disable_gpu": self.disable_gpu,
         }
 
     def with_har_rotated(self) -> LaunchOptions:
