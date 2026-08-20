@@ -165,10 +165,6 @@ def _console_recent(capture_id: str, messages: list[dict[str, Any]]) -> list[dic
     ]
 
 
-_console_error_count = count_errors
-_console_warning_count = count_warnings
-
-
 def _console_json_summary(capture_id: str, content: str) -> dict[str, Any] | None:
     messages = _extract_console_messages(_load_json_object(content))
     if not messages:
@@ -176,8 +172,8 @@ def _console_json_summary(capture_id: str, content: str) -> dict[str, Any] | Non
     return {
         "type": "console",
         "message_count": len(messages),
-        "error_count": _console_error_count(messages),
-        "warning_count": _console_warning_count(messages),
+        "error_count": count_errors(messages),
+        "warning_count": count_warnings(messages),
         "by_level": _sorted_counts(Counter(str(message.get("level") or "unknown") for message in messages)),
         "recent": _console_recent(capture_id, messages),
     }

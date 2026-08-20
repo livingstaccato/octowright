@@ -222,6 +222,16 @@ def _detect_sandbox_blocked(txt: str, _target: str) -> PlaywrightFailureHint | N
     }
 
 
+def _running_on_windows() -> bool:
+    """Whether this process launches browsers on Windows.
+
+    Split out so it can be faked in tests; the browser that produced the error
+    text ran in THIS process (see ``browser_pool.errors``), so the host
+    platform is the right thing to gate on.
+    """
+    return platform.system() == "Windows"
+
+
 def _detect_windows_media_stack_missing(txt: str, _target: str) -> PlaywrightFailureHint | None:
     """Windows images (notably Server Core) missing components Chromium needs.
 
@@ -230,7 +240,16 @@ def _detect_windows_media_stack_missing(txt: str, _target: str) -> PlaywrightFai
     base image omits OS components Chromium initializes at startup. Raw, this
     reads as a transient network fault and sends the reader off chasing DNS and
     proxies; named, it points at the image.
+
+    Gated on the host platform because this is ordered AHEAD of the generic
+    detectors: an error text that merely happens to carry one of these tokens
+    on Linux or macOS would otherwise be answered with "install the
+    Server-Media-Foundation feature" and would suppress the correct
+    sandbox/target-closed diagnosis -- the misdiagnosis this detector exists
+    to prevent, pointed the other way.
     """
+    if not _running_on_windows():
+        return None
     if not re.search(r"(WSALookupServiceBegin|\bmfplat\.dll\b|\bmf\.dll\b)", txt, flags=re.IGNORECASE):
         return None
     return {

@@ -15,7 +15,15 @@ from __future__ import annotations
 
 import pytest
 
+from octowright import engines
 from octowright.engines import playwright_failure_sanity
+
+
+@pytest.fixture(autouse=True)
+def _on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These are Windows-image failures; the detector is gated on the host."""
+    monkeypatch.setattr(engines, "_running_on_windows", lambda: True)
+
 
 WSA = "browserType.launch: Browser closed.\n[ERROR:network_change_notifier_win.cc] WSALookupServiceBegin failed with: 10091"
 MF_DLL = "browserType.launch: Failed to load mf.dll"
@@ -88,6 +96,18 @@ def test_matching_is_case_insensitive_but_still_specific() -> None:
     assert playwright_failure_sanity("wsalookupservicebegin failed", kind="chromium") is not None
     # A bare error code is not enough -- it would fire on unrelated numbers.
     assert playwright_failure_sanity("exit code 10091", kind="chromium") is None
+
+
+def test_off_windows_the_generic_detector_keeps_the_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ordering it ahead of the generic detectors is only safe because it does
+    not fire off-Windows: the remedy is Windows-only, and claiming a Linux
+    failure would suppress the correct sandbox/target-closed diagnosis."""
+    monkeypatch.setattr(engines, "_running_on_windows", lambda: False)
+
+    hint = playwright_failure_sanity(FIELD_TEXT, kind="chromium")
+
+    assert hint is not None
+    assert hint["category"] == "playwright_target_closed"
 
 
 def test_the_hint_reaches_the_launch_error_a_caller_sees() -> None:

@@ -110,9 +110,6 @@ def _console_recent_rows(
     ]
 
 
-_console_warning_count = count_warnings
-
-
 @mcp.tool(
     structured_output=False,
     description=(
@@ -141,7 +138,7 @@ def browser_console_summary(
         "next_cursor": len(msgs),
         "by_level": _count_items(Counter(str(msg.get("level") or "unknown") for msg in sliced)),
         "error_count": count_errors(sliced),
-        "warning_count": _console_warning_count(sliced),
+        "warning_count": count_warnings(sliced),
         "recent": _console_recent_rows(instance_id, recent, capped_text),
         "recent_limit": capped_recent,
         "next_actions": _console_summary_next_actions(instance_id, len(msgs)),

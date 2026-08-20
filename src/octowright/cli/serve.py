@@ -44,6 +44,27 @@ _INLINE_FALLBACK_WARNING = (
 )
 
 
+def _export_ready_timeout(ready_timeout: float | None) -> None:
+    """Publish ``--ready-timeout`` so every wait_for_daemon() in this process
+    shares one budget (including the post-bridge respawn), not just the first.
+
+    A non-positive or non-finite value is refused rather than exported: the
+    parser floors it back to the default, so the caller would believe a flag
+    took effect that silently did nothing -- the same class of bug as a flag
+    ``--wait-ready`` ignores.
+    """
+    if ready_timeout is None:
+        return
+    import math as _math
+    import os as _os
+
+    from octowright import daemonize as _daemonize
+
+    if not _math.isfinite(ready_timeout) or ready_timeout <= 0:
+        raise click.UsageError("--ready-timeout must be a positive, finite number of seconds")
+    _os.environ[_daemonize.DAEMON_READY_TIMEOUT_ENV] = str(ready_timeout)
+
+
 def _reject_incompatible_wait_ready(*, wait_ready: bool, no_singleton: bool, no_http: bool, daemon_mode: bool) -> None:
     """Refuse flag combinations ``--wait-ready`` would otherwise ignore.
 
@@ -199,12 +220,7 @@ def serve(
         wait_ready=wait_ready, no_singleton=no_singleton, no_http=no_http, daemon_mode=daemon_mode
     )
 
-    # Export so the readiness budget reaches every wait_for_daemon() call in
-    # this process (including the post-bridge respawn), not just the first.
-    if ready_timeout is not None:
-        from octowright import daemonize as _daemonize
-
-        _os.environ[_daemonize.DAEMON_READY_TIMEOUT_ENV] = str(ready_timeout)
+    _export_ready_timeout(ready_timeout)
 
     setup_telemetry()
     try:
@@ -278,26 +294,40 @@ async def _ensure_leader_or_inline(
 ) -> Any:
     """Find or spawn a daemon leader. Returns leader info, OR None when
     we fell back to running the leader inline (caller returns immediately)."""
-    spawned = await _election.elect_leader(
-        http_host=http_host,
-        http_port=http_port,
-        idle_grace=idle_grace,
-        keep_alive=bool(leader_kwargs.get("keep_alive")),
-    )
+    try:
+        spawned = await _election.elect_leader(
+            http_host=http_host,
+            http_port=http_port,
+            idle_grace=idle_grace,
+            keep_alive=bool(leader_kwargs.get("keep_alive")),
+        )
+    except _election.ElectionContended:
+        # Another instance was electing and never produced a leader. We spawned
+        # nothing, so quoting OUR daemon log would point at a process this one
+        # never started, and "daemon_spawn_failed" would report a failure that
+        # did not happen. Still fall back inline — a fragile server beats
+        # dropping the client — but say which of the two happened.
+        await _fall_back_inline(leader_kwargs, reason="election_contention")
+        return None
     if spawned is None:
         # Daemon didn't come up — run leader inline so the user at least gets
         # a working server (browsers die on this process's exit). Surface the
         # degraded, fragile state loudly and via octowright_status.
-        from octowright.server import _state
-
-        click.echo(_INLINE_FALLBACK_WARNING, err=True)
         # The warning says THAT the spawn failed; only the daemon log says WHY
         # -- see echo_daemon_log_tail.
         _ready.echo_daemon_log_tail()
-        _state.set_leader_mode("inline", inline_reason="daemon_spawn_failed")
-        await _run_leader(**leader_kwargs, no_singleton=False)
+        await _fall_back_inline(leader_kwargs, reason="daemon_spawn_failed")
         return None
     return spawned
+
+
+async def _fall_back_inline(leader_kwargs: dict[str, Any], *, reason: str) -> None:
+    """Run the leader in THIS process, loudly, recording why."""
+    from octowright.server import _state
+
+    click.echo(_INLINE_FALLBACK_WARNING, err=True)
+    _state.set_leader_mode("inline", inline_reason=reason)
+    await _run_leader(**leader_kwargs, no_singleton=False)
 
 
 async def _bridge_to_leader(leader_info: Any) -> None:
