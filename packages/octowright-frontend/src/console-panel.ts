@@ -8,19 +8,37 @@ const LEVEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "error", label: "Error" },
 ];
 
-export function badgeClassForLevel(level: ConsoleLevel): string {
+export type ConsoleSeverity = "error" | "warn" | "info" | "debug" | "log";
+
+/**
+ * Map a raw engine level onto the severity the UI groups by.
+ *
+ * Every engine reports `console.warn` as `"warning"` (measured: chromium,
+ * firefox and webkit on Playwright 1.62), so filtering by raw equality against
+ * the `"warn"` option value matched nothing and the dashboard's Warn filter
+ * returned an empty list. `console.assert` arrives as its own `"assert"` level
+ * and is error severity — it fires only when a declared invariant failed.
+ * `"warn"` is kept as a defensive alias; it costs nothing.
+ */
+export function severityForLevel(level: ConsoleLevel): ConsoleSeverity {
   const l = (level ?? "log").toLowerCase();
-  if (l === "error") return "console-badge--error";
-  if (l === "warn" || l === "warning") return "console-badge--warn";
-  if (l === "info") return "console-badge--info";
-  if (l === "debug") return "console-badge--debug";
-  return "console-badge--log";
+  if (l === "error" || l === "assert") return "error";
+  if (l === "warn" || l === "warning") return "warn";
+  if (l === "info") return "info";
+  if (l === "debug") return "debug";
+  return "log";
+}
+
+export function badgeClassForLevel(level: ConsoleLevel): string {
+  return `console-badge--${severityForLevel(level)}`;
 }
 
 export function filterMessages(messages: ConsoleMessage[], level: string): ConsoleMessage[] {
   if (!level || level === "all") return messages;
+  // Severity, not raw equality: the option values are UI categories, and the
+  // levels are whatever the engine emitted.
   const target = level.toLowerCase();
-  return messages.filter((m) => (m.level ?? "log").toLowerCase() === target);
+  return messages.filter((m) => severityForLevel(m.level) === target);
 }
 
 export interface ConsolePanelOptions {
