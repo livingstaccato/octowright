@@ -81,6 +81,8 @@ _ACTION_MAP = {
     "expect_js": "expect_js",
     "mock_route": "mock_route",
     "set_extra_http_headers": "set_extra_http_headers",
+    "inject_headers": "inject_headers",
+    "uninject_headers": "uninject_headers",
     "unmock_route": "unmock_route",
     "set_dialog_policy": "set_dialog_policy",
     "set_input_files": "set_input_files",
@@ -137,6 +139,10 @@ _REPLAY_RENAME_KEYS: dict[str, dict[str, str]] = {
     "drag": {"source": "source_selector", "target": "target_selector"},
     "mock_route": {"pattern": "url_pattern"},
     "unmock_route": {"pattern": "url_pattern"},
+    # Same split, same reason: the recorder writes "pattern", the session
+    # method's parameter is "url_pattern".
+    "inject_headers": {"pattern": "url_pattern"},
+    "uninject_headers": {"pattern": "url_pattern"},
 }
 
 

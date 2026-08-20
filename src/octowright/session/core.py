@@ -130,6 +130,10 @@ class BrowserSession(
     _dialog_policy: str = "dismiss"
     _dialog_prompt_text: str | None = None
     _active_routes: dict[str, Any] = field(default_factory=dict)
+    #: Header-injection route handlers, keyed by url_pattern. Kept separate
+    #: from _active_routes so a mock and an injector can share a pattern
+    #: without one silently evicting the other's handler from the registry.
+    _header_routes: dict[str, Any] = field(default_factory=dict)
     active_frame: Any | None = None  # playwright.async_api.Frame when set
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)
