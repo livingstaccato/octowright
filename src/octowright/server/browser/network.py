@@ -207,6 +207,22 @@ async def browser_mock_route(
 
 @mcp.tool(
     structured_output=False,
+    description=(
+        "Set extra HTTP headers on THIS page, overriding any set at launch. Use for a "
+        "header the run only learns partway through (log in, then carry the token); for a "
+        "header the whole browser needs, pass extra_http_headers to browser_launch instead. "
+        "Per-page: a popup or new tab opened afterwards does NOT inherit these. Values are "
+        "scrubbed from the recording by header name, so an Authorization is redacted while "
+        "an X-Env stays readable."
+    ),
+)
+async def browser_set_extra_http_headers(instance_id: str, headers: dict[str, str]) -> dict[str, Any]:
+    async with browser_operation(pool, instance_id, "browser_set_extra_http_headers") as session:
+        return await session.set_extra_http_headers(headers)
+
+
+@mcp.tool(
+    structured_output=False,
     description=("Remove a previously-installed mock for `url_pattern`. Raises if no mock was active."),
 )
 async def browser_unmock_route(instance_id: str, url_pattern: str) -> dict[str, Any]:

@@ -80,6 +80,7 @@ _ACTION_MAP = {
     "expect_selector": "expect_selector",
     "expect_js": "expect_js",
     "mock_route": "mock_route",
+    "set_extra_http_headers": "set_extra_http_headers",
     "unmock_route": "unmock_route",
     "set_dialog_policy": "set_dialog_policy",
     "set_input_files": "set_input_files",
