@@ -94,6 +94,13 @@ def test_daemon_survives_parent_sigkill(tmp_path: Path) -> None:
     # actual ~/.local/state/octowright/logs/octowright-daemon.log, indistinguishable
     # from a genuine daemon startup on a random port.
     env["XDG_STATE_HOME"] = str(tmp_path)
+    # ...and the config dir, for the same reason one directory over: the daemon
+    # records the version it started on in user_config_dir()/upgrade.json, so
+    # without this every run marked the developer's real post-upgrade what's-new
+    # notice as already seen. Measured on the 0.16.3 release -- this module was
+    # the one still doing it. conftest also exports OCTOWRIGHT_UPGRADE_STATE,
+    # which covers the marker specifically; this covers the whole config dir.
+    env["XDG_CONFIG_HOME"] = str(tmp_path / "config")
 
     stderr_log = (tmp_path / "parent-stderr.log").open("wb")
     parent = subprocess.Popen(

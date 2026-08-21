@@ -41,6 +41,31 @@ _AMBIENT_OTLP_ENV_VARS = (
 
 
 @pytest.fixture(autouse=True)
+def _isolate_upgrade_marker(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Keep the post-upgrade what's-new marker out of the developer's real config.
+
+    The marker records the last version a leader started on, and it fires ONCE
+    per version bump -- so anything that writes the real
+    ``~/.config/octowright/upgrade.json`` during a test run consumes the notice
+    for an actual upgrade, and the operator never sees it. Observed for real on
+    the 0.16.3 release: the marker was already at 0.16.3, timestamped fifteen
+    minutes before the daemon restart that was supposed to trigger the banner.
+
+    0.16.2 fixed this by making five named live-daemon modules set
+    ``XDG_CONFIG_HOME``, and a guard test pins that they still do. But the guard
+    enumerates modules, so it only ever covers the offenders known at the time:
+    ``test_daemonize.py`` spawns a real daemon too, isolates ``XDG_STATE_HOME``
+    with a careful comment about polluting the developer's daemon log, and never
+    got the config half. Adding a sixth name would just reset the trap.
+
+    Exporting the override here covers every spawned subprocess at once,
+    whichever module spawns it, because a child reads the variable at ITS import
+    time. That is the whole point of doing it in conftest rather than per module.
+    """
+    monkeypatch.setenv("OCTOWRIGHT_UPGRADE_STATE", str(tmp_path_factory.mktemp("upgrade") / "upgrade.json"))
+
+
+@pytest.fixture(autouse=True)
 def _clear_ambient_otlp_export_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep tests deterministic when a developer shell has OTLP export configured."""
     for name in _AMBIENT_OTLP_ENV_VARS:
