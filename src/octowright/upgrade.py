@@ -60,6 +60,13 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "ordinary page from ~6.6k tokens into ~45k. The same call had no row cap "
         "at all and could return the whole 5000-entry buffer; it now pages 200 at "
         "a time with returned/truncated in the payload.",
+        "If you are reading this, the what's-new notice works -- which it did "
+        "not on the last release. 0.16.2 said this was fixed; it fixed five "
+        "named test modules and added a guard that lists them by name, so a "
+        "sixth one nobody had listed kept marking the version seen during "
+        "`make ci` and eating the notice before you could see it. The "
+        "isolation now lives in conftest, where it covers every spawned "
+        "daemon instead of the ones somebody remembered.",
         "Captures, goldens and macros are locked to 0700, governed by the same "
         "OCTOWRIGHT_RECORDINGS_PRIVATE knob recordings already use. They hold page "
         "text, accessibility trees and now request headers, but sat world-readable "
