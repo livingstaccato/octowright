@@ -147,6 +147,7 @@ def test_status_reports_the_running_version() -> None:
         "test_bridge_heartbeat_live",
         "test_bridge_idempotency_live",
         "test_bridge_leader_restart_live",
+        "test_daemonize",
         "test_mcp_events_daemon_live",
         "test_mcp_notifications_daemon_live",
     ],
@@ -164,6 +165,26 @@ def test_live_daemon_tests_isolate_the_config_dir(module: str) -> None:
     source = (Path(__file__).parent / f"{module}.py").read_text(encoding="utf-8")
 
     assert 'env["XDG_CONFIG_HOME"]' in source, f"{module} would pollute the real config dir"
+
+
+def test_the_upgrade_marker_is_isolated_for_every_spawned_daemon() -> None:
+    """The list above is the weak half of this control, and it failed once.
+
+    Enumerating modules only ever covers the offenders known when the list was
+    written: `test_daemonize` spawned a real daemon, reasoned carefully about
+    XDG_STATE_HOME polluting the developer's daemon log, missed the config half,
+    and was not on the list — so the 0.16.3 release marker was consumed fifteen
+    minutes before the restart that should have shown the banner. Adding a sixth
+    name (done above) fixes that one case and resets the trap for the next.
+
+    conftest exporting OCTOWRIGHT_UPGRADE_STATE is the half that cannot be
+    forgotten: a spawned child reads it at its own import time, so every
+    subprocess is covered whichever module spawns it. This pins that it stays.
+    """
+    source = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
+
+    assert "OCTOWRIGHT_UPGRADE_STATE" in source, "conftest must isolate the upgrade marker for spawned daemons"
+    assert "autouse=True" in source
 
 
 def test_stale_followers_come_with_an_action() -> None:

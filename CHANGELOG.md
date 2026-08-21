@@ -95,6 +95,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Returned network rows are copies.** `list(deque)` copies the list and not the dicts inside
   it, so handing back originals let one reader's in-place edit rewrite the session's history
   for every later reader.
+- **The post-upgrade what's-new notice was still being consumed by the test suite.** 0.16.2
+  fixed this for five named live-daemon modules and added a guard test pinning that they set
+  `XDG_CONFIG_HOME` — but the guard *enumerates modules*, so it only ever covered the
+  offenders known when the list was written. `tests/test_daemonize.py` spawns a real daemon
+  too, isolates `XDG_STATE_HOME` with a careful comment about polluting the developer's
+  daemon log, and never got the config half. Caught on this very release: the real marker read
+  `0.16.3` fifteen minutes before the restart that should have shown the banner, so the notice
+  never fired. `conftest` now exports `OCTOWRIGHT_UPGRADE_STATE` for the whole session, which
+  covers every spawned subprocess whichever module spawns it — a control that cannot be
+  forgotten the way a list can — and a test pins that it stays.
 
 ## [0.16.2] - 2026-08-20
 
