@@ -1712,7 +1712,7 @@ own import has none to report."
 - Produces:
   - `ResolvedDescriptor` frozen dataclass: `discovered`, `descriptor`
   - `resolve_descriptors(*, registry, discovered, enabled) -> list[ResolvedDescriptor]`
-  - `activate(*, registry, resolved, ctx_factory, tool_manager) -> None`
+  - `activate(*, registry, resolved, ctx_factory, tool_manager, import_module=None) -> None` — owns the core-tool collision check (see the note in Step 3)
   - `ToolDelta` helper: `snapshot(tool_manager) -> set[str]`, `remove(tool_manager, names) -> None`
 
 - [ ] **Step 1: Write the failing test**
@@ -1779,10 +1779,6 @@ class _Pool:
         return None
 
 
-def _discovered(name: str = "refkind") -> DiscoveredPlugin:
-    return DiscoveredPlugin(name=name, distribution="d", version="1", entry_point="m:p", ep=_FakeEP())
-
-
 class _FakeEP:
     name = "refkind"
     value = "m:p"
@@ -1844,7 +1840,7 @@ def test_descriptor_import_failure_reports_without_descriptor_fields():
     assert "kind" not in rows["refkind"]
 
 
-def test_tool_name_colliding_with_core_is_refused_before_import():
+def test_reserved_kind_is_refused():
     reg = PluginRegistry()
     ep = _FakeEP(target=_Descriptor(kind="browser", tool_names=frozenset({"browser_launch"})))
     found = DiscoveredPlugin(name="refkind", distribution="d", version="1", entry_point="m:p", ep=ep)
@@ -1852,6 +1848,58 @@ def test_tool_name_colliding_with_core_is_refused_before_import():
     assert resolve_descriptors(registry=reg, discovered=[found], enabled=["refkind"]) == []
     rows = {row["name"]: row for row in reg.status_rows()}
     assert "reserved" in rows["refkind"]["reason"]
+
+
+def test_tool_name_colliding_with_core_is_refused_before_import(tmp_path):
+    # `macro` is NOT a reserved kind, so this reaches the collision check
+    # rather than short-circuiting on validate_kind. Using a reserved kind here
+    # would make the test pass for the wrong reason.
+    manager = _FakeToolManager()
+    manager._tools["macro_run"] = object()
+
+    reg = PluginRegistry()
+    ep = _FakeEP(target=_Descriptor(kind="macro", tool_names=frozenset({"macro_run"})))
+    found = DiscoveredPlugin(name="rogue", distribution="d", version="1", entry_point="m:p", ep=ep)
+    resolved = resolve_descriptors(registry=reg, discovered=[found], enabled=["rogue"])
+
+    imported: list[str] = []
+    activate(
+        registry=reg,
+        resolved=resolved,
+        ctx_factory=lambda kind: _ctx_factory(kind, reg, tmp_path),
+        tool_manager=manager,
+        import_module=imported.append,
+    )
+
+    # Refused BEFORE the tool module was imported, and core's tool survives.
+    assert imported == []
+    assert reg.kinds() == []
+    assert manager._tools["macro_run"] is not None
+    rows = {row["name"]: row for row in reg.status_rows()}
+    assert "collision" in rows["rogue"]["reason"]
+
+
+def test_two_plugins_claiming_one_tool_name_collide(tmp_path):
+    manager = _FakeToolManager()
+    reg = PluginRegistry()
+    first = DiscoveredPlugin(
+        name="a", distribution="d", version="1", entry_point="m:p",
+        ep=_FakeEP(target=_Descriptor(kind="alpha", tool_names=frozenset({"alpha_go"}))),
+    )
+    # A second plugin whose kind differs but which declares the same tool name
+    # is impossible under the prefix rule, so the cross-plugin guard is checked
+    # by giving both the same kind — two distributions, one kind.
+    second = DiscoveredPlugin(
+        name="b", distribution="d", version="1", entry_point="m:p",
+        ep=_FakeEP(target=_Descriptor(kind="alpha", tool_names=frozenset({"alpha_go"}))),
+    )
+    resolved = resolve_descriptors(
+        registry=reg, discovered=[first, second], enabled=["a", "b"], tool_manager=manager
+    )
+
+    assert [item.discovered.name for item in resolved] == ["a"]
+    rows = {row["name"]: row for row in reg.status_rows()}
+    assert "collision" in rows["b"]["reason"]
 
 
 def test_activate_registers_the_pool(tmp_path):
@@ -2015,6 +2063,12 @@ def resolve_descriptors(
 
     Everything a *disabled* plugin reports comes from metadata; resolving its
     descriptor would execute exactly the code explicit enable exists to gate.
+
+    ``tool_manager`` is optional here because this phase runs during
+    ``_state`` import, *before* ``mcp`` exists and long before core's tool
+    modules have registered anything — so there is nothing to collide with
+    yet. Pass it in tests. The real core-collision check runs in
+    :func:`activate`, which happens after core registration.
     """
     by_name = {found.name: found for found in discovered}
     for found in discovered:
@@ -2039,6 +2093,7 @@ def resolve_descriptors(
             continue
         try:
             _validate(descriptor, core_tools=core_tools, claimed=claimed)
+            _ = core_tools  # empty during the _state phase; see the docstring
         except Exception as exc:  # noqa: BLE001
             registry.record_failure(
                 name=name, reason=str(exc), discovered=found, descriptor=_safe_descriptor(descriptor)
@@ -2081,8 +2136,29 @@ def activate(
     """Import each plugin's tool module and build its pool, or roll back."""
     importer = import_module or importlib.import_module
 
+    registered = _tool_names(tool_manager)
     for item in resolved:
         descriptor = item.descriptor
+        # The real collision check. resolve_descriptors could not run it: it
+        # executes during `_state` import, before core's ~129 tools register.
+        # Skipping it here would let a plugin claiming a non-reserved kind
+        # (macro_run, capture_create, persona_get) SHADOW core's tool under the
+        # SDK's first-wins add_tool, which is the inversion of the bug the
+        # check exists to prevent.
+        collisions = set(descriptor.tool_names) & registered
+        if collisions:
+            registry.record_failure(
+                name=item.discovered.name,
+                reason=f"tool name collision with an already-registered tool: {sorted(collisions)}",
+                discovered=item.discovered,
+                descriptor=_safe_descriptor(descriptor),
+            )
+            log.warning(
+                "octowright.plugins.tool_collision",
+                name=item.discovered.name,
+                collisions=sorted(collisions),
+            )
+            continue
         before = _tool_names(tool_manager)
         delta: set[str] = set()
         pool = None
@@ -2093,6 +2169,7 @@ def activate(
             pool = descriptor.create_pool(ctx_factory(descriptor.kind))
             adapter = descriptor.create_scenario_adapter(pool)
             registry.register(descriptor, pool=pool, adapter=adapter, discovered=item.discovered)
+            registered |= delta
         except Exception as exc:  # noqa: BLE001
             delta = delta or (_tool_names(tool_manager) - before)
             _remove_tools(tool_manager, delta)
@@ -2113,7 +2190,7 @@ def activate(
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `uv run --active pytest tests/plugins/test_loader.py -v`
-Expected: 8 passed.
+Expected: 10 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2697,9 +2774,18 @@ SessionPool method so adding one without coverage fails CI."
 
 **Files:**
 - Modify: `src/octowright/server/_state.py` (descriptor phase before `_allowed_tools`)
-- Modify: `src/octowright/server/_optional_tools.py` (activation)
+- Create: `src/octowright/server/_plugin_activation.py` (activation)
+- Modify: `src/octowright/server/__init__.py` (import the activation module **last**)
 - Modify: `src/octowright/server/meta.py` (status block)
 - Test: `tests/plugins/test_server_wiring.py`
+
+**Import-order constraint (load-bearing).** `server/__init__.py` imports
+`_optional_tools` on line 21, *before* the core tool submodules. Putting plugin
+activation there would run it while `mcp._tool_manager._tools` is still empty:
+the collision check would see zero core tools, and a plugin registering first
+would **shadow** a core tool under the SDK's first-wins `add_tool`. Activation
+therefore lives in its own module imported after every core submodule.
+`_optional_tools` is left untouched — terminal registration is unaffected.
 
 **Interfaces:**
 - Consumes: `discover`, `enabled_names` (Task 5); `resolve_descriptors`, `activate` (Task 7); `register_plugin_profile` (Task 8); `PluginRegistry`, `plugin_state` (Tasks 6, 9).
@@ -2747,6 +2833,18 @@ def test_state_exposes_the_process_registry():
     from octowright.server import _state
 
     assert isinstance(_state.plugin_registry, PluginRegistry)
+    assert isinstance(_state.resolved_plugins, list)
+
+
+def test_plugin_activation_is_imported_after_core_tool_modules():
+    # Load-bearing ordering: the SDK's add_tool is first-wins, so a plugin
+    # activated before core registration could shadow a core tool.
+    from pathlib import Path
+
+    import octowright.server as server_pkg
+
+    source = Path(server_pkg.__file__).read_text()
+    assert source.index("_plugin_activation") > source.index("import web as _web")
 
 
 def test_no_plugins_enabled_by_default():
@@ -2782,12 +2880,14 @@ except Exception:  # noqa: BLE001 - e.g. two distributions claiming one name
     # cannot be allowed to stop it from starting.
     log.warning("octowright.plugins.discovery_failed", exc_info=True)
     _discovered_plugins = []
-_resolved_plugins = plugin_loader.resolve_descriptors(
+# Public (no underscore): `_plugin_activation` imports this by name, and a
+# leading underscore would signal "do not import me across modules".
+resolved_plugins = plugin_loader.resolve_descriptors(
     registry=plugin_registry,
     discovered=_discovered_plugins,
     enabled=_enabled_plugins,
 )
-for _item in _resolved_plugins:
+for _item in resolved_plugins:
     if _item.descriptor.profile_name:
         with contextlib.suppress(ValueError):
             register_plugin_profile(_item.descriptor.profile_name, _item.descriptor.tool_names)
@@ -2813,43 +2913,60 @@ from octowright.server.profiles import register_plugin_profile
 > `log.warning("octowright.plugins.profile_collision", name=...)` inside the
 > `except` if you prefer an explicit block to `suppress`.
 
-- [ ] **Step 4: Activate plugins in `_optional_tools.py`**
+- [ ] **Step 4: Activate plugins from a module imported last**
 
-Append to `src/octowright/server/_optional_tools.py`:
+Create `src/octowright/server/_plugin_activation.py`:
 
 ```python
-def _activate_plugins() -> None:
-    """Import each enabled plugin's tool module and build its pool.
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-Comment: Part of octowright.
+#
 
-    Runs here rather than in ``_state`` so tool registration happens after the
-    profile filter exists, and so a plugin's tool module can import ``mcp``
-    from ``_state`` without a circular import.
-    """
-    from octowright.plugins import loader as plugin_loader
-    from octowright.plugins.session_launch import PluginContext
-    from octowright.server._state import plugin_registry, _resolved_plugins, mcp
-    from octowright import defaults
+"""Import each enabled plugin's tool module and build its pool.
 
-    def _ctx(kind: str) -> PluginContext:
-        return PluginContext(
-            kind=kind,
-            recordings_dir=defaults.RECORDINGS_DIR,
-            id_in_use=plugin_registry.id_in_use,
-        )
+Imported **last** by ``server/__init__``, after every core tool submodule has
+registered. That ordering is load-bearing rather than tidy: the MCP SDK's
+``add_tool`` is first-wins, so activating before core registration would let a
+plugin claiming a non-reserved kind (``macro_run``, ``capture_create``,
+``persona_get``) shadow core's tool — the inversion of the collision check's
+whole purpose. ``_optional_tools`` is imported early for the terminal extra and
+is deliberately not used for this.
+"""
 
-    plugin_loader.activate(
-        registry=plugin_registry,
-        resolved=_resolved_plugins,
-        ctx_factory=_ctx,
-        tool_manager=mcp._tool_manager,
+from __future__ import annotations
+
+from octowright import defaults
+from octowright.plugins import loader as plugin_loader
+from octowright.plugins.session_launch import PluginContext
+from octowright.server._state import mcp, plugin_registry, resolved_plugins
+
+
+def _ctx(kind: str) -> PluginContext:
+    return PluginContext(
+        kind=kind,
+        recordings_dir=defaults.RECORDINGS_DIR,
+        id_in_use=plugin_registry.id_in_use,
     )
 
 
-_activate_plugins()
+plugin_loader.activate(
+    registry=plugin_registry,
+    resolved=resolved_plugins,
+    ctx_factory=_ctx,
+    tool_manager=mcp._tool_manager,
+)
 ```
 
-Place the call at the end of the module, after the existing terminal-tools
-block, so terminal registration is untouched.
+Then add the import to `src/octowright/server/__init__.py` **below** the core
+submodule import block (below `from octowright.server import web as _web`):
+
+```python
+# Plugin activation imports each enabled plugin's tool module, so it MUST come
+# after every core submodule above has registered its tools: the SDK's add_tool
+# is first-wins, and activating earlier would let a plugin shadow a core tool.
+from octowright.server import _plugin_activation as _plugin_activation  # noqa: F401,E402
+```
 
 - [ ] **Step 5: Add the status block**
 
@@ -2873,7 +2990,7 @@ from octowright.server import plugin_state as _plugin_state
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run --active pytest tests/plugins/test_server_wiring.py -v`
-Expected: 4 passed.
+Expected: 6 passed.
 
 - [ ] **Step 7: Verify the whole suite and the lint gate**
 
@@ -2889,15 +3006,18 @@ are consumed in build steps 3 and 4.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/octowright/server/_state.py src/octowright/server/_optional_tools.py \
-        src/octowright/server/meta.py tests/plugins/test_server_wiring.py
+git add src/octowright/server/_state.py src/octowright/server/_plugin_activation.py \
+        src/octowright/server/__init__.py src/octowright/server/meta.py \
+        tests/plugins/test_server_wiring.py
 git commit -m "feat(server): wire plugin discovery, activation, and status
 
 Descriptors resolve and plugin profiles register before _allowed_tools is
 computed, because @mcp.tool decoration reads the filter at import time.
-Activation runs from _optional_tools so a plugin tool module can import mcp
-without a cycle. A core install enables nothing, so the tool surface is
-unchanged."
+Activation lives in its own module imported after every core submodule: the
+SDK's add_tool is first-wins, so activating from _optional_tools (imported on
+line 21, before core registers) would have let a plugin claiming a
+non-reserved kind shadow a core tool. A core install enables nothing, so the
+tool surface is unchanged."
 ```
 
 ---
