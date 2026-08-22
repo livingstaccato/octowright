@@ -849,7 +849,10 @@ class ToolGateFake(OperationAwareFake):
         self.observed_roots.append(self.operation_snapshot()["active_operation"])
         return "Example"
 
-    async def click(self, selector: str) -> None:
+    async def click(self, selector: str, *, timeout_ms: int | None = None) -> None:
+        # Mirrors BrowserSession.click's real signature -- browser_click now
+        # forwards timeout_ms on the selector path, and a double that omits it
+        # fails with TypeError instead of exercising the gate.
         self.observed_roots.append(self.operation_snapshot()["active_operation"])
 
     def _target(self) -> _ToolGateTarget:

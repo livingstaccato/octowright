@@ -78,6 +78,31 @@ def validate_extra_http_headers(headers: Any) -> None:
         validate_one_header(name, value)
 
 
+def redact_headers_for_report(headers: dict[str, str]) -> dict[str, str]:
+    """Header map as it should be REPORTED over the tool/HTTP surface.
+
+    Shares the recorder's allow/deny logic -- the same header-NAME
+    classification, via :func:`redact_header_values` -- and differs only in the
+    mode floor: ``off`` is treated as ``passwords``.
+
+    That divergence is deliberate and is the stricter direction.
+    ``OCTOWRIGHT_REDACT_INPUTS=off`` is documented as a legacy opt-in for
+    RECORDINGS, which are a ``0600`` file on the operator's own disk. This
+    surface is not that: it crosses the MCP transport to any connected client
+    and lands in an LLM's context. Honouring ``off`` here would silently turn a
+    recording-privacy setting into "ship my bearer token to every caller",
+    which nobody setting that variable is asking for. ``all`` is still honoured
+    because it is stricter than the floor, not looser.
+
+    Names are never scrubbed either way: which headers a browser sets is the
+    diagnostic value, and the name is not the secret.
+    """
+    from octowright.session.aria_redaction import resolve_redaction_mode
+
+    mode = resolve_redaction_mode()
+    return redact_header_values(headers, "passwords" if mode == "off" else mode)
+
+
 def validate_extra_http_header_urls(url_patterns: Any) -> None:
     """Validate the URL globs that scope a header map, or raise ``ValueError``.
 
