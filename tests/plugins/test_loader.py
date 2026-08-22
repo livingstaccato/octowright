@@ -55,6 +55,22 @@ class _Pool:
         return None
 
 
+class _TrackingPool:
+    """A pool whose ``close_all`` records whether it was actually awaited."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def maybe_get(self, instance_id: str) -> None:
+        return None
+
+    def iter_sessions(self):
+        return iter(())
+
+    async def close_all(self, *, force: bool = False) -> None:
+        self.closed = True
+
+
 class _FakeEP:
     name = "refkind"
     value = "m:p"
@@ -231,6 +247,49 @@ def test_rollback_removes_the_actual_delta_not_the_declaration(tmp_path):
 
     assert "refkind_launch" not in manager._tools
     assert "refkind_undeclared" not in manager._tools
+    assert manager._tools.keys() == {"browser_launch"}
+    assert reg.kinds() == []
+    rows = {row["name"]: row for row in reg.status_rows()}
+    assert rows["refkind"]["state"] == "failed"
+
+
+def test_activation_failure_after_pool_created_closes_the_pool(tmp_path):
+    # create_pool SUCCEEDS, then create_scenario_adapter raises: the pool
+    # exists and owns resources (SessionPool.close_all is how it releases
+    # them), so rollback must await close_all rather than dropping it.
+    manager = _FakeToolManager()
+    module_name = "octowright_test_pool_leak_module"
+    created_pools: list[_TrackingPool] = []
+
+    class _AdapterFailsDescriptor(_Descriptor):
+        tool_module = module_name
+
+        def create_pool(self, ctx: Any) -> Any:
+            pool = _TrackingPool()
+            created_pools.append(pool)
+            return pool
+
+        def create_scenario_adapter(self, pool: Any) -> Any:
+            raise RuntimeError("adapter refused")
+
+    def _register(name: str) -> None:
+        manager._tools["refkind_launch"] = object()
+
+    reg = PluginRegistry()
+    ep = _FakeEP(target=_AdapterFailsDescriptor())
+    found = DiscoveredPlugin(name="refkind", distribution="d", version="1", entry_point="m:p", ep=ep)
+    resolved = resolve_descriptors(registry=reg, discovered=[found], enabled=["refkind"])
+
+    activate(
+        registry=reg,
+        resolved=resolved,
+        ctx_factory=lambda kind: _ctx_factory(kind, reg, tmp_path),
+        tool_manager=manager,
+        import_module=_register,
+    )
+
+    assert len(created_pools) == 1
+    assert created_pools[0].closed is True
     assert manager._tools.keys() == {"browser_launch"}
     assert reg.kinds() == []
     rows = {row["name"]: row for row in reg.status_rows()}
