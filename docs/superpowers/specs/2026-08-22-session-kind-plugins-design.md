@@ -22,8 +22,8 @@ guarantee. So the recorder is not merely core-issued but core-*transacted*; scen
 not declared strings but derived from supplied handlers; artifact registration is not an in-memory
 note but a durable row.
 
-The goal is **not** line-count reduction — §10 does that arithmetic, and the saving is about a third
-of what it looked like before review. The goal is **dependency inversion**: after this, a change to scenarios, session detail, closed-session
+The goal is **not** line-count reduction — §10 does that arithmetic, and after two review rounds the
+Python saving is best treated as zero. The goal is **dependency inversion**: after this, a change to scenarios, session detail, closed-session
 discovery, or close semantics reasons about a registry instead of about a second hard-coded session
 kind, and `provide-uterm`'s release schedule stops gating octowright's.
 
@@ -38,15 +38,16 @@ There is no migration path and no compatibility shim. This spec describes the en
 | 3 | Discovery | Python entry points (`octowright.session_kinds`) for discovery; **explicit enable** required before load. |
 | 4 | Enable scope | Daemon-scoped (`OCTOWRIGHT_PLUGINS`, else user-level config). **Not** the CWD-walked project config. |
 | 5 | Placement | Terminal moves to its own repository and release cadence. A partial reference plugin stays in `tests/`. |
-| 6 | Recording | Core owns the recorder **and the launch transaction around it**. A plugin cannot obtain a recorder outside that transaction. |
+| 6 | Recording | Core owns the recorder **and the launch transaction around it**. A plugin cannot obtain a recorder outside that transaction. Core's own metadata rows are **control rows** that bypass the byte ceiling (§5.3). |
 | 7 | Side artifacts | Core issues contained paths; the plugin commits, and the commit writes a durable JSONL row. Artifacts never registered in memory only. |
-| 8 | Scenario capabilities | Closed, core-defined vocabulary. A plugin supplies a **handler** per capability; core *derives* the supported set from the handlers present. Capabilities are never self-declared strings. |
+| 8 | Scenario capabilities | Closed, core-defined vocabulary of four. A plugin supplies a **handler** per capability; core *derives* the supported set from the handlers present. Capabilities are never self-declared strings. |
 | 9 | Closed-session discovery | Core writes a uniform `session_start` opening row, so discovery classifies recordings with **zero** plugin knowledge. |
 | 10 | Dashboard UI | Plugins ship prebuilt JS. Core owns the page chrome; the plugin fills one pane via `mountStream`. |
 | 11 | Versioning | Backend (`plugin_api_version`) and renderer (`renderer_api_version`) version independently. |
 | 12 | Trust model | The trust decision is concentrated at *enable*. No UI sandboxing. |
 | 13 | Failure isolation | Ordinary exceptions where core retains control are isolated, logged, and reported. Enabled plugins share the leader's process; crashes, hangs, and deliberate interference are **not** isolated (§9). |
 | 14 | Identity | The entry-point name is the configured identity. `kind` is runtime metadata and is not what an operator types (§4.2). |
+| 15 | Session registry | The plugin's `SessionPool` is the **single** registry. Core holds no parallel session table; it enforces cross-pool ID uniqueness at commit (§4.3). |
 
 ## 3. Goals and scope
 
@@ -95,7 +96,7 @@ The package-level descriptor an entry point resolves to. Every member is metadat
 | `tool_module: str \| None` | Import path whose `@mcp.tool` decorators register those tools. |
 | `profile_name: str \| None` | Capability-profile name the plugin's tools register under (§6.5). |
 | `frontend: FrontendAsset \| None` | Prebuilt UI (§8.5–§8.7). |
-| `scenario: ScenarioAdapter \| None` | Scenario participation (§7.3). `None` means the kind cannot appear in a scenario at all. |
+| `create_scenario_adapter(pool) -> ScenarioAdapter \| None` | Scenario participation (§7.3). Returns `None` when the kind cannot appear in a scenario at all. A factory rather than an attribute because the adapter resolves instance IDs against the pool, which does not exist until `create_pool` has run. |
 | `create_pool(ctx) -> SessionPool` | Builds the pool. The only member core *invokes* during load; importing `tool_module` also runs plugin code (§6.3). |
 | `session_detail(session) -> dict` | Dashboard detail payload (§8.2). |
 
@@ -160,9 +161,17 @@ Rules, all of which core relies on:
 - `close_all` continues past an individual failure and raises an aggregate at the end. Daemon
   shutdown depends on this (§6.7).
 - Core may call any method concurrently from different tasks; the pool serializes its own state.
-- Instance IDs must be unique **across all pools**, not merely within one. Core's HTTP layer resolves
-  a session by id alone and searches the registry. Core does not enforce uniqueness; the
-  `uuid4().hex[:12]` convention makes collision negligible and is documented as the expectation.
+- Instance IDs must be unique **across all pools**, not merely within one, because core's HTTP layer
+  resolves a session by id alone and searches the registry. **Core enforces this** at
+  `launch.commit()` by probing every other registered pool's `maybe_get`, and fails the transaction
+  on collision. Stating the requirement and then declining to check it would contradict §1's
+  governing principle in the same document that sets it out.
+
+The pool is the **single** session registry. Core keeps no parallel table: `_live_summary`, session
+detail, and close all resolve by iterating `iter_sessions` / `maybe_get` across registered pools. This
+is why `launch.commit()` does not "register with core" in any sense that implies a second store — it
+validates the record, enforces uniqueness against the other pools, and hands the record back for the
+plugin's own pool to hold (§5.1).
 
 `list_sessions` is **removed** from the contract. Terminal's version duplicated serialization core
 already does in `_live_summary`; core now serializes from `iter_sessions` for every kind, which is
@@ -181,7 +190,9 @@ plus `extra: dict` for kind-specific fields. Terminal's `connector_type` becomes
 
 Passed to `create_pool`. Exposes:
 
-- `begin_session(...) -> SessionLaunch` — the mandatory launch transaction (§5.1).
+- `begin_session(*, instance_id, label, profile, extra=None) -> SessionLaunch` — the mandatory launch
+  transaction (§5.1). It takes no `kind`: `ctx` already holds the validated descriptor, so accepting
+  one would let a plugin stamp a recording with a kind core never approved.
 - `artifact(session, name, suffix) -> ArtifactHandle` — contained side artifact (§5.2).
 - `redaction_mode() -> str` — the resolved `OCTOWRIGHT_REDACT_INPUTS` policy.
 - `recordings_dir: Path` — the owning pool's root.
@@ -214,20 +225,23 @@ So core does not hand a plugin a recorder and hope. It runs the launch:
 ```python
 async with ctx.begin_session(
     instance_id=instance_id,
-    kind="terminal",
     label=label,
     profile=profile,
 ) as launch:
     engine = await backend.start(launch.recorder)
-    return launch.commit(session_record)
+    return launch.commit(session_record)   # plugin then holds the record in its own pool
 ```
 
 `__aenter__` opens the recorder under containment and writes the `session_start` row (§8.4) carrying
 `kind`, `label`, and `profile` — which is why `profile` is a parameter here and was missing from the
 `new_recording(instance_id, label)` shape this replaces.
 
-`commit(record)` registers the `SessionRecord` with core, returns the `LaunchResult` (§4.3), and
-marks the transaction successful. A block that exits without committing is treated as a failure.
+`commit(record)` validates and finalizes; it does **not** create a second registry (§4.3). It checks
+that the record's `instance_id`, `kind`, `recorder`, and `log_path` match the ones the transaction
+issued — a plugin swapping in its own recorder would otherwise silently escape every guarantee this
+section exists to provide — enforces cross-pool ID uniqueness, returns the `LaunchResult`, and marks
+the transaction successful. The plugin's pool holds the record. A block that exits without committing
+is treated as a failure.
 
 `__aexit__` on any `BaseException`, cancellation included:
 
@@ -262,7 +276,7 @@ secures the per-session artifact directory under `OCTOWRIGHT_RECORDINGS_PRIVATE`
 — core cannot secure a file it does not write, so the directory is the control, consistent with how
 `secure_artifact_tree` already treats captures, goldens, and macros.
 
-`commit` writes a durable row into the session's own JSONL:
+`commit` writes a durable **control row** (§5.3) into the session's own JSONL:
 
 ```json
 {"action": "artifact_registered", "artifact_id": "transcript",
@@ -295,6 +309,35 @@ Path composition is where this project's disk-containment bugs have lived — `b
 single resolve-and-contain choke point. Handing plugins a path composer would reopen that class of bug
 in code core does not review. `ctx.artifact` receives the same test battery `reject_unsafe_path` has:
 `..` traversal, absolute paths, and a symlinked parent, with symlinks resolved before the prefix check.
+
+### 5.3 Control rows bypass the byte ceiling
+
+`Recorder.record()` stops writing once `OCTOWRIGHT_RECORDING_MAX_BYTES` is reached: it emits one
+`recording_truncated` marker, sets `_truncated`, and every later call returns silently. That is
+correct for the action stream — the ceiling exists to bound a firehose page — but it makes core's own
+metadata rows unreliable in exactly the way that matters:
+
+- A long-running session that hits its ceiling and then commits an artifact gets a *successful*
+  `commit()` whose `artifact_registered` row was dropped. The durability §5.2 promises evaporates
+  silently.
+- A ceiling smaller than the opening row means `session_start` never lands, so discovery loses the
+  kind (§8.4) and the failed-launch rule's "nothing but core's own opening row" test (§5.1) has no
+  opening row to reason about.
+
+So core's metadata rows are **control rows**, written through `Recorder.record_control(...)`, which
+bypasses the ceiling and is drawn from a small separate budget of its own. The precedent already
+exists in the file: `_write_truncation_marker` deliberately bypasses the ceiling for exactly this
+reason — "so the cut is always visible to replay/export/discovery." Control rows generalize that rule
+rather than inventing one.
+
+The control set is closed and core-only: `session_start`, `artifact_registered`,
+`recording_truncated`. A plugin cannot write one; `record()` remains its only surface, ceiling and
+all. The separate budget is bounded so a plugin cannot evade the disk-fill guard by committing
+artifacts in a loop — a commit that would exceed the control budget fails, which is a failure the
+plugin can see, rather than a success whose row vanished.
+
+This is off-by-default territory in practice (`OCTOWRIGHT_RECORDING_MAX_BYTES` is unset by default,
+so nothing truncates), but a guarantee that holds only when a knob is off is not a guarantee.
 
 ## 6. Discovery, enable, and lifecycle
 
@@ -329,13 +372,15 @@ internal errors forever.
 4. Validate metadata with **no** plugin logic run: `plugin_api_version`, `kind` syntax and reserved
    list, `tool_names` prefix and collisions (§6.4), `profile_name` collision, frontend asset paths.
 5. Register the profile name, so it is visible before any tool decorator fires (§6.5).
-6. Import `tool_module`. Its `@mcp.tool` decorators register the declared tools.
+6. Snapshot the tool manager's registered names, import `tool_module`, then compute the **delta**
+   (§6.4). Its `@mcp.tool` decorators register the tools during the import.
 7. `create_pool(ctx)`.
-8. Commit: add the pool to the registry and mark `state: enabled`.
+8. `create_scenario_adapter(pool)`; derive the capability set from the handlers it supplies (§7.5).
+9. Commit: add the pool to the registry and mark `state: enabled`.
 
-Rollback on failure at any step: unregister any tools registered in step 6 by their declared names,
-unregister the profile, close a pool created in step 7, mark `state: failed` with the reason, and
-continue to the next plugin.
+Rollback on failure at any step: unregister **the entire measured delta** from step 6, unregister the
+profile, close a pool created in step 7, mark `state: failed` with the reason, and continue to the
+next plugin.
 
 Ordering note — tool import precedes pool creation deliberately. Tool registration is the step whose
 rollback touches shared state; doing it before the pool exists means the pool never has to be torn
@@ -356,9 +401,15 @@ Core therefore validates `tool_names` in step 4 against the live tool manager an
 enabled plugin's declared names, and refuses the plugin on collision. The `{kind}_` prefix rule
 (§4.2) makes cross-plugin collision nearly impossible and core collision impossible.
 
-Rollback in step 6 removes registered tools by name. This reaches into the tool manager's mapping,
-which is private; that is an accepted, narrow coupling, pinned by a test so an SDK change fails
-loudly rather than silently leaving a half-registered plugin.
+Rollback removes **what was actually registered**, not what was declared. Core snapshots the tool
+manager's key set immediately before the import and diffs it after; on failure the whole delta is
+removed, and on success the delta is checked against the subset of `tool_names` the active profile
+permits. Rolling back by declared name alone would leak an *undeclared* tool registered by a module
+that then raised — the one case rollback exists for.
+
+Both the snapshot and the removal reach into the tool manager's mapping, which is private. That is an
+accepted, narrow coupling, pinned by a test so an SDK change fails loudly rather than silently leaving
+a half-registered plugin.
 
 **Rejected alternative:** a staged `register_tools(registrar)` interface that validates before
 mutating. It is cleaner in isolation but gives plugins a second, different registration path from the
@@ -372,11 +423,24 @@ tools cannot be in it. A plugin declares `profile_name` and `tool_names`, and `b
 consults registered plugin profiles alongside `PROFILES`. Core's `terminals` profile entry leaves with
 the terminal code; the plugin supplies it.
 
-**Ordering is the whole requirement.** `_state.py` computes `_allowed_tools = active_filter()` at
-module import, before any plugin is discovered. The filter is a mutable `set` that
-`_ProfiledMCPServer.tool()` re-reads on every call, so registering a plugin profile *in place* before
-step 6 works; rebinding the name would not. Step 5 exists for exactly this reason and is pinned by a
-test that loads a plugin under a narrow `OCTOWRIGHT_PROFILE` and asserts its tools registered.
+**Bootstrap ordering is the whole requirement, and the current code gets it wrong twice.**
+`_state.py` computes `_allowed_tools = active_filter()` at module import, before any plugin is
+discovered. Two consequences, both real:
+
+1. `build_allowed_set` resolves the spec against `PROFILES` alone. Registering a plugin profile
+   afterwards does not retroactively widen an already-computed set.
+2. It also *diagnoses* against `PROFILES` alone — `OCTOWRIGHT_PROFILE=terminals` with terminal as a
+   plugin logs `octowright.profile.unknown`, and if that is the only name, `octowright.profile.all_unknown`
+   at ERROR. Both would be false, and the second is the loudest signal the daemon emits.
+
+So the bootstrap becomes explicit: `_state.py` stores the **raw spec**, discovery and enable
+resolution run, plugin profiles register, and only then is the allowed set computed and applied. The
+filter is a mutable `set` that `_ProfiledMCPServer.tool()` re-reads on every call, so it is mutated in
+place; rebinding the name would not take. Diagnostics fire after plugin profiles are known, so an
+unknown-profile warning means the profile is genuinely unknown.
+
+Pinned by a test that loads a plugin under a narrow `OCTOWRIGHT_PROFILE` naming that plugin's profile
+and asserts both that its tools registered **and** that no unknown-profile diagnostic fired.
 
 Plugins may **not** add to `ALWAYS_ON_TOOLS`. That set exists to guarantee diagnostics survive any
 filter, and a plugin bypassing the filter would defeat its purpose.
@@ -410,8 +474,12 @@ Disabled — metadata only, no import:
  "entry_point": "octowright_terminal.plugin:plugin", "state": "disabled"}
 ```
 
-Enabled or failed — the descriptor has been resolved, so `kind`, `display_name`,
-`plugin_api_version`, `tool_names`, and (on failure) `reason` are added.
+Enabled — the descriptor resolved, so `kind`, `display_name`, `plugin_api_version`, and `tool_names`
+are added.
+
+Failed — `reason` is always present; the descriptor fields are **optional**, because a plugin that
+raised while importing its own module has no descriptor to report. A schema requiring them would make
+the earliest and most common failure unreportable.
 
 `state` is one of `enabled`, `disabled`, `failed`, or `missing`. `missing` covers an
 `OCTOWRIGHT_PLUGINS` entry with no matching entry point — a typo — which is otherwise almost
@@ -427,7 +495,7 @@ threaded explicitly through eight method signatures.
 
 `_validate_participant_kind` today branches `if p.kind == "terminal": … elif p.kind not in
 SUPPORTED_KINDS: raise`. It becomes: a browser engine name, or a kind registered by an enabled plugin
-**with a `scenario` adapter**, else the same error — now listing the enabled kinds, so a typo or a
+whose `create_scenario_adapter` returned an adapter, else the same error — now listing the enabled kinds, so a typo or a
 disabled plugin is self-diagnosing.
 
 ### 7.2 `connector_type` leaves core
@@ -461,19 +529,34 @@ and, in `wait_for_sync`, `session.wait_for` / `session.operation` / `session.pag
 `kind == "terminal"` with `"macros" not in supports` leaves that body unchanged, so a plugin that
 declared `macros` would still be looked up in the browser pool.
 
-So each kind supplies an adapter:
+So each kind supplies an adapter, built by a factory that receives the pool:
 
 ```python
 class ScenarioAdapter(Protocol):
+    """The mandatory floor. Everything else is a separate capability Protocol."""
     def resolve_participant(self, spec: Participant, persona: Persona | None) -> dict: ...
 
-    # Optional. Presence defines the capability (§7.5).
+class SupportsMacros(Protocol):
     async def run_macro(self, instance_id: str, *, name: str, args: dict) -> None: ...
+
+class SupportsSync(Protocol):
     async def wait_for_sync(self, instance_id: str, *, selector, text, url, timeout_ms) -> None: ...
-    async def apply_fixtures(self, instance_id: str, fixtures: dict) -> None: ...
+
+class SupportsDialogPolicy(Protocol):
     async def set_dialog_policy(self, instance_id: str, policy: str) -> None: ...
+
+class SupportsMockRoutes(Protocol):
     async def install_mock_routes(self, instance_id: str, routes: list) -> None: ...
 ```
+
+The capabilities are **separate Protocols, not optional methods on one**. A `Protocol` that declares a
+method requires it structurally, so a single combined Protocol with "optional" handlers is a
+contradiction — terminal's adapter, implementing only `resolve_participant`, would not satisfy it.
+Core narrows with `isinstance(adapter, SupportsMacros)` on runtime-checkable Protocols.
+
+`create_scenario_adapter(pool)` is a factory rather than a descriptor attribute because the adapter
+resolves instance IDs against its own pool, and the pool does not exist until `create_pool` has run
+(load step 8, §6.3).
 
 `resolve_participant` is mandatory and replaces `scenarios.resolve_terminal_launch(p)`. This is what
 deletes core's `from octowright.terminal.connector_config import …`, and with it the reason that module
@@ -485,7 +568,7 @@ The adapters take an `instance_id`, not a session object, and resolve it against
 is what removes `browser_pool` from eight `ScenarioPool` method signatures: core no longer needs to
 know which pool a participant lives in, because the adapter does.
 
-Browsers get a `BrowserScenarioAdapter` implementing all six, holding exactly the code that lives
+Browsers get a `BrowserScenarioAdapter` implementing all five, holding exactly the code that lives
 inline in `scenarios_pool.py` today. Terminal's adapter implements `resolve_participant` and nothing
 else.
 
@@ -500,9 +583,15 @@ pairs and simply iterate the registry.
 
 The vocabulary is closed and core-defined:
 
-`{"macros", "fixtures", "sync", "dialog_policy", "mock_routes"}`
+`{"macros", "sync", "dialog_policy", "mock_routes"}`
 
-It is *derived from the five skip sites that already exist*, not invented ahead of need. Core must know
+It is derived from the skip sites that already exist, not invented ahead of need. `fixtures` was in an
+earlier draft and is **removed**: `_validate_fixtures` accepts exactly two keys, `dialog_policy` and
+`mock_routes`, and `_apply_fixtures` does nothing but dispatch to those two. Keeping it as a
+capability alongside its own constituents would mean either an undefined precedence between the
+container and its parts, or a browser adapter applying the same fixture twice. Core keeps
+`_apply_fixtures` as the dispatcher and calls the two capability handlers; the fixture *vocabulary* in
+scenario YAML is unchanged. Core must know
 what a capability means in order to skip it, so a plugin inventing one would declare something core
 cannot act on. Adding a capability is a core change, and that is correct.
 
@@ -611,7 +700,9 @@ Contract details, stated because a third party cannot read them off core's sourc
 - `feed` receives **batches** in JSONL order. Historical events are fed before any live event.
 - Delivery is **at-least-once**: a `/tail` reconnect may replay a batch. A renderer must tolerate a
   repeat, which is why the terminal view's `reset: true` delta semantics survive unchanged.
-- `destroy` is idempotent and is always called on teardown, including when `mountStream` rejected.
+- `destroy` is idempotent and is always called on teardown, once a handle has been obtained. A
+  `mountStream` that rejects yields no handle and so has nothing to destroy; core switches that pane
+  to the fallback renderer instead.
 - An exception thrown from `mountStream` or `feed` is caught by core and switches the pane to the
   fallback renderer with a visible reason (§8.7).
 - A plugin ships its own CSS alongside its module and scopes selectors under the mount element. Core
@@ -686,33 +777,35 @@ are all *more* core machinery, because each moves a guarantee from the plugin au
 
 | Core gains | LOC |
 |---|---|
-| Contract Protocols and `TypedDict`s | ~120 |
-| Registry, loader, load transaction and rollback | ~220 |
-| `begin_session` transaction and failed-launch rule | ~90 |
+| Contract Protocols and `TypedDict`s, including the four capability Protocols | ~140 |
+| Registry, loader, load transaction, delta rollback, profile bootstrap | ~270 |
+| `begin_session`, failed-launch rule, `record_control`, ID-uniqueness check | ~140 |
 | `ctx.artifact` reserve/commit plus containment | ~110 |
-| `BrowserScenarioAdapter` (relocated inline code) plus adapter dispatch | ~180 |
+| `BrowserScenarioAdapter` (relocated inline code), adapter factory and dispatch | ~200 |
 | `/api/plugins`, asset serving | ~80 |
 | Frontend registry, `mountStream` host, fallback renderer, `.d.ts` | ~160 TS |
-| Reference plugin and contract tests | ~250 |
+| Reference plugin and contract tests | ~290 |
 
 Doing the arithmetic honestly, source for source: 1,124 Python lines leave core (937 + 187) and
-roughly 800 non-test lines arrive, a saving of about **300 Python lines** — down from the ~500 an
-earlier draft of this spec claimed, because every correctness fix above moved work *into* core.
-TypeScript saves about 370 (531 out, 160 in). Tests look better on paper — 1,262 out, ~250 in — but
-that is a swap of terminal-specific tests for contract tests, not a reduction in what is verified.
+roughly 940 non-test lines arrive, a saving **under 200 Python lines**. The first draft claimed ~500;
+two rounds of review have taken it down by more than half, because every correctness fix moved work
+*into* core — which is the point, but it is also the cost. TypeScript saves about 370 (531 out, 160
+in). Tests look better on paper — 1,262 out, ~290 in — but that is a swap of terminal-specific tests
+for contract tests, not a reduction in what is verified.
 
-So the design still shrinks core, by roughly a third of what it looked like before review, and the
-margin is thin enough that a single unanticipated seam would erase it. Line count is not the case for
-this design and this spec should not pretend otherwise.
+**Assume the Python saving is zero.** The remaining margin is inside the error bars of these
+estimates, and a third round of review that finds one more unenforced guarantee would erase it. Line
+count is not the case for this design; if it were, the honest recommendation would be to stop.
 
 The case is that core stops knowing a terminal exists: a change to scenarios, session detail,
 discovery, or close reasons about a registry instead of a second hardcoded kind, third parties get a
 targetable API, and `provide-uterm`'s release schedule stops gating octowright's. The `AGENTS.md`
 reduction is disproportionately valuable because that file is read on every task.
 
-**This is the decision to weigh before Step 1**, and it is a genuine trade: a smaller design that
-kept capabilities as declared strings and the recorder as a handed-out object would save more lines,
-and would ship guarantees it could not enforce.
+**This is the decision to weigh before Step 1**, and it is a genuine trade. A smaller design — one
+that kept capabilities as declared strings, the recorder as a handed-out object, and rollback by
+declared name — would save real lines. It would also ship four guarantees it could not enforce, which
+is how the first draft read before review.
 
 ### The uterm caveat
 
@@ -746,14 +839,25 @@ representing nothing. Two guards:
   prefix check, and a committed row that resolves back to a contained path on read.
 - **Launch transaction**: a plugin launch that raises after `begin_session` leaves no
   opening-row-only recording; a launch that raises *after* recording an action keeps the partial
-  recording; a cancelled launch behaves as a failed one.
+  recording; a cancelled launch behaves as a failed one; a `commit` whose record carries a different
+  recorder, id, or log path than the transaction issued is refused.
+- **Control rows**: with `OCTOWRIGHT_RECORDING_MAX_BYTES` set smaller than a `session_start` row, the
+  row is still written and discovery still classifies; an artifact committed after the action stream
+  truncated still yields a readable `artifact_registered` row; a commit that would exceed the control
+  budget fails visibly rather than reporting success.
+- **ID uniqueness**: a commit whose `instance_id` already exists in another registered pool is
+  refused, and the transaction rolls back as a failed launch.
 - **Tool collision**: a plugin declaring a core tool name is refused at validation, before import.
 - **Partial registration rollback**: a `tool_module` that registers one tool then raises leaves zero
-  of its tools registered and no pool in the registry.
-- **Profile ordering**: a plugin's tools register under a narrow `OCTOWRIGHT_PROFILE` naming that
-  plugin's profile.
-- **Capability derivation**: an adapter without `run_macro` yields a kind whose participant cannot
-  declare `startup_macros`, and core never calls the missing handler.
+  of its tools registered and no pool in the registry; a module that registers an **undeclared** tool
+  and then raises leaves that tool unregistered too (the delta, not the declaration, is what unwinds).
+- **Profile bootstrap**: a plugin's tools register under a narrow `OCTOWRIGHT_PROFILE` naming that
+  plugin's profile, **and** neither `octowright.profile.unknown` nor `octowright.profile.all_unknown`
+  fires for it.
+- **Capability derivation**: an adapter implementing only `resolve_participant` type-checks, yields a
+  kind whose participant cannot declare `startup_macros`, and core never calls a missing handler.
+- **Adapter binding**: the adapter core uses resolves instance IDs against the pool from the same
+  plugin's `create_pool`.
 - `plugin_api_version` and `renderer_api_version`: a test ties each constant to its contract's shape,
   so a contract change that forgets to bump it fails.
 - **Discovery**: a recording written by a plugin that is **no longer installed** still classifies,
@@ -773,13 +877,17 @@ implementation plan, and each step's reference-plugin coverage is limited to the
 actually inverts. An earlier draft had step 1's reference plugin exercising every seam, which is
 impossible while those seams are still hardcoded.
 
-1. **Contract and loader.** Protocols, `TypedDict`s, identity and namespace validation, entry-point
-   discovery, enable resolution, the load transaction with rollback, tool-collision checking, profile
-   registration, status reporting. A **backend-only** reference plugin: pool, tools, protected close.
-   CI green with terminal still on its existing path.
-2. **Core-owned lifecycle.** `begin_session`, the failed-launch rule, `ctx.artifact` reserve/commit
-   and its JSONL row, the `session_start` opening row, registry-driven session list, detail, and
-   close, shutdown teardown. Reference plugin grows a Tier-2 artifact.
+1. **Contract, loader, and the launch transaction.** Protocols, `TypedDict`s, identity and namespace
+   validation, entry-point discovery, enable resolution, profile bootstrap, tool-collision checking
+   and delta rollback, status reporting — plus `begin_session`, `record_control`, the `session_start`
+   row, and the failed-launch rule. A **backend-only** reference plugin: pool, tools, protected close.
+   The launch transaction lands here rather than in step 2 because a reference pool that cannot launch
+   a session cannot demonstrate protected close, and a pool built against a temporary
+   launch-and-recorder shape would be rewritten in step 2 anyway. CI green with terminal still on its
+   existing path.
+2. **Core-owned artifacts and dashboard.** `ctx.artifact` reserve/commit and its control row,
+   registry-driven session list, detail, and close, shutdown teardown. Reference plugin grows a
+   Tier-2 artifact.
 3. **Scenarios.** `ScenarioAdapter`, `BrowserScenarioAdapter`, derived capabilities, the group-by
    partition, `options:` replacing `connector_type`, and the example/demo YAML updates. Reference
    plugin grows a partial adapter.
@@ -795,7 +903,7 @@ is inadequate, it is discovered while the working implementation is still in the
 
 | # | Risk | Mitigation |
 |---|---|---|
-| 1 | The LOC saving is thin and the payoff is structural only | Arithmetic done plainly in §10 as a decision to weigh, not buried |
+| 1 | There is effectively no LOC saving; the payoff is structural only | Arithmetic done plainly in §10 as a decision to weigh, not buried |
 | 2 | `ctx.artifact` containment bugs reopen a closed bug class | Full `reject_unsafe_path` test battery (§5.2, §11.2) |
 | 3 | Either API version is only useful if core actually bumps it | A test ties each constant to its contract shape (§11.2) |
 | 4 | Reference plugin decays into a toy | Partial adapter + coverage assertion (§11.1) |
@@ -805,3 +913,5 @@ is inadequate, it is discovered while the working implementation is still in the
 | 8 | Third-party frontend drifts from core's chrome | Core renders the chrome, minimizing *accidental* drift; deliberate drift is a trust-model consequence, not a bug (§9) |
 | 9 | Plugin API rots with no in-repo consumer | Reference plugin is that consumer, grown per build step (§11.1, §12) |
 | 10 | An in-process plugin hangs or crashes the leader | Not mitigated. Accepted and documented (§9); mitigation would require a process boundary |
+| 11 | The byte ceiling silently drops core metadata rows | Control rows bypass the ceiling on a separate bounded budget (§5.3) |
+| 12 | Core and a pool disagree about which sessions exist | The pool is the single registry; commit validates rather than duplicating (§4.3) |
