@@ -21,6 +21,7 @@ from provide.telemetry import get_logger
 from octowright.http_headers import (
     REDACTED_HEADER_PLACEHOLDER,
     redact_header_values,
+    redact_headers_for_report,
     validate_extra_http_headers,
 )
 from octowright.session._protocols import SessionLike
@@ -233,6 +234,9 @@ class SessionInteractionMixin(SessionLike):
             await self.context.unroute(url_pattern, self._header_routes[url_pattern])
         await self.context.route(url_pattern, _handler)
         self._header_routes[url_pattern] = _handler
+        # The registry above holds the closure; the headers it merges cannot be
+        # read back out of it, so keep them for header_state().
+        self._injected_headers[url_pattern] = dict(headers)
         self.recorder.record(
             "inject_headers",
             pattern=url_pattern,
@@ -244,6 +248,7 @@ class SessionInteractionMixin(SessionLike):
     async def uninject_headers(self, url_pattern: str) -> dict[str, Any]:
         """Remove a previously-installed header injection for ``url_pattern``."""
         handler = self._header_routes.pop(url_pattern, None)
+        self._injected_headers.pop(url_pattern, None)
         if handler is None:
             raise KeyError(f"no active header injection for pattern {url_pattern!r}")
         await self.context.unroute(url_pattern, handler)
@@ -270,11 +275,50 @@ class SessionInteractionMixin(SessionLike):
         _reject_redacted_headers(headers)
         validate_extra_http_headers(headers)
         await self.page.set_extra_http_headers(dict(headers))
+        # Playwright has no getter for these, so remember them or nothing can
+        # report what this page is sending. Replaces rather than merges,
+        # matching Playwright: each call sets the page's full header map.
+        # `or None` is not cosmetic: Playwright treats set_extra_http_headers({})
+        # as CLEARING the page's headers, so an empty map must reset the record
+        # rather than leave the previous one standing.
+        self._page_extra_headers = dict(headers) or None
         self.recorder.record(
             "set_extra_http_headers",
             headers=redact_header_values(headers, resolve_redaction_mode()),
         )
         return {"ok": True, "headers": sorted(headers)}
+
+    def header_state(self) -> dict[str, Any]:
+        """What extra HTTP headers this browser is sending, redacted by name.
+
+        Deliberately NOT a single merged map. The three scopes have different
+        reach and a flattened view would assert a precedence that does not hold
+        uniformly: ``launch`` is context-level and rides every request in the
+        browser (unless ``launch_url_patterns`` narrows it), ``page`` covers
+        only the active page and overrides the context on it, and ``injected``
+        are context routes matching a URL glob. Merging would make a
+        page-scoped token look browser-wide.
+
+        Scopes with nothing set are omitted, so an empty dict means "no extra
+        headers anywhere" rather than "not reported".
+
+        Not gated: it reads local state and touches no Playwright object, so
+        taking a lease would make an ordinary ``browser_list`` queue behind a
+        slow in-flight action for no benefit.
+        """
+        state: dict[str, Any] = {}
+        if self.extra_http_headers:
+            state["launch"] = redact_headers_for_report(self.extra_http_headers)
+            if self.extra_http_headers_urls:
+                state["launch_url_patterns"] = list(self.extra_http_headers_urls)
+        if self._page_extra_headers:
+            state["page"] = redact_headers_for_report(self._page_extra_headers)
+        if self._injected_headers:
+            state["injected"] = {
+                pattern: redact_headers_for_report(headers)
+                for pattern, headers in sorted(self._injected_headers.items())
+            }
+        return state
 
     @gated_operation("browser_unmock_route")
     async def unmock_route(self, url_pattern: str) -> dict[str, Any]:

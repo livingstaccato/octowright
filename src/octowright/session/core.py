@@ -134,6 +134,24 @@ class BrowserSession(
     #: from _active_routes so a mock and an injector can share a pattern
     #: without one silently evicting the other's handler from the registry.
     _header_routes: dict[str, Any] = field(default_factory=dict)
+    #: The headers each _header_routes entry merges in, same keys. Stored
+    #: because the registry above holds the route CLOSURE, from which the
+    #: headers cannot be recovered -- so nothing could report what an injector
+    #: was actually adding.
+    _injected_headers: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: Launch-time context-level headers, as handed to new_context(). Playwright
+    #: exposes no getter, so without this copy a browser could not say what it
+    #: was sending -- which left an adopting client guessing whether a running
+    #: browser carried the current run's tag or a stale one.
+    extra_http_headers: dict[str, str] | None = None
+    #: URL globs scoping the above, when it was installed as scoped routes
+    #: instead of unscoped context headers. Reported alongside, because scoped
+    #: headers do not ride every request and the headers alone overstate reach.
+    extra_http_headers_urls: list[str] | None = None
+    #: Headers set on the ACTIVE page by set_extra_http_headers. Per page by
+    #: nature, so this tracks the page it was last applied to rather than
+    #: claiming browser-wide scope.
+    _page_extra_headers: dict[str, str] | None = None
     active_frame: Any | None = None  # playwright.async_api.Frame when set
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)

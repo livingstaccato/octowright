@@ -96,6 +96,9 @@ def _fake_session(
         _teardown_after_close_cutoff=AsyncMock(),
         _operation_gate=gate,
         _crashed=False,
+        # list_sessions now reports header state; a double without it raises
+        # AttributeError instead of exercising the row builder.
+        header_state=lambda: {},
     )
     # Compound helpers (capture-and-close/handoff/relaunch preparation
     # callbacks) call session.operation(...)/set_protected_state(...), not
@@ -417,6 +420,7 @@ class TestListSessions:
             "log_path",
             "har_path",
             "protected",
+            "extra_http_headers",
             "operation_gate",
         }
 

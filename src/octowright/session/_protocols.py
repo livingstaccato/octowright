@@ -35,6 +35,13 @@ class SessionLike(Protocol):
     _dialog_prompt_text: str | None
     _active_routes: dict[str, Any]
     _header_routes: dict[str, Any]
+    #: Header state the mixin reports through header_state(). Declared here for
+    #: the same reason the two route registries are: the mixin reads and writes
+    #: them, and the dataclass that actually owns them is not its base.
+    _injected_headers: dict[str, dict[str, str]]
+    _page_extra_headers: dict[str, str] | None
+    extra_http_headers: dict[str, str] | None
+    extra_http_headers_urls: list[str] | None
     _network_requests: deque[dict[str, Any]]
     _network_requests_dropped: int
     trace: bool
