@@ -25,9 +25,11 @@ and modelling only some of them is its own kind of hand-written table:
    carries the ``role``/``role_name`` the recorder stamped on it;
 3. ``_dispatch_click_or_fill`` intercepts click/fill/click_by/fill_by BEFORE
    any signature is consulted: semantic keys go to ``click_by``/``fill_by``
-   (which take ``**finders``), everything else falls back to
-   ``click``/``fill``, and ``timeout_ms`` is accepted by one and popped by the
-   other — so this family's contract is not its ``_ACTION_MAP`` signature;
+   (which take ``**finders``) and everything else falls back to
+   ``click``/``fill`` — so this family's contract is not its ``_ACTION_MAP``
+   signature. ``timeout_ms`` was once accepted by one and popped by the other,
+   and this module papered over the asymmetry with a hardcoded literal rather
+   than reporting it; both halves now take the field, so it derives cleanly;
 4. ``_REPLAY_RENAME_KEYS`` — recorded names the runtime renames before the
    call, so the RECORDED spelling is what a macro legitimately carries;
 5. ``_REPLAY_DROP_KEYS`` — recorded-only observations the runtime strips, which
@@ -111,18 +113,23 @@ def _click_or_fill_allowed(kind: str) -> set[str] | None:
     """Allowed fields for the click/fill family, which never consults ``_ACTION_MAP``.
 
     ``_dispatch_click_or_fill`` splits the action in two: keys in
-    ``SEMANTIC_LOCATOR_KEYS`` (plus ``timeout_ms``, plus ``value`` for a fill)
-    go to the ``**finders`` method, and everything left over is splatted at
-    plain ``click``/``fill`` with ``timeout_ms`` popped. So the accepted set is
-    the union, and the CSS-fallback method is the only signature that
-    constrains it.
+    ``SEMANTIC_LOCATOR_KEYS`` (plus ``value`` for a fill) go to the
+    ``**finders`` method, and everything left over is splatted at plain
+    ``click``/``fill``. So the accepted set is the union, and the CSS-fallback
+    method is the only signature that constrains it.
+
+    ``timeout_ms`` used to be added here as a LITERAL, because the fallback
+    popped it and so it appeared in no signature. That hardcoding is exactly
+    what let lint bless a field the runtime discarded -- the drift this module
+    exists to prevent, reintroduced by hand inside the module itself. Now that
+    ``click``/``fill`` take it, the derivation covers it with nothing listed.
     """
     fallback = "fill" if kind in {"fill", "fill_by"} else "click"
     introspected = _session_method_params(fallback)
     if introspected is None:  # pragma: no cover - BrowserSession always has both
         return None
     params, _ = introspected
-    return set(params) | set(SEMANTIC_LOCATOR_KEYS) | {"timeout_ms"}
+    return set(params) | set(SEMANTIC_LOCATOR_KEYS)
 
 
 def _standard_allowed(kind: str, method_name: str) -> set[str] | None:

@@ -123,7 +123,10 @@ async def browser_click(
                 timeout_ms=timeout_ms,
             )
         elif selector:
-            await session.click(selector)
+            # Forward the timeout here too. It reached click_by above and was
+            # dropped on this line, so an agent that set timeout_ms on a
+            # selector click silently got the 15s default.
+            await session.click(selector, timeout_ms=timeout_ms)
         else:
             raise ValueError("provide a selector or at least one ARIA locator (role/label/text/test_id)")
         res: dict[str, Any] = {"ok": True}
@@ -206,7 +209,7 @@ async def browser_fill(
                 timeout_ms=timeout_ms,
             )
         elif selector:
-            await session.fill(selector, value)
+            await session.fill(selector, value, timeout_ms=timeout_ms)
         else:
             raise ValueError("provide a selector or at least one ARIA locator (role/label/test_id)")
         res: dict[str, Any] = {"ok": True}
