@@ -169,6 +169,14 @@ def _build_session_object(
         viewport_mode=viewport_info.mode.value,
         viewport_width=viewport_info.width,
         viewport_height=viewport_info.height,
+        # Kept so the browser can report what it is sending. Playwright offers
+        # no getter for context-level extra headers, so this copy is the only
+        # record; without it browser_list could not distinguish a browser
+        # carrying the current run's tag from one carrying a stale one.
+        extra_http_headers=dict(launch_options.extra_http_headers) if launch_options.extra_http_headers else None,
+        extra_http_headers_urls=(
+            list(launch_options.extra_http_headers_urls) if launch_options.extra_http_headers_urls else None
+        ),
         _browser_for_close=(browser if browser is not None else getattr(context, "browser", None)),
         operation_queue_timeout_seconds=operation_queue_timeout_seconds,
     )
