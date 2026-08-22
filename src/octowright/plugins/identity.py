@@ -20,7 +20,9 @@ from octowright.plugins.errors import PluginLoadError
 
 #: One safe syntax for every plugin identifier: lowercase, starts with a
 #: letter, no separators that could escape a path segment or a URL segment.
-NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+#: Uses \Z not $, because $ matches at the end of the string OR just before a
+#: single trailing newline, so "terminal\n" would incorrectly pass.
+NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}\Z")
 
 #: Kinds core owns. A plugin claiming one would shadow a browser engine in the
 #: registry, or collide with the ``unknown`` classification closed-session
@@ -30,7 +32,7 @@ RESERVED_KINDS: frozenset[str] = frozenset({"chromium", "firefox", "webkit", "br
 
 def validate_name(value: str, *, label: str) -> None:
     """Raise ``PluginLoadError`` unless ``value`` matches :data:`NAME_RE`."""
-    if not NAME_RE.match(value):
+    if not NAME_RE.fullmatch(value):
         raise PluginLoadError(f"{label} {value!r} must match {NAME_RE.pattern}")
 
 
