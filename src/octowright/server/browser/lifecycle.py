@@ -398,7 +398,16 @@ async def browser_quick_launch(
         "List all live browser instances. Returns {summary, count, browsers}: "
         "`summary` is a one-line human-readable gist (e.g. "
         "'3 browsers: dante/webkit @ discord.com/app · ops/firefox @ monitor'); "
-        "`browsers` is the structured per-instance data. Pass response_mode='summary' "
+        "`browsers` is the structured per-instance data. Each entry carries "
+        "`extra_http_headers`, which reports what that browser is actually sending — "
+        "use it to check whether an already-running browser you are adopting carries "
+        "the header you expect rather than a stale one. Scopes are reported separately, "
+        "never merged: `launch` (context-level, whole browser; narrowed by "
+        "`launch_url_patterns` when present), `page` (the active page only, overrides "
+        "the context there), and `injected` (per-URL-glob, keyed by pattern). A scope "
+        "with nothing set is omitted, so `{}` means no extra headers anywhere. "
+        "Credential-named values (Authorization/Cookie/…) are always redacted; names "
+        "are not. Pass response_mode='summary' "
         "for bounded rows with browser_page_outline/browser_close action payloads."
     ),
 )

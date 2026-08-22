@@ -40,6 +40,28 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.16.4": [
+        "timeout_ms actually works on a CSS-selector click or fill. It was "
+        "accepted by macro lint, saved by the dashboard editor, forwarded on "
+        "the ARIA path -- and popped before the selector path, which ran on "
+        "the 15s default. A failing click cost 15s every time and the obvious "
+        "mitigation was a no-op. browser_click/browser_fill had the same hole, "
+        "so an agent had no working knob either.",
+        "browser_list now reports what extra HTTP headers each browser is "
+        "actually sending. extra_http_headers used to be write-only -- it went "
+        "into Playwright's context and nothing could read it back -- so a "
+        "client adopting an already-running browser could not tell a current "
+        "run tag from a stale one. The three scopes (launch, page, per-URL "
+        "injection) are reported separately rather than merged, because a "
+        "flattened map would make a page-scoped token look browser-wide. "
+        "Credential-named values are always redacted.",
+        "The ty type gate could never fail. It filtered ty's output with "
+        "startswith('error['), but concise-format lines start with the file "
+        "path -- so it matched nothing and passed no matter what ty found, "
+        "while its 154-entry baseline sat stale and disagreed with CI (which "
+        "enforces zero). Nothing slipped through, because CI never used the "
+        "script; the two just quietly disagreed.",
+    ],
     "0.16.3": [
         "Launch headers can be scoped to URL globs: browser_launch("
         "extra_http_headers_urls=[...]). Context-level headers ride EVERY request "

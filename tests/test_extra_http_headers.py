@@ -469,6 +469,7 @@ class _StubRoutes:
     def __init__(self) -> None:
         self.instance_id = "i"
         self._header_routes: dict[str, object] = {}
+        self._injected_headers: dict[str, dict[str, str]] = {}
         self._active_routes: dict[str, object] = {}
         self.page = SimpleNamespace(route=self._noop, unroute=self._noop)
         self.context = SimpleNamespace(route=self._noop, unroute=self._noop)

@@ -340,9 +340,21 @@ class SessionPageMixin(SessionLike):
         return {}
 
     @gated_operation("browser_click")
-    async def click(self, selector: str) -> None:
+    async def click(self, selector: str, *, timeout_ms: int | None = None) -> None:
+        """Click a CSS selector, waiting at most ``timeout_ms``.
+
+        ``None`` resolves to ``DEFAULT_ACTION_TIMEOUT_MS`` rather than being
+        forwarded: Playwright reads an explicit ``timeout=None`` as "no
+        timeout", so splatting a macro action carrying ``"timeout_ms": null``
+        would hang forever instead of falling back to the default.
+
+        The knob existed on the semantic path (``click_by``) and nowhere here,
+        which made it a lie everywhere else -- macro lint accepted the field,
+        the dashboard editor saved it, and both the macro runtime and
+        ``browser_click`` dropped it before this call.
+        """
         meta = await self._resolve_semantic_metadata(selector)
-        await self._target().click(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        await self._target().click(selector, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("click", selector=selector, **meta)
 
     @gated_operation("session_input_redaction")
@@ -414,10 +426,12 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("type", selector=selector, text=recorded_text, delay_ms=delay_ms, **meta)
 
     @gated_operation("browser_fill")
-    async def fill(self, selector: str, value: str) -> None:
+    async def fill(self, selector: str, value: str, *, timeout_ms: int | None = None) -> None:
+        """Fill a CSS selector, waiting at most ``timeout_ms``. See ``click``
+        for why ``None`` resolves to the default instead of being forwarded."""
         meta = await self._resolve_semantic_metadata(selector)
         recorded_value = await self._redacted_or_original(selector, value)
-        await self._target().fill(selector, value, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        await self._target().fill(selector, value, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     @gated_operation("browser_press_key")

@@ -256,6 +256,12 @@ class BrowserPool:
                 "log_path": str(s.log_path),
                 "har_path": str(s.har_path) if s.har_path else None,
                 "protected": s.protected,
+                # What this browser is actually sending. Launch-time headers
+                # were a write-only argument before this: a client adopting an
+                # already-running browser had no way to tell a current run tag
+                # from a stale one, and resorted to tracking its own launches.
+                # Values are redacted by header name -- see header_state().
+                "extra_http_headers": s.header_state(),
                 "operation_gate": s.operation_snapshot(),
             }
             for s in tuple(self._sessions.values())
