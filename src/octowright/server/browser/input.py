@@ -89,6 +89,9 @@ def _get_text_by_full_action(
         "'Submit').\n"
         "  test_id   — element with a matching data-testid attribute.\n"
         "  selector  — CSS / XPath selector (fallback for ARIA-less elements).\n"
+        "timeout_ms bounds the wait for the element, on BOTH the ARIA and selector "
+        "paths (default 15000). Lower it when a click is expected to fail and you are "
+        "probing — the default costs 15s per failed attempt.\n"
         "Pass response_mode='outline' to get a compact browser_page_outline in the "
         "same call, or response_mode='brief' for the older aria-based brief snapshot."
     ),
@@ -175,6 +178,8 @@ async def browser_type(
         "combine with role_name for specificity.\n"
         "  test_id  — data-testid attribute.\n"
         "  selector — CSS / XPath selector (fallback).\n"
+        "timeout_ms bounds the wait for the element, on BOTH the ARIA and selector "
+        "paths (default 15000).\n"
         "USE THIS BY DEFAULT for form fields — ~10x faster than browser_type "
         "because it sets the value in one shot. Switch to browser_type only "
         "when the page needs per-keystroke events. Pass response_mode='outline' "

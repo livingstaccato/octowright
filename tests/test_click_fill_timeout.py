@@ -202,3 +202,41 @@ class TestToolSurfaceForwardsTimeout:
         source = inspect.getsource(getattr(_input, tool))
 
         assert call in source
+
+
+class TestZeroIsNotForwarded:
+    """`timeout_ms or DEFAULT` maps 0 to the default, and that is deliberate.
+
+    Playwright reads `timeout=0` as "disable the timeout" — wait forever. A
+    macro author writing `"timeout_ms": 0` is far more likely to mean "don't
+    wait" than "block this run indefinitely", and a macro that hangs forever is
+    exactly the failure this whole change exists to prevent. Falling back to the
+    bounded default is the safe reading.
+
+    Pinned rather than left implicit: `x or DEFAULT` looks like a null check,
+    so a later refactor to `x if x is not None else DEFAULT` would silently
+    reintroduce the hang. That is the same silent-behaviour-change class as the
+    dropped timeout itself.
+    """
+
+    @pytest.mark.parametrize("method,args", [("click", ("#x",)), ("fill", ("#x", "v"))])
+    async def test_zero_falls_back_to_the_default_rather_than_disabling(
+        self, method: str, args: tuple[Any, ...]
+    ) -> None:
+        session = _Session()
+
+        await getattr(session, method)(*args, timeout_ms=0)
+
+        assert session.target.calls[0][1] == {"timeout": DEFAULT_ACTION_TIMEOUT_MS}
+
+    @pytest.mark.parametrize("method,args", [("click", ("#x",)), ("fill", ("#x", "v"))])
+    async def test_the_semantic_path_agrees(self, method: str, args: tuple[Any, ...]) -> None:
+        """click_by/fill_by resolve it the same way; the two paths must not
+        disagree about what 0 means."""
+        import inspect
+
+        from octowright.session.core_locator_mixin import SessionLocatorMixin
+
+        source = inspect.getsource(getattr(SessionLocatorMixin, f"{method}_by"))
+
+        assert "timeout_ms or DEFAULT_ACTION_TIMEOUT_MS" in source
