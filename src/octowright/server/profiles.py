@@ -18,6 +18,7 @@ is the back-compat default.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from typing import Any
 
 from provide.telemetry import get_logger
@@ -172,17 +173,45 @@ PROFILES: dict[str, list[str]] = {
     ],
 }
 
+#: Capability profiles contributed by enabled plugins. Kept separate from
+#: PROFILES so core's static table stays static and a plugin cannot mutate a
+#: core profile's membership. Populated by the loader BEFORE the active filter
+#: is computed — the ordering is load-bearing, see build_allowed_set.
+_PLUGIN_PROFILES: dict[str, frozenset[str]] = {}
+
+
+def register_plugin_profile(name: str, tool_names: Iterable[str]) -> None:
+    """Register a plugin's capability profile.
+
+    A plugin may create a profile; it may not extend or shadow a core one,
+    because a third-party package silently widening ``core`` would defeat the
+    point of picking a narrow profile.
+    """
+    if name in PROFILES:
+        raise ValueError(f"plugin profile {name!r} collides with a core profile")
+    _PLUGIN_PROFILES[name] = frozenset(tool_names)
+
+
+def plugin_profile_names() -> list[str]:
+    return sorted(_PLUGIN_PROFILES)
+
+
+def reset_plugin_profiles() -> None:
+    """Clear registered plugin profiles. Test seam; the daemon never calls it."""
+    _PLUGIN_PROFILES.clear()
+
 
 def build_allowed_set(profile_spec: str) -> set[str]:
     """Resolve a comma-separated profile spec to the set of allowed tool names.
 
-    Unknown profile names are logged at WARNING and skipped — a typo in
-    the profile spec would otherwise silently produce an unexpectedly
-    narrow surface. If EVERY name was unknown (so the resolved set is
-    exactly :data:`ALWAYS_ON_TOOLS` despite a non-empty spec), an
-    additional ERROR-level log fires so the operator notices the
-    daemon-is-healthy-but-LLM-has-no-tools failure mode instead of
-    chasing a "why does my MCP client not see browser_launch?" thread.
+    Resolves names against both core :data:`PROFILES` and plugin-contributed
+    profiles registered via :func:`register_plugin_profile`. Unknown profile
+    names are logged at WARNING and skipped — a typo in the profile spec
+    would otherwise silently produce an unexpectedly narrow surface. If EVERY
+    name was unknown (so the resolved set is exactly :data:`ALWAYS_ON_TOOLS`
+    despite a non-empty spec), an additional ERROR-level log fires so the
+    operator notices the daemon-is-healthy-but-LLM-has-no-tools failure mode
+    instead of chasing a "why does my MCP client not see browser_launch?" thread.
 
     Callers that want "no filter" should detect that themselves via
     :func:`active_filter` returning ``None``.
@@ -191,20 +220,28 @@ def build_allowed_set(profile_spec: str) -> set[str]:
     allowed: set[str] = set(ALWAYS_ON_TOOLS)
     matched_any = False
     for name in names:
-        if name not in PROFILES:
-            log.warning(
-                "octowright.profile.unknown",
-                profile=name,
-                known=sorted(PROFILES.keys()),
-            )
+        if name in PROFILES:
+            matched_any = True
+            allowed.update(PROFILES[name])
             continue
-        matched_any = True
-        allowed.update(PROFILES[name])
+        if name in _PLUGIN_PROFILES:
+            matched_any = True
+            allowed.update(_PLUGIN_PROFILES[name])
+            continue
+        # Diagnose against BOTH tables. Checking PROFILES alone made
+        # `OCTOWRIGHT_PROFILE=<plugin profile>` log profile.unknown and then
+        # profile.all_unknown at ERROR — the loudest signal the daemon emits,
+        # fired at a correct configuration.
+        log.warning(
+            "octowright.profile.unknown",
+            profile=name,
+            known=sorted([*PROFILES.keys(), *_PLUGIN_PROFILES.keys()]),
+        )
     if names and not matched_any:
         log.error(
             "octowright.profile.all_unknown",
             profile_spec=profile_spec,
-            known=sorted(PROFILES.keys()),
+            known=sorted([*PROFILES.keys(), *_PLUGIN_PROFILES.keys()]),
             hint=(
                 "every profile name was unknown — the daemon will start "
                 "with only ALWAYS_ON_TOOLS (no browser tools at all). "
