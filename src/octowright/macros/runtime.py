@@ -222,8 +222,12 @@ async def _dispatch_click_or_fill(
                 hint="semantic locator path failed, falling back to CSS selector",
             )
 
+    # timeout_ms is NOT popped here any more. It used to be, which made the
+    # field a lie on the CSS path: lint allowed it, the dashboard editor saved
+    # it, and the action then ran on the 15s default -- a failing click cost
+    # 15s per attempt with no way to shorten it. click/fill now take the same
+    # timeout_ms the semantic pair always did.
     fallback_kwargs = {k: v for k, v in kwargs.items() if k not in semantic_keys}
-    fallback_kwargs.pop("timeout_ms", None)
     await fallback_method(**fallback_kwargs)
     return 1, 0
 

@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] - 2026-08-22
+
+### Fixed
+- **`timeout_ms` is honored on the CSS-selector click/fill path.** It was accepted
+  everywhere and honored only on the semantic (ARIA) path:
+  `macros/runtime._dispatch_click_or_fill` forwarded it to `click_by`/`fill_by` and
+  then explicitly popped it before the `click`/`fill` fallback, and `session.click`
+  had no timeout parameter at all — it hardcoded `DEFAULT_ACTION_TIMEOUT_MS`. So
+  `{"action": "click", "selector": "#x", "timeout_ms": 3000}` linted clean, saved
+  from the dashboard macro editor, and then waited 15s. Reported from the field: a
+  failing click cost 15s four times over and blew an item budget, and the obvious
+  mitigation turned out to be a no-op. Honoring it was chosen over rejecting the
+  field (which would break every macro already carrying it) or warning (which
+  leaves the knob non-functional). The **MCP tools had the same hole** —
+  `browser_click`/`browser_fill` forwarded the timeout to the semantic pair and
+  dropped it on `session.click(selector)` — so an agent had no working knob either.
+  Two resolution rules are pinned by tests: `None` resolves to the default rather
+  than being forwarded, because Playwright reads an explicit `timeout=None` as *no
+  timeout* and an action carrying `"timeout_ms": null` would otherwise hang
+  forever; and `0` likewise resolves to the default, because Playwright reads
+  `timeout=0` as *disable the timeout* while an author writing `0` means "don't
+  wait".
+- **`macros/lint_fields` no longer hardcodes `timeout_ms` in the allowed set.** That
+  literal existed *because* the fallback popped the field, so it appeared in no
+  signature — hand-maintained drift inside the very module whose docstring argues
+  against hand-maintained tables. It now derives from the signature.
+- **The `ty` gate could never fail.** `scripts/check_ty.py` collected diagnostics
+  with `line.startswith("error[")`, but runs ty with `--output-format concise`,
+  whose lines start with the **file path**. The filter matched nothing on every
+  run, so the script printed "ty check passed: no diagnostics." and returned 0 no
+  matter what ty found — measured against real output, one genuine
+  `unresolved-attribute` produced two lines and zero matches. Nothing slipped
+  through, because CI never used the script: `ci.yml` runs `ty check` directly, with
+  no `--exit-zero` and no baseline, and has been enforcing zero diagnostics all
+  along. That was the trap — the two gates disagreed, CI allowing none while the
+  baseline allowed 154, so anything added to the baseline would unblock `make lint`
+  and still fail CI. Matching is now anchored on the `:line:col: severity[` run
+  (excluding the `Found N diagnostics` summary, which would never match a baseline
+  entry and so would fail the gate on every run instead), and the 154 stale entries
+  are cleared to match CI.
+
+### Added
+- **`browser_list` reports the extra HTTP headers each browser is sending.**
+  `extra_http_headers` was a write-only launch argument: it went into
+  `new_context()` and was thereafter known to Playwright alone, which exposes no
+  getter — and neither the page-level `browser_set_extra_http_headers` nor
+  `browser_inject_headers` kept a copy either, the latter storing the route
+  *closure*, from which the merged headers cannot be recovered. A client that tags
+  traffic with a per-run header and later **adopts** an already-running browser
+  therefore could not tell a current tag from a stale one, and resorted to tracking
+  its own launches in-process — wrong across restarts and blind to other clients'
+  browsers. The three scopes are reported **separately, never merged**, because
+  their reach genuinely differs and a flattened map would assert a precedence that
+  does not hold uniformly: `launch` is context-level (unless `launch_url_patterns`
+  narrows it), `page` covers only the active page and overrides the context there,
+  and `injected` are context routes keyed by URL glob. A scope with nothing set is
+  omitted, so `{}` means "no extra headers anywhere" rather than "not reported".
+  Values are scrubbed by header **name** through
+  `http_headers.redact_headers_for_report`, which shares the recorder's
+  classification but **floors the mode at `passwords`**: `OCTOWRIGHT_REDACT_INPUTS=off`
+  is a legacy opt-in for *recordings* (a `0600` file on the operator's own disk),
+  and honoring it here would turn that into "ship my bearer token to every MCP
+  client". `all` is still honored, being stricter.
+- **A live canary ties the header report to the wire.** `header_state()` reports
+  what was recorded when a header was set, one step removed from what the browser
+  sends — and for scoped launch headers the gap is real, since
+  `extra_http_headers_urls` moves the headers off the context entirely and onto
+  per-glob routes while the report still says `launch`. Three tests read headers off
+  a real local server: unscoped headers reach every path, scoped headers reach a
+  matching path and not a non-matching one, and a credential header reaches the page
+  with its real value while the report shows the placeholder — redaction must not be
+  achieved by failing to send.
+
 ## [0.16.3] - 2026-08-20
 
 ### Added
