@@ -18,7 +18,19 @@ def test_valid_names(value):
 
 @pytest.mark.parametrize(
     "value",
-    ["", "Terminal", "2fast", "-lead", "has space", "has/slash", "a" * 65, "with.dot"],
+    [
+        "",
+        "Terminal",
+        "2fast",
+        "-lead",
+        "has space",
+        "has/slash",
+        "a" * 65,
+        "with.dot",
+        "terminal\n",
+        "terminal\r",
+        "terminal ",
+    ],
 )
 def test_invalid_names(value):
     with pytest.raises(PluginLoadError, match="entry-point name"):
