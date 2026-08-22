@@ -17,6 +17,7 @@ not exist would answer MCP calls with internal errors forever.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -97,7 +98,6 @@ def resolve_descriptors(
             continue
         try:
             _validate(descriptor, core_tools=core_tools, claimed=claimed)
-            _ = core_tools  # empty during the _state phase; see the docstring
         except Exception as exc:
             registry.record_failure(
                 name=name, reason=str(exc), discovered=entry, descriptor=_safe_descriptor(descriptor)
@@ -127,6 +127,33 @@ def _validate(descriptor: Any, *, core_tools: set[str], claimed: set[str]) -> No
     collisions = set(descriptor.tool_names) & (core_tools | claimed)
     if collisions:
         raise ValueError(f"tool name collision: {sorted(collisions)}")
+
+
+def _abandon_pool(pool: Any, name: str) -> None:
+    """Best-effort teardown of a pool created but never registered.
+
+    ``close_all`` is async while ``activate`` is not — it runs at module-import
+    time, where there is no running loop, so ``asyncio.run`` completes it. Under
+    an already-running loop we cannot block, and a fire-and-forget task would
+    only trade the leak for an unawaited-task warning, so that case is logged.
+    """
+    if pool is None:
+        return
+    try:
+        coro = pool.close_all(force=True)
+    except Exception as exc:
+        log.warning("octowright.plugins.abandoned_pool_close_failed", name=name, error=repr(exc))
+        return
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            asyncio.run(coro)
+        except Exception as exc:
+            log.warning("octowright.plugins.abandoned_pool_close_failed", name=name, error=repr(exc))
+        return
+    coro.close()
+    log.warning("octowright.plugins.abandoned_pool_not_closed", name=name, reason="event loop already running")
 
 
 def activate(
@@ -177,6 +204,7 @@ def activate(
         except Exception as exc:
             delta = delta or (_tool_names(tool_manager) - before)
             _remove_tools(tool_manager, delta)
+            _abandon_pool(pool, item.discovered.name)
             registry.record_failure(
                 name=item.discovered.name,
                 reason=f"activation failed: {exc!r}",
