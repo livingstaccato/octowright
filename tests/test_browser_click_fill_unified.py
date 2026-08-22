@@ -55,7 +55,7 @@ def _session(patch: MagicMock) -> _FakeSession:
 async def test_browser_click_css_selector_calls_session_click(_patch_pool: MagicMock) -> None:
     s = _session(_patch_pool)
     out = await _input.browser_click("i", selector="button.submit")
-    s.click.assert_awaited_once_with("button.submit")
+    s.click.assert_awaited_once_with("button.submit", timeout_ms=None)
     assert out["ok"] is True
 
 
@@ -158,7 +158,7 @@ async def test_browser_click_no_locator_raises(_patch_pool: MagicMock) -> None:
 async def test_browser_fill_css_selector_calls_session_fill(_patch_pool: MagicMock) -> None:
     s = _session(_patch_pool)
     out = await _input.browser_fill("i", "hello", selector="#email")
-    s.fill.assert_awaited_once_with("#email", "hello")
+    s.fill.assert_awaited_once_with("#email", "hello", timeout_ms=None)
     assert out["ok"] is True
 
 
@@ -172,7 +172,7 @@ async def test_browser_fill_css_selector_with_outline_returns_page_outline(
 
     out = await _input.browser_fill("i", "hello", selector="#email", response_mode="outline")
 
-    s.fill.assert_awaited_once_with("#email", "hello")
+    s.fill.assert_awaited_once_with("#email", "hello", timeout_ms=None)
     outline.assert_awaited_once_with("i")
     assert out["outline"]["url"] == "outline"
 

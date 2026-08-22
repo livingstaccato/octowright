@@ -501,8 +501,15 @@ class TestSemanticTimeoutPropagation:
         s.click_by.assert_awaited_once_with(role="button", timeout_ms=1000)
 
     @pytest.mark.anyio
-    async def test_fallback_kwargs_strip_timeout_ms_and_semantic_keys(self) -> None:
-        """Fallback fill receives only selector/value — no role/label/timeout_ms."""
+    async def test_fallback_kwargs_strip_semantic_keys_but_keep_timeout_ms(self) -> None:
+        """Fallback fill receives selector/value/timeout_ms — no role/label.
+
+        This test previously asserted the OPPOSITE for timeout_ms, pinning the
+        bug rather than the contract: the CSS fallback popped the field, so a
+        macro that set it ran on the 15s default and the author had no signal.
+        Semantic keys are still stripped — those belong to fill_by, and
+        ``fill`` has no parameter for them.
+        """
         s = _full_session()
         s.fill_by.side_effect = RuntimeError("nope")
         await _dispatch_via_simple(
@@ -516,7 +523,7 @@ class TestSemanticTimeoutPropagation:
                 "timeout_ms": 1000,
             },
         )
-        s.fill.assert_awaited_once_with(selector="#email", value="x")
+        s.fill.assert_awaited_once_with(selector="#email", value="x", timeout_ms=1000)
 
 
 # --------------------------------------------------------------------------
