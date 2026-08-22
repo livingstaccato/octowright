@@ -15,6 +15,8 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.plugins.errors import ControlBudgetExceededError
+
 log = get_logger(__name__)
 
 # Restrict label characters to alphanumeric + dot/underscore/hyphen so a
@@ -24,6 +26,27 @@ _LABEL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 # Falsey tokens that opt OUT of owner-only recording permissions.
 _PRIVATE_OFF = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
+
+#: Rows core writes about a session rather than about a page action. They
+#: bypass ``OCTOWRIGHT_RECORDING_MAX_BYTES`` because the ceiling exists to
+#: bound a firehose *page*, and dropping a metadata row instead loses the
+#: recording's identity: no ``session_start`` means discovery cannot report
+#: the kind, and a dropped ``artifact_registered`` means ``commit()`` returned
+#: success for a registration that does not exist. ``_write_truncation_marker``
+#: already bypasses the ceiling for exactly this reason; this generalizes it.
+#: Core-only — ``record()`` stays a plugin's sole surface, ceiling and all.
+CONTROL_ACTIONS: frozenset[str] = frozenset(
+    {
+        "session_start",
+        "artifact_registered",
+        "recording_truncated",
+    }
+)
+
+#: Separate bounded budget for control rows. Bounded so a plugin cannot evade
+#: the disk-fill guard by committing artifacts in a loop; a commit that would
+#: exceed it fails visibly instead of vanishing.
+CONTROL_BUDGET_BYTES = 64 * 1024
 
 
 def _recording_max_bytes() -> int:
@@ -103,6 +126,10 @@ class Recorder:
         self._max_bytes = _recording_max_bytes()
         self._bytes_written = self.log_path.stat().st_size if self._max_bytes else 0
         self._truncated = False
+        # Control rows are budgeted separately from the action ceiling, so a
+        # truncated recording still carries its metadata. Counted from zero on
+        # every open: the budget bounds one process's writes, not the file.
+        self._control_bytes = 0
 
     def record(self, action: str, **fields: Any) -> None:
         if self._truncated:  # ceiling already hit — drop silently (marker already written)
@@ -121,6 +148,26 @@ class Recorder:
         self._event_count += 1
         if action not in _EVENT_ONLY_ACTIONS:
             self._action_count += 1
+
+    def record_control(self, action: str, **fields: Any) -> None:
+        """Append a core-owned metadata row, bypassing the action ceiling.
+
+        Raises ``ValueError`` for an action outside :data:`CONTROL_ACTIONS` and
+        ``ControlBudgetExceededError`` when the control budget is exhausted.
+        """
+        if action not in CONTROL_ACTIONS:
+            raise ValueError(f"{action!r} is not a control action")
+        entry = {"ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "action": action, **fields}
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        encoded = len(line.encode("utf-8"))
+        if self._control_bytes + encoded > CONTROL_BUDGET_BYTES:
+            raise ControlBudgetExceededError(
+                f"control row {action!r} would exceed the {CONTROL_BUDGET_BYTES}-byte control budget"
+            )
+        self._control_bytes += encoded
+        self._fh.write(line)
+        self._fh.flush()
+        self._event_count += 1
 
     def _write_truncation_marker(self) -> None:
         """Append a single bounded marker recording the cut. Bypasses the
