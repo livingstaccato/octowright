@@ -578,7 +578,12 @@ async def _close_plugin_pools_on_shutdown(registry: Any, *, log: Any) -> None:
     """
     if registry is None:
         return
-    for kind, pool in registry.pools().items():
+    try:
+        pools = registry.pools()
+    except Exception as exc:  # best-effort teardown; don't block shutdown
+        log.debug("shutdown.plugin_registry_pools_failed", error=repr(exc))
+        return
+    for kind, pool in pools.items():
         try:
             await pool.close_all(force=True)
         except Exception as exc:  # best-effort teardown; don't block shutdown
