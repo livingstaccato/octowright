@@ -37,7 +37,18 @@ from octowright.session.operation_gate import SessionBusyTimeoutError, SessionCl
 # Restrict to a generous-but-safe character set so a glob metachar (``*``,
 # ``?``, ``[``) or path separator can't widen the result set when ``sid``
 # flows into ``glob()`` patterns or filesystem joins.
-_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+#
+# The HYPHEN is excluded deliberately, and it is the one exclusion that is about
+# correctness rather than path safety. Recording filenames are
+# ``{stamp}-{kind}-{instance_id}[-{label}]`` and readers recover the id as
+# ``stem.split("-")[2]``, so a hyphenated id parses back as a truncated token --
+# which is how a request naming one session could once resolve to another's
+# recording. ``plugins.identity.INSTANCE_ID_RE`` forbids the hyphen at the point
+# core composes the name; forbidding it here too means a request that could only
+# refer to such an id is refused outright rather than silently resolving to a
+# prefix. Case stays permissive: uppercase shifts no field and so is not the
+# ambiguity, while several existing callers use mixed-case ids.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 
 def _valid_session_id(sid: str) -> bool:

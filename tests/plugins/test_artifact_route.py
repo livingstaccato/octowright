@@ -94,16 +94,41 @@ def test_a_row_pointing_outside_the_root_is_not_served(client_with_recordings, t
     assert client.get("/api/sessions/sessionzz02/artifacts/leak").status_code == 404
 
 
-def test_a_colliding_suffix_session_id_does_not_receive_another_sessions_artifact(client_with_recordings):
-    """IDOR regression: a hyphenated sid's recording stem must not substring-match a shorter sid.
+def test_a_hyphenated_session_id_is_refused_by_the_route(client_with_recordings):
+    """IDOR regression, now closed at the source rather than at the lookup.
 
-    ``foo-bar``'s recording file is ``...-refkind-foo-bar.jsonl``. A naive
-    ``f"-{sid}" in stem`` check matches ``sid="bar"`` too (the stem ends in
-    ``-bar``), which would hand session ``bar``'s request session ``foo-bar``'s
-    committed artifact even though session ``bar`` never existed.
+    The original defect: a naive ``f"-{sid}" in stem`` check matched a hyphenated
+    session's recording for a SHORTER sid too -- ``foo-bar``'s file
+    ``...-refkind-foo-bar.jsonl`` ends in ``-bar``, so a request for ``bar``
+    received ``foo-bar``'s committed artifact even though ``bar`` never existed.
+
+    That is unreachable twice over now. ``INSTANCE_ID_RE`` forbids a hyphen where
+    core composes the filename, so no such recording can be written; and
+    ``_valid_session_id`` forbids one in a request, so an id that could only name
+    such a recording is refused outright instead of resolving to a prefix.
     """
-    client, root = client_with_recordings
-    _session_with_artifact(root, sid="foo-bar")
-    resp = client.get("/api/sessions/bar/artifacts/transcript")
-    assert resp.status_code == 404
+    client, _root = client_with_recordings
+    resp = client.get("/api/sessions/foo-bar/artifacts/transcript")
+    assert resp.status_code == 400
     assert resp.text != "recorded output"
+
+
+def test_a_hyphenated_instance_id_cannot_reserve_an_artifact(tmp_path):
+    """The write side refuses it too, so no such artifact directory is created."""
+    from octowright.plugins.artifacts import ArtifactError
+
+    log_path = tmp_path / "20260823T000000Z-refkind-foobar.jsonl"
+    recorder = Recorder(log_path)
+    recorder.record_control("session_start", kind="refkind", label=None, profile=None)
+    try:
+        with pytest.raises(ArtifactError, match="must match"):
+            reserve_artifact(
+                recorder=recorder,
+                instance_id="foo-bar",
+                recordings_dir=tmp_path,
+                artifact_id="transcript",
+                suffix=".txt",
+            )
+    finally:
+        recorder.close()
+    assert not (tmp_path / "session-artifacts").exists()

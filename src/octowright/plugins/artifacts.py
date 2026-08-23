@@ -29,6 +29,7 @@ from pathlib import Path
 
 from octowright._paths import reject_unsafe_path
 from octowright.plugins.errors import PluginError
+from octowright.plugins.identity import INSTANCE_ID_RE
 from octowright.private_paths import secure_artifact_tree
 from octowright.recorder import Recorder
 
@@ -120,8 +121,15 @@ def reserve_artifact(
         raise ArtifactError(f"artifact id {artifact_id!r} must match {_ARTIFACT_ID_RE.pattern}")
     if not _SUFFIX_RE.match(suffix):
         raise ArtifactError(f"artifact suffix {suffix!r} must match {_SUFFIX_RE.pattern}")
-    if not _ARTIFACT_ID_RE.match(instance_id) and not instance_id.isalnum():
-        raise ArtifactError(f"instance id {instance_id!r} is not a safe path segment")
+    # One regex, shared with the launch transaction that issued this id. The
+    # earlier form here was ``_ARTIFACT_ID_RE.match(instance_id) or
+    # instance_id.isalnum()`` -- a double branch that existed only because
+    # nothing upstream validated the id, so this had to accept both the
+    # letters-first artifact syntax and core's digit-leading ``uuid4().hex``.
+    # ``begin_session`` now settles the syntax at composition time, so this is a
+    # straight reuse rather than a second, looser opinion.
+    if not INSTANCE_ID_RE.fullmatch(instance_id):
+        raise ArtifactError(f"instance id {instance_id!r} must match {INSTANCE_ID_RE.pattern}")
 
     # Resolved once and reused: ``_lock_tree``'s walk from leaf to root is a
     # plain ``Path.relative_to`` segment comparison, not resolve-aware, so
