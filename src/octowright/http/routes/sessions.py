@@ -32,8 +32,14 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool, _read_json_body
-from octowright.http.routes._session_kinds import find_plugin_session, iter_plugin_sessions, plugin_session_detail
+from octowright.http.routes._session_kinds import (
+    close_plugin_session,
+    find_plugin_session,
+    iter_plugin_sessions,
+    plugin_session_detail,
+)
 from octowright.http.session_artifacts import session_artifact_cache
+from octowright.plugins.errors import ProtectedSessionCloseError
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 from octowright.session.screencast_config import screencast_config_block
@@ -282,6 +288,24 @@ async def _maybe_close_terminal(sid: str, *, force: bool) -> JSONResponse | None
     return JSONResponse({"closed": True, "instance_id": sid})
 
 
+async def _maybe_close_plugin(sid: str, *, force: bool) -> JSONResponse | None:
+    """Close ``sid`` if it is a live plugin session, else return ``None``.
+
+    ``ProtectedSessionCloseError`` is core's own type, raised by the plugin —
+    which is what removes this module's direct import of a specific plugin's
+    error class.
+    """
+    try:
+        result = await close_plugin_session(sid, force=force)
+    except ProtectedSessionCloseError as e:
+        return JSONResponse({"error": str(e).replace("force=True", "force=true")}, status_code=409)
+    if result is None:
+        return None
+    state.log.info("octowright.http.plugin_session_closed", instance_id=sid)
+    await publish_dashboard_invalidation("sessions")
+    return JSONResponse({"closed": True, "instance_id": sid, **result})
+
+
 async def _close_browser_session(sid: str, *, force: bool) -> JSONResponse:
     """Close a live browser session and warm its close-time artefact cache.
 
@@ -353,6 +377,9 @@ async def session_close(request: Request) -> JSONResponse:
     terminal_close = await _maybe_close_terminal(sid, force=force)
     if terminal_close is not None:
         return terminal_close
+    plugin_close = await _maybe_close_plugin(sid, force=force)
+    if plugin_close is not None:
+        return plugin_close
     return await _close_browser_session(sid, force=force)
 
 
