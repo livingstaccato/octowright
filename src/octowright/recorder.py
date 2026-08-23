@@ -132,6 +132,16 @@ class Recorder:
         self._control_bytes = 0
 
     def record(self, action: str, **fields: Any) -> None:
+        """Append one action row, subject to the byte ceiling.
+
+        Raises ``ValueError`` for a :data:`CONTROL_ACTIONS` member. The control
+        set is core-only and ``record`` is a plugin's sole recording surface,
+        so accepting one here would let a plugin forge core's own metadata —
+        spoofing the opening row the failed-launch rule reasons about, or
+        claiming an artifact core never registered.
+        """
+        if action in CONTROL_ACTIONS:
+            raise ValueError(f"{action!r} is a control action; core writes it through record_control()")
         if self._truncated:  # ceiling already hit — drop silently (marker already written)
             return
         entry = {"ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "action": action, **fields}

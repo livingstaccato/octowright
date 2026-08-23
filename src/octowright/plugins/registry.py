@@ -118,8 +118,20 @@ class PluginRegistry:
                 return found
         return None
 
-    def id_in_use(self, instance_id: str) -> bool:
-        return self.maybe_get(instance_id) is not None
+    def id_in_use(self, instance_id: str, *, exclude_kind: str | None = None) -> bool:
+        """Is ``instance_id`` held by a registered pool other than ``exclude_kind``?
+
+        The exclusion is what makes the spec's "probe every *other* registered
+        pool" real. A launching plugin's own pool is not another pool, and a
+        plugin that registers its session before committing — the natural
+        order — would otherwise be refused by its own bookkeeping.
+        """
+        for kind, loaded in self._loaded.items():
+            if kind == exclude_kind:
+                continue
+            if loaded.pool.maybe_get(instance_id) is not None:
+                return True
+        return False
 
     def status_rows(self) -> list[dict[str, Any]]:
         return [self._states[name] for name in sorted(self._states)]

@@ -192,6 +192,18 @@ def register_plugin_profile(name: str, tool_names: Iterable[str]) -> None:
     _PLUGIN_PROFILES[name] = frozenset(tool_names)
 
 
+def unregister_plugin_profile(name: str) -> None:
+    """Remove a plugin's capability profile.
+
+    Idempotent — a name that was never registered is not an error, because the
+    loader's rollback path runs for failures that happened before registration
+    as well as after. Called when a plugin's activation is rolled back: leaving
+    the profile behind would make ``OCTOWRIGHT_PROFILE=<its name>`` resolve to
+    a set naming tools that do not exist.
+    """
+    _PLUGIN_PROFILES.pop(name, None)
+
+
 def plugin_profile_names() -> list[str]:
     return sorted(_PLUGIN_PROFILES)
 

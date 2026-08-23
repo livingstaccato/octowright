@@ -20,10 +20,11 @@ import os
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from provide.telemetry import get_logger
 
+from octowright._paths import reject_unsafe_path
 from octowright.plugins.contract import LaunchResult, SessionRecord
 from octowright.plugins.errors import SessionIdInUseError
 from octowright.recorder import Recorder, new_log_path
@@ -38,6 +39,18 @@ _LOG = get_logger("octowright.plugins.launch")
 _OPENING_ONLY: frozenset[str] = frozenset({"session_start"})
 
 
+class IdInUse(Protocol):
+    """Probe for an ``instance_id`` already held by a registered pool.
+
+    ``exclude_kind`` skips one kind's own pool. Core enforces cross-pool id
+    uniqueness at commit, and the launching plugin's pool is not "another"
+    pool: a plugin that registers its session before committing — the natural
+    order — would otherwise be refused by its own bookkeeping.
+    """
+
+    def __call__(self, instance_id: str, *, exclude_kind: str | None = None) -> bool: ...
+
+
 @dataclass
 class SessionLaunch:
     """One in-flight launch. Yielded by :meth:`PluginContext.begin_session`."""
@@ -48,7 +61,6 @@ class SessionLaunch:
     kind: str
     _id_in_use: Callable[[str], bool]
     _committed: bool = False
-    _result: LaunchResult | None = None
 
     def commit(self, record: SessionRecord) -> LaunchResult:
         """Validate and finalize. The plugin's own pool holds ``record``.
@@ -71,14 +83,13 @@ class SessionLaunch:
         if self._id_in_use(self.instance_id):
             raise SessionIdInUseError(f"instance_id {self.instance_id!r} is already held by another registered pool")
         self._committed = True
-        self._result = LaunchResult(
+        return LaunchResult(
             instance_id=self.instance_id,
             kind=self.kind,
             label=record.label,
             profile=record.profile,
             log_path=str(self.log_path),
         )
-        return self._result
 
 
 @dataclass
@@ -87,7 +98,7 @@ class PluginContext:
 
     kind: str
     recordings_dir: Path
-    id_in_use: Callable[[str], bool]
+    id_in_use: IdInUse
     log: Any = field(default_factory=lambda: _LOG)
 
     def redaction_mode(self) -> str:
@@ -116,22 +127,32 @@ class PluginContext:
         kind core never approved.
         """
         log_path = new_log_path(self.recordings_dir, instance_id, label, self.kind)
+        # ``new_log_path`` sanitizes only ``label``; ``instance_id`` is
+        # plugin-supplied and reaches the filename raw, so a traversing id
+        # resolves outside the recordings root. Checked BEFORE the recorder is
+        # built, because ``Recorder.__init__`` is what materializes the
+        # directory (``mkdir(parents=True)``) — validating afterwards would
+        # already have created the escape.
+        reject_unsafe_path(log_path, self.recordings_dir, label="plugin recording")
         recorder = Recorder(log_path)
-        recorder.record_control(
-            "session_start",
-            kind=self.kind,
-            label=label,
-            profile=profile,
-            **(extra or {}),
-        )
-        launch = SessionLaunch(
-            recorder=recorder,
-            log_path=log_path,
-            instance_id=instance_id,
-            kind=self.kind,
-            _id_in_use=self.id_in_use,
-        )
+        # The opening row is inside the guard: an OSError (or an exhausted
+        # control budget) while writing it would otherwise leave an open handle
+        # and an orphan file with nothing to clean them up.
         try:
+            recorder.record_control(
+                "session_start",
+                kind=self.kind,
+                label=label,
+                profile=profile,
+                **(extra or {}),
+            )
+            launch = SessionLaunch(
+                recorder=recorder,
+                log_path=log_path,
+                instance_id=instance_id,
+                kind=self.kind,
+                _id_in_use=lambda candidate: self.id_in_use(candidate, exclude_kind=self.kind),
+            )
             yield launch
         except BaseException:
             _discard_failed_launch(recorder, log_path)
@@ -158,5 +179,7 @@ def _discard_failed_launch(recorder: Recorder, log_path: Path) -> None:
             except json.JSONDecodeError:
                 # An unparsable line is data we did not write; keep the file.
                 return
-        if actions and actions <= _OPENING_ONLY:
+        # An empty file is included: nothing was recorded at all, which is the
+        # shape a failure during the opening-row write leaves behind.
+        if actions <= _OPENING_ONLY:
             log_path.unlink()

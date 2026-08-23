@@ -97,7 +97,11 @@ class SessionPool(Protocol):
         """
 
     async def close_all(self, *, force: bool = False) -> None:
-        """Close every session, continuing past individual failures."""
+        """Close every session, continuing past an individual failure.
+
+        Raises an aggregate at the end if any close failed — daemon shutdown
+        tears every pool down and reports what did not close.
+        """
 
 
 @runtime_checkable
