@@ -59,11 +59,13 @@ def _iter_recordings(recordings_dir: Path) -> list[Path]:
 
 
 def _read_first_opening(jsonl_path: Path) -> dict[str, Any] | None:
-    """Find a recording's opening event: browser ``launch`` or ``terminal_start``.
+    """Find a recording's opening event: ``launch``, ``session_start``, or
+    ``terminal_start``.
 
-    Lets closed-session discovery classify a recording's kind. Terminal
-    recordings have no ``launch`` row (they open with ``terminal_start``), so a
-    ``launch``-only scan would mislabel them ``unknown``.
+    ``session_start`` is the uniform row core's plugin launch transaction
+    writes, carrying ``kind``/``label``/``profile`` — so a plugin recording
+    classifies with zero plugin knowledge, and stays classified even after
+    the plugin that wrote it is uninstalled.
     """
     try:
         with jsonl_path.open(encoding="utf-8") as fh:
@@ -75,7 +77,7 @@ def _read_first_opening(jsonl_path: Path) -> dict[str, Any] | None:
                     entry = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if entry.get("action") in ("launch", "terminal_start"):
+                if entry.get("action") in ("launch", "session_start", "terminal_start"):
                     return entry
     except OSError:
         return None
