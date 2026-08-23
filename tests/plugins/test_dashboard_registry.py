@@ -155,3 +155,44 @@ def test_a_descriptor_that_raises_yields_a_degraded_detail(registered):
     assert detail["id"] == "refsess01"
     assert detail["kind"] == "refkind"
     assert "detail_error" in detail
+
+
+def test_a_vanishing_artifact_file_degrades_that_entry_not_the_whole_response(registered, tmp_path, monkeypatch):
+    """A committed artifact can be deleted between read_registered_artifacts's
+    own existence check and plugin_session_detail's stat() call (a concurrent
+    recordings_cleanup, or a plugin rotating its own artifact). That race must
+    drop the one entry, not 500 the whole dashboard detail response.
+    """
+    from octowright.http import state as http_state
+    from octowright.http.routes._session_kinds import plugin_session_detail
+    from octowright.plugins import artifacts as artifacts_module
+    from octowright.plugins.artifacts import reserve_artifact
+    from octowright.recorder import Recorder
+
+    log_path = tmp_path / "20260823T000000Z-refkind-refsess01.jsonl"
+    recorder = Recorder(log_path)
+    recorder.record_control("session_start", kind="refkind", label=None, profile=None)
+    handle = reserve_artifact(
+        recorder=recorder, instance_id="refsess01", recordings_dir=tmp_path, artifact_id="transcript", suffix=".txt"
+    )
+    handle.path.write_text("hello")
+    handle.commit(mime_type="text/plain")
+    recorder.close()
+
+    _, pool = registered
+    session = pool.sessions["refsess01"]
+    session.log_path = log_path
+    monkeypatch.setattr(http_state, "RECORDINGS_DIR", tmp_path)
+
+    real_read_registered_artifacts = artifacts_module.read_registered_artifacts
+
+    def _read_then_vanish(log_path: Path, recordings_dir: Path):
+        found = real_read_registered_artifacts(log_path, recordings_dir)
+        for artifact in found:
+            artifact.path.unlink()
+        return found
+
+    monkeypatch.setattr(artifacts_module, "read_registered_artifacts", _read_then_vanish)
+
+    detail = plugin_session_detail("refkind", session)
+    assert detail["artifacts"] == []
