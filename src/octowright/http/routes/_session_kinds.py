@@ -45,9 +45,13 @@ def find_plugin_session(instance_id: str) -> tuple[str, Any] | None:
 def plugin_session_detail(kind: str, session: Any) -> dict[str, Any]:
     """Build a plugin session's dashboard detail payload.
 
-    A plugin raising here is caught and rendered as a degraded detail rather
-    than a 500: an enabled plugin shares the leader's process, but a bad
-    detail builder must not take a dashboard page down with it.
+    Both halves are guarded independently so a failure in either degrades to
+    a partial payload rather than a 500: an enabled plugin shares the
+    leader's process, but a bad detail builder — or a committed artifact
+    file that vanishes between ``read_registered_artifacts``'s existence
+    check and this function's own ``stat`` (a concurrent
+    ``recordings_cleanup``, or a plugin rotating its own artifact) — must
+    not take a dashboard page down with it.
 
     Artifacts are reported by id and mime type only. The absolute path stays
     server-side — the dashboard fetches through the artifact route, which
@@ -66,8 +70,22 @@ def plugin_session_detail(kind: str, session: Any) -> dict[str, Any]:
         )
         detail = {"id": getattr(session, "instance_id", None), "kind": kind, "detail_error": repr(exc)}
 
-    artifacts = read_registered_artifacts(Path(session.log_path), Path(state.RECORDINGS_DIR))
-    detail["artifacts"] = [
-        {"artifact_id": a.artifact_id, "mime_type": a.mime_type, "bytes": a.path.stat().st_size} for a in artifacts
-    ]
+    reported_artifacts: list[dict[str, Any]] = []
+    for artifact in read_registered_artifacts(Path(session.log_path), Path(state.RECORDINGS_DIR)):
+        try:
+            size = artifact.path.stat().st_size
+        except OSError as exc:
+            # read_registered_artifacts already confirmed the file existed;
+            # a race between that check and this stat drops just this one
+            # entry rather than failing the whole detail response.
+            state.log.warning(
+                "octowright.http.plugin_session_artifact_stat_failed",
+                kind=kind,
+                instance_id=getattr(session, "instance_id", None),
+                artifact_id=artifact.artifact_id,
+                error=repr(exc),
+            )
+            continue
+        reported_artifacts.append({"artifact_id": artifact.artifact_id, "mime_type": artifact.mime_type, "bytes": size})
+    detail["artifacts"] = reported_artifacts
     return detail
