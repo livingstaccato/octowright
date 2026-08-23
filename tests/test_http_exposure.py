@@ -82,6 +82,7 @@ SENSITIVE_ROUTE_PATTERNS = {
     ("GET", "/api/sessions/{id}/frame"),
     ("GET", "/api/sessions/{id}/video"),
     ("GET", "/api/sessions/{id}/trace"),
+    ("GET", "/api/sessions/{id}/artifacts/{artifact_id}"),
     ("GET", "/api/sessions/{id}/markdown"),
     ("POST", "/api/sessions/{id}/trace/open"),
     ("GET", "/api/sessions/{id}/screenshot/now"),
