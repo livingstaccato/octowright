@@ -169,12 +169,40 @@ async def test_traversing_instance_id_is_refused_before_anything_is_created(tmp_
     )
     escaped = tmp_path / "escaped"
 
-    with pytest.raises(ValueError, match="plugin recording"):
+    # The id's SYNTAX gate rejects this before the path-containment guard is
+    # reached: a traversing id necessarily contains a separator, and
+    # INSTANCE_ID_RE admits only ``[a-z0-9_]``. Containment remains behind it as
+    # defense in depth for the composed path (``label`` still reaches
+    # ``new_log_path``'s own sanitizer), but it is no longer reachable through a
+    # plugin-supplied id, which is the stronger arrangement.
+    with pytest.raises(ValueError, match="must match"):
         async with ctx.begin_session(instance_id="ssh:host/../../escaped", label=None, profile=None):
             pass  # pragma: no cover - the guard raises before the body runs
 
     assert not escaped.exists()
     assert list(root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_hyphenated_instance_id_is_refused(tmp_path):
+    # A hyphen is not a path hazard -- it is a PARSING hazard. Recording names
+    # are ``{stamp}-{kind}-{instance_id}[-{label}]`` and readers recover the id
+    # as ``stem.split("-")[2]``, so a hyphenated id parses back as a truncated
+    # token and a request naming a different session could resolve to this one's
+    # recording. Refused at the point core composes the name.
+    root = tmp_path / "recordings"
+    root.mkdir()
+    ctx = PluginContext(
+        kind="refkind",
+        recordings_dir=root,
+        id_in_use=lambda instance_id, *, exclude_kind=None: False,
+    )
+
+    with pytest.raises(ValueError, match="must match"):
+        async with ctx.begin_session(instance_id="foo-bar", label=None, profile=None):
+            pass  # pragma: no cover - the guard raises before the body runs
+
+    assert list(root.iterdir()) == [], "nothing may be created for a refused id"
 
 
 @pytest.mark.asyncio

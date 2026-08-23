@@ -28,6 +28,7 @@ from octowright._paths import reject_unsafe_path
 from octowright.plugins.artifacts import ArtifactHandle, reserve_artifact
 from octowright.plugins.contract import LaunchResult, SessionRecord
 from octowright.plugins.errors import SessionIdInUseError
+from octowright.plugins.identity import validate_instance_id
 from octowright.recorder import Recorder, new_log_path
 
 _LOG = get_logger("octowright.plugins.launch")
@@ -141,6 +142,12 @@ class PluginContext:
         kind, so accepting one would let a plugin stamp a recording with a
         kind core never approved.
         """
+        # This is the single point where core composes a recording filename from
+        # a plugin-supplied id, so it is where the id's syntax is settled.
+        # ``new_log_path`` builds ``{stamp}-{kind}-{instance_id}[-{label}]`` and
+        # readers recover the id as ``stem.split("-")[2]``; a hyphen here shifts
+        # every later field, so the id would parse back as the wrong token.
+        validate_instance_id(instance_id)
         log_path = new_log_path(self.recordings_dir, instance_id, label, self.kind)
         # ``new_log_path`` sanitizes only ``label``; ``instance_id`` is
         # plugin-supplied and reaches the filename raw, so a traversing id
