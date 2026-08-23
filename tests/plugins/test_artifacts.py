@@ -53,6 +53,42 @@ def test_artifact_directory_is_owner_only(recording, monkeypatch):
     assert stat.S_IMODE(handle.path.parent.stat().st_mode) == 0o700
 
 
+def test_intermediate_dir_is_locked_when_recordings_dir_is_reached_through_a_symlink(monkeypatch, tmp_path):
+    """secure_artifact_tree's leaf-to-root walk is a plain ``relative_to``, not
+    resolve-aware. reserve_artifact must resolve recordings_dir before handing
+    it to that walk -- pytest's own tmp_path fixture is already pre-resolved,
+    which is why the other ownership test above cannot catch this: it never
+    exercises a root reached through a symlink hop (e.g. macOS's /tmp ->
+    /private/tmp). Without the fix, the leaf (already resolved by
+    reject_unsafe_path) fails relative_to(unresolved root) and the walk
+    silently returns before locking the `session-artifacts/` intermediate.
+    """
+    monkeypatch.setenv("OCTOWRIGHT_RECORDINGS_PRIVATE", "1")
+    real_root = tmp_path / "real-root"
+    real_root.mkdir()
+    root_via_symlink = tmp_path / "root-via-symlink"
+    root_via_symlink.symlink_to(real_root, target_is_directory=True)
+
+    log_path = root_via_symlink / "20260823T000000Z-refkind-refsess02.jsonl"
+    recorder = Recorder(log_path)
+    recorder.record_control("session_start", kind="refkind", label=None, profile=None)
+    try:
+        reserve_artifact(
+            recorder=recorder,
+            instance_id="refsess02",
+            recordings_dir=root_via_symlink,
+            artifact_id="transcript",
+            suffix=".txt",
+        )
+    finally:
+        recorder.close()
+
+    intermediate = real_root / "session-artifacts"
+    assert stat.S_IMODE(intermediate.stat().st_mode) == 0o700, (
+        "session-artifacts/ must be locked even when recordings_dir is a symlink"
+    )
+
+
 def test_commit_writes_a_control_row_with_a_relative_path(recording):
     recorder, log_path, root = recording
     handle = _reserve(recording)
