@@ -136,3 +136,41 @@ def test_known_kinds_lists_browsers_terminal_and_plugins(registered):
     assert TERMINAL_KIND in kinds
     assert "refkind" in kinds
     assert kinds == sorted(kinds), "sorted so an error message is stable"
+
+
+def test_a_registered_plugin_kind_validates(registered):
+    from octowright.scenarios import Participant, Scenario, _validate_participant_kind
+
+    p = Participant(persona="tanuki-tim", kind="refkind", role="player")
+    s = Scenario(name="demo", participants=[p])
+    _validate_participant_kind(s, p)  # must not raise
+
+
+def test_an_unregistered_kind_is_refused_and_the_error_lists_what_is_available(registered):
+    from octowright.scenarios import Participant, Scenario, _validate_participant_kind
+
+    p = Participant(persona="tanuki-tim", kind="notaplugin", role="player")
+    s = Scenario(name="demo", participants=[p])
+    with pytest.raises(ValueError) as excinfo:
+        _validate_participant_kind(s, p)
+    message = str(excinfo.value)
+    assert "notaplugin" in message
+    assert "refkind" in message, "a disabled or mistyped plugin must be self-diagnosing"
+    assert "chromium" in message
+
+
+def test_a_kind_without_macros_cannot_declare_startup_macros(registered):
+    from octowright.scenarios import Participant, Scenario, _validate_participant_kind
+
+    p = Participant(persona="tanuki-tim", kind="refkind", role="player", startup_macros=["login"])
+    s = Scenario(name="demo", participants=[p])
+    with pytest.raises(ValueError, match="startup_macros"):
+        _validate_participant_kind(s, p)
+
+
+def test_a_kind_with_macros_may_declare_startup_macros(registered):
+    from octowright.scenarios import Participant, Scenario, _validate_participant_kind
+
+    p = Participant(persona="tanuki-tim", kind="macrokind", role="player", startup_macros=["login"])
+    s = Scenario(name="demo", participants=[p])
+    _validate_participant_kind(s, p)  # must not raise

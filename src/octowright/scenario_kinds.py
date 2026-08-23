@@ -42,6 +42,10 @@ def adapter_for(kind: str, *, browser_pool: Any) -> Any | None:
     ``None`` means "not adapter-driven", which today is terminal (hardcoded
     branch) and any unregistered kind. Callers must handle it rather than
     assume every participant has an adapter.
+
+    ``None`` does NOT mean "invalid kind" -- terminal is a perfectly valid
+    kind with no adapter. A caller that needs to validate a kind must use
+    ``known_kinds()``, not the return value of this function.
     """
     if kind in SUPPORTED_KINDS:
         return browser_scenario_adapter(browser_pool)
