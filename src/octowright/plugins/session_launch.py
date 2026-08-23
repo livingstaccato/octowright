@@ -25,6 +25,7 @@ from typing import Any, Protocol
 from provide.telemetry import get_logger
 
 from octowright._paths import reject_unsafe_path
+from octowright.plugins.artifacts import ArtifactHandle, reserve_artifact
 from octowright.plugins.contract import LaunchResult, SessionRecord
 from octowright.plugins.errors import SessionIdInUseError
 from octowright.recorder import Recorder, new_log_path
@@ -110,6 +111,20 @@ class PluginContext:
         """
         raw = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "").strip().lower()
         return raw if raw in {"off", "passwords", "all"} else "passwords"
+
+    def artifact(self, session: Any, name: str, suffix: str) -> ArtifactHandle:
+        """Reserve a contained side-artifact path for ``session``.
+
+        The plugin writes to the returned ``.path`` and then calls
+        ``.commit(mime_type=...)``. It never composes a path itself.
+        """
+        return reserve_artifact(
+            recorder=session.recorder,
+            instance_id=session.instance_id,
+            recordings_dir=self.recordings_dir,
+            artifact_id=name,
+            suffix=suffix,
+        )
 
     @contextlib.asynccontextmanager
     async def begin_session(
