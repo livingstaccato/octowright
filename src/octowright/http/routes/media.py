@@ -165,6 +165,14 @@ async def session_artifact(request: Request) -> Response:
         root = Path(state.RECORDINGS_DIR)
         for artifact in read_registered_artifacts(log_path, root):
             if artifact.artifact_id == artifact_id:
+                # ``FileResponse`` defaults to ``content_disposition_type="attachment"``,
+                # which this call relies on and never overrides. That header —
+                # not the mime-type allowlist — is what stops an allowlisted
+                # `image/svg+xml` artifact (SVG is active content: it can carry
+                # <script>) from executing in the dashboard's own origin, where
+                # the pairing bearer lives. Switching this route to `inline`
+                # would silently reopen that; see ARTIFACT_MIME_ALLOWLIST and
+                # tests/plugins/test_artifact_route.py::test_artifact_response_is_attachment_disposition.
                 return FileResponse(
                     path=str(artifact.path),
                     media_type=artifact.mime_type,
