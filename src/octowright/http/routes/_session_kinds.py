@@ -23,9 +23,26 @@ from octowright.http import state
 
 
 def iter_plugin_sessions() -> Iterator[Any]:
-    """Yield every live session across every registered plugin pool."""
-    for pool in state.plugin_registry.pools().values():
-        yield from pool.iter_sessions()
+    """Yield every live session across every registered plugin pool.
+
+    Guarded per pool: a pool whose ``iter_sessions()`` raises (either on the
+    call itself or partway through iteration) must not stop later pools from
+    being listed — the same isolation ``plugin_session_detail`` and
+    ``_close_plugin_pools_on_shutdown`` already give a single misbehaving
+    plugin. Without this, one bad pool 500s ``GET /api/sessions``, which the
+    dashboard auto-polls, blanking the live list for browsers and terminals
+    too.
+    """
+    for kind, pool in state.plugin_registry.pools().items():
+        try:
+            yield from pool.iter_sessions()
+        except Exception as exc:  # a bad plugin must not 500 the dashboard
+            state.log.warning(
+                "octowright.http.plugin_pool_iteration_failed",
+                kind=kind,
+                error=repr(exc),
+            )
+            continue
 
 
 def find_plugin_session(instance_id: str) -> tuple[str, Any] | None:
