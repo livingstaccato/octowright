@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -46,19 +47,40 @@ from octowright.session.screencast_config import screencast_config_block
 from octowright.terminal.errors import ProtectedTerminalCloseError
 
 
+def _safe_live_summaries(sessions: Iterable[Any]) -> list[dict[str, Any]]:
+    """Summarize each session, skipping (and logging) one that fails to serialize.
+
+    ``_live_summary`` reads ``instance_id``/``kind``/``label``/``profile``/``url``
+    without ``getattr``, so a nonconforming session object — most plausibly a
+    third-party plugin's — raises instead of degrading. One bad session must
+    not take the rest of the live list down with it.
+    """
+    summaries: list[dict[str, Any]] = []
+    for session in sessions:
+        try:
+            summaries.append(_live_summary(session))
+        except Exception as exc:
+            state.log.warning(
+                "octowright.http.live_summary_failed",
+                instance_id=getattr(session, "instance_id", None),
+                error=repr(exc),
+            )
+    return summaries
+
+
 async def list_sessions(_request: Request) -> JSONResponse:
     pool = state.pool
-    live = [_live_summary(s) for s in pool.iter_sessions()]
+    live = _safe_live_summaries(pool.iter_sessions())
     # Terminal sessions live in a separate pool that only exists when the
-    # optional `octowright[terminal]` extra is installed. `_live_summary` is
-    # getattr-defensive, so terminal sessions serialize through it cleanly.
+    # optional `octowright[terminal]` extra is installed.
     terminal_pool = state.terminal_pool
     if terminal_pool is not None:
-        live += [_live_summary(s) for s in terminal_pool.iter_sessions()]
-    # Session-kind plugins serialize through the same getattr-defensive
-    # summariser. Terminal keeps its own branch above until it moves out to a
-    # plugin of its own.
-    live += [_live_summary(s) for s in iter_plugin_sessions()]
+        live += _safe_live_summaries(terminal_pool.iter_sessions())
+    # Session-kind plugins serialize through the same guarded summariser, and
+    # iter_plugin_sessions() itself isolates a raising pool from the others.
+    # Terminal keeps its own branch above until it moves out to a plugin of
+    # its own.
+    live += _safe_live_summaries(iter_plugin_sessions())
     live_paths = {s["log_path"] for s in live}
     closed = _closed_sessions(state.RECORDINGS_DIR, live_paths)
     return JSONResponse({"live": live, "closed": closed})

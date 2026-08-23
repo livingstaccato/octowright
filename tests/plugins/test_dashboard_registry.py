@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
+from starlette.requests import Request
 
 from octowright.plugins.registry import PluginRegistry
 from octowright.server import plugin_state
@@ -236,3 +238,110 @@ async def test_protected_close_propagates_for_the_409_mapping(registered):
     with pytest.raises(ProtectedSessionCloseError):
         await close_plugin_session("refsess01", force=False)
     assert await close_plugin_session("refsess01", force=True) == {"instance_id": "refsess01", "closed": True}
+
+
+# ---------------------------------------------------------------------------
+# One bad plugin pool must not 500 GET /api/sessions (final-fixes finding 1).
+# ---------------------------------------------------------------------------
+
+
+class _BoomDescriptor(_Descriptor):
+    kind = "boomkind"
+
+
+class _RaisingPool:
+    """A pool whose iteration explodes -- the reviewer's reproduction case."""
+
+    def iter_sessions(self):
+        raise RuntimeError("plugin pool exploded")
+
+    def maybe_get(self, instance_id: str) -> Any:
+        return None
+
+
+def _get_sessions_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/sessions",
+            "headers": [],
+            "query_string": b"",
+            "path_params": {},
+        }
+    )
+
+
+def test_iter_plugin_sessions_isolates_a_raising_pool_from_later_pools():
+    """A pool that raises must not stop LATER pools from being listed.
+
+    Registered in raise-then-good order specifically so a naive
+    ``for pool in pools: yield from pool.iter_sessions()`` (no per-pool guard)
+    would abort the whole generator on the first pool and never reach the
+    second -- the isolation this pins.
+    """
+    from octowright.http.routes._session_kinds import iter_plugin_sessions
+
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    reg.register(_BoomDescriptor(), pool=_RaisingPool(), adapter=None, discovered=None)
+    reg.register(_Descriptor(), pool=_Pool({"refsess01": _Session("refsess01")}), adapter=None, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        assert [s.instance_id for s in iter_plugin_sessions()] == ["refsess01"]
+    finally:
+        plugin_state.set_registry(original)
+
+
+async def test_list_sessions_route_survives_a_raising_plugin_pool():
+    """The reviewer's reproduction: GET /api/sessions must not 500."""
+    from octowright.http.routes.sessions import list_sessions
+
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    reg.register(_BoomDescriptor(), pool=_RaisingPool(), adapter=None, discovered=None)
+    reg.register(_Descriptor(), pool=_Pool({"refsess01": _Session("refsess01")}), adapter=None, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        resp = await list_sessions(_get_sessions_request())
+    finally:
+        plugin_state.set_registry(original)
+
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+    assert any(s["id"] == "refsess01" for s in body["live"])
+
+
+class _AttributeLackingSession:
+    """Has an instance_id but nothing else -- ``_live_summary`` reads
+    ``.log_path``/``.kind``/``.label``/``.profile``/``.url`` without
+    ``getattr``, so this raises ``AttributeError`` inside the summariser."""
+
+    def __init__(self, instance_id: str) -> None:
+        self.instance_id = instance_id
+
+
+async def test_list_sessions_route_survives_a_session_missing_attributes():
+    """A nonconforming session object must not take the rest of the live list down."""
+    from octowright.http.routes.sessions import list_sessions
+
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    pool = _Pool(
+        {
+            "good01": _Session("good01"),
+            "bad01": _AttributeLackingSession("bad01"),  # type: ignore[dict-item]
+        }
+    )
+    reg.register(_Descriptor(), pool=pool, adapter=None, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        resp = await list_sessions(_get_sessions_request())
+    finally:
+        plugin_state.set_registry(original)
+
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+    live_ids = {s["id"] for s in body["live"]}
+    assert "good01" in live_ids
+    assert "bad01" not in live_ids
