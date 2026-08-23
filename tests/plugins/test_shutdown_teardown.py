@@ -42,6 +42,11 @@ class _Log:
         self.debug_calls.append((event, fields))
 
 
+class _RaisingRegistry:
+    def pools(self) -> dict[str, Any]:
+        raise RuntimeError("registry exploded")
+
+
 async def test_every_registered_pool_is_force_closed():
     rec_a, rec_b = _Recorder(), _Recorder()
     registry = _Registry({"a": _Pool(rec_a), "b": _Pool(rec_b)})
@@ -61,3 +66,9 @@ async def test_one_failing_pool_does_not_stop_the_others():
 
 async def test_no_registry_is_a_no_op():
     await _close_plugin_pools_on_shutdown(None, log=_Log())
+
+
+async def test_registry_pools_failure_does_not_propagate():
+    log = _Log()
+    await _close_plugin_pools_on_shutdown(_RaisingRegistry(), log=log)
+    assert any("plugin_registry_pools_failed" in event for event, _ in log.debug_calls)
