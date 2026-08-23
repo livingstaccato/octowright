@@ -9,7 +9,6 @@ the same `mcp` and to share the same live state."""
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import inspect
 from collections.abc import Callable
@@ -244,22 +243,63 @@ _enabled_plugins = plugin_discovery.enabled_names()
 try:
     _discovered_plugins = plugin_discovery.discover()
 except Exception:
-    # discover() refuses duplicate entry-point names outright. That must not be
-    # fatal here: the daemon owns live browsers, and a bad third-party package
-    # cannot be allowed to stop it from starting.
+    # discover() reports a duplicate entry-point name rather than raising, so
+    # this is a genuine last resort (unreadable installed metadata). It must
+    # not be fatal: the daemon owns live browsers, and a bad third-party
+    # package cannot be allowed to stop it from starting.
     log.warning("octowright.plugins.discovery_failed", exc_info=True)
     _discovered_plugins = []
+
+
+def _register_plugin_profiles(
+    items: list[plugin_loader.ResolvedDescriptor],
+) -> list[plugin_loader.ResolvedDescriptor]:
+    """Register each plugin's capability profile, dropping any that collides.
+
+    A collision is a validation refusal, not something to swallow: with
+    `OCTOWRIGHT_PROFILE` naming the collided profile, `build_allowed_set`
+    resolves the CORE profile, so `_allowed_tools` excludes every plugin tool
+    and NOT ONE of the plugin's tools registers — while the plugin still
+    activates and reports `state: "enabled"`. Invisible in logs and in
+    `octowright_status()`. The check lives here rather than in
+    `plugins/loader.py` because `octowright.plugins` sits below
+    `octowright.server` and must not import `server.profiles`.
+    """
+    kept: list[plugin_loader.ResolvedDescriptor] = []
+    for item in items:
+        profile_name = item.descriptor.profile_name
+        if not profile_name:
+            kept.append(item)
+            continue
+        try:
+            register_plugin_profile(profile_name, item.descriptor.tool_names)
+        except ValueError as exc:
+            plugin_registry.record_failure(
+                name=item.discovered.name,
+                reason=f"profile name collision: {exc}",
+                discovered=item.discovered,
+                descriptor=item.descriptor,
+            )
+            log.warning(
+                "octowright.plugins.profile_collision",
+                name=item.discovered.name,
+                profile=profile_name,
+                error=str(exc),
+            )
+            continue
+        kept.append(item)
+    return kept
+
+
 # Public (no underscore): `_plugin_activation` imports this by name, and a
 # leading underscore would signal "do not import me across modules".
-resolved_plugins = plugin_loader.resolve_descriptors(
-    registry=plugin_registry,
-    discovered=_discovered_plugins,
-    enabled=_enabled_plugins,
+resolved_plugins = _register_plugin_profiles(
+    plugin_loader.resolve_descriptors(
+        registry=plugin_registry,
+        discovered=_discovered_plugins,
+        enabled=_enabled_plugins,
+    )
 )
-for _item in resolved_plugins:
-    if _item.descriptor.profile_name:
-        with contextlib.suppress(ValueError):
-            register_plugin_profile(_item.descriptor.profile_name, _item.descriptor.tool_names)
 plugin_state.set_registry(plugin_registry)
 
 _allowed_tools = active_filter()

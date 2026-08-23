@@ -45,8 +45,13 @@ def _tool_names(tool_manager: Any) -> set[str]:
     Reaches into the SDK's private mapping. Narrow and deliberate: rolling back
     by declared name alone would leak an *undeclared* tool a module registered
     before raising, which is the one case rollback exists for.
+
+    No default: if the SDK renames the attribute, an empty snapshot would make
+    every delta empty and every rollback a no-op — the half-registered plugin
+    this machinery exists to prevent, arrived at silently. Raising instead is
+    loud, and ``tests/plugins/test_tool_manager_coupling.py`` pins the shape.
     """
-    return set(getattr(tool_manager, "_tools", {}))
+    return set(tool_manager._tools)
 
 
 def _remove_tools(tool_manager: Any, names: Iterable[str]) -> None:
@@ -76,12 +81,11 @@ def resolve_descriptors(
     :func:`activate`, which happens after core registration.
     """
     by_name = {found.name: found for found in discovered}
-    for found in discovered:
-        if found.name not in enabled:
-            registry.record_state(name=found.name, state="disabled", discovered=found)
+    _record_non_loading_states(registry, discovered, enabled)
 
     core_tools = _tool_names(tool_manager) if tool_manager is not None else set()
     claimed: set[str] = set()
+    claimed_kinds: set[str] = set()
     resolved: list[ResolvedDescriptor] = []
 
     for name in enabled:
@@ -90,24 +94,60 @@ def resolve_descriptors(
             registry.record_state(name=name, state="missing")
             log.warning("octowright.plugins.enabled_but_not_installed", name=name)
             continue
-        try:
-            descriptor = entry.ep.load()
-        except Exception as exc:
-            registry.record_failure(name=name, reason=f"descriptor import failed: {exc!r}", discovered=entry)
-            log.warning("octowright.plugins.descriptor_import_failed", name=name, error=repr(exc))
+        if entry.conflict:
+            continue  # already recorded failed by _record_non_loading_states
+        item = _resolve_one(registry, entry, core_tools=core_tools, claimed=claimed, claimed_kinds=claimed_kinds)
+        if item is None:
             continue
-        try:
-            _validate(descriptor, core_tools=core_tools, claimed=claimed)
-        except Exception as exc:
-            registry.record_failure(
-                name=name, reason=str(exc), discovered=entry, descriptor=_safe_descriptor(descriptor)
-            )
-            log.warning("octowright.plugins.validation_failed", name=name, error=str(exc))
-            continue
-        claimed |= set(descriptor.tool_names)
-        resolved.append(ResolvedDescriptor(discovered=entry, descriptor=descriptor))
+        # Accumulate only for descriptors that PASSED, so one refused plugin
+        # cannot make a later, legitimate one collide with it.
+        claimed |= set(item.descriptor.tool_names)
+        claimed_kinds.add(item.descriptor.kind)
+        resolved.append(item)
 
     return resolved
+
+
+def _record_non_loading_states(
+    registry: PluginRegistry,
+    discovered: list[DiscoveredPlugin],
+    enabled: list[str],
+) -> None:
+    """Record every plugin that will not be resolved: conflicted or disabled."""
+    for found in discovered:
+        if found.conflict:
+            # Two distributions claim this name, so it is unloadable whether or
+            # not it was enabled — but it is still reported, and every other
+            # plugin still loads.
+            registry.record_failure(name=found.name, reason=found.conflict, discovered=found)
+        elif found.name not in enabled:
+            registry.record_state(name=found.name, state="disabled", discovered=found)
+
+
+def _resolve_one(
+    registry: PluginRegistry,
+    entry: DiscoveredPlugin,
+    *,
+    core_tools: set[str],
+    claimed: set[str],
+    claimed_kinds: set[str],
+) -> ResolvedDescriptor | None:
+    """Import and validate one enabled plugin's descriptor, or record why not."""
+    try:
+        descriptor = entry.ep.load()
+    except Exception as exc:
+        registry.record_failure(name=entry.name, reason=f"descriptor import failed: {exc!r}", discovered=entry)
+        log.warning("octowright.plugins.descriptor_import_failed", name=entry.name, error=repr(exc))
+        return None
+    try:
+        _validate(descriptor, core_tools=core_tools, claimed=claimed, claimed_kinds=claimed_kinds)
+    except Exception as exc:
+        registry.record_failure(
+            name=entry.name, reason=str(exc), discovered=entry, descriptor=_safe_descriptor(descriptor)
+        )
+        log.warning("octowright.plugins.validation_failed", name=entry.name, error=str(exc))
+        return None
+    return ResolvedDescriptor(discovered=entry, descriptor=descriptor)
 
 
 def _safe_descriptor(descriptor: Any) -> SessionKindPlugin | None:
@@ -116,13 +156,20 @@ def _safe_descriptor(descriptor: Any) -> SessionKindPlugin | None:
     return descriptor if all(hasattr(descriptor, attr) for attr in required) else None
 
 
-def _validate(descriptor: Any, *, core_tools: set[str], claimed: set[str]) -> None:
+def _validate(descriptor: Any, *, core_tools: set[str], claimed: set[str], claimed_kinds: set[str]) -> None:
     if getattr(descriptor, "plugin_api_version", None) != PLUGIN_API_VERSION:
         raise ValueError(
             f"plugin_api_version {getattr(descriptor, 'plugin_api_version', None)!r} "
             f"does not match core's {PLUGIN_API_VERSION}"
         )
     validate_kind(descriptor.kind)
+    # Kind must be unique across enabled plugins. The registry is keyed by
+    # kind, so a second claimant would silently replace the first's pool —
+    # dropping it without close_all while both still report `enabled` (status
+    # rows are keyed by *name*) and the first plugin's already-registered
+    # tools resolve through `pool_for(kind)` to the second plugin's pool.
+    if descriptor.kind in claimed_kinds:
+        raise ValueError(f"kind collision: {descriptor.kind!r} is already claimed by an enabled plugin")
     validate_tool_names(descriptor.kind, frozenset(descriptor.tool_names))
     collisions = set(descriptor.tool_names) & (core_tools | claimed)
     if collisions:
@@ -163,8 +210,17 @@ def activate(
     ctx_factory: Callable[[str], Any],
     tool_manager: Any,
     import_module: Callable[[str], Any] | None = None,
+    on_rollback: Callable[[SessionKindPlugin], None] | None = None,
 ) -> None:
-    """Import each plugin's tool module and build its pool, or roll back."""
+    """Import each plugin's tool module and build its pool, or roll back.
+
+    ``on_rollback`` is invoked with the descriptor of a plugin whose
+    activation failed, after its tools and pool are unwound. It exists so the
+    caller can unregister the plugin's capability profile: this module sits
+    below ``server/`` and must not import ``server.profiles``, but leaving a
+    failed plugin's profile registered would make ``OCTOWRIGHT_PROFILE=<its
+    name>`` resolve to a set naming tools that do not exist.
+    """
     importer = import_module or importlib.import_module
 
     registered = _tool_names(tool_manager)
@@ -197,6 +253,7 @@ def activate(
             if descriptor.tool_module:
                 importer(descriptor.tool_module)
                 delta = _tool_names(tool_manager) - before
+                _check_delta(item.discovered.name, descriptor, delta)
             pool = descriptor.create_pool(ctx_factory(descriptor.kind))
             adapter = descriptor.create_scenario_adapter(pool)
             registry.register(descriptor, pool=pool, adapter=adapter, discovered=item.discovered)
@@ -205,6 +262,7 @@ def activate(
             delta = delta or (_tool_names(tool_manager) - before)
             _remove_tools(tool_manager, delta)
             _abandon_pool(pool, item.discovered.name)
+            _run_rollback_hook(on_rollback, descriptor, item.discovered.name)
             registry.record_failure(
                 name=item.discovered.name,
                 reason=f"activation failed: {exc!r}",
@@ -217,3 +275,35 @@ def activate(
                 error=repr(exc),
                 rolled_back_tools=sorted(delta),
             )
+
+
+def _check_delta(name: str, descriptor: SessionKindPlugin, delta: set[str]) -> None:
+    """Reconcile what the tool module actually registered against what it declared.
+
+    A tool outside ``tool_names`` is an error: the declaration is what the
+    collision check in :func:`_validate` reasoned about, so an undeclared
+    registration went through no collision check at all. A *smaller* delta is
+    legitimate — the active capability profile suppresses tools the plugin
+    declared — so it is logged rather than refused.
+    """
+    declared = set(descriptor.tool_names)
+    undeclared = delta - declared
+    if undeclared:
+        raise ValueError(f"tool module registered undeclared tools: {sorted(undeclared)}")
+    filtered = declared - delta
+    if filtered:
+        log.info("octowright.plugins.tools_filtered_by_profile", name=name, not_registered=sorted(filtered))
+
+
+def _run_rollback_hook(
+    hook: Callable[[SessionKindPlugin], None] | None,
+    descriptor: SessionKindPlugin,
+    name: str,
+) -> None:
+    """Run the caller's rollback hook. A failing hook must not abort the rollback."""
+    if hook is None:
+        return
+    try:
+        hook(descriptor)
+    except Exception as exc:
+        log.warning("octowright.plugins.rollback_hook_failed", name=name, error=repr(exc))

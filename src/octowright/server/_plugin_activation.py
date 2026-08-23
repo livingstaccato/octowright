@@ -18,8 +18,10 @@ from __future__ import annotations
 
 from octowright import defaults
 from octowright.plugins import loader as plugin_loader
+from octowright.plugins.contract import SessionKindPlugin
 from octowright.plugins.session_launch import PluginContext
 from octowright.server._state import mcp, plugin_registry, resolved_plugins
+from octowright.server.profiles import unregister_plugin_profile
 
 
 def _ctx(kind: str) -> PluginContext:
@@ -30,9 +32,20 @@ def _ctx(kind: str) -> PluginContext:
     )
 
 
+def _unregister_profile(descriptor: SessionKindPlugin) -> None:
+    """Rollback hook: drop a failed plugin's capability profile.
+
+    Supplied from here rather than from the loader because ``octowright.plugins``
+    sits below ``octowright.server`` and must not import ``server.profiles``.
+    """
+    if descriptor.profile_name:
+        unregister_plugin_profile(descriptor.profile_name)
+
+
 plugin_loader.activate(
     registry=plugin_registry,
     resolved=resolved_plugins,
     ctx_factory=_ctx,
     tool_manager=mcp._tool_manager,
+    on_rollback=_unregister_profile,
 )

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.metadata import EntryPoint
 from importlib.metadata import entry_points as _entry_points
 from pathlib import Path
@@ -44,6 +44,10 @@ class DiscoveredPlugin:
     version: str | None
     entry_point: str
     ep: EntryPoint
+    #: Set when two installed distributions claim this entry-point name. The
+    #: name is then unloadable — never resolved by enumeration order — but it
+    #: is still *reported*, and every other plugin still loads.
+    conflict: str | None = None
 
     def status_row(self, state: str) -> dict[str, object]:
         """The status shape for a plugin whose descriptor has not been resolved."""
@@ -72,10 +76,24 @@ def discover(entry_points: Iterable[EntryPoint] | None = None) -> list[Discovere
             log.warning("octowright.plugins.bad_entry_point_name", name=ep.name, error=str(exc))
             continue
         if ep.name in found:
-            raise DuplicatePluginNameError(
-                f"two distributions declare the {ENTRY_POINT_GROUP} entry point {ep.name!r}; "
-                "resolving by enumeration order would vary by machine"
+            # Built, not raised. A duplicate must never be resolved by
+            # enumeration order (that varies by machine), but raising here
+            # erased *every* plugin from status — a correctly configured
+            # neighbour was then reported `missing`, which is actively
+            # misleading. The name is marked unloadable instead; the
+            # exception type still owns the condition and its wording.
+            found[ep.name] = replace(
+                found[ep.name],
+                conflict=str(
+                    DuplicatePluginNameError(
+                        f"two distributions declare the {ENTRY_POINT_GROUP} entry point {ep.name!r} "
+                        f"({found[ep.name].entry_point!r} and {ep.value!r}); resolving by enumeration "
+                        "order would vary by machine, so neither is loaded"
+                    )
+                ),
             )
+            log.warning("octowright.plugins.duplicate_entry_point_name", name=ep.name)
+            continue
         dist = getattr(ep, "dist", None)
         found[ep.name] = DiscoveredPlugin(
             name=ep.name,
