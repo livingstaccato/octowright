@@ -74,6 +74,20 @@ class ReferencePool:
             raise KeyError(f"no refkind session {instance_id!r}")
         return self._sessions[instance_id]
 
+    def write_transcript(self, instance_id: str, body: str) -> str:
+        """Write and commit a Tier-2 transcript artifact.
+
+        The reference plugin's whole job is to exercise a seam from a
+        consumer's side, so this deliberately uses the ordinary reserve →
+        write → commit sequence rather than a shortcut: it never composes a
+        path, and the artifact is invisible until commit.
+        """
+        session = self.get(instance_id)
+        handle = self._ctx.artifact(session, "transcript", ".txt")
+        handle.path.write_text(body, encoding="utf-8")
+        handle.commit(mime_type="text/plain")
+        return handle.artifact_id
+
     def maybe_get(self, instance_id: str) -> ReferenceSession | None:
         return self._sessions.get(instance_id)
 
