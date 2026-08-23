@@ -1850,6 +1850,41 @@ Deferred to later build steps, per spec §12:
 - `/api/plugins`, plugin asset serving, `mountStream`, core-owned page chrome, the fallback renderer (step 4).
 - Deleting terminal from core and standing up `octowright-terminal` (step 5).
 
+## Known gap this step surfaced but does not close
+
+**`instance_id_from_recording_name` cannot parse a hyphenated plugin kind.**
+`recorder.new_log_path` composes `{stamp}-{kind}-{instance_id}[-{label}]`, and
+`http/artifacts.instance_id_from_recording_name` reads the id as
+`stem.split("-")[2]`. That is exact only while both the kind and the instance id
+are hyphen-free — true of every shipping session today (core kinds are
+`chromium`/`firefox`/`webkit`/`terminal`, real ids are `uuid4().hex[:12]`), and
+not guaranteed for plugins: `plugins/identity.py`'s `NAME_RE` permits `-` in a
+kind, and a plugin supplies its own `instance_id`.
+
+Two consequences, both currently unreachable because no plugin loads on a
+default install:
+
+- A plugin whose kind contains a hyphen (`my-plugin`) parses to `plugin`, so
+  every artifact/video/trace/markdown lookup for its sessions 404s.
+- A never-created session id that equals a prefix token of another session's
+  kind or id resolves to that other session's recording.
+
+The resolver is shared by `session_artifact`, `session_trace`, `session_video`,
+`session_markdown` and `_screenshot_dir_for`, so this is one fix in one place,
+not five.
+
+**The obvious one-liner is wrong.** `stem.split("-", 2)[2]` looks like it widens
+the id to "everything after the kind", but the label is appended *after* the
+instance id, so for the common labeled case
+`20260823T000000Z-chromium-abc123def456-my-repo` it returns
+`abc123def456-my-repo`. Labels are the default (`get_default_label()` derives
+username/repo), so that change would break resolution for nearly every real
+browser recording. Any real fix has to disambiguate the id from the label —
+by constraining plugin kinds/ids to be hyphen-free at the point core composes
+the filename, or by changing the filename scheme itself.
+
+Close this before plugin kinds become reachable (step 3–5), not after.
+
 ## Carried-forward findings from step 1
 
 These were triaged fine-to-defer during step 1 and are listed here so they are not lost. None blocks this step; fix opportunistically only if a task already touches the code.
