@@ -35,6 +35,7 @@ from octowright import macros
 from octowright.conditional import CONDITIONAL_ACTIONS
 from octowright.macros.recording_import import RECORDER_NOISE
 from octowright.macros.runtime import _ACTION_MAP, _REPLAY_PASSIVE, _REPLAY_SKIP
+from octowright.recorder import CONTROL_ACTIONS
 
 SRC = Path(__file__).parents[1] / "src" / "octowright"
 
@@ -109,6 +110,23 @@ def test_recorder_noise_is_derived_from_the_replay_list() -> None:
     """One definition. Two hand-kept copies is how the vocabularies diverged."""
     assert {"user_navigation"} == RECORDER_NOISE - _REPLAY_PASSIVE
     assert _REPLAY_PASSIVE < RECORDER_NOISE
+
+
+def test_control_actions_are_all_replay_passive() -> None:
+    """Every recorder.CONTROL_ACTIONS member must be in _REPLAY_PASSIVE.
+
+    Control rows (session_start, artifact_registered, recording_truncated) are
+    written through record_control(), not record(), so the static
+    recorder.record()-call-site scan above can never see them -- they are
+    structurally invisible to that guard. Asserting the subset relationship
+    directly against CONTROL_ACTIONS closes that blind spot durably: it can't
+    drift as new control rows land in future steps, the way a call-site scan
+    would. Two of three were missing here (only recording_truncated was
+    covered) until artifact_registered and session_start were added, which
+    would have made every macro imported from a plugin recording tally two
+    bogus failures per run.
+    """
+    assert CONTROL_ACTIONS <= _REPLAY_PASSIVE
 
 
 @pytest.mark.anyio
