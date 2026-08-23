@@ -76,3 +76,18 @@ def test_a_row_pointing_outside_the_root_is_not_served(client_with_recordings, t
     recorder.close()
 
     assert client.get("/api/sessions/sessionzz02/artifacts/leak").status_code == 404
+
+
+def test_a_colliding_suffix_session_id_does_not_receive_another_sessions_artifact(client_with_recordings):
+    """IDOR regression: a hyphenated sid's recording stem must not substring-match a shorter sid.
+
+    ``foo-bar``'s recording file is ``...-refkind-foo-bar.jsonl``. A naive
+    ``f"-{sid}" in stem`` check matches ``sid="bar"`` too (the stem ends in
+    ``-bar``), which would hand session ``bar``'s request session ``foo-bar``'s
+    committed artifact even though session ``bar`` never existed.
+    """
+    client, root = client_with_recordings
+    _session_with_artifact(root, sid="foo-bar")
+    resp = client.get("/api/sessions/bar/artifacts/transcript")
+    assert resp.status_code == 404
+    assert resp.text != "recorded output"
