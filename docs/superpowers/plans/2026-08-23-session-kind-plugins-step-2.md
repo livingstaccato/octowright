@@ -1849,6 +1849,17 @@ Deferred to later build steps, per spec §12:
 - `ScenarioAdapter`, `BrowserScenarioAdapter`, derived capabilities, the group-by partition, `options:` replacing `connector_type` (step 3).
 - `/api/plugins`, plugin asset serving, `mountStream`, core-owned page chrome, the fallback renderer (step 4).
 - Deleting terminal from core and standing up `octowright-terminal` (step 5).
+- **Core owning the plugin session-detail envelope (step 4).**
+  `_session_kinds.plugin_session_detail` returns the descriptor's dict verbatim,
+  so a plugin that returns `{}` yields a detail payload with no `id`, `kind`,
+  `log_path` or `live` — while the degraded branch immediately below it already
+  concedes core owns `id` and `kind`, and `_terminal_session_detail` (the shape
+  this was modeled on) returns `{**_live_summary(live), ...}`. The fix is
+  `{**_live_summary(session), **plugin_detail}`, but it belongs with step 4,
+  which owns the renderer contract and therefore decides what a detail payload
+  must always carry. Recorded here rather than left implicit, because a reader
+  comparing the three registry-driven routes would otherwise infer that a plugin
+  owns core's envelope on the detail path and not on the list or close paths.
 
 ## Known gap this step surfaced but does not close
 
