@@ -492,7 +492,11 @@ def resolve_terminal_launch(p: Participant) -> dict[str, Any]:
             return value if value is not None else ssh.get(key)
 
         port_opt = opts.get("port")
-        port = int(port_opt) if port_opt is not None else int(ssh.get("port", SSH_DEFAULT_PORT))
+        # cast, not int(): parity with pre-options behaviour, where a participant-supplied
+        # port was passed through unconverted (only the persona/ssh fallback was int()'d).
+        # opts.get(...) is Any on this untyped dict, so mypy strict needs *something* here --
+        # cast satisfies it with zero runtime effect, matching this file's use at line 217.
+        port = cast(int, port_opt) if port_opt is not None else int(ssh.get("port", SSH_DEFAULT_PORT))
         insecure_opt = opts.get("insecure_no_host_check")
         insecure = bool(insecure_opt) if insecure_opt is not None else bool(ssh.get("insecure_no_host_check", False))
         cfg = ssh_connector_config(
