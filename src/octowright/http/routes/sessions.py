@@ -32,6 +32,7 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool, _read_json_body
+from octowright.http.routes._session_kinds import iter_plugin_sessions
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
@@ -48,6 +49,10 @@ async def list_sessions(_request: Request) -> JSONResponse:
     terminal_pool = state.terminal_pool
     if terminal_pool is not None:
         live += [_live_summary(s) for s in terminal_pool.iter_sessions()]
+    # Session-kind plugins serialize through the same getattr-defensive
+    # summariser. Terminal keeps its own branch above until it moves out to a
+    # plugin of its own.
+    live += [_live_summary(s) for s in iter_plugin_sessions()]
     live_paths = {s["log_path"] for s in live}
     closed = _closed_sessions(state.RECORDINGS_DIR, live_paths)
     return JSONResponse({"live": live, "closed": closed})
