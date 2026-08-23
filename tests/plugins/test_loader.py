@@ -321,3 +321,154 @@ def test_create_pool_failure_rolls_back_tools(tmp_path):
 
     assert manager._tools.keys() == {"browser_launch"}
     assert reg.kinds() == []
+
+
+def test_two_plugins_claiming_one_kind_collide(tmp_path):
+    # Distinct tool names, so nothing but the KIND check can refuse this. The
+    # registry is keyed by kind: a second claimant would silently replace the
+    # first's pool (dropped without close_all) while both reported `enabled`,
+    # and the first's already-registered tools would resolve through
+    # pool_for(kind) to the second plugin's pool.
+    manager = _FakeToolManager()
+    reg = PluginRegistry()
+    first = DiscoveredPlugin(
+        name="a",
+        distribution="d",
+        version="1",
+        entry_point="m:p",
+        ep=_FakeEP(target=_Descriptor(kind="alpha", tool_names=frozenset({"alpha_go"}))),
+    )
+    second = DiscoveredPlugin(
+        name="b",
+        distribution="d",
+        version="1",
+        entry_point="m:p",
+        ep=_FakeEP(target=_Descriptor(kind="alpha", tool_names=frozenset({"alpha_stop"}))),
+    )
+
+    resolved = resolve_descriptors(registry=reg, discovered=[first, second], enabled=["a", "b"], tool_manager=manager)
+
+    assert [item.discovered.name for item in resolved] == ["a"]
+    rows = {row["name"]: row for row in reg.status_rows()}
+    assert "kind collision" in rows["b"]["reason"]
+
+    # The first plugin still activates and owns the kind.
+    activate(
+        registry=reg,
+        resolved=resolved,
+        ctx_factory=lambda kind: _ctx_factory(kind, reg, tmp_path),
+        tool_manager=manager,
+    )
+    assert reg.kinds() == ["alpha"]
+
+
+def test_a_failed_kind_claim_does_not_poison_a_later_distinct_kind(tmp_path):
+    # claimed_kinds must accumulate only for descriptors that PASSED, exactly
+    # like the tool-name `claimed` set.
+    reg = PluginRegistry()
+    bad = DiscoveredPlugin(
+        name="bad",
+        distribution="d",
+        version="1",
+        entry_point="m:p",
+        ep=_FakeEP(target=_Descriptor(kind="alpha", plugin_api_version=PLUGIN_API_VERSION + 1)),
+    )
+    good = DiscoveredPlugin(
+        name="good",
+        distribution="d",
+        version="1",
+        entry_point="m:p",
+        ep=_FakeEP(target=_Descriptor(kind="alpha", tool_names=frozenset({"alpha_go"}))),
+    )
+
+    resolved = resolve_descriptors(registry=reg, discovered=[bad, good], enabled=["bad", "good"])
+
+    assert [item.discovered.name for item in resolved] == ["good"]
+
+
+def test_a_duplicate_entry_point_name_does_not_erase_other_plugins(tmp_path):
+    manager = _FakeToolManager()
+    reg = PluginRegistry()
+    dupe = DiscoveredPlugin(
+        name="dupe",
+        distribution="d",
+        version="1",
+        entry_point="m:p",
+        ep=_FakeEP(target=_Descriptor()),
+        conflict="two distributions declare the octowright.session_kinds entry point 'dupe'",
+    )
+    good = DiscoveredPlugin(
+        name="refkind",
+        distribution="d",
+        version="1",
+        entry_point="m:p",
+        ep=_FakeEP(target=_Descriptor()),
+    )
+
+    resolved = resolve_descriptors(registry=reg, discovered=[dupe, good], enabled=["dupe", "refkind"])
+    activate(
+        registry=reg,
+        resolved=resolved,
+        ctx_factory=lambda kind: _ctx_factory(kind, reg, tmp_path),
+        tool_manager=manager,
+    )
+
+    rows = {row["name"]: row for row in reg.status_rows()}
+    assert rows["dupe"]["state"] == "failed"
+    assert "two distributions" in rows["dupe"]["reason"]
+    # The correctly configured neighbour still loads and is still reported.
+    assert rows["refkind"]["state"] == "enabled"
+    assert reg.kinds() == ["refkind"]
+
+
+def test_an_undeclared_registration_refuses_the_plugin(tmp_path):
+    # The declaration is what the collision check reasoned about, so a tool
+    # outside tool_names went through no collision check at all.
+    manager = _FakeToolManager()
+
+    def _register(name: str) -> None:
+        manager._tools["refkind_launch"] = object()
+        manager._tools["refkind_lunch"] = object()
+
+    reg = PluginRegistry()
+    ep = _FakeEP(target=_Descriptor(tool_module="whatever"))
+    found = DiscoveredPlugin(name="refkind", distribution="d", version="1", entry_point="m:p", ep=ep)
+    resolved = resolve_descriptors(registry=reg, discovered=[found], enabled=["refkind"])
+
+    activate(
+        registry=reg,
+        resolved=resolved,
+        ctx_factory=lambda kind: _ctx_factory(kind, reg, tmp_path),
+        tool_manager=manager,
+        import_module=_register,
+    )
+
+    assert manager._tools.keys() == {"browser_launch"}
+    assert reg.kinds() == []
+    rows = {row["name"]: row for row in reg.status_rows()}
+    assert "undeclared" in rows["refkind"]["reason"]
+
+
+def test_a_delta_narrower_than_the_declaration_is_allowed(tmp_path):
+    # A narrow OCTOWRIGHT_PROFILE legitimately suppresses declared tools, so a
+    # SMALLER delta must not fail the plugin.
+    manager = _FakeToolManager()
+
+    def _register(name: str) -> None:
+        manager._tools["refkind_launch"] = object()
+
+    reg = PluginRegistry()
+    ep = _FakeEP(target=_Descriptor(tool_module="whatever", tool_names=frozenset({"refkind_launch", "refkind_close"})))
+    found = DiscoveredPlugin(name="refkind", distribution="d", version="1", entry_point="m:p", ep=ep)
+    resolved = resolve_descriptors(registry=reg, discovered=[found], enabled=["refkind"])
+
+    activate(
+        registry=reg,
+        resolved=resolved,
+        ctx_factory=lambda kind: _ctx_factory(kind, reg, tmp_path),
+        tool_manager=manager,
+        import_module=_register,
+    )
+
+    assert reg.kinds() == ["refkind"]
+    assert "refkind_launch" in manager._tools

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from octowright.plugins.errors import ControlBudgetExceededError
-from octowright.recorder import CONTROL_BUDGET_BYTES, Recorder
+from octowright.recorder import CONTROL_ACTIONS, CONTROL_BUDGET_BYTES, Recorder
 
 
 def _actions(path: Path) -> list[str]:
@@ -61,3 +61,30 @@ def test_control_budget_is_bounded(tmp_path):
         for i in range(CONTROL_BUDGET_BYTES // 1024 + 2):
             rec.record_control("artifact_registered", artifact_id=f"a{i}", path=payload)
     rec.close()
+
+
+@pytest.mark.parametrize("action", sorted(CONTROL_ACTIONS))
+def test_record_refuses_a_control_action(tmp_path, action):
+    # The control set is core-only; record() is a plugin's sole surface. A
+    # plugin able to write one could forge the opening row the failed-launch
+    # rule reasons about, or claim an artifact core never registered.
+    rec = Recorder(tmp_path / "r.jsonl")
+    try:
+        with pytest.raises(ValueError, match="control action"):
+            rec.record(action, kind="refkind")
+    finally:
+        rec.close()
+
+    assert _actions(tmp_path / "r.jsonl") == []
+
+
+def test_the_truncation_marker_still_lands_despite_the_record_guard(tmp_path, monkeypatch):
+    # _write_truncation_marker writes straight to the file handle rather than
+    # through record(), so the guard cannot suppress the marker.
+    monkeypatch.setenv("OCTOWRIGHT_RECORDING_MAX_BYTES", "10")
+    log = tmp_path / "r.jsonl"
+    rec = Recorder(log)
+    rec.record("click", selector="#a")
+    rec.close()
+
+    assert _actions(log) == ["recording_truncated"]
