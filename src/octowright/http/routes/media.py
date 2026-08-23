@@ -144,6 +144,36 @@ async def session_trace(request: Request) -> Response:
     )
 
 
+async def session_artifact(request: Request) -> Response:
+    """GET /api/sessions/{id}/artifacts/{artifact_id} — serve a committed plugin artifact.
+
+    Everything is re-derived from the recording on every request: the row's
+    stored path is relative and is re-resolved against the recordings root,
+    and its mime type is re-checked against the allowlist. A recording is a
+    file a local user can edit, so neither is trusted from one request to the
+    next.
+    """
+    from octowright.plugins.artifacts import read_registered_artifacts
+
+    sid = request.path_params["id"]
+    artifact_id = request.path_params["artifact_id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
+
+    root = Path(state.RECORDINGS_DIR)
+    for log_path in sorted(root.glob("*.jsonl")):
+        if f"-{sid}" not in log_path.stem:
+            continue
+        for artifact in read_registered_artifacts(log_path, root):
+            if artifact.artifact_id == artifact_id:
+                return FileResponse(
+                    path=str(artifact.path),
+                    media_type=artifact.mime_type,
+                    filename=artifact.path.name,
+                )
+    return JSONResponse({"error": "no such artifact for this session"}, status_code=404)
+
+
 def _screenshot_dir_for(session_id: str) -> Path | None:
     """Look for screenshots next to the recording (matches `browser_screenshot`).
 
@@ -365,6 +395,11 @@ def routes() -> list[Route]:
         ),
         Route("/api/sessions/{id}/video", guard_sensitive_http(session_video), methods=["GET"]),
         Route("/api/sessions/{id}/trace", guard_sensitive_http(session_trace), methods=["GET"]),
+        Route(
+            "/api/sessions/{id}/artifacts/{artifact_id}",
+            guard_sensitive_http(session_artifact),
+            methods=["GET"],
+        ),
         Route(
             "/api/sessions/{id}/markdown",
             guard_sensitive_http(session_markdown, side_effect_get=True),
