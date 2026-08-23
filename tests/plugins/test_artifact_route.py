@@ -47,6 +47,22 @@ def test_committed_artifact_is_served(client_with_recordings):
     assert resp.headers["content-type"].startswith("text/plain")
 
 
+def test_artifact_response_is_attachment_disposition(client_with_recordings):
+    """The mime-type allowlist alone does not neutralize an allowlisted
+    ``image/svg+xml`` artifact -- SVG is active content. What actually stops
+    it executing in the dashboard's own origin (where the pairing bearer
+    lives) is ``FileResponse``'s default ``content_disposition_type="attachment"``,
+    which the artifact route relies on and must never override to ``inline``.
+    This pins that the served response actually carries it.
+    """
+    client, root = client_with_recordings
+    _session_with_artifact(root)
+    resp = client.get("/api/sessions/sessionzz01/artifacts/transcript")
+    assert resp.status_code == 200
+    disposition = resp.headers["content-disposition"]
+    assert disposition.startswith("attachment"), disposition
+
+
 def test_unknown_artifact_is_404(client_with_recordings):
     client, root = client_with_recordings
     _session_with_artifact(root)
