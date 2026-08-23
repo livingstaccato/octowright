@@ -17,7 +17,6 @@ from octowright._paths import reject_unsafe_path
 from octowright.defaults import (
     SCENARIO_TEMPLATES_DIR,
     SCENARIOS_DIR,
-    SUPPORTED_KINDS,
     SUPPORTED_TERMINAL_KINDS,
 )
 
@@ -69,25 +68,39 @@ class Scenario:
 
 
 def _validate_participant_kind(s: Scenario, p: Participant) -> None:
-    """Validate a participant's kind. Terminal participants (kind == "terminal")
-    carry a connector_type (pty/ssh, default pty) and cannot use browser macros;
-    browser participants must name a supported engine. SUPPORTED_KINDS stays
-    browser-only so this never widens browser_launch / session_launch validation.
+    """Validate a participant's kind against every kind that can actually run.
+
+    Three families are legal: a browser engine, ``terminal`` (still core's own
+    until the extraction step), and any kind a registered plugin claims. The
+    error names what IS available, because the two ways to get here -- a typo
+    and a plugin that is installed but not enabled -- are indistinguishable to
+    the operator otherwise.
+
+    ``startup_macros`` is gated on the ``macros`` capability rather than on
+    ``kind != "terminal"``. Terminal still produces the same refusal (it has no
+    adapter, so no capabilities), and every future kind is covered without
+    another special case.
     """
-    if p.kind == "terminal":
+    from octowright.scenario_kinds import TERMINAL_KIND, known_kinds, supports
+
+    if p.kind == TERMINAL_KIND:
         connector_type = p.options.get("connector_type") or "pty"
         if connector_type not in SUPPORTED_TERMINAL_KINDS:
             raise ValueError(
                 f"scenario {s.name!r}: terminal participant has unsupported connector_type {connector_type!r} "
                 f"(expected one of {list(SUPPORTED_TERMINAL_KINDS)})"
             )
-        if p.startup_macros:
-            raise ValueError(
-                f"scenario {s.name!r}: terminal participant {p.persona!r} cannot declare startup_macros "
-                "(Playwright macros don't apply to terminals)"
-            )
-    elif p.kind not in SUPPORTED_KINDS:
-        raise ValueError(f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}")
+    elif p.kind not in known_kinds():
+        raise ValueError(
+            f"scenario {s.name!r}: participant has unsupported kind {p.kind!r} "
+            f"(known kinds: {known_kinds()}) -- a plugin kind must be enabled via OCTOWRIGHT_PLUGINS"
+        )
+
+    if p.startup_macros and not supports(p.kind, "macros", browser_pool=None):
+        raise ValueError(
+            f"scenario {s.name!r}: participant {p.persona!r} of kind {p.kind!r} cannot declare startup_macros "
+            "(its adapter provides no run_macro)"
+        )
 
 
 def _validate_scenario(s: Scenario) -> None:
