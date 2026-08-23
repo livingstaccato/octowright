@@ -9,6 +9,7 @@ the same `mcp` and to share the same live state."""
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import inspect
 from collections.abc import Callable
@@ -20,10 +21,14 @@ from provide.telemetry import get_logger
 from octowright import scenarios_pool as _scenario_pool_mod
 from octowright import terminal as _terminal
 from octowright.browser_pool import BrowserPool
+from octowright.plugins import discovery as plugin_discovery
+from octowright.plugins import loader as plugin_loader
+from octowright.plugins.registry import PluginRegistry
+from octowright.server import plugin_state
 from octowright.server._heartbeat import HEARTBEAT_MAX_SECONDS, _progress_heartbeat
 from octowright.server._idempotency import _idempotent_dispatch
 from octowright.server._request_context import RequestContextMiddleware
-from octowright.server.profiles import active_filter
+from octowright.server.profiles import active_filter, register_plugin_profile
 
 if TYPE_CHECKING:
     from mcp.types import Icon, ToolAnnotations
@@ -228,6 +233,34 @@ class _ProfiledMCPServer(MCPServer):
 
         return wrap
 
+
+# Plugin descriptors resolve BEFORE the profile filter is computed, because a
+# plugin's capability profile must be registered before any @mcp.tool
+# decorator fires — decoration is an import-time side effect and the filter is
+# read at decoration time. Discovery is metadata-only; only an explicitly
+# enabled plugin's descriptor is imported here.
+plugin_registry = PluginRegistry()
+_enabled_plugins = plugin_discovery.enabled_names()
+try:
+    _discovered_plugins = plugin_discovery.discover()
+except Exception:
+    # discover() refuses duplicate entry-point names outright. That must not be
+    # fatal here: the daemon owns live browsers, and a bad third-party package
+    # cannot be allowed to stop it from starting.
+    log.warning("octowright.plugins.discovery_failed", exc_info=True)
+    _discovered_plugins = []
+# Public (no underscore): `_plugin_activation` imports this by name, and a
+# leading underscore would signal "do not import me across modules".
+resolved_plugins = plugin_loader.resolve_descriptors(
+    registry=plugin_registry,
+    discovered=_discovered_plugins,
+    enabled=_enabled_plugins,
+)
+for _item in resolved_plugins:
+    if _item.descriptor.profile_name:
+        with contextlib.suppress(ValueError):
+            register_plugin_profile(_item.descriptor.profile_name, _item.descriptor.tool_names)
+plugin_state.set_registry(plugin_registry)
 
 _allowed_tools = active_filter()
 mcp = _ProfiledMCPServer(
