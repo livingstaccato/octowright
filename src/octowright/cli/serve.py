@@ -546,6 +546,9 @@ async def _run_leader(
         from octowright.server import _state as _st
 
         await _close_terminal_pool_on_shutdown(_st.terminal_pool, log=_log)
+        from octowright.server import plugin_state as _plugin_state
+
+        await _close_plugin_pools_on_shutdown(_plugin_state.registry(), log=_log)
         await shutdown_browser_pool_on_shutdown(pool, log=_log)
         if not no_singleton:
             _sn.remove_lock()
@@ -563,6 +566,23 @@ async def _close_terminal_pool_on_shutdown(terminal_pool: Any, *, log: Any) -> N
         await terminal_pool.close_all(force=True)
     except Exception as exc:  # best-effort teardown; don't block shutdown
         log.debug("shutdown.terminal_pool_close_failed", error=repr(exc))
+
+
+async def _close_plugin_pools_on_shutdown(registry: Any, *, log: Any) -> None:
+    """Best-effort close of every registered session-kind plugin pool.
+
+    Without this a plugin pool holding a subprocess, socket or SSH connection
+    survives the daemon exit — survivable for a local PTY, not for a remote
+    session. Each pool is closed independently so one plugin's bad teardown
+    cannot strand the others.
+    """
+    if registry is None:
+        return
+    for kind, pool in registry.pools().items():
+        try:
+            await pool.close_all(force=True)
+        except Exception as exc:  # best-effort teardown; don't block shutdown
+            log.debug("shutdown.plugin_pool_close_failed", kind=kind, error=repr(exc))
 
 
 def _install_leader_signal_handlers(
