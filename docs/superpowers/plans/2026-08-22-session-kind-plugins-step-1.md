@@ -1059,9 +1059,7 @@ class SessionLaunch:
                 f"({self.instance_id!r}/{self.kind!r})"
             )
         if self._id_in_use(self.instance_id):
-            raise SessionIdInUseError(
-                f"instance_id {self.instance_id!r} is already held by another registered pool"
-            )
+            raise SessionIdInUseError(f"instance_id {self.instance_id!r} is already held by another registered pool")
         self._committed = True
         self._result = LaunchResult(
             instance_id=self.instance_id,
@@ -1883,19 +1881,23 @@ def test_two_plugins_claiming_one_tool_name_collide(tmp_path):
     manager = _FakeToolManager()
     reg = PluginRegistry()
     first = DiscoveredPlugin(
-        name="a", distribution="d", version="1", entry_point="m:p",
+        name="a",
+        distribution="d",
+        version="1",
+        entry_point="m:p",
         ep=_FakeEP(target=_Descriptor(kind="alpha", tool_names=frozenset({"alpha_go"}))),
     )
     # A second plugin whose kind differs but which declares the same tool name
     # is impossible under the prefix rule, so the cross-plugin guard is checked
     # by giving both the same kind — two distributions, one kind.
     second = DiscoveredPlugin(
-        name="b", distribution="d", version="1", entry_point="m:p",
+        name="b",
+        distribution="d",
+        version="1",
+        entry_point="m:p",
         ep=_FakeEP(target=_Descriptor(kind="alpha", tool_names=frozenset({"alpha_go"}))),
     )
-    resolved = resolve_descriptors(
-        registry=reg, discovered=[first, second], enabled=["a", "b"], tool_manager=manager
-    )
+    resolved = resolve_descriptors(registry=reg, discovered=[first, second], enabled=["a", "b"], tool_manager=manager)
 
     assert [item.discovered.name for item in resolved] == ["a"]
     rows = {row["name"]: row for row in reg.status_rows()}
@@ -2503,9 +2505,7 @@ class ReferencePool:
         if session is None:
             raise KeyError(f"no refkind session {instance_id!r}")
         if session.protected and not force:
-            raise ProtectedSessionCloseError(
-                f"refkind {instance_id!r} is protected; pass force=True to close it"
-            )
+            raise ProtectedSessionCloseError(f"refkind {instance_id!r} is protected; pass force=True to close it")
         session.recorder.close()
         del self._sessions[instance_id]
         return CloseResult(instance_id=instance_id, kind=KIND, closed=True)

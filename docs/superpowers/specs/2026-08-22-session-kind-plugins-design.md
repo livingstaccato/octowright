@@ -107,8 +107,8 @@ adapter's handlers (§7.5), because a self-declared capability string is a claim
 @dataclass(frozen=True)
 class FrontendAsset:
     renderer_api_version: int
-    asset_dir: Path                        # served under /plugins/{name}/
-    module_path: str                       # relative to asset_dir
+    asset_dir: Path  # served under /plugins/{name}/
+    module_path: str  # relative to asset_dir
     layout: Literal["browser", "stream"]
 ```
 
@@ -229,7 +229,7 @@ async with ctx.begin_session(
     profile=profile,
 ) as launch:
     engine = await backend.start(launch.recorder)
-    return launch.commit(session_record)   # plugin then holds the record in its own pool
+    return launch.commit(session_record)  # plugin then holds the record in its own pool
 ```
 
 `__aenter__` opens the recorder under containment and writes the `session_start` row (§8.4) carrying
@@ -534,16 +534,21 @@ So each kind supplies an adapter, built by a factory that receives the pool:
 ```python
 class ScenarioAdapter(Protocol):
     """The mandatory floor. Everything else is a separate capability Protocol."""
+
     def resolve_participant(self, spec: Participant, persona: Persona | None) -> dict: ...
+
 
 class SupportsMacros(Protocol):
     async def run_macro(self, instance_id: str, *, name: str, args: dict) -> None: ...
 
+
 class SupportsSync(Protocol):
     async def wait_for_sync(self, instance_id: str, *, selector, text, url, timeout_ms) -> None: ...
 
+
 class SupportsDialogPolicy(Protocol):
     async def set_dialog_policy(self, instance_id: str, policy: str) -> None: ...
+
 
 class SupportsMockRoutes(Protocol):
     async def install_mock_routes(self, instance_id: str, routes: list) -> None: ...
