@@ -12,9 +12,10 @@ from typing import Any
 
 import pytest
 
-from octowright.plugins.errors import SessionIdInUseError
+from octowright.plugins.errors import ControlBudgetExceededError, SessionIdInUseError
+from octowright.plugins.registry import PluginRegistry
 from octowright.plugins.session_launch import PluginContext
-from octowright.recorder import Recorder
+from octowright.recorder import CONTROL_BUDGET_BYTES, Recorder
 
 
 @dataclass
@@ -32,11 +33,37 @@ class _Record:
 
 def _ctx(tmp_path: Path, *, in_use: set[str] | None = None) -> PluginContext:
     taken = in_use or set()
-    return PluginContext(
-        kind="refkind",
-        recordings_dir=tmp_path,
-        id_in_use=lambda instance_id: instance_id in taken,
-    )
+
+    def _probe(instance_id: str, *, exclude_kind: str | None = None) -> bool:
+        return instance_id in taken
+
+    return PluginContext(kind="refkind", recordings_dir=tmp_path, id_in_use=_probe)
+
+
+class _StubDescriptor:
+    """Just enough descriptor for ``PluginRegistry.register``."""
+
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+        self.display_name = kind
+        self.plugin_api_version = 1
+        self.tool_names = frozenset({f"{kind}_launch"})
+        self.tool_module = None
+        self.profile_name = None
+        self.frontend = None
+
+
+class _EagerPool:
+    """A pool that holds its session record — populated before ``commit``."""
+
+    def __init__(self) -> None:
+        self.sessions: dict[str, Any] = {}
+
+    def maybe_get(self, instance_id: str) -> Any:
+        return self.sessions.get(instance_id)
+
+    def iter_sessions(self):
+        return iter(list(self.sessions.values()))
 
 
 def _actions(path: Path) -> list[str]:
@@ -122,6 +149,89 @@ async def test_commit_refuses_a_mismatched_record(tmp_path):
 @pytest.mark.asyncio
 async def test_commit_enforces_cross_pool_id_uniqueness(tmp_path):
     ctx = _ctx(tmp_path, in_use={"abc123"})
+    with pytest.raises(SessionIdInUseError):
+        async with ctx.begin_session(instance_id="abc123", label=None, profile=None) as launch:
+            record = _Record("abc123", "refkind", None, None, None, launch.recorder, launch.log_path)
+            launch.commit(record)
+
+
+@pytest.mark.asyncio
+async def test_traversing_instance_id_is_refused_before_anything_is_created(tmp_path):
+    # ``new_log_path`` sanitizes only the label, so a plugin-supplied id lands
+    # in the filename raw. Without containment, Recorder's mkdir(parents=True)
+    # materializes the traversal.
+    root = tmp_path / "recordings"
+    root.mkdir()
+    ctx = PluginContext(
+        kind="refkind",
+        recordings_dir=root,
+        id_in_use=lambda instance_id, *, exclude_kind=None: False,
+    )
+    escaped = tmp_path / "escaped"
+
+    with pytest.raises(ValueError, match="plugin recording"):
+        async with ctx.begin_session(instance_id="ssh:host/../../escaped", label=None, profile=None):
+            pass  # pragma: no cover - the guard raises before the body runs
+
+    assert not escaped.exists()
+    assert list(root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_hex_instance_id_still_launches(tmp_path):
+    # uuid4().hex[:12] can start with a digit, so the id must NOT be run
+    # through the plugin-name pattern — only through containment.
+    ctx = _ctx(tmp_path)
+    async with ctx.begin_session(instance_id="0f3ab19c22d4", label=None, profile=None) as launch:
+        record = _Record("0f3ab19c22d4", "refkind", None, None, None, launch.recorder, launch.log_path)
+        result = launch.commit(record)
+    assert result["instance_id"] == "0f3ab19c22d4"
+    assert launch.log_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_opening_row_leaves_no_orphan_recording(tmp_path):
+    # The opening-row write is inside the guard: an oversized ``extra`` blows
+    # the control budget, and the empty file it created must not survive.
+    ctx = _ctx(tmp_path)
+    with pytest.raises(ControlBudgetExceededError):
+        async with ctx.begin_session(
+            instance_id="abc123",
+            label=None,
+            profile=None,
+            extra={"blob": "x" * (CONTROL_BUDGET_BYTES + 1)},
+        ):
+            pass  # pragma: no cover - the opening row raises before the body runs
+
+    assert list(tmp_path.glob("*.jsonl")) == []
+
+
+@pytest.mark.asyncio
+async def test_commit_ignores_the_launching_plugins_own_pool(tmp_path):
+    # Registering the session before committing is the natural order, and the
+    # spec says core probes every *other* pool. Without the exclusion this is
+    # a spurious SessionIdInUseError that discards a real recording.
+    registry = PluginRegistry()
+    pool = _EagerPool()
+    registry.register(_StubDescriptor("refkind"), pool=pool, adapter=None, discovered=None)
+    ctx = PluginContext(kind="refkind", recordings_dir=tmp_path, id_in_use=registry.id_in_use)
+
+    async with ctx.begin_session(instance_id="abc123", label=None, profile=None) as launch:
+        record = _Record("abc123", "refkind", None, None, None, launch.recorder, launch.log_path)
+        pool.sessions["abc123"] = record
+        result = launch.commit(record)
+
+    assert result["instance_id"] == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_commit_still_refuses_an_id_held_by_another_kinds_pool(tmp_path):
+    registry = PluginRegistry()
+    other = _EagerPool()
+    other.sessions["abc123"] = object()
+    registry.register(_StubDescriptor("otherkind"), pool=other, adapter=None, discovered=None)
+    ctx = PluginContext(kind="refkind", recordings_dir=tmp_path, id_in_use=registry.id_in_use)
+
     with pytest.raises(SessionIdInUseError):
         async with ctx.begin_session(instance_id="abc123", label=None, profile=None) as launch:
             record = _Record("abc123", "refkind", None, None, None, launch.recorder, launch.log_path)
