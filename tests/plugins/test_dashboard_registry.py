@@ -196,3 +196,43 @@ def test_a_vanishing_artifact_file_degrades_that_entry_not_the_whole_response(re
 
     detail = plugin_session_detail("refkind", session)
     assert detail["artifacts"] == []
+
+
+async def test_close_plugin_session_closes_and_reports(registered):
+    from octowright.http.routes._session_kinds import close_plugin_session
+
+    _, pool = registered
+    closed: list[str] = []
+
+    async def _close(instance_id: str, *, force: bool = False):
+        closed.append(instance_id)
+        pool.sessions.pop(instance_id)
+        return {"instance_id": instance_id, "kind": "refkind", "closed": True}
+
+    pool.close = _close  # type: ignore[attr-defined]
+    result = await close_plugin_session("refsess01", force=False)
+    assert result == {"instance_id": "refsess01", "kind": "refkind", "closed": True}
+    assert closed == ["refsess01"]
+
+
+async def test_close_plugin_session_returns_none_for_an_unknown_id(registered):
+    from octowright.http.routes._session_kinds import close_plugin_session
+
+    assert await close_plugin_session("nope", force=False) is None
+
+
+async def test_protected_close_propagates_for_the_409_mapping(registered):
+    from octowright.http.routes._session_kinds import close_plugin_session
+    from octowright.plugins.errors import ProtectedSessionCloseError
+
+    _, pool = registered
+
+    async def _close(instance_id: str, *, force: bool = False):
+        if not force:
+            raise ProtectedSessionCloseError(f"refkind {instance_id!r} is protected; pass force=True to close it")
+        return {"instance_id": instance_id, "closed": True}
+
+    pool.close = _close  # type: ignore[attr-defined]
+    with pytest.raises(ProtectedSessionCloseError):
+        await close_plugin_session("refsess01", force=False)
+    assert await close_plugin_session("refsess01", force=True) == {"instance_id": "refsess01", "closed": True}
