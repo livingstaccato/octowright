@@ -91,7 +91,12 @@ def test_scenario_plan_shows_terminal_connector_config(monkeypatch: pytest.Monke
     spec = Scenario(
         name="p",
         participants=[
-            Participant(persona="ops", kind="terminal", role="operator", connector_type="pty", command="/bin/sh"),
+            Participant(
+                persona="ops",
+                kind="terminal",
+                role="operator",
+                options={"connector_type": "pty", "command": "/bin/sh"},
+            ),
             Participant(persona="dante", kind="chromium", role="player"),
         ],
     )
@@ -115,4 +120,6 @@ def test_example_browser_plus_terminal_scenario_parses() -> None:
     by_kind = {p.kind: p for p in s.participants}
     assert "chromium" in by_kind and "terminal" in by_kind
     term = by_kind["terminal"]
-    assert term.connector_type == "pty" and term.role == "operator" and term.command == "/bin/bash"
+    assert (
+        term.options["connector_type"] == "pty" and term.role == "operator" and term.options["command"] == "/bin/bash"
+    )
