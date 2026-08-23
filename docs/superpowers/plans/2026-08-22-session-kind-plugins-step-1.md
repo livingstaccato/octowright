@@ -1713,7 +1713,7 @@ own import has none to report."
   - `ResolvedDescriptor` frozen dataclass: `discovered`, `descriptor`
   - `resolve_descriptors(*, registry, discovered, enabled) -> list[ResolvedDescriptor]`
   - `activate(*, registry, resolved, ctx_factory, tool_manager, import_module=None) -> None` — owns the core-tool collision check (see the note in Step 3)
-  - `ToolDelta` helper: `snapshot(tool_manager) -> set[str]`, `remove(tool_manager, names) -> None`
+  - module-private `_tool_names(tool_manager) -> set[str]` and `_remove_tools(tool_manager, names) -> None` — deliberately NOT a public helper class: they reach into the MCP SDK's private `_tools` mapping, and that coupling stays module-private rather than becoming something other code can build on
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2544,14 +2544,14 @@ from octowright.server._state import mcp
 from octowright.server import plugin_state
 
 
-@mcp.tool
+@mcp.tool()
 async def refkind_launch(label: str | None = None, protected: bool = False) -> dict[str, Any]:
     """Launch a reference session."""
     pool = plugin_state.pool_for("refkind")
     return dict(await pool.launch(label=label, protected=protected))
 
 
-@mcp.tool
+@mcp.tool()
 async def refkind_close(instance_id: str, force: bool = False) -> dict[str, Any]:
     """Close a reference session."""
     pool = plugin_state.pool_for("refkind")
