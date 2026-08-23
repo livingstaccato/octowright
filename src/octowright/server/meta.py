@@ -19,6 +19,7 @@ from provide.telemetry import get_logger
 from octowright import advisor as _advisor
 from octowright import takeover as _takeover
 from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
+from octowright.server import plugin_state as _plugin_state
 from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool, upgrade_notice_snapshot
 from octowright.server.registry import registered_tool_names
 from octowright.session.screencast_config import screencast_config_block
@@ -447,6 +448,11 @@ def octowright_status() -> dict[str, Any]:
             "names": persona_names,
         },
         "profile": profile_block,
+        # Every session-kind plugin core knows about, whatever its state.
+        # Disabled rows carry metadata only — reporting `kind` for a disabled
+        # plugin would require importing it, executing exactly the code
+        # explicit enable exists to gate.
+        "plugins": _plugin_state.registry().status_rows(),
         "screencast": screencast_config_block(),
         "advisor": _advisor.status(),
         "bridge": {
