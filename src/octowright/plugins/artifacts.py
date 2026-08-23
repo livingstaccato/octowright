@@ -44,8 +44,12 @@ _ARTIFACT_DIRNAME = "session-artifacts"
 
 #: Types the dashboard is willing to serve back. Deliberately closed: an
 #: artifact route that echoed a plugin-declared Content-Type would let an
-#: enabled plugin serve active content from the dashboard's own origin, where
-#: the pairing bearer lives.
+#: enabled plugin serve arbitrary content back through the dashboard's own
+#: origin, where the pairing bearer lives. Note ``image/svg+xml`` is active
+#: content (it can carry ``<script>``) and this allowlist alone does not
+#: neutralize it — what actually stops it from executing is the artifact
+#: route's ``FileResponse`` serving with ``content_disposition_type="attachment"``,
+#: never ``inline``. See the comment at ``http/routes/media.py::session_artifact``.
 ARTIFACT_MIME_ALLOWLIST: frozenset[str] = frozenset(
     {
         "text/plain",
@@ -175,29 +179,62 @@ def read_registered_artifacts(log_path: Path, recordings_dir: Path) -> list[Regi
     overwritten by every row for that id, valid or not, so a later hand-edit
     that fails validation retracts an earlier valid commit rather than
     leaving it visible underneath. Only the final winner per id is kept.
+
+    Streams the file rather than materializing it (``read_text().splitlines()``
+    holds the whole file AND a list of every line resident at once — roughly
+    double the file size). This is called per ``GET /api/sessions/{id}`` for a
+    plugin session and per artifact fetch, and a streaming-output plugin is
+    exactly the case that grows one recording without bound (see
+    ``OCTOWRIGHT_RECORDING_MAX_BYTES``, off by default). Opened in binary and
+    decoded per line, not via a text-mode handle, so a torn write mid-multibyte
+    sequence raises ``UnicodeDecodeError`` scoped to the one line it broke
+    (caught below) instead of a text iterator that can't isolate the bad byte
+    range from its buffered read.
     """
     latest: dict[str, RegisteredArtifact | None] = {}
     try:
-        raw_lines = log_path.read_text(encoding="utf-8").splitlines()
+        fh = log_path.open("rb")
     except OSError:
         return []
 
-    for raw in raw_lines:
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict) or entry.get("action") != "artifact_registered":
-            continue
-        artifact_id = entry.get("artifact_id")
-        if not isinstance(artifact_id, str):
-            continue
-        latest[artifact_id] = _registered_from_row(entry, recordings_dir)
+    with fh:
+        for raw_bytes in fh:
+            try:
+                line = raw_bytes.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                # A torn write must not hide the good rows around it, same as
+                # a malformed JSON line below.
+                continue
+            if not line:
+                continue
+            parsed = _parse_artifact_registered_line(line, recordings_dir)
+            if parsed is None:
+                continue
+            artifact_id, artifact = parsed
+            latest[artifact_id] = artifact
 
     return [artifact for _artifact_id, artifact in sorted(latest.items()) if artifact is not None]
+
+
+def _parse_artifact_registered_line(line: str, recordings_dir: Path) -> tuple[str, RegisteredArtifact | None] | None:
+    """Parse one JSONL line into ``(artifact_id, registered-or-None)``.
+
+    Returns ``None`` when the line isn't an ``artifact_registered`` row at
+    all (malformed JSON, wrong shape, or no usable id) -- distinct from a
+    recognized row whose *contents* fail validation, which still reports its
+    id so ``read_registered_artifacts`` can retract an earlier valid commit
+    for it (see that function's "newest commit wins" note).
+    """
+    try:
+        entry = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(entry, dict) or entry.get("action") != "artifact_registered":
+        return None
+    artifact_id = entry.get("artifact_id")
+    if not isinstance(artifact_id, str):
+        return None
+    return artifact_id, _registered_from_row(entry, recordings_dir)
 
 
 def _registered_from_row(entry: dict[str, object], recordings_dir: Path) -> RegisteredArtifact | None:
@@ -205,6 +242,12 @@ def _registered_from_row(entry: dict[str, object], recordings_dir: Path) -> Regi
     stored = entry.get("path")
     mime_type = entry.get("mime_type")
     if not isinstance(artifact_id, str) or not isinstance(stored, str) or not isinstance(mime_type, str):
+        return None
+    # The path and mime type are both re-validated below; the id was the one
+    # row field taken on trust ("every row is re-validated" was incomplete).
+    # An arbitrary hand-edited id would otherwise flow into the session-detail
+    # payload and, from there, into the DOM.
+    if not _ARTIFACT_ID_RE.match(artifact_id):
         return None
     if mime_type not in ARTIFACT_MIME_ALLOWLIST:
         return None
