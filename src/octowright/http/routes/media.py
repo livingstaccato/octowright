@@ -160,10 +160,9 @@ async def session_artifact(request: Request) -> Response:
     if not _valid_session_id(sid):
         return JSONResponse({"error": "invalid session id"}, status_code=400)
 
-    root = Path(state.RECORDINGS_DIR)
-    for log_path in sorted(root.glob("*.jsonl")):
-        if f"-{sid}" not in log_path.stem:
-            continue
+    log_path = _resolve_log_path(sid)
+    if log_path is not None:
+        root = Path(state.RECORDINGS_DIR)
         for artifact in read_registered_artifacts(log_path, root):
             if artifact.artifact_id == artifact_id:
                 return FileResponse(
