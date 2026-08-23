@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from octowright.plugins.contract import CloseResult, LaunchResult
+from octowright.plugins.contract import CloseResult, LaunchResult, SessionPool
 from octowright.plugins.errors import ProtectedSessionCloseError
 from octowright.plugins.session_launch import PluginContext
 from octowright.recorder import Recorder
@@ -99,3 +99,14 @@ class ReferencePool:
                 failures.append((instance_id, exc))
         if failures:
             raise ExceptionGroup("refkind close_all had failures", [exc for _, exc in failures])
+
+
+def _assert_structural_conformance(pool: ReferencePool) -> SessionPool:
+    """Static pin: ``ReferencePool`` must satisfy the ``SessionPool`` Protocol.
+
+    A type-checker rejects this return if a method's *signature* drifts, which
+    the name-based coverage test in ``test_reference_plugin.py`` cannot see —
+    and ``activate`` types the pool as ``Any``, so nothing else in the tree
+    checks it. Never called; it exists to be type-checked.
+    """
+    return pool

@@ -8,10 +8,7 @@ from __future__ import annotations
 import sys
 from importlib.metadata import EntryPoint
 
-import pytest
-
 from octowright.plugins.discovery import discover, enabled_names
-from octowright.plugins.errors import DuplicatePluginNameError
 
 
 def _ep(name: str, value: str = "tests.plugins._import_probe:MARKER") -> EntryPoint:
@@ -28,9 +25,24 @@ def test_discovery_reports_metadata_without_importing(monkeypatch):
     assert "tests.plugins._import_probe" not in sys.modules
 
 
-def test_duplicate_entry_point_names_are_refused():
-    with pytest.raises(DuplicatePluginNameError, match="refkind"):
-        discover(entry_points=[_ep("refkind"), _ep("refkind")])
+def test_duplicate_entry_point_names_are_reported_not_fatal():
+    # A duplicate must never be resolved by enumeration order (that varies by
+    # machine), but raising here erased every plugin from status — a correctly
+    # configured neighbour was then reported `missing`, which is misleading.
+    found = discover(
+        entry_points=[
+            _ep("refkind"),
+            _ep("refkind", value="other.dist:MARKER"),
+            _ep("solo"),
+        ]
+    )
+
+    by_name = {p.name: p for p in found}
+    assert sorted(by_name) == ["refkind", "solo"]
+    assert by_name["refkind"].conflict is not None
+    assert "two distributions" in by_name["refkind"].conflict
+    # The unrelated plugin survives discovery untouched.
+    assert by_name["solo"].conflict is None
 
 
 def test_invalid_entry_point_name_is_skipped_not_fatal():
