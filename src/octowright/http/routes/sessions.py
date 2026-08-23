@@ -32,7 +32,7 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool, _read_json_body
-from octowright.http.routes._session_kinds import iter_plugin_sessions
+from octowright.http.routes._session_kinds import find_plugin_session, iter_plugin_sessions, plugin_session_detail
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
@@ -188,6 +188,12 @@ async def session_detail(request: Request) -> JSONResponse:
         term = terminal_pool.maybe_get(sid)
         if term is not None:
             return JSONResponse(_terminal_session_detail(term))
+    # Same short-circuit, now registry-driven: a plugin's session has no
+    # page/console/video either, and its own descriptor knows its shape.
+    plugin_found = find_plugin_session(sid)
+    if plugin_found is not None:
+        kind, plugin_session = plugin_found
+        return JSONResponse(plugin_session_detail(kind, plugin_session))
     live = _live_session_or_none(sid)
     if live is not None:
         return await _live_session_detail_response(live)

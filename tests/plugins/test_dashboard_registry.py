@@ -102,3 +102,56 @@ def test_no_plugins_registered_is_an_empty_iteration():
 
     assert list(iter_plugin_sessions()) == []
     assert find_plugin_session("refsess01") is None
+
+
+def test_plugin_session_detail_uses_the_descriptor(registered):
+    from octowright.http.routes._session_kinds import plugin_session_detail
+
+    _, pool = registered
+    detail = plugin_session_detail("refkind", pool.sessions["refsess01"])
+    assert detail["refkind_specific"] is True
+    assert detail["kind"] == "refkind"
+    assert detail["artifacts"] == []
+
+
+def test_plugin_session_detail_includes_committed_artifacts(registered, tmp_path, monkeypatch):
+    from octowright.http import state as http_state
+    from octowright.http.routes._session_kinds import plugin_session_detail
+    from octowright.plugins.artifacts import reserve_artifact
+    from octowright.recorder import Recorder
+
+    log_path = tmp_path / "20260823T000000Z-refkind-refsess01.jsonl"
+    recorder = Recorder(log_path)
+    recorder.record_control("session_start", kind="refkind", label=None, profile=None)
+    handle = reserve_artifact(
+        recorder=recorder, instance_id="refsess01", recordings_dir=tmp_path, artifact_id="transcript", suffix=".txt"
+    )
+    handle.path.write_text("hello")
+    handle.commit(mime_type="text/plain")
+    recorder.close()
+
+    _, pool = registered
+    session = pool.sessions["refsess01"]
+    session.log_path = log_path
+    monkeypatch.setattr(http_state, "RECORDINGS_DIR", tmp_path)
+
+    detail = plugin_session_detail("refkind", session)
+    assert [a["artifact_id"] for a in detail["artifacts"]] == ["transcript"]
+    assert detail["artifacts"][0]["mime_type"] == "text/plain"
+    # The absolute path is deliberately NOT exposed to the dashboard.
+    assert "path" not in detail["artifacts"][0]
+
+
+def test_a_descriptor_that_raises_yields_a_degraded_detail(registered):
+    from octowright.http.routes._session_kinds import plugin_session_detail
+
+    class _Boom(_Descriptor):
+        def session_detail(self, session: Any) -> dict[str, Any]:
+            raise RuntimeError("plugin detail exploded")
+
+    reg, pool = registered
+    reg.register(_Boom(), pool=pool, adapter=None, discovered=None)
+    detail = plugin_session_detail("refkind", pool.sessions["refsess01"])
+    assert detail["id"] == "refsess01"
+    assert detail["kind"] == "refkind"
+    assert "detail_error" in detail
