@@ -22,7 +22,7 @@
   #
   ```
 - **`from __future__ import annotations`** as the first import in every new module.
-- **777-line hard ceiling** on any `src/**/*.py` (`scripts/check_max_loc.py`). **No file over 500 lines** — `src/octowright/http/routes/sessions.py` is already 437, which is why Tasks 4–6 put their dispatch helpers in a new module.
+- **777-line cap** on any `src/**/*.py` — the project-wide limit, and exactly what `scripts/check_max_loc.py` enforces. Split a module when its responsibilities have genuinely diverged, not to chase a lower threshold.
 - **Ruff `select`** is `["E", "F", "I", "UP", "B", "SIM", "ARG", "RUF", "TID"]`, `line-length = 120`. `BLE`/`ANN`/`PLW` are NOT enabled — never add a `# noqa` for them, RUF100 flags unused directives.
 - **`make lint` must exit 0.** Check the vulture gate with `uv run --active python scripts/check_vulture.py` — never by running `vulture` on one file, whose scope and confidence threshold both differ. **Do not edit `.ci/vulture-baseline.json`;** it is a deliberately-empty ratchet.
 - **Commits must be signed.** Never `--no-gpg-sign` or `--no-verify`. If signing stalls, stop and ask.
@@ -41,7 +41,7 @@
 | Path | Responsibility |
 |---|---|
 | `src/octowright/plugins/artifacts.py` | `ArtifactHandle`, `ctx.artifact` path issuance, containment, directory securing, commit → control row. Read side: parse `artifact_registered` rows back into validated absolute paths. |
-| `src/octowright/http/routes/_session_kinds.py` | Registry dispatch for the HTTP layer: iterate pools, resolve a session by id across kinds, build a kind's detail payload, close by kind. Exists so `sessions.py` stays under 500 lines. |
+| `src/octowright/http/routes/_session_kinds.py` | Registry dispatch for the HTTP layer: iterate pools, resolve a session by id across kinds, build a kind's detail payload, close by kind. Exists because "resolve a session across every registered kind" is one responsibility with its own tests. |
 | `tests/plugins/test_artifacts.py` | Write-side artifact tests (containment battery, commit, replace, MIME allowlist). |
 | `tests/plugins/test_artifact_reads.py` | Read-side tests (re-resolution, re-containment, uncommitted invisible). |
 | `tests/plugins/test_discovery_session_start.py` | `session_start` classification, including a kind whose plugin is absent. |
@@ -988,9 +988,9 @@ Create `src/octowright/http/routes/_session_kinds.py`:
 
 """Registry dispatch for the HTTP session routes.
 
-Lives beside the routes rather than inside ``sessions.py`` because that module
-is already near the project's 500-line file ceiling, and because "resolve a
-session across every registered kind" is one responsibility with its own tests.
+Lives beside the routes rather than inside ``sessions.py`` because "resolve a
+session across every registered kind" is one responsibility with its own tests,
+and ``sessions.py`` is already the largest module in this package.
 
 Core keeps no parallel session table: a plugin's ``SessionPool`` is the single
 registry for its kind, so every lookup here iterates the registered pools.
@@ -1071,9 +1071,8 @@ git commit -m "feat(http): registry-driven live session list
 state.plugin_registry joins pool/scenario_pool/terminal_pool on the single
 module-property seam, read-only because the registry is replaced through
 plugin_state.set_registry and a second write path would let the two
-disagree. Dispatch lives in its own module: sessions.py is already near the
-500-line ceiling, and resolving a session across every registered kind is
-one responsibility with its own tests."
+disagree. Dispatch lives in its own module because resolving a session across
+every registered kind is one responsibility with its own tests."
 ```
 
 ---
