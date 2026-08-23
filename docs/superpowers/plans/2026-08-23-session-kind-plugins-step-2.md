@@ -1861,7 +1861,7 @@ Deferred to later build steps, per spec §12:
   comparing the three registry-driven routes would otherwise infer that a plugin
   owns core's envelope on the detail path and not on the list or close paths.
 
-## Known gap this step surfaced but does not close
+## Known gap this step surfaced (CLOSED before step 3)
 
 **`instance_id_from_recording_name` cannot parse a hyphenated plugin kind.**
 `recorder.new_log_path` composes `{stamp}-{kind}-{instance_id}[-{label}]`, and
@@ -1894,7 +1894,15 @@ browser recording. Any real fix has to disambiguate the id from the label —
 by constraining plugin kinds/ids to be hyphen-free at the point core composes
 the filename, or by changing the filename scheme itself.
 
-Close this before plugin kinds become reachable (step 3–5), not after.
+**Closed** on branch `fix/recording-name-hyphen-ambiguity`, before step 3 began.
+The fix constrains the two composed fields rather than changing the filename
+scheme or teaching the parser to resolve ambiguity: `KIND_RE` and
+`INSTANCE_ID_RE` in `plugins/identity.py` both forbid the hyphen,
+`ctx.begin_session` validates the id at the single point core composes a
+recording name, and `media._valid_session_id` forbids it in a request so an id
+that could only name such a recording is refused rather than resolving to a
+prefix. Entry-point names keep the hyphen -- they never enter a filename.
+`instance_id_from_recording_name` is unchanged and is now exact by construction.
 
 ## Carried-forward findings from step 1
 
