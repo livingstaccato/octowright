@@ -254,16 +254,19 @@ async def test_run_macro_dispatches_to_the_macro_runner(adapter, monkeypatch):
     assert seen["session"] is pool.sessions["br0wser01"]
 
 
-def test_resolve_participant_returns_browser_launch_kwargs(adapter):
-    """The floor method: turn a Participant into what the pool's launcher needs."""
-    from octowright.scenarios import Participant
+def test_resolve_participant_matches_the_existing_browser_resolver(adapter):
+    """The floor method delegates -- it must not fork the resolution rules.
+
+    Pinned against ``resolve_launch_kwargs`` itself rather than against a
+    hand-written dict, because the value of delegating is precisely that the
+    two cannot drift. A hand-written expectation would pass while the adapter
+    quietly dropped the persona ``default_url`` fallback.
+    """
+    from octowright.scenarios import Participant, resolve_launch_kwargs
 
     ad, _ = adapter
     spec = Participant(persona="tanuki-tim", kind="chromium", role="player", url="https://shop.test")
-    resolved = ad.resolve_participant(spec, None)
-    assert resolved["kind"] == "chromium"
-    assert resolved["url"] == "https://shop.test"
-    assert resolved["profile"] == "tanuki-tim"
+    assert ad.resolve_participant(spec, None) == resolve_launch_kwargs(spec)
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -327,22 +330,23 @@ class BrowserScenarioAdapter:
     def resolve_participant(self, spec: Any, persona: Any) -> dict[str, Any]:
         """Turn a ``Participant`` into launch kwargs for the browser roster.
 
-        ``persona`` is accepted and unused: the browser roster resolves persona
-        state itself from the profile name. The parameter stays because it is
-        part of the ``ScenarioAdapter`` floor -- a terminal adapter needs it to
-        read ``app.ssh`` defaults -- and a floor method that varies by kind is
-        not a floor.
+        Delegates to ``scenarios.resolve_launch_kwargs`` rather than rebuilding
+        the mapping. That function already owns the participant-override ->
+        persona-default -> fallback resolution order, including the
+        ``default_url`` fallback and the ``False`` defaults for
+        ``stabilize``/``record_video``/``trace``; a second copy here would be
+        verbatim duplication that silently diverges the moment either side
+        gains a field.
+
+        ``persona`` is accepted and unused: ``resolve_launch_kwargs`` loads the
+        persona itself. The parameter stays because it is part of the
+        ``ScenarioAdapter`` floor -- a terminal adapter needs it to read
+        ``app.ssh`` defaults -- and a floor method that varies by kind is not a
+        floor.
         """
-        return {
-            "kind": spec.kind,
-            "url": spec.url,
-            "profile": spec.persona,
-            "viewport_w": spec.viewport_w,
-            "viewport_h": spec.viewport_h,
-            "stabilize": spec.stabilize,
-            "record_video": spec.record_video,
-            "trace": spec.trace,
-        }
+        from octowright.scenarios import resolve_launch_kwargs
+
+        return resolve_launch_kwargs(spec)
 
     async def run_macro(self, instance_id: str, *, name: str, args: dict[str, Any]) -> None:
         from octowright import macros as _macros
@@ -816,6 +820,13 @@ def test_pool_for_an_unknown_kind_raises(registered):
         pool_for_kind("nosuchkind", browser_pool="B", terminal_pool=None)
 
 
+def test_a_terminal_participant_without_a_terminal_pool_raises():
+    """Carried over from the _pool_for this replaces -- silence here would
+    surface as AttributeError on None.close() during teardown."""
+    with pytest.raises(RuntimeError, match="terminal_pool is unavailable"):
+        pool_for_kind(TERMINAL_KIND, browser_pool="B", terminal_pool=None)
+
+
 def test_known_kinds_lists_browsers_terminal_and_plugins(registered):
     kinds = known_kinds()
     assert "chromium" in kinds
@@ -909,6 +920,11 @@ def pool_for_kind(kind: str, *, browser_pool: Any, terminal_pool: Any | None) ->
     if kind in SUPPORTED_KINDS:
         return browser_pool
     if kind == TERMINAL_KIND:
+        if terminal_pool is None:
+            # Preserved from the _pool_for this replaces. Returning None would
+            # turn a clear "the extra is not installed" error into an
+            # AttributeError on None.close() deep inside teardown.
+            raise RuntimeError("terminal participant present but terminal_pool is unavailable")
         return terminal_pool
     registry = _plugin_registry()
     pools = registry.pools()
@@ -1174,8 +1190,16 @@ class _Descriptor:
 
 
 class _BrowserPool:
-    async def spawn_roster(self, roster: list[dict[str, Any]], **_: Any) -> list[dict[str, Any]]:
-        return [{"instance_id": f"br{i:010d}", "kind": r.get("kind", "chromium")} for i, r in enumerate(roster)]
+    async def spawn_roster(self, roster: list[dict[str, Any]], **_: Any) -> dict[str, Any]:
+        # The real spawn_roster returns {"launched": [...], "errors": [...]},
+        # and _launch_participants indexes both. A fake returning a bare list
+        # would make these tests pass against a contract that does not exist.
+        return {
+            "launched": [
+                {"instance_id": f"br{i:010d}", "kind": r.get("kind", "chromium")} for i, r in enumerate(roster)
+            ],
+            "errors": [],
+        }
 
     async def close(self, instance_id: str, *, force: bool = False) -> None:
         return None
@@ -1440,6 +1464,21 @@ Replace `run_macro`'s inner `_run`:
 Import `SupportsMacros` from `octowright.plugins.contract` at module level.
 
 Replace `_run_startup_macros`'s `_run_for_participant` body the same way — skip when the adapter is not `SupportsMacros` (terminal still skips, now for the general reason), otherwise `await adapter.run_macro(...)`, keeping the existing failure-collection and `log.warning` shape untouched. `_run_startup_macros` needs the browser pool to build a browser adapter, which it already receives as its first parameter.
+
+**There is a THIRD macro site, in `stop()`.** Its teardown-macro loop (~line 350) carries the same `if p.get("kind") == "terminal": continue` and then calls `browser_pool.get(...)` — the plan's opening table lists four skip sites and this is a fifth. Convert it identically:
+
+```python
+            for p in live.participants:
+                adapter = adapter_for(p.get("kind") or "", browser_pool=browser_pool)
+                if not isinstance(adapter, SupportsMacros):
+                    continue  # a kind with no run_macro has no teardown macro to run
+                try:
+                    await adapter.run_macro(p["instance_id"], name=live.spec.teardown_macro, args={})
+                except Exception as e:
+                    summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
+```
+
+Keep the `teardown_errors` accumulation exactly as it is — a failing teardown macro must not abort the close loop that follows it.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
