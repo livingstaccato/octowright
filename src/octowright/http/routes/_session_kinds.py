@@ -89,3 +89,19 @@ def plugin_session_detail(kind: str, session: Any) -> dict[str, Any]:
         reported_artifacts.append({"artifact_id": artifact.artifact_id, "mime_type": artifact.mime_type, "bytes": size})
     detail["artifacts"] = reported_artifacts
     return detail
+
+
+async def close_plugin_session(instance_id: str, *, force: bool) -> dict[str, Any] | None:
+    """Close ``instance_id`` if it belongs to a registered plugin pool.
+
+    Returns the pool's ``CloseResult`` as a plain dict, or ``None`` when the id
+    is not a plugin session so the caller falls through to the browser path.
+    ``ProtectedSessionCloseError`` propagates — the route maps it to 409,
+    mirroring the browser and terminal paths.
+    """
+    found = find_plugin_session(instance_id)
+    if found is None:
+        return None
+    kind, _session = found
+    pool = state.plugin_registry.pools()[kind]
+    return dict(await pool.close(instance_id, force=force))
