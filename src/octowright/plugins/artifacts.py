@@ -22,6 +22,7 @@ session's own JSONL, which also survives the plugin being uninstalled.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -150,3 +151,67 @@ def reserve_artifact(
         _recorder=recorder,
         _relative_path=relative,
     )
+
+
+@dataclass(frozen=True)
+class RegisteredArtifact:
+    """A committed artifact, re-resolved and re-contained at read time."""
+
+    artifact_id: str
+    path: Path
+    mime_type: str
+
+
+def read_registered_artifacts(log_path: Path, recordings_dir: Path) -> list[RegisteredArtifact]:
+    """Return the artifacts a recording registered, newest commit per id.
+
+    Every row is re-validated rather than trusted: the recording is a file on
+    disk that a local user can edit, so a stored path is re-resolved against
+    the recordings root and a stored mime type is re-checked against the
+    allowlist. A row that fails either check, or whose file is gone, is
+    dropped rather than raising — one bad row must not hide the good ones.
+
+    "Newest commit wins" applies to a failing row too: the per-id slot is
+    overwritten by every row for that id, valid or not, so a later hand-edit
+    that fails validation retracts an earlier valid commit rather than
+    leaving it visible underneath. Only the final winner per id is kept.
+    """
+    latest: dict[str, RegisteredArtifact | None] = {}
+    try:
+        raw_lines = log_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    for raw in raw_lines:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict) or entry.get("action") != "artifact_registered":
+            continue
+        artifact_id = entry.get("artifact_id")
+        if not isinstance(artifact_id, str):
+            continue
+        latest[artifact_id] = _registered_from_row(entry, recordings_dir)
+
+    return [artifact for _artifact_id, artifact in sorted(latest.items()) if artifact is not None]
+
+
+def _registered_from_row(entry: dict[str, object], recordings_dir: Path) -> RegisteredArtifact | None:
+    artifact_id = entry.get("artifact_id")
+    stored = entry.get("path")
+    mime_type = entry.get("mime_type")
+    if not isinstance(artifact_id, str) or not isinstance(stored, str) or not isinstance(mime_type, str):
+        return None
+    if mime_type not in ARTIFACT_MIME_ALLOWLIST:
+        return None
+    try:
+        resolved = reject_unsafe_path(recordings_dir / stored, recordings_dir, label="registered artifact")
+    except ValueError:
+        return None
+    if not resolved.is_file():
+        return None
+    return RegisteredArtifact(artifact_id=artifact_id, path=resolved, mime_type=mime_type)
