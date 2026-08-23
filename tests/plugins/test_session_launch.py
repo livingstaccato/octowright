@@ -236,3 +236,26 @@ async def test_commit_still_refuses_an_id_held_by_another_kinds_pool(tmp_path):
         async with ctx.begin_session(instance_id="abc123", label=None, profile=None) as launch:
             record = _Record("abc123", "refkind", None, None, None, launch.recorder, launch.log_path)
             launch.commit(record)
+
+
+@pytest.mark.asyncio
+async def test_context_artifact_reserves_and_commits_through_a_real_session(tmp_path):
+    # PluginContext.artifact() is the wired integration point a plugin
+    # actually calls; exercising reserve_artifact() alone (as
+    # tests/plugins/test_artifacts.py does) proves the module works but not
+    # that PluginContext threads session.recorder / session.instance_id into
+    # it correctly -- an attribute-name typo or argument-order mistake there
+    # would pass every other test in this file and still be broken.
+    ctx = _ctx(tmp_path)
+    async with ctx.begin_session(instance_id="abc123", label=None, profile=None) as launch:
+        record = _Record("abc123", "refkind", None, None, None, launch.recorder, launch.log_path)
+        handle = ctx.artifact(record, "transcript", ".txt")
+        handle.path.write_text("hello")
+        handle.commit(mime_type="text/plain")
+        launch.commit(record)
+
+    rows = [json.loads(line) for line in launch.log_path.read_text().splitlines() if line.strip()]
+    row = [r for r in rows if r["action"] == "artifact_registered"][-1]
+    assert row["artifact_id"] == "transcript"
+    assert row["mime_type"] == "text/plain"
+    assert (tmp_path / row["path"]).resolve() == handle.path.resolve()

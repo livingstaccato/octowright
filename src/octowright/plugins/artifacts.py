@@ -118,6 +118,16 @@ def reserve_artifact(
     if not _ARTIFACT_ID_RE.match(instance_id) and not instance_id.isalnum():
         raise ArtifactError(f"instance id {instance_id!r} is not a safe path segment")
 
+    # Resolved once and reused: ``_lock_tree``'s walk from leaf to root is a
+    # plain ``Path.relative_to`` segment comparison, not resolve-aware, so
+    # handing it an unresolved root while the leaf is already resolved (as
+    # ``reject_unsafe_path`` returns) makes the comparison fail whenever the
+    # root is reached through a symlink hop (e.g. macOS ``/tmp`` ->
+    # ``/private/tmp``) — the walk then silently stops without ever locking
+    # the intermediate ``session-artifacts/`` directory. Both the security
+    # walk and the stored relative path must agree on the same resolved root.
+    resolved_root = recordings_dir.resolve()
+
     art_dir = recordings_dir / _ARTIFACT_DIRNAME / instance_id
     art_dir.mkdir(parents=True, exist_ok=True)
     # Resolve-and-contain AFTER mkdir so a pre-existing symlinked directory is
@@ -130,10 +140,10 @@ def reserve_artifact(
     # ``session-artifacts/`` directory — a world-readable intermediate would
     # leak session ids from the path names alone, which is the same argument
     # its docstring already makes for the nested captures tree.
-    secure_artifact_tree(contained_dir, recordings_dir)
+    secure_artifact_tree(contained_dir, resolved_root)
 
     path = contained_dir / f"{artifact_id}{suffix}"
-    relative = str(path.relative_to(recordings_dir.resolve()))
+    relative = str(path.relative_to(resolved_root))
     return ArtifactHandle(
         artifact_id=artifact_id,
         path=path,
