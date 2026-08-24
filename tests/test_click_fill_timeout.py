@@ -59,12 +59,17 @@ class _Session:
     def __init__(self) -> None:
         self.instance_id = "i"
         self.target = _RecordingTarget()
+        self.metadata_timeouts: list[int | None] = []
         self.recorder = type("R", (), {"record": lambda *a, **k: None})()
 
     def _target(self) -> _RecordingTarget:
         return self.target
 
-    async def _resolve_semantic_metadata(self, selector: str) -> dict[str, Any]:
+    async def _resolve_semantic_metadata(self, selector: str, *, timeout_ms: int | None = None) -> dict[str, Any]:
+        # Records the budget it was handed: the aria read that annotates an
+        # action honours that action's timeout, so an unresolvable selector
+        # cannot spend the full default before the action starts.
+        self.metadata_timeouts.append(timeout_ms)
         return {}
 
     async def _redacted_or_original(self, selector: str, value: str) -> str:
@@ -240,3 +245,33 @@ class TestZeroIsNotForwarded:
         source = inspect.getsource(getattr(SessionLocatorMixin, f"{method}_by"))
 
         assert "timeout_ms or DEFAULT_ACTION_TIMEOUT_MS" in source
+
+
+class TestMetadataReadHonoursTheSameBudget:
+    """The aria read that annotates an action used to be unbounded.
+
+    Its credential scan uses DEFAULT_ACTION_TIMEOUT_MS, so a selector that
+    never resolves spent that in full BEFORE the bounded action started: a
+    click carrying timeout_ms=4000 measured 19.1s downstream. Whatever budget
+    the action gets, the annotation gets too.
+    """
+
+    @pytest.mark.anyio
+    async def test_click_passes_its_budget_down(self) -> None:
+        session = _Session()
+        await SessionPageMixin.click(session, "#x", timeout_ms=4000)  # type: ignore[arg-type]
+        assert session.metadata_timeouts == [4000]
+
+    @pytest.mark.anyio
+    async def test_fill_passes_its_budget_down(self) -> None:
+        session = _Session()
+        await SessionPageMixin.fill(session, "#x", "v", timeout_ms=2500)  # type: ignore[arg-type]
+        assert session.metadata_timeouts == [2500]
+
+    @pytest.mark.anyio
+    async def test_an_unset_budget_still_bounds_the_read(self) -> None:
+        """None means "use the default", not "wait forever" -- the read must
+        be bounded either way, or the bug survives for every default call."""
+        session = _Session()
+        await SessionPageMixin.click(session, "#x")  # type: ignore[arg-type]
+        assert session.metadata_timeouts == [DEFAULT_ACTION_TIMEOUT_MS]
