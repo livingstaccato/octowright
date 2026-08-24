@@ -222,8 +222,10 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     # Plugin assets, before the SPA catchall for the same reason /new-tab is:
     # StaticFiles at "/" would otherwise swallow them.
     from octowright.http.routes.plugin_assets import plugin_asset_routes
+    from octowright.http.routes.plugins_api import plugins_api_routes
 
     routes.extend(plugin_asset_routes())
+    routes.extend(plugins_api_routes())
     routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.octowright_http_host = host
