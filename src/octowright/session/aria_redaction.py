@@ -163,15 +163,24 @@ async def collect_credential_values(
     return [v for v in raw if isinstance(v, str) and v]
 
 
-async def _snapshot(locator: Any, timeout_ms: int | None) -> Any:
+async def _snapshot(session: Any, locator: Any, timeout_ms: int | None) -> Any:
     """``locator.aria_snapshot()``, bounded only when a caller asked for it.
 
     Passing ``timeout=None`` through to Playwright means "no timeout", so an
     unset budget has to omit the argument rather than forward it.
+
+    Takes its own lease around the Playwright call, re-entrant for the
+    caller's task exactly like ``collect_credential_values`` above -- both of
+    ``aria_snapshot``'s call sites already hold this lease, so this nests
+    rather than deadlocks. Gating it here, rather than trusting that every
+    current and future caller already holds one, is what keeps this call
+    site visible to the operation-gate architecture scanner as gated on its
+    own terms.
     """
-    if timeout_ms is None:
-        return await locator.aria_snapshot()
-    return await locator.aria_snapshot(timeout=timeout_ms)
+    async with session.operation("aria_snapshot"):
+        if timeout_ms is None:
+            return await locator.aria_snapshot()
+        return await locator.aria_snapshot(timeout=timeout_ms)
 
 
 async def aria_snapshot(session: Any, locator: Any, *, timeout_ms: int | None = None) -> str:
@@ -197,6 +206,6 @@ async def aria_snapshot(session: Any, locator: Any, *, timeout_ms: int | None = 
     mode = resolve_redaction_mode()
     async with session.operation("aria_snapshot"):
         if mode == "off":
-            return str(await _snapshot(locator, timeout_ms))
+            return str(await _snapshot(session, locator, timeout_ms))
         values = await collect_credential_values(session, locator, mode, timeout_ms=timeout_ms)
-        return scrub_credentials(str(await _snapshot(locator, timeout_ms)), values)
+        return scrub_credentials(str(await _snapshot(session, locator, timeout_ms)), values)
