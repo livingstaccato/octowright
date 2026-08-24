@@ -41,14 +41,41 @@ import type {
 
 const log = getLogger("octowright.frontend.session");
 
-// Hand-maintained mirror of the `Kind` union in types.ts ("chromium" |
-// "firefox" | "webkit" | "terminal", minus "terminal" -- terminal keeps its
-// own branch below and is not dispatched through the plugin registry until
-// the extraction step). `Kind` is a compile-time type with no runtime
-// representation, and a type cannot be tested against at runtime, so this
-// set has to be kept in step with `Kind` BY HAND: there is no codegen step
-// that derives one from the other. If `Kind` changes, update this too.
-const BROWSER_KINDS: ReadonlySet<string> = new Set(["chromium", "firefox", "webkit"]);
+// Mirrors `RESERVED_KINDS` in src/octowright/plugins/identity.py -- the set
+// of session kinds core owns. `validate_kind()` (called from
+// `plugins/loader.py` at load time) REFUSES to let any enabled plugin
+// declare one of these, and that refusal is what makes it safe to skip the
+// plugin-registry lookup (and its `/api/plugins` network round trip) for a
+// kind in this set: a plugin can never claim "unknown" or "chromium", so a
+// closed recording with no readable kind (a launch that died before writing
+// its row, a truncated recording, a legacy file -- see
+// `http/discovery.py`'s `opening.get("kind") or "unknown"`) is core's to
+// render, not a plugin's. A future refactor "simplifying" this
+// check-before-fetch ordering away would reintroduce a network fetch on
+// every ordinary browser-session page load and break the pinned test in
+// session.test.ts.
+//
+// `terminal` is deliberately absent from both sets: it is not yet reserved
+// because it is slated to become a plugin kind itself (see AGENTS.md's
+// "Terminal Sessions" section, step 5), so it is handled by its own branch
+// above, before this check ever runs, rather than by being added here.
+//
+// This is a hand-maintained mirror, not a generated one -- Python's
+// RESERVED_KINDS lives in a different language entirely, so nothing keeps
+// the two in sync automatically. Copy the Python set exactly rather than
+// re-deriving one from `Kind` (types.ts): a compile-time-only type has no
+// runtime representation, and `Kind` and RESERVED_KINDS answer different
+// questions ("what browser kinds does the SPA know how to render" vs. "what
+// kinds can no plugin ever claim"). If RESERVED_KINDS changes, update this
+// too.
+const CORE_RESERVED_KINDS: ReadonlySet<string> = new Set([
+  "chromium",
+  "firefox",
+  "webkit",
+  "browser",
+  "unknown",
+  "session",
+]);
 
 function safeDownloadName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]+/g, "-");
@@ -682,37 +709,38 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     return;
   }
 
-  // Registry-driven dispatch for every other kind. A core browser kind never
-  // lives in the plugin registry -- the three browser kinds are core-owned,
-  // not plugin-supplied -- so it skips the registry lookup (and its
-  // `/api/plugins` round trip) entirely and falls through to the existing
-  // browser page below, unchanged. Any other kind either gets its plugin's
-  // own renderer or the fallback renderer with a visible reason -- never a
-  // blank page.
-  if (!BROWSER_KINDS.has(detail.kind)) {
+  // Registry-driven dispatch for every other kind. A core-reserved kind
+  // (CORE_RESERVED_KINDS above) never lives in the plugin registry, so it
+  // skips the registry lookup (and its `/api/plugins` round trip) entirely
+  // and falls through to the existing browser page below, unchanged. Any
+  // other kind either gets its plugin's own renderer or the fallback
+  // renderer with a visible reason -- never a blank page.
+  if (!CORE_RESERVED_KINDS.has(detail.kind)) {
     const registry = await loadPluginRegistry();
     const chosen = resolveRenderer(registry, detail.kind);
-    if (!("code" in chosen)) {
-      const { bootStreamSession, importRenderer } = await import("./session-stream.js");
+    const { bootStreamSession, importRenderer } = await import("./session-stream.js");
+    let mount: MountStream;
+    if ("code" in chosen) {
+      // No usable renderer for this kind: the fallback, with its reason
+      // (no-frontend / version-mismatch).
+      mount = (el, ctx) => mountFallbackStream(el, ctx, chosen);
+    } else {
       const mod = await importRenderer(chosen.moduleUrl);
-      const mount: MountStream =
+      mount =
         "code" in mod
           ? (el: HTMLElement, ctx: StreamContext) => mountFallbackStream(el, ctx, mod)
           : mod.mountStream;
-      await bootStreamSession(root, sessionId, detail, mount, {
-        ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
-      });
-      return;
     }
-    // No usable renderer for this kind: the fallback, with its reason
-    // (no-frontend / version-mismatch).
-    const { bootStreamSession } = await import("./session-stream.js");
-    await bootStreamSession(root, sessionId, detail, (el, ctx) => mountFallbackStream(el, ctx, chosen), {
+    await bootStreamSession(root, sessionId, detail, mount, {
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });
+    // Mirrors the terminal branch's completion log above (same event name)
+    // so a query for "did this session finish booting" never silently loses
+    // plugin sessions to a differently-named event.
+    log.info({ event: "session_boot_complete", session_id: sessionId, kind: detail.kind });
     return;
   }
-  // A browser kind: fall through to the existing browser page below, unchanged.
+  // A core-reserved kind: fall through to the existing browser page below, unchanged.
 
   const refs = buildLayout(root);
   renderHeader(refs.header, detail);

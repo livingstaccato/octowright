@@ -84,6 +84,19 @@ def test_a_nested_asset_is_served(served):
     assert client.get("/plugins/my-plugin/sub/deep.js").status_code == 200
 
 
+def test_a_served_asset_is_not_a_forced_download(served):
+    """A plugin renderer's only real consumer is `import()`, which ignores
+    Content-Disposition -- but opening the module URL directly to debug it
+    (or a stray browser navigation to it) must show the module, not download
+    it. FileResponse only sets Content-Disposition when given `filename=`, so
+    this pins that the route never passes one.
+    """
+    client, _ = served
+    resp = client.get("/plugins/my-plugin/renderer.js")
+    assert resp.status_code == 200
+    assert "content-disposition" not in resp.headers
+
+
 def test_an_unknown_plugin_name_is_404(served):
     client, _ = served
     assert client.get("/plugins/nosuchplugin/renderer.js").status_code == 404

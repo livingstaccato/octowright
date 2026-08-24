@@ -65,5 +65,13 @@ export function resolveRenderer(
       detail: `plugin targets renderer API v${entry.rendererApiVersion}, dashboard implements v${RENDERER_API_VERSION}`,
     };
   }
+  // A plugin declaring `layout: "browser"` has no stream renderer this
+  // dashboard knows how to host -- the browser layout (video/console/aria/
+  // downloads panels) is core's own and not something a plugin can opt into.
+  // Falling back here is honest rather than silently booting a browser-layout
+  // plugin into the stream page.
+  if (entry.layout !== "stream") {
+    return { code: "no-frontend", detail: `layout '${entry.layout}' is not supported by this dashboard` };
+  }
   return { moduleUrl: entry.moduleUrl, layout: entry.layout };
 }
