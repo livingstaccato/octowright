@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,11 @@ async def test_the_transcript_lives_inside_the_recordings_root(pool):
     assert found[0].path.resolve().is_relative_to(root.resolve())
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file-mode bits: secure_artifact_tree's 0700 chmod is best-effort and "
+    "a no-op on Windows (NTFS ACLs, not mode bits), so this assertion does not apply.",
+)
 async def test_the_artifact_directory_is_owner_only(pool, monkeypatch):
     monkeypatch.setenv("OCTOWRIGHT_RECORDINGS_PRIVATE", "1")
     ref_pool, root = pool
