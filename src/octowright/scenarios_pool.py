@@ -314,13 +314,19 @@ class ScenarioPool:
         Sequential rather than gathered, matching ``_launch_terminals``: a
         plugin pool makes no concurrency promise, and a scenario roster is
         small enough that the wall-clock cost is not worth the first
-        cross-plugin race report.
+        cross-plugin race report. Also matches ``_launch_terminals``' early-out:
+        stops launching once ``errors`` is already non-empty (a failed browser
+        roster, or an earlier plugin participant in this same loop), so a
+        failed launch never goes on to open further -- possibly remote --
+        plugin sessions before rollback.
         """
         from octowright.scenario_kinds import adapter_for, pool_for_kind
         from octowright.scenarios import _load_persona_or_none
 
         launched_ids: list[str] = []
         for index, p in plugin_specs:
+            if errors:
+                break
             pool = pool_for_kind(p.kind, browser_pool=None, terminal_pool=None)
             adapter = adapter_for(p.kind, browser_pool=None)
             if adapter is None:
@@ -442,12 +448,22 @@ class ScenarioPool:
 
         A participant dict with no recorded ``kind`` defaults to the browser
         pool -- the pre-plugin default every hand-built ``LiveScenario`` in the
-        test suite (and any caller that never set the field) relies on.
+        test suite (and any caller that never set the field) relies on. Every
+        production launch path (browser roster, terminal launch, and a plugin's
+        own ``entry.setdefault("kind", p.kind)``) stamps ``kind``, so this
+        branch is only ever reached by a test fixture today -- but a future
+        adapter that forgets to stamp it would otherwise silently misroute to
+        the browser pool, so the fallback is logged rather than silent.
         """
         from octowright.scenario_kinds import pool_for_kind
 
         kind = p.get("kind")
         if not kind:
+            log.debug(
+                "scenario.pool_for.kind_missing_defaulting_to_browser",
+                instance_id=p.get("instance_id"),
+                persona=p.get("persona"),
+            )
             return browser_pool
         return pool_for_kind(kind, browser_pool=browser_pool, terminal_pool=terminal_pool)
 
