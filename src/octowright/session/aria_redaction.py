@@ -137,7 +137,9 @@ def scrub_credentials(aria: str, values: list[str]) -> str:
     return out
 
 
-async def collect_credential_values(session: Any, locator: Any, mode: str) -> list[str]:
+async def collect_credential_values(
+    session: Any, locator: Any, mode: str, *, timeout_ms: int | None = None
+) -> list[str]:
     """Read the values *mode* considers secret from *locator*'s subtree.
 
     Failure raises ``AriaRedactionError`` -- the caller must not fall back to
@@ -149,7 +151,9 @@ async def collect_credential_values(session: Any, locator: Any, mode: str) -> li
         # closed) keeps its own type -- those are session-scoped signals the
         # caller acts on, not a classification failure.
         try:
-            raw = await locator.first.evaluate(_CREDENTIAL_VALUES_JS, mode, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+            raw = await locator.first.evaluate(
+                _CREDENTIAL_VALUES_JS, mode, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+            )
         except Exception as exc:
             raise AriaRedactionError(
                 "could not classify credential fields, so no accessibility snapshot was taken"
@@ -159,11 +163,39 @@ async def collect_credential_values(session: Any, locator: Any, mode: str) -> li
     return [v for v in raw if isinstance(v, str) and v]
 
 
-async def aria_snapshot(session: Any, locator: Any) -> str:
+async def _snapshot(session: Any, locator: Any, timeout_ms: int | None) -> Any:
+    """``locator.aria_snapshot()``, bounded only when a caller asked for it.
+
+    Passing ``timeout=None`` through to Playwright means "no timeout", so an
+    unset budget has to omit the argument rather than forward it.
+
+    Takes its own lease around the Playwright call, re-entrant for the
+    caller's task exactly like ``collect_credential_values`` above -- both of
+    ``aria_snapshot``'s call sites already hold this lease, so this nests
+    rather than deadlocks. Gating it here, rather than trusting that every
+    current and future caller already holds one, is what keeps this call
+    site visible to the operation-gate architecture scanner as gated on its
+    own terms.
+    """
+    async with session.operation("aria_snapshot"):
+        if timeout_ms is None:
+            return await locator.aria_snapshot()
+        return await locator.aria_snapshot(timeout=timeout_ms)
+
+
+async def aria_snapshot(session: Any, locator: Any, *, timeout_ms: int | None = None) -> str:
     """``locator.aria_snapshot()`` with credential values scrubbed.
 
     Every aria sink in the codebase goes through here so the policy cannot
     drift between them.
+
+    *timeout_ms* bounds BOTH Playwright calls -- the credential scan and the
+    snapshot itself. Left as None they use their own defaults, which is right
+    for a deliberate snapshot of a page that is known to be there. Callers
+    annotating another action should pass that action's timeout: on a selector
+    that never resolves, an unbounded read here costs the full default before
+    the action it describes has even started (measured: a click carrying
+    ``timeout_ms=4000`` took 19.1s, 15 of them spent in the credential scan).
 
     Takes *session*'s operation lease around both Playwright calls. The
     credential scan is a real ``evaluate`` against the live page, so it has
@@ -174,6 +206,6 @@ async def aria_snapshot(session: Any, locator: Any) -> str:
     mode = resolve_redaction_mode()
     async with session.operation("aria_snapshot"):
         if mode == "off":
-            return str(await locator.aria_snapshot())
-        values = await collect_credential_values(session, locator, mode)
-        return scrub_credentials(str(await locator.aria_snapshot()), values)
+            return str(await _snapshot(session, locator, timeout_ms))
+        values = await collect_credential_values(session, locator, mode, timeout_ms=timeout_ms)
+        return scrub_credentials(str(await _snapshot(session, locator, timeout_ms)), values)

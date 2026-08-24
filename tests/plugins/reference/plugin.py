@@ -5,11 +5,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from octowright.plugins.contract import PLUGIN_API_VERSION
+from octowright.plugins.contract import PLUGIN_API_VERSION, FrontendAsset
 from octowright.plugins.session_launch import PluginContext
 from tests.plugins.reference.pool import KIND, ReferencePool, ReferenceSession
+
+#: The reference plugin's dashboard renderer. `renderer.js` is the smallest
+#: real consumer of `plugin-contract.d.ts` -- see its module docstring.
+_ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
 
 class ReferenceScenarioAdapter:
@@ -37,7 +42,12 @@ class ReferencePlugin:
     tool_names = frozenset({"refkind_launch", "refkind_close"})
     tool_module = "tests.plugins.reference.tools"
     profile_name = "refkinds"
-    frontend = None
+    frontend = FrontendAsset(
+        renderer_api_version=1,
+        asset_dir=_ASSET_DIR,
+        module_path="renderer.js",
+        layout="stream",
+    )
 
     def create_pool(self, ctx: PluginContext) -> ReferencePool:
         return ReferencePool(ctx)

@@ -17,5 +17,12 @@
     "outDir": "../../src/octowright/server/frontend"
   },
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts", "src/test-setup.ts"]
+  "exclude": ["src/**/*.test.ts", "src/test-setup.ts"],
+  // plugin-contract.test.ts carries type-only expectTypeOf() assertions whose
+  // entire job is to fail a `tsc --noEmit` run when SessionEvent and
+  // RecordingEvent diverge. It matches the *.test.ts exclude above (deliberate
+  // for ordinary runtime tests, which vitest transpiles without type-checking),
+  // so without this explicit entry the assertions would never actually be
+  // type-checked by anything -- `files` is not filtered by `exclude`.
+  "files": ["src/plugin-contract.test.ts"]
 }
