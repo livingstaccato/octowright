@@ -301,3 +301,36 @@ async def test_fixtures_skip_a_kind_that_cannot_apply_them(registered):
     sp = ScenarioPool()
     live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
     assert len(live.participants) == 1, "an inapplicable fixture must not fail the scenario"
+
+
+async def test_stopping_a_mixed_scenario_closes_each_kind_through_its_own_pool(registered):
+    _, ref_pool = registered
+    spec = Scenario(
+        name="mixed",
+        participants=[
+            Participant(persona="tanuki-tim", kind="chromium", role="player"),
+            Participant(persona="ref-rita", kind="refkind", role="monitor"),
+        ],
+    )
+    sp = ScenarioPool()
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    ref_id = live.participants[1]["instance_id"]
+
+    await sp.stop(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), terminal_pool=None)
+    assert ref_pool.closed == [ref_id], "the plugin's own pool must close its session"
+    assert sp.maybe_get(live.scenario_id) is None
+
+
+async def test_a_plugin_pool_failing_to_close_does_not_strand_the_scenario(registered):
+    _, ref_pool = registered
+
+    async def _boom(instance_id: str, *, force: bool = False) -> dict[str, Any]:
+        raise RuntimeError("close exploded")
+
+    spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
+    sp = ScenarioPool()
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    ref_pool.close = _boom  # type: ignore[assignment]
+
+    await sp.stop(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), terminal_pool=None)
+    assert sp.maybe_get(live.scenario_id) is None, "a failing close must still retire the scenario"
