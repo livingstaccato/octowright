@@ -55,11 +55,11 @@ class _Pool:
 
     async def spawn_roster(self, _reqs):
         if self.spawn_error:
-            return {"launched": [{"instance_id": "a", "log_path": "a.log"}], "errors": ["boom"]}
+            return {"launched": [{"instance_id": "a", "kind": "chromium", "log_path": "a.log"}], "errors": ["boom"]}
         return {
             "launched": [
-                {"instance_id": "a", "log_path": "a.log"},
-                {"instance_id": "b", "log_path": "b.log"},
+                {"instance_id": "a", "kind": "chromium", "log_path": "a.log"},
+                {"instance_id": "b", "kind": "chromium", "log_path": "b.log"},
             ],
             "errors": [],
         }
@@ -416,7 +416,7 @@ async def test_run_macro_reports_terminal_as_unsupported() -> None:
     rm = await sp.run_macro(scenario_id="mix", macro="m", browser_pool=_Pool(), role="operator")
     assert rm["targeted"] == 1
     assert rm["results"][0]["ok"] is False
-    assert "browser macros" in rm["results"][0]["error"]
+    assert "does not support macros" in rm["results"][0]["error"], "the error now names the missing capability"
 
 
 @pytest.mark.anyio

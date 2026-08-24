@@ -27,6 +27,7 @@ from octowright.mcp_types import (
     ScenarioTailResult,
     ScenarioWaitForSyncResult,
 )
+from octowright.plugins.contract import SupportsMacros
 
 log = get_logger(__name__)
 
@@ -481,14 +482,14 @@ class ScenarioPool:
                 raise KeyError(self._missing_scenario_message(scenario_id))
             summary: ScenarioStopResult = {"scenario_id": scenario_id, "teardown_errors": [], "closed": []}
             if live.spec.teardown_macro:
-                from octowright import macros as _macros
+                from octowright.scenario_kinds import adapter_for
 
                 for p in live.participants:
-                    if p.get("kind") == "terminal":
-                        continue  # teardown macros are Playwright-only; terminals are skipped
+                    adapter = adapter_for(p.get("kind") or "", browser_pool=browser_pool)
+                    if not isinstance(adapter, SupportsMacros):
+                        continue  # a kind with no run_macro has no teardown macro to run
                     try:
-                        session = browser_pool.get(p["instance_id"])
-                        await _macros.run_macro(session=session, name=live.spec.teardown_macro, args={})
+                        await adapter.run_macro(p["instance_id"], name=live.spec.teardown_macro, args={})
                     except Exception as e:
                         summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
             for p in live.participants:
@@ -532,8 +533,6 @@ class ScenarioPool:
     ) -> ScenarioRunMacroResult:
         import asyncio as _asyncio
 
-        from octowright import macros as _macros
-
         live = self.get(scenario_id)
         targets = self._participants_for_role(live, role)
         # Wrap the fan-out so the per-participant macro.run spans nest under a
@@ -550,15 +549,18 @@ class ScenarioPool:
         ):
 
             async def _run(p: dict[str, Any]) -> ScenarioParticipantOutcome:
-                if p.get("kind") == "terminal":
+                from octowright.scenario_kinds import adapter_for
+
+                kind = p.get("kind") or ""
+                adapter = adapter_for(kind, browser_pool=browser_pool)
+                if not isinstance(adapter, SupportsMacros):
                     return {
                         "instance_id": p["instance_id"],
                         "ok": False,
-                        "error": "terminal sessions do not support browser macros",
+                        "error": f"kind {kind!r} does not support macros (its adapter provides no run_macro)",
                     }
-                session = browser_pool.get(p["instance_id"])
                 try:
-                    await _macros.run_macro(session=session, name=macro, args=args or {})
+                    await adapter.run_macro(p["instance_id"], name=macro, args=args or {})
                     return {"instance_id": p["instance_id"], "ok": True}
                 except Exception as e:
                     return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
@@ -657,18 +659,18 @@ async def _apply_fixtures(browser_pool: Any, live: LiveScenario, fixtures: dict[
 async def _run_startup_macros(browser_pool: Any, live: LiveScenario) -> None:
     import asyncio as _asyncio
 
-    from octowright import macros as _macros
+    from octowright.scenario_kinds import adapter_for
     from octowright.scenarios import resolve_startup_macros
 
     failures: list[dict[str, str]] = []
 
     async def _run_for_participant(participant_dict: dict[str, Any], participant_spec: Any) -> None:
-        if participant_dict.get("kind") == "terminal":
-            return  # Playwright startup macros don't apply to terminals (validation also forbids them)
+        adapter = adapter_for(participant_dict.get("kind") or "", browser_pool=browser_pool)
+        if not isinstance(adapter, SupportsMacros):
+            return  # a kind with no run_macro has no startup macros to run (validation also forbids declaring them)
         for macro_name in resolve_startup_macros(participant_spec):
-            session = browser_pool.get(participant_dict["instance_id"])
             try:
-                await _macros.run_macro(session=session, name=macro_name, args={})
+                await adapter.run_macro(participant_dict["instance_id"], name=macro_name, args={})
             except Exception as e:
                 log.warning(
                     "scenario.startup_macro_failed",
