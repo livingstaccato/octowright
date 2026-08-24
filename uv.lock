@@ -16,6 +16,12 @@ resolution-markers = [
     "(python_full_version < '3.13' and platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and sys_platform == 'win32') or (python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 
+[manifest]
+members = [
+    "octowright",
+    "octowright-terminal",
+]
+
 [[package]]
 name = "aiosqlite"
 version = "0.22.1"
@@ -1887,6 +1893,7 @@ dev = [
     { name = "memray", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "mutmut" },
     { name = "mypy" },
+    { name = "octowright-terminal" },
     { name = "pip-audit" },
     { name = "pip-licenses" },
     { name = "pre-commit" },
@@ -1940,6 +1947,7 @@ dev = [
     { name = "memray", marker = "sys_platform == 'darwin' or sys_platform == 'linux'", specifier = ">=1.19.3" },
     { name = "mutmut", specifier = ">=3.3.1" },
     { name = "mypy", specifier = ">=1.18.0" },
+    { name = "octowright-terminal", editable = "packages/octowright-terminal" },
     { name = "pip-audit", specifier = ">=2.7.0" },
     { name = "pip-licenses", specifier = ">=5.0.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },
@@ -1956,6 +1964,25 @@ dev = [
     { name = "ty", specifier = ">=0.0.18" },
     { name = "vulture", specifier = ">=2.14" },
     { name = "xenon", specifier = ">=0.9.3" },
+]
+
+[[package]]
+name = "octowright-terminal"
+version = "0.1.0"
+source = { editable = "packages/octowright-terminal" }
+dependencies = [
+    { name = "octowright" },
+    { name = "provide-uterm", extra = ["ssh"] },
+    { name = "provide-uterm-platform" },
+    { name = "provide-uterm-server" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "octowright", editable = "." },
+    { name = "provide-uterm", extras = ["ssh"], editable = "../provide-uterm/packages/provide-uterm" },
+    { name = "provide-uterm-platform", editable = "../provide-uterm/packages/provide-uterm-platform" },
+    { name = "provide-uterm-server", editable = "../provide-uterm/packages/provide-uterm-server" },
 ]
 
 [[package]]
@@ -2283,6 +2310,11 @@ dependencies = [
     { name = "pydantic" },
 ]
 
+[package.optional-dependencies]
+ssh = [
+    { name = "asyncssh" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22" },
@@ -2290,7 +2322,7 @@ requires-dist = [
     { name = "asyncssh", marker = "extra == 'ssh'", specifier = ">=2.14" },
     { name = "httpx2", marker = "extra == 'all'", specifier = ">=2.10" },
     { name = "httpx2", marker = "extra == 'client'", specifier = ">=2.10" },
-    { name = "provide-telemetry", specifier = ">=0.4.7" },
+    { name = "provide-telemetry", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyte", marker = "extra == 'all'", specifier = ">=0.8" },
     { name = "pyte", marker = "extra == 'emulator'", specifier = ">=0.8" },
