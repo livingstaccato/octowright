@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -47,12 +48,22 @@ def test_reserved_path_is_contained_and_its_directory_exists(recording):
     assert not handle.path.exists(), "reserve must not create the file itself"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file-mode bits: secure_artifact_tree's 0700 chmod is best-effort and "
+    "a no-op on Windows (NTFS ACLs, not mode bits), so this assertion does not apply.",
+)
 def test_artifact_directory_is_owner_only(recording, monkeypatch):
     monkeypatch.setenv("OCTOWRIGHT_RECORDINGS_PRIVATE", "1")
     handle = _reserve(recording)
     assert stat.S_IMODE(handle.path.parent.stat().st_mode) == 0o700
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file-mode bits: secure_artifact_tree's 0700 chmod is best-effort and "
+    "a no-op on Windows (NTFS ACLs, not mode bits), so this assertion does not apply.",
+)
 def test_intermediate_dir_is_locked_when_recordings_dir_is_reached_through_a_symlink(monkeypatch, tmp_path):
     """secure_artifact_tree's leaf-to-root walk is a plain ``relative_to``, not
     resolve-aware. reserve_artifact must resolve recordings_dir before handing
