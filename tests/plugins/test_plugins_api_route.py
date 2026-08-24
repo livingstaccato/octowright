@@ -154,6 +154,11 @@ def test_module_url_resolves_through_the_asset_route(client_with, tmp_path):
 
         resp = client.get(module_url)
         assert resp.status_code == 200
-        assert resp.text == content
+        # Compare BYTES against what is on disk, not text against the string we
+        # wrote. `write_text` translates "\n" to the platform line ending, so on
+        # Windows the file holds CRLF while `content` still holds LF, and the
+        # route serves the file's real bytes -- a text compare fails there and
+        # only there.
+        assert resp.content == (asset_dir / "dist" / "renderer.js").read_bytes()
     finally:
         plugin_state.set_registry(original)
