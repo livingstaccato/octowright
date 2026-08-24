@@ -60,6 +60,12 @@ export function mountFallbackStream(
     feed(events: SessionEvent[]): void {
       if (destroyed || events.length === 0) return;
       if (base === null) {
+        // `events[0]` is guaranteed by the `events.length === 0` guard above --
+        // the `?? new Date().toISOString()` fallback is not dead code, it is a
+        // defence against a malformed event off the wire: TypeScript's `ts:
+        // string` requirement is a compile-time guarantee only and does not
+        // survive `JSON.parse`. This is the one path whose whole job is to not
+        // crash, so a missing `ts` degrades the render rather than throwing.
         base = events[0]?.ts ?? new Date().toISOString();
         renderTimeline(timeline, events);
         return;
