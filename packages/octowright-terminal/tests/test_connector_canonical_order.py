@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import inspect
 
-from octowright.terminal import connector_config
+from octowright_terminal import connector_config
 
 # Canonical ordering: network modern→legacy (ssh, telnet), then local (pty).
 # octowright has NO ws connector; do not add one (YAGNI).

@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from octowright_terminal.errors import ProtectedTerminalCloseError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -44,7 +45,6 @@ from octowright.plugins.errors import ProtectedSessionCloseError
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 from octowright.session.screencast_config import screencast_config_block
-from octowright.terminal.errors import ProtectedTerminalCloseError
 
 
 def _safe_live_summaries(sessions: Iterable[Any]) -> list[dict[str, Any]]:

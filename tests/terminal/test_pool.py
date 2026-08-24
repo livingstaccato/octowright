@@ -11,8 +11,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from octowright_terminal.errors import ProtectedTerminalCloseError
 
-from octowright.terminal.errors import ProtectedTerminalCloseError
 from octowright.terminal.pool import TerminalPool
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="PTY is POSIX-only")

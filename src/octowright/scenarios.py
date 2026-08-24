@@ -514,7 +514,7 @@ def resolve_terminal_launch(p: Participant) -> dict[str, Any]:
     only — the pure builders live in ``octowright.terminal.connector_config`` so
     this stays importable on a core install.
     """
-    from octowright.terminal.connector_config import (
+    from octowright_terminal.connector_config import (
         SSH_DEFAULT_PORT,
         pty_connector_config,
         ssh_connector_config,
