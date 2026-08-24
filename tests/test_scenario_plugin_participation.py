@@ -330,7 +330,15 @@ async def test_a_plugin_pool_failing_to_close_does_not_strand_the_scenario(regis
     spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
     sp = ScenarioPool()
     live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    ref_id = live.participants[0]["instance_id"]
     ref_pool.close = _boom  # type: ignore[assignment]
 
-    await sp.stop(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), terminal_pool=None)
+    result = await sp.stop(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), terminal_pool=None)
+    # Asserting maybe_get alone is insufficient: stop() pops the scenario
+    # unconditionally before the close loop even runs, so that assertion
+    # passes whether or not the close attempt ever reached the plugin's own
+    # pool. teardown_errors only gains an entry if the close was actually
+    # attempted (through the right pool) and actually raised -- that is what
+    # proves _boom was invoked at all.
+    assert result["teardown_errors"] == [{"instance_id": ref_id, "error": repr(RuntimeError("close exploded"))}]
     assert sp.maybe_get(live.scenario_id) is None, "a failing close must still retire the scenario"
