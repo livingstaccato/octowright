@@ -1,0 +1,37 @@
+[build-system]
+# Pinned to match the root octowright pyproject.toml: hatchling>=1.32 emits
+# Metadata-Version 2.5, which pypa/gh-action-pypi-publish v1.14.0's bundled
+# validator rejects outright. See the root pyproject.toml [build-system]
+# comment for the confirmed repro.
+requires = ["hatchling<1.32"]
+build-backend = "hatchling.build"
+
+[project]
+name = "octowright-terminal"
+version = "0.1.0"
+description = "Terminal session kind for octowright (PTY, SSH, telnet), as a session-kind plugin."
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = [
+    "octowright",
+    # [ssh] not [gateway]: `provide.uterm.server.connectors.ssh` imports
+    # asyncssh at module scope and raises ImportError without it. The extra
+    # that supplies asyncssh is declared on the BASE `provide-uterm` package
+    # (`ssh = ["asyncssh>=2.14"]`), not on `provide-uterm-server` -- which has
+    # no `ssh` extra at all; the extra that happens to pull in asyncssh there
+    # is `[gateway]`, which also drags in fastapi/uvicorn/websockets for the
+    # bridge/tunnel/gateway machinery this package never uses (it only touches
+    # `provide.uterm.server.connectors`, per the terminal-sessions design doc).
+    # `provide-uterm[ssh]` is the minimal, correctly-scoped way to get asyncssh.
+    "provide-uterm[ssh]>=0.4.0",
+    "provide-uterm-platform>=0.4.0",
+    "provide-uterm-server>=0.4.0",
+]
+
+# The only interface between core and this package. Core resolves the name from
+# OCTOWRIGHT_PLUGINS and loads this attribute; nothing else is imported.
+[project.entry-points."octowright.session_kinds"]
+terminal = "octowright_terminal.plugin:plugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/octowright_terminal"]

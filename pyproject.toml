@@ -167,6 +167,14 @@ artifacts = [
     "src/octowright/server/frontend/*.svg",
 ]
 
+[tool.uv.workspace]
+# The session-kind terminal plugin (see AGENTS.md "Terminal Sessions") lives as
+# its own workspace member so it can declare its own dependencies (uterm +
+# asyncssh) independently of core, and reach core only through the
+# octowright.session_kinds entry point. packages/octowright-frontend is not a
+# Python member and is intentionally not listed here.
+members = ["packages/octowright-terminal"]
+
 [tool.uv.sources]
 # Local-dev resolution for the unpublished provide-uterm ecosystem packages that
 # back the optional `terminal` extra (above). Expects the sibling repo checked
@@ -178,6 +186,11 @@ provide-uterm = { path = "../provide-uterm/packages/provide-uterm", editable = t
 provide-uterm-client = { path = "../provide-uterm/packages/provide-uterm-client", editable = true }
 provide-uterm-platform = { path = "../provide-uterm/packages/provide-uterm-platform", editable = true }
 provide-uterm-server = { path = "../provide-uterm/packages/provide-uterm-server", editable = true }
+# The terminal plugin workspace member (see [tool.uv.workspace] above), and the
+# workspace root itself -- uv requires an explicit self-source once any member
+# depends back on the root project by name.
+octowright-terminal = { workspace = true }
+octowright = { workspace = true }
 
 [dependency-groups]
 # Mirrors provide-telemetry's dev toolchain so any contributor across the
@@ -192,6 +205,10 @@ dev = [
     "memray>=1.19.3; sys_platform == 'linux' or sys_platform == 'darwin'",
     "mutmut>=3.3.1",
     "mypy>=1.18.0",
+    # The session-kind terminal plugin (packages/octowright-terminal), a
+    # workspace member. Dev-only so the test suite can import it; a browser-only
+    # install of octowright itself never pulls it in.
+    "octowright-terminal",
     "pip-audit>=2.7.0",
     "pip-licenses>=5.0.0",
     "pre-commit>=4.6.0",
