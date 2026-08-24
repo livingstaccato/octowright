@@ -103,3 +103,39 @@ def test_a_terminal_participant_still_cannot_declare_startup_macros():
     s = Scenario(name="demo", participants=[p])
     with pytest.raises(ValueError, match="startup_macros"):
         _validate_participant_kind(s, p)
+
+
+@pytest.mark.parametrize("opt", ["cols", "rows", "port"])
+def test_a_non_integer_terminal_option_is_refused_at_load(opt):
+    """``options`` is opaque to core, so the YAML parser's int check no longer
+    covers these -- they used to be typed ``Participant`` fields. Terminal's
+    owning kind is still core until the extraction step, so core validates them
+    here; without it a string ``cols`` surfaces deep inside the uterm connector
+    instead of at scenario load.
+    """
+    from octowright.scenarios import Scenario, _validate_participant_kind
+
+    p = Participant(persona="t", kind="terminal", role="monitor", options={opt: "80"})
+    s = Scenario(name="demo", participants=[p])
+    with pytest.raises(ValueError, match=f"options.{opt} must be an integer"):
+        _validate_participant_kind(s, p)
+
+
+@pytest.mark.parametrize("opt", ["cols", "rows", "port"])
+def test_a_bool_terminal_option_is_refused_at_load(opt):
+    """``bool`` is an ``int`` subclass, so a bare isinstance check would let
+    ``cols: true`` through -- the same trap ``_validate_optional_ints`` guards.
+    """
+    from octowright.scenarios import Scenario, _validate_participant_kind
+
+    p = Participant(persona="t", kind="terminal", role="monitor", options={opt: True})
+    s = Scenario(name="demo", participants=[p])
+    with pytest.raises(ValueError, match=f"options.{opt} must be an integer"):
+        _validate_participant_kind(s, p)
+
+
+def test_integer_terminal_options_are_accepted():
+    from octowright.scenarios import Scenario, _validate_participant_kind
+
+    p = Participant(persona="t", kind="terminal", role="monitor", options={"cols": 100, "rows": 40, "port": 2222})
+    _validate_participant_kind(Scenario(name="demo", participants=[p]), p)

@@ -67,6 +67,37 @@ class Scenario:
     verify: dict[str, str] = field(default_factory=dict)
 
 
+def _validate_terminal_options(s: Scenario, p: Participant) -> None:
+    """Validate the ``options`` terminal owns, at scenario-load time.
+
+    Extracted from ``_validate_participant_kind`` so that function stays under
+    the complexity ratchet, and because these are two separate jobs: which kinds
+    may participate at all, versus what one particular kind's settings must look
+    like. This whole function leaves with terminal at the extraction step.
+
+    ``options`` is opaque to core, so the YAML parser's ``_validate_optional_ints``
+    no longer reaches these -- they used to be typed ``Participant`` fields. The
+    spec's answer is that the owning kind validates, and until the extraction step
+    terminal's owning kind IS core. Without this, a string ``cols`` surfaces deep
+    inside the uterm connector instead of at scenario load.
+    """
+    connector_type = p.options.get("connector_type") or "pty"
+    if connector_type not in SUPPORTED_TERMINAL_KINDS:
+        raise ValueError(
+            f"scenario {s.name!r}: terminal participant has unsupported connector_type {connector_type!r} "
+            f"(expected one of {list(SUPPORTED_TERMINAL_KINDS)})"
+        )
+    for opt in ("cols", "rows", "port"):
+        value = p.options.get(opt)
+        # bool is an int subclass, so a bare isinstance check would pass `cols: true`
+        # -- the same trap _validate_optional_ints guards against.
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise ValueError(
+                f"scenario {s.name!r}: terminal participant {p.persona!r} options.{opt} "
+                f"must be an integer, got {type(value).__name__}"
+            )
+
+
 def _validate_participant_kind(s: Scenario, p: Participant) -> None:
     """Validate a participant's kind against every kind that can actually run.
 
@@ -84,12 +115,7 @@ def _validate_participant_kind(s: Scenario, p: Participant) -> None:
     from octowright.scenario_kinds import TERMINAL_KIND, known_kinds, supports
 
     if p.kind == TERMINAL_KIND:
-        connector_type = p.options.get("connector_type") or "pty"
-        if connector_type not in SUPPORTED_TERMINAL_KINDS:
-            raise ValueError(
-                f"scenario {s.name!r}: terminal participant has unsupported connector_type {connector_type!r} "
-                f"(expected one of {list(SUPPORTED_TERMINAL_KINDS)})"
-            )
+        _validate_terminal_options(s, p)
     elif p.kind not in known_kinds():
         raise ValueError(
             f"scenario {s.name!r}: participant has unsupported kind {p.kind!r} "
