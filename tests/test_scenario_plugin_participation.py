@@ -226,3 +226,78 @@ async def test_startup_macros_run_through_the_adapter(registered_with_macros):
     live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
     assert [name for _id, name, _args in adapter.ran] == ["boot"]
     assert live.participants[0]["kind"] == "refkind"
+
+
+class _SyncingAdapter(_RefAdapter):
+    def __init__(self, pool: _RefPool) -> None:
+        super().__init__(pool)
+        self.synced: list[dict[str, Any]] = []
+        self.policies: list[str] = []
+        self.routes: list[list[dict[str, Any]]] = []
+
+    async def wait_for_sync(self, instance_id, *, selector, text, url, timeout_ms) -> None:
+        self.synced.append({"instance_id": instance_id, "selector": selector, "url": url})
+
+    async def set_dialog_policy(self, instance_id: str, policy: str) -> None:
+        self.policies.append(policy)
+
+    async def install_mock_routes(self, instance_id: str, routes: list[dict[str, Any]]) -> None:
+        self.routes.append(routes)
+
+
+@pytest.fixture
+def registered_full():
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    pool = _RefPool()
+    adapter = _SyncingAdapter(pool)
+    reg.register(_Descriptor(), pool=pool, adapter=adapter, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        yield reg, pool, adapter
+    finally:
+        plugin_state.set_registry(original)
+
+
+async def test_wait_for_sync_reports_a_kind_without_the_capability(registered):
+    spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
+    sp = ScenarioPool()
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    result = await sp.wait_for_sync(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), selector="#x")
+    outcome = result["results"][0]
+    assert outcome["ok"] is False
+    assert "sync" in outcome["error"]
+
+
+async def test_wait_for_sync_dispatches_to_a_capable_adapter(registered_full):
+    _, _, adapter = registered_full
+    spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
+    sp = ScenarioPool()
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    await sp.wait_for_sync(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), selector="#ready")
+    assert adapter.synced[0]["selector"] == "#ready"
+
+
+async def test_fixtures_dispatch_to_both_capability_handlers(registered_full):
+    _, _, adapter = registered_full
+    spec = Scenario(
+        name="s",
+        participants=[Participant(persona="a", kind="refkind", role="monitor")],
+        fixtures={"dialog_policy": "accept", "mock_routes": [{"pattern": "**/x", "body": "{}"}]},
+    )
+    sp = ScenarioPool()
+    await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    assert adapter.policies == ["accept"]
+    assert adapter.routes == [[{"pattern": "**/x", "body": "{}"}]]
+
+
+async def test_fixtures_skip_a_kind_that_cannot_apply_them(registered):
+    """A partial adapter is skipped silently -- fixtures are best-effort setup."""
+    spec = Scenario(
+        name="s",
+        participants=[Participant(persona="a", kind="refkind", role="monitor")],
+        fixtures={"dialog_policy": "accept"},
+    )
+    sp = ScenarioPool()
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    assert len(live.participants) == 1, "an inapplicable fixture must not fail the scenario"
