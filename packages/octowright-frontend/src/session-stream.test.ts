@@ -239,3 +239,15 @@ describe("importRenderer", () => {
     expect("code" in result).toBe(false);
   });
 });
+
+// Registry-driven dispatch (Task 7, session.ts) deliberately has no describe
+// block here. Its "which URL/renderer did the dispatcher choose" decision IS
+// `resolveRenderer` from plugin-registry.ts -- session.ts calls it directly
+// and branches on its result -- and that decision is already fully exercised
+// in plugin-registry.test.ts under its own name. A `chooseRenderer` wrapper
+// that only re-exported it would test the same function twice. What session.ts
+// adds on top (which mount function it hands to bootStreamSession, and that a
+// core browser kind never reaches the registry at all) is covered in
+// session.test.ts's "bootSession — plugin registry dispatch" describe block,
+// next to the rest of session.ts's dispatch tests (including the terminal
+// branch this one sits beside).

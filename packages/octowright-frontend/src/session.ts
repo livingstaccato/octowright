@@ -22,7 +22,10 @@ import { clearDashboardMediaAuth, configureDashboardMediaAuth } from "./dashboar
 import { renderDownloadsPanel } from "./downloads-panel.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
+import type { MountStream, StreamContext } from "./plugin-contract.js";
+import { loadPluginRegistry, resolveRenderer } from "./plugin-registry.js";
 import { disposeScreenshotsPanel, renderScreenshotsPanel } from "./screenshots-panel.js";
+import { mountFallbackStream } from "./session-fallback.js";
 import { openTail } from "./tail.js";
 import { bindContext, getLogger, initTelemetry, tabSwitchesCounter, userActionsCounter } from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
@@ -37,6 +40,15 @@ import type {
 } from "./types.js";
 
 const log = getLogger("octowright.frontend.session");
+
+// Hand-maintained mirror of the `Kind` union in types.ts ("chromium" |
+// "firefox" | "webkit" | "terminal", minus "terminal" -- terminal keeps its
+// own branch below and is not dispatched through the plugin registry until
+// the extraction step). `Kind` is a compile-time type with no runtime
+// representation, and a type cannot be tested against at runtime, so this
+// set has to be kept in step with `Kind` BY HAND: there is no codegen step
+// that derives one from the other. If `Kind` changes, update this too.
+const BROWSER_KINDS: ReadonlySet<string> = new Set(["chromium", "firefox", "webkit"]);
 
 function safeDownloadName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]+/g, "-");
@@ -669,6 +681,38 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     log.info({ event: "session_boot_complete", session_id: sessionId, kind: "terminal" });
     return;
   }
+
+  // Registry-driven dispatch for every other kind. A core browser kind never
+  // lives in the plugin registry -- the three browser kinds are core-owned,
+  // not plugin-supplied -- so it skips the registry lookup (and its
+  // `/api/plugins` round trip) entirely and falls through to the existing
+  // browser page below, unchanged. Any other kind either gets its plugin's
+  // own renderer or the fallback renderer with a visible reason -- never a
+  // blank page.
+  if (!BROWSER_KINDS.has(detail.kind)) {
+    const registry = await loadPluginRegistry();
+    const chosen = resolveRenderer(registry, detail.kind);
+    if (!("code" in chosen)) {
+      const { bootStreamSession, importRenderer } = await import("./session-stream.js");
+      const mod = await importRenderer(chosen.moduleUrl);
+      const mount: MountStream =
+        "code" in mod
+          ? (el: HTMLElement, ctx: StreamContext) => mountFallbackStream(el, ctx, mod)
+          : mod.mountStream;
+      await bootStreamSession(root, sessionId, detail, mount, {
+        ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
+      });
+      return;
+    }
+    // No usable renderer for this kind: the fallback, with its reason
+    // (no-frontend / version-mismatch).
+    const { bootStreamSession } = await import("./session-stream.js");
+    await bootStreamSession(root, sessionId, detail, (el, ctx) => mountFallbackStream(el, ctx, chosen), {
+      ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
+    });
+    return;
+  }
+  // A browser kind: fall through to the existing browser page below, unchanged.
 
   const refs = buildLayout(root);
   renderHeader(refs.header, detail);
