@@ -31,9 +31,16 @@ TERMINAL_KIND = "terminal"
 
 
 def _plugin_registry() -> Any:
-    from octowright.server import plugin_state
+    # ``plugins.state``, NOT ``server.plugin_state``: importing ``octowright.server``
+    # runs its __init__, which imports every tool submodule (Playwright included)
+    # to trigger @mcp.tool registration. This function is reached from
+    # ``scenarios._validate_participant_kind`` -- core model code -- and going
+    # through the tool layer took validating one participant from 392 to 1146
+    # loaded modules. ``server.plugin_state`` re-exports these same functions, so
+    # both paths share one global.
+    from octowright.plugins.state import registry
 
-    return plugin_state.registry()
+    return registry()
 
 
 def adapter_for(kind: str, *, browser_pool: Any) -> Any | None:
