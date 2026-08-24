@@ -12,6 +12,24 @@ from octowright.plugins.session_launch import PluginContext
 from tests.plugins.reference.pool import KIND, ReferencePool, ReferenceSession
 
 
+class ReferenceScenarioAdapter:
+    """The mandatory floor and nothing else.
+
+    Deliberately partial: the interesting case for core is a kind that can JOIN
+    a scenario but cannot run macros, sync, or take fixtures. A full adapter
+    would exercise the same paths the browser adapter already covers, and would
+    not prove that the capability narrowing actually narrows.
+    """
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    def resolve_participant(self, spec: Any, persona: Any) -> dict[str, Any]:
+        # options pass through opaquely: core validated nothing inside them, and
+        # the plugin is the only party that knows what its own settings mean.
+        return {"label": spec.persona, "profile": spec.persona, **dict(spec.options)}
+
+
 class ReferencePlugin:
     kind = KIND
     display_name = "Reference Kind"
@@ -24,11 +42,8 @@ class ReferencePlugin:
     def create_pool(self, ctx: PluginContext) -> ReferencePool:
         return ReferencePool(ctx)
 
-    def create_scenario_adapter(self, pool: ReferencePool) -> None:
-        # Scenario participation arrives in build step 3. Returning None here
-        # is the honest state, not a placeholder: this kind cannot appear in a
-        # scenario yet.
-        return None
+    def create_scenario_adapter(self, pool: Any) -> Any:
+        return ReferenceScenarioAdapter(pool)
 
     def session_detail(self, session: ReferenceSession) -> dict[str, Any]:
         return {
