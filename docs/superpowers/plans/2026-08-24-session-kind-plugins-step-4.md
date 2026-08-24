@@ -1133,7 +1133,7 @@ This task builds the generic version of that: core does all eight, the plugin do
 
 **Interfaces:**
 - Consumes: `getEvents`, `tailWebSocketUrl` from `./api.js`; `installDashboardAuthRequiredNotice`, `renderFooter`, `renderHeader` from `./session.js`; `openTail` from `./tail.js`; `renderTimeline`, `appendTimelineEvents` from `./timeline.js`; `mountFallbackStream` (Task 4).
-- Produces: `bootStreamSession(root, sessionId, detail, mount, opts?) -> Promise<void>`.
+- Produces: `bootStreamSession(root, sessionId, detail, mount, opts?) -> Promise<void>`; `importRenderer(moduleUrl) -> Promise<{mountStream: MountStream} | FallbackReason>` — wraps the dynamic import so a 404 or syntax error becomes `code: "import-failed"` rather than an unhandled rejection. Task 7 consumes it; it lives here because it belongs with the other failure handling.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1343,33 +1343,43 @@ In `session.ts`, replace the hardcoded branch with:
 ```ts
   if (detail.kind === "terminal") {
     // Terminal still ships inside core; it moves onto the plugin path in the
-    // extraction step. Checked first so its behaviour is unchanged.
+    // extraction step. Checked first so its behaviour is unchanged -- including
+    // the opts passthrough and the completion log, both of which the existing
+    // branch has and which tests depend on.
     const { bootTerminalSession } = await import("./session-terminal.js");
-    await bootTerminalSession(root, sessionId, detail);
+    await bootTerminalSession(root, sessionId, detail, {
+      ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
+    });
+    log.info({ event: "session_boot_complete", session_id: sessionId, kind: "terminal" });
     return;
   }
 
   const registry = await loadPluginRegistry();
   const chosen = resolveRenderer(registry, detail.kind);
-  if ("code" in chosen) {
-    // Not a plugin kind at all, or one we cannot render: fall through to the
-    // browser page for a browser kind, and to the fallback for anything else.
-    if (!isBrowserKind(detail.kind)) {
-      const { bootStreamSession } = await import("./session-stream.js");
-      await bootStreamSession(root, sessionId, detail, (el, ctx) =>
-        mountFallbackStream(el, ctx, chosen),
-      );
-      return;
-    }
-  } else {
+  if (!("code" in chosen)) {
+    const { bootStreamSession, importRenderer } = await import("./session-stream.js");
     const mod = await importRenderer(chosen.moduleUrl);
-    const { bootStreamSession } = await import("./session-stream.js");
-    await bootStreamSession(root, sessionId, detail, mod.mountStream);
+    const mount =
+      "code" in mod
+        ? (el: HTMLElement, ctx: StreamContext) => mountFallbackStream(el, ctx, mod)
+        : mod.mountStream;
+    await bootStreamSession(root, sessionId, detail, mount);
     return;
   }
+  if (!BROWSER_KINDS.has(detail.kind)) {
+    // A non-browser kind we cannot render: the fallback, with its reason.
+    const { bootStreamSession } = await import("./session-stream.js");
+    await bootStreamSession(root, sessionId, detail, (el, ctx) =>
+      mountFallbackStream(el, ctx, chosen),
+    );
+    return;
+  }
+  // A browser kind: fall through to the existing browser page below, unchanged.
 ```
 
-`importRenderer` wraps the dynamic import so a 404 or syntax error becomes a `FallbackReason` with `code: "import-failed"` rather than an unhandled rejection. Put it in `session-stream.ts` beside the other failure handling.
+`importRenderer` comes from Task 6 — it wraps the dynamic import so a 404 or syntax error becomes a `FallbackReason` with `code: "import-failed"` rather than an unhandled rejection.
+
+**`BROWSER_KINDS` does not exist yet and you must add it.** `types.ts` has a `Kind` *type* union (`"chromium" | "firefox" | "webkit" | "terminal"`) but no runtime value, and a type cannot be tested against at runtime. Add a `const BROWSER_KINDS: ReadonlySet<string> = new Set(["chromium", "firefox", "webkit"])` in `session.ts` beside the dispatch, deriving it from the `Kind` union is not possible without a codegen step — so add a comment saying the two must stay in step, and note in your report that this is a hand-maintained mirror.
 
 Read the surrounding function before writing: the existing browser path must remain the default for browser kinds, and the early `return` shape must match what is already there.
 
@@ -1398,40 +1408,45 @@ Terminal keeps its branch, checked first, until the extraction step."
 
 ## Task 8: Types cleanup
 
-Spec §8.8: `connector_type` and the `"telnet"` member of the kind union leave `types.ts` with the plugin; core's `SessionSummary` keeps a free-form `extra` for kind-specific fields.
+Spec §8.8 says `connector_type` and the telnet member leave `types.ts` **with the plugin**. Terminal does not become a plugin until step 5, so most of this is step 5's.
 
-`connector_type` is already declared-and-unpopulated in `src/octowright/mcp_types.py` (`ScenarioParticipant`) — a pre-existing dead field noted during step 3's review. Remove it there too.
+**Verified against the tree before scoping this task:**
+- `telnet` is not in the `Kind` union at all — `types.ts:1` is `"chromium" | "firefox" | "webkit" | "terminal"`. It lives inside `connector_type`'s own union at `types.ts:72`, so it leaves when that field does.
+- `connector_type` is still **used** by terminal's own tests (`session-terminal.test.ts:66,108`, `terminal-view.test.ts:57`). Removing it now breaks them, and terminal is still core's until step 5.
+
+So this task removes only the genuinely dead one: `ScenarioParticipant.connector_type` in `src/octowright/mcp_types.py`, declared and populated by nothing since the options collapse (confirmed during step 3's review). The frontend field stays until terminal leaves.
 
 **Files:**
-- Modify: `packages/octowright-frontend/src/types.ts`, `src/octowright/mcp_types.py`
+- Modify: `src/octowright/mcp_types.py`
 
-- [ ] **Step 1: Find every consumer**
+- [ ] **Step 1: Confirm the field is genuinely dead**
 
-Run: `grep -rn "connector_type\|telnet" packages/octowright-frontend/src src/octowright/mcp_types.py`
+Run: `grep -rn "connector_type" src/ tests/ | grep -v "octowright/terminal\|test_scenarios_terminal\|scenarios.py"`
 
-Terminal's own code legitimately keeps `connector_type` — it is still core's until step 5. What leaves is the **shared type surface**: core's `SessionSummary`/`ScenarioParticipant` must not name a field only one kind uses.
+Expect the only `ScenarioParticipant` hit to be its declaration. If anything **writes** it, stop and report — the step-3 review's finding that it is unpopulated would then be wrong, and removing it would be a behaviour change rather than a cleanup.
 
-- [ ] **Step 2: Make the change**
+- [ ] **Step 2: Remove it**
 
-Remove `connector_type` from the shared summary types and the `"telnet"` member from the kind union, ensuring `extra` (free-form) carries kind-specific fields instead. If a consumer breaks, route it through `extra` rather than re-adding the field.
+Delete the `connector_type` line from `ScenarioParticipant` in `src/octowright/mcp_types.py`. `total=False` already, so nothing else changes.
 
 - [ ] **Step 3: Verify**
 
-Run: `cd packages/octowright-frontend && npx tsc --noEmit && npm run test`, then from the repo root `uv run --active pytest -k "mcp_types or scenario" --no-cov`.
-Report anything you had to route through `extra` and why.
+From the repo root: `uv run --active pytest -k "mcp_types or scenario" --no-cov`, and confirm `packages/octowright-frontend/src/types.ts` is **untouched** (`git diff --stat -- packages/octowright-frontend/src/types.ts` empty). Touching it would break terminal's own tests, which is step 5's problem to solve when terminal actually leaves.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add packages/octowright-frontend/src/types.ts src/octowright/mcp_types.py
-git commit -m "refactor(types): kind-specific fields leave the shared summary types
+git add src/octowright/mcp_types.py
+git commit -m "refactor(types): drop the dead ScenarioParticipant.connector_type
 
-connector_type and the telnet kind member are terminal's, not core's. The
-shared SessionSummary keeps a free-form extra for kind-specific fields, so a
-plugin adds none of its own to a type every kind shares.
+Declared and populated by nothing since the options collapse moved terminal's
+settings under a free-form mapping.
 
-ScenarioParticipant.connector_type was already declared and populated by
-nothing -- dead since the options collapse."
+The frontend's connector_type stays for now: spec 8.8 has it leaving with the
+plugin, and terminal is still core's until the extraction step -- its own
+tests still read the field, so removing it here would break them to no
+purpose. telnet is not in the Kind union at all; it lives inside
+connector_type's own union and leaves with it."
 ```
 
 ---
@@ -1499,6 +1514,7 @@ rather than a UI library."
 
 - Deleting terminal from core and standing up `octowright-terminal`, including migrating its renderer onto `mountStream` (step 5).
 - `layout: "browser"` — the value exists in `FrontendAsset` and is reported by `/api/plugins`, but core's browser page is not yet pluggable. Only `"stream"` is wired. A plugin declaring `"browser"` gets the fallback, which is honest rather than silently wrong.
+- **`connector_type` leaving `packages/octowright-frontend/src/types.ts`** (spec §8.8). It leaves *with the plugin*, and terminal is still core's — its own tests read the field. Removing it here would break them for no gain. Step 5.
 
 ## Carried-forward findings
 
