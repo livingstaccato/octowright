@@ -69,4 +69,21 @@ describe("resolveRenderer", () => {
   it("reports no-frontend for an unknown kind", () => {
     expect(resolveRenderer(new Map(), "nosuch")).toMatchObject({ code: "no-frontend" });
   });
+
+  it("reports no-frontend for a plugin declaring the browser layout", () => {
+    const reg = new Map([
+      [
+        "refkind",
+        {
+          moduleUrl: "/plugins/p/renderer.js",
+          rendererApiVersion: RENDERER_API_VERSION,
+          displayName: "Ref",
+          layout: "browser" as const,
+        },
+      ],
+    ]);
+    const out = resolveRenderer(reg, "refkind");
+    expect(out).toMatchObject({ code: "no-frontend" });
+    expect((out as { detail: string }).detail).toContain("browser");
+  });
 });

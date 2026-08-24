@@ -547,4 +547,24 @@ describe("bootSession — plugin registry dispatch", () => {
     expect(bootStreamSessionMock).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
   });
+
+  it("never touches the plugin registry for the 'unknown' kind either -- it renders the browser debugger", async () => {
+    // http/discovery.py reports kind "unknown" for a closed recording whose
+    // opening row is missing or carries no kind (a launch that died before
+    // writing its row, a truncated recording, a legacy file). No plugin can
+    // ever claim "unknown" (it is in core's RESERVED_KINDS), so this must
+    // take the exact same no-registry-lookup path a real browser kind does,
+    // rather than fetching /api/plugins and rendering the stream fallback
+    // captioned "kind: unknown" and blaming a plugin that was never involved.
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    getSessionMock.mockResolvedValue(makeDetail({ kind: "unknown", live: false }));
+
+    const el = document.createElement("div");
+    await bootSession(el, "sess-unknown");
+
+    const urls = fetchSpy.mock.calls.map((call) => String(call[0]));
+    expect(urls).not.toContain("/api/plugins");
+    expect(bootStreamSessionMock).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
 });

@@ -107,10 +107,22 @@ def test_no_plugins_is_an_empty_object(client_with):
 
 def test_module_url_is_built_from_the_entry_point_name(client_with, tmp_path):
     """The SPA never composes a plugin URL itself, so core owns this join."""
-    client, original = client_with(("dash-named", "k", "K", _asset(tmp_path, module_path="dist/main.mjs")))
+    asset = _asset(tmp_path, module_path="dist/main.mjs")
+    (asset.asset_dir / "dist").mkdir(parents=True)
+    (asset.asset_dir / "dist" / "main.mjs").write_text("export function mountStream() {}\n", encoding="utf-8")
+    client, original = client_with(("dash-named", "k", "K", asset))
     try:
         body = client.get("/api/plugins").json()
         assert body["k"]["moduleUrl"] == "/plugins/dash-named/dist/main.mjs"
+
+        # `.mjs` (a common plugin build-output extension) was previously
+        # fetched nowhere in this suite -- only `.js` module paths were ever
+        # actually requested. Fetch the URL this test just built and pin that
+        # it actually serves (200, `text/javascript`), not just that the
+        # moduleUrl string is composed correctly.
+        resp = client.get(body["k"]["moduleUrl"])
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/javascript")
     finally:
         plugin_state.set_registry(original)
 
