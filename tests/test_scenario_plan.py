@@ -252,6 +252,52 @@ class _ExplodingPool:
 
 
 @pytest.mark.usefixtures("empty_personas_dir")
+def test_plan_resolves_a_plugin_participant_through_its_own_adapter(scenarios_dir: Path) -> None:
+    """Before the fix, scenario_plan unconditionally called resolve_launch_kwargs
+    for any non-terminal participant, silently dropping spec.options and
+    reporting browser launch kwargs (viewport_w, stabilize, record_video,
+    trace) for a plugin kind that scenario_start would never actually launch
+    that way -- the tool's own description promises the resolved kwargs
+    scenario_start would use, which was false for a plugin kind."""
+    from octowright.plugins.registry import PluginRegistry
+    from octowright.server import plugin_state
+
+    class _RefAdapter:
+        def resolve_participant(self, spec: Any, persona: Any) -> dict[str, Any]:
+            return {"custom_shape": True, "persona_seen": spec.persona}
+
+    class _Descriptor:
+        kind = "refkind"
+        display_name = "Reference Kind"
+        plugin_api_version = 1
+        tool_names: frozenset[str] = frozenset()
+        tool_module = None
+        profile_name = None
+        frontend = None
+
+        def create_pool(self, ctx: Any) -> Any:
+            raise AssertionError("not used")
+
+        def create_scenario_adapter(self, pool: Any) -> Any:
+            raise AssertionError("not used")
+
+        def session_detail(self, session: Any) -> dict[str, Any]:
+            return {}
+
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    reg.register(_Descriptor(), pool="REFPOOL", adapter=_RefAdapter(), discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        _write(scenarios_dir, "plugintest", [{"persona": "ref-rita", "kind": "refkind", "role": "monitor"}])
+        plan = scenario_plan(name="plugintest")
+    finally:
+        plugin_state.set_registry(original)
+
+    assert plan["participants"][0]["launch_kwargs"] == {"custom_shape": True, "persona_seen": "ref-rita"}
+
+
+@pytest.mark.usefixtures("empty_personas_dir")
 def test_plan_does_not_touch_pool(scenarios_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the live `pool` and `scenario_pool` with exploding stand-ins to
     prove scenario_plan never reaches into them."""
