@@ -67,6 +67,10 @@ SENSITIVE_ROUTE_PATTERNS = {
     # pairing_exempt (they ARE the bootstrap; mint is token-authed itself).
     ("POST", "/api/pair/mint"),
     ("POST", "/api/pair/redeem"),
+    # Also pairing_exempt: the SPA reads this to decide what to import before
+    # pairing has necessarily completed, and it exposes only what an operator
+    # already enabled -- no session data.
+    ("GET", "/api/plugins"),
     ("GET", "/api/sessions"),
     ("POST", "/api/sessions"),
     ("GET", "/api/sessions/{id}"),
