@@ -37,7 +37,18 @@ from octowright.session.operation_gate import SessionBusyTimeoutError, SessionCl
 # Restrict to a generous-but-safe character set so a glob metachar (``*``,
 # ``?``, ``[``) or path separator can't widen the result set when ``sid``
 # flows into ``glob()`` patterns or filesystem joins.
-_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+#
+# The HYPHEN is excluded deliberately, and it is the one exclusion that is about
+# correctness rather than path safety. Recording filenames are
+# ``{stamp}-{kind}-{instance_id}[-{label}]`` and readers recover the id as
+# ``stem.split("-")[2]``, so a hyphenated id parses back as a truncated token --
+# which is how a request naming one session could once resolve to another's
+# recording. ``plugins.identity.INSTANCE_ID_RE`` forbids the hyphen at the point
+# core composes the name; forbidding it here too means a request that could only
+# refer to such an id is refused outright rather than silently resolving to a
+# prefix. Case stays permissive: uppercase shifts no field and so is not the
+# ambiguity, while several existing callers use mixed-case ids.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 
 def _valid_session_id(sid: str) -> bool:
@@ -142,6 +153,43 @@ async def session_trace(request: Request) -> Response:
         media_type="application/zip",
         filename=trace_path.name,
     )
+
+
+async def session_artifact(request: Request) -> Response:
+    """GET /api/sessions/{id}/artifacts/{artifact_id} — serve a committed plugin artifact.
+
+    Everything is re-derived from the recording on every request: the row's
+    stored path is relative and is re-resolved against the recordings root,
+    and its mime type is re-checked against the allowlist. A recording is a
+    file a local user can edit, so neither is trusted from one request to the
+    next.
+    """
+    from octowright.plugins.artifacts import read_registered_artifacts
+
+    sid = request.path_params["id"]
+    artifact_id = request.path_params["artifact_id"]
+    if not _valid_session_id(sid):
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
+
+    log_path = _resolve_log_path(sid)
+    if log_path is not None:
+        root = Path(state.RECORDINGS_DIR)
+        for artifact in read_registered_artifacts(log_path, root):
+            if artifact.artifact_id == artifact_id:
+                # ``FileResponse`` defaults to ``content_disposition_type="attachment"``,
+                # which this call relies on and never overrides. That header —
+                # not the mime-type allowlist — is what stops an allowlisted
+                # `image/svg+xml` artifact (SVG is active content: it can carry
+                # <script>) from executing in the dashboard's own origin, where
+                # the pairing bearer lives. Switching this route to `inline`
+                # would silently reopen that; see ARTIFACT_MIME_ALLOWLIST and
+                # tests/plugins/test_artifact_route.py::test_artifact_response_is_attachment_disposition.
+                return FileResponse(
+                    path=str(artifact.path),
+                    media_type=artifact.mime_type,
+                    filename=artifact.path.name,
+                )
+    return JSONResponse({"error": "no such artifact for this session"}, status_code=404)
 
 
 def _screenshot_dir_for(session_id: str) -> Path | None:
@@ -365,6 +413,11 @@ def routes() -> list[Route]:
         ),
         Route("/api/sessions/{id}/video", guard_sensitive_http(session_video), methods=["GET"]),
         Route("/api/sessions/{id}/trace", guard_sensitive_http(session_trace), methods=["GET"]),
+        Route(
+            "/api/sessions/{id}/artifacts/{artifact_id}",
+            guard_sensitive_http(session_artifact),
+            methods=["GET"],
+        ),
         Route(
             "/api/sessions/{id}/markdown",
             guard_sensitive_http(session_markdown, side_effect_get=True),

@@ -31,6 +31,12 @@ from octowright.server import meta as _meta  # noqa: F401
 from octowright.server import personas as _personas  # noqa: F401
 from octowright.server import scenarios as _scenarios  # noqa: F401
 from octowright.server import web as _web  # noqa: F401
+
+# Plugin activation imports each enabled plugin's tool module, so it MUST come
+# after every core submodule above has registered its tools: the SDK's add_tool
+# is first-wins, and activating earlier would let a plugin shadow a core tool.
+from octowright.server import _plugin_activation as _plugin_activation  # isort: skip
+
 from octowright.server._state import log, mcp, pool, scenario_pool
 
 # Re-export every tool function at the package level for direct test access

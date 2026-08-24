@@ -17,7 +17,6 @@ from octowright._paths import reject_unsafe_path
 from octowright.defaults import (
     SCENARIO_TEMPLATES_DIR,
     SCENARIOS_DIR,
-    SUPPORTED_KINDS,
     SUPPORTED_TERMINAL_KINDS,
 )
 
@@ -50,17 +49,12 @@ class Participant:
     stabilize: bool | None = None
     record_video: bool | None = None
     trace: bool | None = None
-    # Terminal participants (kind == "terminal"); connector_type defaults to "pty".
-    connector_type: str | None = None
-    command: str | None = None
-    cols: int | None = None
-    rows: int | None = None
-    host: str | None = None
-    port: int | None = None
-    user: str | None = None
-    key_path: str | None = None
-    known_hosts: str | None = None
-    insecure_no_host_check: bool | None = None
+    # Kind-specific settings, passed through opaquely and validated by whichever
+    # kind owns the participant. This replaced ten terminal-only fields that a
+    # browser participant could never use and that no plugin could extend
+    # without a core change -- the dataclass is public plugin API, so every
+    # field on it is a compatibility commitment.
+    options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -73,26 +67,66 @@ class Scenario:
     verify: dict[str, str] = field(default_factory=dict)
 
 
-def _validate_participant_kind(s: Scenario, p: Participant) -> None:
-    """Validate a participant's kind. Terminal participants (kind == "terminal")
-    carry a connector_type (pty/ssh, default pty) and cannot use browser macros;
-    browser participants must name a supported engine. SUPPORTED_KINDS stays
-    browser-only so this never widens browser_launch / session_launch validation.
+def _validate_terminal_options(s: Scenario, p: Participant) -> None:
+    """Validate the ``options`` terminal owns, at scenario-load time.
+
+    Extracted from ``_validate_participant_kind`` so that function stays under
+    the complexity ratchet, and because these are two separate jobs: which kinds
+    may participate at all, versus what one particular kind's settings must look
+    like. This whole function leaves with terminal at the extraction step.
+
+    ``options`` is opaque to core, so the YAML parser's ``_validate_optional_ints``
+    no longer reaches these -- they used to be typed ``Participant`` fields. The
+    spec's answer is that the owning kind validates, and until the extraction step
+    terminal's owning kind IS core. Without this, a string ``cols`` surfaces deep
+    inside the uterm connector instead of at scenario load.
     """
-    if p.kind == "terminal":
-        connector_type = p.connector_type or "pty"
-        if connector_type not in SUPPORTED_TERMINAL_KINDS:
+    connector_type = p.options.get("connector_type") or "pty"
+    if connector_type not in SUPPORTED_TERMINAL_KINDS:
+        raise ValueError(
+            f"scenario {s.name!r}: terminal participant has unsupported connector_type {connector_type!r} "
+            f"(expected one of {list(SUPPORTED_TERMINAL_KINDS)})"
+        )
+    for opt in ("cols", "rows", "port"):
+        value = p.options.get(opt)
+        # bool is an int subclass, so a bare isinstance check would pass `cols: true`
+        # -- the same trap _validate_optional_ints guards against.
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
             raise ValueError(
-                f"scenario {s.name!r}: terminal participant has unsupported connector_type {p.connector_type!r} "
-                f"(expected one of {list(SUPPORTED_TERMINAL_KINDS)})"
+                f"scenario {s.name!r}: terminal participant {p.persona!r} options.{opt} "
+                f"must be an integer, got {type(value).__name__}"
             )
-        if p.startup_macros:
-            raise ValueError(
-                f"scenario {s.name!r}: terminal participant {p.persona!r} cannot declare startup_macros "
-                "(Playwright macros don't apply to terminals)"
-            )
-    elif p.kind not in SUPPORTED_KINDS:
-        raise ValueError(f"scenario {s.name!r}: participant has unsupported kind {p.kind!r}")
+
+
+def _validate_participant_kind(s: Scenario, p: Participant) -> None:
+    """Validate a participant's kind against every kind that can actually run.
+
+    Three families are legal: a browser engine, ``terminal`` (still core's own
+    until the extraction step), and any kind a registered plugin claims. The
+    error names what IS available, because the two ways to get here -- a typo
+    and a plugin that is installed but not enabled -- are indistinguishable to
+    the operator otherwise.
+
+    ``startup_macros`` is gated on the ``macros`` capability rather than on
+    ``kind != "terminal"``. Terminal still produces the same refusal (it has no
+    adapter, so no capabilities), and every future kind is covered without
+    another special case.
+    """
+    from octowright.scenario_kinds import TERMINAL_KIND, known_kinds, supports
+
+    if p.kind == TERMINAL_KIND:
+        _validate_terminal_options(s, p)
+    elif p.kind not in known_kinds():
+        raise ValueError(
+            f"scenario {s.name!r}: participant has unsupported kind {p.kind!r} "
+            f"(known kinds: {known_kinds()}) -- a plugin kind must be enabled via OCTOWRIGHT_PLUGINS"
+        )
+
+    if p.startup_macros and not supports(p.kind, "macros", browser_pool=None):
+        raise ValueError(
+            f"scenario {s.name!r}: participant {p.persona!r} of kind {p.kind!r} cannot declare startup_macros "
+            "(its adapter provides no run_macro)"
+        )
 
 
 def _validate_scenario(s: Scenario) -> None:
@@ -150,21 +184,23 @@ def _load_yaml_participant(raw: Any, *, index: int, scenario_name: str) -> Parti
         )
     _validate_required_participant_strings(raw, index=index, scenario_name=scenario_name)
     startup_macros = _validate_startup_macros(raw.get("startup_macros"), index=index, scenario_name=scenario_name)
-    _validate_optional_ints(
-        raw, ("viewport_w", "viewport_h", "port", "cols", "rows"), index=index, scenario_name=scenario_name
-    )
+    _validate_optional_ints(raw, ("viewport_w", "viewport_h"), index=index, scenario_name=scenario_name)
     _validate_optional_bools(
         raw,
-        ("stabilize", "record_video", "trace", "insecure_no_host_check"),
+        ("stabilize", "record_video", "trace"),
         index=index,
         scenario_name=scenario_name,
     )
-    kind = raw["kind"]
-    # A terminal participant defaults to a local PTY when connector_type is omitted.
-    connector_type = raw.get("connector_type") or ("pty" if kind == "terminal" else None)
+    raw_options = raw.get("options")
+    if raw_options is None:
+        options: dict[str, Any] = {}
+    elif isinstance(raw_options, dict):
+        options = dict(raw_options)
+    else:
+        raise ValueError(f"scenario participant {raw.get('persona')!r}: options must be a mapping")
     return Participant(
         persona=raw["persona"],
-        kind=kind,
+        kind=raw["kind"],
         role=raw.get("role", "player"),
         url=raw.get("url"),
         startup_macros=startup_macros,
@@ -173,16 +209,7 @@ def _load_yaml_participant(raw: Any, *, index: int, scenario_name: str) -> Parti
         stabilize=raw.get("stabilize"),
         record_video=raw.get("record_video"),
         trace=raw.get("trace"),
-        connector_type=connector_type,
-        command=raw.get("command"),
-        cols=raw.get("cols"),
-        rows=raw.get("rows"),
-        host=raw.get("host"),
-        port=raw.get("port"),
-        user=raw.get("user"),
-        key_path=raw.get("key_path"),
-        known_hosts=raw.get("known_hosts"),
-        insecure_no_host_check=raw.get("insecure_no_host_check"),
+        options=options,
     )
 
 
@@ -493,32 +520,35 @@ def resolve_terminal_launch(p: Participant) -> dict[str, Any]:
         ssh_connector_config,
     )
 
-    connector_type = p.connector_type or "pty"
+    opts = p.options
+    connector_type = opts.get("connector_type") or "pty"
     if connector_type == "ssh":
         persona = _load_persona_or_none(p.persona)
         ssh = (getattr(persona, "app", {}) or {}).get("ssh", {}) or {}
 
-        def _pick(attr: str, key: str) -> Any:
-            value = getattr(p, attr)
+        def _pick(key: str) -> Any:
+            value = opts.get(key)
             return value if value is not None else ssh.get(key)
 
-        port = p.port if p.port is not None else int(ssh.get("port", SSH_DEFAULT_PORT))
-        insecure = (
-            bool(p.insecure_no_host_check)
-            if p.insecure_no_host_check is not None
-            else bool(ssh.get("insecure_no_host_check", False))
-        )
+        port_opt = opts.get("port")
+        # cast, not int(): parity with pre-options behaviour, where a participant-supplied
+        # port was passed through unconverted (only the persona/ssh fallback was int()'d).
+        # opts.get(...) is Any on this untyped dict, so mypy strict needs *something* here --
+        # cast satisfies it with zero runtime effect, matching this file's use at line 217.
+        port = cast(int, port_opt) if port_opt is not None else int(ssh.get("port", SSH_DEFAULT_PORT))
+        insecure_opt = opts.get("insecure_no_host_check")
+        insecure = bool(insecure_opt) if insecure_opt is not None else bool(ssh.get("insecure_no_host_check", False))
         cfg = ssh_connector_config(
-            host=_pick("host", "host"),
+            host=_pick("host"),
             port=port,
-            user=_pick("user", "user"),
-            key_path=_pick("key_path", "key_path"),
+            user=_pick("user"),
+            key_path=_pick("key_path"),
             password=None,
-            known_hosts=_pick("known_hosts", "known_hosts"),
+            known_hosts=_pick("known_hosts"),
             insecure_no_host_check=insecure,
         )
     else:
-        cfg = pty_connector_config(command=p.command, cols=p.cols, rows=p.rows)
+        cfg = pty_connector_config(command=opts.get("command"), cols=opts.get("cols"), rows=opts.get("rows"))
     return {"kind": connector_type, "connector_config": cfg, "label": None, "profile": p.persona, "protected": False}
 
 

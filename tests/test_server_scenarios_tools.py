@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright import macros as octowright_macros
 from octowright.server import scenarios as _scenarios
 
 
@@ -138,8 +140,8 @@ async def test_scenario_run_as_test_success_and_missing_macro(
     _patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     participants = [
-        {"role": "player", "persona": "cosmo", "instance_id": "i1"},
-        {"role": "observer", "persona": "ziggy", "instance_id": "i2"},
+        {"role": "player", "persona": "cosmo", "instance_id": "i1", "kind": "chromium"},
+        {"role": "observer", "persona": "ziggy", "instance_id": "i2", "kind": "chromium"},
     ]
     live = SimpleNamespace(
         name="demo",
@@ -148,7 +150,7 @@ async def test_scenario_run_as_test_success_and_missing_macro(
     )
     _patch_deps["scenario_pool"].get.return_value = live
     _patch_deps["pool"].get.return_value = object()
-    monkeypatch.setattr(_scenarios.macro_mod, "run_macro", AsyncMock(return_value=None))
+    monkeypatch.setattr(octowright_macros, "run_macro", AsyncMock(return_value=None))
     monkeypatch.setattr(_scenarios.runner_mod, "_default_report_path", lambda: tmp_path / "default.xml")
     write_calls: list[tuple[list[dict[str, object]], Path, str]] = []
 
@@ -166,10 +168,74 @@ async def test_scenario_run_as_test_success_and_missing_macro(
 
 
 @pytest.mark.anyio
+async def test_scenario_run_as_test_skips_a_capability_less_kind_cleanly(
+    _patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A participant whose adapter has no run_macro (terminal today, or any
+    plugin kind that never implements it) must be skipped cleanly -- no test
+    case at all -- rather than falling through to pool.get() on an instance id
+    the browser pool never held. Before the fix, only kind == "terminal" was
+    excluded, so a plugin participant with a verify macro declared for its
+    role produced a *failing* test case (pool.get() raising, or a real
+    macro-load failure against a mocked session) instead of being excluded
+    the way scenario_run_macro already reports it (a clean capability
+    message). Asserting only "no exception escaped" would pass either way --
+    this asserts the participant produced zero test cases."""
+    from octowright.plugins.registry import PluginRegistry
+    from octowright.server import plugin_state
+
+    class _NoMacroAdapter:
+        def resolve_participant(self, spec: Any, persona: Any) -> dict[str, Any]:
+            return {}
+
+    class _Descriptor:
+        kind = "refkind"
+        display_name = "Reference Kind"
+        plugin_api_version = 1
+        tool_names: frozenset[str] = frozenset()
+        tool_module = None
+        profile_name = None
+        frontend = None
+
+        def create_pool(self, ctx: Any) -> Any:
+            raise AssertionError("not used")
+
+        def create_scenario_adapter(self, pool: Any) -> Any:
+            raise AssertionError("not used")
+
+        def session_detail(self, session: Any) -> dict[str, Any]:
+            return {}
+
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    reg.register(_Descriptor(), pool="REFPOOL", adapter=_NoMacroAdapter(), discovered=None)
+    plugin_state.set_registry(reg)
+
+    participants = [{"role": "monitor", "persona": "ref-rita", "instance_id": "r1", "kind": "refkind"}]
+    live = SimpleNamespace(
+        name="demo",
+        spec=SimpleNamespace(verify={"monitor": "verify_macro"}),
+        participants=participants,
+    )
+    _patch_deps["scenario_pool"].get.return_value = live
+    monkeypatch.setattr(_scenarios.runner_mod, "_default_report_path", lambda: tmp_path / "default.xml")
+    write_calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(_scenarios.runner_mod, "_write_junit", lambda *args, **kwargs: write_calls.append(args))
+
+    try:
+        out = await _scenarios.scenario_run_as_test("sid", out_path=str(tmp_path / "recordings" / "report.xml"))
+    finally:
+        plugin_state.set_registry(original)
+
+    assert out["total"] == 0, "a capability-less participant must not produce any test case, passing or failing"
+    assert out["results"] == []
+
+
+@pytest.mark.anyio
 async def test_scenario_run_as_test_rejects_out_path_outside_recordings(
     _patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    participants = [{"role": "player", "persona": "cosmo", "instance_id": "i1"}]
+    participants = [{"role": "player", "persona": "cosmo", "instance_id": "i1", "kind": "chromium"}]
     live = SimpleNamespace(
         name="demo",
         spec=SimpleNamespace(verify={"player": "macro_player"}),
@@ -177,7 +243,7 @@ async def test_scenario_run_as_test_rejects_out_path_outside_recordings(
     )
     _patch_deps["scenario_pool"].get.return_value = live
     _patch_deps["pool"].get.return_value = object()
-    monkeypatch.setattr(_scenarios.macro_mod, "run_macro", AsyncMock(return_value=None))
+    monkeypatch.setattr(octowright_macros, "run_macro", AsyncMock(return_value=None))
     monkeypatch.setattr(_scenarios.runner_mod, "_write_junit", lambda *args, **kwargs: None)
 
     with pytest.raises(ValueError, match="scenario report path"):

@@ -157,6 +157,17 @@ class _StateModule(_ModuleType):
     def terminal_pool(self, value: Any) -> None:
         _server_state().terminal_pool = value
 
+    @property
+    def plugin_registry(self) -> Any:
+        # The live session-kind plugin registry. Forwarded through the same
+        # seam as the pools so HTTP-layer code only ever reads plugin state
+        # via ``state.<name>``. Deliberately read-only: the registry is
+        # replaced through ``plugin_state.set_registry``, and a second write
+        # path would let the two disagree.
+        from octowright.server import plugin_state
+
+        return plugin_state.registry()
+
 
 _sys.modules[__name__].__class__ = _StateModule
 
@@ -170,6 +181,7 @@ if TYPE_CHECKING:
     pool: Any
     scenario_pool: Any
     terminal_pool: Any
+    plugin_registry: Any
 
 
 __all__ = [
@@ -184,6 +196,7 @@ __all__ = [
     "_personas",
     "_video",
     "log",
+    "plugin_registry",
     "pool",
     "runtime_session_url",
     "runtime_status",
