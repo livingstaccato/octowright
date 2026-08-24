@@ -14,7 +14,6 @@ from typing import Any, cast
 
 from octowright import _format as fmt
 from octowright import defaults
-from octowright import macros as macro_mod
 from octowright import runner as runner_mod
 from octowright import scenarios as scenario_mod
 from octowright._paths import reject_unsafe_path
@@ -34,6 +33,8 @@ from octowright.mcp_types import (
     ScenarioWaitForSyncResult,
     TestSuiteCaseResult,
 )
+from octowright.plugins.contract import SupportsMacros
+from octowright.scenario_kinds import adapter_for
 from octowright.server._state import mcp, pool, scenario_pool, terminal_pool
 
 
@@ -60,7 +61,16 @@ def scenario_plan(name: str) -> ScenarioPlanResult:
         if p.kind == "terminal":
             launch_kwargs = scenario_mod.resolve_terminal_launch(p)
         else:
-            launch_kwargs = scenario_mod.resolve_launch_kwargs(p)
+            # Resolve through the kind's own adapter -- this is the same call
+            # scenario_start makes (BrowserScenarioAdapter.resolve_participant
+            # delegates straight to resolve_launch_kwargs, so the browser path
+            # is unchanged). Falls back to resolve_launch_kwargs directly for a
+            # kind with no adapter, matching adapter_for's own contract.
+            adapter = adapter_for(p.kind, browser_pool=pool)
+            if adapter is not None:
+                launch_kwargs = adapter.resolve_participant(p, scenario_mod._load_persona_or_none(p.persona))
+            else:
+                launch_kwargs = scenario_mod.resolve_launch_kwargs(p)
         participants.append(
             {
                 "persona": p.persona,
@@ -249,8 +259,14 @@ async def scenario_run_as_test(
     results: list[TestSuiteCaseResult] = []
 
     async def _run(p: dict[str, Any]) -> None:
-        if p.get("kind") == "terminal":
-            return  # verify macros are Playwright assertions; terminal participants are not test targets
+        # Skip by capability, not by kind name -- mirrors ScenarioPool.run_macro.
+        # A kind with no run_macro (terminal today, any future capability-less
+        # plugin kind) is not a test target at all: skipped cleanly, with no
+        # test case appended, rather than surfacing as a failing case via
+        # pool.get()'s KeyError on an instance id the browser pool never held.
+        adapter = adapter_for(p.get("kind") or "", browser_pool=pool)
+        if not isinstance(adapter, SupportsMacros):
+            return
         macro = live.spec.verify.get(p["role"])
         if not macro:
             results.append(
@@ -264,8 +280,7 @@ async def scenario_run_as_test(
             return
         start = datetime.now(UTC)
         try:
-            session = pool.get(p["instance_id"])
-            await macro_mod.run_macro(session=session, name=macro, args={})
+            await adapter.run_macro(p["instance_id"], name=macro, args={})
             ok, err = True, None
         except Exception as e:
             ok, err = False, repr(e)
