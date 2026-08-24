@@ -108,6 +108,23 @@ def test_a_plugin_with_no_frontend_is_404(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("path", ["../secret.txt", "sub/../../secret.txt", "..%2Fsecret.txt"])
 def test_traversal_is_refused(served, tmp_path, path):
+    """NOTE on what this actually exercises: the two literal-``../`` cases
+    never reach containment. httpx (the test client) performs RFC 3986
+    dot-segment normalization client-side before the request is even sent, so
+    ``/plugins/my-plugin/../secret.txt`` is rewritten to ``/plugins/secret.txt``
+    ahead of the route match; that 404s because no plugin is registered under
+    the name ``secret.txt``, not because ``reject_unsafe_path`` caught anything.
+    Only the percent-encoded case (``..%2Fsecret.txt``) survives client-side
+    normalization and reaches the handler with a literal ``..`` path segment --
+    and even that one is stopped by the closed suffix allowlist (``.txt`` is
+    not served) before ``reject_unsafe_path`` is ever called, since this
+    target's extension isn't in the allowlist. These cases still pin real,
+    desired behavior (a plugin name that happens to look like an escaped path
+    component must never leak a file), but none of them is evidence that the
+    resolve-then-contain check itself works -- see
+    ``test_a_dot_segment_escape_with_an_allowed_suffix_is_stopped_by_containment``
+    below for that.
+    """
     client, _asset_dir = served
     (tmp_path / "secret.txt").write_text("do not serve me", encoding="utf-8")
     resp = client.get(f"/plugins/my-plugin/{path}")
@@ -123,6 +140,30 @@ def test_a_symlink_escaping_the_asset_dir_is_refused(served, tmp_path):
     resp = client.get("/plugins/my-plugin/escape.js")
     assert resp.status_code in (400, 404)
     assert "escaped" not in resp.text
+
+
+def test_a_dot_segment_escape_with_an_allowed_suffix_is_stopped_by_containment(served, tmp_path):
+    """Plants the escape target with an ALLOWED suffix (``.js``), so unlike
+    every ``.txt`` case in ``test_traversal_is_refused`` above, the closed
+    suffix allowlist cannot be what stops this one -- only
+    ``reject_unsafe_path``'s resolve-then-contain check can. Uses the
+    percent-encoded ``..%2F`` form because a literal ``../`` is collapsed by
+    the test client's own URL normalization before the request is sent (see
+    the note above); the encoded slash survives that normalization and is
+    decoded to a literal ``..`` path segment by Starlette's ``:path`` route
+    converter, so this is the request that genuinely reaches
+    ``reject_unsafe_path`` with a dot-segment. Asserts the precise error the
+    containment check raises, not just a generic 404, so a regression in
+    ``reject_unsafe_path``'s dot-segment handling can't hide behind the
+    suffix allowlist or the plugin-name lookup the way it could in the older
+    parametrized cases.
+    """
+    client, _asset_dir = served
+    (tmp_path / "secret.js").write_text("do not serve me either", encoding="utf-8")
+    resp = client.get("/plugins/my-plugin/..%2Fsecret.js")
+    assert resp.status_code == 404
+    assert "do not serve me either" not in resp.text
+    assert resp.json()["error"] == "asset path escapes the plugin's asset dir"
 
 
 def test_a_missing_file_under_a_valid_plugin_is_404(served):
