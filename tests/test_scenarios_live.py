@@ -11,6 +11,14 @@ import sys
 import pytest
 import yaml
 
+# Launches two real WebKit browsers through BrowserPool. Every other
+# real-browser module carries this marker; this one did not, so a
+# `-m "not live_browser"` run -- the documented browser-free lane -- still
+# started browsers and inherited their flakiness. CI does not filter on the
+# marker (ci/run_integration_and_main.sh selects only against
+# integration_local/memory_isolated), so this keeps running there.
+pytestmark = pytest.mark.live_browser
+
 
 @pytest.fixture
 def tmp_octowright(tmp_path, monkeypatch):
