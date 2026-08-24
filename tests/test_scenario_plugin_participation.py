@@ -139,3 +139,33 @@ async def test_a_scenario_naming_an_unregistered_kind_fails_before_launching_any
     with pytest.raises((RuntimeError, KeyError, ValueError)):
         await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
     assert ref_pool.launched == [], "nothing may launch for an unresolvable roster"
+
+
+class _FailingBrowserPool:
+    """A browser pool whose roster always reports an error -- for pinning
+    that a failed roster stops the plugin group before it launches anything."""
+
+    async def spawn_roster(self, roster: list[dict[str, Any]], **_: Any) -> dict[str, Any]:
+        return {"launched": [], "errors": ["boom"]}
+
+    async def close(self, instance_id: str, *, force: bool = False) -> None:
+        return None
+
+
+async def test_a_failed_browser_roster_prevents_any_plugin_launch(registered):
+    """Mirrors _launch_terminals' own errors-so-far early-out: a roster that
+    already failed must not go on to open a plugin session either. Assert the
+    plugin pool's own launched list, not just that the scenario failed --
+    that is the only way to prove the plugin launch was never attempted."""
+    _, ref_pool = registered
+    spec = Scenario(
+        name="mixed",
+        participants=[
+            Participant(persona="tanuki-tim", kind="chromium", role="player"),
+            Participant(persona="ref-rita", kind="refkind", role="monitor"),
+        ],
+    )
+    sp = ScenarioPool()
+    with pytest.raises(RuntimeError):
+        await sp.start(spec=spec, browser_pool=_FailingBrowserPool(), terminal_pool=None)
+    assert ref_pool.launched == [], "a failed browser roster must not open a plugin session"
