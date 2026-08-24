@@ -113,3 +113,35 @@ def test_module_url_is_built_from_the_entry_point_name(client_with, tmp_path):
         assert body["k"]["moduleUrl"] == "/plugins/dash-named/dist/main.mjs"
     finally:
         plugin_state.set_registry(original)
+
+
+def test_module_url_resolves_through_the_asset_route(client_with, tmp_path):
+    """Pins the join between this route and ``plugin_assets.py``: ``/api/plugins``
+    composes ``moduleUrl`` and the asset route serves it, but nothing ties the two
+    together directly -- a change on either side that breaks the join would leave
+    every test in both files green while the URL 404s in a real browser. Takes
+    ``moduleUrl`` from the response rather than hardcoding it, so this actually
+    proves the join rather than re-asserting a value the test itself predicted.
+    Uses a NESTED ``module_path`` (not a bare filename): a single-segment path
+    would round-trip even through a join that mishandles an embedded slash, so
+    only the nested case exercises Starlette's ``{path:path}`` converter on the
+    receiving end.
+    """
+    asset_dir = tmp_path / "cross-route-assets"
+    (asset_dir / "dist").mkdir(parents=True)
+    content = "export function mountStream() { return 'cross-route-content'; }\n"
+    (asset_dir / "dist" / "renderer.js").write_text(content, encoding="utf-8")
+    frontend = FrontendAsset(
+        renderer_api_version=1, asset_dir=asset_dir, module_path="dist/renderer.js", layout="stream"
+    )
+
+    client, original = client_with(("cross-route", "crosskind", "Cross Route", frontend))
+    try:
+        body = client.get("/api/plugins").json()
+        module_url = body["crosskind"]["moduleUrl"]
+
+        resp = client.get(module_url)
+        assert resp.status_code == 200
+        assert resp.text == content
+    finally:
+        plugin_state.set_registry(original)
