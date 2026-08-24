@@ -169,3 +169,60 @@ async def test_a_failed_browser_roster_prevents_any_plugin_launch(registered):
     with pytest.raises(RuntimeError):
         await sp.start(spec=spec, browser_pool=_FailingBrowserPool(), terminal_pool=None)
     assert ref_pool.launched == [], "a failed browser roster must not open a plugin session"
+
+
+class _MacroRefAdapter(_RefAdapter):
+    def __init__(self, pool: _RefPool) -> None:
+        super().__init__(pool)
+        self.ran: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def run_macro(self, instance_id: str, *, name: str, args: dict[str, Any]) -> None:
+        self.ran.append((instance_id, name, args))
+
+
+@pytest.fixture
+def registered_with_macros():
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    pool = _RefPool()
+    adapter = _MacroRefAdapter(pool)
+    reg.register(_Descriptor(), pool=pool, adapter=adapter, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        yield reg, pool, adapter
+    finally:
+        plugin_state.set_registry(original)
+
+
+async def test_run_macro_reports_a_kind_without_the_capability(registered):
+    spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
+    sp = ScenarioPool()
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    result = await sp.run_macro(scenario_id=live.scenario_id, macro="login", browser_pool=_BrowserPool())
+    outcome = result["results"][0]
+    assert outcome["ok"] is False
+    assert "macros" in outcome["error"], "the error must name the missing capability, not the kind"
+
+
+async def test_run_macro_dispatches_to_an_adapter_that_has_the_capability(registered_with_macros):
+    _, _, adapter = registered_with_macros
+    spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
+    sp = ScenarioPool()
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    result = await sp.run_macro(
+        scenario_id=live.scenario_id, macro="login", browser_pool=_BrowserPool(), args={"u": "x"}
+    )
+    assert result["results"][0]["ok"] is True
+    assert adapter.ran == [(live.participants[0]["instance_id"], "login", {"u": "x"})]
+
+
+async def test_startup_macros_run_through_the_adapter(registered_with_macros):
+    _, _, adapter = registered_with_macros
+    spec = Scenario(
+        name="s",
+        participants=[Participant(persona="a", kind="refkind", role="monitor", startup_macros=["boot"])],
+    )
+    sp = ScenarioPool()
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    assert [name for _id, name, _args in adapter.ran] == ["boot"]
+    assert live.participants[0]["kind"] == "refkind"
