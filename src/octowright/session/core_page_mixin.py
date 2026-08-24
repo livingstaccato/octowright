@@ -321,7 +321,7 @@ class SessionPageMixin(SessionLike):
             return {"url": url, "title": title}
 
     @gated_operation("session_input_metadata")
-    async def _resolve_semantic_metadata(self, selector: str) -> dict[str, str]:
+    async def _resolve_semantic_metadata(self, selector: str, *, timeout_ms: int | None = None) -> dict[str, str]:
         """Attempt to resolve the role and role_name of the element at selector.
 
         Goes through the credential scrubber because this metadata is written
@@ -332,7 +332,7 @@ class SessionPageMixin(SessionLike):
         """
         try:
             loc = self._target().locator(selector)
-            snapshot = await redacted_aria_snapshot(self, loc)
+            snapshot = await redacted_aria_snapshot(self, loc, timeout_ms=timeout_ms)
             if snapshot and snapshot.startswith("- "):
                 return _parse_semantic_line(snapshot[2:].strip())
         except Exception:
@@ -353,8 +353,9 @@ class SessionPageMixin(SessionLike):
         the dashboard editor saved it, and both the macro runtime and
         ``browser_click`` dropped it before this call.
         """
-        meta = await self._resolve_semantic_metadata(selector)
-        await self._target().click(selector, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
+        budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+        meta = await self._resolve_semantic_metadata(selector, timeout_ms=budget)
+        await self._target().click(selector, timeout=budget)
         self.recorder.record("click", selector=selector, **meta)
 
     @gated_operation("session_input_redaction")
@@ -420,7 +421,7 @@ class SessionPageMixin(SessionLike):
 
     @gated_operation("browser_type")
     async def type_text(self, selector: str, text: str, delay_ms: int | None) -> None:
-        meta = await self._resolve_semantic_metadata(selector)
+        meta = await self._resolve_semantic_metadata(selector, timeout_ms=DEFAULT_ACTION_TIMEOUT_MS)
         recorded_text = await self._redacted_or_original(selector, text)
         await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("type", selector=selector, text=recorded_text, delay_ms=delay_ms, **meta)
@@ -429,9 +430,10 @@ class SessionPageMixin(SessionLike):
     async def fill(self, selector: str, value: str, *, timeout_ms: int | None = None) -> None:
         """Fill a CSS selector, waiting at most ``timeout_ms``. See ``click``
         for why ``None`` resolves to the default instead of being forwarded."""
-        meta = await self._resolve_semantic_metadata(selector)
+        budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+        meta = await self._resolve_semantic_metadata(selector, timeout_ms=budget)
         recorded_value = await self._redacted_or_original(selector, value)
-        await self._target().fill(selector, value, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
+        await self._target().fill(selector, value, timeout=budget)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     @gated_operation("browser_press_key")
