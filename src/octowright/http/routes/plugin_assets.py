@@ -70,7 +70,14 @@ async def plugin_asset(request: Request) -> Response:
         return JSONResponse({"error": "asset path escapes the plugin's asset dir"}, status_code=404)
     if not resolved.is_file():
         return JSONResponse({"error": "no such asset"}, status_code=404)
-    return FileResponse(path=str(resolved), filename=resolved.name)
+    # No `filename=`: that makes FileResponse send `Content-Disposition:
+    # attachment`, which downloads the file when opened directly instead of
+    # displaying it -- meaningless for something only ever consumed via
+    # `import()` (browsers ignore Content-Disposition for module fetches, so
+    # this had no effect on loading; it only broke opening the URL to debug
+    # it). Python's `mimetypes` has no `.map` entry, so a source map is served
+    # as `application/octet-stream` -- harmless, DevTools reads it regardless.
+    return FileResponse(path=str(resolved))
 
 
 def plugin_asset_routes() -> list[Route]:
