@@ -309,7 +309,7 @@ class ScenarioPool:
         plugin_specs: list[tuple[int, Any]],
         launched_by_index: dict[int, dict[str, Any]],
         errors: list[Any],
-    ) -> list[str]:
+    ) -> None:
         """Launch each plugin participant through the pool its kind registered.
 
         Sequential rather than gathered, matching ``_launch_terminals``: a
@@ -320,11 +320,15 @@ class ScenarioPool:
         roster, or an earlier plugin participant in this same loop), so a
         failed launch never goes on to open further -- possibly remote --
         plugin sessions before rollback.
+
+        No return value: the only caller (``_launch_plugin_group``) discards
+        it and reconstructs the launched-id list from ``launched_by_index``,
+        since that dict (mutated in place) still holds every success even
+        when a later participant raises mid-loop.
         """
         from octowright.scenario_kinds import adapter_for, pool_for_kind
         from octowright.scenarios import _load_persona_or_none
 
-        launched_ids: list[str] = []
         for index, p in plugin_specs:
             if errors:
                 break
@@ -342,8 +346,6 @@ class ScenarioPool:
             entry = dict(launched)
             entry.setdefault("kind", p.kind)
             launched_by_index[index] = entry
-            launched_ids.append(entry["instance_id"])
-        return launched_ids
 
     @staticmethod
     async def _launch_terminals(
@@ -447,25 +449,24 @@ class ScenarioPool:
     def _pool_for(p: dict[str, Any], browser_pool: Any, terminal_pool: Any | None) -> Any:
         """The pool that owns participant ``p``, resolved by its recorded ``kind``.
 
-        A participant dict with no recorded ``kind`` defaults to the browser
-        pool -- the pre-plugin default every hand-built ``LiveScenario`` in the
-        test suite (and any caller that never set the field) relies on. Every
-        production launch path (browser roster, terminal launch, and a plugin's
-        own ``entry.setdefault("kind", p.kind)``) stamps ``kind``, so this
-        branch is only ever reached by a test fixture today -- but a future
-        adapter that forgets to stamp it would otherwise silently misroute to
-        the browser pool, so the fallback is logged rather than silent.
+        Delegates unconditionally to ``pool_for_kind`` -- no missing-``kind``
+        fallback. Every production launch path (browser roster, terminal
+        launch, and a plugin's own ``entry.setdefault("kind", p.kind)``) stamps
+        ``kind``, and every hand-built ``LiveScenario`` in the test suite
+        stamps it too, so a participant dict with no recorded ``kind`` is a
+        genuine bug, not a case to default around. A defaulted fallback here
+        previously routed such a dict to the browser pool for closing while
+        ``adapter_for`` (strict) skipped its teardown macro -- the two
+        resolvers must agree, and disagreeing silently is worse than raising.
         """
         from octowright.scenario_kinds import pool_for_kind
 
         kind = p.get("kind")
         if not kind:
-            log.debug(
-                "scenario.pool_for.kind_missing_defaulting_to_browser",
-                instance_id=p.get("instance_id"),
-                persona=p.get("persona"),
+            raise ValueError(
+                f"scenario participant has no recorded 'kind' (instance_id={p.get('instance_id')!r}, "
+                f"persona={p.get('persona')!r}); every launch path must stamp kind"
             )
-            return browser_pool
         return pool_for_kind(kind, browser_pool=browser_pool, terminal_pool=terminal_pool)
 
     async def stop(
