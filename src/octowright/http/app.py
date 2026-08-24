@@ -219,6 +219,11 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     # browser-count — accepted, documented in http/pairing.py.
     routes.append(Route("/new-tab", guard_sensitive_http(new_tab, pairing_exempt=True), methods=["GET"]))
     routes.append(Route("/otto.svg", otto_svg, methods=["GET"]))
+    # Plugin assets, before the SPA catchall for the same reason /new-tab is:
+    # StaticFiles at "/" would otherwise swallow them.
+    from octowright.http.routes.plugin_assets import plugin_asset_routes
+
+    routes.extend(plugin_asset_routes())
     routes.extend(_frontend_routes(host=host))
     app = Starlette(routes=routes, lifespan=lifespan)
     app.state.octowright_http_host = host
