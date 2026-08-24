@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the terminal-boot module so we can assert delegation, and override only
 // getSession on the real api module (so render-function tests keep videoUrl
@@ -8,9 +8,22 @@ const { getSessionMock, getEventsMock } = vi.hoisted(() => ({
   getSessionMock: vi.fn(),
   getEventsMock: vi.fn(),
 }));
+// The registry-driven dispatch (Task 7) dynamically imports "./session-stream.js"
+// for a non-browser, non-terminal kind. Mocked here so the dispatch tests can
+// assert what session.ts hands it -- the resolved mount function and the
+// boot arguments -- without depending on session-stream.ts's own internals,
+// which are covered by session-stream.test.ts.
+const { bootStreamSessionMock, importRendererMock } = vi.hoisted(() => ({
+  bootStreamSessionMock: vi.fn(async () => undefined),
+  importRendererMock: vi.fn(),
+}));
 vi.mock("./session-terminal.js", () => ({
   bootTerminalSession: bootTerminalSessionMock,
   buildTerminalLayout: () => ({}),
+}));
+vi.mock("./session-stream.js", () => ({
+  bootStreamSession: bootStreamSessionMock,
+  importRenderer: importRendererMock,
 }));
 vi.mock("./api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api.js")>()),
@@ -19,6 +32,7 @@ vi.mock("./api.js", async (importOriginal) => ({
 }));
 
 import { getDashboardBearer, setDashboardBearer } from "./dashboard-auth.js";
+import { RENDERER_API_VERSION } from "./plugin-registry.js";
 import {
   bootSession,
   buildLayout,
@@ -405,5 +419,132 @@ describe("bootSession terminal branch", () => {
     const el = document.createElement("div");
     await bootSession(el, "sess-1");
     expect(bootTerminalSessionMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bootSession — registry-driven dispatch (Task 7)
+//
+// resolveRenderer's own decision (registered/mismatched/unknown kind -> a
+// moduleUrl or a FallbackReason) is already exercised end-to-end in
+// plugin-registry.test.ts, so it is not re-tested here under a different
+// name. These tests cover what session.ts itself decides on top of that:
+// which mount function it hands to bootStreamSession, and that a core
+// browser kind never touches the registry at all.
+// ---------------------------------------------------------------------------
+describe("bootSession — plugin registry dispatch", () => {
+  function fetchReturningPlugins(body: Record<string, unknown>) {
+    return vi.fn(async (url: string) => {
+      if (url === "/api/plugins") {
+        return { ok: true, json: async () => body } as Response;
+      }
+      throw new Error(`unexpected fetch in dispatch test: ${String(url)}`);
+    });
+  }
+
+  function capturedMount() {
+    return bootStreamSessionMock.mock.calls.at(-1)?.[3] as (
+      el: HTMLElement,
+      ctx: { sessionId: string; live: boolean; kind: string },
+    ) => { feed: (events: unknown[]) => void; destroy: () => void };
+  }
+
+  beforeEach(() => {
+    bootStreamSessionMock.mockReset();
+    bootStreamSessionMock.mockResolvedValue(undefined);
+    importRendererMock.mockReset();
+    getEventsMock.mockResolvedValue({ events: [], cursor: 0, total_bytes: 0, complete: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("imports the advertised module and boots the stream page for a registered kind", async () => {
+    vi.stubGlobal(
+      "fetch",
+      fetchReturningPlugins({
+        refkind: {
+          moduleUrl: "/plugins/p/renderer.js",
+          rendererApiVersion: RENDERER_API_VERSION,
+          displayName: "Ref",
+          layout: "stream",
+        },
+      }),
+    );
+    const mountStream = vi.fn();
+    importRendererMock.mockResolvedValueOnce({ mountStream });
+    getSessionMock.mockResolvedValue(makeDetail({ kind: "refkind", live: false }));
+
+    const el = document.createElement("div");
+    await bootSession(el, "ref-0");
+
+    expect(importRendererMock).toHaveBeenCalledWith("/plugins/p/renderer.js");
+    expect(bootStreamSessionMock).toHaveBeenCalledTimes(1);
+    const [, sessionId, detail, mount] = bootStreamSessionMock.mock.calls[0] as [
+      HTMLElement,
+      string,
+      SessionDetail,
+      unknown,
+    ];
+    expect(sessionId).toBe("ref-0");
+    expect(detail.kind).toBe("refkind");
+    expect(mount).toBe(mountStream);
+  });
+
+  it("falls back with the import-failed reason when the plugin's module fails to load", async () => {
+    vi.stubGlobal(
+      "fetch",
+      fetchReturningPlugins({
+        refkind: {
+          moduleUrl: "/plugins/p/renderer.js",
+          rendererApiVersion: RENDERER_API_VERSION,
+          displayName: "Ref",
+          layout: "stream",
+        },
+      }),
+    );
+    importRendererMock.mockResolvedValueOnce({ code: "import-failed", detail: "404" });
+    getSessionMock.mockResolvedValue(makeDetail({ kind: "refkind", live: false }));
+
+    const el = document.createElement("div");
+    await bootSession(el, "ref-1");
+
+    expect(bootStreamSessionMock).toHaveBeenCalledTimes(1);
+    const mountEl = document.createElement("div");
+    capturedMount()(mountEl, { sessionId: "ref-1", live: false, kind: "refkind" });
+    const notice = mountEl.querySelector('[data-testid="stream-fallback-notice"]');
+    expect(notice?.getAttribute("data-fallback-code")).toBe("import-failed");
+  });
+
+  it("falls back with the no-frontend reason for an unregistered non-browser kind", async () => {
+    vi.stubGlobal("fetch", fetchReturningPlugins({}));
+    getSessionMock.mockResolvedValue(makeDetail({ kind: "unregisteredkind", live: false }));
+
+    const el = document.createElement("div");
+    await bootSession(el, "un-0");
+
+    expect(importRendererMock).not.toHaveBeenCalled();
+    expect(bootStreamSessionMock).toHaveBeenCalledTimes(1);
+    const mountEl = document.createElement("div");
+    capturedMount()(mountEl, { sessionId: "un-0", live: false, kind: "unregisteredkind" });
+    const notice = mountEl.querySelector('[data-testid="stream-fallback-notice"]');
+    expect(notice?.getAttribute("data-fallback-code")).toBe("no-frontend");
+  });
+
+  it("never touches the plugin registry for a browser kind", async () => {
+    // A spy, not a stub: this must not disturb the browser page's own real
+    // network calls (getConsole/getDownloads/getScreenshots), only observe
+    // whether any of them targeted /api/plugins.
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    getSessionMock.mockResolvedValue(makeDetail({ kind: "chromium", live: false }));
+
+    const el = document.createElement("div");
+    await bootSession(el, "sess-1");
+
+    const urls = fetchSpy.mock.calls.map((call) => String(call[0]));
+    expect(urls).not.toContain("/api/plugins");
+    expect(bootStreamSessionMock).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });
