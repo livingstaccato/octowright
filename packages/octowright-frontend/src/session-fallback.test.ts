@@ -44,4 +44,27 @@ describe("mountFallbackStream", () => {
     handle.destroy();
     expect(() => handle.destroy()).not.toThrow();
   });
+
+  it("appends a second batch onto the first rather than replacing it", () => {
+    const el = document.createElement("div");
+    const handle = mountFallbackStream(el, ctx, { code: "no-frontend", detail: "" });
+    handle.feed([{ ts: "2026-08-24T00:00:00Z", action: "first_event" }]);
+    handle.feed([{ ts: "2026-08-24T00:00:01Z", action: "second_event" }]);
+    expect(el.textContent).toContain("first_event");
+    expect(el.textContent).toContain("second_event");
+  });
+
+  it("ignores an empty feed batch", () => {
+    const el = document.createElement("div");
+    const handle = mountFallbackStream(el, ctx, { code: "no-frontend", detail: "" });
+    expect(() => handle.feed([])).not.toThrow();
+  });
+
+  it("drops a late batch fed in after destroy", () => {
+    const el = document.createElement("div");
+    const handle = mountFallbackStream(el, ctx, { code: "no-frontend", detail: "" });
+    handle.destroy();
+    handle.feed([{ ts: "2026-08-24T00:00:00Z", action: "late_event" }]);
+    expect(el.textContent).not.toContain("late_event");
+  });
 });
