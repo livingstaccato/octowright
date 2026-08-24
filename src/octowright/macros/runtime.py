@@ -64,6 +64,15 @@ _REPLAY_PASSIVE = {
     # The recorder's own byte-ceiling marker (recorder.py); a truncated recording
     # carries it and it must not tally as a failed step on replay.
     "recording_truncated",
+    # The other two members of recorder.CONTROL_ACTIONS. Core writes these
+    # through record_control() rather than record() -- session_start opens
+    # every recording (including a plugin session-kind's) and
+    # artifact_registered marks a committed plugin artifact -- and neither is
+    # a user action to replay. A macro imported from a plugin recording would
+    # otherwise tally both as failed steps, the same 608-bogus-errors class
+    # this set exists to prevent.
+    "session_start",
+    "artifact_registered",
 }
 _REPLAY_SKIP = {"launch", "close", "snapshot"}
 _ACTION_MAP = {

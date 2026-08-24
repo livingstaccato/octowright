@@ -141,7 +141,9 @@ class TestValidateScenario:
     def test_terminal_participant_accepted(self) -> None:
         s = Scenario(
             name="t",
-            participants=[Participant(persona="alice", kind="terminal", role="operator", connector_type="pty")],
+            participants=[
+                Participant(persona="alice", kind="terminal", role="operator", options={"connector_type": "pty"})
+            ],
         )
         _validate_scenario(s)  # does not raise
 
@@ -155,7 +157,7 @@ class TestValidateScenario:
     def test_terminal_bad_connector_type_rejected(self) -> None:
         s = Scenario(
             name="t",
-            participants=[Participant(persona="a", kind="terminal", role="x", connector_type="telnet")],
+            participants=[Participant(persona="a", kind="terminal", role="x", options={"connector_type": "telnet"})],
         )
         with pytest.raises(ValueError, match="connector_type"):
             _validate_scenario(s)
@@ -164,7 +166,13 @@ class TestValidateScenario:
         s = Scenario(
             name="t",
             participants=[
-                Participant(persona="a", kind="terminal", role="x", connector_type="pty", startup_macros=["m"]),
+                Participant(
+                    persona="a",
+                    kind="terminal",
+                    role="x",
+                    options={"connector_type": "pty"},
+                    startup_macros=["m"],
+                ),
             ],
         )
         with pytest.raises(ValueError, match="startup_macros"):
@@ -175,7 +183,7 @@ class TestValidateScenario:
             name="mixed",
             participants=[
                 Participant(persona="dante", kind="chromium", role="player"),
-                Participant(persona="alice", kind="terminal", role="operator", connector_type="ssh"),
+                Participant(persona="alice", kind="terminal", role="operator", options={"connector_type": "ssh"}),
             ],
         )
         _validate_scenario(s)  # does not raise
@@ -266,12 +274,14 @@ class TestLoadYamlScenario:
                         {
                             "persona": "remote",
                             "kind": "terminal",
-                            "connector_type": "ssh",
-                            "host": "h",
-                            "port": 2222,
-                            "user": "deploy",
-                            "known_hosts": "/kh",
                             "role": "operator",
+                            "options": {
+                                "connector_type": "ssh",
+                                "host": "h",
+                                "port": 2222,
+                                "user": "deploy",
+                                "known_hosts": "/kh",
+                            },
                         },
                     ],
                 }
@@ -279,9 +289,17 @@ class TestLoadYamlScenario:
         )
         s = load_yaml_scenario(path.read_text(), path.stem)
         pty, ssh = s.participants
-        assert pty.kind == "terminal" and pty.connector_type == "pty"  # defaulted
-        assert ssh.connector_type == "ssh" and ssh.host == "h" and ssh.port == 2222
-        assert ssh.user == "deploy" and ssh.known_hosts == "/kh"
+        # No options block at all -- the loader passes options through opaquely and
+        # does not inject the pty default; that defaulting lives in
+        # _validate_participant_kind / resolve_terminal_launch instead.
+        assert pty.kind == "terminal" and pty.options == {}
+        assert ssh.options == {
+            "connector_type": "ssh",
+            "host": "h",
+            "port": 2222,
+            "user": "deploy",
+            "known_hosts": "/kh",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +500,9 @@ class TestResolveTerminalLaunch:
     @pytest.mark.usefixtures("empty_personas_dir")
     def test_pty(self) -> None:
         kw = resolve_terminal_launch(
-            Participant(persona="a", kind="terminal", role="op", connector_type="pty", command="/bin/sh")
+            Participant(
+                persona="a", kind="terminal", role="op", options={"connector_type": "pty", "command": "/bin/sh"}
+            )
         )
         assert kw["kind"] == "pty"
         assert kw["connector_config"] == {"command": "/bin/sh", "cols": 80, "rows": 24}
@@ -500,7 +520,12 @@ class TestResolveTerminalLaunch:
 
         monkeypatch.setattr(_scenarios, "_load_persona_or_none", lambda name: _P())
         kw = resolve_terminal_launch(
-            Participant(persona="a", kind="terminal", role="op", connector_type="ssh", host="explicit-host")
+            Participant(
+                persona="a",
+                kind="terminal",
+                role="op",
+                options={"connector_type": "ssh", "host": "explicit-host"},
+            )
         )
         cfg = kw["connector_config"]
         assert kw["kind"] == "ssh"
@@ -511,7 +536,9 @@ class TestResolveTerminalLaunch:
 
     @pytest.mark.usefixtures("empty_personas_dir")
     def test_ssh_without_persona_or_args_omits_optionals(self) -> None:
-        kw = resolve_terminal_launch(Participant(persona="ghost", kind="terminal", role="op", connector_type="ssh"))
+        kw = resolve_terminal_launch(
+            Participant(persona="ghost", kind="terminal", role="op", options={"connector_type": "ssh"})
+        )
         cfg = kw["connector_config"]
         # No host/user/key/known_hosts anywhere → only the default port survives.
         assert cfg == {"port": 22}
@@ -685,7 +712,7 @@ class TestScenarioPoolStart:
             name="mix",
             participants=[
                 Participant(persona="dante", kind="chromium", role="player"),
-                Participant(persona="ops", kind="terminal", role="operator", connector_type="pty"),
+                Participant(persona="ops", kind="terminal", role="operator", options={"connector_type": "pty"}),
             ],
         )
         bp, tp = _StubPool(), _StubTerminalPool()
