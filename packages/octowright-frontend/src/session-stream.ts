@@ -142,6 +142,23 @@ export async function bootStreamSession(
     try {
       handle.feed(events);
     } catch (err) {
+      // The plugin's own handle is being discarded -- release whatever it
+      // holds (a socket, a timer, an observer) before losing the only
+      // reference to it. `beforeunload` above closes over `handle` and will
+      // only ever destroy whatever it currently points to, so if we don't
+      // destroy the outgoing handle here nothing ever will. This is itself
+      // failure-handling code, so a throwing `destroy()` must not stop the
+      // fallback swap that follows it.
+      try {
+        handle.destroy();
+      } catch (destroyErr) {
+        log.warn({
+          event: "stream_handle_destroy_failed",
+          session_id: ctx.sessionId,
+          kind: ctx.kind,
+          error: errorMessage(destroyErr),
+        });
+      }
       handle = fallbackFromError(refs.streamSlot, ctx, err, "stream_feed_failed");
       handle.feed(events);
     }
