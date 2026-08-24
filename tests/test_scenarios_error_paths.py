@@ -297,9 +297,9 @@ async def test_stop_closes_every_participant_even_when_one_close_fails(
         name="demo",
         spec=_Spec("demo", [], fixtures={}, teardown_macro=None),
         participants=[
-            {"instance_id": "i-a", "persona": "cosmo", "role": "r1", "log_path": "a.log"},
-            {"instance_id": "i-b", "persona": "ziggy", "role": "r2", "log_path": "b.log"},
-            {"instance_id": "i-c", "persona": "nova", "role": "r3", "log_path": "c.log"},
+            {"instance_id": "i-a", "persona": "cosmo", "role": "r1", "kind": "chromium", "log_path": "a.log"},
+            {"instance_id": "i-b", "persona": "ziggy", "role": "r2", "kind": "chromium", "log_path": "b.log"},
+            {"instance_id": "i-c", "persona": "nova", "role": "r3", "kind": "chromium", "log_path": "c.log"},
         ],
     )
     sp._live[live.scenario_id] = live
