@@ -30,6 +30,17 @@ describe("loadPluginRegistry", () => {
     const reg = await loadPluginRegistry(fakeFetch({}, false) as never);
     expect(reg.size).toBe(0);
   });
+
+  it("is empty rather than throwing on malformed JSON", async () => {
+    const malformed = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => {
+        throw new SyntaxError("Unexpected token in JSON");
+      },
+    });
+    const reg = await loadPluginRegistry(malformed as never);
+    expect(reg.size).toBe(0);
+  });
 });
 
 describe("resolveRenderer", () => {
