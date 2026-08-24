@@ -55,11 +55,11 @@ class _Pool:
 
     async def spawn_roster(self, _reqs):
         if self.spawn_error:
-            return {"launched": [{"instance_id": "a", "log_path": "a.log"}], "errors": ["boom"]}
+            return {"launched": [{"instance_id": "a", "kind": "chromium", "log_path": "a.log"}], "errors": ["boom"]}
         return {
             "launched": [
-                {"instance_id": "a", "log_path": "a.log"},
-                {"instance_id": "b", "log_path": "b.log"},
+                {"instance_id": "a", "kind": "chromium", "log_path": "a.log"},
+                {"instance_id": "b", "kind": "chromium", "log_path": "b.log"},
             ],
             "errors": [],
         }
@@ -408,6 +408,35 @@ async def test_stop_routes_terminal_close_to_terminal_pool() -> None:
     assert set(summary["closed"]) == {"b", "t"}
 
 
+def test_pool_for_a_participant_with_no_recorded_kind_raises() -> None:
+    """The missing-kind fallback in _pool_for silently defaulted to the
+    browser pool, disagreeing with adapter_for (strict, used for teardown
+    macros) about what a kind-less dict is. Every production launch path
+    stamps kind, so a dict without one is a bug that must raise, not route
+    around."""
+    sp = ScenarioPool()
+    participant = {"instance_id": "a", "persona": "cosmo", "role": "r1", "log_path": "a.log"}  # no "kind"
+    with pytest.raises(ValueError, match="no recorded 'kind'"):
+        sp._pool_for(participant, _Pool(), None)
+
+
+async def test_stop_raises_rather_than_misroute_a_participant_with_no_kind() -> None:
+    """stop() must surface the missing-kind bug via its per-participant error
+    handling rather than silently closing through the wrong pool."""
+    sp = ScenarioPool()
+    live = LiveScenario(
+        scenario_id="nokind",
+        name="nokind",
+        spec=_Spec("nokind", [], fixtures={}, teardown_macro=None),
+        participants=[{"instance_id": "a", "persona": "cosmo", "role": "r1", "log_path": "a.log"}],
+    )
+    sp._live[live.scenario_id] = live
+    summary = await sp.stop(scenario_id="nokind", browser_pool=_Pool(), terminal_pool=None)
+    assert summary["closed"] == []
+    assert len(summary["teardown_errors"]) == 1
+    assert "no recorded 'kind'" in summary["teardown_errors"][0]["error"]
+
+
 @pytest.mark.anyio
 async def test_run_macro_reports_terminal_as_unsupported() -> None:
     sp = ScenarioPool()
@@ -416,7 +445,7 @@ async def test_run_macro_reports_terminal_as_unsupported() -> None:
     rm = await sp.run_macro(scenario_id="mix", macro="m", browser_pool=_Pool(), role="operator")
     assert rm["targeted"] == 1
     assert rm["results"][0]["ok"] is False
-    assert "browser macros" in rm["results"][0]["error"]
+    assert "does not support macros" in rm["results"][0]["error"], "the error now names the missing capability"
 
 
 @pytest.mark.anyio
@@ -426,7 +455,7 @@ async def test_wait_for_sync_reports_terminal_as_unsupported() -> None:
     sp._live[live.scenario_id] = live
     ws = await sp.wait_for_sync(scenario_id="mix", browser_pool=_Pool(), role="operator", selector="#x")
     assert ws["results"][0]["ok"] is False
-    assert "browser sync" in ws["results"][0]["error"]
+    assert "does not support sync" in ws["results"][0]["error"], "the error now names the missing capability"
 
 
 # ---------------------------------------------------------------------------

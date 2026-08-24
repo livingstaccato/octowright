@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -32,22 +33,54 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool, _read_json_body
+from octowright.http.routes._session_kinds import (
+    close_plugin_session,
+    find_plugin_session,
+    iter_plugin_sessions,
+    plugin_session_detail,
+)
 from octowright.http.session_artifacts import session_artifact_cache
+from octowright.plugins.errors import ProtectedSessionCloseError
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 from octowright.session.screencast_config import screencast_config_block
 from octowright.terminal.errors import ProtectedTerminalCloseError
 
 
+def _safe_live_summaries(sessions: Iterable[Any]) -> list[dict[str, Any]]:
+    """Summarize each session, skipping (and logging) one that fails to serialize.
+
+    ``_live_summary`` reads ``instance_id``/``kind``/``label``/``profile``/``url``
+    without ``getattr``, so a nonconforming session object — most plausibly a
+    third-party plugin's — raises instead of degrading. One bad session must
+    not take the rest of the live list down with it.
+    """
+    summaries: list[dict[str, Any]] = []
+    for session in sessions:
+        try:
+            summaries.append(_live_summary(session))
+        except Exception as exc:
+            state.log.warning(
+                "octowright.http.live_summary_failed",
+                instance_id=getattr(session, "instance_id", None),
+                error=repr(exc),
+            )
+    return summaries
+
+
 async def list_sessions(_request: Request) -> JSONResponse:
     pool = state.pool
-    live = [_live_summary(s) for s in pool.iter_sessions()]
+    live = _safe_live_summaries(pool.iter_sessions())
     # Terminal sessions live in a separate pool that only exists when the
-    # optional `octowright[terminal]` extra is installed. `_live_summary` is
-    # getattr-defensive, so terminal sessions serialize through it cleanly.
+    # optional `octowright[terminal]` extra is installed.
     terminal_pool = state.terminal_pool
     if terminal_pool is not None:
-        live += [_live_summary(s) for s in terminal_pool.iter_sessions()]
+        live += _safe_live_summaries(terminal_pool.iter_sessions())
+    # Session-kind plugins serialize through the same guarded summariser, and
+    # iter_plugin_sessions() itself isolates a raising pool from the others.
+    # Terminal keeps its own branch above until it moves out to a plugin of
+    # its own.
+    live += _safe_live_summaries(iter_plugin_sessions())
     live_paths = {s["log_path"] for s in live}
     closed = _closed_sessions(state.RECORDINGS_DIR, live_paths)
     return JSONResponse({"live": live, "closed": closed})
@@ -183,6 +216,12 @@ async def session_detail(request: Request) -> JSONResponse:
         term = terminal_pool.maybe_get(sid)
         if term is not None:
             return JSONResponse(_terminal_session_detail(term))
+    # Same short-circuit, now registry-driven: a plugin's session has no
+    # page/console/video either, and its own descriptor knows its shape.
+    plugin_found = find_plugin_session(sid)
+    if plugin_found is not None:
+        kind, plugin_session = plugin_found
+        return JSONResponse(plugin_session_detail(kind, plugin_session))
     live = _live_session_or_none(sid)
     if live is not None:
         return await _live_session_detail_response(live)
@@ -271,6 +310,24 @@ async def _maybe_close_terminal(sid: str, *, force: bool) -> JSONResponse | None
     return JSONResponse({"closed": True, "instance_id": sid})
 
 
+async def _maybe_close_plugin(sid: str, *, force: bool) -> JSONResponse | None:
+    """Close ``sid`` if it is a live plugin session, else return ``None``.
+
+    ``ProtectedSessionCloseError`` is core's own type, raised by the plugin —
+    which is what removes this module's direct import of a specific plugin's
+    error class.
+    """
+    try:
+        result = await close_plugin_session(sid, force=force)
+    except ProtectedSessionCloseError as e:
+        return JSONResponse({"error": str(e).replace("force=True", "force=true")}, status_code=409)
+    if result is None:
+        return None
+    state.log.info("octowright.http.plugin_session_closed", instance_id=sid)
+    await publish_dashboard_invalidation("sessions")
+    return JSONResponse({"closed": True, "instance_id": sid, **result})
+
+
 async def _close_browser_session(sid: str, *, force: bool) -> JSONResponse:
     """Close a live browser session and warm its close-time artefact cache.
 
@@ -342,6 +399,9 @@ async def session_close(request: Request) -> JSONResponse:
     terminal_close = await _maybe_close_terminal(sid, force=force)
     if terminal_close is not None:
         return terminal_close
+    plugin_close = await _maybe_close_plugin(sid, force=force)
+    if plugin_close is not None:
+        return plugin_close
     return await _close_browser_session(sid, force=force)
 
 

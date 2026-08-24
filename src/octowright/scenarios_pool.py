@@ -16,6 +16,7 @@ from provide.telemetry import get_logger
 
 from octowright._tracing import span
 from octowright.browser_pool.roster import shielded_rollback_close
+from octowright.defaults import SUPPORTED_KINDS
 from octowright.mcp_types import (
     ScenarioParticipantOutcome,
     ScenarioRemapEntry,
@@ -26,6 +27,7 @@ from octowright.mcp_types import (
     ScenarioTailResult,
     ScenarioWaitForSyncResult,
 )
+from octowright.plugins.contract import SupportsDialogPolicy, SupportsMacros, SupportsMockRoutes, SupportsSync
 
 log = get_logger(__name__)
 
@@ -179,16 +181,21 @@ class ScenarioPool:
         effective_name = name or spec.name
         if not spec.participants:
             raise RuntimeError(f"scenario {effective_name!r} has no participants")
-        # Partition by kind: browsers go through the roster, terminals launch
-        # individually (TerminalPool has no roster). SUPPORTED_KINDS stays
-        # browser-only, so "terminal" is the sole non-browser kind here.
-        terminal_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind == "terminal"]
+        # Group by kind rather than splitting browser/terminal: browsers keep
+        # the roster (it batches window creation), terminals keep their
+        # individual launches, and a plugin kind launches through its own pool.
+        from octowright.scenario_kinds import TERMINAL_KIND
+
+        terminal_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind == TERMINAL_KIND]
         if terminal_specs and terminal_pool is None:
             raise RuntimeError(
                 f"scenario {effective_name!r} has terminal participant(s) but the octowright[terminal] "
                 "extra is not installed (terminal_pool is unavailable)"
             )
-        browser_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind != "terminal"]
+        browser_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind in SUPPORTED_KINDS]
+        plugin_specs = [
+            (i, p) for i, p in enumerate(spec.participants) if p.kind != TERMINAL_KIND and p.kind not in SUPPORTED_KINDS
+        ]
         scenario_id = _uuid.uuid4().hex[:12]
         # Wrap the whole multi-session spawn + fixture + startup-macro sequence
         # under a single span so per-participant launches and macro runs nest
@@ -199,8 +206,8 @@ class ScenarioPool:
             scenario_name=effective_name,
             participants=len(spec.participants),
         ):
-            launched_by_index, browser_ids, terminal_ids = await self._launch_participants(
-                browser_pool, terminal_pool, browser_specs, terminal_specs, effective_name
+            launched_by_index, browser_ids, terminal_ids, plugin_ids_by_kind = await self._launch_participants(
+                browser_pool, terminal_pool, browser_specs, terminal_specs, plugin_specs, effective_name
             )
             # Reassemble in original spec order so roles/personas line up.
             participants: list[dict[str, Any]] = []
@@ -218,7 +225,9 @@ class ScenarioPool:
             except BaseException:
                 # CancelledError is a BaseException, so catch it here too — but the
                 # rollback must *complete* before we re-raise, so run it shielded.
-                await self._rollback_start(scenario_id, browser_pool, browser_ids, terminal_pool, terminal_ids)
+                await self._rollback_start(
+                    scenario_id, browser_pool, browser_ids, terminal_pool, terminal_ids, plugin_ids_by_kind
+                )
                 raise
             return live
 
@@ -228,11 +237,17 @@ class ScenarioPool:
         terminal_pool: Any | None,
         browser_specs: list[tuple[int, Any]],
         terminal_specs: list[tuple[int, Any]],
+        plugin_specs: list[tuple[int, Any]],
         effective_name: str,
-    ) -> tuple[dict[int, dict[str, Any]], list[str], list[str]]:
-        """Launch browser participants via the roster and terminal participants
-        individually, keyed back to their original participant index. On any
-        failure, close everything launched in either pool and raise."""
+    ) -> tuple[dict[int, dict[str, Any]], list[str], list[str], dict[str, list[str]]]:
+        """Launch browser participants via the roster, plugin participants
+        through their own pools, and terminal participants individually --
+        keyed back to their original participant index. Plugins launch
+        *before* terminals so ``_launch_terminals``' errors-so-far early-out
+        (which exists to stop it opening further, possibly remote, sessions
+        once anything has already failed) also covers a plugin launch
+        failure, not just a browser-roster one. On any failure, close
+        everything launched in every group and raise."""
         from octowright.scenarios import resolve_launch_kwargs
 
         launched_by_index: dict[int, dict[str, Any]] = {}
@@ -247,12 +262,90 @@ class ScenarioPool:
                 for (i, _p), launched in zip(browser_specs, roster["launched"], strict=True):
                     launched_by_index[i] = launched
 
+        plugin_ids_by_kind = await self._launch_plugin_group(plugin_specs, launched_by_index, errors)
+
         terminal_ids = await self._launch_terminals(terminal_pool, terminal_specs, launched_by_index, errors)
 
         if errors:
-            await self._close_launched(browser_pool, browser_ids, terminal_pool, terminal_ids)
+            await self._close_launched(browser_pool, browser_ids, terminal_pool, terminal_ids, plugin_ids_by_kind)
             raise RuntimeError(f"scenario {effective_name!r}: {len(errors)} participant(s) failed to launch: {errors}")
-        return launched_by_index, browser_ids, terminal_ids
+        return launched_by_index, browser_ids, terminal_ids, plugin_ids_by_kind
+
+    @staticmethod
+    async def _launch_plugin_group(
+        plugin_specs: list[tuple[int, Any]],
+        launched_by_index: dict[int, dict[str, Any]],
+        errors: list[Any],
+    ) -> dict[str, list[str]]:
+        """Launch every plugin participant and report what actually landed,
+        grouped by kind for rollback.
+
+        Wraps ``_launch_plugin_participants``: a pool/adapter lookup failure
+        (unregistered kind) raises rather than appending to ``errors``, so it
+        is folded in here -- the shared close-everything-and-raise path in
+        ``_launch_participants`` still runs, and a kind that resolves to no
+        pool reports the same failure shape as any other launch failure.
+        Reconstructing from ``launched_by_index`` rather than trusting the
+        return value alone matters for the same reason: an exception raised
+        partway through the loop still leaves earlier successful launches
+        recorded there (it is mutated in place), and those must still be
+        closed on rollback.
+        """
+        if not plugin_specs:
+            return {}
+        try:
+            await ScenarioPool._launch_plugin_participants(plugin_specs, launched_by_index, errors)
+        except Exception as exc:
+            errors.append(f"plugin participant launch aborted: {exc!r}")
+        plugin_ids_by_kind: dict[str, list[str]] = {}
+        for i, p in plugin_specs:
+            entry = launched_by_index.get(i)
+            if entry is not None:
+                plugin_ids_by_kind.setdefault(p.kind, []).append(entry["instance_id"])
+        return plugin_ids_by_kind
+
+    @staticmethod
+    async def _launch_plugin_participants(
+        plugin_specs: list[tuple[int, Any]],
+        launched_by_index: dict[int, dict[str, Any]],
+        errors: list[Any],
+    ) -> None:
+        """Launch each plugin participant through the pool its kind registered.
+
+        Sequential rather than gathered, matching ``_launch_terminals``: a
+        plugin pool makes no concurrency promise, and a scenario roster is
+        small enough that the wall-clock cost is not worth the first
+        cross-plugin race report. Also matches ``_launch_terminals``' early-out:
+        stops launching once ``errors`` is already non-empty (a failed browser
+        roster, or an earlier plugin participant in this same loop), so a
+        failed launch never goes on to open further -- possibly remote --
+        plugin sessions before rollback.
+
+        No return value: the only caller (``_launch_plugin_group``) discards
+        it and reconstructs the launched-id list from ``launched_by_index``,
+        since that dict (mutated in place) still holds every success even
+        when a later participant raises mid-loop.
+        """
+        from octowright.scenario_kinds import adapter_for, pool_for_kind
+        from octowright.scenarios import _load_persona_or_none
+
+        for index, p in plugin_specs:
+            if errors:
+                break
+            pool = pool_for_kind(p.kind, browser_pool=None, terminal_pool=None)
+            adapter = adapter_for(p.kind, browser_pool=None)
+            if adapter is None:
+                errors.append(f"participant kind {p.kind!r} has no scenario adapter")
+                continue
+            try:
+                launch_kwargs = adapter.resolve_participant(p, _load_persona_or_none(p.persona))
+                launched = await pool.launch(**launch_kwargs)
+            except Exception as e:
+                errors.append(f"participant {p.persona!r} ({p.kind}) failed to launch: {e!r}")
+                continue
+            entry = dict(launched)
+            entry.setdefault("kind", p.kind)
+            launched_by_index[index] = entry
 
     @staticmethod
     async def _launch_terminals(
@@ -288,11 +381,36 @@ class ScenarioPool:
         return terminal_ids
 
     @staticmethod
+    def _plugin_pool_groups(plugin_ids_by_kind: dict[str, list[str]]) -> list[tuple[Any, list[str]]]:
+        """Resolve (pool, ids) for each plugin kind's launched sessions, for
+        teardown. A kind whose pool can no longer be resolved (e.g. the
+        registry changed mid-run) is logged and skipped rather than raised --
+        teardown must still close every OTHER already-launched session."""
+        from octowright.scenario_kinds import pool_for_kind
+
+        groups: list[tuple[Any, list[str]]] = []
+        for kind, ids in plugin_ids_by_kind.items():
+            try:
+                pool = pool_for_kind(kind, browser_pool=None, terminal_pool=None)
+            except Exception as exc:
+                log.warning("scenario.rollback.pool_lookup_failed", kind=kind, error=repr(exc))
+                continue
+            groups.append((pool, ids))
+        return groups
+
+    @staticmethod
     async def _close_launched(
-        browser_pool: Any, browser_ids: list[str], terminal_pool: Any | None, terminal_ids: list[str]
+        browser_pool: Any,
+        browser_ids: list[str],
+        terminal_pool: Any | None,
+        terminal_ids: list[str],
+        plugin_ids_by_kind: dict[str, list[str]] | None = None,
     ) -> None:
-        """Best-effort close of partially-launched sessions across both pools."""
-        for pool, ids in ((browser_pool, browser_ids), (terminal_pool, terminal_ids)):
+        """Best-effort close of partially-launched sessions across every pool."""
+        groups: list[tuple[Any, list[str]]] = [(browser_pool, browser_ids), (terminal_pool, terminal_ids)]
+        if plugin_ids_by_kind:
+            groups.extend(ScenarioPool._plugin_pool_groups(plugin_ids_by_kind))
+        for pool, ids in groups:
             if pool is None:
                 continue
             for iid in ids:
@@ -309,11 +427,12 @@ class ScenarioPool:
         browser_ids: list[str],
         terminal_pool: Any | None,
         terminal_ids: list[str],
+        plugin_ids_by_kind: dict[str, list[str]] | None = None,
     ) -> None:
         """Shielded teardown for a scenario that failed or was cancelled during
         fixture application / startup macros: drop bookkeeping and close every
-        launched session (browser + terminal) before the original exception
-        re-propagates."""
+        launched session (browser + terminal + plugin) before the original
+        exception re-propagates."""
         with anyio.CancelScope(shield=True):
             async with self._live_lock:
                 self._live.pop(scenario_id, None)
@@ -322,15 +441,33 @@ class ScenarioPool:
                 await shielded_rollback_close(
                     terminal_pool, terminal_ids, logger=log, event="scenario.rollback.close_failed"
                 )
+            if plugin_ids_by_kind:
+                for pool, ids in self._plugin_pool_groups(plugin_ids_by_kind):
+                    await shielded_rollback_close(pool, ids, logger=log, event="scenario.rollback.close_failed")
 
     @staticmethod
     def _pool_for(p: dict[str, Any], browser_pool: Any, terminal_pool: Any | None) -> Any:
-        """The pool that owns participant ``p`` — terminal_pool for terminals, else browser_pool."""
-        if p.get("kind") == "terminal":
-            if terminal_pool is None:
-                raise RuntimeError("terminal participant present but terminal_pool is unavailable")
-            return terminal_pool
-        return browser_pool
+        """The pool that owns participant ``p``, resolved by its recorded ``kind``.
+
+        Delegates unconditionally to ``pool_for_kind`` -- no missing-``kind``
+        fallback. Every production launch path (browser roster, terminal
+        launch, and a plugin's own ``entry.setdefault("kind", p.kind)``) stamps
+        ``kind``, and every hand-built ``LiveScenario`` in the test suite
+        stamps it too, so a participant dict with no recorded ``kind`` is a
+        genuine bug, not a case to default around. A defaulted fallback here
+        previously routed such a dict to the browser pool for closing while
+        ``adapter_for`` (strict) skipped its teardown macro -- the two
+        resolvers must agree, and disagreeing silently is worse than raising.
+        """
+        from octowright.scenario_kinds import pool_for_kind
+
+        kind = p.get("kind")
+        if not kind:
+            raise ValueError(
+                f"scenario participant has no recorded 'kind' (instance_id={p.get('instance_id')!r}, "
+                f"persona={p.get('persona')!r}); every launch path must stamp kind"
+            )
+        return pool_for_kind(kind, browser_pool=browser_pool, terminal_pool=terminal_pool)
 
     async def stop(
         self, *, scenario_id: str, browser_pool: Any, terminal_pool: Any | None = None
@@ -346,14 +483,14 @@ class ScenarioPool:
                 raise KeyError(self._missing_scenario_message(scenario_id))
             summary: ScenarioStopResult = {"scenario_id": scenario_id, "teardown_errors": [], "closed": []}
             if live.spec.teardown_macro:
-                from octowright import macros as _macros
+                from octowright.scenario_kinds import adapter_for
 
                 for p in live.participants:
-                    if p.get("kind") == "terminal":
-                        continue  # teardown macros are Playwright-only; terminals are skipped
+                    adapter = adapter_for(p.get("kind") or "", browser_pool=browser_pool)
+                    if not isinstance(adapter, SupportsMacros):
+                        continue  # a kind with no run_macro has no teardown macro to run
                     try:
-                        session = browser_pool.get(p["instance_id"])
-                        await _macros.run_macro(session=session, name=live.spec.teardown_macro, args={})
+                        await adapter.run_macro(p["instance_id"], name=live.spec.teardown_macro, args={})
                     except Exception as e:
                         summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
             for p in live.participants:
@@ -397,8 +534,6 @@ class ScenarioPool:
     ) -> ScenarioRunMacroResult:
         import asyncio as _asyncio
 
-        from octowright import macros as _macros
-
         live = self.get(scenario_id)
         targets = self._participants_for_role(live, role)
         # Wrap the fan-out so the per-participant macro.run spans nest under a
@@ -415,15 +550,18 @@ class ScenarioPool:
         ):
 
             async def _run(p: dict[str, Any]) -> ScenarioParticipantOutcome:
-                if p.get("kind") == "terminal":
+                from octowright.scenario_kinds import adapter_for
+
+                kind = p.get("kind") or ""
+                adapter = adapter_for(kind, browser_pool=browser_pool)
+                if not isinstance(adapter, SupportsMacros):
                     return {
                         "instance_id": p["instance_id"],
                         "ok": False,
-                        "error": "terminal sessions do not support browser macros",
+                        "error": f"kind {kind!r} does not support macros (its adapter provides no run_macro)",
                     }
-                session = browser_pool.get(p["instance_id"])
                 try:
-                    await _macros.run_macro(session=session, name=macro, args=args or {})
+                    await adapter.run_macro(p["instance_id"], name=macro, args=args or {})
                     return {"instance_id": p["instance_id"], "ok": True}
                 except Exception as e:
                     return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
@@ -449,28 +587,25 @@ class ScenarioPool:
         timeout_ms: int | None = None,
     ) -> ScenarioWaitForSyncResult:
         import asyncio as _asyncio
-        import re as _re
 
         live = self.get(scenario_id)
         targets = self._participants_for_role(live, role)
 
         async def _wait(p: dict[str, Any]) -> ScenarioParticipantOutcome:
-            if p.get("kind") == "terminal":
+            from octowright.scenario_kinds import adapter_for
+
+            kind = p.get("kind") or ""
+            adapter = adapter_for(kind, browser_pool=browser_pool)
+            if not isinstance(adapter, SupportsSync):
                 return {
                     "instance_id": p["instance_id"],
                     "ok": False,
-                    "error": "terminal sessions do not support browser sync",
+                    "error": f"kind {kind!r} does not support sync (its adapter provides no wait_for_sync)",
                 }
-            session = browser_pool.get(p["instance_id"])
             try:
-                if selector or text:
-                    await session.wait_for(selector=selector, text=text, timeout_ms=timeout_ms)
-                elif url:
-                    async with session.operation("scenario_wait_for_sync"):
-                        if not _re.search(url, session.page.url):
-                            await session.page.wait_for_url(url, timeout=timeout_ms or 30000)
-                else:
-                    await session.wait_for(selector=None, text=None, timeout_ms=timeout_ms)
+                await adapter.wait_for_sync(
+                    p["instance_id"], selector=selector, text=text, url=url, timeout_ms=timeout_ms
+                )
                 return {"instance_id": p["instance_id"], "ok": True}
             except Exception as e:
                 return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
@@ -492,21 +627,28 @@ async def _apply_fixtures(browser_pool: Any, live: LiveScenario, fixtures: dict[
 
     dialog_policy = fixtures.get("dialog_policy")
     mock_routes = fixtures.get("mock_routes") or []
+    if not dialog_policy and not mock_routes:
+        # Nothing to configure -- skip touching any pool at all. The common
+        # case (a scenario that declares no fixtures) must not force a
+        # session lookup for every participant, browser or plugin, that has
+        # nothing to receive. Per-kind adapter dispatch for the fixtures that
+        # ARE set is a separate concern (routing dialog_policy/mock_routes to
+        # a plugin's own adapter rather than the browser pool).
+        return
 
     async def _apply(p: dict[str, Any]) -> None:
-        if p.get("kind") == "terminal":
-            return  # dialog policy + mock routes are browser-only
-        session = browser_pool.get(p["instance_id"])
-        if dialog_policy:
-            await session.set_dialog_policy(dialog_policy)
-        for mr in mock_routes:
-            await session.mock_route(
-                mr["pattern"],
-                status=mr.get("status", 200),
-                body=mr.get("body"),
-                content_type=mr.get("content_type", "application/json"),
-                headers=mr.get("headers"),
-            )
+        from octowright.scenario_kinds import adapter_for
+
+        adapter = adapter_for(p.get("kind") or "", browser_pool=browser_pool)
+        # Two capabilities, not one: _validate_fixtures accepts exactly these
+        # two keys and this function does nothing but dispatch to them, so a
+        # single "fixtures" capability would need an undefined precedence
+        # against its own constituents. A kind that supports one and not the
+        # other gets the one it supports.
+        if dialog_policy and isinstance(adapter, SupportsDialogPolicy):
+            await adapter.set_dialog_policy(p["instance_id"], dialog_policy)
+        if mock_routes and isinstance(adapter, SupportsMockRoutes):
+            await adapter.install_mock_routes(p["instance_id"], list(mock_routes))
 
     await _asyncio.gather(*(_apply(p) for p in live.participants))
 
@@ -514,18 +656,18 @@ async def _apply_fixtures(browser_pool: Any, live: LiveScenario, fixtures: dict[
 async def _run_startup_macros(browser_pool: Any, live: LiveScenario) -> None:
     import asyncio as _asyncio
 
-    from octowright import macros as _macros
+    from octowright.scenario_kinds import adapter_for
     from octowright.scenarios import resolve_startup_macros
 
     failures: list[dict[str, str]] = []
 
     async def _run_for_participant(participant_dict: dict[str, Any], participant_spec: Any) -> None:
-        if participant_dict.get("kind") == "terminal":
-            return  # Playwright startup macros don't apply to terminals (validation also forbids them)
+        adapter = adapter_for(participant_dict.get("kind") or "", browser_pool=browser_pool)
+        if not isinstance(adapter, SupportsMacros):
+            return  # a kind with no run_macro has no startup macros to run (validation also forbids declaring them)
         for macro_name in resolve_startup_macros(participant_spec):
-            session = browser_pool.get(participant_dict["instance_id"])
             try:
-                await _macros.run_macro(session=session, name=macro_name, args={})
+                await adapter.run_macro(participant_dict["instance_id"], name=macro_name, args={})
             except Exception as e:
                 log.warning(
                     "scenario.startup_macro_failed",
