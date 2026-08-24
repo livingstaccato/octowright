@@ -95,8 +95,17 @@ def known_kinds(*, include_plugins: bool = True) -> list[str]:
 
     Sorted so a validation failure reads the same on every machine -- entry
     point enumeration order is installation-dependent.
+
+    A plugin kind is included only when its ``create_scenario_adapter``
+    actually returned an adapter (spec 7.1). ``registry.kinds()`` lists every
+    *loaded* plugin regardless, so a plugin registered with ``adapter=None``
+    would otherwise pass kind validation here and then fail later at launch
+    (``adapter_for`` returns ``None``, ``_launch_plugin_participants`` refuses
+    it) -- a confusing two-step failure for what should be one clear
+    "unsupported kind" error.
     """
     kinds = set(SUPPORTED_KINDS) | {TERMINAL_KIND}
     if include_plugins:
-        kinds |= set(_plugin_registry().kinds())
+        registry = _plugin_registry()
+        kinds |= {kind for kind in registry.kinds() if registry.get_plugin(kind).adapter is not None}
     return sorted(kinds)

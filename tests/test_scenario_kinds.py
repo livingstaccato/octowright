@@ -67,6 +67,21 @@ def registered():
         plugin_state.set_registry(original)
 
 
+@pytest.fixture
+def registered_with_adapterless():
+    """Includes a plugin whose ``create_scenario_adapter`` returned ``None`` --
+    the case spec 7.1 says must NOT count as a valid participant kind."""
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    reg.register(_Descriptor("refkind"), pool="REFPOOL", adapter=_RefAdapter(), discovered=None)
+    reg.register(_Descriptor("noadapterkind"), pool="NOADAPTERPOOL", adapter=None, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        yield reg
+    finally:
+        plugin_state.set_registry(original)
+
+
 def test_browser_kinds_resolve_to_the_browser_adapter():
     from octowright.scenario_adapters import BrowserScenarioAdapter
 
@@ -136,6 +151,29 @@ def test_known_kinds_lists_browsers_terminal_and_plugins(registered):
     assert TERMINAL_KIND in kinds
     assert "refkind" in kinds
     assert kinds == sorted(kinds), "sorted so an error message is stable"
+
+
+def test_known_kinds_excludes_a_plugin_with_no_scenario_adapter(registered_with_adapterless):
+    """Spec 7.1: a valid participant kind is one registered by an enabled
+    plugin whose create_scenario_adapter returned an adapter. A plugin
+    registered with adapter=None must not pass kind validation only to fail
+    later at launch."""
+    reg = registered_with_adapterless
+    assert reg.get_plugin("noadapterkind").adapter is None, "the plugin is loaded, just capability-less"
+    kinds = known_kinds()
+    assert "refkind" in kinds
+    assert "noadapterkind" not in kinds
+
+
+def test_an_adapterless_plugin_kind_is_refused_at_participant_validation(registered_with_adapterless):
+    from octowright.scenarios import Participant, Scenario, _validate_participant_kind
+
+    reg = registered_with_adapterless
+    assert reg.get_plugin("noadapterkind").adapter is None
+    p = Participant(persona="tanuki-tim", kind="noadapterkind", role="player")
+    s = Scenario(name="demo", participants=[p])
+    with pytest.raises(ValueError, match="noadapterkind"):
+        _validate_participant_kind(s, p)
 
 
 def test_a_registered_plugin_kind_validates(registered):
