@@ -90,6 +90,10 @@ def test_the_module_url_from_api_plugins_actually_serves_the_renderer(client):
 
     resp = client.get(module_url)
     assert resp.status_code == 200
-    on_disk = (plugin.frontend.asset_dir / plugin.frontend.module_path).read_text(encoding="utf-8")
-    assert resp.text == on_disk
+    # BYTES, not text. `read_text` applies universal-newline translation, so on
+    # a Windows checkout (where git materialises this file with CRLF) it yields
+    # LF while the route serves the file's real CRLF bytes. Comparing bytes
+    # asserts what actually went over the wire and is platform-neutral.
+    on_disk = (plugin.frontend.asset_dir / plugin.frontend.module_path).read_bytes()
+    assert resp.content == on_disk
     assert "mountStream" in resp.text

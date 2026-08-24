@@ -21,6 +21,7 @@ symlinks resolved before the prefix check.
 
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
 from starlette.requests import Request
@@ -29,6 +30,17 @@ from starlette.routing import Route
 
 from octowright._paths import reject_unsafe_path
 from octowright.http.exposure import guard_sensitive_http
+
+# Pin the JavaScript module types rather than trusting the host's mimetype
+# database. Python's `mimetypes` seeds itself from the Windows registry, where
+# `.mjs` is typically absent -- so a Windows-hosted daemon served a plugin's
+# renderer as `application/octet-stream`, and browsers enforce strict MIME
+# checking on ES modules and REFUSE to execute one that isn't a JavaScript
+# type. The module loaded fine on Linux and macOS and failed only on Windows,
+# which is exactly the class of bug that reaches a user before it reaches us.
+# Registering both extensions makes the served type deterministic everywhere.
+for _js_suffix in (".js", ".mjs"):
+    mimetypes.add_type("text/javascript", _js_suffix)
 
 #: Extensions the dashboard can actually use. Deliberately closed for the same
 #: reason ARTIFACT_MIME_ALLOWLIST is: this route serves from the dashboard's own
@@ -76,7 +88,8 @@ async def plugin_asset(request: Request) -> Response:
     # `import()` (browsers ignore Content-Disposition for module fetches, so
     # this had no effect on loading; it only broke opening the URL to debug
     # it). Python's `mimetypes` has no `.map` entry, so a source map is served
-    # as `application/octet-stream` -- harmless, DevTools reads it regardless.
+    # as `application/octet-stream` -- harmless, DevTools reads it regardless,
+    # and unlike a module a source map is not MIME-checked.
     return FileResponse(path=str(resolved))
 
 
