@@ -12,6 +12,6 @@ JSONL recordings. See docs/superpowers/specs/2026-06-12-terminal-sessions-design
 
 from __future__ import annotations
 
-from octowright.terminal.availability import is_available
+from octowright_terminal.availability import is_available
 
 __all__ = ["is_available"]

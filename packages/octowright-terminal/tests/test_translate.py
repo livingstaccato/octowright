@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from octowright.terminal.translate import MessageTranslator
+from octowright_terminal.translate import MessageTranslator
 
 
 def _snap(screen: str) -> dict:

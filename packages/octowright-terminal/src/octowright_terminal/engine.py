@@ -27,10 +27,10 @@ from provide.uterm.server.connectors import (
 
 from octowright._tracing import counter, record_exception, span
 from octowright.recorder import Recorder
-from octowright.terminal import redact
-from octowright.terminal.errors import TerminalDisconnectedError
-from octowright.terminal.supervision import poll_done_reason
-from octowright.terminal.translate import MessageTranslator
+from octowright_terminal import redact
+from octowright_terminal.errors import TerminalDisconnectedError
+from octowright_terminal.supervision import poll_done_reason
+from octowright_terminal.translate import MessageTranslator
 
 log = get_logger("octowright.terminal")
 

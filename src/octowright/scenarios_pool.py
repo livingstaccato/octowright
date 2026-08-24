@@ -357,8 +357,9 @@ class ScenarioPool:
         """Launch each terminal participant, recording its launched dict by index.
         Stops early if ``errors`` is already non-empty (the browser roster failed),
         so a failed browser launch never opens further (esp. remote SSH) sessions."""
+        from octowright_terminal.errors import TerminalPoolUnavailableError
+
         from octowright.scenarios import resolve_terminal_launch
-        from octowright.terminal.errors import TerminalPoolUnavailableError
 
         terminal_ids: list[str] = []
         for i, p in terminal_specs:

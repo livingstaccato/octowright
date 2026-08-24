@@ -9,24 +9,25 @@ from __future__ import annotations
 
 from typing import Any
 
-from octowright.dashboard_events import publish_dashboard_invalidation_nowait
-from octowright.server._state import mcp, terminal_pool
-from octowright.terminal.connector_config import SSH_DEFAULT_PORT as _DEFAULT_SSH_PORT
-from octowright.terminal.connector_config import TELNET_DEFAULT_PORT as _DEFAULT_TELNET_PORT
-from octowright.terminal.connector_config import (
+from octowright_terminal.connector_config import SSH_DEFAULT_PORT as _DEFAULT_SSH_PORT
+from octowright_terminal.connector_config import TELNET_DEFAULT_PORT as _DEFAULT_TELNET_PORT
+from octowright_terminal.connector_config import (
     pty_connector_config as _pty_connector_config,
 )
-from octowright.terminal.connector_config import (
+from octowright_terminal.connector_config import (
     ssh_connector_config as _ssh_connector_config,
 )
-from octowright.terminal.connector_config import (
+from octowright_terminal.connector_config import (
     telnet_connector_config as _telnet_connector_config,
 )
-from octowright.terminal.errors import (
+from octowright_terminal.errors import (
     ProtectedTerminalCloseError,
     TerminalDisconnectedError,
     TerminalPoolUnavailableError,
 )
+
+from octowright.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.server._state import mcp, terminal_pool
 from octowright.terminal.pool import TerminalPool
 
 

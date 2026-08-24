@@ -19,10 +19,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from octowright_terminal import engine as engine_mod
+from octowright_terminal.engine import TerminalEngine
 
 from octowright.recorder import Recorder
-from octowright.terminal import engine as engine_mod
-from octowright.terminal.engine import TerminalEngine
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="PTY is POSIX-only")
 

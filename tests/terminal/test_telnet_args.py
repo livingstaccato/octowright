@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+from octowright_terminal.connector_config import TELNET_DEFAULT_PORT
+
 from octowright.server.terminal import lifecycle
-from octowright.terminal.connector_config import TELNET_DEFAULT_PORT
 
 
 def test_telnet_connector_config_maps_host_and_port() -> None:

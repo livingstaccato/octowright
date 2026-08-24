@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from octowright_terminal.engine import TerminalEngine
 
 from octowright.recorder import Recorder
-from octowright.terminal.engine import TerminalEngine
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="PTY is POSIX-only")
 
@@ -91,7 +91,7 @@ async def test_engine_masks_password_source_input(tmp_path: Path, monkeypatch: p
 
 
 async def test_engine_send_input_on_dead_terminal_raises(tmp_path: Path) -> None:
-    from octowright.terminal.errors import TerminalDisconnectedError
+    from octowright_terminal.errors import TerminalDisconnectedError
 
     recorder = Recorder(tmp_path / "t.jsonl")
     engine = TerminalEngine("eng-4", "cat", "pty", {"command": "/bin/cat"}, recorder)

@@ -9,10 +9,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from octowright_terminal.engine import TerminalEngine
+from octowright_terminal.session import TerminalSession
 
 from octowright.recorder import Recorder
-from octowright.terminal.engine import TerminalEngine
-from octowright.terminal.session import TerminalSession
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="PTY is POSIX-only")
 
