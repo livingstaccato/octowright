@@ -27,7 +27,7 @@ from octowright.mcp_types import (
     ScenarioTailResult,
     ScenarioWaitForSyncResult,
 )
-from octowright.plugins.contract import SupportsMacros
+from octowright.plugins.contract import SupportsDialogPolicy, SupportsMacros, SupportsMockRoutes, SupportsSync
 
 log = get_logger(__name__)
 
@@ -586,28 +586,25 @@ class ScenarioPool:
         timeout_ms: int | None = None,
     ) -> ScenarioWaitForSyncResult:
         import asyncio as _asyncio
-        import re as _re
 
         live = self.get(scenario_id)
         targets = self._participants_for_role(live, role)
 
         async def _wait(p: dict[str, Any]) -> ScenarioParticipantOutcome:
-            if p.get("kind") == "terminal":
+            from octowright.scenario_kinds import adapter_for
+
+            kind = p.get("kind") or ""
+            adapter = adapter_for(kind, browser_pool=browser_pool)
+            if not isinstance(adapter, SupportsSync):
                 return {
                     "instance_id": p["instance_id"],
                     "ok": False,
-                    "error": "terminal sessions do not support browser sync",
+                    "error": f"kind {kind!r} does not support sync (its adapter provides no wait_for_sync)",
                 }
-            session = browser_pool.get(p["instance_id"])
             try:
-                if selector or text:
-                    await session.wait_for(selector=selector, text=text, timeout_ms=timeout_ms)
-                elif url:
-                    async with session.operation("scenario_wait_for_sync"):
-                        if not _re.search(url, session.page.url):
-                            await session.page.wait_for_url(url, timeout=timeout_ms or 30000)
-                else:
-                    await session.wait_for(selector=None, text=None, timeout_ms=timeout_ms)
+                await adapter.wait_for_sync(
+                    p["instance_id"], selector=selector, text=text, url=url, timeout_ms=timeout_ms
+                )
                 return {"instance_id": p["instance_id"], "ok": True}
             except Exception as e:
                 return {"instance_id": p["instance_id"], "ok": False, "error": repr(e)}
@@ -639,19 +636,18 @@ async def _apply_fixtures(browser_pool: Any, live: LiveScenario, fixtures: dict[
         return
 
     async def _apply(p: dict[str, Any]) -> None:
-        if p.get("kind") == "terminal":
-            return  # dialog policy + mock routes are browser-only
-        session = browser_pool.get(p["instance_id"])
-        if dialog_policy:
-            await session.set_dialog_policy(dialog_policy)
-        for mr in mock_routes:
-            await session.mock_route(
-                mr["pattern"],
-                status=mr.get("status", 200),
-                body=mr.get("body"),
-                content_type=mr.get("content_type", "application/json"),
-                headers=mr.get("headers"),
-            )
+        from octowright.scenario_kinds import adapter_for
+
+        adapter = adapter_for(p.get("kind") or "", browser_pool=browser_pool)
+        # Two capabilities, not one: _validate_fixtures accepts exactly these
+        # two keys and this function does nothing but dispatch to them, so a
+        # single "fixtures" capability would need an undefined precedence
+        # against its own constituents. A kind that supports one and not the
+        # other gets the one it supports.
+        if dialog_policy and isinstance(adapter, SupportsDialogPolicy):
+            await adapter.set_dialog_policy(p["instance_id"], dialog_policy)
+        if mock_routes and isinstance(adapter, SupportsMockRoutes):
+            await adapter.install_mock_routes(p["instance_id"], list(mock_routes))
 
     await _asyncio.gather(*(_apply(p) for p in live.participants))
 

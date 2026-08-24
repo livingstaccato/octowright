@@ -426,7 +426,7 @@ async def test_wait_for_sync_reports_terminal_as_unsupported() -> None:
     sp._live[live.scenario_id] = live
     ws = await sp.wait_for_sync(scenario_id="mix", browser_pool=_Pool(), role="operator", selector="#x")
     assert ws["results"][0]["ok"] is False
-    assert "browser sync" in ws["results"][0]["error"]
+    assert "does not support sync" in ws["results"][0]["error"], "the error now names the missing capability"
 
 
 # ---------------------------------------------------------------------------
