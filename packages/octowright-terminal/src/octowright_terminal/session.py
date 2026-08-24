@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from octowright.recorder import Recorder
-from octowright.terminal.engine import TerminalEngine
+from octowright_terminal.engine import TerminalEngine
 
 
 @dataclass

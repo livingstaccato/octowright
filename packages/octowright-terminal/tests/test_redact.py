@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import pytest
+from octowright_terminal import redact
 
 from octowright import defaults
-from octowright.terminal import redact
 
 
 def test_is_password_prompt_detects_trailing_prompt() -> None:

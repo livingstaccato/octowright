@@ -565,7 +565,7 @@ async def test_launch_terminals_raises_when_pool_missing_but_specs_present() -> 
     # are terminal specs. If that contract is ever broken, the helper must fail
     # loudly with a typed error, not a `python -O`-stripped assert that would let
     # a None pool reach `.launch` and crash with AttributeError.
-    from octowright.terminal.errors import TerminalPoolUnavailableError
+    from octowright_terminal.errors import TerminalPoolUnavailableError
 
     specs = [(0, SimpleNamespace(persona="ops"))]
     with pytest.raises(TerminalPoolUnavailableError):

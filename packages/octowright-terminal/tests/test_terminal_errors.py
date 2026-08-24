@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from octowright.terminal.errors import ProtectedTerminalCloseError, TerminalPoolUnavailableError
+from octowright_terminal.errors import ProtectedTerminalCloseError, TerminalPoolUnavailableError
 
 
 def test_protected_terminal_close_error_is_value_error() -> None:

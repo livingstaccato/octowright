@@ -18,11 +18,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from octowright_terminal.engine import TerminalEngine
+from octowright_terminal.errors import ProtectedTerminalCloseError
+from octowright_terminal.session import TerminalSession
+
 from octowright import defaults
 from octowright.recorder import Recorder, new_log_path
-from octowright.terminal.engine import TerminalEngine
-from octowright.terminal.errors import ProtectedTerminalCloseError
-from octowright.terminal.session import TerminalSession
 
 
 class TerminalPool:

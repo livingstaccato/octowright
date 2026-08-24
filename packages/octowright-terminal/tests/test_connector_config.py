@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from octowright.terminal.connector_config import pty_connector_config, ssh_connector_config, telnet_connector_config
+from octowright_terminal.connector_config import pty_connector_config, ssh_connector_config, telnet_connector_config
 
 
 def test_pty_config_defaults_and_overrides() -> None:
