@@ -1,4 +1,4 @@
-.PHONY: help install test test-frontend lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean
+.PHONY: help install test test-terminal test-frontend lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
@@ -15,6 +15,15 @@ install: ## uv sync --all-groups (deps + dev tools)
 test: ## Run the Python test suite (launches real browsers where engines are installed)
 	uv run --active pytest -q tests/ -m "not memory_isolated"
 	uv run --active pytest -q tests/ -m memory_isolated --no-cov
+
+# The terminal session-kind plugin's own suite. `make test` above runs tests/
+# only, so this is the local equivalent of CI's terminal-plugin job. Needs the
+# `terminal` dependency group synced (uv sync --all-groups) and the sibling
+# ../provide-uterm checkout; without them the suite ignores itself at collection
+# and reports a clean pass over zero tests, which is why the CI script asserts
+# availability first.
+test-terminal: ## Run the octowright-terminal plugin suite (needs ../provide-uterm)
+	uv run --active pytest -q packages/octowright-terminal/tests --no-cov
 
 test-frontend: ## Run TypeScript frontend tests with coverage gating
 	cd packages/octowright-frontend && npm test
