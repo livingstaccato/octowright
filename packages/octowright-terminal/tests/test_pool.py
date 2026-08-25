@@ -6,20 +6,25 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from octowright_terminal.errors import ProtectedTerminalCloseError
+from octowright_terminal.pool import TerminalPool
 
-from octowright.terminal.pool import TerminalPool
+from octowright.plugins.session_launch import PluginContext
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="PTY is POSIX-only")
 
 
-async def test_launch_registers_and_lists_session() -> None:
-    pool = TerminalPool()
+@pytest.fixture
+def ctx(tmp_path):
+    return PluginContext(kind="terminal", recordings_dir=tmp_path, id_in_use=lambda _id, **_: False)
+
+
+async def test_launch_registers_and_lists_session(ctx) -> None:
+    pool = TerminalPool(ctx)
     try:
         result = await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}, label="cat")
         iid = result["instance_id"]
@@ -39,8 +44,8 @@ async def test_launch_registers_and_lists_session() -> None:
         await pool.close_all(force=True)
 
 
-async def test_get_and_maybe_get() -> None:
-    pool = TerminalPool()
+async def test_get_and_maybe_get(ctx) -> None:
+    pool = TerminalPool(ctx)
     try:
         iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}))["instance_id"]
         assert pool.get(iid).instance_id == iid
@@ -52,22 +57,20 @@ async def test_get_and_maybe_get() -> None:
         await pool.close_all(force=True)
 
 
-async def test_failed_launch_leaves_no_orphan_recording(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from octowright import defaults
-
-    monkeypatch.setattr(defaults, "RECORDINGS_DIR", tmp_path)
-    pool = TerminalPool()
+async def test_failed_launch_leaves_no_orphan_recording(ctx, tmp_path) -> None:
+    pool = TerminalPool(ctx)
     # SSH without known_hosts: the connector raises ValueError in its ctor (via
     # build_connector in TerminalEngine.__init__), after the recorder file is
-    # created but before the session registers. The file must not be orphaned.
+    # created but before the session registers. The transaction (ctx.begin_session)
+    # discards the opening-row-only recording, so the file must not be orphaned.
     with pytest.raises(ValueError, match="known_hosts"):
         await pool.launch(kind="ssh", connector_config={"host": "h", "username": "u"})
     assert list(tmp_path.glob("*.jsonl")) == []
-    assert pool.iter_sessions() == ()
+    assert list(pool.iter_sessions()) == []
 
 
-async def test_close_refuses_protected_without_force() -> None:
-    pool = TerminalPool()
+async def test_close_refuses_protected_without_force(ctx) -> None:
+    pool = TerminalPool(ctx)
     iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}, protected=True))["instance_id"]
     try:
         with pytest.raises(ProtectedTerminalCloseError):
@@ -79,8 +82,15 @@ async def test_close_refuses_protected_without_force() -> None:
     assert pool.maybe_get(iid) is None
 
 
-async def test_close_all_attempts_every_session_and_aggregates_failures() -> None:
-    pool = TerminalPool()
+async def test_close_returns_a_close_result(ctx) -> None:
+    pool = TerminalPool(ctx)
+    iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}))["instance_id"]
+    result = await pool.close(iid, force=True)
+    assert result == {"instance_id": iid, "kind": "terminal", "closed": True}
+
+
+async def test_close_all_attempts_every_session_and_aggregates_failures(ctx) -> None:
+    pool = TerminalPool(ctx)
     sessions = {
         "first": SimpleNamespace(protected=False, close=AsyncMock(side_effect=RuntimeError("first failed"))),
         "second": SimpleNamespace(protected=False, close=AsyncMock()),
