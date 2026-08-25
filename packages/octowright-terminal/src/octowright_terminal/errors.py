@@ -7,9 +7,24 @@
 
 from __future__ import annotations
 
+from octowright.plugins.errors import ProtectedSessionCloseError
 
-class ProtectedTerminalCloseError(ValueError):
-    """Raised when closing a protected terminal session requires force=True."""
+
+class ProtectedTerminalCloseError(ProtectedSessionCloseError, ValueError):
+    """Raised when closing a protected terminal session requires force=True.
+
+    Core's ``ProtectedSessionCloseError`` comes FIRST in the MRO because it is
+    the contract: ``SessionPool.close`` promises that type, and
+    ``http/routes/sessions._maybe_close_plugin`` catches only that type to map
+    a refused close onto ``409`` with actionable "pass force=true" guidance.
+    Raising a type outside that hierarchy is not a cosmetic difference — the
+    route's ``except`` does not match, nothing above it catches, and Starlette
+    turns the refusal into a generic ``500``.
+
+    ``ValueError`` is kept in the MRO deliberately: ``terminal_launch``'s broad
+    ``except ValueError`` and any external caller that has been catching this
+    as one keep working, so adding the contract type takes nothing away.
+    """
 
 
 class TerminalDisconnectedError(RuntimeError):
