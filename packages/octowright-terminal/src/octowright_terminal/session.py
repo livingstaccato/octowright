@@ -12,8 +12,9 @@ label, profile, url(None), recorder, log_path, protected, plus the engine.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from octowright.recorder import Recorder
 from octowright_terminal.engine import TerminalEngine
@@ -31,6 +32,12 @@ class TerminalSession:
     engine: TerminalEngine
     protected: bool = False
     url: str | None = None  # always None; present so dashboard summaries are uniform
+    #: Required by the SessionRecord Protocol: the free-form map a kind uses for
+    #: settings core does not model. Terminal keeps `connector_type` as a real
+    #: field because its own tools and dashboard detail read it directly, so this
+    #: stays empty -- but the member must EXIST or the record does not satisfy
+    #: the Protocol and `SessionLaunch.commit` refuses it.
+    extra: dict[str, Any] = field(default_factory=dict)
 
     async def close(self) -> None:
         # Protected-close refusal is enforced by TerminalPool.close (which holds
