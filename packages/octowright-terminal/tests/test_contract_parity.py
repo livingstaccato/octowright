@@ -129,6 +129,47 @@ def test_pool_covers_every_session_pool_method_with_a_compatible_signature(pool:
         pool.get("nope")
 
 
+async def test_close_refuses_a_protected_session_with_cores_own_error_type(pool: Any) -> None:
+    """The one contract clause that is a *raised type*, not a signature.
+
+    The name-and-signature checks above cannot see this, and that blind spot
+    shipped a real regression: ``TerminalPool.close`` raised a
+    ``ProtectedTerminalCloseError`` that was not a ``ProtectedSessionCloseError``,
+    so ``http/routes/sessions._maybe_close_plugin`` — which catches *only*
+    core's type — let it escape and Starlette turned a refusal into a ``500``
+    instead of the ``409`` the dashboard's close button needs.
+
+    The type is not hardcoded on its own: the assertion below first re-derives
+    it from ``SessionPool.close``'s declared contract, so a core rename that
+    left this file pinning the old type fails here rather than passing while
+    the route silently stops matching.
+    """
+    from octowright.plugins import errors as plugin_errors
+    from octowright.plugins.errors import ProtectedSessionCloseError
+
+    promised = [
+        name
+        for name in dir(plugin_errors)
+        if name in (SessionPool.close.__doc__ or "") and isinstance(getattr(plugin_errors, name), type)
+    ]
+    assert promised == ["ProtectedSessionCloseError"], (
+        "SessionPool.close's contract no longer promises exactly ProtectedSessionCloseError "
+        f"(found {promised!r}); update this test AND every plugin that raises the old type"
+    )
+
+    launched = await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}, protected=True)
+    instance_id = launched["instance_id"]
+    try:
+        with pytest.raises(ProtectedSessionCloseError):
+            await pool.close(instance_id)
+        # ...and force still closes, so the refusal is a gate rather than a wall.
+        await pool.close(instance_id, force=True)
+        assert pool.maybe_get(instance_id) is None
+    finally:
+        if pool.maybe_get(instance_id) is not None:
+            await pool.close(instance_id, force=True)
+
+
 #: Terminal's deliberate coverage of core's capability vocabulary. Named
 #: explicitly -- not computed as "whatever isn't implemented" -- so a
 #: capability added to (or removed from) `_CAPABILITY_PROTOCOLS` without a
