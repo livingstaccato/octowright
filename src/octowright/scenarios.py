@@ -69,28 +69,24 @@ class Scenario:
 def _validate_participant_kind(s: Scenario, p: Participant) -> None:
     """Validate a participant's kind against every kind that can actually run.
 
-    Three families are legal: a browser engine, ``terminal`` (still core's own
-    until the extraction step), and any kind a registered plugin claims. The
-    error names what IS available, because the two ways to get here -- a typo
-    and a plugin that is installed but not enabled -- are indistinguishable to
-    the operator otherwise.
+    Two families are legal: a browser engine, and any kind a registered
+    plugin claims -- terminal included, now that step 5 removed its hardcoded
+    branch. The error names what IS available, because the two ways to get
+    here -- a typo and a plugin that is installed but not enabled -- are
+    indistinguishable to the operator otherwise.
 
-    ``startup_macros`` is gated on the ``macros`` capability rather than on
-    ``kind != "terminal"``. Terminal still produces the same refusal (it has no
-    adapter, so no capabilities), and every future kind is covered without
-    another special case.
+    A plugin kind's own options (e.g. terminal's ``connector_type``) are no
+    longer validated here at scenario-load time -- core has no business
+    knowing a plugin's option shape. They are validated inside that kind's
+    own ``resolve_participant``, which runs at launch time instead.
+
+    ``startup_macros`` is gated on the ``macros`` capability, which every
+    kind -- including one core has never heard of -- is covered by without
+    a special case.
     """
-    from octowright.scenario_kinds import TERMINAL_KIND, known_kinds, supports
+    from octowright.scenario_kinds import known_kinds, supports
 
-    if p.kind == TERMINAL_KIND:
-        # Terminal's own rules about terminal's own options -- moved into the
-        # plugin in step 5. Local import: this is core model code, reached
-        # from every scenario load, and must not pull the optional uterm
-        # dependency chain just to validate one participant's options.
-        from octowright_terminal.scenario import _validate_options
-
-        _validate_options(p)
-    elif p.kind not in known_kinds():
+    if p.kind not in known_kinds():
         raise ValueError(
             f"scenario {s.name!r}: participant has unsupported kind {p.kind!r} "
             f"(known kinds: {known_kinds()}) -- a plugin kind must be enabled via OCTOWRIGHT_PLUGINS"
@@ -476,24 +472,6 @@ def _load_persona_or_none(name: str) -> Any:
         return _p.load_persona(name)
     except FileNotFoundError:
         return None
-
-
-def resolve_terminal_launch(p: Participant) -> dict[str, Any]:
-    """Return kwargs for ``terminal_pool.launch(**kwargs)`` from a terminal Participant.
-
-    Transitional shim: the real resolution now lives in the terminal plugin
-    (``octowright_terminal.scenario._resolve_launch``), moved there in step 5
-    alongside the ``TerminalScenarioAdapter``. This keeps
-    ``octowright.scenarios.resolve_terminal_launch`` importable for existing
-    callers -- this module's own tests included -- until the deletion phase
-    removes the terminal special case here entirely. It deliberately still
-    resolves the persona itself via this module's ``_load_persona_or_none``
-    (rather than delegating that too) so a caller that monkeypatches it here
-    keeps working exactly as before.
-    """
-    from octowright_terminal.scenario import _resolve_launch
-
-    return _resolve_launch(p, _load_persona_or_none(p.persona))
 
 
 def resolve_startup_macros(p: Participant) -> list[str]:

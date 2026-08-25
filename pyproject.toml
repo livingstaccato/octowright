@@ -242,7 +242,7 @@ markers = [
     "live_browser: tests that require real browser engines installed",
     "engine_matrix: tests that exercise chromium/firefox/webkit matrices",
     "integration_local: tests that run against the local demo playground server",
-    "terminal: optional terminal-session tests; require the octowright[terminal] extra (provide-uterm). Auto-applied to everything under tests/terminal/. Select with -m terminal / exclude with -m 'not terminal'.",
+    "terminal: optional terminal-session tests; require provide-uterm (the octowright-terminal plugin's own dependency, resolved from the sibling ../provide-uterm checkout). Auto-applied to everything under packages/octowright-terminal/tests/. Select with -m terminal / exclude with -m 'not terminal'.",
     "memory_isolated: tests whose assertion is a process-wide tracemalloc heap diff, so they must run in their own pytest process rather than interleaved with the rest of the suite (thousands of unrelated tests' retained state otherwise pollutes the measurement window). Run alone in CI; excluded from the main suite invocation.",
 ]
 filterwarnings = [
@@ -288,22 +288,18 @@ explicit_package_bases = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-# provide.uterm.* backs the optional `terminal` extra; it ships py.typed so it
-# types cleanly where installed (local dev), but on a core install / in CI the
-# extra is absent and its imports under src/octowright/terminal/ are unresolved.
-# ignore_missing_imports keeps mypy green in both setups.
+# provide.uterm.* backs the terminal session-kind plugin
+# (packages/octowright-terminal, imported unconditionally by its own source
+# under packages/octowright-terminal/src/octowright_terminal/). It ships
+# py.typed so it types cleanly where installed (local dev, via the sibling
+# ../provide-uterm checkout resolved through [tool.uv.sources] below), but CI
+# has no sibling checkout, so the package is unresolved there.
+# ignore_missing_imports keeps mypy green in both setups. Core itself
+# (src/octowright) never imports provide.uterm at all -- see
+# tests/test_plugin_isolation.py -- so this override exists purely for the
+# plugin package half of `mypy src/octowright packages/octowright-terminal/src`.
 module = ["mcp.*", "provide.telemetry.*", "provide.uterm.*", "yaml"]
 ignore_missing_imports = true
-
-# ty equivalent of the mypy override above: scope the unresolved-import rule OFF
-# for the optional terminal package only, so a core install / CI (no provide.uterm)
-# stays green. Scoped to src/octowright/terminal/** so unresolved imports anywhere
-# else are still caught.
-[[tool.ty.overrides]]
-include = ["src/octowright/terminal/**"]
-
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
 
 [tool.codespell]
 skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,packages/*/coverage,packages/*/dist,package-lock.json"

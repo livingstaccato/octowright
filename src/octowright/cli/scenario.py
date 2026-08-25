@@ -36,31 +36,6 @@ def scenario_list_cmd() -> None:
         click.echo(f"{row['name']:30s}  {row['form']:6s}  {row['path']}")
 
 
-def _make_terminal_pool() -> Any | None:
-    """Build a TerminalPool when the optional terminal extra is installed, else
-    None. Mirrors ``server/_state`` so CLI scenarios that declare terminal
-    participants work instead of raising 'extra not installed'."""
-    from octowright import terminal as _terminal
-
-    if not _terminal.is_available():
-        return None
-    from octowright_terminal.pool import TerminalPool
-
-    from octowright import defaults
-    from octowright.plugins.session_launch import PluginContext
-
-    def _no_other_pool_to_check(instance_id: str, *, exclude_kind: str | None = None) -> bool:
-        # A standalone CLI scenario run has no other session pool in scope to
-        # cross-check against here -- the same pre-plugin-loader shim used in
-        # server/_state.py, temporary until this is routed through the plugin
-        # registry.
-        del instance_id, exclude_kind
-        return False
-
-    ctx = PluginContext(kind="terminal", recordings_dir=defaults.RECORDINGS_DIR, id_in_use=_no_other_pool_to_check)
-    return TerminalPool(ctx)
-
-
 @scenario.command("start")
 @click.argument("name")
 @click.option("--test", "test_mode", is_flag=True, help="Run verify macros after start; emit pass/fail and exit.")
@@ -78,10 +53,9 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
 
     async def _run() -> int:
         pool = BrowserPool()
-        tpool = _make_terminal_pool()
         spool = _s.ScenarioPool()
         try:
-            live = await spool.start(name=name, browser_pool=pool, terminal_pool=tpool)
+            live = await spool.start(name=name, browser_pool=pool)
             click.echo(f"scenario_id: {live.scenario_id}")
             for p in live.participants:
                 click.echo(
@@ -94,7 +68,7 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
                     live=live,
                     out_path=out_path,
                 )
-                await spool.stop(scenario_id=live.scenario_id, browser_pool=pool, terminal_pool=tpool)
+                await spool.stop(scenario_id=live.scenario_id, browser_pool=pool)
                 return exit_code
 
             click.echo("\nbrowsers open; Ctrl-C to tear down and exit.")
@@ -135,12 +109,10 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
                     await watcher_task
                 except _asyncio.CancelledError:
                     pass
-            await spool.stop(scenario_id=live.scenario_id, browser_pool=pool, terminal_pool=tpool)
+            await spool.stop(scenario_id=live.scenario_id, browser_pool=pool)
             return 0
         finally:
             await pool.shutdown()
-            if tpool is not None:
-                await tpool.close_all()
 
     try:
         exit_code = _asyncio.run(_run())

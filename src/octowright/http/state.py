@@ -147,17 +147,6 @@ class _StateModule(_ModuleType):
         _server_state().scenario_pool = value
 
     @property
-    def terminal_pool(self) -> Any:
-        # None on a core install (the optional `octowright[terminal]` extra is
-        # absent); a TerminalPool when uterm is available. Forwarded like the
-        # other pools so the HTTP layer reads it through the single seam.
-        return _server_state().terminal_pool
-
-    @terminal_pool.setter
-    def terminal_pool(self, value: Any) -> None:
-        _server_state().terminal_pool = value
-
-    @property
     def plugin_registry(self) -> Any:
         # The live session-kind plugin registry. Forwarded through the same
         # seam as the pools so HTTP-layer code only ever reads plugin state
@@ -180,7 +169,6 @@ if TYPE_CHECKING:
 
     pool: Any
     scenario_pool: Any
-    terminal_pool: Any
     plugin_registry: Any
 
 
@@ -204,5 +192,4 @@ __all__ = [
     "scenario_pool",
     "shutil",
     "subprocess",
-    "terminal_pool",
 ]

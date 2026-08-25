@@ -12,7 +12,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from octowright_terminal.errors import ProtectedTerminalCloseError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -71,15 +70,9 @@ def _safe_live_summaries(sessions: Iterable[Any]) -> list[dict[str, Any]]:
 async def list_sessions(_request: Request) -> JSONResponse:
     pool = state.pool
     live = _safe_live_summaries(pool.iter_sessions())
-    # Terminal sessions live in a separate pool that only exists when the
-    # optional `octowright[terminal]` extra is installed.
-    terminal_pool = state.terminal_pool
-    if terminal_pool is not None:
-        live += _safe_live_summaries(terminal_pool.iter_sessions())
-    # Session-kind plugins serialize through the same guarded summariser, and
-    # iter_plugin_sessions() itself isolates a raising pool from the others.
-    # Terminal keeps its own branch above until it moves out to a plugin of
-    # its own.
+    # Session-kind plugins (terminal included, when enabled) serialize
+    # through the same guarded summariser, and iter_plugin_sessions() itself
+    # isolates a raising pool from the others.
     live += _safe_live_summaries(iter_plugin_sessions())
     live_paths = {s["log_path"] for s in live}
     closed = _closed_sessions(state.RECORDINGS_DIR, live_paths)
@@ -189,35 +182,11 @@ def _closed_session_detail_response(sid: str) -> JSONResponse:
     return JSONResponse(detail)
 
 
-def _terminal_session_detail(live: Any) -> dict[str, Any]:
-    """Detail payload for a live terminal session.
-
-    Terminal sessions have no page/console/download/video/trace artefacts, so
-    we return the summary plus terminal-relevant fields rather than running the
-    browser-only ``_build_live_session_detail`` (which reads ``live.page`` etc.).
-    """
-    return {
-        **_live_summary(live),
-        "connector_type": getattr(live, "connector_type", None),
-        "video_path": None,
-        "trace_path": None,
-        "markdown_path": None,
-        "websocket_path": None,
-        "action_count": int(getattr(getattr(live, "recorder", None), "action_count", 0)),
-    }
-
-
 async def session_detail(request: Request) -> JSONResponse:
     sid = request.path_params["id"]
-    # Terminal sessions are browser-shaped only in the summary; short-circuit
-    # before the browser-only detail builder.
-    terminal_pool = state.terminal_pool
-    if terminal_pool is not None:
-        term = terminal_pool.maybe_get(sid)
-        if term is not None:
-            return JSONResponse(_terminal_session_detail(term))
-    # Same short-circuit, now registry-driven: a plugin's session has no
-    # page/console/video either, and its own descriptor knows its shape.
+    # A plugin session (terminal included, when enabled) has no
+    # page/console/video; short-circuit before the browser-only detail
+    # builder, and let its own descriptor supply its shape.
     plugin_found = find_plugin_session(sid)
     if plugin_found is not None:
         kind, plugin_session = plugin_found
@@ -289,25 +258,6 @@ async def session_launch(request: Request) -> JSONResponse:
     )
     await publish_dashboard_invalidation("sessions")
     return JSONResponse(summary, status_code=201)
-
-
-async def _maybe_close_terminal(sid: str, *, force: bool) -> JSONResponse | None:
-    """Close ``sid`` if it is a live terminal session, else return ``None``.
-
-    Returns ``None`` when terminals are unavailable (core install) or ``sid`` is
-    not a terminal, so the caller falls through to the browser-pool path. A
-    protected terminal without ``force`` maps to 409, mirroring the browser path.
-    """
-    terminal_pool = state.terminal_pool
-    if terminal_pool is None or terminal_pool.maybe_get(sid) is None:
-        return None
-    try:
-        await terminal_pool.close(sid, force=force)
-    except ProtectedTerminalCloseError as e:
-        return JSONResponse({"error": str(e).replace("force=True", "force=true")}, status_code=409)
-    state.log.info("octowright.http.terminal_session_closed", instance_id=sid)
-    await publish_dashboard_invalidation("sessions")
-    return JSONResponse({"closed": True, "instance_id": sid})
 
 
 async def _maybe_close_plugin(sid: str, *, force: bool) -> JSONResponse | None:
@@ -384,7 +334,7 @@ async def _close_browser_session(sid: str, *, force: bool) -> JSONResponse:
 
 
 async def session_close(request: Request) -> JSONResponse:
-    """DELETE /api/sessions/{id} — close a live session (browser or terminal)."""
+    """DELETE /api/sessions/{id} — close a live session (browser or plugin kind)."""
     sid = request.path_params["id"]
     raw_force = request.query_params.get("force")
     force = False
@@ -393,12 +343,10 @@ async def session_close(request: Request) -> JSONResponse:
         if parsed_force is None:
             return JSONResponse({"error": f"invalid force={raw_force!r}, must be bool"}, status_code=400)
         force = parsed_force
-    # Terminal sessions live in a separate (optional) pool. Close them here too
-    # so the dashboard's close button works uniformly — without this, DELETE on a
-    # visible terminal 404s because its id isn't in the browser pool.
-    terminal_close = await _maybe_close_terminal(sid, force=force)
-    if terminal_close is not None:
-        return terminal_close
+    # A plugin-kind session (terminal included, when enabled) lives in its
+    # own pool. Close it here too so the dashboard's close button works
+    # uniformly — without this, DELETE on a visible plugin session 404s
+    # because its id isn't in the browser pool.
     plugin_close = await _maybe_close_plugin(sid, force=force)
     if plugin_close is not None:
         return plugin_close

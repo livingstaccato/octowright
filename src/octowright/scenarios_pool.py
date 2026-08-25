@@ -89,7 +89,6 @@ class ScenarioPool:
         new_instance_id: str,
         role: str | None = None,
         browser_pool: Any | None = None,
-        terminal_pool: Any | None = None,
     ) -> ScenarioRemapEntry:
         live = self.get(scenario_id)
         matches = [p for p in live.participants if p.get("instance_id") == old_instance_id]
@@ -107,8 +106,8 @@ class ScenarioPool:
         target = matches[0]
         if browser_pool is None:
             raise ValueError("browser_pool is required for remap validation")
-        # A terminal participant's replacement must come from the terminal pool.
-        lookup_pool = self._pool_for(target, browser_pool, terminal_pool)
+        # A plugin-kind participant's replacement must come from its own kind's pool.
+        lookup_pool = self._pool_for(target, browser_pool)
         replacement = lookup_pool.maybe_get(new_instance_id)
         if replacement is None:
             raise ValueError(f"replacement instance_id={new_instance_id!r} is not live")
@@ -139,7 +138,6 @@ class ScenarioPool:
         scenario_id: str,
         remaps: list[dict[str, Any]],
         browser_pool: Any | None = None,
-        terminal_pool: Any | None = None,
     ) -> ScenarioRemapResult:
         applied: list[ScenarioRemapEntry] = []
         for item in remaps:
@@ -159,7 +157,6 @@ class ScenarioPool:
                     new_instance_id=new_instance_id,
                     role=role,
                     browser_pool=browser_pool,
-                    terminal_pool=terminal_pool,
                 )
             )
         return {"scenario_id": scenario_id, "applied": applied, "count": len(applied)}
@@ -170,7 +167,6 @@ class ScenarioPool:
         name: str | None = None,
         browser_pool: Any,
         spec: Any | None = None,
-        terminal_pool: Any | None = None,
     ) -> LiveScenario:
         if spec is None:
             if name is None:
@@ -181,21 +177,12 @@ class ScenarioPool:
         effective_name = name or spec.name
         if not spec.participants:
             raise RuntimeError(f"scenario {effective_name!r} has no participants")
-        # Group by kind rather than splitting browser/terminal: browsers keep
-        # the roster (it batches window creation), terminals keep their
-        # individual launches, and a plugin kind launches through its own pool.
-        from octowright.scenario_kinds import TERMINAL_KIND
-
-        terminal_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind == TERMINAL_KIND]
-        if terminal_specs and terminal_pool is None:
-            raise RuntimeError(
-                f"scenario {effective_name!r} has terminal participant(s) but the octowright[terminal] "
-                "extra is not installed (terminal_pool is unavailable)"
-            )
+        # Group by kind: browsers keep the roster (it batches window
+        # creation), and every other kind -- terminal included, now that it
+        # is a plugin like any other -- launches through its own registered
+        # pool.
         browser_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind in SUPPORTED_KINDS]
-        plugin_specs = [
-            (i, p) for i, p in enumerate(spec.participants) if p.kind != TERMINAL_KIND and p.kind not in SUPPORTED_KINDS
-        ]
+        plugin_specs = [(i, p) for i, p in enumerate(spec.participants) if p.kind not in SUPPORTED_KINDS]
         scenario_id = _uuid.uuid4().hex[:12]
         # Wrap the whole multi-session spawn + fixture + startup-macro sequence
         # under a single span so per-participant launches and macro runs nest
@@ -206,8 +193,8 @@ class ScenarioPool:
             scenario_name=effective_name,
             participants=len(spec.participants),
         ):
-            launched_by_index, browser_ids, terminal_ids, plugin_ids_by_kind = await self._launch_participants(
-                browser_pool, terminal_pool, browser_specs, terminal_specs, plugin_specs, effective_name
+            launched_by_index, browser_ids, plugin_ids_by_kind = await self._launch_participants(
+                browser_pool, browser_specs, plugin_specs, effective_name
             )
             # Reassemble in original spec order so roles/personas line up.
             participants: list[dict[str, Any]] = []
@@ -225,29 +212,21 @@ class ScenarioPool:
             except BaseException:
                 # CancelledError is a BaseException, so catch it here too — but the
                 # rollback must *complete* before we re-raise, so run it shielded.
-                await self._rollback_start(
-                    scenario_id, browser_pool, browser_ids, terminal_pool, terminal_ids, plugin_ids_by_kind
-                )
+                await self._rollback_start(scenario_id, browser_pool, browser_ids, plugin_ids_by_kind)
                 raise
             return live
 
     async def _launch_participants(
         self,
         browser_pool: Any,
-        terminal_pool: Any | None,
         browser_specs: list[tuple[int, Any]],
-        terminal_specs: list[tuple[int, Any]],
         plugin_specs: list[tuple[int, Any]],
         effective_name: str,
-    ) -> tuple[dict[int, dict[str, Any]], list[str], list[str], dict[str, list[str]]]:
-        """Launch browser participants via the roster, plugin participants
-        through their own pools, and terminal participants individually --
-        keyed back to their original participant index. Plugins launch
-        *before* terminals so ``_launch_terminals``' errors-so-far early-out
-        (which exists to stop it opening further, possibly remote, sessions
-        once anything has already failed) also covers a plugin launch
-        failure, not just a browser-roster one. On any failure, close
-        everything launched in every group and raise."""
+    ) -> tuple[dict[int, dict[str, Any]], list[str], dict[str, list[str]]]:
+        """Launch browser participants via the roster and every other
+        participant through the pool its kind registered -- keyed back to
+        its original participant index. On any failure, close everything
+        launched in every group and raise."""
         from octowright.scenarios import resolve_launch_kwargs
 
         launched_by_index: dict[int, dict[str, Any]] = {}
@@ -264,12 +243,10 @@ class ScenarioPool:
 
         plugin_ids_by_kind = await self._launch_plugin_group(plugin_specs, launched_by_index, errors)
 
-        terminal_ids = await self._launch_terminals(terminal_pool, terminal_specs, launched_by_index, errors)
-
         if errors:
-            await self._close_launched(browser_pool, browser_ids, terminal_pool, terminal_ids, plugin_ids_by_kind)
+            await self._close_launched(browser_pool, browser_ids, plugin_ids_by_kind)
             raise RuntimeError(f"scenario {effective_name!r}: {len(errors)} participant(s) failed to launch: {errors}")
-        return launched_by_index, browser_ids, terminal_ids, plugin_ids_by_kind
+        return launched_by_index, browser_ids, plugin_ids_by_kind
 
     @staticmethod
     async def _launch_plugin_group(
@@ -312,14 +289,13 @@ class ScenarioPool:
     ) -> None:
         """Launch each plugin participant through the pool its kind registered.
 
-        Sequential rather than gathered, matching ``_launch_terminals``: a
-        plugin pool makes no concurrency promise, and a scenario roster is
-        small enough that the wall-clock cost is not worth the first
-        cross-plugin race report. Also matches ``_launch_terminals``' early-out:
-        stops launching once ``errors`` is already non-empty (a failed browser
-        roster, or an earlier plugin participant in this same loop), so a
-        failed launch never goes on to open further -- possibly remote --
-        plugin sessions before rollback.
+        Sequential rather than gathered: a plugin pool makes no concurrency
+        promise, and a scenario roster is small enough that the wall-clock
+        cost is not worth the first cross-plugin race report. Stops launching
+        once ``errors`` is already non-empty (a failed browser roster, or an
+        earlier plugin participant in this same loop), so a failed launch
+        never goes on to open further -- possibly remote -- plugin sessions
+        before rollback.
 
         No return value: the only caller (``_launch_plugin_group``) discards
         it and reconstructs the launched-id list from ``launched_by_index``,
@@ -332,7 +308,7 @@ class ScenarioPool:
         for index, p in plugin_specs:
             if errors:
                 break
-            pool = pool_for_kind(p.kind, browser_pool=None, terminal_pool=None)
+            pool = pool_for_kind(p.kind, browser_pool=None)
             adapter = adapter_for(p.kind, browser_pool=None)
             if adapter is None:
                 errors.append(f"participant kind {p.kind!r} has no scenario adapter")
@@ -348,41 +324,6 @@ class ScenarioPool:
             launched_by_index[index] = entry
 
     @staticmethod
-    async def _launch_terminals(
-        terminal_pool: Any | None,
-        terminal_specs: list[tuple[int, Any]],
-        launched_by_index: dict[int, dict[str, Any]],
-        errors: list[Any],
-    ) -> list[str]:
-        """Launch each terminal participant, recording its launched dict by index.
-        Stops early if ``errors`` is already non-empty (the browser roster failed),
-        so a failed browser launch never opens further (esp. remote SSH) sessions."""
-        from octowright_terminal.errors import TerminalPoolUnavailableError
-        from octowright_terminal.scenario import _resolve_launch
-
-        from octowright.scenarios import _load_persona_or_none
-
-        terminal_ids: list[str] = []
-        for i, p in terminal_specs:
-            if errors:
-                break
-            # start() guarantees a terminal_pool whenever terminal_specs is non-empty.
-            # Explicit raise (not assert) so a broken invariant fails loudly even
-            # under `python -O`, rather than crashing on `None.launch`.
-            if terminal_pool is None:
-                raise TerminalPoolUnavailableError(
-                    "terminal participants present but terminal_pool is None — start() invariant violated"
-                )
-            try:
-                launched = await terminal_pool.launch(**_resolve_launch(p, _load_persona_or_none(p.persona)))
-            except Exception as exc:
-                errors.append({"persona": p.persona, "error": repr(exc)})
-                continue
-            terminal_ids.append(launched["instance_id"])
-            launched_by_index[i] = launched
-        return terminal_ids
-
-    @staticmethod
     def _plugin_pool_groups(plugin_ids_by_kind: dict[str, list[str]]) -> list[tuple[Any, list[str]]]:
         """Resolve (pool, ids) for each plugin kind's launched sessions, for
         teardown. A kind whose pool can no longer be resolved (e.g. the
@@ -393,7 +334,7 @@ class ScenarioPool:
         groups: list[tuple[Any, list[str]]] = []
         for kind, ids in plugin_ids_by_kind.items():
             try:
-                pool = pool_for_kind(kind, browser_pool=None, terminal_pool=None)
+                pool = pool_for_kind(kind, browser_pool=None)
             except Exception as exc:
                 log.warning("scenario.rollback.pool_lookup_failed", kind=kind, error=repr(exc))
                 continue
@@ -404,12 +345,10 @@ class ScenarioPool:
     async def _close_launched(
         browser_pool: Any,
         browser_ids: list[str],
-        terminal_pool: Any | None,
-        terminal_ids: list[str],
         plugin_ids_by_kind: dict[str, list[str]] | None = None,
     ) -> None:
         """Best-effort close of partially-launched sessions across every pool."""
-        groups: list[tuple[Any, list[str]]] = [(browser_pool, browser_ids), (terminal_pool, terminal_ids)]
+        groups: list[tuple[Any, list[str]]] = [(browser_pool, browser_ids)]
         if plugin_ids_by_kind:
             groups.extend(ScenarioPool._plugin_pool_groups(plugin_ids_by_kind))
         for pool, ids in groups:
@@ -427,36 +366,30 @@ class ScenarioPool:
         scenario_id: str,
         browser_pool: Any,
         browser_ids: list[str],
-        terminal_pool: Any | None,
-        terminal_ids: list[str],
         plugin_ids_by_kind: dict[str, list[str]] | None = None,
     ) -> None:
         """Shielded teardown for a scenario that failed or was cancelled during
         fixture application / startup macros: drop bookkeeping and close every
-        launched session (browser + terminal + plugin) before the original
-        exception re-propagates."""
+        launched session (browser + plugin) before the original exception
+        re-propagates."""
         with anyio.CancelScope(shield=True):
             async with self._live_lock:
                 self._live.pop(scenario_id, None)
             await shielded_rollback_close(browser_pool, browser_ids, logger=log, event="scenario.rollback.close_failed")
-            if terminal_pool is not None and terminal_ids:
-                await shielded_rollback_close(
-                    terminal_pool, terminal_ids, logger=log, event="scenario.rollback.close_failed"
-                )
             if plugin_ids_by_kind:
                 for pool, ids in self._plugin_pool_groups(plugin_ids_by_kind):
                     await shielded_rollback_close(pool, ids, logger=log, event="scenario.rollback.close_failed")
 
     @staticmethod
-    def _pool_for(p: dict[str, Any], browser_pool: Any, terminal_pool: Any | None) -> Any:
+    def _pool_for(p: dict[str, Any], browser_pool: Any) -> Any:
         """The pool that owns participant ``p``, resolved by its recorded ``kind``.
 
         Delegates unconditionally to ``pool_for_kind`` -- no missing-``kind``
-        fallback. Every production launch path (browser roster, terminal
-        launch, and a plugin's own ``entry.setdefault("kind", p.kind)``) stamps
-        ``kind``, and every hand-built ``LiveScenario`` in the test suite
-        stamps it too, so a participant dict with no recorded ``kind`` is a
-        genuine bug, not a case to default around. A defaulted fallback here
+        fallback. Every production launch path (browser roster, and a
+        plugin's own ``entry.setdefault("kind", p.kind)``) stamps ``kind``,
+        and every hand-built ``LiveScenario`` in the test suite stamps it
+        too, so a participant dict with no recorded ``kind`` is a genuine
+        bug, not a case to default around. A defaulted fallback here
         previously routed such a dict to the browser pool for closing while
         ``adapter_for`` (strict) skipped its teardown macro -- the two
         resolvers must agree, and disagreeing silently is worse than raising.
@@ -469,11 +402,9 @@ class ScenarioPool:
                 f"scenario participant has no recorded 'kind' (instance_id={p.get('instance_id')!r}, "
                 f"persona={p.get('persona')!r}); every launch path must stamp kind"
             )
-        return pool_for_kind(kind, browser_pool=browser_pool, terminal_pool=terminal_pool)
+        return pool_for_kind(kind, browser_pool=browser_pool)
 
-    async def stop(
-        self, *, scenario_id: str, browser_pool: Any, terminal_pool: Any | None = None
-    ) -> ScenarioStopResult:
+    async def stop(self, *, scenario_id: str, browser_pool: Any) -> ScenarioStopResult:
         # Shield the whole teardown: the scenario is popped from the registry
         # up front, so a cancel mid-teardown would strand live participants with
         # no scenario_id left to retry. Matching _rollback_start, the pop + macro
@@ -497,7 +428,7 @@ class ScenarioPool:
                         summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
             for p in live.participants:
                 try:
-                    await self._pool_for(p, browser_pool, terminal_pool).close(p["instance_id"], force=True)
+                    await self._pool_for(p, browser_pool).close(p["instance_id"], force=True)
                     summary["closed"].append(p["instance_id"])
                 except Exception as e:
                     summary["teardown_errors"].append({"instance_id": p["instance_id"], "error": repr(e)})
