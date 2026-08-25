@@ -103,12 +103,14 @@ Emitted only when `PROVIDE_TRACE_ENABLED=true` / `PROVIDE_METRICS_ENABLED=true` 
 
 ## Development
 
-This package is a `uv` workspace member of the octowright repo, so from the repo root:
+This package is a `uv` workspace member of the octowright repo, but it lives in its own `terminal` dependency group rather than in `dev`, because its dependency chain reaches the unpublished `provide-uterm`. `uv sync` on its own (default groups only) therefore does **not** install it; ask for the group, or for every group:
 
 ```bash
-uv sync --active                                   # installs this package in editable mode too
+uv sync --active --all-groups                      # or: --group terminal
 uv run --active --no-sync mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
 uv run --active --no-sync pytest packages/octowright-terminal/tests -v --no-cov
 ```
 
-The `terminal` pytest marker is auto-applied to everything under `packages/octowright-terminal/tests/` (see the root `pyproject.toml`); those tests require the sibling `provide-uterm` checkout and are skipped at collection when it's absent, so core CI runs them only where that checkout exists.
+`make test-terminal` from the repo root runs that last line.
+
+The `terminal` pytest marker is auto-applied to everything under `packages/octowright-terminal/tests/` (see the root `pyproject.toml`). Those tests import uterm-backed modules, so the suite ignores itself at collection when the sibling checkout is absent — which is right for a core install and dangerous for a CI gate, since pytest then reports a clean pass over zero tests. CI therefore runs this suite in a dedicated `terminal-plugin` job that clones `provide-io/provide-uterm` (a public repo, pinned to a commit) into the sibling path first and asserts uterm is importable *before* pytest starts. See `ci/clone_provide_uterm.sh` and `ci/run_terminal_plugin_tests.sh`.
