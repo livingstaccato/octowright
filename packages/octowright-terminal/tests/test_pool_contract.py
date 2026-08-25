@@ -13,11 +13,15 @@ enforces cross-pool id uniqueness.
 
 from __future__ import annotations
 
+from typing import Any
+from unittest import mock
+
 import pytest
+from octowright_terminal import pool as _pool_module
 from octowright_terminal.pool import TerminalPool
 
 from octowright.plugins.contract import SessionPool
-from octowright.plugins.session_launch import PluginContext
+from octowright.plugins.session_launch import PluginContext, SessionLaunch
 
 
 @pytest.fixture
@@ -72,3 +76,47 @@ async def test_a_failed_launch_leaves_no_orphan_recording(ctx, tmp_path):
     # The transaction discards an opening-row-only recording. Any .jsonl left
     # behind here is the orphan the launch transaction exists to prevent.
     assert list(tmp_path.glob("*.jsonl")) == []
+
+
+async def test_a_failing_commit_stops_the_engine_it_already_started(tmp_path) -> None:
+    """`engine.start()` forks the PTY BEFORE `commit()` can refuse.
+
+    Core's launch transaction discards the recording on failure, but it has no
+    handle on the connector and the session is never registered anywhere that
+    could close it -- so the pool has to stop what it started. Without this a
+    refused launch leaves a live child process and a running poll task behind.
+    """
+    from octowright_terminal.plugin import plugin as terminal_plugin
+
+    from octowright.plugins.registry import PluginRegistry
+    from octowright.plugins.session_launch import PluginContext
+
+    registry = PluginRegistry()
+    ctx = PluginContext(kind="terminal", recordings_dir=tmp_path, id_in_use=registry.id_in_use)
+    pool = terminal_plugin.create_pool(ctx)
+
+    started: list[Any] = []
+    real_engine_cls = _pool_module.TerminalEngine
+
+    class _RecordingEngine(real_engine_cls):  # type: ignore[misc, valid-type]
+        async def start(self) -> None:
+            await super().start()
+            started.append(self)
+
+    boom = RuntimeError("commit refused")
+
+    def _explode(_self: Any, _record: Any) -> Any:
+        raise boom
+
+    with (
+        mock.patch.object(_pool_module, "TerminalEngine", _RecordingEngine),
+        mock.patch.object(SessionLaunch, "commit", _explode),
+        pytest.raises(RuntimeError, match="commit refused"),
+    ):
+        await pool.launch(kind="pty", connector_config={"command": "/bin/cat"})
+
+    assert started, "the test did not reach engine.start(); it is not exercising the window"
+    engine = started[0]
+    assert not engine._connector.is_connected(), "the connector survived a failed launch"
+    assert engine._poll_task is None or engine._poll_task.done(), "the poll task outlived the failed launch"
+    assert pool.maybe_get(engine._instance_id) is None
