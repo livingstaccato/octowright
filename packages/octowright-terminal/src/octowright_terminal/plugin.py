@@ -12,11 +12,19 @@ package's logic, which is why the class body carries no uterm import.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from octowright.plugins.contract import PLUGIN_API_VERSION
+from octowright.plugins.contract import PLUGIN_API_VERSION, FrontendAsset
 
 KIND = "terminal"
+
+#: The terminal plugin's dashboard renderer -- a self-contained bundle (xterm
+#: + two addons inlined, see assets-src/build.mjs) built from
+#: assets-src/src/renderer.ts and committed here because a Python wheel has
+#: no npm step at install time. See ../../assets-src/README.md for how to
+#: rebuild it.
+_ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
 #: The seven tools that moved out of core's `server/terminal/lifecycle.py`.
 #: Declared here and registered by importing `tool_module`; core refuses the
@@ -41,7 +49,12 @@ class TerminalPlugin:
     tool_names = TOOL_NAMES
     tool_module = "octowright_terminal.tools"
     profile_name = "terminals"
-    frontend = None  # Task 7
+    frontend = FrontendAsset(
+        renderer_api_version=1,
+        asset_dir=_ASSET_DIR,
+        module_path="renderer.js",
+        layout="stream",
+    )
 
     def create_pool(self, ctx: Any) -> Any:
         from octowright_terminal.pool import TerminalPool
