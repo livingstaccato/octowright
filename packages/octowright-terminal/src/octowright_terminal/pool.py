@@ -60,6 +60,11 @@ class TerminalPool:
                 log_path=launch.log_path,
                 engine=engine,
                 protected=protected,
+                # Mirrored into the record's free-form map so core's launch
+                # transaction carries it out in LaunchResult["extra"] -- the
+                # only route a plugin has to add a field to a result core
+                # builds. `terminal_launch` flattens it back to the top level.
+                extra={"connector_type": kind},
             )
             await engine.start()
             result = launch.commit(session)

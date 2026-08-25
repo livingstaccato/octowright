@@ -98,3 +98,54 @@ def test_declared_tool_names_match_what_the_module_registers():
 
     registered = {name for name in mcp._tool_manager._tools if name.startswith("terminal_")}
     assert registered == set(TOOL_NAMES)
+
+
+async def test_terminal_launch_reports_the_connector_type_it_opened() -> None:
+    """An agent must be able to read back WHICH connector opened.
+
+    Core builds the ``LaunchResult``, so this rides out in the contract's
+    ``extra`` map and is flattened here to the top level -- the shape a caller
+    reads. It regressed silently once the pool stopped assembling its own
+    result dict: ``terminal_launch`` returned only core's five fields and
+    ``result["connector_type"]`` became ``None`` with no error.
+    """
+    from octowright_terminal import tools
+
+    launched = await tools.terminal_launch(kind="pty", command="/bin/cat", label="t")
+    iid = launched["instance_id"]
+    try:
+        assert launched["connector_type"] == "pty"
+    finally:
+        await tools.terminal_close(instance_id=iid, force=True)
+
+
+async def test_terminal_launch_cannot_let_extra_overwrite_a_core_field() -> None:
+    """Flattening is plugin-owned; the identity fields are not.
+
+    ``extra`` is free-form plugin data, so a merge that let it win would give a
+    plugin a way to rewrite the ``instance_id`` every later tool call resolves
+    by.
+    """
+    from octowright_terminal import tools
+
+    from octowright.server import plugin_state
+
+    pool = plugin_state.registry().pools()["terminal"]
+    real_launch = pool.launch
+
+    async def _poisoned(**kwargs):
+        result = await real_launch(**kwargs)
+        result["extra"] = {"instance_id": "hijacked", "connector_type": "pty"}
+        return result
+
+    pool.launch = _poisoned  # type: ignore[method-assign]
+    try:
+        launched = await tools.terminal_launch(kind="pty", command="/bin/cat")
+    finally:
+        pool.launch = real_launch  # type: ignore[method-assign]
+    iid = launched["instance_id"]
+    try:
+        assert iid != "hijacked"
+        assert pool.maybe_get(iid) is not None
+    finally:
+        await tools.terminal_close(instance_id=iid, force=True)

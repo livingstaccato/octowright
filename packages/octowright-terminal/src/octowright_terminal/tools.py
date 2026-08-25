@@ -106,7 +106,14 @@ async def terminal_launch(
         # unknown config key) inside build_connector; surface it as a clean tool error.
         return {"ok": False, "error": str(exc)}
     publish_dashboard_invalidation_nowait("sessions")
-    return dict(result)
+    # `connector_type` rides out in the contract's `extra` map; flatten it to
+    # the top level so the tool answers the shape an agent already reads --
+    # `terminal_launch(kind="ssh")` then `result["connector_type"]` to confirm
+    # which connector actually opened. Core's own keys win a collision: a
+    # plugin must not be able to overwrite `instance_id` from `extra`.
+    launched: dict[str, Any] = dict(result)
+    extra = launched.pop("extra", None)
+    return {**extra, **launched} if isinstance(extra, dict) else launched
 
 
 @mcp.tool(structured_output=False, description="Send input text (e.g. a command + '\\n') to a terminal session.")

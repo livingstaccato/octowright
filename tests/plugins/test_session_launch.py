@@ -287,3 +287,43 @@ async def test_context_artifact_reserves_and_commits_through_a_real_session(tmp_
     assert row["artifact_id"] == "transcript"
     assert row["mime_type"] == "text/plain"
     assert (tmp_path / row["path"]).resolve() == handle.path.resolve()
+
+
+@pytest.mark.asyncio
+async def test_commit_carries_the_records_extra_into_the_launch_result(tmp_path):
+    """``SessionRecord.extra`` -> ``LaunchResult.extra`` is the only route a
+    plugin has to add a kind-specific field to a result core builds.
+
+    Both members were declared and neither was wired to the other, so the
+    terminal plugin's ``connector_type`` silently vanished from
+    ``terminal_launch`` when it stopped assembling its own dict.
+    """
+    ctx = _ctx(tmp_path)
+    async with ctx.begin_session(instance_id="abc123", label=None, profile=None) as launch:
+        record = _Record(
+            "abc123", "refkind", None, None, None, launch.recorder, launch.log_path, extra={"connector_type": "pty"}
+        )
+        result = launch.commit(record)
+    assert result["extra"] == {"connector_type": "pty"}
+
+
+@pytest.mark.asyncio
+async def test_commit_omits_extra_entirely_when_the_record_has_none(tmp_path):
+    """``LaunchResult`` is ``total=False``; an empty map is absence, not ``{}``."""
+    ctx = _ctx(tmp_path)
+    async with ctx.begin_session(instance_id="abc123", label=None, profile=None) as launch:
+        record = _Record("abc123", "refkind", None, None, None, launch.recorder, launch.log_path)
+        result = launch.commit(record)
+    assert "extra" not in result
+
+
+@pytest.mark.asyncio
+async def test_commit_copies_extra_so_later_session_mutation_cannot_rewrite_it(tmp_path):
+    """A caller holding a result must not see it change under them."""
+    ctx = _ctx(tmp_path)
+    record_extra = {"connector_type": "pty"}
+    async with ctx.begin_session(instance_id="abc123", label=None, profile=None) as launch:
+        record = _Record("abc123", "refkind", None, None, None, launch.recorder, launch.log_path, extra=record_extra)
+        result = launch.commit(record)
+    record_extra["connector_type"] = "ssh"
+    assert result["extra"] == {"connector_type": "pty"}
