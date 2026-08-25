@@ -52,9 +52,28 @@ def find_plugin_session(instance_id: str) -> tuple[str, Any] | None:
     Returns ``(kind, session)`` or ``None``. Instance ids are unique across
     all pools — core enforces that at launch commit — so the first match is
     the only match.
+
+    Guarded per pool for the same reason ``iter_plugin_sessions`` and
+    ``plugin_session_detail`` are, and with more reach than either: this
+    function runs *first* in both ``session_detail`` and ``session_close``,
+    before the browser pool is consulted at all. A pool whose ``maybe_get``
+    raises — mid-teardown, a half-rolled-back registration, a third-party bug
+    — would therefore 500 the detail page and the close button for **browser**
+    sessions too, not just its own. A raising pool is skipped: it cannot
+    answer for the id, and treating "this pool is broken" as "this pool has no
+    such session" is exactly the degradation the contract promises.
     """
     for kind, pool in state.plugin_registry.pools().items():
-        session = pool.maybe_get(instance_id)
+        try:
+            session = pool.maybe_get(instance_id)
+        except Exception as exc:  # a bad plugin must not 500 unrelated sessions
+            state.log.warning(
+                "octowright.http.plugin_pool_lookup_failed",
+                kind=kind,
+                instance_id=instance_id,
+                error=repr(exc),
+            )
+            continue
         if session is not None:
             return kind, session
     return None

@@ -367,3 +367,73 @@ def test_a_plugin_that_raises_from_operation_snapshot_does_not_500_the_dashboard
     assert detail["kind"] == "refkind"
     # The descriptor's own half still ran, so the payload degrades rather than dies.
     assert detail["refkind_specific"] is True
+
+
+class _LookupRaisingPool:
+    """A pool whose ``maybe_get`` explodes.
+
+    Distinct from ``_RaisingPool`` above, which raises from ``iter_sessions``:
+    ``find_plugin_session`` never iterates, so only this shape reaches it.
+    """
+
+    def maybe_get(self, instance_id: str) -> Any:
+        raise RuntimeError("plugin pool lookup exploded")
+
+    def iter_sessions(self):
+        return iter(())
+
+
+def _detail_request(instance_id: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": f"/api/sessions/{instance_id}",
+            "headers": [],
+            "query_string": b"",
+            "path_params": {"id": instance_id},
+        }
+    )
+
+
+def test_find_plugin_session_isolates_a_pool_that_raises_from_maybe_get():
+    """The third of the trio, and the one with the widest blast radius.
+
+    ``find_plugin_session`` runs FIRST in both ``session_detail`` and
+    ``session_close``, before the browser pool is consulted, so an unguarded
+    raise here 500s those routes for browser sessions too. Registered
+    raise-then-good so a missing guard cannot be masked by ordering.
+    """
+    from octowright.http.routes._session_kinds import find_plugin_session
+
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    reg.register(_BoomDescriptor(), pool=_LookupRaisingPool(), adapter=None, discovered=None)
+    reg.register(_Descriptor(), pool=_Pool({"refsess01": _Session("refsess01")}), adapter=None, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        found = find_plugin_session("refsess01")
+        assert found is not None
+        assert found[0] == "refkind"
+        # An id nobody holds still resolves to None rather than propagating.
+        assert find_plugin_session("nobody") is None
+    finally:
+        plugin_state.set_registry(original)
+
+
+async def test_session_detail_route_survives_a_pool_that_raises_from_maybe_get():
+    """A broken plugin must not 500 the detail page of an unrelated session."""
+    from octowright.http.routes.sessions import session_detail
+
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    reg.register(_BoomDescriptor(), pool=_LookupRaisingPool(), adapter=None, discovered=None)
+    reg.register(_Descriptor(), pool=_Pool({"refsess01": _Session("refsess01")}), adapter=None, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        resp = await session_detail(_detail_request("refsess01"))
+    finally:
+        plugin_state.set_registry(original)
+
+    assert resp.status_code == 200
+    assert json.loads(resp.body)["kind"] == "refkind"
