@@ -6,17 +6,13 @@
  * The core-owned session detail page for a session-kind plugin's stream
  * renderer.
  *
- * `bootTerminalSession` (session-terminal.ts) builds this same header/slot/
- * timeline/footer layout and calls back into core for eight things --
- * renderHeader, renderFooter, installDashboardAuthRequiredNotice,
+ * Core builds the header/slot/timeline/footer layout and handles eight
+ * things -- renderHeader, renderFooter, installDashboardAuthRequiredNotice,
  * renderTimeline, appendTimelineEvents, openTail, getEvents,
- * tailWebSocketUrl -- with only mounting the view and feeding it events
- * actually terminal-specific. This is the generic version: core does all
- * eight, the plugin does exactly one (`mountStream`).
- *
- * `session-terminal.ts` is NOT modified by this module. Terminal moves onto
- * this path in the extraction step, when it becomes an external plugin;
- * until then core deliberately carries both.
+ * tailWebSocketUrl -- and the plugin does exactly one (`mountStream`),
+ * mounting the view and feeding it events. This is how every non-core-
+ * reserved session kind renders, terminal included now that it is an
+ * external plugin rather than a special case core carries directly.
  */
 
 import { getEvents, tailWebSocketUrl } from "./api.js";
