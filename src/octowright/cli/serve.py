@@ -543,29 +543,12 @@ async def _run_leader(
         from octowright.process_reaper import reap_descendant_browsers_on_shutdown, shutdown_browser_pool_on_shutdown
 
         await reap_descendant_browsers_on_shutdown(pool, log=_log)
-        from octowright.server import _state as _st
-
-        await _close_terminal_pool_on_shutdown(_st.terminal_pool, log=_log)
         from octowright.server import plugin_state as _plugin_state
 
         await _close_plugin_pools_on_shutdown(_plugin_state.registry(), log=_log)
         await shutdown_browser_pool_on_shutdown(pool, log=_log)
         if not no_singleton:
             _sn.remove_lock()
-
-
-async def _close_terminal_pool_on_shutdown(terminal_pool: Any, *, log: Any) -> None:
-    """Best-effort close of the optional terminal pool during leader shutdown.
-
-    Browsers are reaped separately by ``reap_descendant_browsers_on_shutdown``;
-    without this, terminal sessions (local PTYs, SSH connections) survive the
-    daemon exit. ``terminal_pool`` is ``None`` on a core install."""
-    if terminal_pool is None:
-        return
-    try:
-        await terminal_pool.close_all(force=True)
-    except Exception as exc:  # best-effort teardown; don't block shutdown
-        log.debug("shutdown.terminal_pool_close_failed", error=repr(exc))
 
 
 async def _close_plugin_pools_on_shutdown(registry: Any, *, log: Any) -> None:

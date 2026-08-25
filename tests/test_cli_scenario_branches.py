@@ -171,29 +171,6 @@ def _patch_signal_handlers_to_immediate_resolve(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(asyncio, "get_running_loop", patched_get_loop)
 
 
-class TestScenarioStartTerminalPool:
-    def test_terminal_pool_built_threaded_and_closed(
-        self, patched_pools: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When the terminal extra is available, `scenario start` builds a
-        terminal pool, threads it into start()/stop(), and closes it on exit —
-        otherwise CLI terminal scenarios always raise 'extra not installed'."""
-        live = _live()
-        patched_pools["spool"].start.return_value = live
-
-        tpool = MagicMock(name="TerminalPool")
-        tpool.close_all = AsyncMock()
-        monkeypatch.setattr(_scenario_mod, "_make_terminal_pool", lambda: tpool, raising=False)
-        _patch_signal_handlers_to_immediate_resolve(monkeypatch)
-
-        result = CliRunner().invoke(cli, ["scenario", "start", "demo"])
-        assert result.exit_code == 0
-
-        assert patched_pools["spool"].start.await_args.kwargs.get("terminal_pool") is tpool
-        assert patched_pools["spool"].stop.await_args.kwargs.get("terminal_pool") is tpool
-        tpool.close_all.assert_awaited_once()
-
-
 # ---------------------------------------------------------------------------
 # scenario start --watch
 # ---------------------------------------------------------------------------
