@@ -68,24 +68,13 @@ dependencies = [
     "pydantic-settings>=2.14.2",
 ]
 
-[project.optional-dependencies]
-# Optional terminal sessions: hosts a provide-uterm connector in-process (local
-# PTY shell + SSH), recorded to the same JSONL format as browsers. See AGENTS.md
-# "Terminal Sessions (optional)". Core never imports uterm; without this extra the
-# terminal_* tools simply don't register. `provide-uterm-server[gateway]` brings
-# asyncssh for the SSH connector.
-#
-# EXPERIMENTAL / not yet installable from PyPI: the provide-uterm packages below
-# are NOT published, so `pip install octowright[terminal]` currently FAILS (404).
-# [tool.uv.sources] resolves them from a sibling ../provide-uterm checkout for
-# local dev only; uv strips those overrides from the built wheel. Until the
-# packages are published, the extra works only from a source checkout — see the
-# "Terminal Sessions (optional)" section in AGENTS.md/README.
-terminal = [
-    "provide-uterm>=0.4.0",
-    "provide-uterm-platform>=0.4.0",
-    "provide-uterm-server[gateway]>=0.4.0",
-]
+# No [project.optional-dependencies] here: terminal sessions used to be an
+# `octowright[terminal]` extra, but step 5 (see AGENTS.md "Terminal Sessions
+# (plugin)") moved them out to the packages/octowright-terminal workspace
+# member entirely -- core has no code left that would use provide-uterm, so
+# an extra installing it into *this* distribution would have nothing to do.
+# Install the terminal plugin as its own package instead (source-checkout
+# only today; see packages/octowright-terminal/README.md).
 
 [project.urls]
 Homepage = "https://github.com/livingstaccato/octowright"
@@ -176,12 +165,13 @@ artifacts = [
 members = ["packages/octowright-terminal"]
 
 [tool.uv.sources]
-# Local-dev resolution for the unpublished provide-uterm ecosystem packages that
-# back the optional `terminal` extra (above). Expects the sibling repo checked
-# out at ../provide-uterm (the provide.io layout); `provide-uterm-client` is a
-# transitive dep of `provide-uterm-server`. uv strips these source overrides from
-# the published wheel, so a real `pip install octowright[terminal]` resolves the
-# same packages from PyPI once they publish. Remove this table at that point.
+# Local-dev resolution for the unpublished provide-uterm ecosystem packages
+# that packages/octowright-terminal (above) depends on. Expects the sibling
+# repo checked out at ../provide-uterm (the provide.io layout);
+# `provide-uterm-client` is a transitive dep of `provide-uterm-server`. uv
+# strips these source overrides from the built wheel, so a real
+# `pip install octowright-terminal` resolves the same packages from PyPI once
+# they publish. Remove this table at that point.
 provide-uterm = { path = "../provide-uterm/packages/provide-uterm", editable = true }
 provide-uterm-client = { path = "../provide-uterm/packages/provide-uterm-client", editable = true }
 provide-uterm-platform = { path = "../provide-uterm/packages/provide-uterm-platform", editable = true }
