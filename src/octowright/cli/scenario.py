@@ -36,6 +36,38 @@ def scenario_list_cmd() -> None:
         click.echo(f"{row['name']:30s}  {row['form']:6s}  {row['path']}")
 
 
+def _activate_session_kind_plugins() -> Any:
+    """Make the enabled session-kind plugins usable in this CLI process.
+
+    ``scenario start`` runs outside the daemon, so nothing has populated the
+    process-global plugin registry: ``scenario_kinds._plugin_registry()`` reads
+    ``octowright.plugins.state``, which is filled only as an import side effect
+    of ``octowright.server._plugin_activation``. Without this, a participant of
+    any plugin kind is refused by ``_validate_participant_kind`` with an error
+    telling the operator to set ``OCTOWRIGHT_PLUGINS`` — which they already did.
+
+    Importing ``octowright.server`` is deliberately the *whole* activation path
+    rather than a second, CLI-local copy of resolve→activate: ``server/__init__``
+    imports every core tool module first and ``_plugin_activation`` last, so the
+    loader's tool-name collision check sees the same registered surface the
+    daemon's does. A CLI-only sequence would let a plugin that the daemon
+    refuses load here, which is a worse failure than the one being fixed.
+
+    Nothing about what loads changes: activation is still gated on
+    ``OCTOWRIGHT_PLUGINS`` / ``plugins.yaml``, so with no plugin enabled this
+    resolves nothing and registers nothing. It is import-time and idempotent —
+    a second call is a ``sys.modules`` hit, so tools cannot double-register.
+
+    Imported inside the function, matching ``selftest``: merely importing the
+    CLI must not pull the tool registry and Playwright into every follower
+    process (see ``tests/test_follower_import_weight.py``).
+    """
+    import octowright.server  # noqa: F401  # activation is an import side effect
+    from octowright.server import plugin_state
+
+    return plugin_state.registry()
+
+
 @scenario.command("start")
 @click.argument("name")
 @click.option("--test", "test_mode", is_flag=True, help="Run verify macros after start; emit pass/fail and exit.")
@@ -52,6 +84,9 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
     setup_telemetry()
 
     async def _run() -> int:
+        # Before start(), which loads and validates the scenario: a plugin-kind
+        # participant is refused unless the registry is already populated.
+        plugin_registry = _activate_session_kind_plugins()
         pool = BrowserPool()
         spool = _s.ScenarioPool()
         try:
@@ -113,6 +148,14 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
             return 0
         finally:
             await pool.shutdown()
+            # A plugin pool can hold a PTY, an SSH connection or a socket; the
+            # daemon tears these down on shutdown (cli/serve) and the CLI must
+            # too, or `scenario start` leaks them on exit. Same helper, so the
+            # two entry points cannot drift.
+            from octowright.cli.serve import _close_plugin_pools_on_shutdown
+            from octowright.server._state import log as _log
+
+            await _close_plugin_pools_on_shutdown(plugin_registry, log=_log)
 
     try:
         exit_code = _asyncio.run(_run())
