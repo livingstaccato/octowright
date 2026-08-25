@@ -3,12 +3,20 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""@mcp.tool surface for driving terminal sessions (PTY / SSH / Telnet)."""
+"""@mcp.tool surface for driving terminal sessions (PTY / SSH / Telnet).
+
+Registration is an import-time side effect, exactly as core's own tool
+modules do it -- the loader snapshots the tool manager around this import so a
+partial registration can be rolled back.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+from octowright.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.server import plugin_state
+from octowright.server._state import mcp
 from octowright_terminal.connector_config import SSH_DEFAULT_PORT as _DEFAULT_SSH_PORT
 from octowright_terminal.connector_config import TELNET_DEFAULT_PORT as _DEFAULT_TELNET_PORT
 from octowright_terminal.connector_config import (
@@ -25,21 +33,25 @@ from octowright_terminal.errors import (
     TerminalDisconnectedError,
     TerminalPoolUnavailableError,
 )
+from octowright_terminal.plugin import KIND as _KIND
 from octowright_terminal.pool import TerminalPool
-
-from octowright.dashboard_events import publish_dashboard_invalidation_nowait
-from octowright.server._state import mcp, terminal_pool
 
 
 def _pool() -> TerminalPool:
-    # This module is imported only when _state.terminal_pool is not None
-    # (server/__init__ gates it on terminal availability), so this never fires in
-    # practice. It's an explicit raise (not assert) so the guard survives
-    # `python -O` instead of letting a None pool reach `.launch`.
-    pool = terminal_pool
-    if pool is None:
-        raise TerminalPoolUnavailableError("terminal tools reached without an available terminal_pool")
-    return pool
+    # The pool is resolved per call through the plugin registry rather than a
+    # core global (see octowright.server.plugin_state / tests/plugins/reference
+    # for the pattern this follows). `pool_for` raises a bare KeyError when the
+    # "terminal" plugin has not been activated -- an operator has the extra
+    # installed but did not name it in OCTOWRIGHT_PLUGINS, or a defensive call
+    # site is reached before plugin activation runs. Wrapped in a typed error so
+    # the guard survives `python -O` (which strips `assert`) instead of leaking
+    # an undocumented KeyError to an MCP caller.
+    try:
+        return cast("TerminalPool", plugin_state.pool_for(_KIND))
+    except KeyError as exc:
+        raise TerminalPoolUnavailableError(
+            "terminal tools reached without a registered terminal plugin (is 'terminal' listed in OCTOWRIGHT_PLUGINS?)"
+        ) from exc
 
 
 @mcp.tool(
