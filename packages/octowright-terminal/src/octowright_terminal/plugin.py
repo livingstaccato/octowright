@@ -53,8 +53,28 @@ class TerminalPlugin:
 
         return TerminalScenarioAdapter(pool)
 
-    def session_detail(self, _session: Any) -> dict[str, Any]:
-        return {}  # Task 6
+    def session_detail(self, session: Any) -> dict[str, Any]:
+        """Terminal's own additions to the dashboard detail payload.
+
+        Core merges these under the uniform ``_live_summary`` base (started_at,
+        live, protected, event/console/download/page counts, log_path, ...) —
+        see ``plugin_session_detail`` in
+        ``octowright.http.routes._session_kinds``. A terminal has no
+        page/console/download/video/trace artefacts, so the browser-only paths
+        are reported explicitly as ``None`` rather than omitted: a dashboard
+        summary stays uniform across kinds instead of branching on which keys
+        are present. Field names are byte-identical to core's former
+        ``_terminal_session_detail`` — the dashboard reads them, and a rename
+        here would be a silent UI break rather than a refactor.
+        """
+        return {
+            "connector_type": getattr(session, "connector_type", None),
+            "video_path": None,
+            "trace_path": None,
+            "markdown_path": None,
+            "websocket_path": None,
+            "action_count": int(getattr(getattr(session, "recorder", None), "action_count", 0)),
+        }
 
 
 plugin = TerminalPlugin()
