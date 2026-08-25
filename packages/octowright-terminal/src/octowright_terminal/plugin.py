@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from octowright.plugins.contract import PLUGIN_API_VERSION, FrontendAsset
+from octowright.plugins.contract import FrontendAsset
 
 KIND = "terminal"
 
@@ -45,7 +45,18 @@ TOOL_NAMES = frozenset(
 class TerminalPlugin:
     kind = KIND
     display_name = "Terminal"
-    plugin_api_version = PLUGIN_API_VERSION
+    #: A LITERAL, deliberately -- not core's ``PLUGIN_API_VERSION``. This is the
+    #: version of the backend contract this package was written against, and an
+    #: independently released distribution can be installed beside a core it has
+    #: never been built with. Importing core's constant makes it agree by
+    #: construction, which is the same as having no gate: a core bump would be
+    #: silently auto-adopted and the plugin would fail later, at whatever
+    #: Protocol actually changed, instead of being refused at load with the
+    #: legible message the loader already produces. The renderer half of this
+    #: descriptor already states its version as a literal for the same reason.
+    #: `tests/test_entry_point.py` fails when this and core's constant diverge,
+    #: so a core bump forces a deliberate decision here rather than a surprise.
+    plugin_api_version = 1
     tool_names = TOOL_NAMES
     tool_module = "octowright_terminal.tools"
     profile_name = "terminals"
