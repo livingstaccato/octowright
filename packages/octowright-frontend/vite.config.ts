@@ -38,12 +38,14 @@ export default defineConfig({
         entryFileNames: "[name].js",
         chunkFileNames: "[name].js",
         // Vite names extracted shared CSS after an arbitrary JS chunk (currently
-        // format.css), not after static/styles.css. The dashboard has exactly one
-        // eager stylesheet plus the lazy terminal chunk, so name the non-terminal
-        // CSS by the stable server/wheel contract instead of that chunk heuristic.
+        // format.css), not after static/styles.css. The dashboard emits exactly
+        // one stylesheet, so name it by the stable server/wheel contract instead
+        // of that chunk heuristic. (A session-kind plugin's CSS never reaches
+        // this build -- a plugin ships its own bundled asset, served from
+        // /plugins/<name>/, and is not an input here.)
         assetFileNames: (assetInfo) => {
           const cssName = assetInfo.names.find((name) => name.endsWith(".css"));
-          return cssName && cssName !== "session-terminal.css" ? "styles.css" : "[name][extname]";
+          return cssName ? "styles.css" : "[name][extname]";
         },
       },
     },
