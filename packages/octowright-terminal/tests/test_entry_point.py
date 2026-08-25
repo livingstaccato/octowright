@@ -28,3 +28,34 @@ def test_the_entry_point_resolves_to_a_descriptor_core_accepts():
     assert descriptor.kind == "terminal"
     assert descriptor.plugin_api_version == PLUGIN_API_VERSION
     assert descriptor.display_name
+
+
+def test_the_declared_api_version_is_a_literal_not_cores_constant():
+    """The gate only gates if the two can disagree.
+
+    ``plugin_api_version = PLUGIN_API_VERSION`` agrees by construction, so a
+    core bump is auto-adopted and the loader's refusal path -- the legible
+    "does not match core's N" message -- is unreachable for this plugin. This
+    package is an independently released distribution installable beside a core
+    it was never built with, so it states its own number.
+
+    The assertion above (``== PLUGIN_API_VERSION``) is what makes a core bump
+    fail HERE, forcing a deliberate decision, instead of shipping a plugin core
+    silently refuses at runtime.
+    """
+    import ast
+    import inspect
+
+    from octowright_terminal import plugin as plugin_module
+
+    tree = ast.parse(inspect.getsource(plugin_module))
+    (cls,) = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "TerminalPlugin"]
+    assigned = [
+        n.value
+        for n in cls.body
+        if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "plugin_api_version" for t in n.targets)
+    ]
+    assert len(assigned) == 1, "TerminalPlugin must declare plugin_api_version exactly once"
+    assert isinstance(assigned[0], ast.Constant), (
+        "plugin_api_version must be a literal; importing core's constant makes the version gate a no-op"
+    )
