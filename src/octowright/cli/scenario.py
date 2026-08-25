@@ -44,9 +44,21 @@ def _make_terminal_pool() -> Any | None:
 
     if not _terminal.is_available():
         return None
-    from octowright.terminal.pool import TerminalPool
+    from octowright_terminal.pool import TerminalPool
 
-    return TerminalPool()
+    from octowright import defaults
+    from octowright.plugins.session_launch import PluginContext
+
+    def _no_other_pool_to_check(instance_id: str, *, exclude_kind: str | None = None) -> bool:
+        # A standalone CLI scenario run has no other session pool in scope to
+        # cross-check against here -- the same pre-plugin-loader shim used in
+        # server/_state.py, temporary until this is routed through the plugin
+        # registry.
+        del instance_id, exclude_kind
+        return False
+
+    ctx = PluginContext(kind="terminal", recordings_dir=defaults.RECORDINGS_DIR, id_in_use=_no_other_pool_to_check)
+    return TerminalPool(ctx)
 
 
 @scenario.command("start")

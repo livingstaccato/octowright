@@ -11,7 +11,7 @@ def test_state_terminal_pool_matches_availability() -> None:
     from octowright.terminal import is_available
 
     if is_available():
-        from octowright.terminal.pool import TerminalPool
+        from octowright_terminal.pool import TerminalPool
 
         assert isinstance(_state.terminal_pool, TerminalPool)
     else:

@@ -7,27 +7,30 @@
 
 Mirrors BrowserPool's surface (launch/get/maybe_get/iter_sessions/list_sessions/
 close/close_all) so the dashboard and scenario layers treat terminal and browser
-sessions uniformly.
+sessions uniformly. Conforms to ``octowright.plugins.contract.SessionPool``:
+``launch`` opens a core-owned launch transaction (``ctx.begin_session``) rather
+than building its own ``Recorder``, so the 0600/0700 recording guarantees, the
+byte ceiling, and cross-pool instance-id uniqueness are structural rather than
+an obligation this pool has to remember.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 
+from octowright.plugins.contract import CloseResult, LaunchResult
+from octowright.plugins.session_launch import PluginContext
 from octowright_terminal.engine import TerminalEngine
 from octowright_terminal.errors import ProtectedTerminalCloseError
 from octowright_terminal.session import TerminalSession
 
-from octowright import defaults
-from octowright.recorder import Recorder, new_log_path
-
 
 class TerminalPool:
-    def __init__(self) -> None:
+    def __init__(self, ctx: PluginContext) -> None:
+        self._ctx = ctx
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = asyncio.Lock()
 
@@ -39,57 +42,30 @@ class TerminalPool:
         label: str | None = None,
         profile: str | None = None,
         protected: bool = False,
-    ) -> dict[str, Any]:
+    ) -> LaunchResult:
         instance_id = uuid4().hex[:12]
-        # kind in the FILENAME is always "terminal" so closed-session discovery
-        # (which keys on the kind segment) groups terminals together.
-        log_path = new_log_path(defaults.RECORDINGS_DIR, instance_id, label, "terminal")
-        recorder = Recorder(log_path)
-        try:
-            engine = TerminalEngine(instance_id, label, kind, connector_config, recorder)
+        # Failures (the SSH connector rejecting a missing known_hosts in its
+        # ctor, or connector.start() failing) surface inside the transaction,
+        # so ctx.begin_session discards the opening-row-only recording on our
+        # behalf -- this pool no longer owns that rollback.
+        async with self._ctx.begin_session(instance_id=instance_id, label=label, profile=profile) as launch:
+            engine = TerminalEngine(launch.instance_id, label, kind, connector_config, launch.recorder)
             session = TerminalSession(
-                instance_id=instance_id,
-                kind="terminal",
+                instance_id=launch.instance_id,
+                kind=launch.kind,
                 connector_type=kind,
                 label=label,
                 profile=profile,
-                recorder=recorder,
-                log_path=log_path,
+                recorder=launch.recorder,
+                log_path=launch.log_path,
                 engine=engine,
                 protected=protected,
             )
             await engine.start()
-        except BaseException:
-            # A failed launch (e.g. the SSH connector rejecting a missing
-            # known_hosts in its ctor, or connector.start() failing) must not
-            # leave the recording behind: the session is never registered, so
-            # the file would be unreachable orphaned cruft.
-            self._discard_failed_launch(recorder, log_path)
-            raise
+            result = launch.commit(session)
         async with self._lock:
             self._sessions[instance_id] = session
-        return {
-            "instance_id": instance_id,
-            "kind": "terminal",
-            "connector_type": kind,
-            "label": label,
-            "profile": profile,
-            "log_path": str(log_path),
-        }
-
-    @staticmethod
-    def _discard_failed_launch(recorder: Recorder, log_path: Path) -> None:
-        """Close the recorder and drop its file if nothing was recorded.
-
-        Failures surface before any action is written (the SSH connector raises
-        in its ctor; connector.start() raises before the first record), so the
-        file is empty and safe to delete. If a partial recording did land, keep
-        it — a real (if orphaned) recording beats destroying diagnostic data.
-        """
-        recorder.close()
-        with contextlib.suppress(OSError):
-            if log_path.exists() and log_path.stat().st_size == 0:
-                log_path.unlink()
+        return result
 
     def get(self, instance_id: str) -> TerminalSession:
         if instance_id not in self._sessions:
@@ -99,8 +75,8 @@ class TerminalPool:
     def maybe_get(self, instance_id: str) -> TerminalSession | None:
         return self._sessions.get(instance_id)
 
-    def iter_sessions(self) -> tuple[TerminalSession, ...]:
-        return tuple(self._sessions.values())
+    def iter_sessions(self) -> Iterator[TerminalSession]:
+        return iter(tuple(self._sessions.values()))
 
     def list_sessions(self) -> list[dict[str, Any]]:
         return [
@@ -118,7 +94,7 @@ class TerminalPool:
             for s in tuple(self._sessions.values())
         ]
 
-    async def close(self, instance_id: str, *, force: bool = False) -> None:
+    async def close(self, instance_id: str, *, force: bool = False) -> CloseResult:
         session = self.maybe_get(instance_id)
         if session is None:
             raise KeyError(f"no terminal session {instance_id!r}")
@@ -127,6 +103,7 @@ class TerminalPool:
         await session.close()
         async with self._lock:
             self._sessions.pop(instance_id, None)
+        return CloseResult(instance_id=instance_id, kind="terminal", closed=True)
 
     async def close_all(self, *, force: bool = False) -> None:
         failures: list[tuple[str, Exception]] = []
