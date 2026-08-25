@@ -34,14 +34,19 @@ from octowright_terminal.connector_config import (
 
 
 def _validate_options(p: Any) -> None:
-    """Validate the ``options`` terminal owns, at scenario-load time.
+    """Validate the ``options`` terminal owns, at LAUNCH time.
 
-    Moved verbatim (aside from the dropped scenario-name prefix -- see the
-    module docstring) from core's ``scenarios._validate_terminal_options``.
-    ``options`` is opaque to core, so the YAML parser's int check does not
-    reach these -- they used to be typed ``Participant`` fields. Without this,
-    a string ``cols`` surfaces deep inside the uterm connector instead of at
-    scenario load.
+    Moved (aside from the dropped scenario-name prefix -- see the module
+    docstring) from core's ``scenarios._validate_terminal_options``, which ran
+    at scenario-load time. It does not any more: ``options`` is opaque to core,
+    so this now runs from ``resolve_participant``, i.e. when the participant is
+    launched. Core's ``scenarios._validate_participant_kind`` states the same
+    boundary from its side.
+
+    The check still earns its place at the later moment. ``options`` is opaque
+    to core, so the YAML parser's int check does not reach these -- they used
+    to be typed ``Participant`` fields. Without this, a string ``cols`` surfaces
+    deep inside the uterm connector instead of at the scenario seam.
     """
     connector_type = p.options.get("connector_type") or "pty"
     if connector_type not in SUPPORTED_TERMINAL_KINDS:
