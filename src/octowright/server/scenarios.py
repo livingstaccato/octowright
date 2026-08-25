@@ -58,8 +58,14 @@ def scenario_plan(name: str) -> ScenarioPlanResult:
     for p in spec.participants:
         # Terminals launch via terminal_pool with a connector_config, not the
         # browser launch kwargs — show the real shape so the dry-run is accurate.
+        # Resolved directly against the plugin (not through an adapter_for
+        # lookup) because terminal still runs its own hardcoded branch here,
+        # same as scenario_start's _launch_terminals -- adapter_for keeps
+        # returning None for it until the deletion phase.
         if p.kind == "terminal":
-            launch_kwargs = scenario_mod.resolve_terminal_launch(p)
+            from octowright_terminal.scenario import _resolve_launch
+
+            launch_kwargs = _resolve_launch(p, scenario_mod._load_persona_or_none(p.persona))
         else:
             # Resolve through the kind's own adapter -- this is the same call
             # scenario_start makes (BrowserScenarioAdapter.resolve_participant
