@@ -31,8 +31,7 @@ from octowright.server.profiles import active_filter, register_plugin_profile
 
 if TYPE_CHECKING:
     from mcp.types import Icon, ToolAnnotations
-
-    from octowright.terminal.pool import TerminalPool
+    from octowright_terminal.pool import TerminalPool
 
 log = get_logger("octowright.server")
 
@@ -91,9 +90,28 @@ scenario_pool = _scenario_pool_mod.ScenarioPool()
 # install they simply do not appear.
 terminal_pool: TerminalPool | None = None
 if _terminal.is_available():
-    from octowright.terminal.pool import TerminalPool as _TerminalPool
+    from octowright_terminal.pool import TerminalPool as _TerminalPool
 
-    terminal_pool = _TerminalPool()
+    from octowright import defaults
+    from octowright.plugins.session_launch import PluginContext
+
+    # Pre-plugin-loader wiring: terminal is not yet routed through
+    # `plugin_registry`/`resolve_descriptors` (that move is a later task in
+    # this series), so this constructs the launch-transaction PluginContext
+    # by hand. `pool` (BrowserPool) is the only other session pool that
+    # exists yet at this point in module load, so it is what `id_in_use`
+    # checks against.
+    def _terminal_id_in_use(instance_id: str, *, exclude_kind: str | None = None) -> bool:
+        del exclude_kind  # only one other pool exists yet; nothing to exclude
+        return pool.maybe_get(instance_id) is not None
+
+    terminal_pool = _TerminalPool(
+        PluginContext(
+            kind="terminal",
+            recordings_dir=defaults.RECORDINGS_DIR,
+            id_in_use=_terminal_id_in_use,
+        )
+    )
 
 # Records how this process's leader was started, so octowright_status can flag
 # the fragile inline-fallback mode — a client that became the in-process leader

@@ -25,10 +25,10 @@ from octowright_terminal.errors import (
     TerminalDisconnectedError,
     TerminalPoolUnavailableError,
 )
+from octowright_terminal.pool import TerminalPool
 
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.server._state import mcp, terminal_pool
-from octowright.terminal.pool import TerminalPool
 
 
 def _pool() -> TerminalPool:
@@ -94,7 +94,7 @@ async def terminal_launch(
         # unknown config key) inside build_connector; surface it as a clean tool error.
         return {"ok": False, "error": str(exc)}
     publish_dashboard_invalidation_nowait("sessions")
-    return result
+    return dict(result)
 
 
 @mcp.tool(structured_output=False, description="Send input text (e.g. a command + '\\n') to a terminal session.")
