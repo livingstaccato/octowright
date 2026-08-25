@@ -5,11 +5,11 @@
 
 from __future__ import annotations
 
-from octowright.server.terminal import lifecycle
+from octowright_terminal import tools
 
 
 def test_ssh_connector_config_maps_to_uterm_keys() -> None:
-    cfg = lifecycle._ssh_connector_config(
+    cfg = tools._ssh_connector_config(
         host="h",
         port=2222,
         user="me",
@@ -35,7 +35,7 @@ def test_ssh_connector_config_only_emits_valid_uterm_keys() -> None:
     # or build_connector() raises "unknown ssh connector_config keys".
     from provide.uterm.server.connectors.ssh import SshSessionConnector
 
-    cfg = lifecycle._ssh_connector_config(
+    cfg = tools._ssh_connector_config(
         host="h",
         port=22,
         user="me",
@@ -51,6 +51,6 @@ async def test_ssh_launch_without_known_hosts_returns_clean_error() -> None:
     # The connector raises ValueError synchronously in build_connector when
     # known_hosts is absent and host-key checking isn't explicitly disabled;
     # terminal_launch must convert that into a clean tool-error dict.
-    result = await lifecycle.terminal_launch(kind="ssh", host="h", user="me")
+    result = await tools.terminal_launch(kind="ssh", host="h", user="me")
     assert result.get("ok") is False
     assert "known_hosts" in result["error"]

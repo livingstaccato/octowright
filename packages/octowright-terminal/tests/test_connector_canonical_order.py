@@ -41,7 +41,7 @@ def test_connector_enumeration_canonical_order() -> None:
 def test_external_mcp_terminal_launch_kind_arg_preserved() -> None:
     """The external MCP tool arg name ``kind`` and its default ``'pty'`` are an external
     contract for MCP clients — assert they are UNCHANGED by any internal reordering."""
-    from octowright.server.terminal.lifecycle import terminal_launch
+    from octowright_terminal.tools import terminal_launch
 
     sig = inspect.signature(terminal_launch)
     assert "kind" in sig.parameters, "external MCP arg 'kind' was renamed — breaks MCP clients"

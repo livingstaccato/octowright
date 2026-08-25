@@ -5,13 +5,12 @@
 
 from __future__ import annotations
 
+from octowright_terminal import tools
 from octowright_terminal.connector_config import TELNET_DEFAULT_PORT
-
-from octowright.server.terminal import lifecycle
 
 
 def test_telnet_connector_config_maps_host_and_port() -> None:
-    cfg = lifecycle._telnet_connector_config(host="bbs.example.com", port=23)
+    cfg = tools._telnet_connector_config(host="bbs.example.com", port=23)
     assert cfg["host"] == "bbs.example.com"
     assert cfg["port"] == 23
     # Telnet connector must not carry PTY-only, SSH-only, or unrecognised keys.
@@ -26,7 +25,7 @@ def test_telnet_connector_config_maps_host_and_port() -> None:
 def test_telnet_connector_config_only_emits_valid_connector_keys() -> None:
     from provide.uterm.server.connectors.telnet import TelnetSessionConnector
 
-    cfg = lifecycle._telnet_connector_config(host="h", port=23)
+    cfg = tools._telnet_connector_config(host="h", port=23)
     assert set(cfg) <= TelnetSessionConnector._VALID_CONFIG_KEYS
     assert cfg.get("hub_overlay") is False
 
@@ -47,8 +46,8 @@ async def test_telnet_launch_defaults_to_port_23() -> None:
         captured.update(connector_config=connector_config)
         return {"instance_id": "x", "kind": kind}
 
-    with patch.object(lifecycle._pool(), "launch", side_effect=fake_launch):
-        await lifecycle.terminal_launch(kind="telnet", host="h")
+    with patch.object(tools._pool(), "launch", side_effect=fake_launch):
+        await tools.terminal_launch(kind="telnet", host="h")
 
     assert captured["connector_config"]["port"] == 23
     assert captured["connector_config"]["host"] == "h"
