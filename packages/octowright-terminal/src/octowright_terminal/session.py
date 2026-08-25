@@ -33,10 +33,12 @@ class TerminalSession:
     protected: bool = False
     url: str | None = None  # always None; present so dashboard summaries are uniform
     #: Required by the SessionRecord Protocol: the free-form map a kind uses for
-    #: settings core does not model. Terminal keeps `connector_type` as a real
-    #: field because its own tools and dashboard detail read it directly, so this
-    #: stays empty -- but the member must EXIST or the record does not satisfy
-    #: the Protocol and `SessionLaunch.commit` refuses it.
+    #: settings core does not model. `connector_type` stays a real field because
+    #: this package's own tools and dashboard detail read it directly, and it is
+    #: ALSO mirrored in here by the pool -- that is the one route core's launch
+    #: transaction offers for putting a kind-specific field in a `LaunchResult`
+    #: (see `SessionLaunch.commit`), and without it `terminal_launch` reported
+    #: no connector type at all.
     extra: dict[str, Any] = field(default_factory=dict)
 
     async def close(self) -> None:
