@@ -122,3 +122,53 @@ def test_integer_options_are_accepted():
     adapter = TerminalScenarioAdapter(pool=object())
     p = Participant(persona="t", kind="terminal", role="monitor", options={"cols": 100, "rows": 40, "port": 2222})
     adapter.resolve_participant(p, persona=None)  # must not raise
+
+
+def test_the_shipped_example_scenario_parses_and_resolves_through_this_adapter():
+    """`examples/scenarios/browser-plus-terminal.yaml` is the only worked
+    example of the `options:` shape, and the extraction left it validated by
+    nothing (`tests/test_scenarios_terminal.py` was deleted). It belongs on
+    this side of the seam now: the file is core's, but the `options:` block it
+    documents is terminal's, and only this adapter can say the documented keys
+    still mean what the comment claims.
+    """
+    from pathlib import Path
+
+    from octowright_terminal.plugin import plugin as terminal_plugin
+
+    from octowright.plugins.registry import PluginRegistry
+    from octowright.scenarios import load_yaml_scenario
+    from octowright.server import plugin_state
+
+    # Three levels up from tests/: packages/octowright-terminal/ -> packages/ -> repo root.
+    path = Path(__file__).resolve().parents[3] / "examples" / "scenarios" / "browser-plus-terminal.yaml"
+    assert path.is_file(), f"the example scenario moved or was deleted: {path}"
+
+    # `known_kinds()` lists a plugin kind only once it has an ADAPTER, and the
+    # suite's autouse fixture registers terminal with `adapter=None` (its tests
+    # do not need one). Register a real adapter so `kind: terminal` validates
+    # the way it does in a daemon with the plugin enabled -- which is also the
+    # half of `load_yaml_scenario` this example is meant to prove.
+    registry = PluginRegistry()
+    pool = plugin_state.registry().pools()["terminal"]
+    registry.register(
+        terminal_plugin, pool=pool, adapter=terminal_plugin.create_scenario_adapter(pool), discovered=None
+    )
+    previous = plugin_state.registry()
+    plugin_state.set_registry(registry)
+    try:
+        spec = load_yaml_scenario(path.read_text(encoding="utf-8"), "browser-plus-terminal")
+    finally:
+        plugin_state.set_registry(previous)
+    by_kind = {p.kind: p for p in spec.participants}
+    assert set(by_kind) == {"chromium", "terminal"}
+
+    term = by_kind["terminal"]
+    assert term.role == "operator"
+    assert term.options["connector_type"] == "pty"
+    assert term.options["command"] == "/bin/bash"
+
+    # And the adapter turns those documented keys into a real launch kwargs map.
+    resolved = TerminalScenarioAdapter(pool=object()).resolve_participant(term, None)
+    assert resolved["kind"] == "pty"
+    assert resolved["connector_config"]["command"] == "/bin/bash"
