@@ -26,7 +26,7 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	# `_assert_structural_conformance` pin is actually checked: `activate`
 	# types a plugin pool as `Any`, so nothing else verifies that a pool
 	# satisfies the SessionPool Protocol's signatures.
-	uv run --active mypy src/octowright tests/plugins/reference
+	uv run --active mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
 	uv run --active ty check src/octowright
 	uv run --active bandit -q -r src/octowright -s B110,B112,B404,B405
 	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
@@ -86,7 +86,7 @@ format: ## Apply ruff format + ruff --fix
 	uv run --active ruff check --fix .
 
 typecheck: ## mypy only
-	uv run --active mypy src/octowright tests/plugins/reference
+	uv run --active mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
 
 typecheck-ty-probe: ## Non-gating: probe broader ty coverage and collect remaining baseline errors
 	uv run --active ty check src/octowright
