@@ -44,6 +44,8 @@ runs:
       if: ${{ env.ACT != 'true' }}
       with:
         enable-cache: false
+    # Provide the interpreter `uv sync` builds the venv against, so the leg runs
+    # on the matrix's Python rather than whatever the runner image ships.
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: ${{ inputs.python-version }}

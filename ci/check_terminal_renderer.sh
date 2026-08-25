@@ -26,8 +26,17 @@
 # "git failed" alike, so a git-level problem would be announced as a stale
 # artifact; and under nektos/act there is no .git in the workspace at all, which
 # made exactly that happen ("fatal: not a git repository" reported as STALE).
-# The saved copy is also restored on failure, so a red run leaves the tree as it
-# found it.
+#
+# Restoring the saved copy is done from the EXIT trap, not from the mismatch
+# branch, because the window this guard writes into the tree opens at `npm run
+# build` and closes only when the script decides what to do -- and the script
+# can be killed inside it. `concurrency.cancel-in-progress` is on for PRs, so a
+# push that supersedes a running job sends exactly that signal; Ctrl-C does the
+# same locally. From the branch, an interrupt between a differing build and the
+# `cmp` leaves the rebuilt artifact behind as an unexplained working-tree
+# change. `keep_rebuilt` is set only on the one path where the rebuild IS the
+# committed artifact (they compared equal), so every other exit -- pass, fail,
+# or signal -- puts the tree back the way it was found.
 
 set -euo pipefail
 
@@ -41,14 +50,27 @@ if [[ ! -f "$artifact" ]]; then
 fi
 
 committed="$(mktemp)"
-trap 'rm -f "$committed"' EXIT
+keep_rebuilt=0
+
+restore_artifact() {
+    # `cp` back unless the rebuild is byte-identical to what was committed, in
+    # which case restoring would be a no-op that only risks touching mtime.
+    if [[ "$keep_rebuilt" -eq 0 && -f "$committed" ]]; then
+        cp "$committed" "$artifact"
+    fi
+    rm -f "$committed"
+}
+# EXIT alone does not run on a signal under `set -e`, so the interrupt cases
+# this trap exists for (a cancelled CI job, a local Ctrl-C) are named too.
+trap restore_artifact EXIT
+trap 'exit 130' INT TERM
+
 cp "$artifact" "$committed"
 
 npm ci --prefix "$assets_src"
 npm run build --prefix "$assets_src"
 
 if ! cmp -s "$committed" "$artifact"; then
-    cp "$committed" "$artifact"
     cat >&2 <<MSG
 
 FAIL: packages/octowright-terminal/src/octowright_terminal/assets/renderer.js is
@@ -65,4 +87,5 @@ MSG
     exit 1
 fi
 
+keep_rebuilt=1
 echo "renderer.js matches a fresh build of its source"
