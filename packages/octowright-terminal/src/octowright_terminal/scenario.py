@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from octowright.defaults import SUPPORTED_TERMINAL_KINDS
 from octowright_terminal.connector_config import (
     SSH_DEFAULT_PORT,
+    SUPPORTED_TERMINAL_KINDS,
     pty_connector_config,
     ssh_connector_config,
 )

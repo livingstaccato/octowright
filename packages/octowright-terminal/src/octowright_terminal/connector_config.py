@@ -5,22 +5,33 @@
 
 """Pure builders for uterm connector_config dicts (no uterm import).
 
-Lives in the terminal package but depends only on ``octowright.defaults`` +
-stdlib, so core callers (e.g. ``scenarios.py``) can build terminal launch
-configs without pulling the optional uterm dependency.
+Depends only on stdlib, so callers elsewhere in this package can build
+terminal launch configs without pulling the optional uterm dependency.
+``SSH_DEFAULT_PORT`` used to live in core's ``octowright.defaults`` (moved
+here in step 5's deletion phase, alongside ``SUPPORTED_TERMINAL_KINDS`` below)
+so that core no longer carries terminal-specific constants -- this package
+owns its own defaults entirely.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from octowright.defaults import SSH_DEFAULT_PORT
+#: Default SSH port for terminal SSH connectors (scenario participants /
+#: terminal_launch). Overridable so a deployment behind a jump host or a
+#: nonstandard sshd can set it once instead of passing port= everywhere.
+SSH_DEFAULT_PORT: int = int(os.environ.get("OCTOWRIGHT_SSH_PORT", "22"))
+
+#: Connector types for a terminal scenario participant (its kind is "terminal").
+SUPPORTED_TERMINAL_KINDS = ("pty", "ssh")
 
 TELNET_DEFAULT_PORT = 23
 
 # canonical order: network ssh, telnet then local pty (octowright: no ws connector)
 __all__ = [  # noqa: RUF022
     "SSH_DEFAULT_PORT",
+    "SUPPORTED_TERMINAL_KINDS",
     "TELNET_DEFAULT_PORT",
     "ssh_connector_config",
     "telnet_connector_config",

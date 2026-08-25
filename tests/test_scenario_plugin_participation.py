@@ -69,6 +69,9 @@ class _Descriptor:
 
 
 class _BrowserPool:
+    def __init__(self) -> None:
+        self.closed: list[str] = []
+
     async def spawn_roster(self, roster: list[dict[str, Any]], **_: Any) -> dict[str, Any]:
         # The real spawn_roster returns {"launched": [...], "errors": [...]},
         # and _launch_participants indexes both. A fake returning a bare list
@@ -81,7 +84,7 @@ class _BrowserPool:
         }
 
     async def close(self, instance_id: str, *, force: bool = False) -> None:
-        return None
+        self.closed.append(instance_id)
 
 
 @pytest.fixture
@@ -107,7 +110,7 @@ async def test_a_plugin_participant_launches_through_its_own_pool(registered):
         ],
     )
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
 
     assert len(live.participants) == 2
     assert live.participants[0]["kind"] == "chromium"
@@ -126,7 +129,7 @@ async def test_participants_reassemble_in_declaration_order(registered):
         ],
     )
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     assert [p["persona"] for p in live.participants] == ["a", "b", "c"]
     assert [p["role"] for p in live.participants] == ["monitor", "player", "spectator"]
     assert [p["kind"] for p in live.participants] == ["refkind", "chromium", "refkind"]
@@ -137,7 +140,7 @@ async def test_a_scenario_naming_an_unregistered_kind_fails_before_launching_any
     spec = Scenario(name="bad", participants=[Participant(persona="x", kind="nosuchkind", role="player")])
     sp = ScenarioPool()
     with pytest.raises((RuntimeError, KeyError, ValueError)):
-        await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+        await sp.start(spec=spec, browser_pool=_BrowserPool())
     assert ref_pool.launched == [], "nothing may launch for an unresolvable roster"
 
 
@@ -153,7 +156,7 @@ class _FailingBrowserPool:
 
 
 async def test_a_failed_browser_roster_prevents_any_plugin_launch(registered):
-    """Mirrors _launch_terminals' own errors-so-far early-out: a roster that
+    """``_launch_plugin_participants``' errors-so-far early-out: a roster that
     already failed must not go on to open a plugin session either. Assert the
     plugin pool's own launched list, not just that the scenario failed --
     that is the only way to prove the plugin launch was never attempted."""
@@ -167,8 +170,52 @@ async def test_a_failed_browser_roster_prevents_any_plugin_launch(registered):
     )
     sp = ScenarioPool()
     with pytest.raises(RuntimeError):
-        await sp.start(spec=spec, browser_pool=_FailingBrowserPool(), terminal_pool=None)
+        await sp.start(spec=spec, browser_pool=_FailingBrowserPool())
     assert ref_pool.launched == [], "a failed browser roster must not open a plugin session"
+
+
+class _FailingRefPool(_RefPool):
+    """A plugin pool whose launch always raises, after the given count of
+    successes -- for pinning that a plugin launch failure rolls back every
+    browser the roster already launched."""
+
+    def __init__(self, *, fail_after: int = 0) -> None:
+        super().__init__()
+        self._fail_after = fail_after
+
+    async def launch(self, **kwargs: Any) -> dict[str, Any]:
+        if self._fail_after <= 0:
+            raise RuntimeError("forced plugin launch failure")
+        self._fail_after -= 1
+        return await super().launch(**kwargs)
+
+
+async def test_a_plugin_launch_failure_closes_already_launched_browsers_and_raises():
+    """The reverse of the roster-failed case above: the browser roster
+    succeeds, then a later plugin participant's launch raises. Every browser
+    already opened must be rolled back before the exception propagates --
+    the historical coverage for this lived in core's own terminal-specific
+    ScenarioPool.start tests, deleted in step 5's core cleanup."""
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    failing_pool = _FailingRefPool()
+    reg.register(_Descriptor(), pool=failing_pool, adapter=_RefAdapter(failing_pool), discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        spec = Scenario(
+            name="mixed",
+            participants=[
+                Participant(persona="tanuki-tim", kind="chromium", role="player"),
+                Participant(persona="ref-rita", kind="refkind", role="monitor"),
+            ],
+        )
+        sp = ScenarioPool()
+        bp = _BrowserPool()
+        with pytest.raises(RuntimeError, match="failed to launch"):
+            await sp.start(spec=spec, browser_pool=bp)
+        assert bp.closed == ["br0000000000"], "the already-launched browser must be rolled back"
+    finally:
+        plugin_state.set_registry(original)
 
 
 class _MacroRefAdapter(_RefAdapter):
@@ -197,7 +244,7 @@ def registered_with_macros():
 async def test_run_macro_reports_a_kind_without_the_capability(registered):
     spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     result = await sp.run_macro(scenario_id=live.scenario_id, macro="login", browser_pool=_BrowserPool())
     outcome = result["results"][0]
     assert outcome["ok"] is False
@@ -208,7 +255,7 @@ async def test_run_macro_dispatches_to_an_adapter_that_has_the_capability(regist
     _, _, adapter = registered_with_macros
     spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     result = await sp.run_macro(
         scenario_id=live.scenario_id, macro="login", browser_pool=_BrowserPool(), args={"u": "x"}
     )
@@ -223,7 +270,7 @@ async def test_startup_macros_run_through_the_adapter(registered_with_macros):
         participants=[Participant(persona="a", kind="refkind", role="monitor", startup_macros=["boot"])],
     )
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     assert [name for _id, name, _args in adapter.ran] == ["boot"]
     assert live.participants[0]["kind"] == "refkind"
 
@@ -262,7 +309,7 @@ def registered_full():
 async def test_wait_for_sync_reports_a_kind_without_the_capability(registered):
     spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     result = await sp.wait_for_sync(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), selector="#x")
     outcome = result["results"][0]
     assert outcome["ok"] is False
@@ -273,7 +320,7 @@ async def test_wait_for_sync_dispatches_to_a_capable_adapter(registered_full):
     _, _, adapter = registered_full
     spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     await sp.wait_for_sync(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), selector="#ready")
     assert adapter.synced[0]["selector"] == "#ready"
 
@@ -286,7 +333,7 @@ async def test_fixtures_dispatch_to_both_capability_handlers(registered_full):
         fixtures={"dialog_policy": "accept", "mock_routes": [{"pattern": "**/x", "body": "{}"}]},
     )
     sp = ScenarioPool()
-    await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    await sp.start(spec=spec, browser_pool=_BrowserPool())
     assert adapter.policies == ["accept"]
     assert adapter.routes == [[{"pattern": "**/x", "body": "{}"}]]
 
@@ -299,7 +346,7 @@ async def test_fixtures_skip_a_kind_that_cannot_apply_them(registered):
         fixtures={"dialog_policy": "accept"},
     )
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     assert len(live.participants) == 1, "an inapplicable fixture must not fail the scenario"
 
 
@@ -313,10 +360,10 @@ async def test_stopping_a_mixed_scenario_closes_each_kind_through_its_own_pool(r
         ],
     )
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     ref_id = live.participants[1]["instance_id"]
 
-    await sp.stop(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), terminal_pool=None)
+    await sp.stop(scenario_id=live.scenario_id, browser_pool=_BrowserPool())
     assert ref_pool.closed == [ref_id], "the plugin's own pool must close its session"
     assert sp.maybe_get(live.scenario_id) is None
 
@@ -329,11 +376,11 @@ async def test_a_plugin_pool_failing_to_close_does_not_strand_the_scenario(regis
 
     spec = Scenario(name="s", participants=[Participant(persona="a", kind="refkind", role="monitor")])
     sp = ScenarioPool()
-    live = await sp.start(spec=spec, browser_pool=_BrowserPool(), terminal_pool=None)
+    live = await sp.start(spec=spec, browser_pool=_BrowserPool())
     ref_id = live.participants[0]["instance_id"]
     ref_pool.close = _boom  # type: ignore[assignment]
 
-    result = await sp.stop(scenario_id=live.scenario_id, browser_pool=_BrowserPool(), terminal_pool=None)
+    result = await sp.stop(scenario_id=live.scenario_id, browser_pool=_BrowserPool())
     # Asserting maybe_get alone is insufficient: stop() pops the scenario
     # unconditionally before the close loop even runs, so that assertion
     # passes whether or not the close attempt ever reached the plugin's own

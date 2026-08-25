@@ -72,7 +72,11 @@ class _Pool:
 
 
 class _TerminalPool:
-    """Minimal terminal pool: close (records) + maybe_get (for remap validation)."""
+    """Minimal plugin-kind pool: close (records) + maybe_get (for remap
+    validation). Named for the kind string these tests use ("terminal"), but
+    exercises the fully generic plugin-registry routing path -- registered
+    below via ``registered_terminal_pool``, exactly as any other plugin kind
+    would be."""
 
     def __init__(self) -> None:
         self.closed: list[tuple[str, bool]] = []
@@ -83,6 +87,48 @@ class _TerminalPool:
 
     def maybe_get(self, instance_id: str) -> Any:
         return self._sessions.get(instance_id)
+
+
+class _TerminalDescriptor:
+    """Minimal descriptor to register ``_TerminalPool`` under kind "terminal"
+    in the plugin registry -- ``create_pool``/``create_scenario_adapter`` are
+    never called (the fixture registers the already-built pool directly)."""
+
+    kind = "terminal"
+    display_name = "Terminal (test double)"
+    plugin_api_version = 1
+    tool_names: frozenset[str] = frozenset()
+    tool_module = None
+    profile_name = None
+    frontend = None
+
+    def create_pool(self, ctx: Any) -> Any:
+        raise AssertionError("not used")
+
+    def create_scenario_adapter(self, pool: Any) -> Any:
+        raise AssertionError("not used")
+
+    def session_detail(self, session: Any) -> dict[str, Any]:
+        return {}
+
+
+@pytest.fixture
+def registered_terminal_pool() -> Any:
+    """Register a ``_TerminalPool`` under kind "terminal" for the duration of
+    one test, mirroring how a real session-kind plugin (terminal included,
+    now that it is one) is registered by the daemon at startup."""
+    from octowright.plugins.registry import PluginRegistry
+    from octowright.server import plugin_state
+
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    tp = _TerminalPool()
+    reg.register(_TerminalDescriptor(), pool=tp, adapter=None, discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        yield tp
+    finally:
+        plugin_state.set_registry(original)
 
 
 def _live() -> LiveScenario:
@@ -398,12 +444,13 @@ async def test_start_requires_name_or_spec() -> None:
 
 
 @pytest.mark.anyio
-async def test_stop_routes_terminal_close_to_terminal_pool() -> None:
+async def test_stop_routes_terminal_close_to_terminal_pool(registered_terminal_pool: Any) -> None:
+    tp = registered_terminal_pool
     sp = ScenarioPool()
     live = _mixed_live()
     sp._live[live.scenario_id] = live
-    bp, tp = _Pool(), _TerminalPool()
-    summary = await sp.stop(scenario_id="mix", browser_pool=bp, terminal_pool=tp)
+    bp = _Pool()
+    summary = await sp.stop(scenario_id="mix", browser_pool=bp)
     assert ("b", True) in bp.closed and tp.closed == [("t", True)]
     assert set(summary["closed"]) == {"b", "t"}
 
@@ -417,7 +464,7 @@ def test_pool_for_a_participant_with_no_recorded_kind_raises() -> None:
     sp = ScenarioPool()
     participant = {"instance_id": "a", "persona": "cosmo", "role": "r1", "log_path": "a.log"}  # no "kind"
     with pytest.raises(ValueError, match="no recorded 'kind'"):
-        sp._pool_for(participant, _Pool(), None)
+        sp._pool_for(participant, _Pool())
 
 
 async def test_stop_raises_rather_than_misroute_a_participant_with_no_kind() -> None:
@@ -431,7 +478,7 @@ async def test_stop_raises_rather_than_misroute_a_participant_with_no_kind() -> 
         participants=[{"instance_id": "a", "persona": "cosmo", "role": "r1", "log_path": "a.log"}],
     )
     sp._live[live.scenario_id] = live
-    summary = await sp.stop(scenario_id="nokind", browser_pool=_Pool(), terminal_pool=None)
+    summary = await sp.stop(scenario_id="nokind", browser_pool=_Pool())
     assert summary["closed"] == []
     assert len(summary["teardown_errors"]) == 1
     assert "no recorded 'kind'" in summary["teardown_errors"][0]["error"]
@@ -544,32 +591,18 @@ async def test_wait_for_sync_url_branch_gates_per_session_not_scenario_wide() ->
     assert session_b.wait_for_url_calls == ["sync-target"]
 
 
-def test_remap_terminal_participant_uses_terminal_pool() -> None:
+def test_remap_terminal_participant_uses_terminal_pool(registered_terminal_pool: Any) -> None:
     sp = ScenarioPool()
     live = _mixed_live()
     sp._live[live.scenario_id] = live
-    tp = _TerminalPool()  # maybe_get("t2") → terminal session with matching profile
+    # registered_terminal_pool: maybe_get("t2") -> terminal session with matching profile
     out = sp.remap_participant(
         scenario_id="mix",
         old_instance_id="t",
         new_instance_id="t2",
         browser_pool=_Pool(),
-        terminal_pool=tp,
     )
     assert out["new_instance_id"] == "t2" and out["role"] == "operator"
-
-
-@pytest.mark.anyio
-async def test_launch_terminals_raises_when_pool_missing_but_specs_present() -> None:
-    # Internal invariant: start() guarantees terminal_pool is wired whenever there
-    # are terminal specs. If that contract is ever broken, the helper must fail
-    # loudly with a typed error, not a `python -O`-stripped assert that would let
-    # a None pool reach `.launch` and crash with AttributeError.
-    from octowright_terminal.errors import TerminalPoolUnavailableError
-
-    specs = [(0, SimpleNamespace(persona="ops"))]
-    with pytest.raises(TerminalPoolUnavailableError):
-        await ScenarioPool._launch_terminals(None, specs, {}, [])
 
 
 @pytest.mark.anyio
