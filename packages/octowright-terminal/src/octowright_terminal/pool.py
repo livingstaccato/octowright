@@ -67,7 +67,19 @@ class TerminalPool:
                 extra={"connector_type": kind},
             )
             await engine.start()
-            result = launch.commit(session)
+            try:
+                result = launch.commit(session)
+            except BaseException:
+                # engine.start() has forked the PTY / opened the SSH connection
+                # and started a poll task; commit() can still refuse (a
+                # duplicate instance_id) or be cancelled. The transaction
+                # discards the recording, but it has no handle on this
+                # connector and the session is never registered anywhere that
+                # could close it -- so without this the process keeps a live
+                # child and a running task for a launch that failed. The
+                # transaction cannot own this; the pool that started it must.
+                await engine.stop()
+                raise
         async with self._lock:
             self._sessions[instance_id] = session
         return result
