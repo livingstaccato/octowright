@@ -49,7 +49,11 @@ dest="$(dirname "$repo_root")/provide-uterm"
 # developer's own working checkout (often a symlink to it), and a script that
 # fetched and detached its HEAD because someone ran a ci/ script by hand would be
 # a nasty surprise. Report and warn instead; do not touch it.
-if [[ -e "$dest" ]]; then
+# `-e` dereferences, so a BROKEN symlink at $dest is false to it and control
+# falls through to `git clone`, which then refuses with "could not create work
+# tree dir ... File exists" -- a safe failure with a misleading message, since
+# nothing was created at the dangling target. `-L` names it for what it is.
+if [[ -e "$dest" || -L "$dest" ]]; then
     if [[ "${PROVIDE_UTERM_FORCE:-0}" != "1" ]]; then
         current="$(git -C "$dest" rev-parse HEAD 2>/dev/null || echo "unknown")"
         echo "provide-uterm already present at $dest (HEAD $current) — leaving it untouched"
