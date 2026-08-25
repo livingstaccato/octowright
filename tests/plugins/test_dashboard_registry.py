@@ -345,3 +345,25 @@ async def test_list_sessions_route_survives_a_session_missing_attributes():
     live_ids = {s["id"] for s in body["live"]}
     assert "good01" in live_ids
     assert "bad01" not in live_ids
+
+
+def test_a_plugin_that_raises_from_operation_snapshot_does_not_500_the_dashboard(registered):
+    """`_live_summary` is not purely core code: it calls the session's own
+    `operation_snapshot()`. Unguarded, a plugin raising there took the whole
+    dashboard page down, which this function's contract says must not happen.
+    """
+    from octowright.http.routes._session_kinds import plugin_session_detail
+
+    _, pool = registered
+    session = pool.sessions["refsess01"]
+
+    def _explode() -> dict[str, object]:
+        raise RuntimeError("plugin gate is broken")
+
+    session.operation_snapshot = _explode  # type: ignore[attr-defined]
+    detail = plugin_session_detail("refkind", session)
+
+    assert "summary_error" in detail, "the failure must be reported, not swallowed"
+    assert detail["kind"] == "refkind"
+    # The descriptor's own half still ran, so the payload degrades rather than dies.
+    assert detail["refkind_specific"] is True

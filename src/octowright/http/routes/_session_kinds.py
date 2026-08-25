@@ -85,7 +85,21 @@ def plugin_session_detail(kind: str, session: Any) -> dict[str, Any]:
     """
     from octowright.plugins.artifacts import read_registered_artifacts
 
-    base = _live_summary(session)
+    # Guarded like the descriptor call below, and for the same reason: this is
+    # not purely core code. `_live_summary` reads plugin-owned attributes and
+    # CALLS the session's own `operation_snapshot()`, so a bad plugin can raise
+    # from in here too. Unguarded it would 500 the dashboard -- exactly what
+    # this function's contract says must not happen.
+    try:
+        base = _live_summary(session)
+    except Exception as exc:
+        state.log.warning(
+            "octowright.http.plugin_session_summary_failed",
+            kind=kind,
+            instance_id=getattr(session, "instance_id", None),
+            error=repr(exc),
+        )
+        base = {"id": getattr(session, "instance_id", None), "kind": kind, "summary_error": repr(exc)}
     try:
         plugin_detail = dict(state.plugin_registry.get_plugin(kind).descriptor.session_detail(session))
     except Exception as exc:  # a bad plugin must not 500 the dashboard
