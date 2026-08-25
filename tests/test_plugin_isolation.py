@@ -26,10 +26,16 @@ def test_core_never_imports_uterm():
     import anywhere under src/octowright is an ImportError for every user who
     did not install the plugin."""
     hits = []
+    scanned = 0
     for path in pathlib.Path("src/octowright").rglob("*.py"):
+        scanned += 1
         text = path.read_text(encoding="utf-8")
         if "provide.uterm" in text or "provide_uterm" in text:
             hits.append(str(path))
+    # The walk is CWD-relative, so from any other directory it finds nothing and
+    # `hits == []` holds trivially. This is the test guarding the branch's
+    # central invariant; it must not be able to pass by scanning zero files.
+    assert scanned > 0, "found no core modules to scan -- run pytest from the repo root"
     assert hits == [], f"core must not reference uterm: {hits}"
 
 
