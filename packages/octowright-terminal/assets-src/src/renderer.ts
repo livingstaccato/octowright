@@ -65,9 +65,9 @@ interface StreamHandle {
 const STYLE_ELEMENT_ID = "octowright-terminal-plugin-style";
 
 // The panel chrome core used to provide for the OLD dedicated terminal page
-// (`.session-terminal-view` in `packages/octowright-frontend/static/styles.css`)
-// does not exist for the generic stream layout core now serves every
-// plugin through -- `.session-stream` carries zero styling of its own (see
+// (a `.session-terminal-view` rule in core's stylesheet, deleted with the
+// extraction) does not exist for the generic stream layout core now serves
+// every plugin through -- `.session-stream` carries zero styling of its own (see
 // `session-stream.ts` / `plugin-registry.ts`), so a stream-layout plugin owns
 // its own panel presentation. This mirrors that pre-extraction chrome,
 // scoped under a plugin-private class name so it can't collide with core's.

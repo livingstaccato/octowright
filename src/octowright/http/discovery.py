@@ -160,8 +160,10 @@ def _live_summary(session: Any) -> dict[str, Any]:
         "download_count": int(getattr(session, "download_count", len(getattr(session, "downloads", ())))),
         "page_count": int(getattr(session, "page_count", len(getattr(session, "pages", ()) or (1,)))),
     }
-    # Terminal sessions carry no operation gate -- only add the key when the
-    # object actually supplies one, rather than fabricating an idle default.
+    # A session kind need not have an operation gate (no plugin kind does
+    # today) -- only add the key when the object actually supplies one, rather
+    # than fabricating an idle default. Readers key off the field's presence,
+    # not off the kind name; see `session-table.ts`'s `operationBadge`.
     snapshot = getattr(session, "operation_snapshot", None)
     if callable(snapshot):
         summary["operation_gate"] = snapshot()
