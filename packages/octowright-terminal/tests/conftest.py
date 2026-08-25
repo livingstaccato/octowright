@@ -19,6 +19,16 @@ Concerns, handled here so individual test files stay clean:
   Note what that costs: pytest then reports a clean pass over ZERO tests, which
   is why CI asserts uterm is importable before running this suite rather than
   trusting a green check (see ``ci/run_terminal_plugin_tests.sh``).
+
+  There are **two** ways this suite can be unrunnable and they need different
+  handling. ``is_available()`` answers "uterm is missing", which presumes
+  ``octowright_terminal`` itself imported — and after the extraction that
+  package is *absent* on a core install and in every core CI leg
+  (``--all-groups --no-group terminal``). Importing it unconditionally to ask
+  the question is therefore the very failure the question exists to avoid: a
+  bare ``pytest`` at the repo root (no ``testpaths`` is declared, so it walks
+  into this directory) died with an ``ImportError`` in this file. Both imports
+  are guarded, and either absence ignores the directory the same way.
 * **Plugin registration** — the ``@mcp.tool`` functions in
   ``octowright_terminal.tools`` resolve their pool through
   ``plugin_state.pool_for("terminal")`` rather than a core global (see
@@ -36,8 +46,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from octowright_terminal.availability import is_available
-from octowright_terminal.plugin import plugin as terminal_plugin
 
 from octowright.plugins.registry import PluginRegistry
 from octowright.plugins.session_launch import PluginContext
@@ -45,8 +53,15 @@ from octowright.server import plugin_state
 
 _HERE = Path(__file__).parent
 
-if not is_available():
+try:
+    from octowright_terminal.availability import is_available
+    from octowright_terminal.plugin import plugin as terminal_plugin
+except ImportError:  # the plugin distribution itself is not installed
+    terminal_plugin = None
     collect_ignore_glob = ["test_*.py"]
+else:
+    if not is_available():  # installed, but uterm is not
+        collect_ignore_glob = ["test_*.py"]
 
 
 def pytest_collection_modifyitems(items: list) -> None:
