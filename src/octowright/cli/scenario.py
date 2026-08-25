@@ -83,10 +83,15 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
 
     setup_telemetry()
 
+    # Before start(), which loads and validates the scenario: a plugin-kind
+    # participant is refused unless the registry is already populated. Outside
+    # `asyncio.run` on purpose, so this matches the daemon, where activation
+    # happens at import with no loop running -- the loader's rollback path
+    # (`_abandon_pool`) can only `asyncio.run` a failed plugin's `close_all`
+    # when there is no running loop, and merely logs otherwise.
+    plugin_registry = _activate_session_kind_plugins()
+
     async def _run() -> int:
-        # Before start(), which loads and validates the scenario: a plugin-kind
-        # participant is refused unless the registry is already populated.
-        plugin_registry = _activate_session_kind_plugins()
         pool = BrowserPool()
         spool = _s.ScenarioPool()
         try:
