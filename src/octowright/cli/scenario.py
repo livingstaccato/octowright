@@ -83,14 +83,6 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
 
     setup_telemetry()
 
-    # Before start(), which loads and validates the scenario: a plugin-kind
-    # participant is refused unless the registry is already populated. Outside
-    # `asyncio.run` on purpose, so this matches the daemon, where activation
-    # happens at import with no loop running -- the loader's rollback path
-    # (`_abandon_pool`) can only `asyncio.run` a failed plugin's `close_all`
-    # when there is no running loop, and merely logs otherwise.
-    plugin_registry = _activate_session_kind_plugins()
-
     async def _run() -> int:
         pool = BrowserPool()
         spool = _s.ScenarioPool()
@@ -163,6 +155,16 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
             await _close_plugin_pools_on_shutdown(plugin_registry, log=_log)
 
     try:
+        # Before start(), which loads and validates the scenario: a plugin-kind
+        # participant is refused unless the registry is already populated.
+        # Outside `asyncio.run` on purpose, so this matches the daemon, where
+        # activation happens at import with no loop running -- the loader's
+        # rollback path (`_abandon_pool`) can only `asyncio.run` a failed
+        # plugin's `close_all` when there is no running loop, and merely logs
+        # otherwise. Inside this `try` so that a failing activation still runs
+        # the `finally` below; `_run` reads `plugin_registry` at call time,
+        # which is after this assignment.
+        plugin_registry = _activate_session_kind_plugins()
         exit_code = _asyncio.run(_run())
     finally:
         shutdown_telemetry()
