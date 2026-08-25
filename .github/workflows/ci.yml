@@ -67,7 +67,7 @@ jobs:
       # Mirror `make lint` — mypy, codespell, and the LOC gate were
       # previously local-only, which let bigger regressions slip past CI.
       - name: mypy
-        run: uv run --active mypy src/octowright
+        run: uv run --active mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
       - name: ty check
         run: uv run --active ty check src/octowright
       - name: Bandit
