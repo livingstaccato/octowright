@@ -48,8 +48,10 @@ class TerminalPlugin:
 
         return TerminalPool(ctx)
 
-    def create_scenario_adapter(self, _pool: Any) -> Any:
-        return None  # Task 5
+    def create_scenario_adapter(self, pool: Any) -> Any:
+        from octowright_terminal.scenario import TerminalScenarioAdapter
+
+        return TerminalScenarioAdapter(pool)
 
     def session_detail(self, _session: Any) -> dict[str, Any]:
         return {}  # Task 6
