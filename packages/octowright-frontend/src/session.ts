@@ -55,10 +55,10 @@ const log = getLogger("octowright.frontend.session");
 // every ordinary browser-session page load and break the pinned test in
 // session.test.ts.
 //
-// `terminal` is deliberately absent from both sets: it is not yet reserved
-// because it is slated to become a plugin kind itself (see AGENTS.md's
-// "Terminal Sessions" section, step 5), so it is handled by its own branch
-// above, before this check ever runs, rather than by being added here.
+// `terminal` is deliberately absent from both sets: it is a plugin kind
+// (see AGENTS.md's "Terminal Sessions" section) rather than a core-reserved
+// one, so it flows through the registry-driven dispatch below like any
+// other plugin kind instead of being added here.
 //
 // This is a hand-maintained mirror, not a generated one -- Python's
 // RESERVED_KINDS lives in a different language entirely, so nothing keeps
@@ -695,21 +695,8 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     has_trace: Boolean(detail.trace_path),
   });
 
-  // Terminal sessions get a dedicated slim layout (no video/trace/tabs). Branch
-  // before the browser layout build so the browser path stays untouched.
-  if (detail.kind === "terminal") {
-    // Lazy-load the terminal view (xterm + addons, ~250KB) only for terminal
-    // sessions so it never bloats the browser-session debugger bundle. Also
-    // breaks the static session ↔ session-terminal import cycle.
-    const { bootTerminalSession } = await import("./session-terminal.js");
-    await bootTerminalSession(root, sessionId, detail, {
-      ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
-    });
-    log.info({ event: "session_boot_complete", session_id: sessionId, kind: "terminal" });
-    return;
-  }
-
-  // Registry-driven dispatch for every other kind. A core-reserved kind
+  // Registry-driven dispatch for every non-core kind (including terminal,
+  // now a plugin kind like any other). A core-reserved kind
   // (CORE_RESERVED_KINDS above) never lives in the plugin registry, so it
   // skips the registry lookup (and its `/api/plugins` round trip) entirely
   // and falls through to the existing browser page below, unchanged. Any
@@ -734,8 +721,8 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     await bootStreamSession(root, sessionId, detail, mount, {
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });
-    // Mirrors the terminal branch's completion log above (same event name)
-    // so a query for "did this session finish booting" never silently loses
+    // Same event name as the core-reserved-kind completion log below, so a
+    // query for "did this session finish booting" never silently loses
     // plugin sessions to a differently-named event.
     log.info({ event: "session_boot_complete", session_id: sessionId, kind: detail.kind });
     return;
