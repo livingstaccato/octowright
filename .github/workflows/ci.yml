@@ -43,8 +43,11 @@ env:
   UV_PYTHON_DOWNLOADS: never
   # Use the committed uv.lock as-is for every uv invocation (sync AND run).
   # Without this, each `uv run` re-runs resolution before executing, which stats
-  # the editable ../provide-uterm sibling (the optional `terminal` extra) that
-  # only exists in the provide.io dev layout — absent in CI, it fails every step.
+  # the editable ../provide-uterm sibling that backs the terminal session-kind
+  # plugin and only exists in the provide.io dev layout. Note this is necessary
+  # but NOT sufficient on its own: --frozen skips resolution, not installation,
+  # so the plugin also has to sit in its own `terminal` dependency group that
+  # core's jobs exclude — see .github/actions/bootstrap-uv/action.yml.
   UV_FROZEN: "1"
   # Keep scenarios/profiles quiet during CI — never touch $HOME defaults.
   OCTOWRIGHT_RECORDINGS: ${{ github.workspace }}/.ci/recordings
@@ -119,6 +122,18 @@ jobs:
         run: npm run lint --workspace=packages/octowright-frontend
       - name: Tests (vitest with coverage)
         run: npm test --workspace=packages/octowright-frontend
+      # The terminal plugin's dashboard renderer is a COMMITTED build artifact:
+      # a Python wheel has no npm step at install time and the dashboard serves
+      # plugin assets verbatim off disk, so the bundle has to be in the
+      # distribution. The cost is that editing assets-src/src/renderer.ts and
+      # forgetting to rebuild ships a stale renderer with no signal at all. This
+      # rebuilds it and fails if the committed file differs. Note the script
+      # installs INSIDE packages/octowright-terminal/assets-src, which has its own
+      # package-lock.json and is deliberately not a root npm workspace member —
+      # that separation is what keeps xterm out of core's own bundle, so the two
+      # dependency trees must stay apart rather than be merged for convenience.
+      - name: Terminal plugin renderer matches its source
+        run: bash ci/check_terminal_renderer.sh
 
   select-test-matrix:
     name: 🧭 Select test matrix
@@ -241,3 +256,45 @@ jobs:
         env:
           CODEX_HOME: ${{ github.workspace }}/.ci/codex-home
         run: bash ci/smoke_skill.sh
+
+  # The terminal session-kind plugin (packages/octowright-terminal) is a separate
+  # distribution: core's `pytest tests/` legs never reach its suite, and its
+  # dependency provide-uterm is unpublished, so it gets its own job.
+  #
+  # That suite had NEVER run in CI. Under the old octowright[terminal] extra it
+  # self-ignored at collection because uterm was never installed, and a skip that
+  # renders as a pass is exactly how three real failures sat unnoticed until the
+  # extraction forced someone to install uterm locally. It runs for real here:
+  # ci/run_terminal_plugin_tests.sh asserts uterm is importable BEFORE pytest, so
+  # a missing sibling fails loudly instead of passing over zero tests.
+  #
+  # This job is allowed to block. What makes that fair is the pinned upstream
+  # commit in ci/clone_provide_uterm.sh — an unpinned clone would turn someone
+  # else's push into a red build here and teach people to ignore CI.
+  terminal-plugin:
+    name: 🖥️ Terminal plugin tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # provide-uterm 404s from PyPI, but provide-io/provide-uterm is a PUBLIC
+      # repo, so a plain tokenless clone puts it at the ../provide-uterm path
+      # [tool.uv.sources] resolves against. Must run BEFORE the sync below.
+      # FORCE=1 so a runner that somehow already has the directory (a self-hosted
+      # one with a persistent work dir) is still re-pinned; the script's safe
+      # default is to leave an existing checkout alone, because in the provide.io
+      # dev layout that path is a developer's own working tree.
+      - name: Clone provide-uterm (pinned commit)
+        env:
+          PROVIDE_UTERM_FORCE: "1"
+        run: bash ci/clone_provide_uterm.sh
+      # The one job that DOES sync the `terminal` dependency group — everything
+      # else excludes it (see .github/actions/bootstrap-uv/action.yml), and the
+      # clone above is what makes it resolvable here.
+      - uses: ./.github/actions/bootstrap-uv
+        with:
+          sync-args: '--frozen --all-groups --python "${UV_PYTHON:-python}"'
+      # The plugin's own suite, plus an end-to-end check that the entry point
+      # reaches the real tool surface: OCTOWRIGHT_PLUGINS=terminal must add
+      # exactly 7 terminal_* tools, and an unset value must add none.
+      - name: Terminal plugin suite + tool-surface check
+        run: bash ci/run_terminal_plugin_tests.sh
