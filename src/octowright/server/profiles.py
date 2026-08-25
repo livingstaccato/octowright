@@ -148,18 +148,13 @@ PROFILES: dict[str, list[str]] = {
         "golden_save",
         "golden_verify_loop",
     ],
-    # Terminal sessions (PTY / SSH). These tools register only when the optional
-    # `octowright[terminal]` extra is installed (see server/__init__); listing them
-    # here just controls LLM visibility when it is.
-    "terminals": [
-        "terminal_launch",
-        "terminal_send_input",
-        "terminal_snapshot",
-        "terminal_read",
-        "terminal_wait_for",
-        "terminal_close",
-        "terminal_list",
-    ],
+    # No "terminals" entry: that profile is the terminal PLUGIN's, declared by
+    # its descriptor's `profile_name` and registered through
+    # `register_plugin_profile` when it loads. Core reserving the name here made
+    # the plugin unloadable -- `register_plugin_profile` refuses any name already
+    # in PROFILES, so activation failed with a profile collision and the kind
+    # never registered at all. The profile itself is unchanged: the plugin
+    # declares the same seven tools this entry used to list.
     # Persona + on-disk profile management.
     "personas": [
         "persona_create",

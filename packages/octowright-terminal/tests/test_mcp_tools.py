@@ -53,11 +53,27 @@ async def test_terminal_close_refuses_protected_without_force() -> None:
         await tools.terminal_close(instance_id=iid, force=True)
 
 
-def test_terminals_profile_registered() -> None:
-    from octowright.server.profiles import PROFILES
+def test_the_terminals_profile_is_the_plugin_s_not_core_s() -> None:
+    """Core must NOT reserve the name, or the plugin cannot load at all.
 
-    assert "terminal_launch" in PROFILES["terminals"]
-    assert "terminal_close" in PROFILES["terminals"]
+    ``register_plugin_profile`` refuses any name already present in core's
+    static ``PROFILES``, so while core carried a ``"terminals"`` entry the
+    plugin failed activation with a profile collision and its kind never
+    registered -- verified against the real activation path, not inferred.
+    The profile itself is unchanged; it is simply declared by the descriptor
+    now and registered when the plugin loads.
+    """
+    from octowright_terminal.plugin import plugin
+
+    from octowright.server.profiles import PROFILES, register_plugin_profile, unregister_plugin_profile
+
+    assert "terminals" not in PROFILES, "core reserving this name makes the plugin unloadable"
+    assert plugin.profile_name == "terminals"
+    assert {"terminal_launch", "terminal_close"} <= set(plugin.tool_names)
+
+    # And the name is actually registrable, which is the property that broke.
+    register_plugin_profile(plugin.profile_name, plugin.tool_names)
+    unregister_plugin_profile(plugin.profile_name)
 
 
 def test_pool_raises_clean_error_when_terminal_pool_missing() -> None:
