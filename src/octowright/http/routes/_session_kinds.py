@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from octowright.http import state
+from octowright.http.discovery import _live_summary
 
 
 def iter_plugin_sessions() -> Iterator[Any]:
@@ -62,13 +63,21 @@ def find_plugin_session(instance_id: str) -> tuple[str, Any] | None:
 def plugin_session_detail(kind: str, session: Any) -> dict[str, Any]:
     """Build a plugin session's dashboard detail payload.
 
-    Both halves are guarded independently so a failure in either degrades to
-    a partial payload rather than a 500: an enabled plugin shares the
-    leader's process, but a bad detail builder — or a committed artifact
-    file that vanishes between ``read_registered_artifacts``'s existence
-    check and this function's own ``stat`` (a concurrent
-    ``recordings_cleanup``, or a plugin rotating its own artifact) — must
-    not take a dashboard page down with it.
+    Every plugin gets the same uniform base — ``_live_summary(session)``, the
+    same started_at/live/protected/event/console/download/page-count fields a
+    browser or terminal session reports — and supplies only its own extras on
+    top. ``_live_summary`` is written generically (``getattr`` with fallbacks,
+    ``operation_gate`` added only when the session actually supplies one), so
+    it works on any conforming ``SessionRecord`` unchanged. The descriptor's
+    own fields win on conflict.
+
+    Both halves of the descriptor-specific work are guarded independently so a
+    failure in either degrades to a partial payload rather than a 500: an
+    enabled plugin shares the leader's process, but a bad detail builder — or
+    a committed artifact file that vanishes between
+    ``read_registered_artifacts``'s existence check and this function's own
+    ``stat`` (a concurrent ``recordings_cleanup``, or a plugin rotating its
+    own artifact) — must not take a dashboard page down with it.
 
     Artifacts are reported by id and mime type only. The absolute path stays
     server-side — the dashboard fetches through the artifact route, which
@@ -76,8 +85,9 @@ def plugin_session_detail(kind: str, session: Any) -> dict[str, Any]:
     """
     from octowright.plugins.artifacts import read_registered_artifacts
 
+    base = _live_summary(session)
     try:
-        detail = dict(state.plugin_registry.get_plugin(kind).descriptor.session_detail(session))
+        plugin_detail = dict(state.plugin_registry.get_plugin(kind).descriptor.session_detail(session))
     except Exception as exc:  # a bad plugin must not 500 the dashboard
         state.log.warning(
             "octowright.http.plugin_session_detail_failed",
@@ -85,7 +95,8 @@ def plugin_session_detail(kind: str, session: Any) -> dict[str, Any]:
             instance_id=getattr(session, "instance_id", None),
             error=repr(exc),
         )
-        detail = {"id": getattr(session, "instance_id", None), "kind": kind, "detail_error": repr(exc)}
+        plugin_detail = {"id": getattr(session, "instance_id", None), "kind": kind, "detail_error": repr(exc)}
+    detail = {**base, **plugin_detail}
 
     reported_artifacts: list[dict[str, Any]] = []
     for artifact in read_registered_artifacts(Path(session.log_path), Path(state.RECORDINGS_DIR)):
