@@ -9,12 +9,22 @@ inputs:
     description: "Arguments passed to `uv sync`"
     required: false
     # --frozen: install straight from the committed uv.lock without the resolution
-    # pass. That pass stats every [tool.uv.sources] path, including the editable
-    # ../provide-uterm sibling that backs the optional `terminal` extra and only
-    # exists in the provide.io dev layout — absent in CI, it would fail bootstrap.
-    # The extra is not in the core sync set, so --frozen installs core+dev and the
-    # terminal suite self-ignores (tests/terminal/conftest.py) when uterm is absent.
-    default: "--frozen --all-groups --python \"${UV_PYTHON:-python}\""
+    # pass, which would stat every [tool.uv.sources] path — including the editable
+    # ../provide-uterm sibling that only exists in the provide.io dev layout.
+    #
+    # --no-group terminal: --frozen skips RESOLUTION, not INSTALLATION, so a group
+    # holding an unbuildable path is still fatal. The terminal session-kind plugin
+    # (packages/octowright-terminal) depends on the unpublished provide-uterm, and
+    # while it sat in the `dev` group every job died here with
+    # "Distribution not found at: .../provide-uterm/packages/provide-uterm" —
+    # bootstrap, so lint and tests alike, not just anything terminal-related.
+    # Excluding its own group is also the point rather than a workaround: core
+    # must build, install and pass with no uterm present anywhere, which is the
+    # dependency-layer form of what tests/test_plugin_isolation.py asserts in code.
+    #
+    # The terminal-plugin job overrides this input to sync the group by name,
+    # after ci/clone_provide_uterm.sh puts the sibling checkout in place.
+    default: "--frozen --all-groups --no-group terminal --python \"${UV_PYTHON:-python}\""
 runs:
   using: "composite"
   steps:

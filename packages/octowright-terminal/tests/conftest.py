@@ -8,15 +8,17 @@ shared plugin-registration fixture the MCP-tool tests need.
 
 Concerns, handled here so individual test files stay clean:
 
-* **Marker** — every test under ``tests/terminal/`` gets the registered
-  ``terminal`` marker (see ``pyproject.toml``), so ``-m terminal`` selects the
-  suite and ``-m 'not terminal'`` excludes it.
-* **Availability** — these tests import uterm-backed modules directly, so on a
-  core install (no ``provide-uterm``, i.e. the ``octowright[terminal]`` extra is
-  absent) they would error at *collection* rather than skip. A marker can't
-  prevent that — markers are applied during collection, which is where the
-  import fails — so we ignore the directory entirely instead, keeping
-  ``make test`` green without the extra. With it installed, every test runs.
+* **Marker** — every test in this directory gets the registered ``terminal``
+  marker (see the root ``pyproject.toml``), so ``-m terminal`` selects the suite
+  and ``-m 'not terminal'`` excludes it.
+* **Availability** — these tests import uterm-backed modules directly, so where
+  ``provide-uterm`` is absent (a core install, or any checkout without the
+  sibling ``../provide-uterm``) they would error at *collection* rather than
+  skip. A marker can't prevent that — markers are applied during collection,
+  which is where the import fails — so we ignore the directory entirely instead.
+  Note what that costs: pytest then reports a clean pass over ZERO tests, which
+  is why CI asserts uterm is importable before running this suite rather than
+  trusting a green check (see ``ci/run_terminal_plugin_tests.sh``).
 * **Plugin registration** — the ``@mcp.tool`` functions in
   ``octowright_terminal.tools`` resolve their pool through
   ``plugin_state.pool_for("terminal")`` rather than a core global (see

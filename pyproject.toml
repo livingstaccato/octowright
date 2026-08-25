@@ -195,10 +195,6 @@ dev = [
     "memray>=1.19.3; sys_platform == 'linux' or sys_platform == 'darwin'",
     "mutmut>=3.3.1",
     "mypy>=1.18.0",
-    # The session-kind terminal plugin (packages/octowright-terminal), a
-    # workspace member. Dev-only so the test suite can import it; a browser-only
-    # install of octowright itself never pulls it in.
-    "octowright-terminal",
     "pip-audit>=2.7.0",
     "pip-licenses>=5.0.0",
     "pre-commit>=4.6.0",
@@ -215,6 +211,25 @@ dev = [
     "ty>=0.0.18",
     "vulture>=2.14",
     "xenon>=0.9.3",
+]
+
+# The session-kind terminal plugin (packages/octowright-terminal), a workspace
+# member. Its OWN group, deliberately not part of `dev`, because a group is the
+# only place the dependency boundary can actually be enforced: the plugin pulls
+# provide-uterm, which is unpublished and resolved from the sibling
+# ../provide-uterm checkout (see [tool.uv.sources]). No CI runner has that
+# checkout, so while this lived in `dev` a plain `uv sync --frozen --all-groups`
+# died at bootstrap with "Distribution not found at: .../provide-uterm/..." --
+# every job, not just the terminal ones. Core's CI legs now sync
+# `--all-groups --no-group terminal`, which means they prove at the dependency
+# layer the same property tests/test_plugin_isolation.py proves in code: core
+# builds, installs and passes with no uterm present anywhere. The terminal-plugin
+# job clones the sibling first and then asks for this group by name.
+#
+# `make install` (uv sync --all-groups) still includes it, which is right for the
+# provide.io dev layout where the sibling checkout exists.
+terminal = [
+    "octowright-terminal",
 ]
 
 [tool.pytest.ini_options]

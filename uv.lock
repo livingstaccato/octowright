@@ -1875,13 +1875,6 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 
-[package.optional-dependencies]
-terminal = [
-    { name = "provide-uterm" },
-    { name = "provide-uterm-platform" },
-    { name = "provide-uterm-server", extra = ["gateway"] },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "anyio", extra = ["trio"] },
@@ -1893,7 +1886,6 @@ dev = [
     { name = "memray", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "mutmut" },
     { name = "mypy" },
-    { name = "octowright-terminal" },
     { name = "pip-audit" },
     { name = "pip-licenses" },
     { name = "pre-commit" },
@@ -1911,6 +1903,9 @@ dev = [
     { name = "vulture" },
     { name = "xenon" },
 ]
+terminal = [
+    { name = "octowright-terminal" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1925,16 +1920,12 @@ requires-dist = [
     { name = "msgpack", specifier = ">=1.2.1" },
     { name = "playwright", specifier = ">=1.47.0" },
     { name = "provide-telemetry", extras = ["otel"], specifier = ">=0.4.8" },
-    { name = "provide-uterm", marker = "extra == 'terminal'", editable = "../provide-uterm/packages/provide-uterm" },
-    { name = "provide-uterm-platform", marker = "extra == 'terminal'", editable = "../provide-uterm/packages/provide-uterm-platform" },
-    { name = "provide-uterm-server", extras = ["gateway"], marker = "extra == 'terminal'", editable = "../provide-uterm/packages/provide-uterm-server" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "python-multipart", specifier = ">=0.0.31" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "starlette", specifier = ">=1.3.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
-provides-extras = ["terminal"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1947,7 +1938,6 @@ dev = [
     { name = "memray", marker = "sys_platform == 'darwin' or sys_platform == 'linux'", specifier = ">=1.19.3" },
     { name = "mutmut", specifier = ">=3.3.1" },
     { name = "mypy", specifier = ">=1.18.0" },
-    { name = "octowright-terminal", editable = "packages/octowright-terminal" },
     { name = "pip-audit", specifier = ">=2.7.0" },
     { name = "pip-licenses", specifier = ">=5.0.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },
@@ -1965,6 +1955,7 @@ dev = [
     { name = "vulture", specifier = ">=2.14" },
     { name = "xenon", specifier = ">=0.9.3" },
 ]
+terminal = [{ name = "octowright-terminal", editable = "packages/octowright-terminal" }]
 
 [[package]]
 name = "octowright-terminal"
@@ -2443,12 +2434,6 @@ dependencies = [
     { name = "provide-uterm" },
     { name = "provide-uterm-client" },
     { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-gateway = [
-    { name = "asyncssh" },
-    { name = "websockets" },
 ]
 
 [package.metadata]
