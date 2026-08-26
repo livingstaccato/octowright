@@ -11,7 +11,6 @@ import pytest
 
 from octowright.plugins.registry import PluginRegistry
 from octowright.scenario_kinds import (
-    TERMINAL_KIND,
     adapter_for,
     capabilities_for,
     known_kinds,
@@ -89,11 +88,6 @@ def test_browser_kinds_resolve_to_the_browser_adapter():
     assert isinstance(ad, BrowserScenarioAdapter)
 
 
-def test_terminal_has_no_adapter_this_step():
-    """Terminal keeps its hardcoded branch until step 5, so it resolves to None."""
-    assert adapter_for(TERMINAL_KIND, browser_pool="BROWSERPOOL") is None
-
-
 def test_a_plugin_kind_resolves_to_its_registered_adapter(registered):
     ad = adapter_for("refkind", browser_pool="BROWSERPOOL")
     assert isinstance(ad, _RefAdapter)
@@ -123,32 +117,19 @@ def test_capabilities_are_derived_from_what_the_adapter_implements(registered):
     assert supports("macrokind", "sync", browser_pool="BROWSERPOOL") is False
 
 
-def test_terminal_supports_nothing_without_being_special_cased():
-    assert capabilities_for(TERMINAL_KIND, browser_pool="BROWSERPOOL") == frozenset()
-
-
 def test_pool_for_kind_routes_by_kind(registered):
-    assert pool_for_kind("chromium", browser_pool="BROWSERPOOL", terminal_pool="TERMPOOL") == "BROWSERPOOL"
-    assert pool_for_kind(TERMINAL_KIND, browser_pool="BROWSERPOOL", terminal_pool="TERMPOOL") == "TERMPOOL"
-    assert pool_for_kind("refkind", browser_pool="BROWSERPOOL", terminal_pool="TERMPOOL") == "REFPOOL"
+    assert pool_for_kind("chromium", browser_pool="BROWSERPOOL") == "BROWSERPOOL"
+    assert pool_for_kind("refkind", browser_pool="BROWSERPOOL") == "REFPOOL"
 
 
 def test_pool_for_an_unknown_kind_raises(registered):
     with pytest.raises(KeyError, match="nosuchkind"):
-        pool_for_kind("nosuchkind", browser_pool="B", terminal_pool=None)
+        pool_for_kind("nosuchkind", browser_pool="B")
 
 
-def test_a_terminal_participant_without_a_terminal_pool_raises():
-    """Carried over from the _pool_for this replaces -- silence here would
-    surface as AttributeError on None.close() during teardown."""
-    with pytest.raises(RuntimeError, match="terminal_pool is unavailable"):
-        pool_for_kind(TERMINAL_KIND, browser_pool="B", terminal_pool=None)
-
-
-def test_known_kinds_lists_browsers_terminal_and_plugins(registered):
+def test_known_kinds_lists_browsers_and_plugins(registered):
     kinds = known_kinds()
     assert "chromium" in kinds
-    assert TERMINAL_KIND in kinds
     assert "refkind" in kinds
     assert kinds == sorted(kinds), "sorted so an error message is stable"
 

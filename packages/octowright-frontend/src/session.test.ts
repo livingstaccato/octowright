@@ -1,25 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the terminal-boot module so we can assert delegation, and override only
-// getSession on the real api module (so render-function tests keep videoUrl
-// etc.). vi.hoisted lets the spies exist before the hoisted vi.mock factories.
-const { bootTerminalSessionMock } = vi.hoisted(() => ({ bootTerminalSessionMock: vi.fn() }));
+// Override getSession/getEvents on the real api module (so render-function
+// tests keep videoUrl etc.). vi.hoisted lets the spies exist before the
+// hoisted vi.mock factories.
 const { getSessionMock, getEventsMock } = vi.hoisted(() => ({
   getSessionMock: vi.fn(),
   getEventsMock: vi.fn(),
 }));
 // The registry-driven dispatch (Task 7) dynamically imports "./session-stream.js"
-// for a non-browser, non-terminal kind. Mocked here so the dispatch tests can
-// assert what session.ts hands it -- the resolved mount function and the
-// boot arguments -- without depending on session-stream.ts's own internals,
+// for any non-core-reserved kind (including "terminal", now a plugin kind
+// like any other). Mocked here so the dispatch tests can assert what
+// session.ts hands it -- the resolved mount function and the boot
+// arguments -- without depending on session-stream.ts's own internals,
 // which are covered by session-stream.test.ts.
 const { bootStreamSessionMock, importRendererMock } = vi.hoisted(() => ({
   bootStreamSessionMock: vi.fn(async () => undefined),
   importRendererMock: vi.fn(),
-}));
-vi.mock("./session-terminal.js", () => ({
-  bootTerminalSession: bootTerminalSessionMock,
-  buildTerminalLayout: () => ({}),
 }));
 vi.mock("./session-stream.js", () => ({
   bootStreamSession: bootStreamSessionMock,
@@ -394,31 +390,6 @@ describe("renderFooter", () => {
     const refs = buildLayout(root);
     renderFooter(refs.footer, makeDetail({ live: false }));
     expect(refs.footer.textContent).toMatch(/Closed/);
-  });
-});
-
-describe("bootSession terminal branch", () => {
-  beforeEach(() => {
-    bootTerminalSessionMock.mockReset();
-    bootTerminalSessionMock.mockResolvedValue(undefined);
-    // Empty history so the browser-path negative test completes without a
-    // real network fetch (the terminal path returns early before getEvents).
-    getEventsMock.mockResolvedValue({ events: [], cursor: 0, total_bytes: 0, complete: true });
-  });
-
-  it("delegates to bootTerminalSession when kind is terminal", async () => {
-    getSessionMock.mockResolvedValue(makeDetail({ kind: "terminal", live: false }));
-    const el = document.createElement("div");
-    await bootSession(el, "term-0");
-    expect(bootTerminalSessionMock).toHaveBeenCalledTimes(1);
-    expect(bootTerminalSessionMock.mock.calls[0]?.[1]).toBe("term-0");
-  });
-
-  it("does NOT delegate for browser sessions", async () => {
-    getSessionMock.mockResolvedValue(makeDetail({ kind: "chromium", live: false }));
-    const el = document.createElement("div");
-    await bootSession(el, "sess-1");
-    expect(bootTerminalSessionMock).not.toHaveBeenCalled();
   });
 });
 

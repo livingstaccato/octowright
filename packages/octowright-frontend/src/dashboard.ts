@@ -129,8 +129,8 @@ const PANEL_DEFS: ReadonlyArray<PanelDef<DashboardScope, DashboardState>> = [
     scope: "sessions",
     isDegraded: (s) => s.errors?.has("sessions") ?? false,
     testid: "live-browsers",
-    // "Live sessions" (not "browsers"): the live pool now also holds terminal
-    // sessions (octowright[terminal] extra). testid stays for existing tests.
+    // "Live sessions" (not "browsers"): the live pool also holds sessions from
+    // any enabled session-kind plugin. testid stays for existing tests.
     title: "Live sessions",
     buildBody: (s) =>
       renderSessionTable(s.sessions.live, true, {

@@ -28,7 +28,12 @@ repos:
     hooks:
       - id: codespell
         additional_dependencies: ["tomli"]
-        exclude: "uv\\.lock|recordings/|profiles/"
+        # renderer.js is a committed, minified build artifact (see
+        # packages/octowright-terminal/assets-src/) -- same reason core's
+        # built frontend never needs an entry here (it's gitignored, so
+        # pre-commit never sees it as a changed file). Keep the equivalent
+        # skip in sync with the Makefile's and ci.yml's `codespell` steps.
+        exclude: "uv\\.lock|recordings/|profiles/|packages/octowright-terminal/src/octowright_terminal/assets/renderer\\.js"
 
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.18.0

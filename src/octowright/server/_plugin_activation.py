@@ -10,8 +10,7 @@ registered. That ordering is load-bearing rather than tidy: the MCP SDK's
 ``add_tool`` is first-wins, so activating before core registration would let a
 plugin claiming a non-reserved kind (``macro_run``, ``capture_create``,
 ``persona_get``) shadow core's tool — the inversion of the collision check's
-whole purpose. ``_optional_tools`` is imported early for the terminal extra and
-is deliberately not used for this.
+whole purpose.
 """
 
 from __future__ import annotations

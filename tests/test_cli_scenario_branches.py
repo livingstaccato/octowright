@@ -171,27 +171,77 @@ def _patch_signal_handlers_to_immediate_resolve(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(asyncio, "get_running_loop", patched_get_loop)
 
 
-class TestScenarioStartTerminalPool:
-    def test_terminal_pool_built_threaded_and_closed(
+# ---------------------------------------------------------------------------
+# scenario start: session-kind plugin activation + teardown
+# ---------------------------------------------------------------------------
+
+
+class TestScenarioStartPluginActivation:
+    """`scenario start` runs outside the daemon, so it must activate plugins itself.
+
+    Nothing populates the process-global plugin registry in a CLI process:
+    `scenario_kinds._plugin_registry()` reads `octowright.plugins.state`, filled
+    only as an import side effect of `octowright.server._plugin_activation`.
+    Without the activation call, `_validate_participant_kind` refuses EVERY
+    plugin-kind participant and tells the operator to set OCTOWRIGHT_PLUGINS —
+    which they already did. The end-to-end proof (a real terminal participant
+    through the real CLI) lives in the terminal plugin's own suite; this pins
+    the wiring cheaply, so deleting either half fails here first.
+    """
+
+    def test_activation_runs_before_start_and_pools_close_after(
         self, patched_pools: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When the terminal extra is available, `scenario start` builds a
-        terminal pool, threads it into start()/stop(), and closes it on exit —
-        otherwise CLI terminal scenarios always raise 'extra not installed'."""
-        live = _live()
-        patched_pools["spool"].start.return_value = live
-
-        tpool = MagicMock(name="TerminalPool")
-        tpool.close_all = AsyncMock()
-        monkeypatch.setattr(_scenario_mod, "_make_terminal_pool", lambda: tpool, raising=False)
+        patched_pools["spool"].start.return_value = _live()
         _patch_signal_handlers_to_immediate_resolve(monkeypatch)
 
-        result = CliRunner().invoke(cli, ["scenario", "start", "demo"])
-        assert result.exit_code == 0
+        order: list[str] = []
+        registry = MagicMock(name="PluginRegistry")
 
-        assert patched_pools["spool"].start.await_args.kwargs.get("terminal_pool") is tpool
-        assert patched_pools["spool"].stop.await_args.kwargs.get("terminal_pool") is tpool
-        tpool.close_all.assert_awaited_once()
+        def _activate() -> Any:
+            order.append("activate")
+            return registry
+
+        async def _fake_start(**kwargs: Any) -> Any:
+            order.append("start")
+            return _live()
+
+        closed: list[Any] = []
+
+        async def _fake_close(reg: Any, *, log: Any) -> None:
+            order.append("close_plugin_pools")
+            closed.append(reg)
+
+        monkeypatch.setattr(_scenario_mod, "_activate_session_kind_plugins", _activate)
+        patched_pools["spool"].start.side_effect = _fake_start
+        import octowright.cli.serve as _serve_mod
+
+        monkeypatch.setattr(_serve_mod, "_close_plugin_pools_on_shutdown", _fake_close)
+
+        result = CliRunner().invoke(cli, ["scenario", "start", "demo"])
+        assert result.exit_code == 0, result.output
+
+        # Activation must precede start(): start() loads and validates the
+        # scenario, which is where an unregistered plugin kind is refused.
+        assert order.index("activate") < order.index("start")
+        # And the plugin pools -- a PTY, an SSH connection, a socket -- must be
+        # torn down on exit, through the same helper the daemon uses.
+        assert closed == [registry]
+
+    def test_activation_is_the_single_shared_path(self) -> None:
+        """It imports `octowright.server`, not a CLI-local resolve/activate copy.
+
+        A second sequence would drift: core registers its ~129 tools before
+        `_plugin_activation` runs precisely so the loader's collision check
+        sees them, and a CLI-only path would let a plugin the daemon refuses
+        load here instead.
+        """
+        import inspect
+
+        source = inspect.getsource(_scenario_mod._activate_session_kind_plugins)
+        assert "import octowright.server" in source
+        assert "resolve_descriptors" not in source
+        assert "plugin_loader.activate" not in source
 
 
 # ---------------------------------------------------------------------------

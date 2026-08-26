@@ -84,6 +84,17 @@ def _read_first_opening(jsonl_path: Path) -> dict[str, Any] | None:
     return None
 
 
+#: Opening actions that predate the generic ``session_start`` wrapper every
+#: plugin launch transaction now writes first, so they carry no ``kind``
+#: field of their own. Terminal is the only kind that ever shipped launches
+#: before that wrapper existed; a NEW terminal recording (via the plugin,
+#: same as any other kind) opens with ``session_start`` and needs no entry
+#: here. This table exists purely so a recording already on disk keeps
+#: classifying correctly regardless of whether the plugin that wrote it is
+#: installed today -- it is not expected to grow.
+_LEGACY_OPENING_KIND: dict[str, str] = {"terminal_start": "terminal"}
+
+
 def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
     """Build a SessionSummary for a closed-session JSONL on disk."""
     instance_id = _instance_id_from_recording_name(jsonl_path.stem)
@@ -92,12 +103,19 @@ def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
     opening = _read_first_opening(jsonl_path) or {}
     stat = jsonl_path.stat()
     started = opening.get("ts") or _iso(stat.st_ctime)
-    if opening.get("action") == "terminal_start":
-        # Terminal recordings carry connector_type but none of the browser
-        # launch metadata (kind/label/url/profile come from a launch row).
+    action = opening.get("action")
+    # The opening row names its own kind -- generic across every plugin,
+    # since core's launch transaction always writes ``session_start`` with
+    # ``kind`` before a plugin does anything else. A legacy pre-wrapper
+    # opening (see _LEGACY_OPENING_KIND) falls back to a fixed per-action
+    # kind instead of "unknown".
+    legacy_kind = _LEGACY_OPENING_KIND.get(action) if isinstance(action, str) else None
+    kind = opening.get("kind") or legacy_kind or "unknown"
+    if action == "terminal_start":
+        # Legacy shape: no browser launch metadata, but connector_type.
         return {
             "id": instance_id,
-            "kind": "terminal",
+            "kind": kind,
             "connector_type": opening.get("connector_type"),
             "label": None,
             "profile": None,
@@ -108,7 +126,7 @@ def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
         }
     return {
         "id": instance_id,
-        "kind": opening.get("kind") or "unknown",
+        "kind": kind,
         "label": opening.get("label"),
         "profile": opening.get("profile"),
         "url": opening.get("url"),
@@ -142,8 +160,10 @@ def _live_summary(session: Any) -> dict[str, Any]:
         "download_count": int(getattr(session, "download_count", len(getattr(session, "downloads", ())))),
         "page_count": int(getattr(session, "page_count", len(getattr(session, "pages", ()) or (1,)))),
     }
-    # Terminal sessions carry no operation gate -- only add the key when the
-    # object actually supplies one, rather than fabricating an idle default.
+    # A session kind need not have an operation gate (no plugin kind does
+    # today) -- only add the key when the object actually supplies one, rather
+    # than fabricating an idle default. Readers key off the field's presence,
+    # not off the kind name; see `session-table.ts`'s `operationBadge`.
     snapshot = getattr(session, "operation_snapshot", None)
     if callable(snapshot):
         summary["operation_gate"] = snapshot()

@@ -1,4 +1,4 @@
-.PHONY: help install test test-frontend lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean
+.PHONY: help install test test-terminal test-frontend lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
@@ -16,6 +16,15 @@ test: ## Run the Python test suite (launches real browsers where engines are ins
 	uv run --active pytest -q tests/ -m "not memory_isolated"
 	uv run --active pytest -q tests/ -m memory_isolated --no-cov
 
+# The terminal session-kind plugin's own suite. `make test` above runs tests/
+# only, so this is the local equivalent of CI's terminal-plugin job. Needs the
+# `terminal` dependency group synced (uv sync --all-groups) and the sibling
+# ../provide-uterm checkout; without them the suite ignores itself at collection
+# and reports a clean pass over zero tests, which is why the CI script asserts
+# availability first.
+test-terminal: ## Run the octowright-terminal plugin suite (needs ../provide-uterm)
+	uv run --active pytest -q packages/octowright-terminal/tests --no-cov
+
 test-frontend: ## Run TypeScript frontend tests with coverage gating
 	cd packages/octowright-frontend && npm test
 
@@ -26,10 +35,13 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	# `_assert_structural_conformance` pin is actually checked: `activate`
 	# types a plugin pool as `Any`, so nothing else verifies that a pool
 	# satisfies the SessionPool Protocol's signatures.
-	uv run --active mypy src/octowright tests/plugins/reference
+	uv run --active mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
 	uv run --active ty check src/octowright
 	uv run --active bandit -q -r src/octowright -s B110,B112,B404,B405
-	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*"
+	# packages/octowright-terminal/.../assets/renderer.js is a committed,
+	# minified build artifact (see packages/octowright-terminal/assets-src/) --
+	# same reason core's built frontend is excluded above.
+	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
 	uv run --active python scripts/check_spdx_headers.py
 	uv run --active python scripts/check_max_loc.py
 	uv run --active python scripts/check_operation_gate_architecture.py
@@ -86,7 +98,7 @@ format: ## Apply ruff format + ruff --fix
 	uv run --active ruff check --fix .
 
 typecheck: ## mypy only
-	uv run --active mypy src/octowright tests/plugins/reference
+	uv run --active mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
 
 typecheck-ty-probe: ## Non-gating: probe broader ty coverage and collect remaining baseline errors
 	uv run --active ty check src/octowright

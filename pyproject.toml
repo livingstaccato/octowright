@@ -68,24 +68,13 @@ dependencies = [
     "pydantic-settings>=2.14.2",
 ]
 
-[project.optional-dependencies]
-# Optional terminal sessions: hosts a provide-uterm connector in-process (local
-# PTY shell + SSH), recorded to the same JSONL format as browsers. See AGENTS.md
-# "Terminal Sessions (optional)". Core never imports uterm; without this extra the
-# terminal_* tools simply don't register. `provide-uterm-server[gateway]` brings
-# asyncssh for the SSH connector.
-#
-# EXPERIMENTAL / not yet installable from PyPI: the provide-uterm packages below
-# are NOT published, so `pip install octowright[terminal]` currently FAILS (404).
-# [tool.uv.sources] resolves them from a sibling ../provide-uterm checkout for
-# local dev only; uv strips those overrides from the built wheel. Until the
-# packages are published, the extra works only from a source checkout — see the
-# "Terminal Sessions (optional)" section in AGENTS.md/README.
-terminal = [
-    "provide-uterm>=0.4.0",
-    "provide-uterm-platform>=0.4.0",
-    "provide-uterm-server[gateway]>=0.4.0",
-]
+# No [project.optional-dependencies] here: terminal sessions used to be an
+# `octowright[terminal]` extra, but step 5 (see AGENTS.md "Terminal Sessions
+# (plugin)") moved them out to the packages/octowright-terminal workspace
+# member entirely -- core has no code left that would use provide-uterm, so
+# an extra installing it into *this* distribution would have nothing to do.
+# Install the terminal plugin as its own package instead (source-checkout
+# only today; see packages/octowright-terminal/README.md).
 
 [project.urls]
 Homepage = "https://github.com/livingstaccato/octowright"
@@ -167,17 +156,31 @@ artifacts = [
     "src/octowright/server/frontend/*.svg",
 ]
 
+[tool.uv.workspace]
+# The session-kind terminal plugin (see AGENTS.md "Terminal Sessions") lives as
+# its own workspace member so it can declare its own dependencies (uterm +
+# asyncssh) independently of core, and reach core only through the
+# octowright.session_kinds entry point. packages/octowright-frontend is not a
+# Python member and is intentionally not listed here.
+members = ["packages/octowright-terminal"]
+
 [tool.uv.sources]
-# Local-dev resolution for the unpublished provide-uterm ecosystem packages that
-# back the optional `terminal` extra (above). Expects the sibling repo checked
-# out at ../provide-uterm (the provide.io layout); `provide-uterm-client` is a
-# transitive dep of `provide-uterm-server`. uv strips these source overrides from
-# the published wheel, so a real `pip install octowright[terminal]` resolves the
-# same packages from PyPI once they publish. Remove this table at that point.
+# Local-dev resolution for the unpublished provide-uterm ecosystem packages
+# that packages/octowright-terminal (above) depends on. Expects the sibling
+# repo checked out at ../provide-uterm (the provide.io layout);
+# `provide-uterm-client` is a transitive dep of `provide-uterm-server`. uv
+# strips these source overrides from the built wheel, so a real
+# `pip install octowright-terminal` resolves the same packages from PyPI once
+# they publish. Remove this table at that point.
 provide-uterm = { path = "../provide-uterm/packages/provide-uterm", editable = true }
 provide-uterm-client = { path = "../provide-uterm/packages/provide-uterm-client", editable = true }
 provide-uterm-platform = { path = "../provide-uterm/packages/provide-uterm-platform", editable = true }
 provide-uterm-server = { path = "../provide-uterm/packages/provide-uterm-server", editable = true }
+# The terminal plugin workspace member (see [tool.uv.workspace] above), and the
+# workspace root itself -- uv requires an explicit self-source once any member
+# depends back on the root project by name.
+octowright-terminal = { workspace = true }
+octowright = { workspace = true }
 
 [dependency-groups]
 # Mirrors provide-telemetry's dev toolchain so any contributor across the
@@ -210,6 +213,25 @@ dev = [
     "xenon>=0.9.3",
 ]
 
+# The session-kind terminal plugin (packages/octowright-terminal), a workspace
+# member. Its OWN group, deliberately not part of `dev`, because a group is the
+# only place the dependency boundary can actually be enforced: the plugin pulls
+# provide-uterm, which is unpublished and resolved from the sibling
+# ../provide-uterm checkout (see [tool.uv.sources]). No CI runner has that
+# checkout, so while this lived in `dev` a plain `uv sync --frozen --all-groups`
+# died at bootstrap with "Distribution not found at: .../provide-uterm/..." --
+# every job, not just the terminal ones. Core's CI legs now sync
+# `--all-groups --no-group terminal`, which means they prove at the dependency
+# layer the same property tests/test_plugin_isolation.py proves in code: core
+# builds, installs and passes with no uterm present anywhere. The terminal-plugin
+# job clones the sibling first and then asks for this group by name.
+#
+# `make install` (uv sync --all-groups) still includes it, which is right for the
+# provide.io dev layout where the sibling checkout exists.
+terminal = [
+    "octowright-terminal",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = [
@@ -225,7 +247,7 @@ markers = [
     "live_browser: tests that require real browser engines installed",
     "engine_matrix: tests that exercise chromium/firefox/webkit matrices",
     "integration_local: tests that run against the local demo playground server",
-    "terminal: optional terminal-session tests; require the octowright[terminal] extra (provide-uterm). Auto-applied to everything under tests/terminal/. Select with -m terminal / exclude with -m 'not terminal'.",
+    "terminal: optional terminal-session tests; require provide-uterm (the octowright-terminal plugin's own dependency, resolved from the sibling ../provide-uterm checkout). Auto-applied to everything under packages/octowright-terminal/tests/. Select with -m terminal / exclude with -m 'not terminal'.",
     "memory_isolated: tests whose assertion is a process-wide tracemalloc heap diff, so they must run in their own pytest process rather than interleaved with the rest of the suite (thousands of unrelated tests' retained state otherwise pollutes the measurement window). Run alone in CI; excluded from the main suite invocation.",
 ]
 filterwarnings = [
@@ -271,22 +293,18 @@ explicit_package_bases = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-# provide.uterm.* backs the optional `terminal` extra; it ships py.typed so it
-# types cleanly where installed (local dev), but on a core install / in CI the
-# extra is absent and its imports under src/octowright/terminal/ are unresolved.
-# ignore_missing_imports keeps mypy green in both setups.
+# provide.uterm.* backs the terminal session-kind plugin
+# (packages/octowright-terminal, imported unconditionally by its own source
+# under packages/octowright-terminal/src/octowright_terminal/). It ships
+# py.typed so it types cleanly where installed (local dev, via the sibling
+# ../provide-uterm checkout resolved through [tool.uv.sources] below), but CI
+# has no sibling checkout, so the package is unresolved there.
+# ignore_missing_imports keeps mypy green in both setups. Core itself
+# (src/octowright) never imports provide.uterm at all -- see
+# tests/test_plugin_isolation.py -- so this override exists purely for the
+# plugin package half of `mypy src/octowright packages/octowright-terminal/src`.
 module = ["mcp.*", "provide.telemetry.*", "provide.uterm.*", "yaml"]
 ignore_missing_imports = true
-
-# ty equivalent of the mypy override above: scope the unresolved-import rule OFF
-# for the optional terminal package only, so a core install / CI (no provide.uterm)
-# stays green. Scoped to src/octowright/terminal/** so unresolved imports anywhere
-# else are still caught.
-[[tool.ty.overrides]]
-include = ["src/octowright/terminal/**"]
-
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
 
 [tool.codespell]
 skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,packages/*/coverage,packages/*/dist,package-lock.json"
