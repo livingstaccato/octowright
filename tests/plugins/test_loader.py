@@ -472,3 +472,88 @@ def test_a_delta_narrower_than_the_declaration_is_allowed(tmp_path):
 
     assert reg.kinds() == ["refkind"]
     assert "refkind_launch" in manager._tools
+
+
+# ---------------------------------------------------------------------------
+# scenario-adapter contract check at load time
+# ---------------------------------------------------------------------------
+
+
+class _ValidAdapter:
+    def resolve_participant(self, spec: Any, persona: Any) -> dict[str, Any]:
+        return {}
+
+
+class _SyncRunMacroAdapter(_ValidAdapter):
+    """Satisfies `isinstance(..., SupportsMacros)` but core awaits `run_macro`."""
+
+    def run_macro(self, instance_id: str, *, name: str, args: dict[str, Any]) -> None:
+        return None
+
+
+def _activate_with_adapter(adapter: Any, tmp_path, pools: list[_TrackingPool]) -> PluginRegistry:
+    class _AdapterDescriptor(_Descriptor):
+        def create_pool(self, ctx: Any) -> Any:
+            pool = _TrackingPool()
+            pools.append(pool)
+            return pool
+
+        def create_scenario_adapter(self, pool: Any) -> Any:
+            return adapter
+
+    reg = PluginRegistry()
+    ep = _FakeEP(target=_AdapterDescriptor())
+    found = DiscoveredPlugin(name="refkind", distribution="d", version="1", entry_point="m:p", ep=ep)
+    resolved = resolve_descriptors(registry=reg, discovered=[found], enabled=["refkind"])
+    activate(
+        registry=reg,
+        resolved=resolved,
+        ctx_factory=lambda kind: _ctx_factory(kind, reg, tmp_path),
+        tool_manager=_FakeToolManager(),
+    )
+    return reg
+
+
+def test_adapter_with_a_sync_capability_method_is_refused(tmp_path):
+    # The gap this closes: `isinstance` against a runtime_checkable Protocol
+    # tests attribute presence only, so this adapter is reported as supporting
+    # `macros` and blows up with a TypeError mid-scenario, after browsers have
+    # launched -- read as a scenario failure rather than the plugin defect it is.
+    pools: list[_TrackingPool] = []
+    reg = _activate_with_adapter(_SyncRunMacroAdapter(), tmp_path, pools)
+
+    assert reg.kinds() == []
+    row = next(r for r in reg.status_rows() if r["name"] == "refkind")
+    assert row["state"] == "failed"
+    assert "run_macro" in row["reason"]
+    # Rollback still runs: the pool was built before the check.
+    assert pools and pools[0].closed
+
+
+def test_adapter_missing_the_mandatory_floor_is_refused(tmp_path):
+    class _NoFloor:
+        pass
+
+    pools: list[_TrackingPool] = []
+    reg = _activate_with_adapter(_NoFloor(), tmp_path, pools)
+
+    assert reg.kinds() == []
+    row = next(r for r in reg.status_rows() if r["name"] == "refkind")
+    assert "resolve_participant" in row["reason"]
+
+
+def test_valid_adapter_still_loads(tmp_path):
+    pools: list[_TrackingPool] = []
+    reg = _activate_with_adapter(_ValidAdapter(), tmp_path, pools)
+
+    assert reg.kinds() == ["refkind"]
+    assert not pools[0].closed
+
+
+def test_no_adapter_is_not_a_contract_failure(tmp_path):
+    """`create_scenario_adapter` returning None means the kind opts out of scenarios."""
+    pools: list[_TrackingPool] = []
+    reg = _activate_with_adapter(None, tmp_path, pools)
+
+    assert reg.kinds() == ["refkind"]
+    assert reg.get_plugin("refkind").capabilities == frozenset()
