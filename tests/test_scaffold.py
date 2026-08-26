@@ -175,7 +175,12 @@ def test_init_cli_first_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(_scenarios, "SCENARIOS_DIR", scenarios)
     monkeypatch.setattr(_macro_storage, "MACROS_DIR", macros)
 
-    result = CliRunner().invoke(cli, ["init"])
+    runner = CliRunner()
+    # isolated_filesystem(): scaffold_all defaults target_dir to Path.cwd(), which
+    # under pytest is this checkout -- see tests/conftest.py's
+    # _guard_checkout_project_config for what that used to rewrite.
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["init"])
     assert result.exit_code == 0, result.output
     assert "scaffolding complete" in result.output
     assert (profiles / "default" / "profile.yaml").exists()
@@ -204,8 +209,9 @@ def test_init_cli_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(_macro_storage, "MACROS_DIR", macros)
 
     runner = CliRunner()
-    runner.invoke(cli, ["init"])
-    result = runner.invoke(cli, ["init"])
+    with runner.isolated_filesystem():
+        runner.invoke(cli, ["init"])
+        result = runner.invoke(cli, ["init"])
     assert result.exit_code == 0
     assert "(exists)" in result.output
 
@@ -228,7 +234,8 @@ def test_init_cli_force_flag_overwrites(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(_macro_storage, "MACROS_DIR", macros)
 
     runner = CliRunner()
-    runner.invoke(cli, ["init"])
-    result = runner.invoke(cli, ["init", "--force"])
+    with runner.isolated_filesystem():
+        runner.invoke(cli, ["init"])
+        result = runner.invoke(cli, ["init", "--force"])
     assert result.exit_code == 0
     assert "(overwritten)" in result.output
