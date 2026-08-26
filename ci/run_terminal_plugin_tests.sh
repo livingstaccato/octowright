@@ -6,8 +6,8 @@
 # Run the terminal session-kind plugin's own suite (packages/octowright-terminal),
 # which core's `pytest tests/` legs deliberately do not reach.
 #
-# Requires provide-uterm on disk (ci/clone_provide_uterm.sh) and the `terminal`
-# dependency group synced. Both are the terminal-plugin job's earlier steps.
+# Requires the `terminal` dependency group synced, which is the terminal-plugin
+# job's bootstrap step (every other job excludes that group on purpose).
 #
 # The availability guard below is the point of this script. The plugin's
 # conftest.py sets `collect_ignore_glob` when uterm is missing, because these
@@ -23,8 +23,8 @@ uv run --active python - <<'PY'
 import sys
 
 FIX = (
-    "Run ci/clone_provide_uterm.sh first, then sync the `terminal` dependency "
-    "group (uv sync --frozen --all-groups)."
+    "Sync the `terminal` dependency group first: "
+    "uv sync --frozen --all-groups."
 )
 
 try:

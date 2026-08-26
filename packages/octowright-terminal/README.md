@@ -6,17 +6,21 @@ This package is entirely optional. Octowright core has no terminal-specific code
 
 ## Installation
 
-**Not installable from PyPI today.** `provide-uterm` and `provide-uterm-server` — the connector libraries this package depends on — are not published, so `pip install octowright-terminal` currently fails (404). Moving terminal out of octowright's own tree did not change that; it only moved the blocker out of octowright's own release path. `octowright-terminal` is exactly as source-install-only as the old `octowright[terminal]` extra was.
+The connector libraries this package depends on — `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` — were published to PyPI on 2026-08-26, so this installs like any other distribution:
 
-Today this works only from a source checkout of the octowright repo with the sibling `provide-uterm` repo checked out alongside it:
-
-```
-some-parent-dir/
-├── octowright/
-└── provide-uterm/
+```bash
+pip install octowright-terminal   # alongside octowright itself
 ```
 
-The root `octowright` repo's `pyproject.toml` declares this package as a `[tool.uv.workspace]` member and resolves `provide-uterm` / `provide-uterm-platform` / `provide-uterm-server` (plus the transitive `provide-uterm-client`) from the sibling checkout via `[tool.uv.sources]`. `uv sync` from the octowright repo root installs this package in editable mode as part of that workspace. Once installed, enable it at daemon start with:
+Earlier revisions of this file said the package was source-install-only, requiring a sibling `../provide-uterm` checkout resolved through `[tool.uv.sources]`. That is no longer true, and those path overrides have been removed from the octowright repo's `pyproject.toml`.
+
+From a source checkout, this package is still a `[tool.uv.workspace]` member and installs in editable mode — but it lives in the `terminal` dependency group rather than `dev`, so a plain `uv sync` deliberately skips it and core stays uterm-free. Ask for it explicitly:
+
+```bash
+uv sync --all-groups        # or: uv sync --group terminal
+```
+
+Installing the distribution only makes the plugin *discoverable*. Enable it at daemon start with:
 
 ```bash
 OCTOWRIGHT_PLUGINS=terminal uv run octowright serve
@@ -113,4 +117,4 @@ uv run --active --no-sync pytest packages/octowright-terminal/tests -v --no-cov
 
 `make test-terminal` from the repo root runs that last line.
 
-The `terminal` pytest marker is auto-applied to everything under `packages/octowright-terminal/tests/` (see the root `pyproject.toml`). Those tests import uterm-backed modules, so the suite ignores itself at collection when the sibling checkout is absent — which is right for a core install and dangerous for a CI gate, since pytest then reports a clean pass over zero tests. CI therefore runs this suite in a dedicated `terminal-plugin` job that clones `provide-io/provide-uterm` (a public repo, pinned to a commit) into the sibling path first and asserts uterm is importable *before* pytest starts. See `ci/clone_provide_uterm.sh` and `ci/run_terminal_plugin_tests.sh`.
+The `terminal` pytest marker is auto-applied to everything under `packages/octowright-terminal/tests/` (see the root `pyproject.toml`). Those tests import uterm-backed modules, so the suite ignores itself at collection when the sibling checkout is absent — which is right for a core install and dangerous for a CI gate, since pytest then reports a clean pass over zero tests. CI therefore runs this suite in a dedicated `terminal-plugin` job — the one job that syncs the `terminal` dependency group — which asserts uterm is importable *before* pytest starts, so an absent dependency fails loudly instead of passing over zero tests. See `ci/run_terminal_plugin_tests.sh`.

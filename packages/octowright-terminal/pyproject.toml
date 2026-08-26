@@ -23,9 +23,12 @@ dependencies = [
     # bridge/tunnel/gateway machinery this package never uses (it only touches
     # `provide.uterm.server.connectors`, per the terminal-sessions design doc).
     # `provide-uterm[ssh]` is the minimal, correctly-scoped way to get asyncssh.
-    "provide-uterm[ssh]>=0.4.0",
-    "provide-uterm-platform>=0.4.0",
-    "provide-uterm-server>=0.4.0",
+    # Floors are the oldest versions actually published to PyPI, which are also
+    # the only ones this package has been tested against. The previous >=0.4.0
+    # floors named releases that never existed there.
+    "provide-uterm[ssh]>=0.5.1",
+    "provide-uterm-platform>=0.5.0",
+    "provide-uterm-server>=0.5.0",
 ]
 
 # The only interface between core and this package. Core resolves the name from
