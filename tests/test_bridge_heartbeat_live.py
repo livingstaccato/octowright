@@ -52,7 +52,13 @@ _NO_ENGINE = (
     "no protocol specified",
     "playwright install",
 )
-_HEARTBEAT_INTERVAL = "0.3"  # tiny, so a ~1-3s browser_launch emits several pings
+# Must be comfortably SHORTER than the tool call it has to outlive, or the test
+# is a coin flip. `_beat` sleeps before its first send, so the earliest ping lands
+# one interval in. A headless about:blank launch is ~0.31-0.40s -- measured, and
+# roughly 10x faster than the "~1-3s" this constant was originally sized against
+# -- so at 0.3s the first ping and the response were 5-90ms apart and the test
+# failed about one run in three. At 0.05s the same call emits ~6 pings.
+_HEARTBEAT_INTERVAL = "0.05"
 
 
 def _free_port() -> int:
