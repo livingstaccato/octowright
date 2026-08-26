@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -38,6 +39,57 @@ _AMBIENT_OTLP_ENV_VARS = (
     "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
     "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
 )
+
+
+def _checkout_project_config() -> Path | None:
+    """This checkout's own ``.octowright/config.yaml``, if we run from a source tree."""
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / ".octowright" / "config.yaml"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+_CHECKOUT_PROJECT_CONFIG = _checkout_project_config()
+
+# Bound at import, while ``os.stat`` is still the real one. Tests legitimately
+# monkeypatch ``os.stat`` (tests/test_housekeeping.py patches it module-wide to
+# fake a stat_result), and ``Path.stat()`` goes through that patch -- so a guard
+# calling it would read a fabricated st_mtime of 0 and accuse an innocent test.
+_REAL_OS_STAT = os.stat
+
+
+@pytest.fixture(autouse=True)
+def _guard_checkout_project_config() -> Iterator[None]:
+    """Fail the test that rewrites the checkout's own project config.
+
+    ``scaffold.scaffold_all`` defaults ``target_dir`` to ``Path.cwd()``, which is
+    right for the real ``octowright init`` -- it scaffolds the project you are
+    standing in. Under pytest the cwd is this checkout, so any test that invokes
+    ``init`` without ``CliRunner.isolated_filesystem()`` rewrites the repo's own
+    tracked ``.octowright/config.yaml``.
+
+    That hid for a long time because ``write_project_config`` derives ``label``
+    from the basename of ``git rev-parse --show-toplevel``: in a checkout named
+    "octowright" the rewrite is byte-identical, so git reports nothing. It only
+    surfaces in a git worktree, whose directory is named after the branch -- and
+    there every ``git add -A`` after a test run silently commits a label change.
+
+    Hence mtime, not content: content is identical in exactly the checkout where
+    the suite is usually run. Per-test rather than per-session so the failure
+    names the offending test instead of the whole run.
+    """
+    config = _CHECKOUT_PROJECT_CONFIG
+    before = _REAL_OS_STAT(config).st_mtime_ns if config is not None else None
+    yield
+    if config is None or before is None:
+        return
+    if _REAL_OS_STAT(config).st_mtime_ns != before:
+        raise AssertionError(
+            f"this test rewrote {config}, the checkout's own project config. "
+            "A CLI test that scaffolds must run inside CliRunner.isolated_filesystem(), "
+            "or pass an explicit target_dir."
+        )
 
 
 @pytest.fixture(autouse=True)
