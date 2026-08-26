@@ -258,38 +258,27 @@ jobs:
         run: bash ci/smoke_skill.sh
 
   # The terminal session-kind plugin (packages/octowright-terminal) is a separate
-  # distribution: core's `pytest tests/` legs never reach its suite, and its
-  # dependency provide-uterm is unpublished, so it gets its own job.
+  # distribution and core's `pytest tests/` legs never reach its suite, so it
+  # gets its own job.
   #
   # That suite had NEVER run in CI. Under the old octowright[terminal] extra it
   # self-ignored at collection because uterm was never installed, and a skip that
   # renders as a pass is exactly how three real failures sat unnoticed until the
   # extraction forced someone to install uterm locally. It runs for real here:
   # ci/run_terminal_plugin_tests.sh asserts uterm is importable BEFORE pytest, so
-  # a missing sibling fails loudly instead of passing over zero tests.
+  # an absent dependency fails loudly instead of passing over zero tests.
   #
-  # This job is allowed to block. What makes that fair is the pinned upstream
-  # commit in ci/clone_provide_uterm.sh — an unpinned clone would turn someone
-  # else's push into a red build here and teach people to ignore CI.
+  # provide-uterm is on PyPI as of 2026-08-26, so this job no longer clones the
+  # sibling repo at a pinned commit -- the `terminal` dependency group resolves
+  # it like any other dependency.
   terminal-plugin:
     name: 🖥️ Terminal plugin tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # provide-uterm 404s from PyPI, but provide-io/provide-uterm is a PUBLIC
-      # repo, so a plain tokenless clone puts it at the ../provide-uterm path
-      # [tool.uv.sources] resolves against. Must run BEFORE the sync below.
-      # FORCE=1 so a runner that somehow already has the directory (a self-hosted
-      # one with a persistent work dir) is still re-pinned; the script's safe
-      # default is to leave an existing checkout alone, because in the provide.io
-      # dev layout that path is a developer's own working tree.
-      - name: Clone provide-uterm (pinned commit)
-        env:
-          PROVIDE_UTERM_FORCE: "1"
-        run: bash ci/clone_provide_uterm.sh
-      # The one job that DOES sync the `terminal` dependency group — everything
-      # else excludes it (see .github/actions/bootstrap-uv/action.yml), and the
-      # clone above is what makes it resolvable here.
+      # The one job that DOES sync the `terminal` dependency group — every other
+      # job excludes it (see .github/actions/bootstrap-uv/action.yml) so core's
+      # legs prove they install and pass with no uterm present at all.
       - uses: ./.github/actions/bootstrap-uv
         with:
           sync-args: '--frozen --all-groups --python "${UV_PYTHON:-python}"'
