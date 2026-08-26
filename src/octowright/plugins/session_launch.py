@@ -85,13 +85,26 @@ class SessionLaunch:
         if self._id_in_use(self.instance_id):
             raise SessionIdInUseError(f"instance_id {self.instance_id!r} is already held by another registered pool")
         self._committed = True
-        return LaunchResult(
+        result = LaunchResult(
             instance_id=self.instance_id,
             kind=self.kind,
             label=record.label,
             profile=record.profile,
             log_path=str(self.log_path),
         )
+        # The record's own free-form map is the ONLY route a plugin has to put
+        # a kind-specific field in its launch result: core builds the result,
+        # so without this a plugin would have to mutate the TypedDict core just
+        # handed back — reaching around the transaction that exists to own it.
+        # Terminal's `connector_type` (pty/ssh/telnet) is the first real case:
+        # an agent that launched `kind="ssh"` and reads it back to confirm got
+        # nothing, silently, once the plugin stopped building the dict itself.
+        # Copied, not aliased, so a later mutation of the live session's map
+        # cannot rewrite a result a caller already holds.
+        extra = getattr(record, "extra", None)
+        if extra:
+            result["extra"] = dict(extra)
+        return result
 
 
 @dataclass

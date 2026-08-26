@@ -19,9 +19,8 @@ interface Listener {
   handler: (e: unknown) => void;
 }
 
-// Mirrors session-terminal.test.ts's FakeWebSocket: a minimal double so
-// openTail's addEventListener/emit contract can be exercised without a real
-// socket.
+// A minimal double so openTail's addEventListener/emit contract can be
+// exercised without a real socket.
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   listeners: Listener[] = [];

@@ -1,4 +1,17 @@
-export type Kind = "chromium" | "firefox" | "webkit" | "terminal";
+/** A browser engine core ships. Plugin kinds are NOT enumerable here. */
+export type BrowserKind = "chromium" | "firefox" | "webkit";
+
+/**
+ * A session kind.
+ *
+ * Deliberately open: core knows its three browser engines, and every other
+ * kind comes from a plugin whose name core cannot know at compile time. It
+ * used to name `"terminal"` as a fourth member, which stopped being true when
+ * terminal became a plugin -- and a CLOSED union was always wrong here, since
+ * it could not type any plugin kind at all. The `(string & {})` arm keeps the
+ * three literals visible to autocomplete while admitting the rest.
+ */
+export type Kind = BrowserKind | (string & {});
 
 export interface OperationGateSnapshot {
   state: "open" | "closing" | "closed" | "broken";
@@ -68,8 +81,6 @@ export interface SessionDetail extends SessionSummary {
     quality: number;
     fullscreen_mode: "native" | "panel";
   };
-  /** "pty" | "ssh" | "telnet" for terminal sessions; absent/null for browsers. */
-  connector_type?: "pty" | "ssh" | "telnet" | null;
 }
 
 export interface RecordingEvent {

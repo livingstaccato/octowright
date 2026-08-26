@@ -16,13 +16,13 @@ package is enough to make every tool callable.
 
 from __future__ import annotations
 
-# Optional tool groups (e.g. terminal, gated on the `octowright[terminal]` extra)
-# register via this module. The availability conditional lives there, not here,
-# so this __init__ stays an import-only export surface (convention-test enforced).
-from octowright.server import _optional_tools as _optional_tools
-
+# Session-kind plugin tool groups (e.g. terminal, gated on OCTOWRIGHT_PLUGINS)
+# register via the plugin-activation import further below, placed last so the
+# SDK's first-wins `add_tool` never lets a plugin shadow a core tool. This
+# __init__ stays an import-only export surface (convention-test enforced).
 # Submodule imports trigger @mcp.tool registration via decorator side effects.
-# Order does not matter; F401 ignored intentionally.
+# Order does not matter for the core submodules below; F401 ignored
+# intentionally.
 from octowright.server import browser as _browser  # noqa: F401
 from octowright.server import captures as _captures  # noqa: F401
 from octowright.server import goldens as _goldens  # noqa: F401

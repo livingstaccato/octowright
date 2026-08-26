@@ -9,8 +9,9 @@ SPDX-Comment: Part of octowright.
 
 Current totals (verified against `selftest` 2026-08-20 at 129 tools on a core install): **95** profile-scoped + **7** always-on + **27** all-only = **129 total**.
 
-With the optional `octowright[terminal]` extra installed, the `terminals`
-profile adds 7 more tools for **136 total**.
+With the `terminal` session-kind plugin enabled (`OCTOWRIGHT_PLUGINS=terminal` —
+source-install only today, see `packages/octowright-terminal/README.md`), the
+`terminals` profile it declares adds 7 more tools for **136 total**.
 
 ## Profiles
 
@@ -24,7 +25,7 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 | `scenarios` | 12 | Multi-browser orchestration. |
 | `personas` | 8 | Identity + on-disk profile management. |
 | `goldens` | 5 | Accessibility-tree snapshot baselines + diff. |
-| `terminals` | 7 | Optional PTY/SSH/telnet terminal sessions; only present with `octowright[terminal]`. |
+| `terminals` | 7 | Optional PTY/SSH/telnet terminal sessions; declared by the `terminal` session-kind plugin and only present when it is enabled via `OCTOWRIGHT_PLUGINS`. |
 | _(always-on)_ | 7 | Registers under every profile (and under no profile). Status, dashboard, takeover detection, Advisor. |
 | _(all-only)_ | 27 | Registers only when **no** `--profile` filter is active. Frames/tabs/popups, network mocking, request headers, dialog policy, traces, roster fan-out, macro-artifact extras, cleanup. |
 
@@ -54,7 +55,7 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 
 `persona_create`, `persona_credentials_check`, `persona_delete`, `persona_get`, `persona_list`, `profile_cleanup`, `profile_delete`, `profile_list`
 
-### `terminals` (7, optional extra)
+### `terminals` (7, optional plugin)
 
 `terminal_launch`, `terminal_send_input`, `terminal_snapshot`, `terminal_read`, `terminal_wait_for`, `terminal_close`, `terminal_list`
 

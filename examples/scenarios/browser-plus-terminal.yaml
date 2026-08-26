@@ -3,9 +3,11 @@ description: |
   A browser "player" driving a web form alongside a local terminal "operator"
   running a shell — both launched, recorded, and torn down by one scenario.
 
-  The terminal participant requires the octowright[terminal] extra; on a core
-  install, scenario_start raises a clear "extra not installed" error rather than
-  failing obscurely. Terminal participants are skipped by browser-only steps
+  The terminal participant requires the octowright-terminal session-kind plugin,
+  enabled via OCTOWRIGHT_PLUGINS=terminal (source-install only today; see
+  packages/octowright-terminal/README.md). Without it, scenario_start raises a
+  clear "unsupported kind" error naming OCTOWRIGHT_PLUGINS as the fix, rather
+  than failing obscurely. Terminal participants are skipped by browser-only steps
   (fixtures, verify/startup macros, wait_for_sync); they cannot declare
   startup_macros. For kind: terminal, options.connector_type is pty (default)
   or ssh; an ssh participant resolves options.host/user/key_path/known_hosts

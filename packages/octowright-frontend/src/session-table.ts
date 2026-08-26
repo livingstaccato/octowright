@@ -15,8 +15,13 @@ export interface SessionTableActions {
 type OperationBadgeRenderState = "busy" | "closing" | "broken";
 
 function operationBadge(row: SessionSummary): HTMLElement | null {
+  // No kind check: `operation_gate` is present only when the session actually
+  // supplies an `operation_snapshot()` (see `http/discovery._live_summary`), so
+  // `!gate` already covers every kind that has no gate. Naming a kind here was
+  // both dead and wrong in principle -- a plugin kind that DOES expose a gate
+  // should get a badge, and a hardcoded exclusion would deny it one.
   const gate = row.operation_gate;
-  if (!gate || row.kind === "terminal" || !row.live) return null;
+  if (!gate || !row.live) return null;
   let text: string | null = null;
   let renderState: OperationBadgeRenderState | null = null;
   if (gate.state === "open" && gate.active_operation) {

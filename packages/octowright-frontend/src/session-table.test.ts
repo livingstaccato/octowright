@@ -96,13 +96,28 @@ describe("renderSessionTable", () => {
     expect(table.querySelector(`.operation-badge--${state}`)?.textContent).toBe(state);
   });
 
-  it("is quiet for idle browsers, closed rows, and terminals", () => {
+  it("is quiet for idle browsers, closed rows, and gateless sessions", () => {
     const actions = { onRelaunch: vi.fn(), onDelete: vi.fn() };
     const rows: SessionSummary[] = [
       { ...row, live: true, operation_gate: IDLE_GATE },
       { ...row, id: "closed", live: false, operation_gate: { ...IDLE_GATE, state: "closed" as const } },
-      { ...row, id: "terminal", kind: "terminal" as const, live: true },
+      // A plugin-kind row with no gate at all: the API omits `operation_gate`
+      // unless the session supplies an `operation_snapshot()`.
+      { ...row, id: "gateless", kind: "terminal", live: true, operation_gate: undefined },
     ];
     expect(renderSessionTable(rows, true, actions).querySelector(".operation-badge")).toBeNull();
+  });
+
+  it("badges a non-browser kind that does expose a gate", () => {
+    // The reason the kind check was deleted rather than generalised: a future
+    // plugin kind with a real operation gate must get a badge, and a
+    // kind-name exclusion would silently deny it one.
+    const actions = { onRelaunch: vi.fn(), onDelete: vi.fn() };
+    const table = renderSessionTable(
+      [{ ...row, id: "plug", kind: "terminal", live: true, operation_gate: { ...IDLE_GATE, state: "broken" } }],
+      true,
+      actions,
+    );
+    expect(table.querySelector(".operation-badge--broken")?.textContent).toBe("broken");
   });
 });
