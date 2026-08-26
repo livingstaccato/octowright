@@ -13,6 +13,7 @@ subclass.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -153,6 +154,109 @@ _CAPABILITY_PROTOCOLS: dict[str, type] = {
 def capabilities_of(adapter: object) -> frozenset[str]:
     """Derive the capability set an adapter actually implements."""
     return frozenset(name for name, proto in _CAPABILITY_PROTOCOLS.items() if isinstance(adapter, proto))
+
+
+#: Stand-in argument used to probe an implementation's signature. Never called
+#: with, never stored — ``Signature.bind`` only counts and names arguments.
+_PROBE = object()
+
+
+def _protocol_methods(proto: type) -> Iterator[tuple[str, Any]]:
+    """Every method a Protocol declares, its own and any it inherits.
+
+    Walked over the MRO rather than read off ``vars(proto)`` so that splitting
+    a Protocol into a base and a refinement later does not silently drop the
+    inherited half from the check — the failure mode would be a capability that
+    looks verified and is not. Reversed so a refinement's override wins.
+    """
+    found: dict[str, Any] = {}
+    for klass in reversed(proto.__mro__):
+        for name, value in vars(klass).items():
+            if not name.startswith("_") and inspect.isfunction(value):
+                found[name] = value
+    return iter(found.items())
+
+
+def _without_self(signature: inspect.Signature) -> inspect.Signature:
+    """Drop the receiver, so a declared signature prints the way it is called."""
+    return signature.replace(parameters=[p for name, p in signature.parameters.items() if name != "self"])
+
+
+def _declared_call_shape(declared: inspect.Signature) -> tuple[list[Any], dict[str, Any]]:
+    """The exact call shape core makes, derived from the Protocol's own signature.
+
+    Positional parameters become positional probes and keyword-only ones become
+    named probes, so an implementation stays free to *rename* its positionals
+    (core passes those by position and never names them) while a renamed or
+    missing keyword is caught.
+    """
+    positional: list[Any] = []
+    keywords: dict[str, Any] = {}
+    for name, param in declared.parameters.items():
+        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD):
+            positional.append(_PROBE)
+        elif param.kind is param.KEYWORD_ONLY:
+            keywords[name] = _PROBE
+    return positional, keywords
+
+
+def _is_async_callable(obj: Any) -> bool:
+    if inspect.iscoroutinefunction(obj):
+        return True
+    call = getattr(obj, "__call__", None)  # noqa: B004 - a callable object's async-ness lives on __call__
+    return call is not None and inspect.iscoroutinefunction(call)
+
+
+def _protocol_errors(adapter: object, proto: type) -> list[str]:
+    problems: list[str] = []
+    for name, declared in _protocol_methods(proto):
+        impl = getattr(adapter, name, None)
+        if not callable(impl):
+            problems.append(f"{name}: expected a callable, got {type(impl).__name__}")
+            continue
+        if inspect.iscoroutinefunction(declared) and not _is_async_callable(impl):
+            problems.append(f"{name}: must be `async def` — core awaits it")
+            continue
+        try:
+            signature = inspect.signature(impl)
+        except (TypeError, ValueError):
+            continue  # not introspectable (a C builtin); unverifiable, so not an error
+        declared_signature = _without_self(inspect.signature(declared))
+        positional, keywords = _declared_call_shape(declared_signature)
+        try:
+            signature.bind(*positional, **keywords)
+        except TypeError as exc:
+            problems.append(f"core calls {name}{declared_signature}, which the implementation rejects: {exc}")
+    return problems
+
+
+def contract_errors(adapter: object) -> list[str]:
+    """Why ``adapter`` cannot serve as a scenario adapter — empty when it can.
+
+    ``isinstance`` against a ``runtime_checkable`` Protocol tests attribute
+    *presence* and nothing else: not arity, not keyword names, not whether the
+    method is a coroutine. So an adapter carrying a ``run_macro`` that is a bare
+    attribute, a sync function, or a function taking different keywords passes
+    ``capabilities_of`` and is registered as supporting ``macros``. The mismatch
+    then surfaces mid-scenario as a ``TypeError`` raised from core's own call
+    site — read as a scenario failure, not as the plugin defect it is.
+
+    Checked by *binding* the call shape each Protocol declares against the
+    implementation's signature, so the check tracks the Protocol rather than a
+    hand-maintained mirror of it: change a Protocol and this follows.
+
+    ``ScenarioAdapter`` is the mandatory floor and its absence is an error;
+    the capability protocols are optional, so only the ones an adapter claims
+    (by attribute presence) are verified. An adapter that claims none is valid
+    — it participates in scenarios and supports no extra capability.
+    """
+    if not isinstance(adapter, ScenarioAdapter):
+        return ["missing resolve_participant() — the mandatory ScenarioAdapter floor"]
+    problems = _protocol_errors(adapter, ScenarioAdapter)
+    for proto in _CAPABILITY_PROTOCOLS.values():
+        if isinstance(adapter, proto):
+            problems.extend(_protocol_errors(adapter, proto))
+    return problems
 
 
 @dataclass(frozen=True)
