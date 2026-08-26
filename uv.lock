@@ -1971,9 +1971,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "octowright", editable = "." },
-    { name = "provide-uterm", extras = ["ssh"], editable = "../provide-uterm/packages/provide-uterm" },
-    { name = "provide-uterm-platform", editable = "../provide-uterm/packages/provide-uterm-platform" },
-    { name = "provide-uterm-server", editable = "../provide-uterm/packages/provide-uterm-server" },
+    { name = "provide-uterm", extras = ["ssh"], specifier = ">=0.5.1" },
+    { name = "provide-uterm-platform", specifier = ">=0.5.0" },
+    { name = "provide-uterm-server", specifier = ">=0.5.0" },
 ]
 
 [[package]]
@@ -2294,11 +2294,16 @@ otel = [
 
 [[package]]
 name = "provide-uterm"
-source = { editable = "../provide-uterm/packages/provide-uterm" }
+version = "0.5.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "provide-telemetry" },
     { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fa/c8/3059dcaac20eaef15f1b23d4fe2b36b64297dc2b50c26eea4418ca7faeb9/provide_uterm-0.5.1.tar.gz", hash = "sha256:d9aa4f65a7cb25b2908a0cfced05a1b1e8046891ae7532fc5574501e098d750d", size = 236506, upload-time = "2026-08-26T07:09:38.214Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/99/f7/e1337af5cc9014554b5184bfbaaba7da9a84808f08ddab0c2e0264be57db/provide_uterm-0.5.1-py3-none-any.whl", hash = "sha256:9b2b291ea885b9a16986101db0531c456c5de3bb4fe5efcfd463d2590d5b7b17", size = 225531, upload-time = "2026-08-26T07:09:36.852Z" },
 ]
 
 [package.optional-dependencies]
@@ -2306,188 +2311,44 @@ ssh = [
     { name = "asyncssh" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.22" },
-    { name = "asyncssh", marker = "extra == 'all'", specifier = ">=2.14" },
-    { name = "asyncssh", marker = "extra == 'ssh'", specifier = ">=2.14" },
-    { name = "httpx2", marker = "extra == 'all'", specifier = ">=2.10" },
-    { name = "httpx2", marker = "extra == 'client'", specifier = ">=2.10" },
-    { name = "provide-telemetry", specifier = ">=0.7" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyte", marker = "extra == 'all'", specifier = ">=0.8" },
-    { name = "pyte", marker = "extra == 'emulator'", specifier = ">=0.8" },
-]
-provides-extras = ["emulator", "ssh", "client", "all"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "asyncssh", specifier = ">=2.22.0" },
-    { name = "bandit", specifier = ">=1.9" },
-    { name = "codespell", specifier = ">=2.4.1" },
-    { name = "detect-secrets", specifier = ">=1.5.0" },
-    { name = "fastapi", specifier = ">=0.110" },
-    { name = "httpx2", specifier = ">=2.10" },
-    { name = "hypothesis", specifier = ">=6.151.9" },
-    { name = "mcp", specifier = ">=2.0.0" },
-    { name = "memray", marker = "sys_platform != 'win32'", specifier = ">=1.0" },
-    { name = "mutmut", specifier = ">=3.3.1" },
-    { name = "mypy", specifier = ">=1.19" },
-    { name = "pip-audit", specifier = ">=2.7.0" },
-    { name = "pip-licenses", specifier = ">=5.5.0" },
-    { name = "pre-commit", specifier = ">=4.0" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyjwt", specifier = ">=2.9" },
-    { name = "pyte", specifier = ">=0.8.2" },
-    { name = "pytest", specifier = ">=9.0" },
-    { name = "pytest-asyncio", specifier = ">=1.3" },
-    { name = "pytest-cov", specifier = ">=7.0" },
-    { name = "pytest-playwright", specifier = ">=0.7.2" },
-    { name = "pytest-randomly", specifier = ">=3.15.0" },
-    { name = "pytest-timeout", specifier = ">=2.4.0" },
-    { name = "pytest-xdist", specifier = ">=3.8" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "reuse", specifier = ">=6.2.0" },
-    { name = "ruff", specifier = ">=0.15" },
-    { name = "ty", specifier = ">=0.0.17" },
-    { name = "uv", specifier = ">=0.10.7" },
-    { name = "uvicorn", specifier = ">=0.24" },
-    { name = "vulture", specifier = ">=2.14" },
-    { name = "websockets", specifier = ">=16.0" },
-    { name = "xenon", specifier = ">=0.9.3" },
-]
-
 [[package]]
 name = "provide-uterm-client"
-source = { editable = "../provide-uterm/packages/provide-uterm-client" }
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mcp" },
     { name = "provide-uterm" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "asyncssh", marker = "extra == 'all'", specifier = ">=2.22.0" },
-    { name = "asyncssh", marker = "extra == 'dev'", specifier = ">=2.22.0" },
-    { name = "asyncssh", marker = "extra == 'ssh'", specifier = ">=2.22.0" },
-    { name = "httpx2", marker = "extra == 'all'", specifier = ">=2.10" },
-    { name = "httpx2", marker = "extra == 'dev'", specifier = ">=2.10" },
-    { name = "httpx2", marker = "extra == 'http'", specifier = ">=2.10" },
-    { name = "mcp", specifier = ">=2.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.19" },
-    { name = "provide-uterm", editable = "../provide-uterm/packages/provide-uterm" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
-    { name = "websockets", marker = "extra == 'all'", specifier = ">=16.0" },
-    { name = "websockets", marker = "extra == 'dev'", specifier = ">=16.0" },
-    { name = "websockets", marker = "extra == 'websocket'", specifier = ">=16.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/aa/0f/99cf875423ae33808595dfc8c48c4b7e549b5ac250bc403c8476303a5e0f/provide_uterm_client-0.5.0.tar.gz", hash = "sha256:a0ec16fefe1b3dd271390228aab287bc2052be192cf7d52d97e84f196dc4b14a", size = 52146, upload-time = "2026-08-24T18:43:08.311Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/cf/5ec0c2173a0403b3b925f226856a77d8aeddf829d92ce463ab09059924cb/provide_uterm_client-0.5.0-py3-none-any.whl", hash = "sha256:1efd021f2bcb24c9bdc3f3a6e4bcf36c8588993ade97285c422a2da3fb36a42a", size = 59743, upload-time = "2026-08-24T18:22:49.4Z" },
 ]
-provides-extras = ["http", "websocket", "ssh", "all", "dev"]
 
 [[package]]
 name = "provide-uterm-platform"
-source = { editable = "../provide-uterm/packages/provide-uterm-platform" }
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "provide-uterm" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.9" },
-    { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.110" },
-    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.110" },
-    { name = "fastapi", marker = "extra == 'manager'", specifier = ">=0.110" },
-    { name = "httpx2", marker = "extra == 'all'", specifier = ">=2.10" },
-    { name = "httpx2", marker = "extra == 'dev'", specifier = ">=2.10" },
-    { name = "httpx2", marker = "extra == 'manager'", specifier = ">=2.10" },
-    { name = "mcp", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.19" },
-    { name = "provide-uterm", editable = "../provide-uterm/packages/provide-uterm" },
-    { name = "provide-uterm", marker = "extra == 'all'", editable = "../provide-uterm/packages/provide-uterm" },
-    { name = "provide-uterm", marker = "extra == 'dev'", editable = "../provide-uterm/packages/provide-uterm" },
-    { name = "provide-uterm", marker = "extra == 'pty'", editable = "../provide-uterm/packages/provide-uterm" },
-    { name = "psutil", marker = "extra == 'dev'", specifier = ">=5.9" },
-    { name = "pydantic", marker = "extra == 'all'", specifier = ">=2.0" },
-    { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2.0" },
-    { name = "pydantic", marker = "extra == 'manager'", specifier = ">=2.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
-    { name = "pyyaml", marker = "extra == 'all'", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'manager'", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
-    { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.24" },
-    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "uvicorn", marker = "extra == 'manager'", specifier = ">=0.24" },
+sdist = { url = "https://files.pythonhosted.org/packages/60/40/7b6c215903d937b882b19fce34197d77a1f57eb57e60948caa3c91688f04/provide_uterm_platform-0.5.0.tar.gz", hash = "sha256:d0c7f8ddcd632eb1f77e77f689bfc8ece4279dbc57ad2165c980251140a94b51", size = 62624, upload-time = "2026-08-24T18:43:26.562Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/45/1aec478877b4320c654b20d3b7a54b920e9be957006760e426c0ab232caf/provide_uterm_platform-0.5.0-py3-none-any.whl", hash = "sha256:313d9dc152dac187c366e4c23a475e82377bafc4174bb82bef923a01e8f4730a", size = 79948, upload-time = "2026-08-24T18:22:51.885Z" },
 ]
-provides-extras = ["pty", "manager", "all", "dev"]
 
 [[package]]
 name = "provide-uterm-server"
-source = { editable = "../provide-uterm/packages/provide-uterm-server" }
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "provide-uterm" },
     { name = "provide-uterm-client" },
     { name = "pydantic" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "asyncssh", marker = "extra == 'all'", specifier = ">=2.22.0" },
-    { name = "asyncssh", marker = "extra == 'dev'", specifier = ">=2.22.0" },
-    { name = "asyncssh", marker = "extra == 'gateway'", specifier = ">=2.22.0" },
-    { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.110" },
-    { name = "fastapi", marker = "extra == 'cli'", specifier = ">=0.110" },
-    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.110" },
-    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110" },
-    { name = "fastapi", marker = "extra == 'tunnel'", specifier = ">=0.110" },
-    { name = "httpx2", marker = "extra == 'all'", specifier = ">=2.10" },
-    { name = "httpx2", marker = "extra == 'cli'", specifier = ">=2.10" },
-    { name = "httpx2", marker = "extra == 'dev'", specifier = ">=2.10" },
-    { name = "httpx2", marker = "extra == 'tunnel'", specifier = ">=2.10" },
-    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.151.9" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.19" },
-    { name = "pillow", marker = "extra == 'dev'", specifier = ">=10.0" },
-    { name = "provide-uterm", editable = "../provide-uterm/packages/provide-uterm" },
-    { name = "provide-uterm-annotation", marker = "extra == 'all'", editable = "../provide-uterm/packages/provide-uterm-annotation" },
-    { name = "provide-uterm-annotation", marker = "extra == 'annotation'", editable = "../provide-uterm/packages/provide-uterm-annotation" },
-    { name = "provide-uterm-annotation", marker = "extra == 'dev'", editable = "../provide-uterm/packages/provide-uterm-annotation" },
-    { name = "provide-uterm-client", editable = "../provide-uterm/packages/provide-uterm-client" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2.0" },
-    { name = "pyjwt", marker = "extra == 'all'", specifier = ">=2.9" },
-    { name = "pyjwt", marker = "extra == 'dev'", specifier = ">=2.9" },
-    { name = "pyjwt", marker = "extra == 'server'", specifier = ">=2.9" },
-    { name = "pyte", marker = "extra == 'all'", specifier = ">=0.8" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-randomly", marker = "extra == 'dev'", specifier = ">=3.15.0" },
-    { name = "pytest-textual-snapshot", marker = "extra == 'dev'", specifier = ">=1.0.0" },
-    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
-    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
-    { name = "textual", marker = "extra == 'all'", specifier = ">=0.50" },
-    { name = "textual", marker = "extra == 'cli'", specifier = ">=0.50" },
-    { name = "textual", marker = "extra == 'dev'", specifier = ">=0.50" },
-    { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.24" },
-    { name = "uvicorn", marker = "extra == 'cli'", specifier = ">=0.24" },
-    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.24" },
-    { name = "uvicorn", marker = "extra == 'tunnel'", specifier = ">=0.24" },
-    { name = "websockets", marker = "extra == 'all'", specifier = ">=16.0" },
-    { name = "websockets", marker = "extra == 'cli'", specifier = ">=12.0" },
-    { name = "websockets", marker = "extra == 'dev'", specifier = ">=16.0" },
-    { name = "websockets", marker = "extra == 'gateway'", specifier = ">=16.0" },
-    { name = "websockets", marker = "extra == 'server'", specifier = ">=12.0" },
-    { name = "websockets", marker = "extra == 'tunnel'", specifier = ">=16.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/23/44/cdff5f1839de05558149a7b6125425f1425e567c26418a6dd7eb6ce20dcc/provide_uterm_server-0.5.0.tar.gz", hash = "sha256:1a3098fc238f6806db942863e0b26612cdf4fde87236a2d7c5fec7a47b02e145", size = 546884, upload-time = "2026-08-24T18:43:33.309Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/a4/cb705ad2a132058f4f8a5e9ee2a8b2626d67f821fc7e09ebbb3f9e05ad4f/provide_uterm_server-0.5.0-py3-none-any.whl", hash = "sha256:557971aa243bcfc0daac1ec6c61944b75b23056a33d1bcc9f157522dfef7004e", size = 645214, upload-time = "2026-08-24T18:22:53.358Z" },
 ]
-provides-extras = ["server", "cli", "tunnel", "gateway", "annotation", "all", "dev"]
 
 [[package]]
 name = "py-serializable"

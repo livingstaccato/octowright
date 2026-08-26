@@ -8,22 +8,21 @@ inputs:
   sync-args:
     description: "Arguments passed to `uv sync`"
     required: false
-    # --frozen: install straight from the committed uv.lock without the resolution
-    # pass, which would stat every [tool.uv.sources] path — including the editable
-    # ../provide-uterm sibling that only exists in the provide.io dev layout.
+    # --frozen: install straight from the committed uv.lock, without the
+    # resolution pass, so CI installs exactly what the lockfile records.
     #
-    # --no-group terminal: --frozen skips RESOLUTION, not INSTALLATION, so a group
-    # holding an unbuildable path is still fatal. The terminal session-kind plugin
-    # (packages/octowright-terminal) depends on the unpublished provide-uterm, and
-    # while it sat in the `dev` group every job died here with
-    # "Distribution not found at: .../provide-uterm/packages/provide-uterm" —
-    # bootstrap, so lint and tests alike, not just anything terminal-related.
-    # Excluding its own group is also the point rather than a workaround: core
-    # must build, install and pass with no uterm present anywhere, which is the
-    # dependency-layer form of what tests/test_plugin_isolation.py asserts in code.
+    # --no-group terminal: this outlived the problem that created it, and is kept
+    # deliberately. It was added because the terminal plugin depended on the then
+    # unpublished provide-uterm, and --frozen skips RESOLUTION but not
+    # INSTALLATION, so while that group sat in `dev` every job died at bootstrap
+    # with "Distribution not found at: .../provide-uterm/packages/provide-uterm" —
+    # lint and tests alike, not just anything terminal-related. provide-uterm is on
+    # PyPI now, so the group would install cleanly. It stays excluded because the
+    # exclusion is the point rather than the workaround: core must build, install
+    # and pass with no uterm present anywhere, which is the dependency-layer form
+    # of what tests/test_plugin_isolation.py asserts in code.
     #
-    # The terminal-plugin job overrides this input to sync the group by name,
-    # after ci/clone_provide_uterm.sh puts the sibling checkout in place.
+    # The terminal-plugin job overrides this input to sync the group by name.
     default: "--frozen --all-groups --no-group terminal --python \"${UV_PYTHON:-python}\""
 runs:
   using: "composite"
