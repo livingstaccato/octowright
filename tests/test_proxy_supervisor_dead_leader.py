@@ -239,7 +239,13 @@ async def test_clean_remote_stream_end_exits_when_health_is_dead(monkeypatch: py
 
     monkeypatch.setattr(supervisor, "stdio_server", fake_stdio)
 
-    with anyio.fail_after(0.5), pytest.raises(RuntimeError, match="leader health check failed"):
+    # 3.0s to match every other assertion in this file. This is a hang guard, not
+    # a performance assertion -- the test asserts that a dead leader RAISES, not
+    # that it raises quickly -- and at 0.5s it was the lone sub-second outlier
+    # here. Windows arm64 CI blew that budget and reported it as a bare
+    # TimeoutError ("Cancelled via cancel scope ...; reason: deadline exceeded"),
+    # while the same test failed 0 times in 40 local runs.
+    with anyio.fail_after(3.0), pytest.raises(RuntimeError, match="leader health check failed"):
         await supervisor.run_supervised_proxy(
             leader_mcp_url="http://leader.invalid/mcp/",
             health_url="http://leader.invalid/api/health",
