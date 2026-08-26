@@ -165,17 +165,11 @@ artifacts = [
 members = ["packages/octowright-terminal"]
 
 [tool.uv.sources]
-# Local-dev resolution for the unpublished provide-uterm ecosystem packages
-# that packages/octowright-terminal (above) depends on. Expects the sibling
-# repo checked out at ../provide-uterm (the provide.io layout);
-# `provide-uterm-client` is a transitive dep of `provide-uterm-server`. uv
-# strips these source overrides from the built wheel, so a real
-# `pip install octowright-terminal` resolves the same packages from PyPI once
-# they publish. Remove this table at that point.
-provide-uterm = { path = "../provide-uterm/packages/provide-uterm", editable = true }
-provide-uterm-client = { path = "../provide-uterm/packages/provide-uterm-client", editable = true }
-provide-uterm-platform = { path = "../provide-uterm/packages/provide-uterm-platform", editable = true }
-provide-uterm-server = { path = "../provide-uterm/packages/provide-uterm-server", editable = true }
+# The provide-uterm ecosystem is on PyPI as of 2026-08-26, so the four local
+# `../provide-uterm/packages/*` path overrides that used to live here are gone:
+# packages/octowright-terminal resolves its uterm dependencies normally, and a
+# source checkout no longer needs the sibling repo beside it.
+#
 # The terminal plugin workspace member (see [tool.uv.workspace] above), and the
 # workspace root itself -- uv requires an explicit self-source once any member
 # depends back on the root project by name.
