@@ -950,30 +950,3 @@ class TestShutdownBrowserPoolOnShutdown:
         log = MagicMock()
         await _reaper.shutdown_browser_pool_on_shutdown(pool, log=log)  # must not raise
         log.debug.assert_called_once()
-
-
-# ─── _close_terminal_pool_on_shutdown ────────────────────────────────────────
-
-
-class TestCloseTerminalPoolOnShutdown:
-    """Leader shutdown reaps browsers but must also close the optional terminal
-    pool — otherwise PTY/SSH terminal sessions survive the daemon exit."""
-
-    @pytest.mark.anyio
-    async def test_none_pool_is_noop(self) -> None:
-        await _serve._close_terminal_pool_on_shutdown(None, log=MagicMock())
-
-    @pytest.mark.anyio
-    async def test_closes_present_pool_forced(self) -> None:
-        tpool = MagicMock()
-        tpool.close_all = AsyncMock()
-        await _serve._close_terminal_pool_on_shutdown(tpool, log=MagicMock())
-        tpool.close_all.assert_awaited_once_with(force=True)
-
-    @pytest.mark.anyio
-    async def test_swallows_close_error(self) -> None:
-        tpool = MagicMock()
-        tpool.close_all = AsyncMock(side_effect=RuntimeError("boom"))
-        log = MagicMock()
-        await _serve._close_terminal_pool_on_shutdown(tpool, log=log)  # must not raise
-        log.debug.assert_called_once()

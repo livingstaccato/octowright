@@ -17,7 +17,6 @@ from octowright._paths import reject_unsafe_path
 from octowright.defaults import (
     SCENARIO_TEMPLATES_DIR,
     SCENARIOS_DIR,
-    SUPPORTED_TERMINAL_KINDS,
 )
 
 # ``LiveScenario`` and ``ScenarioPool`` are the runtime/registry classes —
@@ -67,56 +66,27 @@ class Scenario:
     verify: dict[str, str] = field(default_factory=dict)
 
 
-def _validate_terminal_options(s: Scenario, p: Participant) -> None:
-    """Validate the ``options`` terminal owns, at scenario-load time.
-
-    Extracted from ``_validate_participant_kind`` so that function stays under
-    the complexity ratchet, and because these are two separate jobs: which kinds
-    may participate at all, versus what one particular kind's settings must look
-    like. This whole function leaves with terminal at the extraction step.
-
-    ``options`` is opaque to core, so the YAML parser's ``_validate_optional_ints``
-    no longer reaches these -- they used to be typed ``Participant`` fields. The
-    spec's answer is that the owning kind validates, and until the extraction step
-    terminal's owning kind IS core. Without this, a string ``cols`` surfaces deep
-    inside the uterm connector instead of at scenario load.
-    """
-    connector_type = p.options.get("connector_type") or "pty"
-    if connector_type not in SUPPORTED_TERMINAL_KINDS:
-        raise ValueError(
-            f"scenario {s.name!r}: terminal participant has unsupported connector_type {connector_type!r} "
-            f"(expected one of {list(SUPPORTED_TERMINAL_KINDS)})"
-        )
-    for opt in ("cols", "rows", "port"):
-        value = p.options.get(opt)
-        # bool is an int subclass, so a bare isinstance check would pass `cols: true`
-        # -- the same trap _validate_optional_ints guards against.
-        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
-            raise ValueError(
-                f"scenario {s.name!r}: terminal participant {p.persona!r} options.{opt} "
-                f"must be an integer, got {type(value).__name__}"
-            )
-
-
 def _validate_participant_kind(s: Scenario, p: Participant) -> None:
     """Validate a participant's kind against every kind that can actually run.
 
-    Three families are legal: a browser engine, ``terminal`` (still core's own
-    until the extraction step), and any kind a registered plugin claims. The
-    error names what IS available, because the two ways to get here -- a typo
-    and a plugin that is installed but not enabled -- are indistinguishable to
-    the operator otherwise.
+    Two families are legal: a browser engine, and any kind a registered
+    plugin claims -- terminal included, now that step 5 removed its hardcoded
+    branch. The error names what IS available, because the two ways to get
+    here -- a typo and a plugin that is installed but not enabled -- are
+    indistinguishable to the operator otherwise.
 
-    ``startup_macros`` is gated on the ``macros`` capability rather than on
-    ``kind != "terminal"``. Terminal still produces the same refusal (it has no
-    adapter, so no capabilities), and every future kind is covered without
-    another special case.
+    A plugin kind's own options (e.g. terminal's ``connector_type``) are no
+    longer validated here at scenario-load time -- core has no business
+    knowing a plugin's option shape. They are validated inside that kind's
+    own ``resolve_participant``, which runs at launch time instead.
+
+    ``startup_macros`` is gated on the ``macros`` capability, which every
+    kind -- including one core has never heard of -- is covered by without
+    a special case.
     """
-    from octowright.scenario_kinds import TERMINAL_KIND, known_kinds, supports
+    from octowright.scenario_kinds import known_kinds, supports
 
-    if p.kind == TERMINAL_KIND:
-        _validate_terminal_options(s, p)
-    elif p.kind not in known_kinds():
+    if p.kind not in known_kinds():
         raise ValueError(
             f"scenario {s.name!r}: participant has unsupported kind {p.kind!r} "
             f"(known kinds: {known_kinds()}) -- a plugin kind must be enabled via OCTOWRIGHT_PLUGINS"
@@ -502,54 +472,6 @@ def _load_persona_or_none(name: str) -> Any:
         return _p.load_persona(name)
     except FileNotFoundError:
         return None
-
-
-def resolve_terminal_launch(p: Participant) -> dict[str, Any]:
-    """Return kwargs for ``terminal_pool.launch(**kwargs)`` from a terminal Participant.
-
-    Note ``terminal_pool.launch``'s ``kind`` is the *connector* type (pty/ssh);
-    the session's own kind is always ``"terminal"``. SSH fields resolve
-    participant-override → persona ``app['ssh']`` default → omit. No password is
-    read from the scenario (scenarios are persisted): key-based / known_hosts auth
-    only — the pure builders live in ``octowright.terminal.connector_config`` so
-    this stays importable on a core install.
-    """
-    from octowright.terminal.connector_config import (
-        SSH_DEFAULT_PORT,
-        pty_connector_config,
-        ssh_connector_config,
-    )
-
-    opts = p.options
-    connector_type = opts.get("connector_type") or "pty"
-    if connector_type == "ssh":
-        persona = _load_persona_or_none(p.persona)
-        ssh = (getattr(persona, "app", {}) or {}).get("ssh", {}) or {}
-
-        def _pick(key: str) -> Any:
-            value = opts.get(key)
-            return value if value is not None else ssh.get(key)
-
-        port_opt = opts.get("port")
-        # cast, not int(): parity with pre-options behaviour, where a participant-supplied
-        # port was passed through unconverted (only the persona/ssh fallback was int()'d).
-        # opts.get(...) is Any on this untyped dict, so mypy strict needs *something* here --
-        # cast satisfies it with zero runtime effect, matching this file's use at line 217.
-        port = cast(int, port_opt) if port_opt is not None else int(ssh.get("port", SSH_DEFAULT_PORT))
-        insecure_opt = opts.get("insecure_no_host_check")
-        insecure = bool(insecure_opt) if insecure_opt is not None else bool(ssh.get("insecure_no_host_check", False))
-        cfg = ssh_connector_config(
-            host=_pick("host"),
-            port=port,
-            user=_pick("user"),
-            key_path=_pick("key_path"),
-            password=None,
-            known_hosts=_pick("known_hosts"),
-            insecure_no_host_check=insecure,
-        )
-    else:
-        cfg = pty_connector_config(command=opts.get("command"), cols=opts.get("cols"), rows=opts.get("rows"))
-    return {"kind": connector_type, "connector_config": cfg, "label": None, "profile": p.persona, "protected": False}
 
 
 def resolve_startup_macros(p: Participant) -> list[str]:

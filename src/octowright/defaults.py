@@ -213,12 +213,6 @@ BADGE_OPACITY: float = float(os.environ.get("OCTOWRIGHT_BADGE_OPACITY", "0.35"))
 
 SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
-# Default SSH port for terminal SSH connectors (scenario participants / terminal_launch).
-SSH_DEFAULT_PORT: int = int(os.environ.get("OCTOWRIGHT_SSH_PORT", "22"))
-
-# Connector types for a terminal scenario participant (its kind is "terminal").
-SUPPORTED_TERMINAL_KINDS = ("pty", "ssh")
-
 DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))
 DEFAULT_ACTION_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_ACTION_TIMEOUT_MS", "15000"))
 # Wall-clock budget for one aria-tree snapshot. A heavy DOM can make

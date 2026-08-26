@@ -22,9 +22,13 @@ REQUIRED_PACKAGE_FILES = {
     "octowright/server/frontend/session.js",
     "octowright/server/frontend/dashboard-media-sw.js",
     # Main dashboard stylesheet (renamed from the old format.css during the
-    # frontend rework); session-terminal.css ships the xterm view styling.
+    # frontend rework). There is deliberately no terminal entry here: the
+    # xterm view left core's bundle when terminal became a session-kind
+    # plugin, and its renderer (styling inlined) now ships in the separate
+    # octowright-terminal distribution -- see AGENTS.md "Terminal Sessions
+    # (plugin)". A stale session-terminal.css entry here failed this gate on
+    # every build after that removal.
     "octowright/server/frontend/styles.css",
-    "octowright/server/frontend/session-terminal.css",
 }
 
 
