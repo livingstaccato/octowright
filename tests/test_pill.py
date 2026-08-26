@@ -17,6 +17,8 @@ Playwright is not installed.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 # The pill renders its contents inside a CLOSED shadow root (so page automation
@@ -346,13 +348,51 @@ async def test_macro_pill_modal_close_button_and_backdrop(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_macro_slowmo_delays_dispatch(tmp_path) -> None:
-    """slowmo_ms must add a real per-action delay before dispatch."""
+async def test_macro_slowmo_delays_dispatch(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """slowmo_ms must add a real per-action delay before dispatch.
+
+    Asserted by RECORDING the delay the runtime asks for, not by timing two
+    real browser runs against each other. The wall-clock version compared
+    `slow_elapsed >= baseline_elapsed + 0.30`, using a single-sample baseline as
+    its reference -- but the signal is 600ms while the baseline varies by
+    seconds under CI contention, so it inverted and failed (observed on windows
+    amd64: `baseline=2.750s slow=0.610s`). Widening the tolerance only moves the
+    failure rate around; the measurement itself was the problem.
+
+    `execution.py` awaits `asyncio.sleep` in exactly ONE place -- the slowmo call
+    in `_dispatch_one` -- so recording it gives an exact assertion with no noise,
+    and one strictly stronger than the timing version: it pins the per-action
+    count and the delay value, not merely that some time passed.
+    """
     pytest.importorskip("playwright")
     from octowright import defaults as _defaults
     from octowright.browser_pool import BrowserPool
+    from octowright.macros import execution as _execution
     from octowright.macros.execution import run_macro
     from octowright.macros.storage import MACROS_DIR
+
+    class _RecordingAsyncio:
+        """Stands in for `execution`'s own `asyncio` name, recording sleeps.
+
+        Rebinding the module-level name affects ONLY execution.py. Patching
+        `asyncio.sleep` itself would swap it process-wide, under a live
+        Playwright browser -- the same trap that made a guard in
+        tests/conftest.py accuse three innocent tests.
+        """
+
+        def __init__(self, real: Any) -> None:
+            self._real = real
+            self.sleeps: list[float] = []
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+        async def sleep(self, delay: float, *args: Any, **kwargs: Any) -> Any:
+            self.sleeps.append(delay)
+            return await self._real.sleep(0)
+
+    recorder = _RecordingAsyncio(_execution.asyncio)
+    monkeypatch.setattr(_execution, "asyncio", recorder)
 
     monkey_recordings = tmp_path / "rec"
     monkey_recordings.mkdir()
@@ -365,7 +405,6 @@ async def test_macro_slowmo_delays_dispatch(tmp_path) -> None:
 
     # Write a tiny 3-action macro to the macros dir so run_macro can load it.
     import json as _json
-    import time as _time
 
     macro_path = MACROS_DIR / "slowmo-probe.json"
     MACROS_DIR.mkdir(parents=True, exist_ok=True)
@@ -398,27 +437,19 @@ async def test_macro_slowmo_delays_dispatch(tmp_path) -> None:
         )
         session = pool.get(result["instance_id"])
 
-        # Baseline — no slowmo.
-        t0 = _time.monotonic()
+        # Baseline — no slowmo. The runtime must not ask to sleep at all.
+        recorder.sleeps.clear()
         baseline = await run_macro(session, "slowmo-probe")
-        baseline_elapsed = _time.monotonic() - t0
         assert baseline["slowmo_ms"] == 0
         assert baseline["executed"] == 3
+        assert recorder.sleeps == [], f"slowmo is off, so no delay should be requested; got {recorder.sleeps}"
 
-        # Slowmo: 200ms times 3 actions = ~600ms of added delay in theory.
-        # Lower bound here is intentionally permissive (+0.30s) because
-        # asyncio.sleep granularity varies across platforms — Windows
-        # timer resolution often overshoots, but in CI virtualization can
-        # also under-deliver. We just need to confirm slowmo MEASURABLY
-        # adds time, not that the math is exact.
-        t0 = _time.monotonic()
+        # Slowmo: one 200ms delay per action, three actions.
+        recorder.sleeps.clear()
         slow = await run_macro(session, "slowmo-probe", slowmo_ms=200)
-        slow_elapsed = _time.monotonic() - t0
         assert slow["slowmo_ms"] == 200
         assert slow["executed"] == 3
-        assert slow_elapsed >= baseline_elapsed + 0.30, (
-            f"slowmo did not delay dispatch: baseline={baseline_elapsed:.3f}s slow={slow_elapsed:.3f}s"
-        )
+        assert recorder.sleeps == [0.2, 0.2, 0.2], f"expected one 0.2s delay per action; got {recorder.sleeps}"
     finally:
         try:
             macro_path.unlink()
