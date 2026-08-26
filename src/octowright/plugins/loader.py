@@ -25,7 +25,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright.plugins.contract import PLUGIN_API_VERSION, SessionKindPlugin
+from octowright.plugins.contract import PLUGIN_API_VERSION, SessionKindPlugin, contract_errors
 from octowright.plugins.discovery import DiscoveredPlugin
 from octowright.plugins.identity import validate_kind, validate_tool_names
 from octowright.plugins.registry import PluginRegistry
@@ -256,6 +256,7 @@ def activate(
                 _check_delta(item.discovered.name, descriptor, delta)
             pool = descriptor.create_pool(ctx_factory(descriptor.kind))
             adapter = descriptor.create_scenario_adapter(pool)
+            _check_adapter(adapter)
             registry.register(descriptor, pool=pool, adapter=adapter, discovered=item.discovered)
             registered |= delta
         except Exception as exc:
@@ -275,6 +276,28 @@ def activate(
                 error=repr(exc),
                 rolled_back_tools=sorted(delta),
             )
+
+
+def _check_adapter(adapter: Any) -> None:
+    """Refuse an adapter whose methods core could not actually call.
+
+    ``capabilities_of`` derives support by ``isinstance`` against
+    ``runtime_checkable`` Protocols, which tests attribute presence and nothing
+    more. Without this, an adapter whose ``run_macro`` is sync, or takes
+    different keywords, is registered as supporting ``macros`` and fails with a
+    ``TypeError`` from core's call site partway through someone's scenario --
+    a plugin defect reported as a scenario failure, after browsers have
+    launched. Raised here so the existing rollback unwinds the tools and pool
+    and ``record_failure`` names the plugin at ``/api/plugins``.
+
+    ``None`` is legitimate: ``create_scenario_adapter`` returns it for a kind
+    that deliberately cannot participate in scenarios.
+    """
+    if adapter is None:
+        return
+    problems = contract_errors(adapter)
+    if problems:
+        raise ValueError(f"scenario adapter does not satisfy the contract: {'; '.join(problems)}")
 
 
 def _check_delta(name: str, descriptor: SessionKindPlugin, delta: set[str]) -> None:
