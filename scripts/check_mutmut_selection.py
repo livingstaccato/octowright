@@ -29,6 +29,16 @@ must appear in the selection. Slow suites are excluded deliberately -- a
 per-mutant run that launches real browsers would take the nightly past its
 four-hour ceiling -- and that exclusion is by marker, so it stays correct as
 suites are added.
+
+**The computed set is a floor, not an exact match**, and the difference is
+load-bearing. This check detects membership by *import*, while mutmut
+associates tests to functions by *coverage* -- so a test that reaches mutated
+code transitively is invisible here. ``tests/macro_lint/test_cli_export_semantic.py``
+is exactly that: it imports ``octowright.artifacts.script_export`` and touches
+``macros/artifacts.py`` only through the call chain, and regenerating the
+selection from this heuristic alone silently dropped it. Extra entries are
+therefore always allowed; only *missing* files and entries naming a path that
+no longer exists are errors.
 """
 
 from __future__ import annotations
