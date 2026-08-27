@@ -296,10 +296,12 @@ mypy_path = "src"
 # provide.uterm.* backs the terminal session-kind plugin
 # (packages/octowright-terminal, imported unconditionally by its own source
 # under packages/octowright-terminal/src/octowright_terminal/). It ships
-# py.typed, so it types cleanly wherever the `terminal` dependency group is
-# installed -- but core's own CI legs sync `--no-group terminal` on purpose (see
-# that group above), so the package is genuinely absent when mypy runs there.
-# ignore_missing_imports keeps mypy green in both setups. Core itself
+# py.typed. Core's own CI legs sync `--no-group terminal` on purpose (see that
+# group above), so the package is genuinely absent when the lint job's mypy
+# runs, and ignore_missing_imports keeps that run green -- at the cost of typing
+# every uterm symbol as Any there. The terminal-plugin job in ci.yml runs mypy
+# over the plugin with the package present, which is the only place a type
+# error at the uterm boundary can actually be caught. Core itself
 # (src/octowright) never imports provide.uterm at all -- see
 # tests/test_plugin_isolation.py -- so this override exists purely for the
 # plugin package half of `mypy src/octowright packages/octowright-terminal/src`.
