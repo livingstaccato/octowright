@@ -12,8 +12,8 @@ Concerns, handled here so individual test files stay clean:
   marker (see the root ``pyproject.toml``), so ``-m terminal`` selects the suite
   and ``-m 'not terminal'`` excludes it.
 * **Availability** — these tests import uterm-backed modules directly, so where
-  ``provide-uterm`` is absent (a core install, or any checkout without the
-  sibling ``../provide-uterm``) they would error at *collection* rather than
+  ``provide-uterm`` is absent (a core install, or any checkout that has not
+  synced the ``terminal`` dependency group) they would error at *collection* rather than
   skip. A marker can't prevent that — markers are applied during collection,
   which is where the import fails — so we ignore the directory entirely instead.
   Note what that costs: pytest then reports a clean pass over ZERO tests, which

@@ -12,9 +12,11 @@ persistent profiles, structured recordings, and a local debugger dashboard.
 
 ## Get started
 
-Octowright isn't on PyPI yet, so you install from source. Octowright uses
-[`uv`](https://docs.astral.sh/uv/) for dependency management — there is no
-`pip install` path. If you don't have `uv` yet:
+Octowright is on PyPI (`pip install octowright`), but this guide walks the
+from-source path: it is what the MCP registration block below assumes, and
+the optional terminal plugin is only installable from the checkout. Octowright
+uses [`uv`](https://docs.astral.sh/uv/) for dependency management. If you
+don't have `uv` yet:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
