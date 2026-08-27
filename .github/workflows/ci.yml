@@ -42,11 +42,16 @@ env:
   FORCE_COLOR: "1"
   UV_PYTHON_DOWNLOADS: never
   # Use the committed uv.lock as-is for every uv invocation (sync AND run).
-  # Without this, each `uv run` re-runs resolution before executing, which stats
-  # the editable ../provide-uterm sibling that backs the terminal session-kind
-  # plugin and only exists in the provide.io dev layout. Note this is necessary
-  # but NOT sufficient on its own: --frozen skips resolution, not installation,
-  # so the plugin also has to sit in its own `terminal` dependency group that
+  # Without this, each `uv run` re-runs resolution before executing, so a job
+  # would install whatever resolves today rather than what the lockfile records,
+  # and would rewrite the lockfile it was handed.
+  #
+  # It was also load-bearing for a reason that has since gone away: resolution
+  # used to stat an editable ../provide-uterm sibling that existed only in the
+  # provide.io dev layout. provide-uterm has been on PyPI since 2026-08-26 and
+  # that path source is gone. The boundary it protected is still enforced, but
+  # by the group rather than by this flag: --frozen skips resolution, not
+  # installation, so the plugin sits in its own `terminal` dependency group that
   # core's jobs exclude — see .github/actions/bootstrap-uv/action.yml.
   UV_FROZEN: "1"
   # Keep scenarios/profiles quiet during CI — never touch $HOME defaults.
