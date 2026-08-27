@@ -51,21 +51,20 @@ jobs:
       # in one place (pyproject.toml [tool.mutmut]).
       - name: Run mutmut
         run: make mutmut
-      # Render the per-mutant HTML report mutmut 3.x exposes for browsing.
-      - name: Generate mutmut HTML report
-        if: always()
-        run: PYTHONPATH=src uv run --active mutmut html
-      # Surface the surviving-mutants count in the workflow summary.
+      # Surface the per-status counts in the workflow summary. There is no
+      # HTML export step: mutmut 3.x has no `html` command (its browser is the
+      # `mutmut browse` TUI), and the step that called one failed on the first
+      # run that ever reached it, 2026-08-27 -- the same day the workflow
+      # stopped hiding failures.
       - name: Mutmut summary (GitHub step summary)
         if: always()
         run: bash ci/mutmut_summary.sh
-      # Attach the HTML report + raw mutmut cache for offline inspection.
+      # Attach the raw mutmut cache for offline inspection: `mutmut results`,
+      # `mutmut show <mutant>` and `mutmut browse` all read from mutants/.
       - name: Upload mutmut report artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutmut-report
-          path: |
-            html/
-            mutants/
+          path: mutants/
           if-no-files-found: warn
