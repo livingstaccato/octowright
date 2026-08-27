@@ -111,7 +111,12 @@ async def test_health_monitor_calls_failure_hook(monkeypatch: pytest.MonkeyPatch
             2,
             lambda: unhealthy.append(True),
         )
-        await anyio.sleep(0.3)
+        # Two consecutive health failures at a 0.01s interval -- fast in
+        # principle, unbounded under CI load. Same race as above, not yet
+        # observed failing.
+        with anyio.move_on_after(5.0):
+            while not unhealthy:
+                await anyio.sleep(0.01)
         tg.cancel_scope.cancel()  # monitor loops forever now; stop it explicitly
 
     assert unhealthy  # on_unhealthy fired after the consecutive failures
@@ -203,8 +208,16 @@ async def test_request_timeout_recycles_remote_session(monkeypatch: pytest.Monke
         await local_in_send.send(_request("tools/call", "timeout-1"))
         err = await local_out_recv.receive()
         assert "timed out while waiting for leader response" in err.message.error.message
-        await anyio.sleep(0.1)
-        assert len(enters) >= 2
+        # Poll for the recycle instead of sleeping a fixed span. It needs the
+        # 0.03s request timeout plus the 0.01s flap backoff to elapse and then a
+        # fresh client enter, and a loaded runner can take far longer than any
+        # constant chosen here -- this assertion failed on windows-arm64 with
+        # enters still at 1. move_on_after rather than fail_after so a genuine
+        # regression reports the observed value rather than a bare TimeoutError.
+        with anyio.move_on_after(5.0):
+            while len(enters) < 2:
+                await anyio.sleep(0.01)
+        assert len(enters) >= 2, f"session was not recycled: enters={enters}"
         tg.cancel_scope.cancel()
 
 
