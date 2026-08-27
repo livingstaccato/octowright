@@ -299,7 +299,9 @@ module = ["mcp.*", "provide.telemetry.*", "provide.uterm.*", "yaml"]
 ignore_missing_imports = true
 
 [tool.codespell]
-skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,packages/*/coverage,packages/*/dist,package-lock.json"
+# mutants/ is the gitignored mutmut workdir (a full copy of src/ + built
+# frontend assets); scanning it fails lint for anyone who ran `make mutmut`.
+skip = ".git,*.pyc,__pycache__,.venv,recordings,profiles,uv.lock,node_modules,mutants,packages/*/coverage,packages/*/dist,package-lock.json"
 # JS variable shorthands that codespell mistakes for typos:
 # `optionel` = HTML <option> elements; `ths` = HTML <th> elements (table headers)
 ignore-words-list = "nd,strat,optionel,ths"
@@ -352,6 +354,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_label_promotion.py",
     "tests/test_launch_helpers_persona_base_url.py",
     "tests/test_macro_artifacts.py",
+    "tests/test_macro_artifacts_roundtrip.py",
     "tests/test_macro_calls_branches.py",
     "tests/test_macro_checks.py",
     "tests/test_macro_checks_branches.py",

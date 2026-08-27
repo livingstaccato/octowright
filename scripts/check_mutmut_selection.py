@@ -64,12 +64,18 @@ SLOW_MARKERS = re.compile(r"live_browser|integration_local|memory_isolated|engin
 
 
 def expected_selection() -> list[str]:
-    """Every fast test file that imports a mutated package."""
+    """Every fast test file that imports a mutated package.
+
+    Paths are emitted POSIX-style. ``str(Path)`` renders backslashes on
+    Windows, which would not match the forward slashes pyproject.toml stores,
+    so every entry would read as missing and the check would fail on Windows
+    for a reason that has nothing to do with the selection.
+    """
     out: list[str] = []
     for path in sorted((ROOT / "tests").rglob("test_*.py")):
         text = path.read_text(encoding="utf-8", errors="ignore")
         if IMPORTS_MUTATED.search(text) and not SLOW_MARKERS.search(text):
-            out.append(str(path.relative_to(ROOT)))
+            out.append(path.relative_to(ROOT).as_posix())
     return out
 
 
