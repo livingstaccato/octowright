@@ -42,17 +42,24 @@ env:
   FORCE_COLOR: "1"
   UV_PYTHON_DOWNLOADS: never
   # Use the committed uv.lock as-is for every uv invocation (sync AND run).
-  # Without this, each `uv run` re-runs resolution before executing, so a job
-  # would install whatever resolves today rather than what the lockfile records,
-  # and would rewrite the lockfile it was handed.
+  # Precisely what that buys: uv's default is to CHECK the lock against
+  # pyproject.toml before each `uv run` / `uv sync` and re-lock only when it is
+  # stale — offline and milliseconds when the lock is current, and even a
+  # re-lock keeps every existing version and resolves only the delta. --frozen
+  # skips that check and installs whatever the lock says, stale or not. So it
+  # makes CI deterministic, not fresh: a PR that edits pyproject.toml without
+  # re-locking passes every job here against the OLD environment. Nothing in CI
+  # runs `uv lock --check`; that is a known gap, left open because the lock
+  # format can change between uv releases and setup-uv floats to the latest,
+  # so the check would fail on a random day for a reason unrelated to the PR.
   #
-  # It was also load-bearing for a reason that has since gone away: resolution
-  # used to stat an editable ../provide-uterm sibling that existed only in the
-  # provide.io dev layout. provide-uterm has been on PyPI since 2026-08-26 and
-  # that path source is gone. The boundary it protected is still enforced, but
-  # by the group rather than by this flag: --frozen skips resolution, not
-  # installation, so the plugin sits in its own `terminal` dependency group that
-  # core's jobs exclude — see .github/actions/bootstrap-uv/action.yml.
+  # The flag was added when resolution used to stat an editable ../provide-uterm
+  # sibling that existed only in the provide.io dev layout; provide-uterm has
+  # been on PyPI since 2026-08-26 and that path source is gone. It never
+  # enforced the core-stays-uterm-free boundary: that is the `terminal`
+  # dependency group's job (see .github/actions/bootstrap-uv/action.yml), and
+  # before the group existed this flag installed uterm from `dev` wherever the
+  # sibling happened to be present.
   UV_FROZEN: "1"
   # Keep scenarios/profiles quiet during CI — never touch $HOME defaults.
   OCTOWRIGHT_RECORDINGS: ${{ github.workspace }}/.ci/recordings
@@ -88,7 +95,7 @@ jobs:
         run: uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
       - name: SPDX headers
         run: uv run --active python scripts/check_spdx_headers.py
-      - name: Max LOC per file (<=500)
+      - name: Max LOC per file (<=777)
         run: uv run --active python scripts/check_max_loc.py
       - name: Agent docs sync
         run: uv run --active python scripts/check_agent_docs_sync.py

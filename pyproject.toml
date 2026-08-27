@@ -208,26 +208,16 @@ dev = [
 ]
 
 # The session-kind terminal plugin (packages/octowright-terminal), a workspace
-# member. Its OWN group, deliberately not part of `dev` -- and, like the matching
-# `--no-group terminal` in .github/actions/bootstrap-uv, this outlived the problem
-# that created it and is kept on purpose.
-#
-# It was carved out because the plugin pulls provide-uterm, which was then
-# unpublished and resolved from a sibling ../provide-uterm checkout no CI runner
-# had: while this sat in `dev`, a plain `uv sync --frozen --all-groups` died at
-# bootstrap with "Distribution not found at: .../provide-uterm/..." on every job,
-# not just the terminal ones. provide-uterm has been on PyPI since 2026-08-26, so
-# the group would now install cleanly anywhere.
-#
-# It stays a separate group because the separation is the point rather than the
-# workaround: a group is the only place the dependency boundary can actually be
-# enforced, and core's CI legs syncing `--all-groups --no-group terminal` prove at
-# the dependency layer the same property tests/test_plugin_isolation.py asserts in
-# code -- core builds, installs and passes with no uterm present anywhere. The
-# terminal-plugin job is the one leg that drops the exclusion and syncs it.
-#
-# `make install` (uv sync --all-groups) includes it, which is what a dev working
-# on the plugin wants.
+# member, in its OWN group -- deliberately not part of `dev`. The full story
+# (why it was carved out, and why it stays carved out now that provide-uterm is
+# on PyPI) lives in ONE place, .github/actions/bootstrap-uv/action.yml, beside
+# the `--no-group terminal` that is the other half of the same decision; keep it
+# there rather than growing a second copy here. What is specific to this side:
+# a dependency group is the only place that boundary can be enforced at the
+# dependency layer (tests/test_plugin_isolation.py enforces it in code), and
+# `make install` (uv sync --all-groups) includes the group, which is what a dev
+# working on the plugin wants -- while a plain `uv sync` afterwards uninstalls
+# it again, since a sync is exact.
 terminal = [
     "octowright-terminal",
 ]
@@ -247,7 +237,7 @@ markers = [
     "live_browser: tests that require real browser engines installed",
     "engine_matrix: tests that exercise chromium/firefox/webkit matrices",
     "integration_local: tests that run against the local demo playground server",
-    "terminal: optional terminal-session tests; require provide-uterm (the octowright-terminal plugin's own dependency, resolved from PyPI via the `terminal` dependency group, which core's installs deliberately exclude). Auto-applied to everything under packages/octowright-terminal/tests/. Select with -m terminal / exclude with -m 'not terminal'.",
+    "terminal: optional terminal-session tests; require provide-uterm (the octowright-terminal plugin's own dependency, resolved from PyPI via the `terminal` dependency group -- which a plain `uv sync` and core's CI legs exclude, and `make install` / `uv sync --all-groups` / `--group terminal` include). Auto-applied to everything under packages/octowright-terminal/tests/. Select with -m terminal / exclude with -m 'not terminal'.",
     "memory_isolated: tests whose assertion is a process-wide tracemalloc heap diff, so they must run in their own pytest process rather than interleaved with the rest of the suite (thousands of unrelated tests' retained state otherwise pollutes the measurement window). Run alone in CI; excluded from the main suite invocation.",
 ]
 filterwarnings = [
@@ -318,7 +308,7 @@ ignore-words-list = "nd,strat,optionel,ths"
 # modules where weak assertions matter most. mutmut 3.x reads ALL config
 # from this block; CLI flags for paths/runner are no longer accepted.
 [tool.mutmut]
-paths_to_mutate = [
+source_paths = [
     "src/octowright/personas.py",
     "src/octowright/scenarios.py",
     "src/octowright/macros/",
@@ -326,7 +316,7 @@ paths_to_mutate = [
 # Only run the tests that exercise the mutated paths. mutmut 3.x's mutants/
 # workdir doesn't navigate the full repo cleanly (demo bundles, scripts/demos,
 # etc.), so we point it at the targeted unit suites only.
-tests_dir = [
+pytest_add_cli_args_test_selection = [
     "tests/test_personas.py",
     "tests/test_personas_branches.py",
     "tests/test_personas_loader.py",
@@ -362,7 +352,7 @@ tests_dir = [
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]
-# mutmut 3.x copies only the files in paths_to_mutate by default; the rest of
+# mutmut 3.x copies only the files in source_paths by default; the rest of
 # the src tree must be listed here or imports fail in the mutants/ workdir.
 # tools/ holds the out-of-wheel demo lib that tests/conftest.py adds to sys.path.
 also_copy = ["src/", "tools/", "demo/", "examples/", "conftest.py"]
