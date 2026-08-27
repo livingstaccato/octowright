@@ -8,7 +8,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter, set_attrs, span
-from octowright.artifacts.models import now_iso
+from octowright.artifacts.models import new_check_result, now_iso
 
 log = get_logger("octowright.artifacts.verification")
 
@@ -174,9 +174,38 @@ def _evaluate_check(
                 status=status,
             )
 
-        return {
-            **check,
-            "status": status,
-            "message": message,
-            "evidence": matching_evidence,
-        }
+        # The declaration is deliberately NOT merged into the outcome. A check
+        # declares its expectation and the evaluation reports its verdict, and
+        # for `result_status` both live under the key `status` -- so `{**check,
+        # "status": status}` overwrote the expected run status ("ok") with the
+        # verdict ("passed"). Returning the spec's four-field output shape keeps
+        # the two apart at the source.
+        return new_check_result(
+            check_type=check_type,
+            status=status,
+            message=message,
+            evidence=matching_evidence,
+        )
+
+
+def apply_verification_rollup(declared: list[dict[str, Any]], verified: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold a verification's per-critical-point verdict back onto the stored declarations.
+
+    The manifest stores *declarations*; ``verification.json`` stores *outcomes*.
+    Assigning the report's critical points straight into the manifest -- which is
+    what this replaces -- destroyed the declarations, and for a ``result_status``
+    check it destroyed them in a way that broke the next run: the evaluated form
+    carried its verdict under ``status``, the same key that check declares its
+    expected run status under. One verify rewrote
+    ``{"type": "result_status", "status": "ok"}`` into ``"status": "passed"``, so
+    verifying the same unchanged run again compared it against ``"passed"`` and
+    reported failure. Verification was not idempotent.
+
+    Only the two roll-up fields the spec assigns to a critical point cross back
+    over: the verdict and the run it was reached against. ``checks`` stay exactly
+    as declared.
+    """
+    return [
+        {**cp, "status": v_cp.get("status", "unknown"), "last_verified_run": v_cp.get("last_verified_run")}
+        for cp, v_cp in zip(declared, verified, strict=True)
+    ]
