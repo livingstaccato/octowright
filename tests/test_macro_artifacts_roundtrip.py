@@ -494,3 +494,166 @@ def test_export_macro_cli_honours_an_explicit_out_path(monkeypatch: pytest.Monke
     assert result["ok"] is True
     assert Path(result["path"]) == requested
     assert requested.exists()
+
+
+# ---------------------------------------------------------------------------
+# macro_artifact_status
+#
+# The 2026-08-27 scoped mutation run reported all 75 of this function's mutants
+# as "no tests": not weak assertions, no coverage at all. Nothing in tests/
+# called it, and it is an @mcp.tool (server/macros.py) -- the one an agent calls
+# to ask what verification concluded. Every branch of its three-way
+# verification_status ternary could be inverted with the whole suite green,
+# which is the same exposure class as the idempotency bug above: a verifier
+# reporting the wrong answer confidently.
+# ---------------------------------------------------------------------------
+
+
+def _blocked_critical_point(cp_id: str) -> dict[str, Any]:
+    """A critical point with no checks. ``_evaluate_cp`` scores it ``blocked``.
+
+    Useful precisely because it is neither passed nor failed, which is the only
+    way to reach the third branch of the ternary with critical points present.
+    """
+    return {"id": cp_id, "checks": []}
+
+
+def _failing_critical_point(cp_id: str) -> dict[str, Any]:
+    return {"id": cp_id, "checks": [{"type": "result_status", "status": "definitely-not-ok"}]}
+
+
+def _passing_cp(cp_id: str) -> dict[str, Any]:
+    return {"id": cp_id, "checks": [{"type": "result_status", "status": "ok"}]}
+
+
+async def _run_and_verify(macro_artifacts, tmp_path: Path) -> None:
+    await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=False
+    )
+    macro_artifacts.macro_artifact_verify("login")
+
+
+def test_status_reports_a_missing_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An artifact that was never planned is an error, not an empty success."""
+    _storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+
+    status = macro_artifacts.macro_artifact_status("never-planned")
+
+    assert status["ok"] is False
+    assert status["error"] == "Manifest not found."
+
+
+@pytest.mark.asyncio
+async def test_status_does_not_call_an_unverified_artifact_passed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Zero critical points must read ``unknown`` -- never ``passed``.
+
+    The guard that makes this true is the leading ``critical_points and`` in the
+    ternary. Drop it and the arithmetic still holds: ``passed`` is 0, ``len`` is
+    0, so ``0 == 0`` is True and an artifact with nothing asserted about it
+    reports ``passed``. That is the worst possible direction for this tool to be
+    wrong in, and no test observed it.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    status = macro_artifacts.macro_artifact_status("login")
+
+    assert status["ok"] is True
+    assert status["verification_status"] == "unknown"
+    assert status["counts"] == {"total": 0, "passed": 0, "failed": 0}
+
+
+@pytest.mark.asyncio
+async def test_status_reports_passed_when_every_critical_point_holds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", [_passing_cp("cp1"), _passing_cp("cp2")])
+    await _run_and_verify(macro_artifacts, tmp_path)
+
+    status = macro_artifacts.macro_artifact_status("login")
+
+    assert status["verification_status"] == "passed"
+    assert status["counts"] == {"total": 2, "passed": 2, "failed": 0}
+
+
+@pytest.mark.asyncio
+async def test_status_reports_failed_when_any_critical_point_does_not_hold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One failure among passes is a failure. Pins that ``passed`` needs ALL of them."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", [_passing_cp("cp1"), _failing_critical_point("cp2")])
+    await _run_and_verify(macro_artifacts, tmp_path)
+
+    status = macro_artifacts.macro_artifact_status("login")
+
+    assert status["verification_status"] == "failed"
+    assert status["counts"] == {"total": 2, "passed": 1, "failed": 1}
+
+
+@pytest.mark.asyncio
+async def test_status_reports_unknown_when_a_critical_point_is_merely_blocked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The third branch, reached with critical points present.
+
+    A blocked critical point is neither passed nor failed, so this is not
+    ``passed`` (not all passed) and not ``failed`` (nothing failed). Without
+    this case the ``failed > 0`` test could be weakened to ``failed >= 0`` --
+    which would make every incompletely-verified artifact read as ``failed`` --
+    and nothing would notice.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", [_passing_cp("cp1"), _blocked_critical_point("cp2")])
+    await _run_and_verify(macro_artifacts, tmp_path)
+
+    status = macro_artifacts.macro_artifact_status("login")
+
+    assert status["verification_status"] == "unknown"
+    assert status["counts"] == {"total": 2, "passed": 1, "failed": 0}
+
+
+@pytest.mark.asyncio
+async def test_status_surfaces_the_latest_run_and_manifest_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The two pass-through fields, which are how a caller finds the bundle."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+
+    macro_artifacts.plan_macro_artifact("login", args={})
+    first = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=False
+    )
+    second = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=False
+    )
+    assert first["run_id"] != second["run_id"]
+
+    status = macro_artifacts.macro_artifact_status("login")
+
+    # "latest", not "first" -- a mutant pinning this to the first run would
+    # point every caller at a stale bundle.
+    assert status["latest_run"]["run_id"] == second["run_id"]
+    manifest_path = Path(status["paths"]["manifest"])
+    assert manifest_path.name == "artifact.json"
+    assert manifest_path.exists()

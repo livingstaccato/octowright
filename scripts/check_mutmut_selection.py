@@ -52,9 +52,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 #: A test file is in scope when it imports one of the mutated packages.
 IMPORTS_MUTATED = re.compile(
-    r"from octowright\.(macros|personas|scenarios)"
-    r"|import octowright\.(macros|personas|scenarios)"
-    r"|from octowright import.*(macros|personas|scenarios)"
+    r"from octowright\.(artifacts|macros|personas|scenarios)"
+    r"|import octowright\.(artifacts|macros|personas|scenarios)"
+    r"|from octowright import.*(artifacts|macros|personas|scenarios)"
 )
 
 #: ...and out of scope when it carries a marker for a suite mutmut must not run
