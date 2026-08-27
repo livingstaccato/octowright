@@ -32,9 +32,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Build wheel + sdist with the PEP 517 backend (hatchling). `python -m
-      # build` ignores [tool.uv.sources], so the unpublished provide-uterm
-      # editable sibling path is not needed here.
+      # Build wheel + sdist with the PEP 517 backend (hatchling), via pipx so
+      # this job needs no project venv at all. Run at the repo root this builds
+      # ONLY octowright: packages/octowright-terminal is a separate distribution
+      # that nothing in this workflow builds or publishes -- which is why the
+      # terminal plugin is not on PyPI and is installed from the checkout.
       - name: Build distributions
         run: pipx run build --wheel --sdist
 

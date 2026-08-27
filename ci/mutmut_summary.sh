@@ -14,15 +14,23 @@ set -uo pipefail
 
 RESULTS="$(PYTHONPATH=src uv run --active mutmut results 2>&1 || true)"
 
-# Surviving mutants live under the "survived" status; mutmut 3.x prints a
-# line like "survived: 12" in its summary tail. Grep tolerantly.
-SURVIVED="$(printf '%s\n' "${RESULTS}" | grep -iE '^[[:space:]]*survived' | head -n1 || true)"
-[[ -z "${SURVIVED}" ]] && SURVIVED="survived: (no count reported)"
+# mutmut 3.x `results` prints no totals line -- it prints one
+# "    <mutant>: <status>" line per mutant that was NOT killed (killed ones are
+# omitted unless --all). Count per status. An earlier version of this script
+# grepped for a "survived: N" line that mutmut never emits, and reported
+# "(no count reported)" on the first run that ever reached it.
+count_status() {
+    printf '%s\n' "${RESULTS}" | grep -cE ": ${1}\$" || true
+}
+SURVIVED="$(count_status survived)"
+NO_TESTS="$(count_status 'no tests')"
+TIMEOUT="$(count_status timeout)"
+SUSPICIOUS="$(count_status suspicious)"
 
 {
     echo "## Mutation testing (mutmut)"
     echo ""
-    echo "**${SURVIVED}**"
+    echo "**survived: ${SURVIVED}** · no tests: ${NO_TESTS} · timeout: ${TIMEOUT} · suspicious: ${SUSPICIOUS}"
     echo ""
     echo "<details><summary>Full results</summary>"
     echo ""
