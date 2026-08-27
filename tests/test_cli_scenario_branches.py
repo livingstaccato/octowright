@@ -76,16 +76,24 @@ def patched_pools(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     spool_class = MagicMock(return_value=spool_inst)
 
     import octowright.browser_pool as _bp
+    import octowright.scenarios as _sc
     import octowright.scenarios_pool as _s
 
     monkeypatch.setattr(_bp, "BrowserPool", pool_class)
     monkeypatch.setattr(_s, "ScenarioPool", spool_class)
+    # `scenario start` loads the spec itself now (so a bad scenario reports a
+    # message instead of a traceback), before ScenarioPool.start is reached.
+    loaded_spec = SimpleNamespace(name="demo", participants=[], verify={})
+    load_scenario = MagicMock(return_value=loaded_spec)
+    monkeypatch.setattr(_sc, "load_scenario", load_scenario)
 
     return {
         "pool": pool_inst,
         "pool_class": pool_class,
         "spool": spool_inst,
         "spool_class": spool_class,
+        "load_scenario": load_scenario,
+        "spec": loaded_spec,
     }
 
 
@@ -189,44 +197,84 @@ class TestScenarioStartPluginActivation:
     the wiring cheaply, so deleting either half fails here first.
     """
 
-    def test_activation_runs_before_start_and_pools_close_after(
+    def test_activation_runs_before_start_and_scenario_is_torn_down(
         self, patched_pools: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         patched_pools["spool"].start.return_value = _live()
         _patch_signal_handlers_to_immediate_resolve(monkeypatch)
 
         order: list[str] = []
-        registry = MagicMock(name="PluginRegistry")
 
         def _activate() -> Any:
             order.append("activate")
-            return registry
+            return MagicMock(name="PluginRegistry")
 
         async def _fake_start(**kwargs: Any) -> Any:
             order.append("start")
             return _live()
 
-        closed: list[Any] = []
-
-        async def _fake_close(reg: Any, *, log: Any) -> None:
-            order.append("close_plugin_pools")
-            closed.append(reg)
+        async def _fake_stop(**kwargs: Any) -> Any:
+            order.append("stop")
+            return {}
 
         monkeypatch.setattr(_scenario_mod, "_activate_session_kind_plugins", _activate)
         patched_pools["spool"].start.side_effect = _fake_start
-        import octowright.cli.serve as _serve_mod
-
-        monkeypatch.setattr(_serve_mod, "_close_plugin_pools_on_shutdown", _fake_close)
+        patched_pools["spool"].stop.side_effect = _fake_stop
 
         result = CliRunner().invoke(cli, ["scenario", "start", "demo"])
         assert result.exit_code == 0, result.output
 
-        # Activation must precede start(): start() loads and validates the
-        # scenario, which is where an unregistered plugin kind is refused.
+        # Activation must precede the load, which is where an unregistered
+        # plugin kind is refused.
         assert order.index("activate") < order.index("start")
-        # And the plugin pools -- a PTY, an SSH connection, a socket -- must be
-        # torn down on exit, through the same helper the daemon uses.
-        assert closed == [registry]
+        # Exactly one teardown, scoped to this scenario -- it closes each
+        # participant through the pool that owns it, so a plugin session's PTY
+        # or SSH connection is released here too.
+        assert order.count("stop") == 1
+        patched_pools["spool"].stop.assert_awaited_once()
+        assert patched_pools["spool"].stop.await_args.kwargs["scenario_id"] == "sc-1"
+
+    def test_does_not_close_plugin_pools_it_does_not_own(
+        self, patched_pools: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The teardown is scoped to this scenario, not to the whole process.
+
+        The plugin registry is process-global. Force-closing every pool in it
+        is right for the daemon, which owns its process, and wrong for a
+        subcommand: run in-process -- a CliRunner test, or any embedder -- it
+        would close sessions belonging to whoever else shares that registry.
+        """
+        from octowright.plugins import state as _plugin_state
+        from octowright.plugins.registry import PluginRegistry
+
+        class _ForeignPool:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def close_all(self, *, force: bool = False) -> None:
+                self.closed = True
+
+        foreign = _ForeignPool()
+        registry = PluginRegistry()
+        registry.register(
+            SimpleNamespace(
+                kind="foreign",
+                display_name="Foreign",
+                plugin_api_version=1,
+                tool_names=frozenset(),
+            ),
+            pool=foreign,
+            adapter=None,
+            discovered=None,
+        )
+        monkeypatch.setattr(_plugin_state, "_registry", registry)
+        monkeypatch.setattr(_scenario_mod, "_activate_session_kind_plugins", lambda: registry)
+        patched_pools["spool"].start.return_value = _live()
+        _patch_signal_handlers_to_immediate_resolve(monkeypatch)
+
+        result = CliRunner().invoke(cli, ["scenario", "start", "demo"])
+        assert result.exit_code == 0, result.output
+        assert foreign.closed is False
 
     def test_activation_is_the_single_shared_path(self) -> None:
         """It imports `octowright.server`, not a CLI-local resolve/activate copy.
@@ -507,3 +555,88 @@ class TestSystemExitPropagation:
 
         result = CliRunner().invoke(cli, ["scenario", "start", "demo", "--test"])
         assert result.exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# scenario start: a bad scenario reports its reason, not a traceback
+# ---------------------------------------------------------------------------
+
+
+class TestScenarioStartLoadFailure:
+    """`spool.start(name=...)` would load the scenario from inside `asyncio.run`.
+
+    A missing or malformed scenario then reached the operator as ~25 lines of
+    asyncio-and-click stack, with the one useful line -- which already names
+    the fix -- buried at the bottom.
+    """
+
+    def test_missing_scenario_reports_the_message_without_a_traceback(
+        self, patched_pools: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import octowright.scenarios as _sc
+
+        monkeypatch.setattr(
+            _sc,
+            "load_scenario",
+            MagicMock(side_effect=FileNotFoundError("no scenario named 'ghost' in /somewhere")),
+        )
+
+        result = CliRunner().invoke(cli, ["scenario", "start", "ghost"])
+
+        assert result.exit_code == 1
+        assert "no scenario named 'ghost'" in result.output
+        assert "Traceback" not in result.output
+        # And it fails before any browser machinery is built.
+        patched_pools["pool_class"].assert_not_called()
+        patched_pools["spool"].start.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            ValueError("scenario 'demo': participants[0] missing required 'persona'"),
+            RuntimeError("Python scenario /s/demo.py is gated behind OCTOWRIGHT_ALLOW_PY_SCENARIOS=1"),
+            TypeError("build() returned dict, expected Scenario"),
+        ],
+        ids=["bad-field", "py-gate", "wrong-type"],
+    )
+    def test_every_scenario_fault_reports_its_own_message(
+        self, patched_pools: dict[str, Any], monkeypatch: pytest.MonkeyPatch, exc: Exception
+    ) -> None:
+        import octowright.scenarios as _sc
+
+        monkeypatch.setattr(_sc, "load_scenario", MagicMock(side_effect=exc))
+
+        result = CliRunner().invoke(cli, ["scenario", "start", "demo"])
+
+        assert result.exit_code == 1
+        assert str(exc) in result.output
+
+    def test_malformed_yaml_reports_its_message(
+        self, patched_pools: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import yaml
+
+        import octowright.scenarios as _sc
+
+        monkeypatch.setattr(_sc, "load_scenario", MagicMock(side_effect=yaml.YAMLError("mapping values not allowed")))
+
+        result = CliRunner().invoke(cli, ["scenario", "start", "demo"])
+
+        assert result.exit_code == 1
+        assert "mapping values not allowed" in result.output
+
+    def test_an_octowright_bug_keeps_its_traceback(
+        self, patched_pools: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The caught set is deliberately typed, not `except Exception`.
+
+        A scenario being at fault is an operator problem and gets a message; a
+        fault in octowright itself is a bug report and keeps its stack.
+        """
+        import octowright.scenarios as _sc
+
+        monkeypatch.setattr(_sc, "load_scenario", MagicMock(side_effect=ZeroDivisionError("boom")))
+
+        result = CliRunner().invoke(cli, ["scenario", "start", "demo"])
+
+        assert isinstance(result.exception, ZeroDivisionError)
