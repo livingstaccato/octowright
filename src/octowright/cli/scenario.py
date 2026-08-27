@@ -36,7 +36,7 @@ def scenario_list_cmd() -> None:
         click.echo(f"{row['name']:30s}  {row['form']:6s}  {row['path']}")
 
 
-def _activate_session_kind_plugins() -> Any:
+def _activate_session_kind_plugins() -> None:
     """Make the enabled session-kind plugins usable in this CLI process.
 
     ``scenario start`` runs outside the daemon, so nothing has populated the
@@ -63,9 +63,36 @@ def _activate_session_kind_plugins() -> Any:
     process (see ``tests/test_follower_import_weight.py``).
     """
     import octowright.server  # noqa: F401  # activation is an import side effect
-    from octowright.server import plugin_state
 
-    return plugin_state.registry()
+
+def _load_scenario_or_fail(name: str) -> Any:
+    """Load the scenario, or exit with the reason instead of a traceback.
+
+    `spool.start(name=...)` would load it too, but from inside `asyncio.run`,
+    so a missing or malformed scenario reached the operator as ~25 lines of
+    asyncio-and-click stack with the one useful line -- which already names the
+    fix -- buried at the bottom. Loading here also fails before a BrowserPool
+    is constructed, and the loaded spec is handed to `start(spec=...)` so
+    nothing is parsed twice.
+
+    The caught set is what a load raises when the *scenario* is at fault rather
+    than octowright: a missing file, malformed YAML, a bad field, an unenabled
+    plugin kind, a name escaping the scenarios dir, a `.py` scenario behind its
+    opt-in gate. Each carries a message written for the operator. Anything
+    outside it is an octowright bug and keeps its traceback, which is the point
+    of listing types rather than catching `Exception`.
+
+    Imports are function-local for the same reason as `_activate_session_kind_plugins`:
+    importing this CLI must stay cheap for every follower process.
+    """
+    import yaml
+
+    from octowright.scenarios import load_scenario
+
+    try:
+        return load_scenario(name)
+    except (OSError, ValueError, RuntimeError, TypeError, yaml.YAMLError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @scenario.command("start")
@@ -78,16 +105,21 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
     import asyncio as _asyncio
     import signal
 
+    from provide.telemetry import get_logger
+
     from octowright import scenarios_pool as _s
     from octowright.browser_pool import BrowserPool
 
+    log = get_logger("octowright.cli.scenario")
+
     setup_telemetry()
 
-    async def _run() -> int:
+    async def _run(spec: Any) -> int:
         pool = BrowserPool()
         spool = _s.ScenarioPool()
+        live = None
         try:
-            live = await spool.start(name=name, browser_pool=pool)
+            live = await spool.start(name=name, spec=spec, browser_pool=pool)
             click.echo(f"scenario_id: {live.scenario_id}")
             for p in live.participants:
                 click.echo(
@@ -100,7 +132,6 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
                     live=live,
                     out_path=out_path,
                 )
-                await spool.stop(scenario_id=live.scenario_id, browser_pool=pool)
                 return exit_code
 
             click.echo("\nbrowsers open; Ctrl-C to tear down and exit.")
@@ -141,31 +172,48 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
                     await watcher_task
                 except _asyncio.CancelledError:
                     pass
-            await spool.stop(scenario_id=live.scenario_id, browser_pool=pool)
             return 0
         finally:
+            # One teardown for every exit path -- normal, --test, Ctrl-C, and a
+            # raise anywhere in between. `spool.stop` closes each participant
+            # through the pool that owns it, so a PTY, SSH connection or socket
+            # held by a plugin session is released here too; a `start` that
+            # failed partway cleans up after itself in `_rollback_start`, which
+            # is why `live is None` needs nothing.
+            #
+            # Deliberately NOT the daemon's `_close_plugin_pools_on_shutdown`:
+            # that force-closes every pool in the PROCESS-GLOBAL plugin
+            # registry, which is right for a daemon that owns its process and
+            # wrong for a subcommand. Run in-process -- a CliRunner test, or
+            # any embedder -- it would close sessions belonging to whoever else
+            # shares that registry. This command owns one scenario, so it tears
+            # down one scenario.
+            #
+            # Before the browser pool: `stop` runs each role's teardown macro,
+            # which needs its browser still open.
+            if live is not None:
+                try:
+                    await spool.stop(scenario_id=live.scenario_id, browser_pool=pool)
+                except Exception as exc:
+                    # Teardown failure must not replace an in-flight exception
+                    # (a `finally` raise would), but it must not be silent
+                    # either -- it means live browsers or a PTY leaked.
+                    log.warning("scenario.cli_teardown_failed", scenario=name, error=repr(exc))
+                    click.echo(f"warning: scenario teardown failed: {exc}", err=True)
             await pool.shutdown()
-            # A plugin pool can hold a PTY, an SSH connection or a socket; the
-            # daemon tears these down on shutdown (cli/serve) and the CLI must
-            # too, or `scenario start` leaks them on exit. Same helper, so the
-            # two entry points cannot drift.
-            from octowright.cli.serve import _close_plugin_pools_on_shutdown
-            from octowright.server._state import log as _log
-
-            await _close_plugin_pools_on_shutdown(plugin_registry, log=_log)
 
     try:
-        # Before start(), which loads and validates the scenario: a plugin-kind
+        # Before the load below, which validates the scenario: a plugin-kind
         # participant is refused unless the registry is already populated.
         # Outside `asyncio.run` on purpose, so this matches the daemon, where
         # activation happens at import with no loop running -- the loader's
         # rollback path (`_abandon_pool`) can only `asyncio.run` a failed
         # plugin's `close_all` when there is no running loop, and merely logs
         # otherwise. Inside this `try` so that a failing activation still runs
-        # the `finally` below; `_run` reads `plugin_registry` at call time,
-        # which is after this assignment.
-        plugin_registry = _activate_session_kind_plugins()
-        exit_code = _asyncio.run(_run())
+        # the `finally` below.
+        _activate_session_kind_plugins()
+        spec = _load_scenario_or_fail(name)
+        exit_code = _asyncio.run(_run(spec))
     finally:
         shutdown_telemetry()
     raise SystemExit(exit_code)
