@@ -43,7 +43,7 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	# packages/octowright-terminal/.../assets/renderer.js is a committed,
 	# minified build artifact (see packages/octowright-terminal/assets-src/) --
 	# same reason core's built frontend is excluded above.
-	uv run --active codespell --skip="src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
+	uv run --active codespell --skip="mutants/*,./mutants/*,src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
 	uv run --active python scripts/check_spdx_headers.py
 	uv run --active python scripts/check_max_loc.py
 	uv run --active python scripts/check_operation_gate_architecture.py

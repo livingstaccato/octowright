@@ -45,6 +45,22 @@ def test_repository_selection_is_currently_in_sync() -> None:
     assert _load_guard().main() == 0
 
 
+def test_paths_are_emitted_posix_style() -> None:
+    """Entries must use forward slashes on every platform.
+
+    pyproject.toml stores POSIX paths, so a Windows ``str(Path)`` rendering
+    (``tests\\test_macros.py``) matches nothing and every file reads as missing.
+    That is exactly how this check first failed CI: the guard runs Linux-only
+    under `make lint`, but the test suite that calls it runs on Windows too.
+
+    This assertion cannot fail on a POSIX host — it is here for the platform
+    where it can.
+    """
+    for entry in _load_guard().expected_selection():
+        assert "\\" not in entry, entry
+        assert entry.startswith("tests/"), entry
+
+
 def test_extra_entries_are_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A file the heuristic cannot infer must not be reported as a problem.
 
@@ -90,4 +106,4 @@ def test_slow_suites_are_excluded_by_marker_not_by_name() -> None:
     for path in (ROOT / "tests").rglob("test_*.py"):
         text = path.read_text(encoding="utf-8", errors="ignore")
         if "live_browser" in text or "memory_isolated" in text:
-            assert str(path.relative_to(ROOT)) not in expected
+            assert path.relative_to(ROOT).as_posix() not in expected
