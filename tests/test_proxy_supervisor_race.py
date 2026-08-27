@@ -225,6 +225,10 @@ async def test_client_construction_does_not_consume_the_connect_budget(
             await runtime.run_supervised_proxy(leader_mcp_url="http://leader.invalid/mcp")
 
         tg.start_soon(_runner)
+        # DELIBERATE fixed sleep -- do NOT convert this to a condition poll.
+        # The assertion below is that nothing happened (the session was not
+        # cancelled), and the only way to establish that is to let real time
+        # pass. Polling for a negative would pass instantly and test nothing.
         await anyio.sleep(0.3)
 
         assert len(enters) == 1, f"expected one connect, saw {len(enters)}"

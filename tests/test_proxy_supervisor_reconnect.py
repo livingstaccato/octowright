@@ -242,7 +242,11 @@ async def test_health_monitor_unsticks_after_consecutive_failures(monkeypatch: p
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(runtime.monitor_leader_health, "http://leader/api/health", 0.01, 2, lambda: unstuck.append(True))
-        await anyio.sleep(0.3)
+        # Poll rather than sleep: `unstuck` is set only after two consecutive
+        # failed health calls, so a fixed span races the monitor under load.
+        with anyio.move_on_after(5.0):
+            while not unstuck:
+                await anyio.sleep(0.01)
         tg.cancel_scope.cancel()  # monitor loops forever; we stop it
 
     assert calls >= 2
