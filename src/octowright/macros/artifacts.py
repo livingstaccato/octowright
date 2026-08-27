@@ -432,7 +432,7 @@ def macro_artifact_critical_points_set(name: str, critical_points: list[dict[str
 
 
 def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any]:
-    from octowright.artifacts.verification import evaluate_checks
+    from octowright.artifacts.verification import apply_verification_rollup, evaluate_checks
 
     store = ArtifactStore()
     artifact_dir = store.macro_dir(name)
@@ -473,7 +473,7 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
 
     atomic_write_text(verification_path, json.dumps(v_res, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    manifest["critical_points"] = v_res["critical_points"]
+    manifest["critical_points"] = apply_verification_rollup(critical_points, v_res["critical_points"])
     write_artifact_manifest(manifest_path, manifest)
 
     return {"ok": True, "status": v_res["status"], "paths": {"verification": str(verification_path)}}

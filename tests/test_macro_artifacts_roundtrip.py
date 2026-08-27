@@ -215,11 +215,9 @@ async def test_verify_reports_ok_on_a_passing_run(monkeypatch: pytest.MonkeyPatc
     macro_artifacts.plan_macro_artifact("login", args={})
     macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
     # verify=False so this test's explicit call is the FIRST evaluation of the
-    # stored critical points. Verification is currently not idempotent: it
-    # persists the evaluated form back over the definition, and for a
-    # `result_status` check the evaluation's own "status" key overwrites the
-    # expected value, so a second evaluation compares against "passed" instead
-    # of "ok" and reports failure. See test_verify_is_idempotent below.
+    # stored critical points, keeping the assertions below about one known
+    # evaluation rather than a second one. Repeat evaluation is covered by
+    # test_verify_is_idempotent below.
     await macro_artifacts.run_macro_artifact(
         session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=False
     )
@@ -293,25 +291,18 @@ async def test_verify_honours_an_explicit_run_id(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known bug: verification is not idempotent. _evaluate_check returns "
-        "{**check, 'status': <outcome>}, so the evaluation result overwrites a "
-        "result_status check's EXPECTED value -- they share the key 'status'. "
-        "macro_artifact_verify then persists that back over the definition via "
-        "manifest['critical_points'] = v_res['critical_points'], so a second "
-        "verify of the same run compares against 'passed' instead of 'ok' and "
-        "reports failure. Remove this xfail when the input and outcome keys are "
-        "separated (or the definition stops being overwritten)."
-    ),
-)
 async def test_verify_is_idempotent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verifying the same run twice must give the same verdict.
 
-    Asserts the CORRECT behaviour, so this goes green — and XPASSes loudly —
-    the moment the bug is fixed. It is marked xfail rather than asserting the
-    current output because pinning `failed` here would cement the defect.
+    Was xfail(strict=True) until the bug it documents was fixed. Verification
+    persisted the evaluated form of each critical point back over its stored
+    definition, and a `result_status` check declares its expected run status
+    under `status` -- the same key the evaluation reports its verdict under. So
+    the first verify rewrote the expected "ok" into the verdict "passed", and
+    the second compared the unchanged run against "passed" and failed.
+
+    A verifier whose answer depends on how many times it has been asked is
+    worse than no verifier, because the first answer looks authoritative.
     """
     storage, macro_artifacts = _reload(monkeypatch, tmp_path)
     _write_macro(storage)
@@ -328,6 +319,82 @@ async def test_verify_is_idempotent(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     assert first["status"] == "passed"
     assert second["status"] == first["status"]
+
+
+@pytest.mark.asyncio
+async def test_verify_leaves_the_stored_declarations_untouched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The manifest stores declarations; only the roll-up may be written back.
+
+    This is the mechanism behind the idempotency test above, asserted directly
+    so a regression names its own cause. `checks` must come back byte-identical
+    to what was declared -- the verdict belongs on the critical point, and in
+    `verification.json`, not smeared over the definition that produced it.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
+    declared = macro_artifacts.macro_artifact_critical_points_get("login")["critical_points"]
+    declared_checks = json.loads(json.dumps([cp["checks"] for cp in declared]))
+
+    await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=False
+    )
+    verified = macro_artifacts.macro_artifact_verify("login")
+    assert verified["status"] == "passed"
+
+    stored = macro_artifacts.macro_artifact_critical_points_get("login")["critical_points"]
+    assert [cp["checks"] for cp in stored] == declared_checks
+    # The roll-up is the part that IS allowed to change.
+    assert stored[0]["status"] == "passed"
+    assert stored[0]["last_verified_run"] is not None
+
+
+@pytest.mark.asyncio
+async def test_the_verification_report_reports_verdicts_not_declarations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A check result carries the spec's four fields and nothing merged in.
+
+    Keeping the declaration out of the outcome is what makes the collision
+    impossible rather than merely unpersisted: `{**check, "status": verdict}`
+    produces a record whose `status` means different things depending on the
+    check type, and any future consumer that writes such a record back would
+    reintroduce the same defect. `screenshot_exists` declares a `label`, so its
+    presence in the report is a direct signal that the merge is back.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set(
+        "login",
+        [
+            {
+                "id": "cp1",
+                "checks": [
+                    {"type": "result_status", "status": "ok"},
+                    {"type": "screenshot_exists", "label": "after"},
+                ],
+            }
+        ],
+    )
+    await macro_artifacts.run_macro_artifact(
+        session=_CapturingSession(tmp_path), name="login", args={}, capture=True, verify=False
+    )
+
+    verified = macro_artifacts.macro_artifact_verify("login")
+    assert verified["status"] == "passed"
+
+    report = json.loads(Path(verified["paths"]["verification"]).read_text(encoding="utf-8"))
+    checks = report["critical_points"][0]["checks"]
+    assert [set(c) for c in checks] == [{"type", "status", "message", "evidence"}] * 2
+    assert [c["status"] for c in checks] == ["passed", "passed"]
+    # The label is not lost to the reader -- the message carries it.
+    assert "after" in checks[1]["message"]
 
 
 # ---------------------------------------------------------------------------
