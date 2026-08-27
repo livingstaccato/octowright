@@ -320,6 +320,7 @@ pytest_add_cli_args_test_selection = [
     "tests/artifacts_paths/test_run_id_containment.py",
     "tests/field_diagnostics/test_macro_failure_console.py",
     "tests/macro_lint/test_cli_export_coverage.py",
+    "tests/macro_lint/test_cli_export_semantic.py",
     "tests/macro_lint/test_cli_export_execution.py",
     "tests/macro_lint/test_derivation_matches_replay.py",
     "tests/macro_lint/test_fields_edges.py",
