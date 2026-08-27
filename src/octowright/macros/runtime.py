@@ -312,35 +312,3 @@ async def _dispatch_simple_inner(
     if not hasattr(session, method_name):
         return 0, 1
     return await _dispatch_standard(session, kind, kwargs, method_name)
-
-
-async def dispatch_one(
-    session: SessionLike,
-    action: dict[str, Any],
-    *,
-    semantic_keys: tuple[str, ...],
-    strip_non_aria_noise: Callable[[str, dict[str, Any]], dict[str, Any]],
-    action_kwargs: Callable[[dict[str, Any]], dict[str, Any]],
-) -> tuple[int, int]:
-    import octowright.conditional as _cond
-
-    if action.get("action") in _cond.CONDITIONAL_ACTIONS:
-
-        async def _recurse(s: SessionLike, a: dict[str, Any]) -> tuple[int, int]:
-            return await dispatch_one(
-                s,
-                a,
-                semantic_keys=semantic_keys,
-                strip_non_aria_noise=strip_non_aria_noise,
-                action_kwargs=action_kwargs,
-            )
-
-        return await _cond.dispatch_conditional(session, action, _recurse)
-
-    return await dispatch_simple(
-        session,
-        action,
-        semantic_keys=semantic_keys,
-        strip_non_aria_noise=strip_non_aria_noise,
-        action_kwargs=action_kwargs,
-    )
