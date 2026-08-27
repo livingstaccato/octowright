@@ -308,7 +308,7 @@ ignore-words-list = "nd,strat,optionel,ths"
 # modules where weak assertions matter most. mutmut 3.x reads ALL config
 # from this block; CLI flags for paths/runner are no longer accepted.
 [tool.mutmut]
-paths_to_mutate = [
+source_paths = [
     "src/octowright/personas.py",
     "src/octowright/scenarios.py",
     "src/octowright/macros/",
@@ -316,7 +316,7 @@ paths_to_mutate = [
 # Only run the tests that exercise the mutated paths. mutmut 3.x's mutants/
 # workdir doesn't navigate the full repo cleanly (demo bundles, scripts/demos,
 # etc.), so we point it at the targeted unit suites only.
-tests_dir = [
+pytest_add_cli_args_test_selection = [
     "tests/test_personas.py",
     "tests/test_personas_branches.py",
     "tests/test_personas_loader.py",
@@ -352,7 +352,7 @@ tests_dir = [
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]
-# mutmut 3.x copies only the files in paths_to_mutate by default; the rest of
+# mutmut 3.x copies only the files in source_paths by default; the rest of
 # the src tree must be listed here or imports fail in the mutants/ workdir.
 # tools/ holds the out-of-wheel demo lib that tests/conftest.py adds to sys.path.
 also_copy = ["src/", "tools/", "demo/", "examples/", "conftest.py"]
