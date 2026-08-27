@@ -103,6 +103,9 @@ jobs:
         run: uv run --active python scripts/check_xenon.py
       - name: Secret scan
         run: bash ci/run_detect_secrets.sh
+      # Audits the core-only environment (`--no-group terminal`). The terminal
+      # group's own dependency tree is audited by the terminal-plugin job, the
+      # one leg that installs it.
       - name: pip-audit (deps)
         run: uv run --active python scripts/check_pip_audit.py
 
@@ -276,6 +279,11 @@ jobs:
   # provide-uterm is on PyPI as of 2026-08-26, so this job no longer clones the
   # sibling repo at a pinned commit -- the `terminal` dependency group resolves
   # it like any other dependency.
+  #
+  # Because it is the only leg with uterm installed, it also carries the two
+  # checks that mean nothing without it: mypy over the plugin (the lint job's
+  # mypy sees every uterm symbol as `Any`) and pip-audit over the group's
+  # dependency tree (the lint job's audit never sees those packages).
   terminal-plugin:
     name: 🖥️ Terminal plugin tests
     runs-on: ubuntu-24.04
@@ -287,6 +295,20 @@ jobs:
       - uses: ./.github/actions/bootstrap-uv
         with:
           sync-args: '--frozen --all-groups --python "${UV_PYTHON:-python}"'
+      # mypy with provide-uterm actually present. The lint job runs mypy over
+      # this same package, but under `--no-group terminal`, where the
+      # provide.uterm.* override in pyproject.toml makes every uterm symbol
+      # `Any` -- so a type error at the uterm boundary (engine.py, redact.py,
+      # availability.py) passed there by construction. This is the only leg
+      # where "ships py.typed, so it types cleanly" is checked, not assumed.
+      - name: mypy (plugin, with provide-uterm present)
+        run: uv run --active mypy packages/octowright-terminal/src
+      # pip-audit over the one environment that contains the terminal group's
+      # dependency tree: asyncssh, aiosqlite, provide-uterm and its siblings.
+      # The lint job's audit runs under `--no-group terminal`, so none of those
+      # were ever scanned -- while uv.lock ships them to every `make install`.
+      - name: pip-audit (deps incl. terminal group)
+        run: uv run --active python scripts/check_pip_audit.py
       # The plugin's own suite, plus an end-to-end check that the entry point
       # reaches the real tool surface: OCTOWRIGHT_PLUGINS=terminal must add
       # exactly 7 terminal_* tools, and an unset value must add none.

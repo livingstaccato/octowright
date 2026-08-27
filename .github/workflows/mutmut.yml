@@ -12,6 +12,14 @@ permissions:
 env:
   FORCE_COLOR: "1"
   UV_PYTHON_DOWNLOADS: never
+  # Install from the committed uv.lock as-is, same as ci.yml. This workflow
+  # lacked it, so its bare `uv run` steps re-resolved on the runner; while the
+  # lock still pointed at an editable ../provide-uterm sibling, that resolution
+  # failed at "Install Playwright browsers" on every nightly from 2026-06-27 to
+  # 2026-08-26 (61 runs), and the job-level continue-on-error this workflow
+  # used to carry rendered each one as a success. Two months without a single
+  # mutation run, and nothing said so.
+  UV_FROZEN: "1"
   # Keep scenarios/profiles quiet during CI — never touch $HOME defaults.
   OCTOWRIGHT_RECORDINGS: ${{ github.workspace }}/.ci/recordings
   OCTOWRIGHT_PROFILES_DIR: ${{ github.workspace }}/.ci/profiles
@@ -23,8 +31,13 @@ jobs:
   mutmut:
     name: 🧬 mutmut
     runs-on: ubuntu-24.04
-    # Visibility-only — never block main. PR signal is the regular test job.
-    continue-on-error: true
+    # A scheduled run gates nothing: it is not a required check on any PR, so a
+    # red result here never blocks main. That is exactly why the job does NOT
+    # carry `continue-on-error` — with it, a step that died at bootstrap still
+    # rendered as a green job (see the UV_FROZEN note above). Surviving mutants
+    # do not turn it red either: `mutmut run` exits 0 after printing its stats
+    # and exits 1 only when the CLEAN test run fails. Red means broken, not
+    # "some mutants survived".
     # Mutation runs are slow; allow up to 4 hours before GitHub forcibly cancels.
     timeout-minutes: 240
     steps:
