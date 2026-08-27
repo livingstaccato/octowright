@@ -162,9 +162,12 @@ lockfile. Remote dashboard binding still requires `OCTOWRIGHT_ALLOW_REMOTE_DASHB
 - **#15** filesystem containment — safe as written.
 
 ## Env note
-Sibling `../provide-uterm` checkout is absent, so `uv run` (default resolve) fails on the
-terminal path-sources. Use **`uv run --frozen ...`** to run tests/tools against the existing lock.
-This is finding #7 biting local dev.
+The `../provide-uterm` sibling checkout is no longer needed and a plain `uv run` no longer
+fails without it: provide-uterm is on PyPI (2026-08-26) and the path sources are gone from
+`pyproject.toml`. `uv lock --check` passes and `uv run` leaves `uv.lock` untouched — do not
+reach for `--frozen` locally to work around a failure that cannot occur any more. Finding #7
+is resolved by publication; the plugin itself is still installed from this repo (the
+`terminal` dependency group), not from PyPI.
 
 
 ---
