@@ -17,13 +17,15 @@ test: ## Run the Python test suite (launches real browsers where engines are ins
 	uv run --active pytest -q tests/ -m memory_isolated --no-cov
 
 # The terminal session-kind plugin's own suite. `make test` above runs tests/
-# only, so this is the local equivalent of CI's terminal-plugin job. Needs the
-# `terminal` dependency group synced (uv sync --all-groups) and the sibling
-# ../provide-uterm checkout; without them the suite ignores itself at collection
-# and reports a clean pass over zero tests, which is why the CI script asserts
-# availability first.
-test-terminal: ## Run the octowright-terminal plugin suite (needs ../provide-uterm)
-	uv run --active pytest -q packages/octowright-terminal/tests --no-cov
+# only, so this is the local equivalent of CI's terminal-plugin job -- and it
+# runs the same script, availability guard included: the plugin's conftest
+# ignores its whole directory when uterm is absent, so a bare pytest reports a
+# clean pass over zero tests. Needs the `terminal` dependency group synced
+# (`make install`, or uv sync --group terminal). A plain `uv sync` afterwards
+# UNINSTALLS it again (a sync is exact), which is exactly the case the guard
+# turns into a loud failure instead of a fast green.
+test-terminal: ## Run the octowright-terminal plugin suite (needs the `terminal` dependency group)
+	bash ci/run_terminal_plugin_tests.sh
 
 test-frontend: ## Run TypeScript frontend tests with coverage gating
 	cd packages/octowright-frontend && npm test
