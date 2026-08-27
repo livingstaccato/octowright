@@ -22,7 +22,6 @@ from octowright.macros.runtime import (
     _REPLAY_SKIP,
     _dispatch_click_or_fill,
     _dispatch_standard,
-    dispatch_one,
     dispatch_simple,
 )
 from octowright.macros.substitution import SEMANTIC_LOCATOR_KEYS, action_kwargs, strip_non_aria_noise
@@ -612,7 +611,14 @@ class TestDispatchStandardDirect:
 
 
 # --------------------------------------------------------------------------
-# dispatch_one routing
+# _dispatch_one routing
+#
+# These previously exercised a second `dispatch_one` that lived in runtime.py
+# and had NO caller anywhere in src/ -- a near-copy of execution._dispatch_one
+# that vulture did not flag (the missing underscore reads as public API). So
+# the only routing test in the tree was asserting against dead code while the
+# live router went unverified; the 2026-08-27 mutation run surfaced it. The
+# dead copy is gone and these now drive the real one.
 # --------------------------------------------------------------------------
 
 
@@ -631,15 +637,13 @@ class TestDispatchOneRouting:
             return (7, 8)
 
         import octowright.conditional as _cond
+        from octowright.macros import execution as _execution
 
         monkeypatch.setattr(_cond, "dispatch_conditional", _fake_dispatch_conditional)
         s = _full_session()
-        result = await dispatch_one(
+        result = await _execution._dispatch_one(
             s,
             {"action": kind, "selector": "#x", "then": [], "else": [], "actions": [], "branches": []},
-            semantic_keys=SEMANTIC_LOCATOR_KEYS,
-            strip_non_aria_noise=strip_non_aria_noise,
-            action_kwargs=action_kwargs,
         )
         assert result == (7, 8)
         assert observed["called"] is True
@@ -648,14 +652,10 @@ class TestDispatchOneRouting:
     @pytest.mark.anyio
     async def test_non_conditional_action_routes_to_dispatch_simple(self) -> None:
         """Plain action goes through dispatch_simple, calls session method directly."""
+        from octowright.macros import execution as _execution
+
         s = _full_session()
-        result = await dispatch_one(
-            s,
-            {"action": "navigate", "url": "x"},
-            semantic_keys=SEMANTIC_LOCATOR_KEYS,
-            strip_non_aria_noise=strip_non_aria_noise,
-            action_kwargs=action_kwargs,
-        )
+        result = await _execution._dispatch_one(s, {"action": "navigate", "url": "x"})
         assert result == (1, 0)
         s.navigate.assert_awaited_once_with(url="x")
 

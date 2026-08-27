@@ -99,6 +99,11 @@ jobs:
         run: uv run --active python scripts/check_max_loc.py
       - name: Agent docs sync
         run: uv run --active python scripts/check_agent_docs_sync.py
+      # mutmut mutates whole modules but runs only the test files it is given.
+      # When those drift apart, mutants whose killing test never ran are
+      # reported as survivors — indistinguishable from real assertion gaps.
+      - name: mutmut test selection in sync
+        run: uv run --active python scripts/check_mutmut_selection.py
       # Catch plugin-manifest version drift server-side: the same check runs as a
       # pre-commit hook, but that only fires on local commits — this enforces it
       # on every push/PR so a stale .claude/.codex/.antigravity plugin.json fails CI.
