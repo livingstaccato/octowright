@@ -314,6 +314,11 @@ source_paths = [
     "src/octowright/personas.py",
     "src/octowright/scenarios.py",
     "src/octowright/macros/",
+    # The artifact store's shared layer. Added 2026-08-27 after a verification
+    # idempotency bug lived here undetected: `macros/artifacts.py` was mutated
+    # while the module it delegates every check evaluation to was not, so the
+    # defect sat in the one file mutation testing could not see.
+    "src/octowright/artifacts/",
 ]
 # Only run the tests that exercise the mutated paths. mutmut 3.x's mutants/
 # workdir doesn't navigate the full repo cleanly (demo bundles, scripts/demos,
@@ -322,8 +327,8 @@ pytest_add_cli_args_test_selection = [
     "tests/artifacts_paths/test_run_id_containment.py",
     "tests/field_diagnostics/test_macro_failure_console.py",
     "tests/macro_lint/test_cli_export_coverage.py",
-    "tests/macro_lint/test_cli_export_semantic.py",
     "tests/macro_lint/test_cli_export_execution.py",
+    "tests/macro_lint/test_cli_export_semantic.py",
     "tests/macro_lint/test_derivation_matches_replay.py",
     "tests/macro_lint/test_fields_edges.py",
     "tests/macro_lint/test_finder_keys.py",
@@ -338,6 +343,11 @@ pytest_add_cli_args_test_selection = [
     "tests/plugins/test_reference_scenario.py",
     "tests/session_locators/test_exact_plumbing.py",
     "tests/test_aria_playback.py",
+    "tests/test_artifacts_digest.py",
+    "tests/test_artifacts_paths.py",
+    "tests/test_artifacts_redaction.py",
+    "tests/test_artifacts_reports.py",
+    "tests/test_artifacts_verification.py",
     "tests/test_cli.py",
     "tests/test_cli_persona_branches.py",
     "tests/test_cli_scenario_branches.py",
@@ -378,8 +388,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_storage_query.py",
     "tests/test_macro_substitution_branches.py",
     "tests/test_macros.py",
-    "tests/test_mutation_gaps.py",
     "tests/test_macros_calls.py",
+    "tests/test_mutation_gaps.py",
     "tests/test_operation_gate_integration.py",
     "tests/test_persona_cred_cmd_allowlist.py",
     "tests/test_personas.py",
