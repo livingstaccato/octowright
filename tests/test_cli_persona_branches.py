@@ -160,20 +160,90 @@ class TestPersonaCreate:
 
 
 class TestPersonaDelete:
+    @staticmethod
+    def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Any:
+        """Point persona lookups at a tmp root.
+
+        Without this the command resolves `persona_dir` against the developer's
+        real ~/.config/octowright/profiles -- which it did, silently, until the
+        delete command started reading the filesystem to build its confirmation
+        prompt. A test that invokes a delete command must not be one mocked call
+        away from the operator's actual saved logins.
+        """
+        import octowright.personas as _personas
+
+        monkeypatch.setattr(_personas, "PROFILES_DIR", tmp_path / "profiles")
+        return tmp_path / "profiles"
+
     def test_calls_delete_persona(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
         """delete_persona path printed back to user."""
         from octowright import engine_profiles as _profiles
 
+        self._isolate(monkeypatch, tmp_path)
         target = tmp_path / "cosmo"
 
         def fake_delete(name: str) -> Any:
             return target
 
         monkeypatch.setattr(_profiles, "delete_persona", fake_delete)
-        result = CliRunner().invoke(cli, ["persona", "delete", "cosmo"])
+        result = CliRunner().invoke(cli, ["persona", "delete", "cosmo", "--yes"])
         assert result.exit_code == 0
         assert "deleted" in result.output
         assert str(target) in result.output
+
+    def test_confirms_before_destroying_saved_logins(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        """Declining must leave the persona alone.
+
+        `octowright cleanup` already defaults to a dry-run for recordings, which
+        regenerate. This deletes engine profiles -- session cookies,
+        localStorage and IndexedDB for every site the persona logged into --
+        and had neither a dry-run nor a prompt.
+        """
+        from octowright import engine_profiles as _profiles
+
+        root = self._isolate(monkeypatch, tmp_path)
+        (root / "cosmo" / "chromium").mkdir(parents=True)
+        called: list[str] = []
+        monkeypatch.setattr(_profiles, "delete_persona", lambda name: called.append(name))
+
+        result = CliRunner().invoke(cli, ["persona", "delete", "cosmo"], input="n\n")
+
+        assert result.exit_code != 0
+        assert called == []
+        assert "saved logins" in result.output
+        assert "chromium" in result.output  # names what it is about to destroy
+
+    def test_the_prompt_admits_it_cannot_see_live_browsers(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """The CLI has no pool access, and says so rather than implying a guard.
+
+        The `persona_delete` MCP tool refuses while a session holds the persona.
+        This command cannot check, so the prompt must not read as though it had.
+        """
+        from octowright import engine_profiles as _profiles
+
+        root = self._isolate(monkeypatch, tmp_path)
+        (root / "cosmo" / "firefox").mkdir(parents=True)
+        monkeypatch.setattr(_profiles, "delete_persona", lambda name: root / "cosmo")
+
+        result = CliRunner().invoke(cli, ["persona", "delete", "cosmo"], input="y\n")
+
+        assert result.exit_code == 0
+        assert "cannot be detected from the CLI" in result.output
+
+    def test_yes_skips_the_prompt(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        """Scripts need a non-interactive path."""
+        from octowright import engine_profiles as _profiles
+
+        root = self._isolate(monkeypatch, tmp_path)
+        (root / "cosmo" / "chromium").mkdir(parents=True)
+        monkeypatch.setattr(_profiles, "delete_persona", lambda name: root / "cosmo")
+
+        result = CliRunner().invoke(cli, ["persona", "delete", "cosmo", "--yes"])
+
+        assert result.exit_code == 0
+        assert "Delete it?" not in result.output
 
     def test_propagates_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If delete_persona raises, the runner surfaces non-zero exit."""
