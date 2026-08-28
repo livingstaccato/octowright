@@ -25,6 +25,10 @@ import asyncio
 import time
 from typing import Any, Final
 
+from provide.telemetry import get_logger
+
+log = get_logger(__name__)
+
 NAV_MODES: Final = frozenset({"tab", "arrow", "keys"})
 
 _TAB_KEYS: Final[dict[str, str]] = {"forward": "Tab", "backward": "Shift+Tab"}
@@ -176,17 +180,30 @@ async def run_a11y_dragdrop(
         source = target.locator(source_selector)
         await source.focus()
         await keyboard.press(grab_key)
-        grabbed = bool(await source.evaluate(grabbed_predicate_js or _DEFAULT_GRABBED_JS))
-        if not grabbed:
-            return result
-        result["grabbed"] = True
 
-        # Everything past this point holds a grabbed widget, so every exit
-        # path -- including an unhandled exception -- must release it. This
-        # `finally` IS the bug the tool generalizes: a grab that succeeded
-        # with a drop that did not left the widget stuck in grab mode,
-        # indistinguishable from a grab that never registered.
+        # `grab_key` is already pressed at this point, so the widget's
+        # grabbed state is genuinely unknown until the predicate resolves --
+        # everything from here, INCLUDING an exception raised BY the
+        # predicate check itself, must go through the release path below.
+        # The one case that legitimately skips it is the predicate
+        # returning False: the key was pressed but the widget demonstrably
+        # never entered grab mode, so there is nothing to release (that is
+        # an ordinary early ``return``, not an exception, so it never
+        # reaches ``except`` below). A predicate that THROWS is different --
+        # ``grabbed_predicate_js`` is caller-supplied arbitrary JS, so a
+        # throwing predicate, or a target-closed/detached ``evaluate``, is a
+        # real path with grabbed state genuinely unknown. A spurious Escape
+        # when nothing was grabbed is a no-op in the APG pattern, so we err
+        # toward releasing. A grab that succeeded followed by a drop that
+        # did not would otherwise leave the widget stuck in grab mode,
+        # indistinguishable from a grab that never registered -- that is the
+        # exact bug this ``try``/``except`` exists to prevent.
         try:
+            grabbed = bool(await source.evaluate(grabbed_predicate_js or _DEFAULT_GRABBED_JS))
+            if not grabbed:
+                return result
+            result["grabbed"] = True
+
             for key in _nav_keys(nav_key, nav_direction, nav_key_sequence, max_nav_steps):
                 await keyboard.press(key)
                 result["nav_steps_taken"] += 1
@@ -222,6 +239,21 @@ async def run_a11y_dragdrop(
             result["stage_reached"] = "failed_verify"
             return result
         except Exception:
-            await keyboard.press(release_key)
-            result["released"] = True
+            # The release press itself can fail -- most likely in exactly
+            # the situation this handler exists for (page/connection already
+            # gone). A failing release must not replace the ORIGINAL
+            # exception the caller needs to see, so the secondary failure is
+            # caught, logged (silent-swallow policy: a swallow in a
+            # user-action path must log, not vanish), and the bare `raise`
+            # below re-raises the exception this `except` is still handling
+            # -- not the release failure.
+            try:
+                await keyboard.press(release_key)
+                result["released"] = True
+            except Exception as release_exc:
+                log.warning(
+                    "octowright.a11y_dragdrop.release_failed",
+                    instance_id=getattr(session, "instance_id", None),
+                    error=repr(release_exc),
+                )
             raise

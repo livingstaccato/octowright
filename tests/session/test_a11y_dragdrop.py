@@ -178,3 +178,104 @@ async def test_engine_takes_a_named_operation_lease() -> None:
     session = FakeSession(page)
     await run_a11y_dragdrop(session, source_selector="#i", verify_js="() => true")
     assert "browser_a11y_dragdrop" in session.leases
+
+
+async def test_verify_selector_appears_checks_locator_count() -> None:
+    page = FakePage()
+    page.missing.add("#dropzone-item")
+    session = FakeSession(page)
+    result = await run_a11y_dragdrop(
+        session,
+        source_selector="#i",
+        verify_selector_appears="#dropzone-item",
+        verify_timeout_ms=30,
+        verify_poll_ms=10,
+    )
+    assert result["stage_reached"] == "failed_verify", "selector never appears while it stays missing"
+
+    page2 = FakePage()
+    session2 = FakeSession(page2)
+    result2 = await run_a11y_dragdrop(session2, source_selector="#i", verify_selector_appears="#dropzone-item")
+    assert result2["stage_reached"] == "verified", "selector present by default -> locator.count() > 0"
+
+
+async def test_verify_selector_gone_checks_locator_absence() -> None:
+    page = FakePage()
+    session = FakeSession(page)  # "#loading-spinner" present by default -> count() == 1, not gone
+    result = await run_a11y_dragdrop(
+        session,
+        source_selector="#i",
+        verify_selector_gone="#loading-spinner",
+        verify_timeout_ms=30,
+        verify_poll_ms=10,
+    )
+    assert result["stage_reached"] == "failed_verify", "selector still present -> not gone"
+
+    page2 = FakePage()
+    page2.missing.add("#loading-spinner")
+    session2 = FakeSession(page2)
+    result2 = await run_a11y_dragdrop(session2, source_selector="#i", verify_selector_gone="#loading-spinner")
+    assert result2["stage_reached"] == "verified", "selector absent -> locator.count() == 0"
+
+
+async def test_verify_text_contains_checks_body_text() -> None:
+    page = FakePage()
+    page.verify_results = [False]
+    session = FakeSession(page)
+    result = await run_a11y_dragdrop(
+        session,
+        source_selector="#i",
+        verify_text_contains="Item moved to Done",
+        verify_timeout_ms=30,
+        verify_poll_ms=10,
+    )
+    assert result["stage_reached"] == "failed_verify"
+
+    page2 = FakePage()
+    session2 = FakeSession(page2)
+    result2 = await run_a11y_dragdrop(session2, source_selector="#i", verify_text_contains="Item moved to Done")
+    assert result2["stage_reached"] == "verified"
+
+
+async def test_grab_predicate_exception_still_presses_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Important-2: `grab_key` is already pressed before the predicate check
+    runs, so a predicate that THROWS (arbitrary caller-supplied JS, or a
+    target-closed/detached ``evaluate``) must still release -- unlike the
+    predicate returning False, which legitimately presses nothing further.
+    """
+    page = FakePage()
+    session = FakeSession(page)
+
+    async def boom(_self: FakeLocator, _js: str, *_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("target closed")
+
+    monkeypatch.setattr(FakeLocator, "evaluate", boom)
+
+    with pytest.raises(RuntimeError, match="target closed"):
+        await run_a11y_dragdrop(session, source_selector="#i", verify_js="() => true")
+    assert ("press", "Space") in page.events, "grab_key press happens before the predicate check"
+    assert ("press", "Escape") in page.events, "grab_key was already pressed; a throwing predicate must still release"
+
+
+async def test_release_failure_does_not_mask_original_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Important-1: a release press that itself fails (most likely the exact
+    page/connection-gone condition the handler exists for) must not replace
+    the original exception the caller needs to see.
+    """
+    page = FakePage()
+    session = FakeSession(page)
+
+    async def boom_verify(_js: str, *_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("page detached")
+
+    page.evaluate = boom_verify  # type: ignore[method-assign]
+
+    async def boom_release(_self: FakeKeyboard, key: str) -> None:
+        if key == "Escape":
+            raise RuntimeError("connection already closed")
+        page.events.append(("press", key))
+
+    monkeypatch.setattr(FakeKeyboard, "press", boom_release)
+
+    with pytest.raises(RuntimeError, match="page detached"):
+        await run_a11y_dragdrop(session, source_selector="#i", verify_js="() => true")
