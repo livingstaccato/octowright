@@ -8,7 +8,7 @@
 The pool keeps a single ``async_playwright().start()`` driver shared by every
 browser. If that node process dies — crash, OOM, killed daemon generation — its
 stdio pipe closes and every subsequent driver call fails with a connection/pipe
-error, which used to brick the whole pool until a restart. ``pool.launch`` uses
+error, which would otherwise brick the whole pool until a restart. ``pool.launch`` uses
 ``is_driver_dead_error`` to recognise that class of failure, discard the dead
 driver, and rebuild it on retry.
 

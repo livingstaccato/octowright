@@ -97,8 +97,8 @@ _ACTION_MAP = {
     "set_input_files": "set_input_files",
     "click_by": "click_by",
     "fill_by": "fill_by",
-    # User actions previously recorded but absent from the dispatch map —
-    # they were saved into macros and then silently no-op'd as errors.
+    # User actions the recorder emits. Absent from the dispatch map they are
+    # saved into macros and then silently no-op'd as errors.
     "hover": "hover",
     "select_option": "select_option",
     "drag": "drag",
@@ -231,10 +231,10 @@ async def _dispatch_click_or_fill(
                 hint="semantic locator path failed, falling back to CSS selector",
             )
 
-    # timeout_ms is NOT popped here any more. It used to be, which made the
-    # field a lie on the CSS path: lint allowed it, the dashboard editor saved
-    # it, and the action then ran on the 15s default -- a failing click cost
-    # 15s per attempt with no way to shorten it. click/fill now take the same
+    # timeout_ms is NOT popped here. Popping it makes the field a lie on the
+    # CSS path: lint allows it, the dashboard editor saves it, and the action
+    # then runs on the 15s default -- a failing click costs 15s per attempt
+    # with no way to shorten it. click/fill now take the same
     # timeout_ms the semantic pair always did.
     fallback_kwargs = {k: v for k, v in kwargs.items() if k not in semantic_keys}
     await fallback_method(**fallback_kwargs)
@@ -285,15 +285,15 @@ async def _dispatch_simple_inner(
         # macro_call needs an invocation_stack — it only dispatches through
         # the full _dispatch_one path in macros/execution.py. Reaching the
         # simple dispatcher means a caller routed the wrong way (e.g. via
-        # dispatch_plain_action from inside a conditional). Previously this
-        # logged a warning and returned (0, 1) — visually identical to a
-        # legitimate skip, so the caller had no way to notice the routing
-        # bug. Raise instead so the misroute is loud.
+        # dispatch_plain_action from inside a conditional). A warning plus
+        # (0, 1) is visually identical to a legitimate skip, leaving the
+        # caller no way to notice the routing bug. Raise instead so the
+        # misroute is loud.
         if kind == "macro_call":
             raise RuntimeError(
                 "macro_call requires _dispatch_one with invocation_stack; reached simple dispatch incorrectly"
             )
-        # Any other unknown kind used to silently return (0, 1) — looked
+        # Silently returning (0, 1) for any other unknown kind looks
         # identical to an intentional skip. Surface it so missing
         # _ACTION_MAP entries can be diagnosed instead of guessed at.
         log.warning(

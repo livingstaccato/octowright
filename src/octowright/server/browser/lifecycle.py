@@ -375,12 +375,7 @@ async def browser_quick_launch(
         return {"ambiguous": True, "matches": suggest["matches"], "url": url}
 
     profile_to_use = None
-    recommendation = suggest.get("recommendation")
-    if isinstance(recommendation, dict):
-        # Back-compat for older resolver tests/clients; the real resolver now
-        # returns a human-readable recommendation string.
-        profile_to_use = recommendation.get("persona")
-    elif not suggest.get("ephemeral_ok") and suggest["matches"]:
+    if not suggest.get("ephemeral_ok") and suggest["matches"]:
         top = suggest["matches"][0]
         if top["score"] >= 2:
             profile_to_use = top["persona"]

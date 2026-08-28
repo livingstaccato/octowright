@@ -153,7 +153,7 @@ def _identity_key(node: Any, index: int) -> tuple[Any, ...]:
     # Positional matching produces O(n) spurious diffs when a node is
     # inserted at the head of a sibling list. Keying by semantic identity
     # localizes the diff to the actually-added/removed node. Unkeyed
-    # values fall back to ("__index__", index) for legacy positional behavior.
+    # values fall back to ("__index__", index) and are matched positionally.
     if not isinstance(node, dict):
         return ("__index__", index)
     role = node.get("role")
@@ -222,8 +222,9 @@ def _diff_child_lists(
     exp_keys = [_identity_key(n, i) for i, n in enumerate(exp_list)]
     act_keys = [_identity_key(n, i) for i, n in enumerate(act_list)]
 
-    # If either side is fully unkeyed, preserve legacy positional behavior
-    # so callers passing lists of scalars or unkeyed dicts see stable diffs.
+    # If either side is fully unkeyed there is nothing to key on, so match
+    # positionally -- callers passing lists of scalars or unkeyed dicts still
+    # get stable diffs.
     if all(k[0] == "__index__" for k in exp_keys) or all(k[0] == "__index__" for k in act_keys):
         _diff_unkeyed_lists(exp_list, act_list, path, diffs)
         return

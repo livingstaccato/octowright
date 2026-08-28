@@ -31,9 +31,9 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-# Bumped once per coordinator run, regardless of trigger. Moved here from
-# session/core_ops_mixin.py -- SessionOpsMixin.close() no longer runs for any
-# production close (every real close routes through this module's
+# Bumped once per coordinator run, regardless of trigger. Lives here rather
+# than in session/core_ops_mixin.py -- SessionOpsMixin.close() does not run
+# for any production close (every real close routes through this module's
 # coordinator instead), so this is now the only place a real close is ever
 # observed to increment it.
 _SESSION_CLOSED = counter(
@@ -284,9 +284,9 @@ async def _coordinate_close(
     the closed-total counter (explicit closes ONLY, via
     ``close_helpers.is_external_reason`` -- it stays disjoint from
     ``octowright_browser_evicted_total`` so ``launched - closed - evicted``
-    keeps meaning "still live"). Neither fired for a production close before
-    this method owned them, since ``SessionOpsMixin.close()`` no longer runs
-    for one.
+    keeps meaning "still live"). Neither fires for a production close unless
+    this method owns them, since ``SessionOpsMixin.close()`` does not run for
+    one.
 
     The ``finally`` block's own bookkeeping (counter, manifest, publish,
     registry pops) is delegated to ``close_helpers.run_close_bookkeeping``/
