@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>a11y dragdrop fixture</title>
+<style>
+  li { padding: 4px; border: 1px solid #ccc; margin: 2px; list-style: none; }
+  [aria-grabbed="true"] { background: #ffd; }
+</style>
+
+<h1>Arrow-key sortable list</h1>
+<ul id="list">
+  <li id="a" tabindex="0" aria-grabbed="false">Alpha</li>
+  <li id="b" tabindex="0" aria-grabbed="false">Bravo</li>
+  <li id="c" tabindex="0" aria-grabbed="false">Charlie</li>
+</ul>
+<p id="status"></p>
+
+<script>
+  // Minimal WAI-ARIA APG keyboard drag: Space grabs, arrows move the grabbed
+  // item, Space drops, Escape cancels. Deliberately vanilla so the test has no
+  // external dependency and runs headless in CI.
+  let grabbed = null;
+  document.addEventListener("keydown", (e) => {
+    const el = document.activeElement;
+    if (!el || el.tagName !== "LI") return;
+    if (e.key === " " || e.code === "Space") {
+      e.preventDefault();
+      if (grabbed === el) {
+        grabbed.setAttribute("aria-grabbed", "false");
+        document.getElementById("status").textContent = "dropped " + grabbed.id;
+        grabbed = null;
+      } else {
+        grabbed = el;
+        el.setAttribute("aria-grabbed", "true");
+        document.getElementById("status").textContent = "grabbed " + el.id;
+      }
+    } else if (grabbed && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      const list = document.getElementById("list");
+      const sib = e.key === "ArrowDown" ? grabbed.nextElementSibling : grabbed.previousElementSibling;
+      if (sib) {
+        if (e.key === "ArrowDown") list.insertBefore(sib, grabbed);
+        else list.insertBefore(grabbed, sib);
+        grabbed.focus();
+      }
+    } else if (e.key === "Escape" && grabbed) {
+      grabbed.setAttribute("aria-grabbed", "false");
+      document.getElementById("status").textContent = "cancelled";
+      grabbed = null;
+    }
+  });
+</script>
