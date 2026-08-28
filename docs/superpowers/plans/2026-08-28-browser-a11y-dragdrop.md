@@ -352,8 +352,12 @@ async def test_arrow_mode_sends_the_direction_key() -> None:
     page = FakePage()
     session = FakeSession(page)
     await run_a11y_dragdrop(
-        session, source_selector="#i", nav_key="arrow", nav_direction="left",
-        max_nav_steps=2, verify_js="() => true",
+        session,
+        source_selector="#i",
+        nav_key="arrow",
+        nav_direction="left",
+        max_nav_steps=2,
+        verify_js="() => true",
     )
     assert [e for e in page.events if e == ("press", "ArrowLeft")] == [("press", "ArrowLeft")] * 2
 
@@ -362,8 +366,11 @@ async def test_keys_mode_sends_the_sequence_once() -> None:
     page = FakePage()
     session = FakeSession(page)
     result = await run_a11y_dragdrop(
-        session, source_selector="#i", nav_key="keys",
-        nav_key_sequence=["Tab", "Tab", "End"], verify_js="() => true",
+        session,
+        source_selector="#i",
+        nav_key="keys",
+        nav_key_sequence=["Tab", "Tab", "End"],
+        verify_js="() => true",
     )
     pressed = [k for kind, k in page.events if kind == "press"]
     assert pressed[1:4] == ["Tab", "Tab", "End"]
@@ -404,7 +411,9 @@ import asyncio
 import time
 
 
-def _nav_keys(nav_key: str, nav_direction: str | None, nav_key_sequence: list[str] | None, max_nav_steps: int) -> list[str]:
+def _nav_keys(
+    nav_key: str, nav_direction: str | None, nav_key_sequence: list[str] | None, max_nav_steps: int
+) -> list[str]:
     """The exact key presses navigation will send, resolved up front.
 
     Returning a concrete list (rather than deciding per step) is what makes
@@ -430,7 +439,9 @@ def _count_verify_fields(
     return sum(1 for v in (verify_js, verify_selector_appears, verify_selector_gone, verify_text_contains) if v)
 
 
-async def _check_verify(session: Any, *, verify_js, verify_selector_appears, verify_selector_gone, verify_text_contains) -> bool:
+async def _check_verify(
+    session: Any, *, verify_js, verify_selector_appears, verify_selector_gone, verify_text_contains
+) -> bool:
     """One evaluation of whichever verify shape the caller chose."""
     target = session._target()
     if verify_js is not None:
@@ -439,11 +450,7 @@ async def _check_verify(session: Any, *, verify_js, verify_selector_appears, ver
         return await target.locator(verify_selector_appears).count() > 0
     if verify_selector_gone is not None:
         return await target.locator(verify_selector_gone).count() == 0
-    return bool(
-        await target.evaluate(
-            "(needle) => document.body.innerText.includes(needle)", verify_text_contains
-        )
-    )
+    return bool(await target.evaluate("(needle) => document.body.innerText.includes(needle)", verify_text_contains))
 
 
 async def run_a11y_dragdrop(
@@ -963,9 +970,7 @@ def test_lint_rejects_two_verify_fields() -> None:
 
 
 def test_lint_accepts_a_well_formed_action() -> None:
-    issues = lint_macro(
-        _macro({"action": "a11y_dragdrop", "source_selector": "#i", "verify_js": "() => true"})
-    )
+    issues = lint_macro(_macro({"action": "a11y_dragdrop", "source_selector": "#i", "verify_js": "() => true"}))
     assert issues == []
 ```
 
@@ -1187,9 +1192,7 @@ async def test_failed_verify_releases_the_widget(session) -> None:
     )
     assert result["stage_reached"] == "failed_verify"
     assert result["released"] is True
-    still_grabbed = await session.page.evaluate(
-        "() => document.querySelectorAll('[aria-grabbed=\"true\"]').length"
-    )
+    still_grabbed = await session.page.evaluate("() => document.querySelectorAll('[aria-grabbed=\"true\"]').length")
     assert still_grabbed == 0, "release_key did not exit grab mode"
 ```
 
