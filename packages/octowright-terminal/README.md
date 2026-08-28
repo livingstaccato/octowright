@@ -6,9 +6,9 @@ This package is entirely optional. Octowright core has no terminal-specific code
 
 ## Installation
 
-This package is **not on PyPI** — `pip install octowright-terminal` answers "No matching distribution found". Only its dependencies are: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published there on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout any more (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`). The package itself is installed from that repo.
+This package is **not on PyPI** — `uv pip install octowright-terminal` answers "No matching distribution found". Only its dependencies are: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published there on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout any more (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`). The package itself is installed from that repo.
 
-It also needs a core that carries the plugin machinery (`octowright.plugins`), and **no released octowright does yet**. The `octowright` dependency in this package's `pyproject.toml` is unpinned, so installing it against a `pip install octowright` core succeeds — and then fails at daemon start with `ModuleNotFoundError: No module named 'octowright.plugins'`. Until a release carries it, core and plugin come from the same checkout.
+It also needs a core that carries the plugin machinery (`octowright.plugins`). **0.17.0 is the first release that does** — the published wheel contains `octowright/plugins/`. The `octowright` dependency in this package's `pyproject.toml` is unpinned, so installing against an *older* PyPI core still succeeds and then fails at daemon start with `ModuleNotFoundError: No module named 'octowright.plugins'`. Core and plugin still come from the same checkout in practice, now because this package is unpublished rather than because core lacks the machinery.
 
 From that checkout, this package is a `[tool.uv.workspace]` member and installs in editable mode from the `terminal` dependency group — deliberately its own group rather than part of `dev`, so core stays uterm-free unless asked:
 

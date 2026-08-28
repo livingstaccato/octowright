@@ -36,7 +36,7 @@ async def _payload() -> dict:
 @pytest.mark.anyio
 async def test_reports_the_running_version(monkeypatch: pytest.MonkeyPatch) -> None:
     """Even when a newer package is installed on disk, which is exactly what a
-    `uv sync` / `pip install -U` leaves behind before a restart."""
+    `uv sync` / `uv pip install -U` leaves behind before a restart."""
     monkeypatch.setattr(health, "_installed_version", lambda: "99.0.0")
 
     payload = await _payload()
