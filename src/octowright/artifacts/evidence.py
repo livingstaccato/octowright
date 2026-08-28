@@ -80,16 +80,3 @@ class EvidenceBuilder:
                 "ts": now_iso(),
             }
         )
-
-    def digest(self, *, summary: str, truncated: bool, source_size: int, cap: int) -> dict[str, Any]:
-        return self.add(
-            {
-                "id": self._next_id(),
-                "type": "digest",
-                "summary": summary,
-                "truncated": truncated,
-                "source_size": source_size,
-                "cap": cap,
-                "ts": now_iso(),
-            }
-        )
