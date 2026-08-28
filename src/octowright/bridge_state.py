@@ -146,8 +146,8 @@ def _acquire_bounded(fh: Any, lock_path: Path, *, deadline: float | None = None)
     and the leader's housekeeping job), and ``flock`` is NOT released when a
     process is SIGSTOPped — exactly what an MCP client does to a follower during
     compaction. One frozen peer mid-transaction would therefore block every
-    other process's event loop for the length of the freeze. Before this lock
-    existed, writes were wait-free and no process could block another.
+    other process's event loop for the length of the freeze — the price of the
+    lock, against wait-free writes where no process can block another.
 
     Poll non-blocking until the deadline, then return ``False`` so the caller
     skips that snapshot/removal. A later heartbeat or housekeeping pass retries

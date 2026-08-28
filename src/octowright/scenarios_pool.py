@@ -389,9 +389,9 @@ class ScenarioPool:
         plugin's own ``entry.setdefault("kind", p.kind)``) stamps ``kind``,
         and every hand-built ``LiveScenario`` in the test suite stamps it
         too, so a participant dict with no recorded ``kind`` is a genuine
-        bug, not a case to default around. A defaulted fallback here
-        previously routed such a dict to the browser pool for closing while
-        ``adapter_for`` (strict) skipped its teardown macro -- the two
+        bug, not a case to default around. A defaulted fallback here routes
+        such a dict to the browser pool for closing while
+        ``adapter_for`` (strict) skips its teardown macro -- the two
         resolvers must agree, and disagreeing silently is worse than raising.
         """
         from octowright.scenario_kinds import pool_for_kind

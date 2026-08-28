@@ -149,8 +149,8 @@ class SessionNetworkMixin(SessionLike):
         roughly 6.6k tokens to 45k. Ask for them to verify a header actually
         rode the request; leave them off for ordinary traffic inspection.
 
-        ``limit`` caps the rows in ONE read. There was previously no cap at
-        all, so a read could return the whole 5000-entry deque.
+        ``limit`` caps the rows in ONE read. Uncapped, a read returns the
+        whole 5000-entry deque.
         """
         retained = list(self._network_requests)
         retained_base = self._network_requests_dropped

@@ -402,8 +402,8 @@ def macro_artifact_critical_points_get(name: str) -> dict[str, Any]:
 def _normalize_critical_point(point: dict[str, Any], index: int) -> dict[str, Any]:
     """Fill a critical point out to the shape the design doc calls canonical.
 
-    Only `id`, `status` and `checks` used to be filled, so the other four slots
-    were simply absent from stored critical points. The visible cost was in the
+    Filling only `id`, `status` and `checks` leaves the other four slots absent
+    from stored critical points. The visible cost lands in the
     run report, which renders `cp.get("description", "Unknown")` -- a claim
     with no description came back as `### CP1: Unknown`, naming a critical
     point while saying nothing about what it asserts. `evidence`,
@@ -495,8 +495,8 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
     manifest["critical_points"] = apply_verification_rollup(critical_points, v_res["critical_points"])
     write_artifact_manifest(manifest_path, manifest)
 
-    # The run bundle was written before this verification could run, so its
-    # summary.md carries no verdict. Re-render it now that there is one.
+    # The run bundle is written before this verification can run, so its
+    # summary.md carries no verdict until it is re-rendered here.
     summary_path = refresh_run_summary(run_dir=run_dir, result=result, evidence=evidence_records, verification=v_res)
 
     return {
