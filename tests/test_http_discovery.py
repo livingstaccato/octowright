@@ -9,6 +9,7 @@ index's negative-cache via dir mtime."""
 from __future__ import annotations
 
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from octowright.http import discovery
 @pytest.fixture(autouse=True)
 def _clear_caches() -> None:
     discovery.invalidate_recording_index()
-    discovery._summary_per_file.clear()
+    discovery.invalidate_closed_list()
 
 
 def _write_recording(rec_dir: Path, instance_id: str, *, kind: str = "chromium") -> Path:
@@ -33,50 +34,30 @@ def _write_recording(rec_dir: Path, instance_id: str, *, kind: str = "chromium")
     return path
 
 
-def test_summarise_recording_caches_per_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """First call reads + parses; second call hits cache, no re-parse."""
-    rec = tmp_path / "recordings"
-    jsonl = _write_recording(rec, "abc12345dead")
+def test_listing_rereads_a_replaced_recording(tmp_path: Path) -> None:
+    """A recording replaced at the same path is re-read once the directory changes.
 
-    parse_count = 0
-    real = discovery._summarise_recording
-
-    def counting(jsonl_path: Path):  # type: ignore[no-untyped-def]
-        nonlocal parse_count
-        parse_count += 1
-        return real(jsonl_path)
-
-    monkeypatch.setattr(discovery, "_summarise_recording", counting)
-
-    s1 = discovery._summarise_recording_cached(jsonl)
-    s2 = discovery._summarise_recording_cached(jsonl)
-    assert s1 == s2
-    assert parse_count == 1, "second call should hit cache, not re-parse"
-
-
-def test_summarise_recording_invalidates_when_signature_changes(tmp_path: Path) -> None:
-    """A file with the same path but a fresh signature gets re-parsed."""
+    The listing snapshot keys on the directory mtime, and a summary is built
+    from the opening row -- written once at launch and never rewritten, so an
+    append cannot change it. A *different* recording at the same path only
+    follows a delete, which bumps the directory mtime (and which
+    recording_cleanup invalidates explicitly), so the per-file signature check
+    on rebuild is what catches the swap.
+    """
     rec = tmp_path / "recordings"
     jsonl = _write_recording(rec, "rebuiltidwxyz")
+    assert discovery._summaries_for(rec)[0]["kind"] == "chromium"
 
-    s1 = discovery._summarise_recording_cached(jsonl)
-    assert s1 is not None
-    assert s1["kind"] == "chromium"
-
-    # Rewrite with a different launch kind; signature (mtime/size) changes.
     jsonl.write_text(
         json.dumps({"action": "launch", "kind": "firefox", "ts": "2026-01-02T00:00:00Z"}) + "\n",
         encoding="utf-8",
     )
-    # Bump mtime explicitly in case the rewrite landed in the same nanosecond.
-    import os
+    stamp = jsonl.stat().st_mtime_ns + 1_000_000_000
+    os.utime(jsonl, ns=(stamp, stamp))
+    dir_stat = rec.stat()
+    os.utime(rec, ns=(dir_stat.st_atime_ns, dir_stat.st_mtime_ns + 1_000_000_000))
 
-    new_mtime = jsonl.stat().st_mtime_ns + 1_000_000_000
-    os.utime(jsonl, ns=(new_mtime, new_mtime))
-
-    s2 = discovery._summarise_recording_cached(jsonl)
-    assert s2 is not None
-    assert s2["kind"] == "firefox"
+    assert discovery._summaries_for(rec)[0]["kind"] == "firefox"
 
 
 def test_summarise_recording_classifies_closed_terminal(tmp_path: Path) -> None:
@@ -104,42 +85,6 @@ def test_summarise_recording_classifies_closed_terminal(tmp_path: Path) -> None:
     assert summary["connector_type"] == "pty"
 
 
-def test_invalidate_recording_summary_drops_entry(tmp_path: Path) -> None:
-    rec = tmp_path / "recordings"
-    jsonl = _write_recording(rec, "evictidqrstu")
-    discovery._summarise_recording_cached(jsonl)
-    assert str(jsonl) in discovery._summary_per_file
-
-    discovery.invalidate_recording_summary(jsonl)
-    assert str(jsonl) not in discovery._summary_per_file
-
-
-def test_closed_sessions_uses_per_file_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Repeated _closed_sessions calls don't re-parse JSONL files when nothing changed."""
-    rec = tmp_path / "recordings"
-    for i in range(5):
-        _write_recording(rec, f"sess{i:08x}xxxx")
-
-    parse_count = 0
-    real = discovery._summarise_recording
-
-    def counting(jsonl_path: Path):  # type: ignore[no-untyped-def]
-        nonlocal parse_count
-        parse_count += 1
-        return real(jsonl_path)
-
-    monkeypatch.setattr(discovery, "_summarise_recording", counting)
-
-    discovery._closed_sessions(rec, set())  # cold: 5 parses
-    assert parse_count == 5
-
-    discovery._closed_sessions(rec, set())  # warm: 0 parses
-    assert parse_count == 5
-
-    discovery._closed_sessions(rec, set())  # warm: still 0 parses
-    assert parse_count == 5
-
-
 def test_find_recording_for_skips_rebuild_on_unchanged_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Repeated bad-id lookups must not re-walk the dir when nothing has changed."""
     rec = tmp_path / "recordings"
@@ -165,32 +110,28 @@ def test_find_recording_for_skips_rebuild_on_unchanged_dir(tmp_path: Path, monke
     assert build_count == 1, f"expected 1 build, got {build_count} (negative-cache regression)"
 
 
-def test_summary_cache_is_thread_safe_under_concurrent_load(tmp_path: Path) -> None:
-    """Many threads hammering _summarise_recording_cached on distinct paths
-    must not raise ``RuntimeError: dictionary changed size during iteration``
-    (and every call must return a usable summary)."""
+def test_listing_snapshot_is_thread_safe_under_concurrent_load(tmp_path: Path) -> None:
+    """Many threads assembling the listing must not raise ``RuntimeError:
+    dictionary changed size during iteration`` (and every call must return a
+    usable listing). Discovery runs on the event loop AND on ``to_thread``
+    workers, so the snapshot is written under the same lock the index uses."""
     rec = tmp_path / "recordings"
-    # Use more paths than DISCOVERY_CACHE_MAX_ENTRIES so the LRU also exercises
-    # popitem under contention; default is 256 so 320 distinct ids guarantees
-    # eviction churn while the workers race.
-    paths = [_write_recording(rec, f"thr{i:09x}") for i in range(320)]
+    for i in range(320):
+        _write_recording(rec, f"thr{i:09x}")
 
     errors: list[BaseException] = []
 
-    def worker(path: Path) -> None:
+    def worker(_: int) -> None:
         try:
             for _ in range(10):
-                summary = discovery._summarise_recording_cached(path)
-                assert summary is not None
+                assert len(discovery._summaries_for(rec)) == 320
         except BaseException as exc:
             errors.append(exc)
 
     with ThreadPoolExecutor(max_workers=50) as pool:
-        # Submit every path; ThreadPoolExecutor schedules them across the
-        # 50 workers so we get genuine cross-thread contention on the LRU.
-        list(pool.map(worker, paths * 2))
+        list(pool.map(worker, range(100)))
 
-    assert not errors, f"concurrent cache access raised: {errors[:3]}"
+    assert not errors, f"concurrent listing access raised: {errors[:3]}"
 
 
 def test_recording_index_is_thread_safe_under_concurrent_load(tmp_path: Path) -> None:
