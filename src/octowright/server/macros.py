@@ -300,6 +300,22 @@ async def run_test_suite(
 @mcp.tool(
     structured_output=False,
     description=(
+        "Delete a macro's artifact directory: its manifest and configured critical points, "
+        "every run bundle, and any exported CLI. Irreversible. Nothing else removes these -- "
+        "recordings_cleanup deliberately preserves artifacts because age does not make a "
+        "curated artifact disposable, and macro_delete keeps them on purpose so the history "
+        "of what a macro did outlives its definition. Returns the run count it removed."
+    ),
+)
+def macro_artifact_delete(name: str) -> dict[str, Any]:
+    from octowright.macros import artifacts as macro_artifacts
+
+    return macro_artifacts.delete_macro_artifact(name)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Find recording artefacts (JSONL logs, screenshots, videos, traces) older than "
         "`days` and optionally delete them. Defaults to dry_run=True so the first call "
         "is always safe. Pass dry_run=False to actually delete. Returns a per-kind "
