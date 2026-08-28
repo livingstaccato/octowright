@@ -97,6 +97,7 @@ _ACTION_MAP = {
     "set_input_files": "set_input_files",
     "click_by": "click_by",
     "fill_by": "fill_by",
+    "a11y_dragdrop": "a11y_dragdrop",
     # User actions the recorder emits. Absent from the dispatch map they are
     # saved into macros and then silently no-op'd as errors.
     "hover": "hover",
