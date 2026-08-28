@@ -40,6 +40,41 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.17.0": [
+        "Terminal sessions are a plugin now, not part of core. PTY/SSH/telnet "
+        "moved to the octowright-terminal distribution and core carries no "
+        "terminal code at all -- no terminal package, no uterm import, no "
+        "hardcoded scenario branch, no xterm renderer in the dashboard bundle. "
+        "Install the terminal dependency group and set OCTOWRIGHT_PLUGINS="
+        "terminal to get the terminal_* tools back. Nothing loads by default, "
+        "because a transitive dependency must not be able to extend a "
+        "browser-driving daemon on its own.",
+        "Anything can be a session kind now. A distribution declares an "
+        "octowright.session_kinds entry point and gets MCP tools, a scenario "
+        "adapter, a capability profile, a contained artifact store, and its own "
+        "dashboard renderer -- without a line of it landing in core's bundle. A "
+        "plugin that cannot satisfy the contract it claims is refused at load "
+        "with the offending method named, rather than failing halfway through "
+        "someone's scenario and reading as a scenario bug.",
+        "octowright cleanup no longer eats your macro artifacts. They live "
+        "under the recordings root, so the age-based sweep pruned any artifact "
+        "whose files had not been touched lately -- hand-written critical "
+        "points and their whole verification history, gone quietly. Age says a "
+        "recording is disposable; it says the opposite about an artifact, "
+        "because the one that stops changing is the one that keeps passing.",
+        "octowright persona delete asks first. It was taking a name and "
+        "removing the tree -- live session cookies, localStorage and IndexedDB "
+        "for every site that persona ever logged into, a stronger credential "
+        "than the typed password we already protect. It now names what it is "
+        "about to destroy; --yes skips the prompt for scripts.",
+        "Verifying a macro artifact twice gives the same answer twice. A "
+        "result_status check declares its expected run status under `status` "
+        "and the evaluation reported its verdict under the same key, so the "
+        'first verify rewrote "ok" to "passed" in the manifest and the '
+        'second one compared the run against "passed" and failed. The '
+        "verdict also reaches summary.md now -- that section was written "
+        "before verification could run, so it was unreachable in production.",
+    ],
     "0.16.4": [
         "timeout_ms actually works on a CSS-selector click or fill. It was "
         "accepted by macro lint, saved by the dashboard editor, forwarded on "
