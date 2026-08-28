@@ -129,10 +129,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`octowright init` wrote into the checkout's own tracked config.** The scaffold
   resolved its target by walking up from CWD, so running it inside the repo rewrote
   `.octowright/config.yaml` — and the test suite did the same on every run.
-- **Three CI flakes.** The proxy-supervisor tests raced a fixed sleep instead of
+- **Four CI flakes.** The proxy-supervisor tests raced a fixed sleep instead of
   polling for the condition; the live heartbeat check raced its own tool call; and the
   dead-leader check ran on a smaller budget than its siblings. `slowmo` is asserted by
   what the runtime asks for rather than by a stopwatch.
+- **The live operation-gate test raced its own admission deadline.** One pool-wide
+  queue timeout served three opposing requirements — two holds that must be *admitted*
+  and one that must be *rejected* — and it had been tuned for the rejection case and
+  one of the admissions, leaving the third to whatever a real two-action macro happened
+  to cost on the host. That hold is the one the test does not control: measured at
+  0.092–0.095s on a warm Apple Silicon laptop and 0.475s on a contended macOS amd64 CI
+  runner, a 5.1× spread with nothing bounding the upper end, against a 0.5s budget. The
+  queued manual evaluate was rejected after 0.507s instead of being admitted. Every hold
+  is now stated relative to a single named budget, raised to 2.0s so the macro would
+  have to run 4.2× slower than the worst yet observed before the race returns.
 
 ### Documentation
 - **`octowright cleanup` does not prune profiles**, despite saying it did. Deciding a
