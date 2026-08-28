@@ -29,6 +29,7 @@ from octowright.artifacts.paths import ArtifactStore
 from octowright.macros.artifacts import (
     _cap_macro,
     _compact_manifest,
+    _manifest_for_plan,
     _merge_existing_manifest,
     _missing_args,
 )
@@ -225,3 +226,66 @@ def test_compact_returns_none_for_unreadable_manifests(tmp_path: Path, monkeypat
 
     _write(bad, ["not", "an", "object"])
     assert _compact_manifest(store, bad) is None
+
+
+# ---------------------------------------------------------------------------
+# _manifest_for_plan -- what a freshly planned manifest asserts about itself
+# ---------------------------------------------------------------------------
+
+
+def _plan(macro: dict[str, Any], missing: list[str], tmp_path: Path) -> dict[str, Any]:
+    return _manifest_for_plan(
+        name="login",
+        macro=macro,
+        args_used={"user": "tanuki"},
+        missing_args=missing,
+        artifact_dir=tmp_path / "artifact",
+        runs_dir=tmp_path / "artifact" / "runs",
+        exports_dir=tmp_path / "artifact" / "exports",
+    )
+
+
+def test_ready_is_false_exactly_when_arguments_are_missing(tmp_path: Path) -> None:
+    """`ready` is the flag a caller checks before running, and it inverts cleanly.
+
+    `"ready": not missing_args` dropped to `missing_args` reports a non-empty
+    list -- truthy -- so a plan that is missing required arguments announces
+    itself as ready, and the run fails later for a reason the plan already
+    knew. Nothing asserted this field.
+    """
+    macro = {"description": "Login flow", "actions": [{"action": "navigate"}]}
+
+    assert _plan(macro, [], tmp_path)["metadata"]["ready"] is True
+    assert _plan(macro, ["password"], tmp_path)["metadata"]["ready"] is False
+
+
+def test_action_count_falls_back_to_zero_for_a_malformed_actions_field(tmp_path: Path) -> None:
+    """The `else 0` branch: a macro whose `actions` is not a list counts none.
+
+    `else 1` is equally plausible-looking and claims a step that does not
+    exist. Only a malformed macro reaches it, which is why it went unobserved.
+    """
+    assert _plan({"actions": [1, 2, 3]}, [], tmp_path)["metadata"]["action_count"] == 3
+    assert _plan({"actions": "not-a-list"}, [], tmp_path)["metadata"]["action_count"] == 0
+    assert _plan({}, [], tmp_path)["metadata"]["action_count"] == 0
+
+
+def test_the_plan_records_the_three_directories_and_the_description(tmp_path: Path) -> None:
+    """Each path is stringified from its own argument; `str(None)` passes silently."""
+    manifest = _plan({"description": "Login flow", "actions": []}, ["password"], tmp_path)
+    meta = manifest["metadata"]
+
+    assert meta["description"] == "Login flow"
+    assert meta["missing_args"] == ["password"]
+    assert meta["paths"]["artifact_dir"] == str(tmp_path / "artifact")
+    assert meta["paths"]["runs_dir"] == str(tmp_path / "artifact" / "runs")
+    assert meta["paths"]["exports_dir"] == str(tmp_path / "artifact" / "exports")
+    # The three must be distinct -- a single `str(None)` would collapse them.
+    assert len({meta["paths"][k] for k in ("artifact_dir", "runs_dir", "exports_dir")}) == 3
+
+
+def test_the_plan_carries_the_arguments_it_was_built_with(tmp_path: Path) -> None:
+    manifest = _plan({"actions": []}, [], tmp_path)
+    assert manifest["parameters"] == {"user": "tanuki"}
+    assert manifest["source"]["type"] == "macro"
+    assert manifest["source"]["path"].endswith(".json")
