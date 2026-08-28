@@ -129,7 +129,7 @@ def _leader_url_is_safe(mcp_url: str) -> bool:
     """Refuse to bridge to a leader URL whose host isn't loopback.
 
     The lockfile is writable by any process running as the same user — a
-    malicious local process (poisoned pip install, sandbox escape, etc.)
+    malicious local process (poisoned dependency install, sandbox escape, etc.)
     could overwrite ``mcp_url`` to redirect MCP traffic (including persona
     credentials substituted into tool args) to an attacker-controlled URL.
     Validate the host before opening the stream; allow remote URLs only

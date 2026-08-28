@@ -46,7 +46,7 @@ plugin directory (`~/.gemini/config/plugins/octowright/mcp_config.json`) that re
 }
 ```
 
-This uses `uvx` so no separate `pip install octowright` is needed — `uv` resolves and
+This uses `uvx` so no separate install step is needed — `uv` resolves and
 runs the package on demand. If `uvx` isn't on your PATH, install `uv` first
 (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`).
 

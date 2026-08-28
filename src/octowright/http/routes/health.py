@@ -9,7 +9,7 @@
 
 That sounds obvious; the tempting alternative is not. Calling
 ``importlib.metadata.version("octowright")` on every request reads dist-info
-off disk, on the stated intent that "a ``pip install --upgrade`` is reflected
+off disk, on the stated intent that "a ``uv pip install --upgrade`` is reflected
 without a server restart". But an upgrade on disk does not change a running
 process: the daemon keeps executing the code it imported until it is restarted.
 So the one question an operator asks this endpoint after deploying -- "is the
