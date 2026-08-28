@@ -43,7 +43,7 @@ uv run octowright restart        # stop the daemon, reap orphans, start a fresh 
 uv run octowright selftest       # list MCP tools without a client
 uv run octowright scenario list  # list loaded scenarios
 uv run octowright persona list   # list saved personas (also: persona create/show/delete)
-uv run octowright cleanup        # prune stale recordings + abandoned profiles
+uv run octowright cleanup        # prune stale recordings (NOT profiles or macro artifacts)
 uv run octowright dashboard      # mint a single-use dashboard pairing code + /pair URL
 uv run octowright init           # scaffold a starter octowright project tree
 uv run octowright skill          # install/inspect the octowright agent skill
@@ -221,6 +221,11 @@ Bandit's B110 (`try/except/pass`) and B112 (`try/except/continue`) are blanket-s
 - Best-effort I/O during teardown
 
 Silent swallow in **user-action paths** must `log.warning` or `log.debug` instead of truly swallowing. The bandit suppression assumes the swallow is intentional, not an excuse to hide failures from the user.
+
+**`octowright cleanup` scope.** The CLI prunes stale recordings, screenshots, videos and traces under `RECORDINGS_DIR` — and nothing else. Two deliberate exclusions:
+
+- **Profiles.** `profile_cleanup` exists, but only as an MCP tool, because deciding a profile is abandoned requires knowing which profiles live browsers are using and the CLI is a *separate process* from the daemon with no access to the pool. It populates `in_use` from `pool.iter_sessions()`; the CLI cannot, so it does not offer the operation rather than offering an unsafe one. A profile dir holds live session cookies for every site that persona logged into.
+- **Macro artifacts.** They live at `<RECORDINGS_DIR>/artifacts` and so sit inside the tree the sweep walks; `recording_cleanup.PRESERVED_SUBDIRS` excludes them. Age is a fair proxy for "this recording is disposable" and a bad one for "this artifact is disposable" — a recording is a byproduct, a critical point is something a person wrote, and the artifact whose files stop being touched is the stable one that keeps passing. `.frame-cache` is deliberately *not* preserved: it is a regenerable cache and reclaiming it is the point.
 
 ### Idle Watchdog
 
