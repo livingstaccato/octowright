@@ -63,6 +63,20 @@ class _FakeLocator:
         self._rec.record(f"locator.inner_text:{self._label}")
         return "read"
 
+    async def focus(self) -> None:
+        self._rec.record(f"locator.focus:{self._label}")
+
+    async def evaluate(self, expression: str, *args: Any) -> Any:
+        """a11y_dragdrop's grab predicate. ``"() => false"`` is a deliberate
+        sentinel other expressions never carry, letting a test force a False
+        result without a real JS engine."""
+        self._rec.record(f"locator.evaluate:{self._label}", expression)
+        return expression != "() => false"
+
+    async def count(self) -> int:
+        self._rec.record(f"locator.count:{self._label}")
+        return 1
+
 
 class _FakeHandle:
     def __init__(self, rec: _Recorder, frame: Any) -> None:
@@ -82,6 +96,11 @@ class _FakeKeyboard:
 
     async def press(self, key: str) -> None:
         self._rec.record("keyboard.press", key)
+        # a11y_dragdrop exception-mid-sequence sentinel: raises AFTER being
+        # recorded, so a test can see the attempt happened and then assert on
+        # the release-and-reraise path it triggers.
+        if key == "PoisonKey":
+            raise RuntimeError("boom")
 
 
 class _FakeContext:
@@ -151,8 +170,10 @@ class _FakePage:
         self._log("screenshot", **kw)
 
     async def evaluate(self, expression: str, *args: Any) -> Any:
+        """a11y_dragdrop's verify_js/verify_text_contains land here too --
+        same ``"() => false"`` sentinel as ``_FakeLocator.evaluate``."""
         self._log("evaluate", expression)
-        return True
+        return expression != "() => false"
 
     async def wait_for_selector(self, selector: str, **kw: Any) -> _FakeHandle:
         self._log("wait_for_selector", selector)
@@ -195,6 +216,10 @@ class _FakePage:
 
     def get_by_test_id(self, test_id: str) -> _FakeLocator:
         return _FakeLocator(self._rec, "test_id")
+
+    def locator(self, selector: str) -> _FakeLocator:
+        """a11y_dragdrop's source/verify_selector_* locators (CSS, not ARIA)."""
+        return _FakeLocator(self._rec, "css")
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, rec: _Recorder) -> None:
@@ -246,6 +271,14 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "hover", "selector": "#menu"},
     {"action": "select_option", "selector": "#country", "value": "NL"},
     {"action": "drag", "source": "#a", "target": "#b"},
+    {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "nav_key": "arrow",
+        "nav_direction": "down",
+        "max_nav_steps": 2,
+        "verify_js": "() => true",
+    },
     {"action": "set_input_files", "selector": "#file", "paths": ["a.txt"]},
     {"action": "resize", "width": 1280, "height": 800},
     {"action": "navigate_back"},
@@ -367,6 +400,138 @@ def test_switch_frame_retargets_element_actions(monkeypatch: pytest.MonkeyPatch)
     result, rec = _run(monkeypatch, actions)
     assert result["executed"] == 4
     assert rec.names().count("click") == 2
+
+
+def _presses(rec: _Recorder) -> list[str]:
+    return [args[0] for name, args, _kw in rec.calls if name == "keyboard.press"]
+
+
+def test_a11y_dragdrop_verified_immediately_needs_no_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The success path: grab, navigate, drop, verify passes on the first poll -- no release."""
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "nav_key": "tab",
+        "max_nav_steps": 3,
+        "verify_js": "() => true",
+    }
+    result, rec = _run(monkeypatch, [action])
+    assert result == {"executed": 1, "skipped": 0}
+    assert _presses(rec) == ["Space", "Tab", "Tab", "Tab", "Space"]
+
+
+@pytest.mark.parametrize(
+    ("nav_key", "nav_direction", "expected"),
+    [
+        ("tab", None, ["Tab", "Tab"]),
+        ("tab", "backward", ["Shift+Tab", "Shift+Tab"]),
+        ("arrow", "up", ["ArrowUp", "ArrowUp"]),
+        ("arrow", None, ["ArrowDown", "ArrowDown"]),
+    ],
+)
+def test_a11y_dragdrop_tab_and_arrow_modes_resolve_the_right_keys(
+    monkeypatch: pytest.MonkeyPatch, nav_key: str, nav_direction: str | None, expected: list[str]
+) -> None:
+    action: dict[str, Any] = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "nav_key": nav_key,
+        "max_nav_steps": 2,
+        "verify_js": "() => true",
+    }
+    if nav_direction is not None:
+        action["nav_direction"] = nav_direction
+    _result, rec = _run(monkeypatch, [action])
+    nav_presses = _presses(rec)[1:-1]  # strip the leading grab press and the trailing drop press
+    assert nav_presses == expected
+
+
+def test_a11y_dragdrop_keys_mode_sends_the_explicit_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The third nav mode: an explicit key sequence, sent verbatim once."""
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "nav_key": "keys",
+        "nav_key_sequence": ["ArrowRight", "ArrowRight", "Enter"],
+        "verify_js": "() => true",
+    }
+    _result, rec = _run(monkeypatch, [action])
+    nav_presses = _presses(rec)[1:-1]
+    assert nav_presses == ["ArrowRight", "ArrowRight", "Enter"]
+
+
+def test_a11y_dragdrop_defaults_match_the_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No optional fields set -- must resolve exactly the engine's defaults:
+    nav_key=tab forward, max_nav_steps=12, grab_key=drop_key=Space, release_key=Escape."""
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "verify_js": "() => false",  # sentinel: never verifies, so release always fires
+        "verify_timeout_ms": 5,
+        "verify_poll_ms": 1,
+    }
+    result, rec = _run(monkeypatch, [action])
+    assert result == {"executed": 1, "skipped": 0}
+    presses = _presses(rec)
+    assert presses[0] == "Space"  # grab_key default
+    assert presses[1:13] == ["Tab"] * 12  # max_nav_steps default (12), tab forward direction default
+    assert presses[13] == "Space"  # drop_key default
+    assert presses[14] == "Escape"  # release_key default
+
+
+def test_a11y_dragdrop_releases_on_failed_verify(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The trap: a verify that never passes must still press release_key.
+
+    Task 1's fix round removed exactly this bug from the engine -- a grabbed
+    widget left stuck is indistinguishable from a grab that never registered.
+    """
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "max_nav_steps": 1,
+        "verify_js": "() => false",
+        "verify_timeout_ms": 20,
+        "verify_poll_ms": 5,
+        "release_key": "Escape",
+    }
+    result, rec = _run(monkeypatch, [action])
+    assert result == {"executed": 1, "skipped": 0}
+    assert _presses(rec) == ["Space", "Tab", "Space", "Escape"]
+
+
+def test_a11y_dragdrop_ungrabbed_widget_skips_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other half of the trap: a False grab predicate must NOT release --
+    the key was pressed but the widget demonstrably never entered grab mode,
+    so there is nothing to release. Nav/drop/verify must not run either."""
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "grabbed_predicate_js": "() => false",
+        "verify_js": "() => true",
+    }
+    result, rec = _run(monkeypatch, [action])
+    assert result == {"executed": 1, "skipped": 0}
+    assert _presses(rec) == ["Space"]
+
+
+def test_a11y_dragdrop_releases_on_exception_mid_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An exception during navigate/drop/verify must still release AND
+    propagate the ORIGINAL exception -- a failing release must not replace it."""
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "nav_key": "keys",
+        "nav_key_sequence": ["PoisonKey"],
+        "verify_js": "() => true",
+    }
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+    source = render_macro_cli(name="boom", macro={"actions": [action]}, include_evidence=False)
+    namespace: dict[str, Any] = {}
+    exec(source, namespace)
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(namespace["run_boom"]())
+    assert _presses(rec) == ["Space", "PoisonKey", "Escape"]
 
 
 def test_unmock_route_without_a_matching_mock_raises(monkeypatch: pytest.MonkeyPatch) -> None:
