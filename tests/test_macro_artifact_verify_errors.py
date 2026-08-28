@@ -355,6 +355,10 @@ async def test_a_failed_replay_is_recorded_with_its_traceback(monkeypatch: pytes
 
     assert record["status"] == "failed"
     assert record["error"] == "RuntimeError: selector never appeared"
+    # The counters keep their pre-try initialisers: a replay that raised before
+    # returning executed nothing, and `= 1` is as plausible-looking as `= 0`.
+    assert record["executed"] == 0
+    assert record["skipped"] == 0
 
     records = json.loads((_run_dir(macro_artifacts, result["run_id"]) / "evidence.json").read_text(encoding="utf-8"))[
         "records"
