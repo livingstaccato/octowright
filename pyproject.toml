@@ -366,6 +366,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_artifact_critical_points.py",
     "tests/test_macro_artifact_digest_and_listing.py",
     "tests/test_macro_artifact_manifest_helpers.py",
+    "tests/test_macro_artifact_verify_errors.py",
     "tests/test_macro_artifacts.py",
     "tests/test_macro_artifacts_roundtrip.py",
     "tests/test_macro_calls_branches.py",
