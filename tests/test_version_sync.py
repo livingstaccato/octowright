@@ -11,7 +11,7 @@ from pathlib import Path
 from octowright.version import VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "0.16.4"
+RELEASE_VERSION = "0.17.0"
 
 
 def _version_file_value() -> str:
