@@ -280,3 +280,97 @@ def test_export_records_the_plan_metadata_it_built(monkeypatch: pytest.MonkeyPat
     assert meta["action_count"] == 1
     assert meta["missing_args"] == []
     assert len({meta["paths"][k] for k in ("artifact_dir", "runs_dir", "exports_dir")}) == 3
+
+
+def test_max_chars_reaches_both_digest_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`max_chars` is threaded to `digest_macro` and `digest_recording_text` alike.
+
+    Dropping the keyword at either call site leaves the digest working on the
+    4000-character default -- a caller asking for a small summary silently gets
+    a large one, and the `cap` the payload reports is not the cap it was asked
+    for.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    storage.write_macro(
+        name="login",
+        macro={
+            "name": "login",
+            "description": "x" * 500,
+            "parameters": [],
+            "actions": [{"action": "navigate", "url": "https://example.test/"}],
+        },
+    )
+
+    small = macro_artifacts.macro_digest(name="login", max_chars=40)
+    assert small["cap"] == 40
+    assert small["truncated"] is True
+    assert len(small["summary"]) == 40
+
+    from octowright.artifacts.paths import ArtifactStore
+
+    recording = ArtifactStore().root / "sample.jsonl"
+    recording.parent.mkdir(parents=True, exist_ok=True)
+    recording.write_text(
+        "\n".join(json.dumps({"ts": i, "action": "navigate", "url": f"https://example.test/{i}"}) for i in range(50))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from_recording = macro_artifacts.macro_digest(recording_path=str(recording), max_chars=40)
+    assert from_recording["cap"] == 40
+    assert from_recording["truncated"] is True
+
+
+def test_planning_records_the_manifest_it_built(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`plan_macro_artifact` writes a manifest and nothing read it back.
+
+    Its `_manifest_for_plan` call site could pass `None` for any keyword while
+    the suite stayed green -- the helper's own tests cover the helper, not the
+    argument threading here. Uses a macro with an unsupplied parameter so
+    `missing_args` and `ready` carry real values, which also pins the return
+    contract: `ok` is `not missing_args`, so an incomplete plan reports False
+    while still writing a usable manifest.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    storage.write_macro(
+        name="login",
+        macro={
+            "name": "login",
+            "description": "Login flow",
+            "parameters": ["user", "password"],
+            "actions": [{"action": "navigate", "url": "https://example.test/login"}],
+        },
+    )
+
+    planned = macro_artifacts.plan_macro_artifact("login", args={"user": "tanuki"})
+
+    assert planned["ok"] is False  # a required argument is missing
+    assert planned["missing_args"] == ["password"]
+    assert planned["args_used"] == {"user": "tanuki"}
+    assert Path(planned["paths"]["macro_path"]).exists()
+    assert len(set(planned["paths"].values())) == 5  # no two paths collapse to one
+
+    listed = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
+    meta = listed["metadata"]
+
+    assert listed["parameters"] == {"user": "tanuki"}
+    assert meta["missing_args"] == ["password"]
+    assert meta["ready"] is False
+    assert meta["description"] == "Login flow"
+    assert meta["action_count"] == 1
+    assert len({meta["paths"][k] for k in ("artifact_dir", "runs_dir", "exports_dir")}) == 3
+
+
+def test_planning_with_every_argument_supplied_is_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The other side of `ok: not missing_args`."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    storage.write_macro(
+        name="login",
+        macro={"name": "login", "parameters": ["user"], "actions": [{"action": "navigate"}]},
+    )
+
+    planned = macro_artifacts.plan_macro_artifact("login", args={"user": "tanuki"})
+
+    assert planned["ok"] is True
+    assert planned["missing_args"] == []
+    assert macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]["metadata"]["ready"] is True
