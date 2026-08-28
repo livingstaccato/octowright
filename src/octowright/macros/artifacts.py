@@ -20,7 +20,7 @@ from octowright.artifacts.models import new_manifest, new_run_result
 from octowright.artifacts.paths import ArtifactStore
 from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.redaction import redact_mapping
-from octowright.artifacts.reports import write_artifact_manifest, write_run_bundle
+from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.macros.storage import load_macro, macro_path
 
@@ -398,6 +398,33 @@ def macro_artifact_critical_points_get(name: str) -> dict[str, Any]:
     }
 
 
+def _normalize_critical_point(point: dict[str, Any], index: int) -> dict[str, Any]:
+    """Fill a critical point out to the shape the design doc calls canonical.
+
+    Only `id`, `status` and `checks` used to be filled, so the other four slots
+    were simply absent from stored critical points. The visible cost was in the
+    run report, which renders `cp.get("description", "Unknown")` -- a claim
+    with no description came back as `### CP1: Unknown`, naming a critical
+    point while saying nothing about what it asserts. `evidence`,
+    `last_verified_run` and `notes` were likewise missing rather than empty,
+    so a reader had to distinguish "not set" from "not yet verified" by their
+    absence.
+
+    Supplied values always win; this only fills what the caller left out.
+    """
+    normalized = dict(point)
+    if not normalized.get("id"):
+        normalized["id"] = f"CP{index + 1}"
+    if not normalized.get("description"):
+        normalized["description"] = "Unknown claim"
+    normalized.setdefault("status", "unknown")
+    normalized.setdefault("checks", [])
+    normalized.setdefault("evidence", [])
+    normalized.setdefault("last_verified_run", None)
+    normalized.setdefault("notes", None)
+    return normalized
+
+
 def macro_artifact_critical_points_set(name: str, critical_points: list[dict[str, Any]]) -> dict[str, Any]:
     store = ArtifactStore()
     manifest_path = store.macro_manifest_path(name)
@@ -414,16 +441,7 @@ def macro_artifact_critical_points_set(name: str, critical_points: list[dict[str
             exports_dir=manifest_path.parent / "exports",
         )
 
-    normalized_cps = []
-    for i, cp in enumerate(critical_points):
-        normalized = dict(cp)
-        if "id" not in normalized or not normalized["id"]:
-            normalized["id"] = f"CP{i + 1}"
-        if "status" not in normalized:
-            normalized["status"] = "unknown"
-        if "checks" not in normalized:
-            normalized["checks"] = []
-        normalized_cps.append(normalized)
+    normalized_cps = [_normalize_critical_point(cp, i) for i, cp in enumerate(critical_points)]
 
     manifest["critical_points"] = normalized_cps
     write_artifact_manifest(manifest_path, manifest)
@@ -476,7 +494,15 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
     manifest["critical_points"] = apply_verification_rollup(critical_points, v_res["critical_points"])
     write_artifact_manifest(manifest_path, manifest)
 
-    return {"ok": True, "status": v_res["status"], "paths": {"verification": str(verification_path)}}
+    # The run bundle was written before this verification could run, so its
+    # summary.md carries no verdict. Re-render it now that there is one.
+    summary_path = refresh_run_summary(run_dir=run_dir, result=result, evidence=evidence_records, verification=v_res)
+
+    return {
+        "ok": True,
+        "status": v_res["status"],
+        "paths": {"verification": str(verification_path), "summary": str(summary_path)},
+    }
 
 
 def macro_artifact_status(name: str) -> dict[str, Any]:

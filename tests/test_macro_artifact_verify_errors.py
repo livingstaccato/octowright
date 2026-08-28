@@ -471,3 +471,136 @@ async def test_running_an_unplanned_macro_builds_its_own_manifest(
     assert len({meta["paths"][k] for k in ("artifact_dir", "runs_dir", "exports_dir")}) == 3
     assert meta["paths"]["runs_dir"].endswith("runs")
     assert meta["paths"]["exports_dir"].endswith("exports")
+
+
+# ---------------------------------------------------------------------------
+# summary.md must carry the verdict
+#
+# `write_run_bundle` necessarily runs before verification -- verification reads
+# the result.json and evidence.json that call writes -- so the bundle's summary
+# was always rendered with `verification=None`. Nothing re-rendered it
+# afterwards, which made the whole "Verification and Critical Points" section
+# unreachable in production: every artifact run with critical points produced a
+# human-readable report that said nothing about whether the claims held, while
+# verification.json sat beside it holding the answer.
+# ---------------------------------------------------------------------------
+
+
+def _summary(macro_artifacts, run_id: str) -> str:
+    return (_run_dir(macro_artifacts, run_id) / "summary.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_a_verified_run_reports_its_critical_points_in_the_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The verdict, each claim, and the per-check message all reach the report."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set(
+        "login",
+        [
+            {
+                "id": "cp1",
+                "description": "Login form submits successfully",
+                "checks": [{"type": "result_status", "status": "ok"}],
+            }
+        ],
+    )
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=True
+    )
+    md = _summary(macro_artifacts, result["run_id"])
+
+    assert "## Verification and Critical Points" in md
+    assert "**Verification Status**: `passed`" in md
+    assert "### cp1: Login form submits successfully" in md
+    assert "- Status: `passed`" in md
+    assert "`result_status`: `passed`" in md
+
+
+@pytest.mark.asyncio
+async def test_the_summary_says_so_when_a_claim_does_not_hold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A report that can only say "passed" is worse than no report."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set(
+        "login",
+        [
+            {
+                "id": "cp1",
+                "description": "A claim that does not hold",
+                "checks": [{"type": "result_status", "status": "definitely-not-ok"}],
+            }
+        ],
+    )
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=True
+    )
+    md = _summary(macro_artifacts, result["run_id"])
+
+    assert "**Verification Status**: `failed`" in md
+    assert "### cp1: A claim that does not hold" in md
+    assert "Expected status definitely-not-ok, got ok" in md
+
+
+@pytest.mark.asyncio
+async def test_a_standalone_verify_also_refreshes_the_summary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`macro_artifact_verify` is an @mcp.tool callable on its own.
+
+    An agent that runs with verify=False and verifies later must get the same
+    report as one that verified inline, and the returned `paths` must name the
+    summary it rewrote.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=False
+    )
+    assert "Verification and Critical Points" not in _summary(macro_artifacts, result["run_id"])
+
+    verified = macro_artifacts.macro_artifact_verify("login", run_id=result["run_id"])
+
+    assert Path(verified["paths"]["summary"]).name == "summary.md"
+    md = _summary(macro_artifacts, result["run_id"])
+    assert "**Verification Status**: `passed`" in md
+
+
+@pytest.mark.asyncio
+async def test_the_summary_keeps_its_prose_after_being_re_rendered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Re-rendering must not lose the human line the run wrote.
+
+    The summary text is only known to `run_macro_artifact`, so the bundle
+    persists it -- otherwise the refresh would silently blank the one sentence
+    describing what the run did.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path),
+        name="login",
+        args={},
+        capture=False,
+        verify=True,
+        notes="Nightly smoke run",
+    )
+    md = _summary(macro_artifacts, result["run_id"])
+
+    assert "Nightly smoke run" in md
+    assert "## Verification and Critical Points" in md

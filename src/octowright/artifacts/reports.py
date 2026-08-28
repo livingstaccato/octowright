@@ -44,6 +44,11 @@ def write_run_bundle(
     result_payload = dict(result)
     result_payload["args_used"] = redact_mapping(result_payload.get("args_used"))
     result_payload["evidence_path"] = str(evidence_path)
+    # Kept so the summary can be regenerated once verification exists. This
+    # bundle is necessarily written BEFORE verification runs -- verification
+    # reads result.json and evidence.json -- so the verdict cannot be in the
+    # first render, and re-rendering needs this prose back.
+    result_payload["summary"] = summary
     evidence_payload = _redact_evidence(evidence)
 
     _json_write(result_path, result_payload)
@@ -60,6 +65,31 @@ def write_run_bundle(
     )
     paths["summary"] = summary_path
     return paths
+
+
+def refresh_run_summary(
+    *,
+    run_dir: Path,
+    result: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    verification: dict[str, Any],
+) -> Path:
+    """Re-render ``summary.md`` for a run whose verification has now completed.
+
+    ``write_run_bundle`` cannot include the verdict: verification consumes the
+    result and evidence files that call writes, so it necessarily runs after.
+    Without this, the summary's "Verification and Critical Points" section was
+    unreachable in production -- every artifact run with critical points
+    produced a human-readable report that said nothing about whether the
+    claims held, while ``verification.json`` sat beside it with the answer.
+    """
+    summary_path = run_dir / "summary.md"
+    atomic_write_text(
+        summary_path,
+        _render_summary(result, _redact_evidence(evidence), str(result.get("summary", "")), verification),
+        encoding="utf-8",
+    )
+    return summary_path
 
 
 def _redact_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
