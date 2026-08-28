@@ -136,3 +136,72 @@ def test_setting_critical_points_preserves_existing_run_history(
     after = macro_artifacts.macro_artifact_status("login")
 
     assert after["latest_run"] == before["latest_run"]
+
+
+def test_a_stored_critical_point_has_the_canonical_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """All seven fields the design doc calls canonical, not three.
+
+    Only `id`, `status` and `checks` were filled, so the rest were absent
+    rather than empty and a reader could not tell "not set" from "not yet
+    verified". `description` was the visible one: the run report renders
+    `cp.get("description", "Unknown")`, so a claim without one came back as
+    `### CP1: Unknown` -- naming a critical point while saying nothing about
+    what it asserts.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    result = macro_artifacts.macro_artifact_critical_points_set(
+        "login", [{"checks": [{"type": "result_status", "status": "ok"}]}]
+    )
+    stored = result["critical_points"][0]
+
+    assert set(stored) == {
+        "id",
+        "description",
+        "status",
+        "checks",
+        "evidence",
+        "last_verified_run",
+        "notes",
+    }
+    assert stored["id"] == "CP1"
+    assert stored["description"] == "Unknown claim"
+    assert stored["status"] == "unknown"
+    assert stored["evidence"] == []
+    assert stored["last_verified_run"] is None
+    assert stored["notes"] is None
+
+
+def test_every_supplied_field_survives_normalization(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Normalization fills gaps; it never overwrites what the caller said."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    supplied = {
+        "id": "login-works",
+        "description": "Login succeeds",
+        "status": "passed",
+        "checks": [{"type": "result_status", "status": "ok"}],
+        "evidence": ["ev_001"],
+        "last_verified_run": "run_0003",
+        "notes": "flaky on staging",
+    }
+    stored = macro_artifacts.macro_artifact_critical_points_set("login", [dict(supplied)])["critical_points"][0]
+
+    assert stored == supplied
+
+
+def test_a_blank_description_is_replaced_like_a_missing_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An empty string is not a description, for the same reason `""` is not an id."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    stored = macro_artifacts.macro_artifact_critical_points_set(
+        "login", [{"id": "cp1", "description": "", "checks": []}]
+    )["critical_points"][0]
+
+    assert stored["description"] == "Unknown claim"
