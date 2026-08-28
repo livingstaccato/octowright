@@ -12,7 +12,8 @@ persistent profiles, structured recordings, and a local debugger dashboard.
 
 ## Get started
 
-Octowright is on PyPI (`pip install octowright`), but this guide walks the
+Octowright is on PyPI (`uv tool install octowright`, or `uvx octowright serve`
+to run it without installing), but this guide walks the
 from-source path: it is what the MCP registration block below assumes, and
 the optional terminal plugin is only installable from the checkout. Octowright
 uses [`uv`](https://docs.astral.sh/uv/) for dependency management. If you
