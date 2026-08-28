@@ -47,6 +47,31 @@ _NO_ENGINE = (
 )
 
 
+# ── One admission budget, three opposing requirements ────────────────────────
+# The pool-wide queue timeout below bounds how long a queued operation waits to
+# be admitted, and every hold in this test is stated relative to it rather than
+# as a bare literal, because the two directions pull against each other:
+#
+#   admitted:  hold < QUEUE_TIMEOUT_S   (behaviors 1 and 4 -- the queued op lands)
+#   rejected:  hold > QUEUE_TIMEOUT_S   (behavior 3 -- the queued op times out)
+#
+# Behavior 1's hold is the one requirement this test does not control: it is
+# however long a real two-action macro takes on the host. Measured with the same
+# macro and the same slowmo, it ran 0.092-0.095s on a warm Apple Silicon laptop
+# and 0.475s on a contended macOS amd64 CI runner -- a 5.1x spread with nothing
+# bounding the upper end. Against the previous 0.5s budget that runner had 25ms
+# of margin, and CI went red on it (the queued manual evaluate was rejected after
+# 0.507s instead of being admitted). Tuning this number for behaviors 3 and 4
+# alone is what left behavior 1 racing: raising the budget squeezes the rejection
+# case, lowering it squeezes both admission cases, so all three now move together
+# from here.
+QUEUE_TIMEOUT_S = 2.0
+ADMITTED_HOLD_MS = 200  # well under the budget: the op queued behind it gets in
+REJECTED_HOLD_MS = int(QUEUE_TIMEOUT_S * 2 * 1000)  # well over it: the op times out
+PARALLEL_HOLD_MS = 1000  # behavior 2 only -- nothing queues behind it, so the
+# budget does not apply; it just has to outlast session B's evaluate.
+
+
 def _skip_if_no_engine(exc: Exception) -> None:
     if any(s in str(exc).lower() for s in _NO_ENGINE):
         pytest.skip(f"live browser engine unavailable: {exc}")
@@ -134,7 +159,7 @@ async def test_operation_gate_serializes_real_chromium_sessions(
     _configure_runtime_paths(monkeypatch, tmp_path)
     _write_gate_order_macro(monkeypatch, tmp_path)
 
-    pool = BrowserPool(operation_queue_timeout_seconds=0.5)
+    pool = BrowserPool(operation_queue_timeout_seconds=QUEUE_TIMEOUT_S)
     try:
         launch_a = await _launch(
             pool,
@@ -163,7 +188,9 @@ async def test_operation_gate_serializes_real_chromium_sessions(
         assert final_order == ["macro-1", "macro-2", "manual"]
 
         # ── Behavior 2: the gate is per-session, not a global lock ──
-        hold_task = asyncio.create_task(session_a.evaluate("() => new Promise(resolve => setTimeout(resolve, 1000))"))
+        hold_task = asyncio.create_task(
+            session_a.evaluate(f"() => new Promise(resolve => setTimeout(resolve, {PARALLEL_HOLD_MS}))")
+        )
         await _wait_for_snapshot(session_a, lambda s: s["active_operation"] == "browser_evaluate")
         b_result = await asyncio.wait_for(session_b.evaluate("1 + 1"), timeout=2.0)
         assert b_result == 2
@@ -171,7 +198,9 @@ async def test_operation_gate_serializes_real_chromium_sessions(
         await hold_task  # let the 1s hold finish cleanly before the next behavior
 
         # ── Behavior 3: a rejection doesn't poison the browser/driver/tools ──
-        hold_task_2 = asyncio.create_task(session_a.evaluate("() => new Promise(resolve => setTimeout(resolve, 1000))"))
+        hold_task_2 = asyncio.create_task(
+            session_a.evaluate(f"() => new Promise(resolve => setTimeout(resolve, {REJECTED_HOLD_MS}))")
+        )
         await _wait_for_snapshot(session_a, lambda s: s["active_operation"] == "browser_evaluate")
         with pytest.raises(SessionBusyTimeoutError):
             await session_a.evaluate("1 + 1")
@@ -186,17 +215,12 @@ async def test_operation_gate_serializes_real_chromium_sessions(
         assert result_b["result"] == 6
 
         # ── Behavior 4: close cutoff admits the earlier queued op, rejects later ──
-        # The hold here must be well under the pool's 0.5s queue timeout --
-        # unlike behaviors 2/3, "early_task" below is itself a plain queued
-        # evaluate bound by that same default timeout, so it must be admitted
-        # (hold released) before ITS OWN 500ms admission window expires. Kept
-        # at 200ms, leaving 300ms of margin rather than the original
-        # 150ms/250ms pairing's 100ms -- that margin flaked on contended
-        # macOS CI runners (observed timing out at ~252-253ms, just over the
-        # old 250ms ceiling). 0.5s (not the 1.0s first tried) keeps behavior
-        # 3's 1000ms holds comfortably ABOVE the timeout too -- a 1.0s pool
-        # timeout made that a coin flip instead of a reliable timeout.
-        hold_task_3 = asyncio.create_task(session_a.evaluate("() => new Promise(resolve => setTimeout(resolve, 200))"))
+        # "early_task" below is itself a plain queued evaluate bound by the
+        # pool's admission budget, so this hold must release well before that
+        # budget expires -- see ADMITTED_HOLD_MS and the note above it.
+        hold_task_3 = asyncio.create_task(
+            session_a.evaluate(f"() => new Promise(resolve => setTimeout(resolve, {ADMITTED_HOLD_MS}))")
+        )
         await _wait_for_snapshot(session_a, lambda s: s["active_operation"] == "browser_evaluate")
         early_task = asyncio.create_task(session_a.evaluate("5 + 5"))
         await _wait_for_snapshot(session_a, lambda s: s["queue_depth"] >= 1)
