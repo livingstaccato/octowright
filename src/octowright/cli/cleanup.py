@@ -29,6 +29,9 @@ from octowright.cli._root import cli
 def cleanup(days: float, apply: bool, browsers: bool) -> None:
     """Prune old recordings/screenshots/videos/traces under RECORDINGS_DIR.
 
+    Macro artifacts live under the same root and are never pruned: they are
+    curated rather than incidental, so age does not make them disposable.
+
     Pass ``--browsers`` to also reap orphaned playwright browser processes
     so they don't pile up in the Dock between sessions.
     """
