@@ -36,6 +36,7 @@ from octowright.artifacts.verification import (
     _eval_log_contains,
     _eval_result_status,
     _eval_screenshot_exists,
+    _evaluate_check_inner,
     apply_verification_rollup,
 )
 
@@ -233,3 +234,87 @@ def test_rollup_refuses_mismatched_lengths() -> None:
     """
     with pytest.raises(ValueError):
         apply_verification_rollup([{"id": "cp1"}, {"id": "cp2"}], [{"id": "cp1", "status": "passed"}])
+
+
+# ---------------------------------------------------------------------------
+# Gaps the 2026-08-27 mutation run left open after the first pass
+#
+# The tests above raised verification.py from 151/457 killed to 261/457, but a
+# specific set of survivors showed the coverage was shaped wrong rather than
+# thin: every case tested happened to give the same verdict under the mutation
+# as without it. These target exactly those.
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_exists_rejects_a_label_that_does_not_match() -> None:
+    """A *wrong* label must fail, not merely a missing one.
+
+    `(elabel and e.get("label") == elabel)` flipped to `or` still passes every
+    earlier test, because they either omit the label or omit the record. With
+    `or`, any truthy label short-circuits the clause to True and the check
+    matches whatever evidence happens to be present -- an always-pass check.
+    """
+    status, _msg, matched = _eval_evidence_exists({"label": "nope"}, [_evidence(label="after")])
+    assert status == "failed"
+    assert matched == []
+
+
+def test_assertion_passed_rejects_a_label_that_does_not_match() -> None:
+    """Same `and`/`or` short circuit, in the assertion evaluator."""
+    status, _msg, matched = _eval_assertion_passed({"label": "nope"}, [_evidence(label="after")])
+    assert status == "failed"
+    assert matched == []
+
+
+def test_screenshot_exists_returns_the_matching_evidence_id() -> None:
+    """The id is the payload, not incidental.
+
+    Asserting only the status let the returned id be replaced with `str(None)`
+    -- so a passing check would cite evidence "None", and a caller resolving
+    that id would find nothing.
+    """
+    shot = {"id": "ev_020", "type": "screenshot", "label": "after"}
+    _status, _msg, matched = _eval_screenshot_exists({"label": "after"}, [shot])
+    assert matched == ["ev_020"]
+
+
+# --- dispatch: a check must reach ITS OWN evaluator -------------------------
+#
+# `_evaluate_check_inner` is a chain of `check_type == "..."` tests. Flipping
+# any one to `!=` routes a check to the wrong evaluator, and in every case
+# tested above the wrong evaluator happened to return the same verdict. Each
+# test below is built so the two evaluators disagree.
+
+
+def test_assertion_check_is_not_evaluated_as_evidence_exists() -> None:
+    """A recorded FAILURE must fail, even though the record exists.
+
+    `evidence_exists` asks only "is there a record with this id" and would say
+    passed. `assertion_passed` additionally requires status == "passed". If the
+    dispatch sends this to the wrong evaluator, a failed assertion is reported
+    as a verified claim.
+    """
+    failed_assertion = _evidence(id="ev_001", type="assertion", status="failed")
+    status, _msg, _matched = _evaluate_check_inner("assertion_passed", {"id": "ev_001"}, {}, [failed_assertion])
+    assert status == "failed"
+
+
+def test_log_check_is_not_evaluated_as_an_assertion() -> None:
+    """A matching log excerpt passes; the assertion evaluator would reject it."""
+    status, _msg, _matched = _evaluate_check_inner(
+        "log_contains", {"text": "Timeout"}, {}, [_log("... Timeout exceeded ...")]
+    )
+    assert status == "passed"
+
+
+def test_an_unknown_check_type_is_named_as_such() -> None:
+    """Falling off the end of the chain must say *why* it failed.
+
+    Both the unknown-type path and a failing `log_contains` return "failed", so
+    only the message distinguishes them -- and an operator debugging a typo in
+    `type:` needs to be told the type was unrecognised rather than that some
+    check merely did not match.
+    """
+    status, message, _matched = _evaluate_check_inner("no_such_check", {}, {}, [])
+    assert status == "failed"
+    assert message == "unknown_check_type"
