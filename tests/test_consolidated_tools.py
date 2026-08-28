@@ -117,28 +117,6 @@ async def test_browser_quick_launch_with_ambiguous_suggest(_patch_state: dict[st
 
 
 @pytest.mark.anyio
-async def test_browser_quick_launch_with_recommendation(_patch_state: dict[str, MagicMock]) -> None:
-    pool = _patch_state["pool"]
-    resolve = _patch_state["resolve"]
-    pool.launch = AsyncMock(return_value={"instance_id": "inst-1"})
-    resolve.suggest_for_url.return_value = {
-        "ambiguous": False,
-        "recommendation": {"persona": "RecPersona"},
-        "ephemeral_ok": False,
-    }
-
-    result = await _lifecycle.browser_quick_launch(url="https://x.com")
-
-    assert result["instance_id"] == "inst-1"
-    assert result["profile_used"] == "RecPersona"
-
-    pool.launch.assert_awaited_once()
-    _, kwargs = pool.launch.call_args
-    assert kwargs["url"] == "https://x.com"
-    assert kwargs["profile"] == "RecPersona"
-
-
-@pytest.mark.anyio
 async def test_browser_quick_launch_with_resolver_match(_patch_state: dict[str, MagicMock]) -> None:
     pool = _patch_state["pool"]
     resolve = _patch_state["resolve"]

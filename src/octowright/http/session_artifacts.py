@@ -287,7 +287,7 @@ class SessionArtifactCache:
     def warm_close(self, jsonl_path: Path) -> dict[str, Any]:
         """Single-pass session-close warmup.
 
-        Folds the work that previously ran as two parallel JSONL scans
+        Folds what would otherwise be two parallel JSONL scans
         (``write_event_indexes`` + ``cache_report``) into one walk: per
         entry we feed the artifact aggregator AND the row extractors, so
         the cost is one parse instead of two.

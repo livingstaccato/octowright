@@ -15,7 +15,7 @@ the same guard).
 
 This module adds an opt-in host policy, gated like the other network opt-outs:
 
-* ``off`` (DEFAULT) — no host check; full back-compat.
+* ``off`` (DEFAULT) — no host check.
 * ``block-private`` — refuse `http(s)` to a *literal* IP in any non-public range
   (loopback, link-local incl. the metadata range, RFC1918, multicast, reserved,
   unspecified) and to `localhost` / `*.localhost` / well-known metadata

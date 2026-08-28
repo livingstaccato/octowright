@@ -86,7 +86,7 @@ def redact_headers_for_report(headers: dict[str, str]) -> dict[str, str]:
     mode floor: ``off`` is treated as ``passwords``.
 
     That divergence is deliberate and is the stricter direction.
-    ``OCTOWRIGHT_REDACT_INPUTS=off`` is documented as a legacy opt-in for
+    ``OCTOWRIGHT_REDACT_INPUTS=off`` is documented as an opt-in for
     RECORDINGS, which are a ``0600`` file on the operator's own disk. This
     surface is not that: it crosses the MCP transport to any connected client
     and lands in an LLM's context. Honouring ``off`` here would silently turn a

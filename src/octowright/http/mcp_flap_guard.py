@@ -30,7 +30,7 @@ version. Two pieces, both on by default:
    session-creates — the actual storm pattern, whether from an old follower or a
    misbehaving direct client that never sends ``DELETE /mcp`` to close a session
    — still throttles together (same connection, same key), but two unrelated
-   headerless clients on different connections no longer share fate and 429 each
+   headerless clients on different connections do not share fate and 429 each
    other. Only a scope with no peer info at all (e.g. some ASGI test transports)
    falls back to the fully shared ``anonymous`` bucket.
 

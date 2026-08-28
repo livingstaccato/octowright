@@ -36,8 +36,8 @@ async def build_locator(
     suffix when exact and an ``i`` suffix otherwise, so exact matching is also
     CASE-SENSITIVE matching. A caller that flips ``text_exact=True`` purely to
     stop ``"Ada"`` matching ``"Ada Lovelace (old)"`` simultaneously loses the
-    case-insensitivity it had, and ``text="submit", text_exact=True`` no longer
-    matches ``<button>Submit</button>``.
+    case-insensitivity, and ``text="submit", text_exact=True`` does not
+    match ``<button>Submit</button>``.
     """
     provided = [k for k, v in (("role", role), ("label", label), ("text", text), ("test_id", test_id)) if v is not None]
     if len(provided) != 1:

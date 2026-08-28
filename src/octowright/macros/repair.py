@@ -55,9 +55,9 @@ def _resolvable_finder_keys(semantic_keys: tuple[str, ...]) -> tuple[str, ...]:
 def _has_resolvable_finder(action: dict[str, Any], finder_keys: tuple[str, ...]) -> bool:
     """Whether *action* carries something that can actually resolve an element.
 
-    The guard here used to be `if not semantic` over every semantic key, which
-    `text_exact: False` satisfies (the filter tests `is not None`, not
-    truthiness) -- so a click carrying only a modifier was "repaired" into a
+    A guard of `if not semantic` over every semantic key is satisfied by
+    `text_exact: False` (the filter tests `is not None`, not truthiness) -- so a
+    click carrying only a modifier is "repaired" into a
     finder-less click_by with its working CSS selector dropped, and replay then
     raised `ValueError: exactly one of role/label/text/test_id must be set`.
     """
