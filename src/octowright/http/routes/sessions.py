@@ -67,7 +67,41 @@ def _safe_live_summaries(sessions: Iterable[Any]) -> list[dict[str, Any]]:
     return summaries
 
 
-async def list_sessions(_request: Request) -> JSONResponse:
+#: Closed recordings returned per request when the caller does not say.
+#: The dashboard renders ``closed.slice(0, 20)`` and otherwise uses only the
+#: count, so the whole listing was being serialised for twenty rows and one
+#: integer -- 2.7 MB on a real 10,177-recording directory, on every poll.
+#: 200 leaves an order of magnitude of headroom over what the UI shows.
+CLOSED_SESSIONS_DEFAULT_LIMIT = 200
+
+#: Ceiling on ``?closed_limit=``. A caller that genuinely wants the whole
+#: listing can ask for it; it cannot ask for an unbounded response.
+CLOSED_SESSIONS_MAX_LIMIT = 5000
+
+
+def _parse_closed_limit(request: Request) -> tuple[int, JSONResponse | None]:
+    """Parse ``?closed_limit=``. Returns (limit, error_response_or_None).
+
+    Non-int → 400. A non-positive value resolves to the default rather than
+    meaning "unbounded": the cap is the point, so it must not be removable by
+    passing ``0``. Above the ceiling clamps down rather than erroring.
+    """
+    raw = request.query_params.get("closed_limit")
+    if raw is None:
+        return CLOSED_SESSIONS_DEFAULT_LIMIT, None
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0, JSONResponse({"error": f"invalid closed_limit={raw!r}, must be int"}, status_code=400)
+    if value <= 0:
+        return CLOSED_SESSIONS_DEFAULT_LIMIT, None
+    return min(value, CLOSED_SESSIONS_MAX_LIMIT), None
+
+
+async def list_sessions(request: Request) -> JSONResponse:
+    limit, error = _parse_closed_limit(request)
+    if error is not None:
+        return error
     pool = state.pool
     live = _safe_live_summaries(pool.iter_sessions())
     # Session-kind plugins (terminal included, when enabled) serialize
@@ -75,8 +109,16 @@ async def list_sessions(_request: Request) -> JSONResponse:
     # isolates a raising pool from the others.
     live += _safe_live_summaries(iter_plugin_sessions())
     live_paths = {s["log_path"] for s in live}
-    closed = _closed_sessions(state.RECORDINGS_DIR, live_paths)
-    return JSONResponse({"live": live, "closed": closed})
+    closed, closed_total = _closed_sessions(state.RECORDINGS_DIR, live_paths, limit=limit)
+    return JSONResponse(
+        {
+            "live": live,
+            "closed": closed,
+            "closed_total": closed_total,
+            "closed_limit": limit,
+            "closed_truncated": closed_total > len(closed),
+        }
+    )
 
 
 def _resolve_live_markdown_path(live: Any) -> str | None:
