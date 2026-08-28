@@ -342,6 +342,7 @@ pytest_add_cli_args_test_selection = [
     "tests/macro_lint/test_urls_edges.py",
     "tests/plugins/test_reference_scenario.py",
     "tests/session_locators/test_exact_plumbing.py",
+    "tests/test_a11y_dragdrop_macro.py",
     "tests/test_aria_playback.py",
     "tests/test_artifacts_digest.py",
     "tests/test_artifacts_paths.py",
