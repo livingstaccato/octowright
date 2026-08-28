@@ -21,7 +21,7 @@ _OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", "no"}
 def _max_request_body_bytes() -> int:
     """``OCTOWRIGHT_MAX_REQUEST_BODY_BYTES`` — route-level request-body ceiling.
 
-    OFF (returns 0) by default for back-compat. A positive byte count rejects
+    OFF (returns 0) by default. A positive byte count rejects
     larger JSON bodies with 413 before they are fully materialized. A
     non-positive / falsey / unparsable value keeps it off.
     """

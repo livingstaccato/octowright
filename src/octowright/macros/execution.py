@@ -440,10 +440,10 @@ async def _run_macro_impl(
         outcome_label = "done" if completed_ok else "failed"
         await _push_status(session, text=f"{name} | {outcome_label}", done=True)
         # Metrics + structured log must fire on BOTH the ok and failed paths.
-        # Previously these sat outside the try/finally, so a raised
-        # RuntimeError skipped them entirely — the "failed" datapoint never
-        # landed, the histogram only ever measured successful runs, and the
-        # operator-visible log line vanished on the unhappy path.
+        # Outside the try/finally a raised RuntimeError skips them entirely:
+        # the "failed" datapoint never lands, the histogram only ever measures
+        # successful runs, and the operator-visible log line vanishes on the
+        # unhappy path.
         macro_label = _macro_label(name)
         _MACRO_RUN.add(
             1,

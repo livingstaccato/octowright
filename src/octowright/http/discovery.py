@@ -25,7 +25,12 @@ from octowright._paths import safe_under
 from octowright._wire_utils import looks_like_binary_text
 from octowright.defaults import DISCOVERY_CACHE_MAX_ENTRIES
 from octowright.http import state
-from octowright.http.artifacts import instance_id_from_recording_name as _instance_id_from_recording_name
+from octowright.http.artifacts import (
+    instance_id_from_recording_name as _instance_id_from_recording_name,
+)
+from octowright.http.artifacts import (
+    kind_from_recording_name as _kind_from_recording_name,
+)
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.recorder import tail_log
 
@@ -85,17 +90,6 @@ def _read_first_opening(jsonl_path: Path) -> dict[str, Any] | None:
     return None
 
 
-#: Opening actions that predate the generic ``session_start`` wrapper every
-#: plugin launch transaction now writes first, so they carry no ``kind``
-#: field of their own. Terminal is the only kind that ever shipped launches
-#: before that wrapper existed; a NEW terminal recording (via the plugin,
-#: same as any other kind) opens with ``session_start`` and needs no entry
-#: here. This table exists purely so a recording already on disk keeps
-#: classifying correctly regardless of whether the plugin that wrote it is
-#: installed today -- it is not expected to grow.
-_LEGACY_OPENING_KIND: dict[str, str] = {"terminal_start": "terminal"}
-
-
 def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
     """Build a SessionSummary for a closed-session JSONL on disk."""
     instance_id = _instance_id_from_recording_name(jsonl_path.stem)
@@ -104,27 +98,12 @@ def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
     opening = _read_first_opening(jsonl_path) or {}
     stat = jsonl_path.stat()
     started = opening.get("ts") or _iso(stat.st_ctime)
-    action = opening.get("action")
-    # The opening row names its own kind -- generic across every plugin,
-    # since core's launch transaction always writes ``session_start`` with
-    # ``kind`` before a plugin does anything else. A legacy pre-wrapper
-    # opening (see _LEGACY_OPENING_KIND) falls back to a fixed per-action
-    # kind instead of "unknown".
-    legacy_kind = _LEGACY_OPENING_KIND.get(action) if isinstance(action, str) else None
-    kind = opening.get("kind") or legacy_kind or "unknown"
-    if action == "terminal_start":
-        # Legacy shape: no browser launch metadata, but connector_type.
-        return {
-            "id": instance_id,
-            "kind": kind,
-            "connector_type": opening.get("connector_type"),
-            "label": None,
-            "profile": None,
-            "url": None,
-            "started_at": started,
-            "live": False,
-            "log_path": str(jsonl_path),
-        }
+    # The opening row names its own kind -- generic across every plugin, since
+    # core's launch transaction writes ``session_start`` with ``kind`` before a
+    # plugin does anything else. The filename answers for anything that row
+    # cannot: it carries the kind directly, and a kind may not contain the
+    # hyphen the name is split on, so it is exact rather than a guess.
+    kind = opening.get("kind") or _kind_from_recording_name(jsonl_path.stem) or "unknown"
     return {
         "id": instance_id,
         "kind": kind,
@@ -344,9 +323,9 @@ def _closed_sessions(
 
 # In-memory {instance_id → path} index per recordings dir. Built lazily on
 # first lookup; rebuilt only when the dir's mtime changes (file added or
-# removed). Negative lookups (unknown id) used to trigger an unconditional
-# rebuild — a real DoS vector under repeated bad-id traffic — so we now
-# stamp the dir mtime alongside the index and skip the rebuild when it
+# removed). A negative lookup (unknown id) must not trigger an unconditional
+# rebuild — that is a real DoS vector under repeated bad-id traffic — so the
+# dir mtime is stamped alongside the index and the rebuild is skipped when it
 # hasn't changed since the last build. The inner ``OrderedDict`` is LRU-
 # bounded so a recordings dir with more files than
 # ``DISCOVERY_CACHE_MAX_ENTRIES`` evicts least-recently-looked-up entries

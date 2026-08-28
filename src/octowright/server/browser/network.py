@@ -16,8 +16,8 @@ from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
 
 #: Rows returned by ``browser_network_requests`` in one call when the caller
-#: names no limit. There was previously no cap at all, so a single unfiltered
-#: read could return the whole 5000-entry deque straight into the LLM context.
+#: names no limit. Uncapped, a single unfiltered read returns the whole
+#: 5000-entry deque straight into the LLM context.
 NETWORK_REQUESTS_DEFAULT_LIMIT = 200
 #: Ceiling on an explicit ``limit``. A caller wanting more pages the cursor.
 NETWORK_REQUESTS_MAX_LIMIT = 1000
