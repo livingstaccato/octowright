@@ -15,7 +15,7 @@ Color = tuple[int, int, int]
 ColorAlpha = tuple[int, int, int, int]
 
 # Fully transparent base. The overlay PNG carries alpha straight to ffmpeg's
-# overlay filter, so we no longer need a chroma-key sentinel colour.
+# overlay filter, so no chroma-key sentinel colour is needed.
 TRANSPARENT: ColorAlpha = (0, 0, 0, 0)
 
 

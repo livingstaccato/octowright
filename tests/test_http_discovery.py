@@ -60,9 +60,16 @@ def test_listing_rereads_a_replaced_recording(tmp_path: Path) -> None:
     assert discovery._summaries_for(rec)[0]["kind"] == "firefox"
 
 
-def test_summarise_recording_classifies_closed_terminal(tmp_path: Path) -> None:
-    """A closed terminal recording opens with terminal_start (no launch row);
-    it must be classified kind='terminal', not 'unknown'."""
+def test_summarise_recording_classifies_a_pre_wrapper_terminal_recording(tmp_path: Path) -> None:
+    """An opening row with no ``kind`` still classifies, from the filename.
+
+    Terminal recordings written before core's launch transaction existed open
+    with the plugin's own ``terminal_start`` row, which carries no ``kind``.
+    The name does: ``new_log_path`` builds ``<stamp>-<kind>-<id>``, and a kind
+    may not contain the hyphen the name is split on, so it is exact rather than
+    a guess -- and it answers for any opening row that lacks a kind, not just
+    this one shape.
+    """
     rec = tmp_path / "recordings"
     rec.mkdir(parents=True, exist_ok=True)
     jsonl = rec / "20260101T000000Z-terminal-abc123def456.jsonl"
@@ -70,8 +77,6 @@ def test_summarise_recording_classifies_closed_terminal(tmp_path: Path) -> None:
         json.dumps({"action": "terminal_start", "connector_type": "pty", "ts": "2026-01-01T00:00:00Z"})
         + "\n"
         + json.dumps({"action": "terminal_output", "data": "hi"})
-        + "\n"
-        + json.dumps({"action": "terminal_stop", "reason": "eof"})
         + "\n",
         encoding="utf-8",
     )
@@ -79,10 +84,19 @@ def test_summarise_recording_classifies_closed_terminal(tmp_path: Path) -> None:
     assert summary is not None
     assert summary["kind"] == "terminal"
     assert summary["live"] is False
-    assert summary["id"]  # instance id parsed from the filename
-    # connector_type is in the terminal_start row and must survive to the summary
-    # (the frontend renders pty/ssh/telnet differently).
-    assert summary["connector_type"] == "pty"
+    assert summary["id"] == "abc123def456"  # pragma: allowlist secret (fake instance id)
+
+
+def test_an_opening_rows_kind_outranks_the_filename(tmp_path: Path) -> None:
+    """The row core writes is authoritative; the name is only the fallback."""
+    rec = tmp_path / "recordings"
+    rec.mkdir(parents=True, exist_ok=True)
+    jsonl = rec / "20260101T000000Z-terminal-abc123def456.jsonl"
+    jsonl.write_text(
+        json.dumps({"action": "session_start", "kind": "chromium", "ts": "2026-01-01T00:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+    assert discovery._summarise_recording(jsonl)["kind"] == "chromium"
 
 
 def test_find_recording_for_skips_rebuild_on_unchanged_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

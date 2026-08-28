@@ -44,8 +44,8 @@ class SessionLocatorMixin(SessionLike):
         except Exception as exc:
             log.debug("core_locator_mixin.password_lookup_failed", error=str(exc))
             return True
-        if isinstance(info, str):
-            return info == "password"
+        # Same contract as the selector probe: {type, ac}, and anything else
+        # is treated as a credential rather than guessed at.
         if not isinstance(info, dict):
             return True
         if info.get("type") == "password":

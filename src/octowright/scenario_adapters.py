@@ -5,9 +5,9 @@
 
 """The browser kind's scenario adapter.
 
-Core used to inline this behind ``if p.get("kind") == "terminal": return ...``
-checks. The problem with that shape was never the check -- it was the code
-*after* it, which reached into a browser session (``pool.get(...)``,
+Inlining this behind ``if p.get("kind") == "<a kind>": return ...`` checks does
+not work, and the problem is never the check -- it is the code
+*after* it, which reaches into a browser session (``pool.get(...)``,
 ``session.page``, ``session.wait_for``). Swapping the check for a capability
 flag would have left that body intact, so a plugin declaring ``macros`` would
 still have been looked up in the browser pool.

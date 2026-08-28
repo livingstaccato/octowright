@@ -424,6 +424,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_server_macros_tools.py",
     "tests/test_server_scenarios_tools.py",
     "tests/test_session_mode.py",
+    "tests/test_sweep_nesting_guard.py",
     "tests/test_telemetry_fixes.py",
     "tests/test_title_prefix.py",
 ]

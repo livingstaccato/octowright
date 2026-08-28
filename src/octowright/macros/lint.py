@@ -84,7 +84,7 @@ _CODE_LIKE_KEYS: frozenset[str] = frozenset({"expression"})
 
 #: The finder keys a click_by/fill_by must set EXACTLY one of — the arity
 #: `build_locator` enforces. Derived from substitution rather than listed:
-#: `role_name` used to be in this set, so `{"action": "click_by", "role_name":
+#: Including `role_name` here would let `{"action": "click_by", "role_name":
 #: "Save"}` passed lint and then raised `ValueError: exactly one of
 #: role/label/text/test_id must be set` on replay.
 _ARIA_LOCATOR_KEYS: frozenset[str] = frozenset(SEMANTIC_FINDER_KEYS)
@@ -108,9 +108,9 @@ class Issue:
 
 
 #: Report one problem on the action under inspection. Every ``_check_simple_*``
-#: helper reports through this single callback — they used to mix a callback for
-#: "missing field" with direct ``issues.append`` for anything else, so one family
-#: of checks had two ways to say the same thing.
+#: helper reports through this single callback. Mixing a callback for "missing
+#: field" with direct ``issues.append`` for anything else gives one family of
+#: checks two ways to say the same thing.
 _Report = Callable[..., None]
 
 

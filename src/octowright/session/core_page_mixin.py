@@ -391,12 +391,9 @@ class SessionPageMixin(SessionLike):
         except Exception as exc:
             log.debug("core_page_mixin.password_lookup_failed", selector=selector, error=str(exc))
             return True
-        # New shape: {type, ac}. Legacy callers / tests may stub `evaluate`
-        # to return a bare string (the old behaviour); accept that shape too
-        # so the redaction policy stays the same for callers that haven't
-        # upgraded their mocks.
-        if isinstance(info, str):
-            return info == "password"
+        # The probe returns {type, ac}. Anything else means the read did not
+        # produce a shape we can classify, and an unclassifiable field is
+        # treated as a credential -- the safe direction to be wrong in.
         if not isinstance(info, dict):
             return True
         if info.get("type") == "password":
@@ -471,8 +468,9 @@ class SessionPageMixin(SessionLike):
         # Route through _target() so a switched frame's aria-tree is what you see —
         # every action tool (click/fill/evaluate/wait_for) already respects the
         # active frame; snapshot must too, or you can act in a frame you can't inspect.
-        # selector=None preserves the legacy "html"-root JSONL event so existing
-        # macro replays / golden diffs don't drift; explicit selectors are recorded.
+        # selector=None records the "html"-root event with no selector field, which
+        # is the recorded shape macro replays and golden diffs match on; an explicit
+        # selector is recorded.
         target = self._target()
         aria_yaml = await redacted_aria_snapshot(self, target.locator(selector or "html"))
         record_kwargs = {"selector": selector} if selector is not None else {}

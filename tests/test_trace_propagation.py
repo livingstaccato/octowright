@@ -54,7 +54,7 @@ def in_memory_tracer(
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     # Reroute the middleware's tracer resolution at the seam.
-    monkeypatch.setattr(tp, "_tracing_get_tracer", lambda _name: provider.get_tracer("octowright"))
+    monkeypatch.setattr(tp, "get_tracer", lambda _name: provider.get_tracer("octowright"))
     # Also reroute the global OTel API so spans inside the wrapped app
     # (which use ``opentelemetry.trace.get_tracer("inside")``) land in
     # the same exporter.
@@ -408,7 +408,7 @@ async def test_middleware_set_attribute_failure_does_not_break_request(
     exporter, _provider = in_memory_tracer
     exporter.clear()
 
-    real_get_tracer = tp._tracing_get_tracer
+    real_get_tracer = tp.get_tracer
 
     class FailingSpan:
         def __init__(self, wrapped: Any) -> None:
@@ -441,7 +441,7 @@ async def test_middleware_set_attribute_failure_does_not_break_request(
     def fake_get_tracer(name: str) -> Any:
         return WrappedTracer(real_get_tracer(name))
 
-    monkeypatch.setattr(tp, "_tracing_get_tracer", fake_get_tracer)
+    monkeypatch.setattr(tp, "get_tracer", fake_get_tracer)
 
     headers = [(b"traceparent", b"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")]
     completed: dict[str, bool] = {}
@@ -470,7 +470,7 @@ async def test_middleware_swallows_span_exit_failure(
     exporter, _provider = in_memory_tracer
     exporter.clear()
 
-    real_get_tracer = tp._tracing_get_tracer
+    real_get_tracer = tp.get_tracer
 
     class ExitFailingCM:
         def __init__(self, inner: Any) -> None:
@@ -493,7 +493,7 @@ async def test_middleware_swallows_span_exit_failure(
     def fake_get_tracer(name: str) -> Any:
         return WrappedTracer(real_get_tracer(name))
 
-    monkeypatch.setattr(tp, "_tracing_get_tracer", fake_get_tracer)
+    monkeypatch.setattr(tp, "get_tracer", fake_get_tracer)
 
     headers = [(b"traceparent", b"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")]
 
@@ -601,7 +601,7 @@ async def test_middleware_detaches_token_when_span_open_raises(
         def start_as_current_span(self, _name: str, **_kw: Any) -> Any:
             raise RuntimeError("span open broken")
 
-    monkeypatch.setattr(tp, "_tracing_get_tracer", lambda _name: BrokenTracer())
+    monkeypatch.setattr(tp, "get_tracer", lambda _name: BrokenTracer())
 
     headers = [(b"traceparent", b"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")]
     app_called: dict[str, bool] = {}

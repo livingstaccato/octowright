@@ -63,8 +63,10 @@ def test_browser_launch_rows_are_unchanged(tmp_path):
     assert summary["url"] == "https://x.test"
 
 
-def test_terminal_start_rows_are_unchanged(tmp_path):
-    # Terminal is unmoved until step 5; its recordings must keep classifying.
+def test_terminal_start_rows_still_classify(tmp_path):
+    # A recording that opens with the plugin's own row rather than core's
+    # generic `session_start` still classifies, from its filename -- core reads
+    # no plugin-specific field to do it.
     log_path = _write(
         tmp_path,
         "20260823T000000Z-terminal-sessionzz01.jsonl",
@@ -73,4 +75,4 @@ def test_terminal_start_rows_are_unchanged(tmp_path):
     summary = _summarise_recording(log_path)
     assert summary is not None
     assert summary["kind"] == "terminal"
-    assert summary["connector_type"] == "pty"
+    assert "connector_type" not in summary

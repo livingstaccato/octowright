@@ -117,7 +117,7 @@ def resolve_leader_token() -> str:
     Returned only when the lock's URL passes the same loopback gate as
     ``resolve_leader_url`` — never hand the token to a rejected/remote URL, so a
     poisoned lock that redirects the follower can't also harvest the token. ``""``
-    when there is no live lock or the lock predates the token (back-compat).
+    when there is no live lock, or the lock carries no token.
     """
     info = singleton.read_lock()
     if info is not None and not singleton.is_stale(info) and _leader_url_is_safe(info.mcp_url):

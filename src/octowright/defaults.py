@@ -482,7 +482,7 @@ HTTP_METRICS_ENABLED = _parse_bool_env("OCTOWRIGHT_HTTP_METRICS", True)
 # and is not a substitute.
 #
 # Modes:
-#   - ``off``       — legacy behavior; never redact. Use only when you
+#   - ``off``       — never redact. Use only when you
 #                     explicitly trust the recording sink.
 #   - ``passwords`` — DEFAULT. Inspect the locator's DOM element type; if
 #                     it is ``<input type="password">``, replace the

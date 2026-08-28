@@ -118,11 +118,10 @@ def _click_or_fill_allowed(kind: str) -> set[str] | None:
     ``click``/``fill``. So the accepted set is the union, and the CSS-fallback
     method is the only signature that constrains it.
 
-    ``timeout_ms`` used to be added here as a LITERAL, because the fallback
-    popped it and so it appeared in no signature. That hardcoding is exactly
-    what let lint bless a field the runtime discarded -- the drift this module
-    exists to prevent, reintroduced by hand inside the module itself. Now that
-    ``click``/``fill`` take it, the derivation covers it with nothing listed.
+    Naming ``timeout_ms`` here as a LITERAL is exactly what lets lint bless a
+    field the runtime discards -- the drift this module exists to prevent,
+    reintroduced by hand inside the module itself. ``click``/``fill`` take it,
+    so the derivation covers it with nothing listed.
     """
     fallback = "fill" if kind in {"fill", "fill_by"} else "click"
     introspected = _session_method_params(fallback)

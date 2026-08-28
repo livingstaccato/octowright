@@ -5,8 +5,8 @@
 
 """Re-exports of provide.telemetry tracing + metrics helpers.
 
-Octowright used to implement its own ``span()`` / ``set_attrs()`` /
-``record_exception()`` and lazy ``counter()`` / ``histogram()`` here. Those now
+Octowright does not implement its own ``span()`` / ``set_attrs()`` /
+``record_exception()`` or lazy ``counter()`` / ``histogram()``. Those
 live in ``provide.telemetry`` — with consent / sampling / backpressure
 governance, lazy provider rebinding, and trace↔metric exemplar correlation
 built in — so this module is a thin re-export that keeps the
@@ -31,13 +31,7 @@ from provide.telemetry import (
     span,
 )
 
-# Back-compat alias: ``_trace_propagation`` imports ``_tracer`` as the
-# tracer-resolution seam for its manual MCP-request span. provide.telemetry's
-# get_tracer(name) has the same contract as the old local helper.
-_tracer = get_tracer
-
 __all__ = [
-    "_tracer",
     "counter",
     "gauge",
     "get_tracer",

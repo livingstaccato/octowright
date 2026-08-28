@@ -257,9 +257,9 @@ class BrowserPool:
                 "har_path": str(s.har_path) if s.har_path else None,
                 "protected": s.protected,
                 # What this browser is actually sending. Launch-time headers
-                # were a write-only argument before this: a client adopting an
-                # already-running browser had no way to tell a current run tag
-                # from a stale one, and resorted to tracking its own launches.
+                # are otherwise a write-only argument: a client adopting an
+                # already-running browser has no way to tell a current run tag
+                # from a stale one, and resorts to tracking its own launches.
                 # Values are redacted by header name -- see header_state().
                 "extra_http_headers": s.header_state(),
                 "operation_gate": s.operation_snapshot(),
@@ -449,7 +449,7 @@ class BrowserPool:
         # as random renderer crashes. Route shared memory to a regular
         # tmpfile instead. Needed on Linux only (no-op risk on
         # macOS/Windows), and it applies to headless too — the early
-        # "headless returns nothing" path used to skip it.
+        # "headless returns nothing" path would skip it.
         if sys.platform.startswith("linux"):
             args.append("--disable-dev-shm-usage")
         if resolve_disable_gpu(disable_gpu):

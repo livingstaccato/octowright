@@ -143,7 +143,7 @@ def _reject_incompatible_wait_ready(*, wait_ready: bool, no_singleton: bool, no_
     help="Ensure a daemon leader is running, wait until it answers HTTP, print "
     "its URL and exit (0 = ready, non-zero + daemon log tail on failure). "
     "Does not bridge stdio -- this is the CI/scripting entry point, so a "
-    "workflow no longer has to hand-roll a lockfile poll.",
+    "workflow does not have to hand-roll a lockfile poll.",
 )
 @click.option(
     "--ready-timeout",
@@ -271,7 +271,7 @@ async def _serve_async(
         "idle_grace": idle_grace,
     }
     # Direct-leader paths: daemon-mode (the spawned daemon runs leader code
-    # directly) and --no-singleton (legacy inline mode, no daemon, no follower).
+    # directly) and --no-singleton (inline mode: no daemon, no follower).
     from octowright.server import _state
 
     if daemon_mode:

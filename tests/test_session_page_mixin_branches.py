@@ -327,7 +327,9 @@ def _make_input_target(input_type: str | None) -> MagicMock:
     if input_type is None:
         first_mock.evaluate = AsyncMock(side_effect=RuntimeError("locator gone"))
     else:
-        first_mock.evaluate = AsyncMock(return_value=input_type)
+        # The production probe returns {type, ac}; the stub must too, or it
+        # is asserting against a shape the browser never produces.
+        first_mock.evaluate = AsyncMock(return_value={"type": input_type, "ac": ""})
     locator_mock.first = first_mock
     target.locator = MagicMock(return_value=locator_mock)
     return target
@@ -338,8 +340,9 @@ def _make_action_locator(snapshot: str = "", input_type: str = "text") -> MagicM
     locator.aria_snapshot = AsyncMock(return_value=snapshot)
     locator.first = MagicMock()
     # first.evaluate serves two probes: the record-time password check
-    # (returns input_type) and the aria credential scan (returns a list).
-    locator.first.evaluate = credential_aware_evaluate(other=input_type)
+    # (returns the {type, ac} shape the production JS produces) and the aria
+    # credential scan (returns a list).
+    locator.first.evaluate = credential_aware_evaluate(other={"type": input_type, "ac": ""})
     return locator
 
 
