@@ -181,3 +181,102 @@ def test_get_round_trips_what_set_stored(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     assert [cp["id"] for cp in result["critical_points"]] == ["cp1"]
     assert result["critical_points"][0]["description"] == "Login succeeds"
+
+
+# ---------------------------------------------------------------------------
+# export_macro_cli
+#
+# Exporting also writes the artifact manifest, and that half was unasserted:
+# the exports record, the plan metadata, and -- on a re-export over an existing
+# artifact -- the merge that keeps run history alive.
+# ---------------------------------------------------------------------------
+
+
+def test_export_records_what_it_wrote_in_the_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`exports` names the real file and its kind.
+
+    Nothing read this back, so the whole entry could become `None` -- and every
+    consumer iterates it -- or the path could become `str(None)`, pointing at a
+    file that does not exist while claiming an export succeeded.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+
+    result = macro_artifacts.export_macro_cli(name="login")
+
+    assert result["ok"] is True
+    assert Path(result["path"]).exists()
+
+    listed = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
+    assert listed["exports"] == [{"path": result["path"], "kind": "python-cli"}]
+
+
+def test_export_carries_its_arguments_into_the_generated_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`args` become the argparse defaults of the emitted CLI.
+
+    Only a macro that *declares* a parameter produces a parser line at all,
+    which is why the value has to be threaded all the way through: drop the
+    `args=` keyword and the generated script still runs, still parses, and
+    silently defaults the parameter to empty.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    storage.write_macro(
+        name="login",
+        macro={
+            "name": "login",
+            "description": "Login flow",
+            "parameters": ["user"],
+            "actions": [{"action": "fill", "selector": "#user", "value": "{{user}}"}],
+        },
+    )
+
+    result = macro_artifacts.export_macro_cli(name="login", args={"user": "tanuki-tim"})
+
+    script = Path(result["path"]).read_text(encoding="utf-8")
+    assert "--user" in script
+    assert "tanuki-tim" in script
+
+    listed = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
+    assert listed["parameters"] == {"user": "tanuki-tim"}
+    assert listed["metadata"]["missing_args"] == []
+
+
+def test_re_exporting_keeps_the_run_history_and_critical_points(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The merge branch: exporting over an existing artifact must not reset it.
+
+    `export_macro_cli` builds a *fresh* plan manifest and only then merges the
+    existing one over it. Skip that merge -- or pass either side as `None` --
+    and an export silently discards `latest_run` and every configured critical
+    point, so the next verify has nothing to verify against. Reaching it needs
+    an artifact that already exists, which no test had.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", [{"id": "cp1"}])
+    before = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
+
+    macro_artifacts.export_macro_cli(name="login")
+
+    after = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
+    assert [cp["id"] for cp in after["critical_points"]] == ["cp1"]
+    assert after["created_at"] == before["created_at"]
+
+
+def test_export_records_the_plan_metadata_it_built(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The same `_manifest_for_plan` claims, reached through the export path."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+
+    macro_artifacts.export_macro_cli(name="login")
+    meta = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]["metadata"]
+
+    assert meta["ready"] is True
+    assert meta["action_count"] == 1
+    assert meta["missing_args"] == []
+    assert len({meta["paths"][k] for k in ("artifact_dir", "runs_dir", "exports_dir")}) == 3
