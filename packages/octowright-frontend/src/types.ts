@@ -230,7 +230,16 @@ export interface DownloadListResponse {
 
 export interface SessionListResponse {
   live: SessionSummary[];
+  /**
+   * Most-recent closed sessions, capped server-side (`?closed_limit=`). The
+   * whole listing used to be sent -- 2.7 MB on a real 10,177-recording
+   * directory -- for the twenty rows this dashboard renders.
+   */
   closed: SessionSummary[];
+  /** Closed sessions that exist, which may exceed `closed.length`. */
+  closed_total?: number;
+  closed_limit?: number;
+  closed_truncated?: boolean;
 }
 
 export interface SavedScenario {

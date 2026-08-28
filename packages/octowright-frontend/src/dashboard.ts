@@ -270,7 +270,7 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
     log.debug({
       event: "dashboard_refresh",
       live_count: state.sessions.live.length,
-      closed_count: state.sessions.closed.length,
+      closed_count: state.sessions.closed_total ?? state.sessions.closed.length,
       live_scenarios: state.scenarios.live.length,
       personas: state.personas.length,
       macros: state.macros.length,
