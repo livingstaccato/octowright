@@ -73,49 +73,6 @@ def new_run_result(
     }
 
 
-def normalize_critical_point(point: dict[str, Any], index: int) -> dict[str, Any]:
-    normalized = copy.deepcopy(point)
-    if not normalized.get("id"):
-        normalized["id"] = f"CP{index + 1}"
-    if not normalized.get("description"):
-        normalized["description"] = "Unknown claim"
-    if "status" not in normalized:
-        normalized["status"] = "unknown"
-    if "checks" not in normalized:
-        normalized["checks"] = []
-    if "evidence" not in normalized:
-        normalized["evidence"] = []
-    if "last_verified_run" not in normalized:
-        normalized["last_verified_run"] = None
-    if "notes" not in normalized:
-        normalized["notes"] = None
-    return normalized
-
-
-def normalize_critical_points(points: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    if not points:
-        return []
-    return [normalize_critical_point(p, i) for i, p in enumerate(points)]
-
-
-def new_verification_result(
-    *,
-    artifact_type: str,
-    name: str,
-    run_id: str,
-    status: str,
-    critical_points: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "artifact_type": artifact_type,
-        "name": name,
-        "run_id": run_id,
-        "status": status,
-        "verified_at": now_iso(),
-        "critical_points": copy.deepcopy(critical_points),
-    }
-
-
 def new_check_result(
     *,
     check_type: str,
