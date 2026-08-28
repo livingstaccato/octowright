@@ -16,7 +16,11 @@ format here in lockstep.
 ```
 GET    /                                         → static index.html (dashboard)
 GET    /sessions/{id}                            → static session.html (rewritten by frontend router)
-GET    /api/sessions                             → {"live": [SessionSummary, ...], "closed": [SessionSummary, ...]}
+GET    /api/sessions[?closed_limit=N]            → {"live": [...], "closed": [...], "closed_total": int,
+                                                    "closed_limit": int, "closed_truncated": bool}
+                                                 closed is capped (default 200, max 5000); closed_total is
+                                                 the number that exist. A non-positive closed_limit resolves
+                                                 to the default rather than meaning unbounded.
 POST   /api/sessions                             → SessionSummary (201) — launch a new browser session
 GET    /api/sessions/{id}                        → SessionDetail
 DELETE /api/sessions/{id}                        → SessionCloseResponse (200); 404 if not in live pool.  
