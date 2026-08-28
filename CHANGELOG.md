@@ -5,6 +5,146 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-08-28
+
+### Changed
+- **Terminal support is no longer part of core.** PTY / SSH / telnet sessions moved
+  out of `octowright` and into `octowright-terminal` (`packages/octowright-terminal`),
+  the first **session-kind plugin**. Core now carries no terminal-specific code at
+  all: no `terminal/` package, no `provide.uterm` import, no hardcoded scenario
+  branch, no terminal renderer in the dashboard bundle. The `terminal_*` MCP tools,
+  the `terminals` capability profile, the scenario-participant kind and the
+  xterm-based dashboard renderer are all supplied by the plugin. Enable it with
+  `OCTOWRIGHT_PLUGINS=terminal` after installing the `terminal` dependency group;
+  **nothing loads by default**, because a transitive dependency must not be able to
+  extend a browser-driving daemon on its own. The plugin distribution is not on PyPI
+  — only its `provide-uterm` dependencies are — so it installs from this repo, and it
+  needs a core carrying `octowright.plugins`, which no released version did before
+  this one.
+- **A scenario participant's kind-specific fields moved into `options:`.** The
+  terminal-shaped field block on `Participant` is replaced by a generic `options`
+  dict validated against the participant's kind. In `scenario_participants` /
+  `scenario_status` output those fields arrive nested under `extra` rather than
+  flattened onto the entry — `scenarios_pool` builds the entry generically and
+  assigns `persona`/`role` *after* the launch result, so a flattened plugin key
+  would be silently clobbered by core, and a generic flatten would let any plugin
+  overwrite `instance_id`. The plugin's own `terminal_launch` still returns
+  `connector_type` at the top level, so that tool's output is unchanged.
+- **The project-wide file LOC cap is 777**, replacing the old 500-line rule, and now
+  matches the CI gate rather than disagreeing with it.
+
+### Added
+- **A session-kind plugin API.** A distribution declares an `octowright.session_kinds`
+  entry point; an operator enables it by name via `OCTOWRIGHT_PLUGINS` (or a
+  `plugins:` list in the user config dir). Deliberately *not* `.octowright/config.yaml`
+  — that file is found by walking up from CWD, so enabling plugins there would make
+  the MCP tool surface depend on which directory the daemon was spawned in. The
+  registry loads in two phases with delta rollback, so a plugin that fails halfway
+  leaves nothing half-registered, and reports every enabled name at
+  `octowright_status()["plugins"]` with a status ledger — an enabled name with no
+  matching entry point is `state: "missing"` rather than a silent no-op.
+- **Plugins are refused at load if they cannot satisfy the contract they claim.**
+  Capability support is derived by `isinstance` against `runtime_checkable`
+  Protocols, which tests attribute *presence* and nothing else — not arity, not
+  keyword names, not whether the method is a coroutine. An adapter carrying a sync
+  `run_macro`, or one taking different keywords, was registered as supporting
+  `macros` and then failed with a `TypeError` from core's own call site partway
+  through someone's scenario, reading as a scenario failure rather than the plugin
+  defect it was. `plugins.contract.contract_errors` now *binds* the call shape each
+  Protocol declares against the implementation's signature, so it tracks the Protocol
+  instead of mirroring it by hand, and names the offending method. The mandatory
+  `ScenarioAdapter` floor is checked too — nothing asserted it before.
+- **Plugins extend the dashboard without entering core's bundle.** A plugin may ship
+  a `FrontendAsset` renderer, served by `http/routes/plugin_assets.py` and advertised
+  at `/api/plugins`; `session.ts` resolves a non-core `kind` through a client-side
+  registry rather than importing any plugin's renderer directly. A malformed or
+  missing renderer falls back to a generic view that states the reason instead of
+  rendering blank. Plugins also contribute capability profiles, so
+  `OCTOWRIGHT_PROFILE=terminals` works only when that plugin is enabled.
+- **Core owns the launch transaction and the artifact store.** A plugin reserves an
+  artifact path and commits it, so every plugin-written file lands inside the
+  contained tree with the same `0700` locking core applies to its own; a launch that
+  fails to commit stops the plugin's engine rather than stranding it. Plugin
+  identifiers are namespace-validated (a trailing newline is rejected), artifact
+  reads re-validate the id and stream rather than slurping, and JS modules are served
+  with a pinned MIME type.
+- **`macro_artifact_delete`** — the macro artifact store had create, read, run and
+  verify but no removal path, so the only way to drop an artifact was to delete files
+  by hand. It reports how many runs it removed.
+
+### Fixed
+- **`recordings_cleanup` deleted the macro artifact store.** Macro artifacts live at
+  `<RECORDINGS_DIR>/artifacts`, inside the tree the age-based sweep walks, so any
+  artifact whose files had not been touched recently was pruned along with the
+  disposable recordings — silent data loss of hand-authored critical points and
+  their verification history. Age is a fair proxy for "this recording is disposable"
+  and a bad one for "this artifact is disposable": a recording is a byproduct, an
+  artifact is something a person wrote, and the artifact whose files stop being
+  touched is the *stable* one that keeps passing. `recording_cleanup.PRESERVED_SUBDIRS`
+  now excludes it. `.frame-cache` is deliberately not preserved — it is a regenerable
+  cache and reclaiming it is the point.
+- **`octowright persona delete` destroyed saved logins with no confirmation.** A
+  persona directory holds live session cookies, `localStorage` and IndexedDB for
+  every site that persona logged into — a strictly stronger credential than a typed
+  password — and the command took a name and deleted the tree. It now prompts,
+  naming the persona directory and its engine profiles and stating that a live
+  browser using them cannot be detected from the CLI; `--yes/-y` skips the prompt for
+  scripts. Existence is deliberately not pre-checked, so `delete_persona` keeps
+  owning the canonical error.
+- **Macro-artifact verification was not idempotent.** The manifest stores critical
+  point *declarations*; `verification.json` stores *outcomes*. Assigning the report's
+  critical points straight back into the manifest destroyed the declarations, and for
+  a `result_status` check it destroyed them in a way that broke the next run: the
+  evaluated form carried its verdict under `status`, the same key that check declares
+  its expected run status under. One verify rewrote
+  `{"type": "result_status", "status": "ok"}` into `"status": "passed"`, so verifying
+  the same unchanged run again compared it against `"passed"` and reported failure.
+  `_evaluate_check` no longer merges the declaration into the outcome, and
+  `apply_verification_rollup` folds back only the two fields the spec assigns to a
+  critical point — the verdict and the run it was reached against.
+- **The verification verdict never reached the run report.** `write_run_bundle` wrote
+  `summary.md` during the run, before verification could have happened, so its
+  `## Verification and Critical Points` section was unreachable in production — the
+  file on disk always said the run was unverified no matter how many times it passed.
+  `macro_artifact_verify` now calls `refresh_run_summary` and returns the summary
+  path. Bundles written before the summary line was stored have their prose rebuilt
+  rather than blanked.
+- **Accessibility metadata reads ignored the action's own timeout.** The semantic
+  metadata read used its own fixed budget, so an action carrying a short `timeout_ms`
+  could still stall on the metadata hop. A test now gates the raw
+  `locator.aria_snapshot()` call so a new sink cannot bypass the credential scrubber.
+- **Macro replay counted two recorder rows as failures.** `session_start` and
+  `artifact_registered` are passive rows, but `dispatch_simple` counts an
+  unclassified kind as an error, so every replay of a recording containing them
+  reported bogus failures. Both are stripped, and the recorder's control rows now
+  bypass the per-recording byte ceiling so a truncation marker can always be written.
+- **`octowright scenario start` leaked plugin pools.** Plugin activation and teardown
+  are now scoped to the command, run outside the scenario event loop, and a failing
+  activation still shuts telemetry down and closes the pool it abandoned. A raising
+  `registry.pools()` no longer skips the remaining shutdown steps.
+- **A broken plugin no longer breaks unrelated pages.** A plugin pool that raises on
+  lookup is isolated from `GET /api/sessions` and from the session-detail page rather
+  than returning a 500 for every session; artifact session ids resolve exactly instead
+  of by substring; and an artifact `stat` that races a concurrent vanish is guarded.
+- **`octowright init` wrote into the checkout's own tracked config.** The scaffold
+  resolved its target by walking up from CWD, so running it inside the repo rewrote
+  `.octowright/config.yaml` — and the test suite did the same on every run.
+- **Three CI flakes.** The proxy-supervisor tests raced a fixed sleep instead of
+  polling for the condition; the live heartbeat check raced its own tool call; and the
+  dead-leader check ran on a smaller budget than its siblings. `slowmo` is asserted by
+  what the runtime asks for rather than by a stopwatch.
+
+### Documentation
+- **`octowright cleanup` does not prune profiles**, despite saying it did. Deciding a
+  profile is abandoned requires knowing which profiles live browsers are using, and
+  the CLI is a separate process from the daemon with no access to the pool — so the
+  operation is offered as an MCP tool (`profile_cleanup`, which populates `in_use`
+  from the pool) and deliberately not offered by the CLI at all.
+- **`OCTOWRIGHT_PLUGINS` is documented** in the env-var reference, along with the
+  post-publication state of the uterm dependencies: `provide-uterm` and its siblings
+  are on PyPI, so the plugin resolves them normally and a source checkout no longer
+  needs the sibling repo beside it.
+
 ## [0.16.4] - 2026-08-22
 
 ### Fixed
