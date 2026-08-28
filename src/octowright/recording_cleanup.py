@@ -160,7 +160,7 @@ def cleanup_stale(
     errors: list[dict[str, str]] = []
     touched_video_dirs: set[Path] = set()
 
-    from octowright.http.discovery import invalidate_recording_index, invalidate_recording_summary
+    from octowright.http.discovery import invalidate_closed_list, invalidate_recording_index
     from octowright.http.session_artifacts import session_artifact_cache
 
     recording_dirs_touched: set[Path] = set()
@@ -178,7 +178,6 @@ def cleanup_stale(
         # recording that happens to land at the same path can't see ghost rows.
         if entry.kind == "recording":
             session_artifact_cache.evict(entry.path)
-            invalidate_recording_summary(entry.path)
             recording_dirs_touched.add(entry.path.parent)
         if entry.kind == "video":
             touched_video_dirs.add(entry.path.parent)
@@ -188,6 +187,11 @@ def cleanup_stale(
     # that no longer exist.
     for d in recording_dirs_touched:
         invalidate_recording_index(d)
+        # The assembled listing keys on the directory mtime, which an unlink
+        # already bumps -- but only to whatever resolution the filesystem
+        # chooses. Dropping it explicitly means a deleted recording is never
+        # briefly still listed.
+        invalidate_closed_list(d)
 
     # Best-effort empty-dir prune for video subdirs we touched. Walk up until
     # we leave the videos/ tree.
