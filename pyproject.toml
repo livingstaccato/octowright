@@ -363,6 +363,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_hypo_robustness.py",
     "tests/test_label_promotion.py",
     "tests/test_launch_helpers_persona_base_url.py",
+    "tests/test_macro_artifact_critical_points.py",
+    "tests/test_macro_artifact_manifest_helpers.py",
     "tests/test_macro_artifacts.py",
     "tests/test_macro_artifacts_roundtrip.py",
     "tests/test_macro_calls_branches.py",
