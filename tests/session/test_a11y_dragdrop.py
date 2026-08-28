@@ -279,3 +279,39 @@ async def test_release_failure_does_not_mask_original_exception(monkeypatch: pyt
 
     with pytest.raises(RuntimeError, match="page detached"):
         await run_a11y_dragdrop(session, source_selector="#i", verify_js="() => true")
+
+
+async def test_session_method_records_the_action() -> None:
+    from octowright.session.core_ops_mixin import SessionOpsMixin
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        def record(self, kind: str, **fields: Any) -> None:
+            self.events.append((kind, fields))
+
+    page = FakePage()
+
+    class Session(SessionOpsMixin):
+        def __init__(self) -> None:
+            self.page = page
+            self.recorder = Recorder()
+            self.leases: list[str] = []
+
+        def _target(self) -> FakePage:
+            return page
+
+        @asynccontextmanager
+        async def operation(self, name: str, **_kw: Any):
+            self.leases.append(name)
+            yield
+
+    session = Session()
+    result = await session.a11y_dragdrop(source_selector="#item", verify_js="() => true")
+    assert result["verified"] is True
+    kind, fields = session.recorder.events[0]
+    assert kind == "a11y_dragdrop"
+    assert fields["source_selector"] == "#item"
+    assert fields["verify_js"] == "() => true"
+    assert "ok" not in fields, "record the inputs, not the outcome"
