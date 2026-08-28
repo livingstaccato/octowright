@@ -208,7 +208,48 @@ def test_http_metrics_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_list_sessions_empty(client: TestClient) -> None:
     r = client.get("/api/sessions")
     assert r.status_code == 200
-    assert r.json() == {"live": [], "closed": []}
+    assert r.json() == {
+        "live": [],
+        "closed": [],
+        "closed_total": 0,
+        "closed_limit": 200,
+        "closed_truncated": False,
+    }
+
+
+def test_list_sessions_caps_closed_and_reports_the_total(client: TestClient, isolated_recordings: Path) -> None:
+    """The dashboard renders twenty rows; the count must not come from the array.
+
+    Before the cap the whole listing was serialised on every poll -- 2.7 MB on a
+    real 10,177-recording directory -- so a client reading ``len(closed)`` for a
+    total now has to read ``closed_total`` instead.
+    """
+    for i in range(5):
+        _write_recording(isolated_recordings, f"cap00000000{i}")
+
+    body = client.get("/api/sessions?closed_limit=2").json()
+    assert len(body["closed"]) == 2
+    assert body["closed_total"] == 5
+    assert body["closed_limit"] == 2
+    assert body["closed_truncated"] is True
+
+
+def test_list_sessions_closed_limit_is_not_removable_by_zero(client: TestClient, isolated_recordings: Path) -> None:
+    """``0`` resolves to the default rather than meaning unbounded -- the cap is
+    the point, so it must not be switched off by a caller passing a falsy value."""
+    _write_recording(isolated_recordings, "zero00000001")
+    for raw in ("0", "-1"):
+        body = client.get(f"/api/sessions?closed_limit={raw}").json()
+        assert body["closed_limit"] == 200
+
+
+def test_list_sessions_closed_limit_clamps_and_rejects(client: TestClient, isolated_recordings: Path) -> None:
+    _write_recording(isolated_recordings, "clamp0000001")
+    assert client.get("/api/sessions?closed_limit=999999").json()["closed_limit"] == 5000
+
+    bad = client.get("/api/sessions?closed_limit=banana")
+    assert bad.status_code == 400
+    assert "closed_limit" in bad.json()["error"]
 
 
 def test_list_sessions_with_closed_recording(client: TestClient, isolated_recordings: Path) -> None:
