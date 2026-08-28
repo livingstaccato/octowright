@@ -95,3 +95,74 @@ def test_resolve_export_path_rejects_outside_recordings(monkeypatch: pytest.Monk
     store = paths.ArtifactStore(recordings_dir=recordings_dir)
     with pytest.raises(ValueError, match="outside"):
         store.resolve_macro_export_path("login", str(tmp_path / "elsewhere" / "login.py"))
+
+
+def test_a_relative_export_path_is_anchored_under_the_artifact_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`if NOT target.is_absolute()` -- inverting it swaps both branches at once.
+
+    A relative `out_path` would stop being anchored to the artifact root (and
+    resolve against the process CWD instead), while an absolute one would be
+    joined to the root. `reject_unsafe_path` still stands behind this, so the
+    inversion is a containment weakening rather than an outright escape -- but
+    the anchoring is the part that makes a relative export land somewhere
+    predictable, and nothing asserted it.
+    """
+    paths, recordings_dir = _reload_paths(monkeypatch, tmp_path)
+    store = paths.ArtifactStore(recordings_dir=recordings_dir)
+
+    target = store.resolve_macro_export_path("login", "subdir/login-cli.py")
+
+    assert target == store.root / "subdir" / "login-cli.py"
+    assert target.parent.exists()
+
+
+def test_an_absolute_export_path_inside_the_root_is_used_as_given(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The other branch, so the pair pins the condition rather than one side."""
+    paths, recordings_dir = _reload_paths(monkeypatch, tmp_path)
+    store = paths.ArtifactStore(recordings_dir=recordings_dir)
+    wanted = store.root / "explicit" / "login-cli.py"
+
+    assert store.resolve_macro_export_path("login", str(wanted)) == wanted
+
+
+def test_a_stray_file_in_runs_does_not_stop_the_run_id_scan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`continue`, not `break` -- the scan must see every entry.
+
+    `next_run_dir` walks `runs/` for the highest `run_NNNN` it can find, and
+    skips anything that is not a directory. Swap that `continue` for `break`
+    and the walk stops at the first stray file -- a `.DS_Store`, an editor
+    swapfile, a leftover archive -- so the next run reuses an id that already
+    exists and `mkdir(exist_ok=False)` raises, or worse, overwrites a bundle a
+    verification still refers to. Directory iteration order is unspecified, so
+    this is a latent failure that depends on the filesystem.
+    """
+    paths, recordings_dir = _reload_paths(monkeypatch, tmp_path)
+    store = paths.ArtifactStore(recordings_dir=recordings_dir)
+    artifact_dir = store.macro_dir("login")
+
+    first = store.next_run_dir(artifact_dir)
+    assert first.name == "run_0001"
+
+    # A non-directory entry sitting among the run dirs.
+    (artifact_dir / "runs" / ".DS_Store").write_text("", encoding="utf-8")
+
+    second = store.next_run_dir(artifact_dir)
+    assert second.name == "run_0002"
+    assert second.exists()
+
+
+def test_the_run_id_scan_ignores_names_that_are_not_run_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Only `run_NNNN` counts toward the maximum."""
+    paths, recordings_dir = _reload_paths(monkeypatch, tmp_path)
+    store = paths.ArtifactStore(recordings_dir=recordings_dir)
+    artifact_dir = store.macro_dir("login")
+    runs = artifact_dir / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    (runs / "archive").mkdir()
+    (runs / "run_9999_old").mkdir()
+
+    assert store.next_run_dir(artifact_dir).name == "run_0001"
