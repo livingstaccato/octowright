@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import traceback
 from pathlib import Path
 from typing import Any
@@ -503,6 +504,38 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
         "status": v_res["status"],
         "paths": {"verification": str(verification_path), "summary": str(summary_path)},
     }
+
+
+def delete_macro_artifact(name: str) -> dict[str, Any]:
+    """Remove a macro's artifact directory: manifest, every run, and exports.
+
+    The artifact store was the only store with no delete -- goldens, macros,
+    profiles and personas all have one. That was survivable only because
+    `recordings_cleanup` swept it by accident, since `ArtifactStore` roots
+    under the recordings dir. Excluding artifacts from that sweep was correct
+    (age says nothing about whether a curated artifact is disposable) but it
+    removed the sole path that ever reclaimed the space, leaving artifacts to
+    accumulate with no supported way to remove them -- including the orphans
+    `macro_delete` leaves behind, since deleting a macro deliberately keeps the
+    history of what it did.
+
+    Deliberate and targeted, then, rather than age-based: the caller names the
+    artifact. Reports the run count so a caller can see the size of what they
+    are discarding before it is gone from the return value too.
+    """
+    store = ArtifactStore()
+    artifact_dir = store.macro_dir(name)
+    manifest_path = artifact_dir / "artifact.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"no macro artifact for {name!r} at {artifact_dir}; list them with `macro_artifact_list`"
+        )
+
+    runs_dir = artifact_dir / "runs"
+    runs = sorted(child.name for child in runs_dir.iterdir() if child.is_dir()) if runs_dir.exists() else []
+    shutil.rmtree(artifact_dir)
+    log.info("octowright.macro.artifact.deleted", artifact_type="macro", name=name, runs=len(runs))
+    return {"deleted": True, "name": name, "path": str(artifact_dir), "runs_removed": len(runs)}
 
 
 def macro_artifact_status(name: str) -> dict[str, Any]:
