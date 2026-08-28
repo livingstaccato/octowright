@@ -10,9 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Terminal support is no longer part of core.** PTY / SSH / telnet sessions moved
   out of `octowright` and into `octowright-terminal` (`packages/octowright-terminal`),
-  the first **session-kind plugin**. Core now carries no terminal-specific code at
-  all: no `terminal/` package, no `provide.uterm` import, no hardcoded scenario
-  branch, no terminal renderer in the dashboard bundle. The `terminal_*` MCP tools,
+  the first **session-kind plugin**. Core keeps no terminal implementation: no
+  `terminal/` package, no `provide.uterm` import, no hardcoded scenario branch, no
+  terminal renderer in the dashboard bundle. One residue stays behind deliberately —
+  a fixed table in `http/discovery.py` mapping the pre-plugin `terminal_start`
+  opening row to `kind: "terminal"`, so a recording already on disk keeps classifying
+  correctly whether or not the plugin is installed today. The `terminal_*` MCP tools,
   the `terminals` capability profile, the scenario-participant kind and the
   xterm-based dashboard renderer are all supplied by the plugin. Enable it with
   `OCTOWRIGHT_PLUGINS=terminal` after installing the `terminal` dependency group;
@@ -116,8 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Macro replay counted two recorder rows as failures.** `session_start` and
   `artifact_registered` are passive rows, but `dispatch_simple` counts an
   unclassified kind as an error, so every replay of a recording containing them
-  reported bogus failures. Both are stripped, and the recorder's control rows now
-  bypass the per-recording byte ceiling so a truncation marker can always be written.
+  reported bogus failures. Both are stripped. The recorder also gained a `record_control`
+  path for the rows core itself must be able to write — `session_start`, the truncation
+  marker — with its own 64 KiB budget rather than the per-recording ceiling, deliberately
+  bounded rather than exempt so a plugin cannot evade `OCTOWRIGHT_RECORDING_MAX_BYTES` by
+  routing traffic through it.
 - **`octowright scenario start` leaked plugin pools.** Plugin activation and teardown
   are now scoped to the command, run outside the scenario event loop, and a failing
   activation still shuts telemetry down and closes the pool it abandoned. A raising
@@ -126,10 +132,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lookup is isolated from `GET /api/sessions` and from the session-detail page rather
   than returning a 500 for every session; artifact session ids resolve exactly instead
   of by substring; and an artifact `stat` that races a concurrent vanish is guarded.
-- **`octowright init` wrote into the checkout's own tracked config.** The scaffold
-  resolved its target by walking up from CWD, so running it inside the repo rewrote
-  `.octowright/config.yaml` — and the test suite did the same on every run.
-- **Four CI flakes.** The proxy-supervisor tests raced a fixed sleep instead of
+- **The test suite rewrote the checkout's own tracked project config.**
+  `scaffold.scaffold_all` defaults `target_dir` to `Path.cwd()`, which is right for
+  the real `octowright init` — it scaffolds the project you are standing in — but
+  under pytest the cwd is this checkout, so any test invoking `init` without an
+  isolated filesystem rewrote the repo's tracked `.octowright/config.yaml`. It hid
+  for a long time because `write_project_config` derives `label` from the basename of
+  `git rev-parse --show-toplevel`: in a checkout named `octowright` the rewrite is
+  byte-identical and git reports nothing. It surfaced only in a git worktree, whose
+  directory is named after the branch — where every `git add -A` after a test run
+  silently committed a label change. An autouse fixture now fails the offending test
+  by name, comparing mtime rather than content because content is identical in
+  exactly the checkout where the suite is usually run.
+- **Three CI flakes.** The proxy-supervisor tests raced a fixed sleep instead of
   polling for the condition; the live heartbeat check raced its own tool call; and the
   dead-leader check ran on a smaller budget than its siblings. `slowmo` is asserted by
   what the runtime asks for rather than by a stopwatch.
