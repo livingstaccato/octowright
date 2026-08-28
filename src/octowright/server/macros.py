@@ -319,7 +319,10 @@ def macro_artifact_delete(name: str) -> dict[str, Any]:
         "Find recording artefacts (JSONL logs, screenshots, videos, traces) older than "
         "`days` and optionally delete them. Defaults to dry_run=True so the first call "
         "is always safe. Pass dry_run=False to actually delete. Returns a per-kind "
-        "breakdown so you can see what would be freed before committing."
+        "breakdown so you can see what would be freed before committing. Macro "
+        "artifacts (manifests, critical points, run bundles, exports) live under the "
+        "same root but are never swept -- they are curated, not incidental, so age "
+        "does not make them disposable. Use macro_artifact_* tools to manage those."
     ),
 )
 def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:

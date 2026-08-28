@@ -361,3 +361,80 @@ def test_cli_cleanup_apply_deletes(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "removed 2" in result.output
     assert not a.exists()
     assert not b.exists()
+
+
+# ---------------------------------------------------------------------------
+# The artifact store must survive the sweep
+#
+# `ArtifactStore` roots itself at `<recordings_dir>/artifacts`, so macro
+# artifacts have always lived inside the tree this sweep walks -- and it walked
+# them. A 30-day cleanup deleted artifact.json with its configured critical
+# points, every run bundle, verification.json, summary.md and any exported CLI,
+# reporting them as `other` in the per-kind breakdown that exists precisely so
+# an operator can see what they are about to free.
+# ---------------------------------------------------------------------------
+
+
+def test_the_artifact_store_is_never_swept(tmp_path: Path) -> None:
+    """Age says nothing about whether a macro artifact is disposable.
+
+    A recording is a byproduct; a critical point is something a person wrote.
+    The artifact whose files stop being touched is the stable one that keeps
+    passing -- exactly the one worth keeping.
+    """
+    root = tmp_path / "recordings"
+    artifact_files = [
+        _touch(root / "artifacts" / "macros" / "login" / "artifact.json", age_days=90),
+        _touch(root / "artifacts" / "macros" / "login" / "runs" / "run_0001" / "result.json", age_days=90),
+        _touch(root / "artifacts" / "macros" / "login" / "runs" / "run_0001" / "summary.md", age_days=90),
+        _touch(
+            root / "artifacts" / "macros" / "login" / "runs" / "run_0001" / "verification.json",
+            age_days=90,
+        ),
+        _touch(root / "artifacts" / "macros" / "login" / "exports" / "login.py", age_days=90),
+    ]
+
+    stale = rc.find_stale_files(root, days=30)
+
+    assert stale == []
+    for path in artifact_files:
+        assert path.exists()
+
+
+def test_recordings_beside_the_artifact_store_are_still_swept(tmp_path: Path) -> None:
+    """The exclusion is a subtree, not a blanket -- ordinary recordings still go."""
+    root = tmp_path / "recordings"
+    _touch(root / "artifacts" / "macros" / "login" / "artifact.json", age_days=90)
+    recording = _touch(root / "20260101T000000Z-chromium-abc.jsonl", age_days=90)
+    screenshot = _touch(root / "shots" / "before.png", age_days=90)
+
+    swept = {s.path for s in rc.find_stale_files(root, days=30)}
+
+    assert swept == {recording, screenshot}
+
+
+def test_the_frame_cache_is_deliberately_still_swept(tmp_path: Path) -> None:
+    """`.frame-cache` is regenerable, so sweeping it is the point.
+
+    Pinned so a future "preserve everything that looks internal" change has to
+    argue with a test rather than quietly stop reclaiming cache space.
+    """
+    root = tmp_path / "recordings"
+    cached = _touch(root / ".frame-cache" / "session-1" / "0001.png", age_days=90)
+
+    assert [s.path for s in rc.find_stale_files(root, days=30)] == [cached]
+
+
+def test_a_directory_merely_named_artifacts_deeper_down_is_not_protected(
+    tmp_path: Path,
+) -> None:
+    """Only the artifact store at the root is preserved.
+
+    The check is anchored on the first path component rather than matching the
+    name anywhere, so a session that happens to write into a folder called
+    `artifacts` does not get itself exempted from cleanup.
+    """
+    root = tmp_path / "recordings"
+    nested = _touch(root / "session-1" / "artifacts" / "blob.bin", age_days=90)
+
+    assert [s.path for s in rc.find_stale_files(root, days=30)] == [nested]
