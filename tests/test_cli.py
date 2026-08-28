@@ -142,8 +142,9 @@ def test_persona_create_then_list_then_show_then_delete(isolated_paths: dict[str
     assert "Dante" in r.output
     assert "https://discord.com/app" in r.output
 
-    # delete
-    r = runner.invoke(cli, ["persona", "delete", "dante"])
+    # delete -- `--yes` because the command now confirms before destroying
+    # engine profiles, which hold saved logins rather than regenerable data.
+    r = runner.invoke(cli, ["persona", "delete", "dante", "--yes"])
     assert r.exit_code == 0
     assert "deleted" in r.output
     assert not (isolated_paths["profiles"] / "dante").exists()
