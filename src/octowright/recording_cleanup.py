@@ -70,6 +70,25 @@ def _classify(path: Path, recordings_dir: Path) -> str:
     return "other"
 
 
+#: Subdirectories of the recordings root this sweep must never touch.
+#:
+#: ``ArtifactStore`` roots itself at ``<recordings_dir>/artifacts``, so macro
+#: artifacts have always lived inside the tree this function walks -- and it
+#: walked them. A 30-day cleanup deleted artifact.json with its configured
+#: critical points, every run bundle, verification.json, summary.md and any
+#: exported CLI, reporting them as ``other`` in the per-kind breakdown that
+#: exists so an operator can see what they are about to free.
+#:
+#: Age is a fair proxy for "this recording is disposable" and a bad one for
+#: "this artifact is disposable". A recording is a byproduct; a critical point
+#: is something a person wrote. The artifact whose files stop being touched is
+#: the stable one that keeps passing -- exactly the one worth keeping.
+#:
+#: ``.frame-cache`` is deliberately NOT listed: it is a regenerable cache and
+#: sweeping it is the point.
+PRESERVED_SUBDIRS = ("artifacts",)
+
+
 def find_stale_files(
     recordings_dir: Path,
     days: float,
@@ -79,8 +98,8 @@ def find_stale_files(
     """Return all files under ``recordings_dir`` older than ``days``.
 
     Age is computed from mtime. The directory itself is skipped; subdirs are
-    recursed. ``now`` is injectable so tests can pin "now" for deterministic
-    age math.
+    recursed, except those named in :data:`PRESERVED_SUBDIRS`. ``now`` is
+    injectable so tests can pin "now" for deterministic age math.
     """
     if not recordings_dir.exists():
         return []
@@ -91,6 +110,8 @@ def find_stale_files(
     stale: list[StaleFile] = []
     for path in recordings_dir.rglob("*"):
         if not path.is_file():
+            continue
+        if _is_preserved(path, recordings_dir):
             continue
         try:
             stat = path.stat()
@@ -108,6 +129,15 @@ def find_stale_files(
             )
         )
     return stale
+
+
+def _is_preserved(path: Path, recordings_dir: Path) -> bool:
+    """True when *path* sits under a subdirectory the sweep must not delete."""
+    try:
+        relative = path.relative_to(recordings_dir)
+    except ValueError:
+        return False
+    return bool(relative.parts) and relative.parts[0] in PRESERVED_SUBDIRS
 
 
 def cleanup_stale(
