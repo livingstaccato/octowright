@@ -425,3 +425,45 @@ async def test_a_verified_run_reports_its_status_and_paths(monkeypatch: pytest.M
     verification = Path(result["paths"]["verification"])
     assert verification.exists()
     assert verification.parent.name == result["run_id"]
+
+
+@pytest.mark.asyncio
+async def test_running_an_unplanned_macro_builds_its_own_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`run_macro_artifact` plans for itself when no artifact exists yet.
+
+    All thirty existing call sites call `plan_macro_artifact` first, so the
+    `if not manifest:` branch -- and the whole `_manifest_for_plan` call inside
+    it, every keyword -- was never executed by the suite. Running a macro
+    directly is the documented one-step path, and it must produce the same
+    manifest a plan would.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    storage.write_macro(
+        name="login",
+        macro={
+            "name": "login",
+            "description": "Login flow",
+            "parameters": ["user", "password"],
+            "actions": [{"action": "navigate", "url": "https://example.test/login"}],
+        },
+    )
+    _stub_replay(monkeypatch, macro_artifacts)
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={"user": "tanuki"}, capture=False, verify=False
+    )
+    assert result["ok"] is True
+
+    listed = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
+    meta = listed["metadata"]
+
+    assert listed["parameters"] == {"user": "tanuki"}
+    assert meta["missing_args"] == ["password"]
+    assert meta["ready"] is False  # a required argument was not supplied
+    assert meta["description"] == "Login flow"
+    assert meta["action_count"] == 1
+    assert len({meta["paths"][k] for k in ("artifact_dir", "runs_dir", "exports_dir")}) == 3
+    assert meta["paths"]["runs_dir"].endswith("runs")
+    assert meta["paths"]["exports_dir"].endswith("exports")
