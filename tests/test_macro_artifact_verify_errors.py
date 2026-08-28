@@ -245,3 +245,183 @@ async def test_a_successful_screenshot_records_its_own_path_and_label(
     for label, record in shots.items():
         assert Path(record["path"]).name == f"{label}.png"
         assert Path(record["path"]).exists()
+
+
+# ---------------------------------------------------------------------------
+# run_macro_artifact -- the run record, and the gate in front of verification
+#
+# Every field of result.json comes from a separate expression, and the suite
+# only ever read `ok`, `run_id` and `verification_status`. The rest -- the
+# replay counts, the instance, the recording path, the error slot -- could each
+# be replaced with `None` unnoticed, which matters because result.json is what
+# `result_status` checks are evaluated against and what a human reads after a
+# failed run.
+# ---------------------------------------------------------------------------
+
+
+def _result_json(macro_artifacts, run_id: str) -> dict:
+    return json.loads((_run_dir(macro_artifacts, run_id) / "result.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_capture_is_on_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`capture: bool = True` is the documented production default.
+
+    Every existing call passed `capture=` explicitly, so flipping the default
+    to False changed nothing the suite could see -- and an artifact bundle
+    without screenshots is most of the point of an artifact bundle.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    session = _CapturingSession(tmp_path)
+    await macro_artifacts.run_macro_artifact(session=session, name="login", args={})
+
+    assert [p.name for p in session.shots] == ["before.png", "after.png"]
+
+
+@pytest.mark.asyncio
+async def test_the_run_record_carries_the_replay_counts_and_session_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """result.json is the artifact of record, so each field is asserted by value.
+
+    `executed` and `skipped` are read out of the replay's own return value and
+    coerced with `int(...)`; the default in `replay.get("executed", 0)` is only
+    observable when a replay omits the key.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    session = _FakeSession(tmp_path)
+    result = await macro_artifacts.run_macro_artifact(session=session, name="login", args={}, capture=False)
+    record = _result_json(macro_artifacts, result["run_id"])
+
+    assert record["status"] == "ok"
+    assert record["error"] is None  # not "" -- the slot means "nothing went wrong"
+    assert record["executed"] == 1
+    assert record["skipped"] == 0
+    assert record["macro"] == "login"
+    assert record["instance_id"] == session.instance_id
+    assert record["recording_path"] == str(session.log_path)
+
+
+@pytest.mark.asyncio
+async def test_a_replay_that_reports_no_counts_records_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The `, 0)` defaults, reachable only from a replay that omits the keys."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+
+    async def bare_replay(*, session, name, args, slowmo_ms=None):
+        return {"macro": name}
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", bare_replay)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False
+    )
+    record = _result_json(macro_artifacts, result["run_id"])
+
+    assert record["executed"] == 0
+    assert record["skipped"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_replay_is_recorded_with_its_traceback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The except branch: status failed, the error named, a log excerpt kept.
+
+    The run still returns rather than raising -- an artifact of a failed run is
+    exactly what a caller needs -- so nothing forces the failure to be
+    *recorded*, and every argument to the evidence call could go `None`.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+
+    async def exploding_replay(*, session, name, args, slowmo_ms=None):
+        raise RuntimeError("selector never appeared")
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", exploding_replay)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False
+    )
+    record = _result_json(macro_artifacts, result["run_id"])
+
+    assert record["status"] == "failed"
+    assert record["error"] == "RuntimeError: selector never appeared"
+
+    records = json.loads((_run_dir(macro_artifacts, result["run_id"]) / "evidence.json").read_text(encoding="utf-8"))[
+        "records"
+    ]
+    excerpts = [r for r in records if r.get("type") == "log_excerpt"]
+    assert excerpts, "a failed replay left no log excerpt"
+    assert "selector never appeared" in str(excerpts[0]["preview"])
+
+
+# --- the gate in front of verification -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_verify_false_skips_verification_even_with_critical_points(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`if verify AND critical_points` -- swapped to `or`, the flag stops working.
+
+    Every other test in the suite passes `verify=False` on an artifact with no
+    critical points, or `verify=True` on one that has them, and `or` gives the
+    same answer for both. Only this combination separates them.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=False
+    )
+
+    assert result["verification_status"] == "not_configured"
+    assert not (_run_dir(macro_artifacts, result["run_id"]) / "verification.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_no_critical_points_reports_not_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The other half of the `and`: asking to verify nothing is not a failure."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=True
+    )
+
+    assert result["verification_status"] == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_a_verified_run_reports_its_status_and_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Both fields are lifted out of the verify result with defaults behind them."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=True
+    )
+
+    assert result["verification_status"] == "passed"
+    verification = Path(result["paths"]["verification"])
+    assert verification.exists()
+    assert verification.parent.name == result["run_id"]
