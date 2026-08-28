@@ -604,3 +604,40 @@ async def test_the_summary_keeps_its_prose_after_being_re_rendered(
 
     assert "Nightly smoke run" in md
     assert "## Verification and Critical Points" in md
+
+
+@pytest.mark.asyncio
+async def test_verifying_a_bundle_written_before_the_summary_was_stored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Re-rendering must not blank the prose of an artifact already on disk.
+
+    `write_run_bundle` only began persisting `summary` alongside this refresh,
+    so every run bundle that exists today lacks the key. Reading it as `""`
+    made the first re-verify of an existing run silently drop the one sentence
+    saying what the run did -- replacing information with nothing, on a path
+    whose entire purpose is to add information. This simulates such a bundle by
+    removing the key before verifying.
+    """
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=_FakeSession(tmp_path), name="login", args={}, capture=False, verify=False
+    )
+    run_dir = _run_dir(macro_artifacts, result["run_id"])
+    prose_before = _summary(macro_artifacts, result["run_id"]).splitlines()[2]
+    assert prose_before.startswith("Ran macro login:")
+
+    legacy = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    legacy.pop("summary")
+    (run_dir / "result.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+    macro_artifacts.macro_artifact_verify("login", run_id=result["run_id"])
+
+    md = _summary(macro_artifacts, result["run_id"])
+    assert md.splitlines()[2] == prose_before  # rebuilt, not blanked
+    assert "## Verification and Critical Points" in md  # and the verdict arrived
