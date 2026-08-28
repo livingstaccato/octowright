@@ -15,6 +15,7 @@ from octowright.console_levels import is_diagnostic_console_message
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
+from octowright.session.a11y_dragdrop import run_a11y_dragdrop
 from octowright.session.operation_gate import gated_operation
 from octowright.session.viewport_ops import SessionViewportMixin
 
@@ -276,6 +277,73 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
     async def drag(self, source_selector: str, target_selector: str) -> None:
         await self._target().drag_and_drop(source_selector, target_selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         self.recorder.record("drag", source=source_selector, target=target_selector)
+
+    @gated_operation("browser_a11y_dragdrop")
+    async def a11y_dragdrop(
+        self,
+        source_selector: str,
+        nav_key: str = "tab",
+        nav_direction: str | None = None,
+        nav_key_sequence: list[str] | None = None,
+        max_nav_steps: int = 12,
+        grab_key: str = "Space",
+        drop_key: str = "Space",
+        release_key: str = "Escape",
+        grabbed_predicate_js: str | None = None,
+        verify_js: str | None = None,
+        verify_selector_appears: str | None = None,
+        verify_selector_gone: str | None = None,
+        verify_text_contains: str | None = None,
+        verify_timeout_ms: int = 2000,
+        verify_poll_ms: int = 100,
+    ) -> dict[str, Any]:
+        """Keyboard (WAI-ARIA APG) drag-and-drop; see ``session/a11y_dragdrop.py``.
+
+        The engine takes its own re-entrant lease, so this decorator's lease is
+        the root one and the operation name stays ``browser_a11y_dragdrop``
+        throughout.
+        """
+        result = await run_a11y_dragdrop(
+            self,
+            source_selector=source_selector,
+            nav_key=nav_key,
+            nav_direction=nav_direction,
+            nav_key_sequence=nav_key_sequence,
+            max_nav_steps=max_nav_steps,
+            grab_key=grab_key,
+            drop_key=drop_key,
+            release_key=release_key,
+            grabbed_predicate_js=grabbed_predicate_js,
+            verify_js=verify_js,
+            verify_selector_appears=verify_selector_appears,
+            verify_selector_gone=verify_selector_gone,
+            verify_text_contains=verify_text_contains,
+            verify_timeout_ms=verify_timeout_ms,
+            verify_poll_ms=verify_poll_ms,
+        )
+        # Record the INPUTS only. Replay re-runs the action; recording the
+        # outcome would make a replayed macro carry a stale verdict, and the
+        # recorded field names must match this method's parameter names so
+        # `lint_fields.allowed_fields_for` derives them from the signature.
+        self.recorder.record(
+            "a11y_dragdrop",
+            source_selector=source_selector,
+            nav_key=nav_key,
+            nav_direction=nav_direction,
+            nav_key_sequence=nav_key_sequence,
+            max_nav_steps=max_nav_steps,
+            grab_key=grab_key,
+            drop_key=drop_key,
+            release_key=release_key,
+            grabbed_predicate_js=grabbed_predicate_js,
+            verify_js=verify_js,
+            verify_selector_appears=verify_selector_appears,
+            verify_selector_gone=verify_selector_gone,
+            verify_text_contains=verify_text_contains,
+            verify_timeout_ms=verify_timeout_ms,
+            verify_poll_ms=verify_poll_ms,
+        )
+        return result
 
     @gated_operation("browser_navigate_back")
     async def navigate_back(self) -> dict[str, Any]:
