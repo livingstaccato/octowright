@@ -35,10 +35,10 @@ NON_ARIA_NOISE_KEYS = ("role", "role_name", "test_id", "role_exact", "label_exac
 # recording raises TypeError: navigate() got an unexpected keyword argument.
 #
 # `scenario_role` is spelled that way BECAUSE stripping cannot fix a collision.
-# The label was originally written to `role`, which is also the ARIA locator key
+# Writing the label to `role` collides: `role` is also the ARIA locator key
 # on click/fill/click_by/fill_by/get_text_by — and `strip_non_aria_noise` returns
 # those actions untouched precisely because `role` is their locator. So the label
-# both destroyed a recorded ARIA role and injected one where there was none, with
+# would both destroy a recorded ARIA role and inject one where there was none, with
 # nothing downstream able to tell the two apart. Renaming at the source is the
 # only fix; do not re-add a bare `role` here.
 RECORDING_NOISE_KEYS = ("action", "ts", "kind", "profile", "instance_id", "persona", "scenario_role")

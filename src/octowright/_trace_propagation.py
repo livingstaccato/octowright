@@ -34,7 +34,7 @@ from typing import Any
 
 import httpx2
 
-from octowright._tracing import _tracer as _tracing_get_tracer
+from octowright._tracing import get_tracer
 
 try:
     from opentelemetry import context as _otel_context
@@ -167,10 +167,10 @@ class TraceContextExtractionMiddleware:
         send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
     ) -> None:
         # Initialize token + span_cm BEFORE the attach so the finally below
-        # can safely check them. Previously attach + span open ran outside
-        # any try/finally — if attach raised partway through, or if
-        # ``span_cm.__enter__`` raised after attach succeeded, the token
-        # leaked onto the asyncio task (no detach ever ran).
+        # can safely check them. Attach + span open outside any try/finally
+        # leaks the token onto the asyncio task (no detach ever runs) if
+        # attach raises partway through, or if ``span_cm.__enter__`` raises
+        # after attach succeeds.
         token: Any = None
         span_cm: Any = None
         span_ended = False
@@ -199,7 +199,7 @@ class TraceContextExtractionMiddleware:
             # minutes). Keeping the span open that long fills the OTel
             # batch-exporter buffer (default 2048 spans) with one entry per
             # concurrent follower and silently drops spans when it overflows.
-            tracer = _tracing_get_tracer("octowright")
+            tracer = get_tracer("octowright")
             span_cm = tracer.start_as_current_span("octowright.mcp.request")
             _set_request_span_attrs(span_cm.__enter__(), scope)
 

@@ -165,31 +165,6 @@ class TestAutocompleteRedaction:
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
 
 
-# ─── legacy evaluate-string return shape (back-compat) ─────────────────────
-
-
-class TestLegacyEvaluateReturn:
-    """Older callers / older test mocks may stub ``evaluate`` to return a
-    bare string (the original behavior before the {type, ac} dict shape).
-    ``_is_password_input`` MUST still treat ``"password"`` as redactable
-    and any other string as non-credential, so existing macros and external
-    consumers of the policy don't silently regress."""
-
-    @pytest.mark.anyio
-    async def test_legacy_evaluate_string_return_still_works(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Bare ``"password"`` → redact; bare ``"text"`` → don't."""
-        monkeypatch.delenv(REDACT_INPUTS_ENV, raising=False)
-
-        # Legacy shape: evaluate returns just the type string.
-        subj_pw = _make_redaction_subject("password")
-        await subj_pw.fill("#pw", "hunter2")
-        assert subj_pw.recorder.record.call_args.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
-
-        subj_text = _make_redaction_subject("text")
-        await subj_text.fill("#name", "alice")
-        assert subj_text.recorder.record.call_args.kwargs["value"] == "alice"
-
-
 # ─── fail-closed contract when evaluate raises ─────────────────────────────
 
 

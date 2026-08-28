@@ -189,9 +189,8 @@ class SessionInteractionMixin(SessionLike):
         """Add headers to requests matching ``url_pattern``, leaving others alone.
 
         Registered on the **context**, so it follows popups and pages opened
-        later. It was originally a ``page.route`` and died at the page
-        boundary: a caller had to re-register after every page switch and hope
-        they caught them all, and the interesting traffic is often exactly in
+        later. A ``page.route`` dies at the page boundary: a caller has to
+        re-register after every page switch and hope they caught them all, and the interesting traffic is often exactly in
         the popup (a field report hit this with a test player that runs in
         one). Measured: a context route sees a popup's requests on chromium,
         firefox and webkit; a page route does not.

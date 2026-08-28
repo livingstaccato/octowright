@@ -103,8 +103,8 @@ def close_recorder_fields(session: Any, reason: str | None) -> dict[str, Any]:
         "websocket_path": str(session.websocket_path) if session.websocket_path else None,
     }
     if reason is not None:
-        # Explicit/shutdown close keeps the reason-less row unchanged
-        # (back-compat); an external-close coordinator (crashed / user_close
+        # An explicit or shutdown close records no reason at all; an
+        # external-close coordinator (crashed / user_close
         # / external_disconnect) records why the browser went away, mapped
         # down to "crashed" / "external" by the pool coordinator before it
         # ever reaches here.

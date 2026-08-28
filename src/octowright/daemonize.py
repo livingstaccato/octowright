@@ -206,7 +206,7 @@ def _resolve_daemon_entrypoint() -> list[str]:
 
 
 def _open_daemon_log() -> IO[bytes]:
-    """Open the private daemon-stderr log, repairing legacy permissions."""
+    """Open the private daemon-stderr log, tightening permissions if it exists."""
     _DAEMON_LOG.parent.mkdir(parents=True, exist_ok=True)
     if _DAEMON_LOG.exists() and _DAEMON_LOG.stat().st_size > _DAEMON_LOG_MAX_BYTES:
         _DAEMON_LOG.unlink()
@@ -305,7 +305,7 @@ async def wait_for_daemon(timeout: float | None = None, poll_seconds: float = 0.
 
     Returns the leader info on success, or None if the daemon failed to come
     up within ``timeout`` seconds. The caller can then fall back to running
-    the leader inline (the legacy non-daemonized path).
+    the leader inline, in its own process.
 
     ``timeout`` defaults to :func:`daemon_ready_timeout`, so a cold container
     can raise it via ``OCTOWRIGHT_DAEMON_READY_TIMEOUT`` or ``--ready-timeout``

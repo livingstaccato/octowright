@@ -17,6 +17,21 @@ def instance_id_from_recording_name(stem: str) -> str | None:
     return parts[2]
 
 
+def kind_from_recording_name(stem: str) -> str | None:
+    """The session kind a recording's own filename carries.
+
+    ``new_log_path`` builds ``<stamp>-<kind>-<id>[-<label>]``, and
+    ``plugins.identity.KIND_RE`` forbids a hyphen in a kind by construction --
+    the same invariant that lets the id above be recovered as ``parts[2]``. So
+    the name is an authoritative source for the kind of every recording ever
+    written, including one whose opening row is missing or unreadable.
+    """
+    parts = stem.split("-")
+    if len(parts) < 3 or not parts[1]:
+        return None
+    return parts[1]
+
+
 def _human_bytes(size_bytes: int) -> str:
     if size_bytes < 0:
         size_bytes = 0

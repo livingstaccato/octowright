@@ -28,7 +28,7 @@ def test_shim_reexports_provide_telemetry_callables() -> None:
     assert _tracing.counter is pt.counter
     assert _tracing.gauge is pt.gauge
     assert _tracing.histogram is pt.histogram
-    assert _tracing._tracer is pt.get_tracer
+    assert _tracing.get_tracer is pt.get_tracer
 
 
 def test_span_and_helpers_safe_without_provider() -> None:

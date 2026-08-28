@@ -79,7 +79,7 @@ def mcp_session_manager(mcp: Any) -> Any:
 
     MCP 2.0 replaced the ``_session_manager`` attribute with a property that
     *raises* until ``streamable_http_app()`` has built the manager, so callers
-    that used to probe the attribute (idle-timeout setup, the housekeeping
+    that probe the attribute (idle-timeout setup, the housekeeping
     reapers) must tolerate the raise rather than assume ``None``.
     """
     try:

@@ -214,8 +214,8 @@ def _macro_pill_chip_for(
     return chip_text, _badge_color_for(seed)
 
 
-# `_describe_action` used to live here; it was moved to
-# `octowright.macros.descriptions` so the macro layer doesn't have to
+# `_describe_action` lives in `octowright.macros.descriptions` rather than
+# here, so the macro layer doesn't have to
 # import from the pool layer (wrong direction). The pool layer still
 # needs the helper for pill / badge rendering, so we re-export under the
 # original underscore name to keep existing call sites unchanged.

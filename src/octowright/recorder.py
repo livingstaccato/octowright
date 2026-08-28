@@ -56,7 +56,7 @@ def _recording_max_bytes() -> int:
     its JSONL recording without bound and fill the disk. ``OCTOWRIGHT_RECORDING_MAX_BYTES``
     caps it: once the file would exceed the ceiling the recorder writes a single
     ``recording_truncated`` marker and stops appending. **OFF by default**
-    (unbounded, back-compat), mirroring ``OCTOWRIGHT_MIN_FREE_MEMORY_MB`` /
+    (unbounded), mirroring ``OCTOWRIGHT_MIN_FREE_MEMORY_MB`` /
     ``OCTOWRIGHT_IDLE_GRACE``: silently dropping recorded actions is a behavior
     change an operator must opt into. A non-positive / falsey / unparsable
     value keeps it off.
@@ -75,7 +75,7 @@ def _recordings_private() -> bool:
     """Whether to lock recordings to the owner (0600 file / 0700 parent).
 
     Default ON. The JSONL can hold typed input, navigated URLs, console output,
-    and — in legacy ``OCTOWRIGHT_REDACT_INPUTS=off`` deployments — cleartext
+    and — where ``OCTOWRIGHT_REDACT_INPUTS=off`` is set — cleartext
     credentials. A world-readable (0644) file would let any *local* user read all
     of that, bypassing the loopback HTTP boundary the dashboard enforces. Opt out
     with ``OCTOWRIGHT_RECORDINGS_PRIVATE`` set to a falsey token for setups that
@@ -205,10 +205,10 @@ class Recorder:
             self._fh.close()
 
 
-#: Bytes ``tail_log`` will read in ONE call. The read used to be an unbounded
-#: ``fh.read()``, so a single ``?since=0`` on a recording that had grown for
-#: hours pulled the whole file into the leader — the process that owns every
-#: live browser — and then multiplied it by parsing every line into dicts.
+#: Bytes ``tail_log`` will read in ONE call. An unbounded ``fh.read()`` lets a
+#: single ``?since=0`` on a recording that has grown for hours pull the whole
+#: file into the leader — the process that owns every live browser — and then
+#: multiply it by parsing every line into dicts.
 #: Recordings have no ceiling by default (``OCTOWRIGHT_RECORDING_MAX_BYTES`` is
 #: off), so nothing else bounded it. Every caller already loops on the returned
 #: cursor, so a window costs an extra round trip, not correctness. 8 MiB is

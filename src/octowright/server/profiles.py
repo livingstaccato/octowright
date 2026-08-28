@@ -12,7 +12,7 @@ filter is applied at ``@mcp.tool`` decoration time in ``server/_state``;
 tools whose name is not in any active profile are skipped entirely.
 
 When the env var is unset (or set to ``all``), every tool registers — that
-is the back-compat default.
+is the default.
 """
 
 from __future__ import annotations
@@ -154,7 +154,7 @@ PROFILES: dict[str, list[str]] = {
     # the plugin unloadable -- `register_plugin_profile` refuses any name already
     # in PROFILES, so activation failed with a profile collision and the kind
     # never registered at all. The profile itself is unchanged: the plugin
-    # declares the same seven tools this entry used to list.
+    # declares the same seven tools.
     # Persona + on-disk profile management.
     "personas": [
         "persona_create",
