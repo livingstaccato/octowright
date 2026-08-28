@@ -16,13 +16,16 @@ manifest with the suite still green.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
 from tests._macro_artifact_fixtures import (
+    _FakeSession,
     _reload,
+    _stub_replay,
     _write_macro,
     restore_reloaded_defaults,
 )
@@ -374,3 +377,86 @@ def test_planning_with_every_argument_supplied_is_ok(monkeypatch: pytest.MonkeyP
     assert planned["ok"] is True
     assert planned["missing_args"] == []
     assert macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]["metadata"]["ready"] is True
+
+
+# ---------------------------------------------------------------------------
+# macro_artifact_delete
+#
+# The artifact store was the only store with no delete -- goldens, macros,
+# profiles and personas all have one. That was survivable only because
+# `recordings_cleanup` swept it by accident, `ArtifactStore` being rooted under
+# the recordings dir. Excluding artifacts from that sweep was right, but it
+# removed the sole path that ever reclaimed the space.
+# ---------------------------------------------------------------------------
+
+
+def test_deleting_an_artifact_removes_its_runs_and_exports(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    macro_artifacts.macro_artifact_critical_points_set("login", [{"id": "cp1"}])
+    macro_artifacts.export_macro_cli(name="login")
+
+    from octowright.artifacts.paths import ArtifactStore
+
+    artifact_dir = ArtifactStore().macro_dir("login")
+    assert (artifact_dir / "artifact.json").exists()
+
+    result = macro_artifacts.delete_macro_artifact("login")
+
+    assert result["deleted"] is True
+    assert result["name"] == "login"
+    assert not artifact_dir.exists()
+    assert macro_artifacts.list_macro_artifacts()["artifacts"] == []
+
+
+def test_deleting_reports_how_many_runs_went_with_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The count is the only signal of what was discarded, once it is gone."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    session = _FakeSession(tmp_path)
+    for _ in range(3):
+        asyncio.run(
+            macro_artifacts.run_macro_artifact(session=session, name="login", args={}, capture=False, verify=False)
+        )
+
+    assert macro_artifacts.delete_macro_artifact("login")["runs_removed"] == 3
+
+
+def test_deleting_an_artifact_leaves_the_macro_itself_alone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The two stores are separate, and so are their deletes."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    macro_artifacts.plan_macro_artifact("login", args={})
+
+    macro_artifacts.delete_macro_artifact("login")
+
+    assert storage.load_macro("login")["name"] == "login"
+
+
+def test_deleting_a_missing_artifact_names_the_tool_that_lists_them(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="macro_artifact_list"):
+        macro_artifacts.delete_macro_artifact("never-planned")
+
+
+def test_delete_refuses_a_name_that_escapes_the_artifact_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The name reaches the filesystem, so containment is load-bearing.
+
+    `macro_dir` runs it through `reject_unsafe_path`; this is a delete, so the
+    consequence of losing that is worse than for the read paths already covered.
+    """
+    _storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    victim = tmp_path / "outside"
+    victim.mkdir()
+
+    with pytest.raises((ValueError, FileNotFoundError)):
+        macro_artifacts.delete_macro_artifact("../../../outside")
+
+    assert victim.exists()
