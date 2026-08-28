@@ -8,12 +8,53 @@ build-backend = "hatchling.build"
 
 [project]
 name = "octowright-terminal"
+# Deliberately its own version line, not core's. This is a separate
+# distribution with its own maturity, and locking the two would force a
+# plugin release on every core release even when nothing here changed.
 version = "0.1.0"
 description = "Terminal session kind for octowright (PTY, SSH, telnet), as a session-kind plugin."
+readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-dependencies = [
+license-files = ["LICENSES/*"]
+authors = [
+    { name = "Tim Perkins", email = "code@tim.life" },
+    { name = "provide.io", email = "code@provide.io" },
+]
+maintainers = [
+    { name = "provide.io", email = "code@provide.io" },
+]
+keywords = [
+    "mcp",
+    "model-context-protocol",
     "octowright",
+    "terminal",
+    "pty",
+    "ssh",
+    "telnet",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Shells",
+    "Topic :: Terminals",
+    "Typing :: Typed",
+]
+dependencies = [
+    # 0.17.0 is the first core release carrying `octowright.plugins`, the only
+    # module this package imports from core's plugin machinery. Against an
+    # older core the install resolves fine and then dies at daemon start with
+    # `ModuleNotFoundError: No module named 'octowright.plugins'` -- a floor is
+    # the only thing that turns that into a resolver error the user can read.
+    "octowright>=0.17.0",
     # [ssh] not [gateway]: `provide.uterm.server.connectors.ssh` imports
     # asyncssh at module scope and raises ImportError without it. The extra
     # that supplies asyncssh is declared on the BASE `provide-uterm` package
@@ -35,6 +76,12 @@ dependencies = [
 # OCTOWRIGHT_PLUGINS and loads this attribute; nothing else is imported.
 [project.entry-points."octowright.session_kinds"]
 terminal = "octowright_terminal.plugin:plugin"
+
+[project.urls]
+Homepage = "https://github.com/livingstaccato/octowright"
+Documentation = "https://foundry.provide.io/octowright/"
+Repository = "https://github.com/livingstaccato/octowright"
+Issues = "https://github.com/livingstaccato/octowright/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/octowright_terminal"]
