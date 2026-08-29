@@ -30,7 +30,8 @@ from octowright.server.browser.views import _with_outline
         "'verified' | 'failed_verify') and decide what to do. It raises only when the "
         "result would be meaningless (selector matches nothing, frame detached). "
         "If verification fails, release_key is pressed so the widget is not left stuck "
-        "in grab mode."
+        "in grab mode. "
+        "Pass response_mode='outline' to get a compact browser_page_outline in the same call."
     ),
 )
 async def browser_a11y_dragdrop(

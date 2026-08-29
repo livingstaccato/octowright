@@ -48,14 +48,6 @@ DEFAULT_ARROW_DIRECTION: Final = "down"
 _DEFAULT_GRABBED_JS: Final = "(el) => document.activeElement === el"
 
 
-class A11yDragDropError(Exception):
-    """An infrastructure failure that makes the result meaningless.
-
-    Deliberately NOT raised for an ordinary failed verify -- that is a normal
-    outcome the caller reads off ``stage_reached`` (spec section 7).
-    """
-
-
 def validate_params(*, nav_key: str, nav_key_sequence: list[str] | None, verify_fields_set: int) -> None:
     """Reject impossible parameter combinations before any key is sent.
 
@@ -115,6 +107,17 @@ async def _check_verify(
 ) -> bool:
     """One evaluation of whichever verify shape the caller chose.
 
+    Dispatch is by TRUTHINESS, not by ``is not None``, and that has to match
+    ``_count_verify_fields`` (and the lint's own arity check, which counts the
+    same way) or the two disagree on a field set to ``""``. They did: an action
+    carrying ``verify_js=""`` alongside a real ``verify_text_contains`` counted
+    as arity 1, passed validation, and then took the ``verify_js`` branch here
+    and evaluated the empty string -- the author's text check never ran, and
+    the failure surfaced as an unrelated Playwright error. Aligning the OTHER
+    way would be worse: ``verify_text_contains=""`` would become legal and
+    compile to ``innerText.includes("")``, an always-true check that silently
+    passes every drag.
+
     Takes its own lease around the Playwright calls, re-entrant for the
     caller's task exactly like ``run_a11y_dragdrop``'s own lease -- the one
     call site already holds it. Gating it here, rather than trusting that
@@ -125,11 +128,11 @@ async def _check_verify(
     """
     async with session.operation("browser_a11y_dragdrop"):
         target = session._target()
-        if verify_js is not None:
+        if verify_js:
             return bool(await target.evaluate(verify_js))
-        if verify_selector_appears is not None:
+        if verify_selector_appears:
             return await target.locator(verify_selector_appears).count() > 0
-        if verify_selector_gone is not None:
+        if verify_selector_gone:
             return await target.locator(verify_selector_gone).count() == 0
         return bool(await target.evaluate("(needle) => document.body.innerText.includes(needle)", verify_text_contains))
 
@@ -177,14 +180,19 @@ async def run_a11y_dragdrop(
         keyboard = session.page.keyboard
 
         # --- Grab -------------------------------------------------------
+        # `focus()` stays OUTSIDE the protected region: no key has been
+        # delivered yet, so a failure there cannot have grabbed anything and
+        # a release press would be pure noise. The `grab_key` press itself is
+        # INSIDE it, because a press that raises may still have delivered its
+        # keydown -- the same "grabbed state is unknown" condition the handler
+        # below exists for.
         source = target.locator(source_selector)
         await source.focus()
-        await keyboard.press(grab_key)
 
-        # `grab_key` is already pressed at this point, so the widget's
-        # grabbed state is genuinely unknown until the predicate resolves --
-        # everything from here, INCLUDING an exception raised BY the
-        # predicate check itself, must go through the release path below.
+        # Once `grab_key` is pressed the widget's grabbed state is genuinely
+        # unknown until the predicate resolves -- everything from there,
+        # INCLUDING an exception raised BY the predicate check itself, must go
+        # through the release path below.
         # The one case that legitimately skips it is the predicate
         # returning False: the key was pressed but the widget demonstrably
         # never entered grab mode, so there is nothing to release (that is
@@ -199,6 +207,7 @@ async def run_a11y_dragdrop(
         # indistinguishable from a grab that never registered -- that is the
         # exact bug this ``try``/``except`` exists to prevent.
         try:
+            await keyboard.press(grab_key)
             grabbed = bool(await source.evaluate(grabbed_predicate_js or _DEFAULT_GRABBED_JS))
             if not grabbed:
                 return result
@@ -239,6 +248,16 @@ async def run_a11y_dragdrop(
             result["stage_reached"] = "failed_verify"
             return result
         except Exception:
+            # `Exception`, deliberately not `BaseException`: a cancelled task
+            # (`asyncio.CancelledError`) does NOT release, and a drag
+            # cancelled mid-poll therefore leaves the widget grabbed. Catching
+            # it would not fix that -- pressing a key needs an await, and an
+            # awaiting cancelled task is cancelled again -- so a real fix means
+            # a shielded task, which this module's docstring rules out (a
+            # spawned task is a different identity to `gated_operation` and
+            # would queue behind the lease this frame still holds). AGENTS.md
+            # states the resulting limitation rather than papering over it.
+            #
             # The release press itself can fail -- most likely in exactly
             # the situation this handler exists for (page/connection already
             # gone). A failing release must not replace the ORIGINAL

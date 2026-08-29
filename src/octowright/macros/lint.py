@@ -81,7 +81,11 @@ _MACRO_CALL_ACTION = "macro_call"
 #: Candidate fields that hold a URL, and so are scanned by URL part.
 _URL_LIKE_KEYS: frozenset[str] = frozenset({"url", "pattern"})
 #: Candidate fields that hold JavaScript, scanned for embedded tokens only.
-_CODE_LIKE_KEYS: frozenset[str] = frozenset({"expression"})
+#: ``a11y_dragdrop`` spells two of its own (``verify_js``,
+#: ``grabbed_predicate_js``) rather than reusing ``expression``, and both reach
+#: ``evaluate`` — so the code-shaped scan has to know their names too, exactly
+#: as ``substitution.CREDENTIAL_UNSAFE_KEYS`` does for the run-time guard.
+_CODE_LIKE_KEYS: frozenset[str] = frozenset({"expression", "verify_js", "grabbed_predicate_js"})
 
 #: The finder keys a click_by/fill_by must set EXACTLY one of — the arity
 #: `build_locator` enforces. Derived from substitution rather than listed:
