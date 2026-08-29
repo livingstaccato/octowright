@@ -281,6 +281,49 @@ async def test_release_failure_does_not_mask_original_exception(monkeypatch: pyt
         await run_a11y_dragdrop(session, source_selector="#i", verify_js="() => true")
 
 
+async def test_empty_verify_js_falls_through_to_the_text_check() -> None:
+    """The reachable asymmetry: lint/validate count verify fields by
+    TRUTHINESS, so ``verify_js=""`` alongside a real ``verify_text_contains``
+    is arity 1 and passes validation. Dispatching on ``is not None`` then took
+    the ``verify_js`` branch and evaluated the empty string -- the author's
+    text check never ran, and the failure surfaced as an unrelated Playwright
+    error rather than as a failed verify.
+    """
+    page = FakePage()
+    session = FakeSession(page)
+    seen: list[str] = []
+
+    async def capture(js: str, *_a: Any, **_k: Any) -> Any:
+        seen.append(js)
+        return True
+
+    page.evaluate = capture  # type: ignore[method-assign]
+
+    result = await run_a11y_dragdrop(session, source_selector="#i", verify_js="", verify_text_contains="Done")
+    assert result["stage_reached"] == "verified"
+    assert seen and "innerText.includes" in seen[0], seen
+
+
+async def test_grab_key_press_failure_still_releases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The grab press is inside the protected region: a press that raises may
+    still have delivered its keydown, which is the same "grabbed state is
+    unknown" condition the release path exists for.
+    """
+    page = FakePage()
+    session = FakeSession(page)
+
+    async def boom_press(_self: FakeKeyboard, key: str) -> None:
+        page.events.append(("press", key))
+        if key == "Space":
+            raise RuntimeError("press interrupted")
+
+    monkeypatch.setattr(FakeKeyboard, "press", boom_press)
+
+    with pytest.raises(RuntimeError, match="press interrupted"):
+        await run_a11y_dragdrop(session, source_selector="#i", verify_js="() => true")
+    assert ("press", "Escape") in page.events, "a failed grab press must still release"
+
+
 async def test_session_method_records_the_action() -> None:
     from octowright.session.core_ops_mixin import SessionOpsMixin
 

@@ -534,6 +534,71 @@ def test_a11y_dragdrop_releases_on_exception_mid_sequence(monkeypatch: pytest.Mo
     assert _presses(rec) == ["Space", "PoisonKey", "Escape"]
 
 
+def test_a11y_dragdrop_rejects_an_unknown_nav_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replay raises ValueError on an unknown nav_key; the exported script used
+    to fall through to Tab navigation and silently do something else."""
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "nav_key": "swipe",
+        "verify_js": "() => true",
+    }
+    with pytest.raises(RuntimeError, match="nav_key must be one of"):
+        _run(monkeypatch, [action])
+
+
+def test_a11y_dragdrop_rejects_keys_mode_without_a_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Otherwise the script sends zero navigation keys and drops in place."""
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "nav_key": "keys",
+        "verify_js": "() => true",
+    }
+    with pytest.raises(RuntimeError, match="non-empty nav_key_sequence"):
+        _run(monkeypatch, [action])
+
+
+def test_a11y_dragdrop_rejects_a_sequence_outside_keys_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "nav_key": "arrow",
+        "nav_key_sequence": ["End"],
+        "verify_js": "() => true",
+    }
+    with pytest.raises(RuntimeError, match="only valid with nav_key='keys'"):
+        _run(monkeypatch, [action])
+
+
+@pytest.mark.parametrize(
+    "verify",
+    [{}, {"verify_js": "() => true", "verify_text_contains": "Done"}],
+    ids=["none", "two"],
+)
+def test_a11y_dragdrop_rejects_wrong_verify_arity(monkeypatch: pytest.MonkeyPatch, verify: dict[str, Any]) -> None:
+    """A macro exported without passing lint used to raise a bare KeyError from
+    inside the verify dispatch; it now names the actual problem."""
+    action = {"action": "a11y_dragdrop", "source_selector": "#drag-me", **verify}
+    with pytest.raises(RuntimeError, match="exactly one verify_"):
+        _run(monkeypatch, [action])
+
+
+def test_a11y_dragdrop_empty_verify_js_uses_the_text_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Truthiness dispatch, matching the engine: an empty verify_js is not a
+    verify_js, so the author's text check is the one that runs."""
+    action = {
+        "action": "a11y_dragdrop",
+        "source_selector": "#drag-me",
+        "max_nav_steps": 1,
+        "verify_js": "",
+        "verify_text_contains": "Done",
+    }
+    _result, rec = _run(monkeypatch, [action])
+    evaluated = [args[0] for name, args, _kw in rec.calls if name == "evaluate"]
+    assert evaluated and all("innerText.includes" in js for js in evaluated), evaluated
+
+
 def test_unmock_route_without_a_matching_mock_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(RuntimeError, match="no active mock"):
         _run(monkeypatch, [{"action": "unmock_route", "pattern": "**/never"}])
