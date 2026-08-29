@@ -32,6 +32,7 @@ from octowright.server._state import mcp, pool
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session import DEFAULT_PREVIEW_CHARS
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
+from octowright.session.timeouts import bounded
 
 if TYPE_CHECKING:
     from octowright.session import BrowserSession
@@ -80,7 +81,7 @@ async def _capture_before_close(
     # bypass admission, since the observable root stays the reservation's
     # "browser_capture_and_close" name either way.
     async with session.operation("browser_capture_and_close"):
-        title = await session.page.title()
+        title = await bounded(session.page.title(), operation="browser_capture_and_close")
         # url + aria follow the active frame (like browser_snapshot); the screenshot
         # stays page-level since it captures the rendered viewport, and title is page-only.
         frame_target = session._target()

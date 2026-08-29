@@ -13,9 +13,14 @@ broken WebKit, with ``page.on("crash")`` silent because a wedged target never
 crashes, it just stops replying.
 
 ON by default, unlike this repo's other new quotas: those trade a working
-behaviour for a limit, while this trades hanging forever for failing in
-thirty seconds. ``core_io_mixin``'s pre-existing 10s cap on ``content()`` is
-the same call, already unconditional.
+behaviour for a limit, while this trades an unbounded hang of the calling
+coroutine for a bounded one. That is a narrower guarantee than "failing in
+thirty seconds" -- cancellation releases the awaiting coroutine (and the
+session's operation gate) within the budget, but it cannot make Playwright's
+driver or the browser process abandon a call already sent over the wire; the
+underlying request may still be outstanding after ``bounded()`` raises.
+``core_io_mixin``'s pre-existing 10s cap on ``content()`` is the same call,
+already unconditional.
 """
 
 from __future__ import annotations
@@ -68,12 +73,25 @@ async def bounded(awaitable: Awaitable[T], *, operation: str, timeout: float | N
     ``timeout=None`` resolves from the environment; ``0.0`` awaits unbounded.
     The operation name is in the message because the raised error is what an
     operator or agent sees -- ``asyncio.TimeoutError`` alone names nothing.
+
+    Uses ``asyncio.timeout()``, NOT ``asyncio.wait_for`` -- this repo has
+    already shipped and fixed this exact bug once (see
+    ``server/browser/inspect_capture.py``'s ``_capture_before_close``).
+    ``wait_for`` runs *awaitable* in a SEPARATE Task via ``ensure_future``,
+    and ``SessionOperationGate`` grants re-entry by ``asyncio.current_task()``
+    identity -- so if the awaited code re-enters the same session's gate (an
+    ARIA scrub, a nested macro call), it would look like a stranger task and
+    queue behind the very lease this call is running under, until the queue
+    timeout. ``asyncio.timeout()`` sets a deadline on the CURRENT task
+    instead of spawning a new one, so task identity is preserved through the
+    whole call regardless of what the awaited code does.
     """
     budget = unbounded_call_timeout_seconds() if timeout is None else timeout
     if budget <= 0:
         return await awaitable
     try:
-        return await asyncio.wait_for(awaitable, timeout=budget)
+        async with asyncio.timeout(budget):
+            return await awaitable
     except TimeoutError as exc:
         raise SessionCallTimeoutError(
             f"{operation} did not answer within {budget}s -- the browser target is "

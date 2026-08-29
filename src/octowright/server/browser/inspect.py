@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from octowright import captures as _captures
 from octowright._paths import reject_unsafe_path
@@ -49,7 +49,9 @@ from octowright.server.browser.network import browser_network_summary
 from octowright.server.browser.views import browser_downloads_summary
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session import DEFAULT_PREVIEW_CHARS
+from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
+from octowright.session.timeouts import SessionCallTimeoutError, bounded
 
 # Module-level alias so tests can monkeypatch the snapshot timeout cheaply.
 SNAPSHOT_TIMEOUT_S = SNAPSHOT_TIMEOUT_SECONDS
@@ -303,6 +305,20 @@ def _annotate_capture_result_actions(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _raise_markdown_capture_failure(session: SessionLike) -> NoReturn:
+    """capture_markdown() catches its own exceptions and returns None, so a
+    hung target must not be reported as a missing dependency -- consult the
+    recorded cause rather than let a timeout vanish into a generic "ensure
+    markitdown is installed" message. Split out of browser_read_markdown to
+    keep that function's own branching count down (xenon)."""
+    error = getattr(session, "_last_markdown_capture_error", None)
+    if isinstance(error, SessionCallTimeoutError):
+        raise error
+    raise RuntimeError(
+        "markdown generation failed or is unavailable; ensure markitdown is installed and the page rendered HTML content"
+    )
+
+
 def _markdown_truncated_next_actions(instance_id: str, original_size: int) -> list[BrowserToolAction]:
     return annotate_next_actions_for_profile(
         [
@@ -340,10 +356,7 @@ async def browser_read_markdown(
         path = await session.capture_markdown(force=True)
 
         if not path or not path.exists():
-            raise RuntimeError(
-                "markdown generation failed or is unavailable; "
-                "ensure markitdown is installed and the page rendered HTML content"
-            )
+            _raise_markdown_capture_failure(session)
 
         text = path.read_text(encoding="utf-8", errors="replace")
         original_size = len(text)
@@ -354,7 +367,7 @@ async def browser_read_markdown(
                 kind="markdown",
                 content=text,
                 url=target.url,
-                title=await session.page.title(),
+                title=await bounded(session.page.title(), operation="browser_read_markdown"),
                 instance_id=instance_id,
                 source={"source": "markdown", "path": str(path)},
             )
@@ -404,7 +417,7 @@ async def browser_brief(instance_id: str) -> BrowserBriefResult:
         # Route through _target() so brief reflects a switched frame, matching snapshot
         # and every action tool. title stays page-level — Playwright Frames have none.
         target = session._target()
-        title = await session.page.title()
+        title = await bounded(session.page.title(), operation="browser_brief")
         # Pull a tiny slice of the body snapshot to provide basic orientation
         aria = await redacted_aria_snapshot(session, target.locator("body"))
         elements = aria[:500] + ("..." if len(aria) > 500 else "")

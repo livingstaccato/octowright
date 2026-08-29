@@ -324,9 +324,12 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
                 nav_error = str(exc)
         else:
             async with self.page.expect_popup(timeout=DEFAULT_NAV_TIMEOUT_MS) as popup_info:
-                await self.page.evaluate(
-                    "({u, w, h}) => window.open(u, '_blank', `popup,width=${w},height=${h}`)",
-                    {"u": url, "w": width, "h": height},
+                await bounded(
+                    self.page.evaluate(
+                        "({u, w, h}) => window.open(u, '_blank', `popup,width=${w},height=${h}`)",
+                        {"u": url, "w": width, "h": height},
+                    ),
+                    operation="browser_open_url",
                 )
             new_page = await popup_info.value
             try:

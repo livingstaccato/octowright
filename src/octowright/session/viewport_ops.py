@@ -19,6 +19,7 @@ from provide.telemetry import get_logger
 
 from octowright.session._protocols import SessionLike
 from octowright.session.operation_gate import gated_operation
+from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
@@ -69,11 +70,14 @@ class SessionViewportMixin(SessionLike):
         """
         target = self.page if page is None else page
         try:
-            measured = await target.evaluate(
-                """() => ({
-                    dw: window.outerWidth - window.innerWidth,
-                    dh: window.outerHeight - window.innerHeight
-                })"""
+            measured = await bounded(
+                target.evaluate(
+                    """() => ({
+                        dw: window.outerWidth - window.innerWidth,
+                        dh: window.outerHeight - window.innerHeight
+                    })"""
+                ),
+                operation="browser_measure_frame_inset",
             )
             inset_w = int(measured["dw"])
             inset_h = int(measured["dh"])
@@ -143,7 +147,7 @@ class SessionViewportMixin(SessionLike):
 
     @gated_operation("browser_viewport_status")
     async def viewport_status(self) -> dict[str, Any]:
-        measured = await self.page.evaluate(_MEASURE)
+        measured = await bounded(self.page.evaluate(_MEASURE), operation="browser_viewport_status")
         page = {
             "width": int(measured.get("innerWidth") or 0),
             "height": int(measured.get("innerHeight") or 0),
