@@ -34,6 +34,7 @@ from octowright.session.operation_gate_types import (
     _Waiter,
     validate_operation_name,
 )
+from octowright.session.timeouts import SessionCallTimeoutError
 
 __all__ = [
     "USE_DEFAULT",
@@ -145,11 +146,17 @@ class SessionOperationGate(_CloseGateMixin):
         *,
         queue_timeout_seconds: float | None = None,
         clock: Callable[[], float] | None = None,
+        on_call_timeout: Callable[[str, SessionCallTimeoutError], None] | None = None,
     ) -> None:
         self.instance_id = instance_id
         self.kind = kind
         self.queue_timeout_seconds = resolve_operation_queue_timeout_seconds(queue_timeout_seconds)
         self._clock = clock if clock is not None else time.monotonic
+        # Invoked at most once per SessionCallTimeoutError that escapes the
+        # ROOT gated operation (see operation()'s finally block) -- never for
+        # a nested reentrant frame, and never for any other exception type.
+        # None for a gate built without a session to notify (bare unit tests).
+        self._on_call_timeout = on_call_timeout
         self._admission_lock = asyncio.Lock()
         self._waiters: deque[_Waiter] = deque()
         self._owner_task: asyncio.Task[object] | None = None
@@ -278,7 +285,7 @@ class SessionOperationGate(_CloseGateMixin):
         async with self._admission_lock:
             if self._owner_task is task:
                 self._depth += 1
-                return _LeaseToken(task, name)
+                return _LeaseToken(task, name, is_root=False)
             self._raise_if_not_open(name)
             waiter = _Waiter(task, name, self._clock(), asyncio.get_running_loop().create_future())
             self._waiters.append(waiter)
@@ -441,13 +448,15 @@ class SessionOperationGate(_CloseGateMixin):
     ) -> AsyncIterator[None]:
         lease = await self._acquire(operation_name, wait_timeout_seconds)
         outcome: Literal["ok", "error", "cancelled"] = "ok"
+        error: BaseException | None = None
         try:
             yield
         except asyncio.CancelledError:
             outcome = "cancelled"
             raise
-        except BaseException:
+        except BaseException as exc:
             outcome = "error"
+            error = exc
             raise
         finally:
             # ``asyncio.shield`` wraps ``self._release(...)`` in a brand-new
@@ -458,6 +467,26 @@ class SessionOperationGate(_CloseGateMixin):
             # cancellation-safe exit would falsely trip the ownership
             # invariant.
             await _run_shielded(self._release(lease, outcome))
+            # Fire at most once per SessionCallTimeoutError: nesting is
+            # stack-shaped, so only the ROOT lease (lease.is_root -- see
+            # _LeaseToken) is the frame whose release corresponds to the
+            # whole ownership span ending. A reentrant inner frame also sees
+            # this same exception propagate through its own except/finally,
+            # but is_root is False there, so it stays silent and the caller
+            # that actually owns the gate publishes exactly once.
+            if lease.is_root and self._on_call_timeout is not None and isinstance(error, SessionCallTimeoutError):
+                try:
+                    self._on_call_timeout(lease.operation_name, error)
+                except Exception:
+                    # The hook (session -> event bus) must never mask the
+                    # real SessionCallTimeoutError still propagating out of
+                    # this context manager.
+                    log.exception(
+                        "octowright.operation.call_timeout_hook_failed",
+                        instance_id=self.instance_id,
+                        kind=self.kind,
+                        operation=lease.operation_name,
+                    )
 
 
 def gated_operation(
