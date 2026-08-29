@@ -103,6 +103,43 @@ _QUEUE_DEPTH = gauge("octowright_operation_queue_depth", unit="1")
 
 log = get_logger(__name__)
 
+# How many `__cause__` hops _call_timeout_cause walks looking for a
+# SessionCallTimeoutError. Bounded so a pathological/cyclic cause chain can't
+# spin the check; four comfortably covers every wrapping layer in this
+# codebase today (a macro action's SessionCallTimeoutError, wrapped once by
+# macros/execution.py's `raise RuntimeError(payload) from exc`, wrapped again
+# by a scenario or macro-sequence caller).
+_CALL_TIMEOUT_CAUSE_MAX_HOPS = 4
+
+
+def _call_timeout_cause(
+    exc: BaseException | None,
+    *,
+    max_hops: int = _CALL_TIMEOUT_CAUSE_MAX_HOPS,
+) -> SessionCallTimeoutError | None:
+    """Find a ``SessionCallTimeoutError`` in *exc*'s explicit cause chain.
+
+    A bare ``isinstance(exc, SessionCallTimeoutError)`` on the exception that
+    escapes the root gated operation only catches a caller that never wraps
+    the error. ``macros/execution.py``'s per-action failure handling instead
+    re-raises every action failure as ``RuntimeError(payload) from exc``
+    *inside* the root ``session.operation("macro_run")`` frame, so the
+    unwrapped isinstance check never saw the ``SessionCallTimeoutError`` that
+    caused it -- the unattended macro/scenario replay path (exactly the shape
+    of the 2026-08-29 incident this exists to close) published no event at
+    all. Walking ``__cause__`` (set by Python's ``raise ... from exc``, never
+    by a bare ``raise`` inside an ``except`` block) finds it regardless of how
+    many such layers wrap it, bounded by *max_hops* so a pathological or
+    cyclic chain cannot spin forever.
+    """
+    for _ in range(max_hops):
+        if isinstance(exc, SessionCallTimeoutError):
+            return exc
+        if exc is None:
+            return None
+        exc = exc.__cause__
+    return None
+
 
 class UseDefault(Enum):
     """Sentinel distinguishing the gate's configured timeout from an explicit ``None``."""
@@ -473,14 +510,22 @@ class SessionOperationGate(_CloseGateMixin):
             # whole ownership span ending. A reentrant inner frame also sees
             # this same exception propagate through its own except/finally,
             # but is_root is False there, so it stays silent and the caller
-            # that actually owns the gate publishes exactly once.
-            if lease.is_root and self._on_call_timeout is not None and isinstance(error, SessionCallTimeoutError):
+            # that actually owns the gate publishes exactly once. The cause
+            # chain (not just the top-level exception) is checked -- see
+            # _call_timeout_cause -- so a caller that wraps the timeout in
+            # its own exception (macros/execution.py's per-action failure
+            # handling does exactly this) still publishes.
+            if (
+                lease.is_root
+                and self._on_call_timeout is not None
+                and (cause := _call_timeout_cause(error)) is not None
+            ):
                 try:
-                    self._on_call_timeout(lease.operation_name, error)
+                    self._on_call_timeout(lease.operation_name, cause)
                 except Exception:
                     # The hook (session -> event bus) must never mask the
-                    # real SessionCallTimeoutError still propagating out of
-                    # this context manager.
+                    # real exception still propagating out of this context
+                    # manager.
                     log.exception(
                         "octowright.operation.call_timeout_hook_failed",
                         instance_id=self.instance_id,

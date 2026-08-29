@@ -95,5 +95,7 @@ async def bounded(awaitable: Awaitable[T], *, operation: str, timeout: float | N
     except TimeoutError as exc:
         raise SessionCallTimeoutError(
             f"{operation} did not answer within {budget}s -- the browser target is "
-            "unresponsive. Relaunch this session; other sessions are unaffected."
+            "unresponsive. It may still be executing (this is not a crash, and Octowright "
+            "does not auto-recover it) -- retry or wait if the work may still finish; "
+            "relaunch this session if it stays unresponsive. Other sessions are unaffected."
         ) from exc
