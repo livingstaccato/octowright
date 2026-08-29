@@ -280,11 +280,17 @@ class BrowserSession(
         total``) also covers a target that is merely unresponsive -- no
         Playwright event reports this, which is exactly why the call budget
         in ``session/timeouts.py`` has to raise it instead of observing it.
-        Also increments ``octowright_unresponsive_target_total``: a push
+        Also increments ``octowright_unresponsive_target_total`` and records
+        an ``incidents.CATEGORY_UNRESPONSIVE_TARGET`` entry: a push
         notification is best-effort (a direct HTTP-MCP client gets no push
-        at all -- SDK limitation) and this scope has no ``octowright.
-        incidents`` record either, so without a counter it would be
-        invisible on every PULL surface too.
+        at all -- SDK limitation), and OTel counters are noop unless
+        ``PROVIDE_METRICS_ENABLED`` is set (off by default) -- so without a
+        retrievable record, the common configuration's PULL surface
+        (``octowright_status()``) would show nothing for this scope either.
+        No exception message is recorded: the operation name is the
+        diagnostic signal, and a message could carry a URL/path (mirrors why
+        ``octowright_browser_launch_failed_total`` labels on the exception
+        CLASS rather than its message).
 
         Deliberately does NOT set ``self._crashed`` or call into
         ``crash_recovery`` -- renderer-crash recovery replaces the dead page,
@@ -293,11 +299,23 @@ class BrowserSession(
         is only slow. Surface + notify; let the caller decide (wait, retry,
         or relaunch). ``recovering`` is always False for this scope.
 
-        Imports ``session_event_bus`` lazily, mirroring ``session/screencast.
-        py`` -- ``browser_pool`` imports FROM ``session`` (``BrowserSession``),
-        so a module-level import here would be circular.
+        Imports ``session_event_bus``/``incidents`` lazily, mirroring
+        ``session/screencast.py`` -- ``browser_pool`` imports FROM
+        ``session`` (``BrowserSession``), so a module-level import here
+        would be circular.
         """
+        from octowright.browser_pool import incidents
         from octowright.browser_pool.session_event_bus import SessionCrashedEvent, session_event_bus
+
+        # self.url, not a live self.page.url read: this hook runs synchronously
+        # from the gate's own release path, not under a session.operation(...)
+        # lease -- and self.page.url is a Playwright object read the
+        # operation-gate architecture scanner (rightly) requires be gated.
+        # self.url is a plain string field, kept current by every MCP-driven
+        # navigate() (session/core_page_mixin.py); it can lag a manual
+        # address-bar navigation the user made outside octowright's tools,
+        # same as every other best-effort incident/status field.
+        url = self.url
 
         _UNRESPONSIVE.add(1, attributes={"kind": self.kind})
         log.warning(
@@ -306,6 +324,13 @@ class BrowserSession(
             kind=self.kind,
             operation=operation_name,
             error=repr(error),
+        )
+        incidents.record(
+            incidents.CATEGORY_UNRESPONSIVE_TARGET,
+            instance_id=self.instance_id,
+            kind=self.kind,
+            url=url,
+            operation=operation_name,
         )
         session_event_bus.publish_nowait(
             SessionCrashedEvent(

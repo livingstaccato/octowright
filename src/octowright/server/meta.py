@@ -442,6 +442,15 @@ def octowright_status() -> dict[str, Any]:
             # `.ips` SIGSEGV signature (the OS writes it a beat after the crash,
             # so it can't be attached when the incident is first recorded).
             "recent": _crash_reports.enrich(_incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH, limit=10)),
+            # A DIFFERENT scope, kept as a SEPARATE key rather than folded into
+            # "recent": a target that stopped answering within its call budget
+            # (session/timeouts.py's SessionCallTimeoutError) has no macOS
+            # `.ips` crash report to correlate -- it never crashed, it just
+            # stopped replying -- so running it through _crash_reports.enrich
+            # would only ever look up nothing. Each record carries
+            # instance_id/kind/url/operation/ts; never an exception message
+            # (see BrowserSession._notify_call_timeout).
+            "unresponsive_recent": _incidents.recent(category=_incidents.CATEGORY_UNRESPONSIVE_TARGET, limit=10),
         },
         "personas": {
             "count": len(persona_names),

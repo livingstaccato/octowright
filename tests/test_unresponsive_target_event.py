@@ -45,11 +45,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright.browser_pool import incidents
 from octowright.browser_pool.events import SessionCrashedEvent
 from octowright.browser_pool.session_event_bus import session_event_bus
+from octowright.server.meta import octowright_status
 from octowright.session import BrowserSession
 from octowright.session.operation_gate import _call_timeout_cause
 from octowright.session.timeouts import SessionCallTimeoutError
+
+
+@pytest.fixture(autouse=True)
+def _reset_incidents() -> None:
+    """Isolates the process-global incidents ring (browser_pool/incidents.py)
+    per test, matching the established convention in test_crash_recovery.py."""
+    incidents.reset()
 
 
 def test_unresponsive_is_a_valid_crash_scope() -> None:
@@ -327,3 +336,40 @@ def test_call_timeout_cause_respects_the_hop_bound() -> None:
     cyclic = RuntimeError("cyclic")
     cyclic.__cause__ = cyclic
     assert _call_timeout_cause(cyclic, max_hops=4) is None
+
+
+# ─── octowright_status() pull surface (Task 2 review round 2, F3) ─────────
+
+
+async def test_unresponsive_target_is_retrievable_from_status(fake_session_kwargs: dict[str, object]) -> None:
+    """A push notification is best-effort and OTel counters are noop unless
+    ``PROVIDE_METRICS_ENABLED`` is set (off by default), so a timeout must
+    also leave a retrievable record on the PULL surface
+    (``octowright_status()``) in the common configuration -- and it must
+    land under its own key, never bleeding into the renderer-crash
+    ``"recent"`` key, since an unresponsive target has no crash report to
+    correlate."""
+    session = BrowserSession(**fake_session_kwargs)  # type: ignore[arg-type]
+
+    with pytest.raises(SessionCallTimeoutError):
+        async with session.operation("browser_evaluate"):
+            raise SessionCallTimeoutError("browser_evaluate did not answer within 30.0s")
+
+    snap = octowright_status()
+    crash = snap["crash"]
+
+    unresponsive = crash["unresponsive_recent"]
+    assert len(unresponsive) == 1
+    record = unresponsive[0]
+    assert record["instance_id"] == session.instance_id
+    assert record["kind"] == session.kind
+    assert record["operation"] == "browser_evaluate"
+    assert "ts" in record
+    # No exception message is recorded -- the operation name is the
+    # diagnostic signal, and a message could carry a URL/path.
+    assert "error" not in record
+    assert "message" not in record
+
+    # The renderer-crash key must not see this record -- different scope,
+    # different category, no bleed between them.
+    assert all(entry.get("instance_id") != session.instance_id for entry in crash["recent"])
