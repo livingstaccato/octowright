@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, LiteralString
 from weakref import WeakSet
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
+from provide.telemetry import get_logger
 
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
@@ -34,6 +35,9 @@ from octowright.session.operation_gate import (
     UseDefault,
     resolve_operation_queue_timeout_seconds,
 )
+from octowright.session.timeouts import SessionCallTimeoutError
+
+log = get_logger(__name__)
 
 # ``DEFAULT_PREVIEW_CHARS`` is the public preview cap, re-exported via
 # ``session.__init__`` and used by server/browser tools. Defined in
@@ -222,6 +226,7 @@ class BrowserSession(
             self.instance_id,
             self.kind,
             queue_timeout_seconds=resolve_operation_queue_timeout_seconds(self.operation_queue_timeout_seconds),
+            on_call_timeout=self._notify_call_timeout,
         )
         if self._browser_for_close is None and self.browser is not None:
             self._browser_for_close = self.browser
@@ -241,6 +246,51 @@ class BrowserSession(
 
     def _websocket_cache_path(self) -> Path:
         return self.log_path.with_suffix(".websocket.jsonl")
+
+    def _notify_call_timeout(self, operation_name: str, error: SessionCallTimeoutError) -> None:
+        """The operation gate's ``on_call_timeout`` hook -- called at most once
+        per wedge, only for the ROOT gated operation (see
+        ``SessionOperationGate.operation()``'s ``lease.is_root`` check).
+
+        Publishes ``SessionCrashedEvent(scope="unresponsive")`` on the pool's
+        event bus so the taxonomy that already exists for a dead browser
+        (``page.on("crash")`` -> ``SessionCrashedEvent(scope="renderer")``,
+        the ``browser_crashed`` notification, ``octowright_browser_crashed_
+        total``) also covers a target that is merely unresponsive -- no
+        Playwright event reports this, which is exactly why the call budget
+        in ``session/timeouts.py`` has to raise it instead of observing it.
+
+        Deliberately does NOT set ``self._crashed`` or call into
+        ``crash_recovery`` -- renderer-crash recovery replaces the dead page,
+        which is right for an actual crash and wrong here: the target may
+        still be executing, and force-replacing it can thrash a browser that
+        is only slow. Surface + notify; let the caller decide (wait, retry,
+        or relaunch). ``recovering`` is always False for this scope.
+
+        Imports ``session_event_bus`` lazily, mirroring ``session/screencast.
+        py`` -- ``browser_pool`` imports FROM ``session`` (``BrowserSession``),
+        so a module-level import here would be circular.
+        """
+        from octowright.browser_pool.session_event_bus import SessionCrashedEvent, session_event_bus
+
+        log.warning(
+            "octowright.session.unresponsive",
+            instance_id=self.instance_id,
+            kind=self.kind,
+            operation=operation_name,
+            error=repr(error),
+        )
+        session_event_bus.publish_nowait(
+            SessionCrashedEvent(
+                instance_id=self.instance_id,
+                kind=self.kind,
+                label=self.label,
+                profile=self.profile,
+                scope="unresponsive",
+                log_path=str(self.log_path),
+                recovering=False,
+            )
+        )
 
     def operation(
         self,
