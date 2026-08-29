@@ -264,14 +264,20 @@ class BrowserSession(
 
     def _notify_call_timeout(self, operation_name: str, error: SessionCallTimeoutError) -> None:
         """The operation gate's ``on_call_timeout`` hook -- called at most once
-        per wedge, only for the ROOT gated operation (see
-        ``SessionOperationGate.operation()``'s ``lease.is_root`` check).
-        ``error`` is always a ``SessionCallTimeoutError`` even when the
-        exception that actually escaped the root operation was something
+        per wedge, from whichever ``session.operation(...)`` frame is the
+        INNERMOST one to see a ``SessionCallTimeoutError`` escape it (see
+        ``SessionOperationGate.operation()``'s ``_mark_call_timeout_published``
+        dedup) -- not necessarily the outermost/root frame, since a caller can
+        swallow the error inside its own root lease (``macros/artifacts.py``'s
+        ``macro_artifact_run``, ``run_sequence(stop_on_failure=False)``) before
+        it ever reaches one. ``error`` is always a ``SessionCallTimeoutError``
+        even when the exception that actually escaped this frame was something
         else that wrapped it (``_call_timeout_cause`` in ``operation_gate.py``
         walks the ``__cause__`` chain before calling this hook, so a caller
         like ``macros/execution.py`` re-raising as ``RuntimeError(...) from
-        exc`` still reaches here).
+        exc`` still reaches here). ``operation_name`` is THIS frame's own
+        operation, which for a nested wedge is the specific action that
+        stalled, not an outer umbrella name.
 
         Publishes ``SessionCrashedEvent(scope="unresponsive")`` on the pool's
         event bus so the taxonomy that already exists for a dead browser

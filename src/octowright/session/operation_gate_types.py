@@ -131,15 +131,6 @@ class _Waiter:
 class _LeaseToken:
     owner_task: asyncio.Task[object]
     operation_name: str
-    # True when THIS acquisition is the one that took the gate from unowned to
-    # owned (queued or granted fresh) rather than a same-task reentry. Nesting
-    # is stack-shaped (Python `try/finally` unwinds inner-to-outer), so the
-    # root lease's release is always the LAST one to run for a given ownership
-    # span -- exactly the frame responsible for a one-time side effect like
-    # publishing an unresponsive-target event (see operation_gate.operation()).
-    # Defaults True: every construction site except the reentrant fast path in
-    # `_acquire` represents a fresh/root acquisition.
-    is_root: bool = True
 
 
 @dataclass(slots=True)
