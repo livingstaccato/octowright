@@ -27,6 +27,11 @@ CATEGORY_DRIVER_RESTART = "driver_restart"
 # A browser session lost when the shared driver died (H4a). Recorded with
 # outcome="relaunched" + new_instance_id when auto-relaunch reopens it.
 CATEGORY_DRIVER_LOST = "driver_lost"
+# A target that stopped answering a Playwright call within its budget
+# (SessionCallTimeoutError). No Playwright event reports this -- it is
+# recorded from session/timeouts.py's call budget rather than observed like
+# a renderer crash, and it has no crash report to correlate.
+CATEGORY_UNRESPONSIVE_TARGET = "unresponsive_target"
 
 _RING_SIZE = int(os.environ.get("OCTOWRIGHT_INCIDENT_RING_SIZE", "25"))
 _RING: deque[dict[str, Any]] = deque(maxlen=_RING_SIZE)
