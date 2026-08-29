@@ -23,6 +23,7 @@ from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session._protocols import SessionLike
 from octowright.session.operation_gate import gated_operation
+from octowright.session.timeouts import bounded
 
 _BYTE_LIMIT_OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", "no"}
 
@@ -217,7 +218,6 @@ class SessionIOMixin(SessionLike):
             force: Set to ``True`` to force a refresh even when the URL/key
                    matches the last cached capture.
         """
-        import asyncio
         import contextlib
 
         path = self._markdown_cache_path()
@@ -245,7 +245,7 @@ class SessionIOMixin(SessionLike):
             # Cap at 10s: pages with busy JS (SPAs retrying auth, WebSocket floods)
             # can hold the CDP evaluation lock for 60+ seconds, which stalls the
             # asyncio event loop and delays every other MCP response in the process.
-            html = await asyncio.wait_for(target.content(), timeout=10.0)
+            html = await bounded(target.content(), operation="browser_read_markdown", timeout=10.0)
             markdown = await self._extract_markdown(html)
             temp_path.write_text(markdown, encoding="utf-8")
             temp_path.replace(path)

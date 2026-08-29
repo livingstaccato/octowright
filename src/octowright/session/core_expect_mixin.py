@@ -13,6 +13,7 @@ from typing import Any
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
 from octowright.session.operation_gate import gated_operation
+from octowright.session.timeouts import bounded
 
 _WAIT_FOR_POLL_SECONDS = 0.05
 
@@ -111,7 +112,7 @@ class SessionExpectMixin(SessionLike):
     @gated_operation("browser_expect_js")
     async def expect_js(self, expression: str, equals: Any = None) -> Any:
         """Evaluate *expression* in the page and assert it is truthy (or equals *equals*)."""
-        result = await self._target().evaluate(expression)
+        result = await bounded(self._target().evaluate(expression), operation="browser_expect_js")
         if equals is not None:
             if result != equals:
                 raise RuntimeError(
