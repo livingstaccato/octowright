@@ -18,6 +18,7 @@ from weakref import WeakSet
 from playwright.async_api import Browser, BrowserContext, Page, Video
 from provide.telemetry import get_logger
 
+from octowright._tracing import counter
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
@@ -38,6 +39,20 @@ from octowright.session.operation_gate import (
 from octowright.session.timeouts import SessionCallTimeoutError
 
 log = get_logger(__name__)
+
+# octowright_status()["crash"]["recent"] is built from octowright.incidents,
+# not from session_event_bus -- a push notification is best-effort (the MCP
+# instructions string says so explicitly) and a direct HTTP-MCP client gets
+# no push at all (SDK limitation), so without a counter this scope would be
+# invisible on every PULL surface: no incident record, no metric, nothing
+# but a raw tool error to a client that never saw the notification. Mirrors
+# browser_pool/listeners.py's _CRASHED counter for the renderer-crash case,
+# kept separate (not folded into octowright_browser_crashed_total) because
+# that counter's own description is specific to page.on("crash").
+_UNRESPONSIVE = counter(
+    "octowright_unresponsive_target_total",
+    description="Targets that stopped answering a Playwright call within its budget (SessionCallTimeoutError)",
+)
 
 # ``DEFAULT_PREVIEW_CHARS`` is the public preview cap, re-exported via
 # ``session.__init__`` and used by server/browser tools. Defined in
@@ -251,6 +266,12 @@ class BrowserSession(
         """The operation gate's ``on_call_timeout`` hook -- called at most once
         per wedge, only for the ROOT gated operation (see
         ``SessionOperationGate.operation()``'s ``lease.is_root`` check).
+        ``error`` is always a ``SessionCallTimeoutError`` even when the
+        exception that actually escaped the root operation was something
+        else that wrapped it (``_call_timeout_cause`` in ``operation_gate.py``
+        walks the ``__cause__`` chain before calling this hook, so a caller
+        like ``macros/execution.py`` re-raising as ``RuntimeError(...) from
+        exc`` still reaches here).
 
         Publishes ``SessionCrashedEvent(scope="unresponsive")`` on the pool's
         event bus so the taxonomy that already exists for a dead browser
@@ -259,6 +280,11 @@ class BrowserSession(
         total``) also covers a target that is merely unresponsive -- no
         Playwright event reports this, which is exactly why the call budget
         in ``session/timeouts.py`` has to raise it instead of observing it.
+        Also increments ``octowright_unresponsive_target_total``: a push
+        notification is best-effort (a direct HTTP-MCP client gets no push
+        at all -- SDK limitation) and this scope has no ``octowright.
+        incidents`` record either, so without a counter it would be
+        invisible on every PULL surface too.
 
         Deliberately does NOT set ``self._crashed`` or call into
         ``crash_recovery`` -- renderer-crash recovery replaces the dead page,
@@ -273,6 +299,7 @@ class BrowserSession(
         """
         from octowright.browser_pool.session_event_bus import SessionCrashedEvent, session_event_bus
 
+        _UNRESPONSIVE.add(1, attributes={"kind": self.kind})
         log.warning(
             "octowright.session.unresponsive",
             instance_id=self.instance_id,
