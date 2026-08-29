@@ -16,6 +16,7 @@ from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_M
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 from octowright.session.operation_gate import gated_operation
+from octowright.session.timeouts import bounded
 from octowright.session.viewport_ops import SessionViewportMixin
 
 log = get_logger(__name__)
@@ -148,7 +149,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         except Exception:
             pass
         try:
-            bundle["title"] = await self.page.title()
+            bundle["title"] = await bounded(self.page.title(), operation="browser_diagnostic_bundle")
         except Exception:
             pass
 
@@ -164,7 +165,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         import hashlib
 
         try:
-            html = await self.page.content()
+            html = await bounded(self.page.content(), operation="browser_diagnostic_bundle")
             h_dir = screenshot_dir or self.log_path.parent
             h_dir.mkdir(parents=True, exist_ok=True)
             h_path = h_dir / f"{self.instance_id}-fail-{_timestamp()}.html"
@@ -281,7 +282,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
     async def navigate_back(self) -> dict[str, Any]:
         response = await self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
         url = self.page.url
-        title = await self.page.title()
+        title = await bounded(self.page.title(), operation="browser_navigate_back")
         self.recorder.record("navigate_back", url=url)
         return {"ok": response is not None, "url": url, "title": title}
 
