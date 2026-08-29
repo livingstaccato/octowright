@@ -65,8 +65,24 @@ def _shannon_entropy(s: str) -> float:
 # (e.g. a CSS selector containing `[id="user@host"]` — unlikely, but cheap
 # to skip). We only inspect string fields whose KEY plausibly carries
 # user-supplied values.
+#: ``verify_js`` / ``grabbed_predicate_js`` are ``a11y_dragdrop``'s own
+#: differently-spelled ``evaluate`` sinks. They must be listed HERE as well as
+#: in ``lint._CODE_LIKE_KEYS``: the scan skips any key absent from this set
+#: before it ever asks what kind of field it is, so a code-shaped key that is
+#: not a candidate is simply never inspected.
 _CREDENTIAL_CANDIDATE_KEYS: frozenset[str] = frozenset(
-    {"value", "text", "url", "expression", "pattern", "body", "key", "prompt_text"}
+    {
+        "value",
+        "text",
+        "url",
+        "expression",
+        "pattern",
+        "body",
+        "key",
+        "prompt_text",
+        "verify_js",
+        "grabbed_predicate_js",
+    }
 )
 
 

