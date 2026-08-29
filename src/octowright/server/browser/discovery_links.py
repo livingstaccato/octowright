@@ -20,6 +20,7 @@ from octowright.server._state import mcp, pool
 from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session._protocols import SessionLike
+from octowright.session.timeouts import bounded
 from octowright.text_scoring import weighted_text_score
 
 _LINK_EXTRACTOR_JS = """
@@ -152,7 +153,10 @@ async def _extract_browser_links(
     # provable without a caller-supplied name.
     async with session.operation("browser_extract_links"):
         target = session._target()
-        candidates = await target.evaluate(_LINK_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)})
+        candidates = await bounded(
+            target.evaluate(_LINK_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)}),
+            operation="browser_extract_links",
+        )
     if not isinstance(candidates, list):
         candidates = []
     return [_clean_link_candidate(item, instance_id) for item in candidates]
@@ -180,7 +184,7 @@ async def browser_links(instance_id: str, selector: str = "body", limit: int = 5
     cap = _clean_limit(limit)
     async with browser_operation(pool, instance_id, "browser_links") as session:
         links = await _extract_browser_links(session, instance_id, selector, cap + 1)
-        title = await session.page.title()
+        title = await bounded(session.page.title(), operation="browser_links")
         target = session._target()
         truncated = len(links) > cap
         return {
@@ -234,7 +238,7 @@ async def browser_find_link(
             item["reason"] = reason
             ranked.append(item)
         ranked.sort(key=lambda item: (float(item.get("score") or 0), bool(item.get("visible"))), reverse=True)
-        title = await session.page.title()
+        title = await bounded(session.page.title(), operation="browser_find_link")
         target = session._target()
         return {
             "query": query,

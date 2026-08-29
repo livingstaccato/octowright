@@ -59,7 +59,16 @@ def test_unparsable_or_nonpositive_falls_back_to_the_default(raw: str, monkeypat
 
 
 async def test_a_disabled_budget_does_not_wrap() -> None:
-    async def quick() -> int:
+    """``timeout=0.0`` must skip wrapping entirely, not merely resolve to a
+    near-zero budget. A coroutine that sleeps longer than an accidental
+    real 0.0s deadline would still complete here; if a refactor dropped the
+    early-return and ran everything through ``asyncio.timeout(budget)``
+    regardless, a 0.0 budget expires almost immediately and this would raise
+    ``SessionCallTimeoutError`` instead of returning.
+    """
+
+    async def slow() -> int:
+        await asyncio.sleep(0.2)
         return 3
 
-    assert await bounded(quick(), operation="browser_evaluate", timeout=0.0) == 3
+    assert await bounded(slow(), operation="browser_evaluate", timeout=0.0) == 3

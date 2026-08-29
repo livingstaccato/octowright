@@ -164,6 +164,14 @@ class BrowserSession(
     _last_markdown_capture_url: str | None = None
     _last_markdown_capture_key: str | None = None
     _pending_markdown_capture: Any | None = None
+    #: Set by capture_markdown() on every attempt: None on success, the
+    #: caught exception on failure. capture_markdown() swallows its own
+    #: exceptions and returns None on failure, so a caller that gets None
+    #: back (browser_read_markdown, capture_create(source="markdown")) reads
+    #: this to tell a hung target (SessionCallTimeoutError) apart from an
+    #: ordinary rendering failure -- reporting the former as "ensure
+    #: markitdown is installed" would be actively misleading.
+    _last_markdown_capture_error: Exception | None = None
     websocket_path: Path | None = None
     # Lazy-opened append handle for high-frequency WS feeds; typed as Any
     # because Path.open("a", encoding="utf-8") returns TextIOWrapper while
