@@ -885,6 +885,28 @@ async def test_browser_read_markdown_failure(_patch_pool: MagicMock) -> None:
 
 
 @pytest.mark.anyio
+async def test_browser_read_markdown_names_a_hung_target(_patch_pool: MagicMock) -> None:
+    """capture_markdown() swallows its own exceptions and always returns
+    None on failure, so a hung target and a missing dependency look
+    identical unless the tool consults the recorded cause. When it was a
+    SessionCallTimeoutError, the tool must say so -- "ensure markitdown is
+    installed" is actively misleading for a target that simply stopped
+    answering."""
+    from octowright.session.timeouts import SessionCallTimeoutError
+
+    s = _session()
+    _patch_pool.get.return_value = s
+    s.markdown_path = None
+    s.capture_markdown = AsyncMock(return_value=None)
+    s._last_markdown_capture_error = SessionCallTimeoutError(
+        "markdown_capture did not answer within 10.0s -- the browser target is "
+        "unresponsive. Relaunch this session; other sessions are unaffected."
+    )
+    with pytest.raises(SessionCallTimeoutError, match="unresponsive"):
+        await _inspect.browser_read_markdown("i")
+
+
+@pytest.mark.anyio
 async def test_browser_snapshot_records_event_in_jsonl(_patch_pool: MagicMock, tmp_path: Path) -> None:
     """Regression: the MCP tool must route through session.snapshot() so the
     JSONL recording gets a "snapshot" event. Bypassing session.snapshot()

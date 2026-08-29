@@ -306,6 +306,7 @@ CrashScope = Literal["renderer", "process", "unresponsive"]
 only signal is a raw error string and the agent cannot tell "relaunch this
 session" from "the transport died".
 """
+
 from octowright.browser_pool.events import SessionCrashedEvent
 
 
