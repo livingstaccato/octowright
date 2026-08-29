@@ -119,18 +119,15 @@ def _call_timeout_cause(
 ) -> SessionCallTimeoutError | None:
     """Find a ``SessionCallTimeoutError`` in *exc*'s explicit cause chain.
 
-    A bare ``isinstance(exc, SessionCallTimeoutError)`` on the exception that
-    escapes the root gated operation only catches a caller that never wraps
-    the error. ``macros/execution.py``'s per-action failure handling instead
-    re-raises every action failure as ``RuntimeError(payload) from exc``
-    *inside* the root ``session.operation("macro_run")`` frame, so the
-    unwrapped isinstance check never saw the ``SessionCallTimeoutError`` that
-    caused it -- the unattended macro/scenario replay path (exactly the shape
-    of the 2026-08-29 incident this exists to close) published no event at
-    all. Walking ``__cause__`` (set by Python's ``raise ... from exc``, never
-    by a bare ``raise`` inside an ``except`` block) finds it regardless of how
-    many such layers wrap it, bounded by *max_hops* so a pathological or
-    cyclic chain cannot spin forever.
+    A bare ``isinstance(exc, SessionCallTimeoutError)`` only catches a caller
+    that never wraps the error. ``macros/execution.py``'s per-action failure
+    handling instead re-raises every action failure as
+    ``RuntimeError(payload) from exc``, so an unwrapped isinstance check
+    never saw the ``SessionCallTimeoutError`` that caused it. Walking
+    ``__cause__`` (set by Python's ``raise ... from exc``, never by a bare
+    ``raise`` inside an ``except`` block) finds it regardless of how many
+    such layers wrap it, bounded by *max_hops* so a pathological or cyclic
+    chain cannot spin forever.
     """
     for _ in range(max_hops):
         if isinstance(exc, SessionCallTimeoutError):
@@ -139,6 +136,26 @@ def _call_timeout_cause(
             return None
         exc = exc.__cause__
     return None
+
+
+# Marks a SessionCallTimeoutError instance (never a wrapper of one -- see
+# _call_timeout_cause, which always returns the SAME underlying instance
+# regardless of how many `raise ... from exc` layers wrap it) once its
+# on_call_timeout hook has fired, so an ancestor `operation()` frame that
+# later sees the SAME exception object propagate through it (nested/reentrant
+# calls, or a caller that re-raises `from exc` without swallowing) does not
+# fire it again. A plain instance attribute rather than a class/module set:
+# the exception object IS the one thing every frame in the propagation path
+# shares, so marking it directly needs no separate registry to clean up.
+_CALL_TIMEOUT_PUBLISHED_ATTR = "_octowright_call_timeout_published"
+
+
+def _mark_call_timeout_published(cause: SessionCallTimeoutError) -> bool:
+    """Return True and mark *cause* published, or False if already marked."""
+    if getattr(cause, _CALL_TIMEOUT_PUBLISHED_ATTR, False):
+        return False
+    setattr(cause, _CALL_TIMEOUT_PUBLISHED_ATTR, True)
+    return True
 
 
 class UseDefault(Enum):
@@ -322,7 +339,7 @@ class SessionOperationGate(_CloseGateMixin):
         async with self._admission_lock:
             if self._owner_task is task:
                 self._depth += 1
-                return _LeaseToken(task, name, is_root=False)
+                return _LeaseToken(task, name)
             self._raise_if_not_open(name)
             waiter = _Waiter(task, name, self._clock(), asyncio.get_running_loop().create_future())
             self._waiters.append(waiter)
@@ -504,34 +521,42 @@ class SessionOperationGate(_CloseGateMixin):
             # cancellation-safe exit would falsely trip the ownership
             # invariant.
             await _run_shielded(self._release(lease, outcome))
-            # Fire at most once per SessionCallTimeoutError: nesting is
-            # stack-shaped, so only the ROOT lease (lease.is_root -- see
-            # _LeaseToken) is the frame whose release corresponds to the
-            # whole ownership span ending. A reentrant inner frame also sees
-            # this same exception propagate through its own except/finally,
-            # but is_root is False there, so it stays silent and the caller
-            # that actually owns the gate publishes exactly once. The cause
-            # chain (not just the top-level exception) is checked -- see
-            # _call_timeout_cause -- so a caller that wraps the timeout in
-            # its own exception (macros/execution.py's per-action failure
-            # handling does exactly this) still publishes.
-            if (
-                lease.is_root
-                and self._on_call_timeout is not None
-                and (cause := _call_timeout_cause(error)) is not None
-            ):
-                try:
-                    self._on_call_timeout(lease.operation_name, cause)
-                except Exception:
-                    # The hook (session -> event bus) must never mask the
-                    # real exception still propagating out of this context
-                    # manager.
-                    log.exception(
-                        "octowright.operation.call_timeout_hook_failed",
-                        instance_id=self.instance_id,
-                        kind=self.kind,
-                        operation=lease.operation_name,
-                    )
+            # Fire from the INNERMOST `operation()` frame that sees a
+            # SessionCallTimeoutError escape it -- not "the root lease", which
+            # assumes the timeout always makes it all the way out. It does
+            # not: macros/artifacts.py's macro_artifact_run swallows the
+            # error from its own nested run_macro() lease inside its OWN
+            # root "macro_artifact_run" lease, and run_sequence(stop_on_
+            # failure=False) does the same per failed step -- in both shapes
+            # nothing ever escapes a root frame for a root-only check to see.
+            # Every `operation()` frame the exception actually passes through
+            # runs this same check, but Python unwinds try/finally
+            # inside-out, so the innermost frame's finally always runs
+            # first; _mark_call_timeout_published marks the SessionCall
+            # TimeoutError instance itself (not any wrapper -- see
+            # _call_timeout_cause, which always returns that same underlying
+            # instance) the first time it is seen, so an outer frame that
+            # also sees it (still propagating, or reachable via its own
+            # __cause__ walk) finds the mark and stays silent. Exactly one
+            # publish per wedge, regardless of who swallows or re-wraps the
+            # exception on the way out -- and using THIS frame's own
+            # operation_name means a nested wedge reports the specific
+            # action that actually stalled, not an outer umbrella name.
+            if self._on_call_timeout is not None:
+                cause = _call_timeout_cause(error)
+                if cause is not None and _mark_call_timeout_published(cause):
+                    try:
+                        self._on_call_timeout(lease.operation_name, cause)
+                    except Exception:
+                        # The hook (session -> event bus) must never mask the
+                        # real exception still propagating out of this context
+                        # manager.
+                        log.exception(
+                            "octowright.operation.call_timeout_hook_failed",
+                            instance_id=self.instance_id,
+                            kind=self.kind,
+                            operation=lease.operation_name,
+                        )
 
 
 def gated_operation(

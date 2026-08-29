@@ -11,6 +11,17 @@ enough context (instance, url, outcome, timestamp) that an operator or the LLM
 can articulate "browser X at <url> crashed at <ts> and recovered" from a single
 status call instead of grepping the daemon log. Bounded by ``_RING_SIZE`` so a
 long-lived daemon can't grow it without limit.
+
+The ring is shared across ALL categories, not partitioned per category:
+``recent(category=...)`` filters after the fact, so a target that repeatedly
+goes unresponsive (``CATEGORY_UNRESPONSIVE_TARGET``) can evict older renderer-
+crash or driver records out of the ring entirely, not just out of its own
+category's view. This is accepted as-is rather than fixed -- splitting the
+ring per category would change the ordering ``recent()``/``counts()`` return
+to their three existing consumers (``server/meta.py``, ``crash_reports.py``,
+the recovery/driver-relaunch paths), a broader change than the incident this
+module was extended for warrants. Noted here so the interaction reads as
+deliberate, not overlooked, the next time it comes up.
 """
 
 from __future__ import annotations

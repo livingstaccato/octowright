@@ -16,10 +16,16 @@ Covers:
   pool's event bus (Task 2, Step 3), via ``SessionOperationGate``'s
   ``on_call_timeout`` hook, wired by ``BrowserSession.__post_init__`` to
   ``BrowserSession._notify_call_timeout``.
-- Nesting does not multiply the notification: only the ROOT gated operation's
-  release fires the hook (``_LeaseToken.is_root``), so a timeout raised deep
-  inside several reentrant ``session.operation(...)`` frames still publishes
-  exactly once.
+- Nesting does not multiply the notification: the INNERMOST gated operation
+  to see a ``SessionCallTimeoutError`` escape it fires the hook, and marks
+  the exception instance (``_mark_call_timeout_published``) so an ancestor
+  frame that also sees it (still propagating, or via its own ``__cause__``
+  walk) stays silent -- not "the root lease", which review round 3 (R1)
+  found false for a caller that swallows the error inside its own root
+  lease (``macros/artifacts.py``'s ``macro_artifact_run``, ``run_sequence
+  (stop_on_failure=False)``): nothing ever escapes a root frame there for a
+  root-only check to see, so those two shapes published nothing until this
+  fix.
 - An ordinary exception (not a ``SessionCallTimeoutError``, and not wrapping
   one via ``__cause__``) never publishes — the hook is specific to the
   call-budget timeout, not "any gated error".
@@ -216,8 +222,18 @@ async def test_real_evaluate_call_site_publishes_via_bounded(
     session = BrowserSession(**{**fake_session_kwargs, "page": page})  # type: ignore[arg-type]
 
     async with session_event_bus.subscribe() as sub:
+        # A second outer bound, deliberately separate from bounded()'s own
+        # 0.2s budget above (review round 3, R2): if bounded() ever regresses
+        # out of core_page_mixin.evaluate() -- stops actually bounding the
+        # call -- this test must fail fast rather than hang the suite
+        # indefinitely (no pytest-timeout plugin is configured here). A
+        # regression makes this asyncio.timeout(2.0) fire a plain
+        # TimeoutError instead of SessionCallTimeoutError, which
+        # pytest.raises below rejects -- a clean, fast test failure instead
+        # of exactly the hang this whole plan exists to prevent.
         with pytest.raises(SessionCallTimeoutError):
-            await session.evaluate("1")
+            async with asyncio.timeout(2.0):
+                await session.evaluate("1")
 
         received = await asyncio.wait_for(sub.get(), timeout=2.0)
 
@@ -373,3 +389,97 @@ async def test_unresponsive_target_is_retrievable_from_status(fake_session_kwarg
     # The renderer-crash key must not see this record -- different scope,
     # different category, no bleed between them.
     assert all(entry.get("instance_id") != session.instance_id for entry in crash["recent"])
+
+
+# ─── R1 (review round 3): shapes that swallow inside their OWN root lease ──
+
+
+async def test_run_sequence_stop_on_failure_false_still_publishes(
+    monkeypatch: pytest.MonkeyPatch, fake_session_kwargs: dict[str, object]
+) -> None:
+    """``run_sequence(stop_on_failure=False)`` catches each step's exception
+    and continues WITHOUT re-raising, all inside its own root
+    ``session.operation("macro_run_sequence")`` lease -- so nothing ever
+    escapes that root frame for a root-only check to see. Before the R1 fix
+    (publish from the innermost lease, not the root), this shape published
+    no event at all -- driving the REAL ``run_sequence`` here (only
+    ``load_macro``/``_dispatch_one`` are stubbed) proves it now does.
+    """
+    from octowright.macros import execution as _execution
+
+    session = BrowserSession(**fake_session_kwargs)  # type: ignore[arg-type]
+    session.diagnostic_bundle = AsyncMock(return_value={"url": "https://octowright.com", "title": "t"})  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        _execution,
+        "load_macro",
+        lambda name: {"name": name, "actions": [{"action": "evaluate", "expression": "1"}]},
+    )
+
+    async def _raise_timeout(*_args: object, **_kwargs: object) -> tuple[int, int]:
+        raise SessionCallTimeoutError("browser_evaluate did not answer within 0.2s")
+
+    monkeypatch.setattr(_execution, "_dispatch_one", _raise_timeout)
+
+    async with session_event_bus.subscribe() as sub:
+        result = await _execution.run_sequence(session=session, names=["wedged-macro"], stop_on_failure=False)
+
+        received = await asyncio.wait_for(sub.get(), timeout=1.0)
+        await _assert_nothing_else_arrives(sub)
+
+    # run_sequence must not have raised -- stop_on_failure=False -- and must
+    # report the step as failed rather than silently succeeding.
+    assert result["ok"] is False
+    assert len(result["steps"]) == 1
+    assert result["steps"][0]["ok"] is False
+
+    assert received.scope == "unresponsive"
+    assert received.instance_id == session.instance_id
+    assert received.recovering is False
+
+
+async def test_macro_artifact_run_swallowed_timeout_still_publishes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_session_kwargs: dict[str, object]
+) -> None:
+    """``macros/artifacts.py``'s ``run_macro_artifact`` catches whatever its
+    nested ``run_macro()``/``"macro_run"`` lease raises and does NOT
+    re-raise -- the exception never escapes its OWN root
+    ``session.operation("macro_artifact_run")`` lease either. Before the R1
+    fix this shape (root-only publish) published no event at all, because
+    nothing ever reached a root frame's own except/finally. Drives the REAL
+    ``run_macro_artifact`` end to end (``load_macro``/``_dispatch_one``
+    stubbed, ``capture=False``/``verify=False`` to skip page/critical-point
+    work unrelated to this) against a real artifact store under ``tmp_path``.
+    """
+    from octowright.macros import execution as _execution
+    from tests._macro_artifact_fixtures import _reload as _reload_artifact_modules
+    from tests._macro_artifact_fixtures import restore_reloaded_defaults
+
+    _storage, macro_artifacts = _reload_artifact_modules(monkeypatch, tmp_path)
+    macro_def = {"name": "wedged-macro", "actions": [{"action": "evaluate", "expression": "1"}]}
+    monkeypatch.setattr(_execution, "load_macro", lambda name: macro_def)
+    monkeypatch.setattr(macro_artifacts, "load_macro", lambda name: macro_def)
+
+    async def _raise_timeout(*_args: object, **_kwargs: object) -> tuple[int, int]:
+        raise SessionCallTimeoutError("browser_evaluate did not answer within 0.2s")
+
+    monkeypatch.setattr(_execution, "_dispatch_one", _raise_timeout)
+
+    session = BrowserSession(**fake_session_kwargs)  # type: ignore[arg-type]
+
+    try:
+        async with session_event_bus.subscribe() as sub:
+            result = await macro_artifacts.run_macro_artifact(session, "wedged-macro", capture=False, verify=False)
+
+            received = await asyncio.wait_for(sub.get(), timeout=1.0)
+            await _assert_nothing_else_arrives(sub)
+    finally:
+        restore_reloaded_defaults()
+
+    # run_macro_artifact must not have raised -- it returns paths even when
+    # replay fails -- and must report the run as failed.
+    assert result["ok"] is False
+
+    assert received.scope == "unresponsive"
+    assert received.instance_id == session.instance_id
+    assert received.recovering is False
