@@ -591,18 +591,18 @@ class SessionOperationGate(_CloseGateMixin):
 
         This method can ALSO cancel a close reservation that was already
         granted and is itself wedged mid-teardown (e.g. a hung
-        ``context.close()``). CORRECTION -- disproved by driving it, not by
-        re-reading the call graph (an earlier version of this docstring
-        claimed the opposite): that does NOT unwind through
-        ``_release_close``'s cancellation branch. ``prepare_then_teardown``
-        swallows the ``CancelledError`` and returns it instead of raising,
-        so ``outcome`` stays ``"ok"`` and ``_release_close`` converts
-        nothing; the raw ``CancelledError`` reaches ``fail_close`` directly,
-        which normalizes it into ``SessionCloseAbortedError``. See that
-        class's docstring (``operation_gate_types.py``) and
-        ``_terminal_close_failure`` (``operation_gate_close.py``) for the
-        full mechanism, and ``relaunch._close_with_fallback_snapshot`` for
-        why the distinction from a plain ``SessionClosedError`` matters.
+        ``context.close()``). Such a cancellation can land in more than one
+        place -- swallowed and returned by ``prepare_then_teardown``, or
+        raised in the close body before it ever runs -- and every one of
+        them is normalized in a SINGLE seam, ``_terminal_close_failure``
+        (``operation_gate_close.py``), into ``SessionCloseAbortedError``.
+        ``_release_close`` deliberately converts nothing itself, so one
+        cause cannot yield two error types depending on where it landed; an
+        earlier design did exactly that, and a ceiling-aborted close then
+        read as an ordinary close race. See that class's docstring
+        (``operation_gate_types.py``) for the full mechanism, and
+        ``relaunch._close_with_fallback_snapshot`` for why the distinction
+        from a plain ``SessionClosedError`` matters.
 
         Deliberately does NOT raise or publish a ``SessionCallTimeoutError``.
         That machinery (``session/timeouts.bounded``, this gate's
