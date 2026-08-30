@@ -173,6 +173,23 @@ def test_crash_notification_hint_reflects_auto_recovery() -> None:
     assert "relaunch" in off["hint"].lower()  # recovery off → relaunch IS needed
 
 
+def test_unresponsive_crash_notification_hint_is_not_the_crash_hint() -> None:
+    """scope="unresponsive" is a different situation from a real crash (the
+    target is alive, merely stopped answering) and is never auto-recovered —
+    the hint must say so rather than reusing the misleading "page crashed"
+    text a `recovering=False` renderer crash gets."""
+    from octowright.browser_pool.events import SessionCrashedEvent
+
+    params = _build_notification(
+        SessionCrashedEvent("c3", "webkit", "p", None, "unresponsive", "/tmp/c3.jsonl", recovering=False)
+    ).message.params
+    assert params["scope"] == "unresponsive"
+    assert params["recovering"] is False
+    hint = params["hint"].lower()
+    assert "crashed" not in hint
+    assert "stopped answering" in hint
+
+
 def test_recovered_notification_per_outcome() -> None:
     """A SessionRecoveredEvent becomes a browser_recovered notification whose hint
     is accurate per outcome (usable / relaunch)."""

@@ -29,6 +29,7 @@ from octowright.server.browser.discovery_links import (
 )
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session._protocols import SessionLike
+from octowright.session.timeouts import bounded
 from octowright.text_scoring import weighted_text_score
 
 _FIELD_EXTRACTOR_JS = """
@@ -188,7 +189,10 @@ async def _extract_browser_fields(
     # provable without a caller-supplied name.
     async with session.operation("browser_extract_fields"):
         target = session._target()
-        candidates = await target.evaluate(_FIELD_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)})
+        candidates = await bounded(
+            target.evaluate(_FIELD_EXTRACTOR_JS, {"selector": selector, "limit": _clean_limit(limit)}),
+            operation="browser_extract_fields",
+        )
     if not isinstance(candidates, list):
         candidates = []
     return [_clean_field_candidate(item, instance_id) for item in candidates]
@@ -216,7 +220,7 @@ async def browser_fields(instance_id: str, selector: str = "body", limit: int = 
     cap = _clean_limit(limit)
     async with browser_operation(pool, instance_id, "browser_fields") as session:
         fields = await _extract_browser_fields(session, instance_id, selector, cap + 1)
-        title = await session.page.title()
+        title = await bounded(session.page.title(), operation="browser_fields")
         target = session._target()
         return {
             "url": target.url,
@@ -279,7 +283,7 @@ async def browser_find_field(
             item["reason"] = reason
             ranked.append(item)
         ranked.sort(key=lambda item: (float(item.get("score") or 0), bool(item.get("visible"))), reverse=True)
-        title = await session.page.title()
+        title = await bounded(session.page.title(), operation="browser_find_field")
         target = session._target()
         return {
             "query": query,
@@ -468,11 +472,14 @@ async def browser_page_outline(instance_id: str, selector: str = "body", limit: 
     cap = _clean_limit(limit)
     async with browser_operation(pool, instance_id, "browser_page_outline") as session:
         target = session._target()
-        raw = await target.evaluate(_PAGE_OUTLINE_JS, {"selector": selector, "limit": cap})
+        raw = await bounded(
+            target.evaluate(_PAGE_OUTLINE_JS, {"selector": selector, "limit": cap}),
+            operation="browser_page_outline",
+        )
         if not isinstance(raw, dict):
             raw = {}
         counts = _outline_counts(raw)
-        title = await session.page.title()
+        title = await bounded(session.page.title(), operation="browser_page_outline")
         return {
             "url": target.url,
             "title": title,

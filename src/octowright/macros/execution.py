@@ -37,6 +37,7 @@ from octowright.mcp_types import (
     MacroSequenceResult,
     MacroSequenceStep,
 )
+from octowright.session.timeouts import bounded
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -195,7 +196,7 @@ async def _push_status(
         if page is None:
             return
         try:
-            await page.evaluate(_STATUS_PUSH_JS, payload)
+            await bounded(page.evaluate(_STATUS_PUSH_JS, payload), operation="macro_status")
         except Exception as exc:
             # Per silent-swallow policy: this is a user-action path, so log instead
             # of truly swallowing. A failed pill push must not break macro dispatch.

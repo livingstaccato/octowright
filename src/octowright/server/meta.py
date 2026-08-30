@@ -427,6 +427,12 @@ def octowright_status() -> dict[str, Any]:
             # Per-browser operation-gate state (busy/queue/closing/broken), reused
             # verbatim from list_sessions() rows -- no separate Page/Frame read.
             "operation_gates": operation_gates,
+            # Per-engine last-launch outcome ({"outcome": "ok"|"error", "at": iso,
+            # "error": <exception class name, on failure>}). A kind never
+            # launched is absent, not falsely reported healthy -- lets the LLM
+            # or operator see "chromium is fine, webkit is failing" in one call
+            # instead of grepping logs (see BrowserPool.engine_health).
+            "engine_health": pool.engine_health(),
         },
         # Renderer-crash + auto-recovery tallies (process-lifetime). Lets the
         # operator/LLM see that "random crashes" are happening and whether they
@@ -442,6 +448,15 @@ def octowright_status() -> dict[str, Any]:
             # `.ips` SIGSEGV signature (the OS writes it a beat after the crash,
             # so it can't be attached when the incident is first recorded).
             "recent": _crash_reports.enrich(_incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH, limit=10)),
+            # A DIFFERENT scope, kept as a SEPARATE key rather than folded into
+            # "recent": a target that stopped answering within its call budget
+            # (session/timeouts.py's SessionCallTimeoutError) has no macOS
+            # `.ips` crash report to correlate -- it never crashed, it just
+            # stopped replying -- so running it through _crash_reports.enrich
+            # would only ever look up nothing. Each record carries
+            # instance_id/kind/url/operation/ts; never an exception message
+            # (see BrowserSession._notify_call_timeout).
+            "unresponsive_recent": _incidents.recent(category=_incidents.CATEGORY_UNRESPONSIVE_TARGET, limit=10),
         },
         "personas": {
             "count": len(persona_names),

@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING, Any, LiteralString
 from weakref import WeakSet
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
+from provide.telemetry import get_logger
 
+from octowright._tracing import counter
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
@@ -27,12 +29,29 @@ from octowright.session.core_locator_mixin import SessionLocatorMixin
 from octowright.session.core_network_mixin import SessionNetworkMixin
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     USE_DEFAULT,
     OperationGateSnapshot,
     SessionOperationGate,
     UseDefault,
     resolve_operation_queue_timeout_seconds,
+)
+from octowright.session.timeouts import SessionCallTimeoutError
+
+log = get_logger(__name__)
+
+# octowright_status()["crash"]["recent"] is built from octowright.incidents,
+# not from session_event_bus -- a push notification is best-effort (the MCP
+# instructions string says so explicitly) and a direct HTTP-MCP client gets
+# no push at all (SDK limitation), so without a counter this scope would be
+# invisible on every PULL surface: no incident record, no metric, nothing
+# but a raw tool error to a client that never saw the notification. Mirrors
+# browser_pool/listeners.py's _CRASHED counter for the renderer-crash case,
+# kept separate (not folded into octowright_browser_crashed_total) because
+# that counter's own description is specific to page.on("crash").
+_UNRESPONSIVE = counter(
+    "octowright_unresponsive_target_total",
+    description="Targets that stopped answering a Playwright call within its budget (SessionCallTimeoutError)",
 )
 
 # ``DEFAULT_PREVIEW_CHARS`` is the public preview cap, re-exported via
@@ -164,6 +183,14 @@ class BrowserSession(
     _last_markdown_capture_url: str | None = None
     _last_markdown_capture_key: str | None = None
     _pending_markdown_capture: Any | None = None
+    #: Set by capture_markdown() on every attempt: None on success, the
+    #: caught exception on failure. capture_markdown() swallows its own
+    #: exceptions and returns None on failure, so a caller that gets None
+    #: back (browser_read_markdown, capture_create(source="markdown")) reads
+    #: this to tell a hung target (SessionCallTimeoutError) apart from an
+    #: ordinary rendering failure -- reporting the former as "ensure
+    #: markitdown is installed" would be actively misleading.
+    _last_markdown_capture_error: Exception | None = None
     websocket_path: Path | None = None
     # Lazy-opened append handle for high-frequency WS feeds; typed as Any
     # because Path.open("a", encoding="utf-8") returns TextIOWrapper while
@@ -214,6 +241,7 @@ class BrowserSession(
             self.instance_id,
             self.kind,
             queue_timeout_seconds=resolve_operation_queue_timeout_seconds(self.operation_queue_timeout_seconds),
+            on_call_timeout=self._notify_call_timeout,
         )
         if self._browser_for_close is None and self.browser is not None:
             self._browser_for_close = self.browser
@@ -234,6 +262,94 @@ class BrowserSession(
     def _websocket_cache_path(self) -> Path:
         return self.log_path.with_suffix(".websocket.jsonl")
 
+    def _notify_call_timeout(self, operation_name: str, error: SessionCallTimeoutError) -> None:
+        """The operation gate's ``on_call_timeout`` hook -- called at most once
+        per wedge, from whichever ``session.operation(...)`` frame is the
+        INNERMOST one to see a ``SessionCallTimeoutError`` escape it (see
+        ``SessionOperationGate.operation()``'s ``_mark_call_timeout_published``
+        dedup) -- not necessarily the outermost/root frame, since a caller can
+        swallow the error inside its own root lease (``macros/artifacts.py``'s
+        ``macro_artifact_run``, ``run_sequence(stop_on_failure=False)``) before
+        it ever reaches one. ``error`` is always a ``SessionCallTimeoutError``
+        even when the exception that actually escaped this frame was something
+        else that wrapped it (``_call_timeout_cause`` in ``operation/gate/core.py``
+        walks the ``__cause__`` chain before calling this hook, so a caller
+        like ``macros/execution.py`` re-raising as ``RuntimeError(...) from
+        exc`` still reaches here). ``operation_name`` is THIS frame's own
+        operation, which for a nested wedge is the specific action that
+        stalled, not an outer umbrella name.
+
+        Publishes ``SessionCrashedEvent(scope="unresponsive")`` on the pool's
+        event bus so the taxonomy that already exists for a dead browser
+        (``page.on("crash")`` -> ``SessionCrashedEvent(scope="renderer")``,
+        the ``browser_crashed`` notification, ``octowright_browser_crashed_
+        total``) also covers a target that is merely unresponsive -- no
+        Playwright event reports this, which is exactly why the call budget
+        in ``session/timeouts.py`` has to raise it instead of observing it.
+        Also increments ``octowright_unresponsive_target_total`` and records
+        an ``incidents.CATEGORY_UNRESPONSIVE_TARGET`` entry: a push
+        notification is best-effort (a direct HTTP-MCP client gets no push
+        at all -- SDK limitation), and OTel counters are noop unless
+        ``PROVIDE_METRICS_ENABLED`` is set (off by default) -- so without a
+        retrievable record, the common configuration's PULL surface
+        (``octowright_status()``) would show nothing for this scope either.
+        No exception message is recorded: the operation name is the
+        diagnostic signal, and a message could carry a URL/path (mirrors why
+        ``octowright_browser_launch_failed_total`` labels on the exception
+        CLASS rather than its message).
+
+        Deliberately does NOT set ``self._crashed`` or call into
+        ``crash_recovery`` -- renderer-crash recovery replaces the dead page,
+        which is right for an actual crash and wrong here: the target may
+        still be executing, and force-replacing it can thrash a browser that
+        is only slow. Surface + notify; let the caller decide (wait, retry,
+        or relaunch). ``recovering`` is always False for this scope.
+
+        Imports ``session_event_bus``/``incidents`` lazily, mirroring
+        ``session/screencast.py`` -- ``browser_pool`` imports FROM
+        ``session`` (``BrowserSession``), so a module-level import here
+        would be circular.
+        """
+        from octowright.browser_pool import incidents
+        from octowright.browser_pool.session_event_bus import SessionCrashedEvent, session_event_bus
+
+        # self.url, not a live self.page.url read: this hook runs synchronously
+        # from the gate's own release path, not under a session.operation(...)
+        # lease -- and self.page.url is a Playwright object read the
+        # operation-gate architecture scanner (rightly) requires be gated.
+        # self.url is a plain string field, kept current by every MCP-driven
+        # navigate() (session/core_page_mixin.py); it can lag a manual
+        # address-bar navigation the user made outside octowright's tools,
+        # same as every other best-effort incident/status field.
+        url = self.url
+
+        _UNRESPONSIVE.add(1, attributes={"kind": self.kind})
+        log.warning(
+            "octowright.session.unresponsive",
+            instance_id=self.instance_id,
+            kind=self.kind,
+            operation=operation_name,
+            error=repr(error),
+        )
+        incidents.record(
+            incidents.CATEGORY_UNRESPONSIVE_TARGET,
+            instance_id=self.instance_id,
+            kind=self.kind,
+            url=url,
+            operation=operation_name,
+        )
+        session_event_bus.publish_nowait(
+            SessionCrashedEvent(
+                instance_id=self.instance_id,
+                kind=self.kind,
+                label=self.label,
+                profile=self.profile,
+                scope="unresponsive",
+                log_path=str(self.log_path),
+                recovering=False,
+            )
+        )
+
     def operation(
         self,
         operation_name: LiteralString,
@@ -244,6 +360,14 @@ class BrowserSession(
 
     def operation_snapshot(self) -> OperationGateSnapshot:
         return self._operation_gate.snapshot()
+
+    async def enforce_operation_active_timeout(self, ceiling_seconds: float) -> bool:
+        """Delegates to the gate -- see ``SessionOperationGate.enforce_active_timeout``.
+
+        The only caller is ``housekeeping._enforce_operation_active_timeout_once``,
+        which resolves the ceiling once per cycle and walks every live session.
+        """
+        return await self._operation_gate.enforce_active_timeout(ceiling_seconds)
 
     async def set_protected_state(
         self,

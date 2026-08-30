@@ -12,9 +12,14 @@ waiting for the client to poll.
 Notification methods:
   * ``notifications/octowright/session_closed`` — a session left the pool.
   * ``notifications/octowright/browser_crashed`` — a crash was observed
-    (``page.on("crash")``); the session may still be alive. Params carry
-    ``scope`` ("renderer"/"process"), ``recovering`` (whether auto-recovery was
-    scheduled), and an actionable ``hint`` instead of a close ``reason``.
+    (``page.on("crash")``), OR a target stopped answering within its call
+    budget (``session/timeouts.py``, ``scope="unresponsive"`` — no Playwright
+    event reports this case, so it is raised rather than observed); the
+    session may still be alive either way. Params carry ``scope``
+    ("renderer"/"process"/"unresponsive"), ``recovering`` (whether
+    auto-recovery was scheduled — always False for "unresponsive": replacing
+    the page is right for a crash and wrong for a target that may still be
+    executing), and an actionable ``hint`` instead of a close ``reason``.
   * ``notifications/octowright/browser_recovered`` — a renderer-crash recovery
     resolved; ``outcome`` is recovered|failed|exhausted (the accurate follow-up
     to a ``browser_crashed`` with ``recovering=true``).
@@ -130,14 +135,25 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
     if isinstance(event, SessionCrashedEvent):
         # Accurate to the auto-recovery behavior: when recovery is scheduled the
         # client should WAIT for the browser_recovered outcome, not relaunch a
-        # browser that's already healing itself.
-        hint = (
-            "the page crashed — Octowright is auto-recovering it (replacing the page); "
-            "no action needed, wait for a browser_recovered notification (outcome=recovered "
-            "means usable again; failed/exhausted means relaunch)"
-            if event.recovering
-            else "the page crashed and auto-recovery is off/exhausted — relaunch the browser with browser_launch"
-        )
+        # browser that's already healing itself. scope="unresponsive" is a
+        # DIFFERENT situation from a crash -- the target is alive and merely
+        # stopped answering (session/timeouts.py's call budget), not observed
+        # dead via page.on("crash") -- and is never auto-recovered (recovering
+        # is always False for it), so it gets its own, non-misleading hint.
+        if event.scope == "unresponsive":
+            hint = (
+                "the target stopped answering a Playwright call within its budget — it may still be "
+                "executing, this is not a crash and Octowright does not auto-recover it. Retry or wait if "
+                "the work may still finish; relaunch this session with browser_launch if it stays unresponsive"
+            )
+        elif event.recovering:
+            hint = (
+                "the page crashed — Octowright is auto-recovering it (replacing the page); "
+                "no action needed, wait for a browser_recovered notification (outcome=recovered "
+                "means usable again; failed/exhausted means relaunch)"
+            )
+        else:
+            hint = "the page crashed and auto-recovery is off/exhausted — relaunch the browser with browser_launch"
         return {
             "method": "notifications/octowright/browser_crashed",
             "params": {
