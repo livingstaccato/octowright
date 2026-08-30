@@ -46,7 +46,7 @@ from tests._pool_invariants import wait_until
 @pytest.fixture
 def anyio_backend() -> str:
     # The close coordinator is asyncio-native (asyncio.Task/Future) -- see
-    # session/operation_gate.py. These tests exercise it directly.
+    # session/operation/gate/core.py. These tests exercise it directly.
     return "asyncio"
 
 
@@ -73,7 +73,7 @@ class _EventTarget:
 
 
 def _session(instance_id: str) -> SimpleNamespace:
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     return SimpleNamespace(
         instance_id=instance_id,

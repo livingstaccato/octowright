@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -40,7 +41,7 @@ def _fake_source(
     unconditionally once teardown actually runs (a duck type missing them
     used to be safe here only because the old tests mocked ``pool.close``
     away entirely, never reaching that code)."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     gate = SessionOperationGate(instance_id, kind)
     source = SimpleNamespace(
@@ -336,3 +337,82 @@ async def test_relaunch_fluid_survives_eviction_race(monkeypatch: pytest.MonkeyP
 
     await wait_until(lambda: "fluid01" not in pool._closing_sessions)
     source._teardown_after_close_cutoff.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_handoff_close_aborted_by_ceiling_propagates_instead_of_stale_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ceiling breach mid-teardown is NOT the ordinary close-vs-eviction
+    race ``_close_with_fallback_snapshot`` otherwise falls back from (Task 3
+    review round 3, D1). Driven end to end through ``pool.handoff``, not
+    just at the gate level: ``_teardown_after_close_cutoff`` hangs,
+    preparation (spied on below, not assumed) has already produced a fresh
+    snapshot by the time the ceiling fires, and the close is expected to
+    raise ``SessionCloseAbortedError`` -- discarding that snapshot for a
+    stale pre-close read and launching a replacement over an unconfirmed
+    teardown would risk exactly the ``SingletonLock`` collision the module
+    docstring warns about.
+    """
+    import octowright.browser_pool.relaunch as relaunch_mod
+    from octowright.session.operation.gate import SessionCloseAbortedError
+
+    _pop_manifest_noop(monkeypatch)
+    pool = BrowserPool()
+    source = _fake_source(
+        instance_id="wedge-handoff",
+        profile="dante",
+        label="dante-lab",
+        url="https://octowright.com/app",
+        user_data_dir="/tmp/profile-dir",
+    )
+    pool._sessions["wedge-handoff"] = source
+
+    original_prepare = relaunch_mod._prepare_handoff_snapshot
+    prepared_snapshots: list[Any] = []
+
+    async def _spy_prepare(session: Any) -> Any:
+        result = await original_prepare(session)
+        prepared_snapshots.append(result)
+        return result
+
+    monkeypatch.setattr(relaunch_mod, "_prepare_handoff_snapshot", _spy_prepare)
+
+    teardown_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def _hang_teardown(reason: str | None = None) -> None:
+        teardown_entered.set()
+        await never.wait()
+
+    source._teardown_after_close_cutoff = _hang_teardown
+
+    launch_calls = {"count": 0}
+
+    async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        launch_calls["count"] += 1
+        return {"instance_id": "should-not-launch", "kind": kwargs["kind"], "log_path": "/tmp/x.jsonl"}
+
+    monkeypatch.setattr(pool, "launch", _fake_launch)
+
+    handoff_task = asyncio.create_task(pool.handoff("wedge-handoff", headed=False))
+    async with asyncio.timeout(5):
+        await teardown_entered.wait()
+
+    # Preparation genuinely ran and produced a snapshot before the ceiling
+    # fired -- not inferred from timing alone.
+    assert len(prepared_snapshots) == 1
+    # The coordinator (not some other displaced owner) holds the gate under
+    # its own reservation's root operation name throughout preparation AND
+    # the now-hung teardown.
+    assert source.operation_snapshot()["active_operation"] == "browser_handoff"
+
+    async with asyncio.timeout(5):
+        assert await source._operation_gate.enforce_active_timeout(0.0) is True
+
+    async with asyncio.timeout(5):
+        with pytest.raises(SessionCloseAbortedError):
+            await handoff_task
+
+    # No replacement was launched over the unconfirmed teardown.
+    assert launch_calls["count"] == 0

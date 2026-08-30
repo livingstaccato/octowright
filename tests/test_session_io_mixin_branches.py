@@ -24,12 +24,15 @@ import sys
 from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright.session import core_io_mixin as _io
+from octowright.session import timeouts as _timeouts
 from octowright.session.core_io_mixin import SessionIOMixin, _looks_like_binary_text
-from octowright.session.operation_gate import SessionOperationGate
+from octowright.session.operation.gate import SessionOperationGate
 
 
 @pytest.fixture
@@ -46,8 +49,6 @@ def _ws_flush_every_frame(monkeypatch: pytest.MonkeyPatch) -> None:
     file back after a single write and would race the buffer. Drop
     both thresholds to 1 so every test write is immediately on disk.
     """
-    from octowright.session import core_io_mixin as _io
-
     monkeypatch.setattr(_io, "WEBSOCKET_CACHE_FLUSH_FRAMES", 1)
     monkeypatch.setattr(_io, "WEBSOCKET_CACHE_FLUSH_SECONDS", 0.0)
 
@@ -469,6 +470,49 @@ class TestCaptureMarkdown:
         assert result is None
         recorded = [c.args for c in subj.recorder.record.call_args_list]
         assert any(call == ("markdown_cache_error",) for call in recorded)
+        # _last_markdown_capture_error is what browser_read_markdown /
+        # capture_create(source="markdown") consult to tell a hung target
+        # apart from an ordinary failure -- an ordinary RuntimeError is
+        # recorded too, just not treated as "unresponsive" at the raise site.
+        assert isinstance(subj._last_markdown_capture_error, RuntimeError)
+        assert not isinstance(subj._last_markdown_capture_error, _timeouts.SessionCallTimeoutError)
+
+    @pytest.mark.anyio
+    async def test_hang_records_a_typed_timeout_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A SessionCallTimeoutError raised by bounded() must be captured on
+        the session, not swallowed into an indistinguishable None -- the
+        explicit browser_read_markdown / capture_create(source="markdown")
+        call sites use this to report "target unresponsive" instead of a
+        misleading "ensure markitdown is installed"."""
+
+        async def _boom(awaitable: Any, *, operation: str, timeout: float | None = None) -> Any:
+            awaitable.close()  # avoid a "coroutine was never awaited" warning
+            raise _timeouts.SessionCallTimeoutError(f"{operation} did not answer within {timeout}s")
+
+        monkeypatch.setattr(_io, "bounded", _boom)
+        subj = _make_subject(tmp_path)
+        subj.page.url = "https://octowright.com/p"
+        subj.page.content = AsyncMock(return_value="<p>hello</p>")
+        result = await subj.capture_markdown()
+        assert result is None
+        assert isinstance(subj._last_markdown_capture_error, _timeouts.SessionCallTimeoutError)
+
+    @pytest.mark.anyio
+    async def test_success_after_a_prior_failure_clears_the_recorded_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stale error from an earlier failed attempt must not keep being
+        reported once a later attempt succeeds."""
+        monkeypatch.setitem(sys.modules, "markitdown", None)
+        subj = _make_subject(tmp_path)
+        subj.page.url = "https://octowright.com/p"
+        subj.page.content = AsyncMock(side_effect=RuntimeError("boom"))
+        await subj.capture_markdown()
+        assert subj._last_markdown_capture_error is not None
+        subj.page.content = AsyncMock(return_value="<p>hello</p>")
+        result = await subj.capture_markdown(force=True)
+        assert result is not None
+        assert subj._last_markdown_capture_error is None
 
     @pytest.mark.anyio
     async def test_url_attribute_failure_handled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

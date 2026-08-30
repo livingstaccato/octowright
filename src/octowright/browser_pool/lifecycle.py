@@ -18,7 +18,7 @@ from octowright._tracing import counter, span
 from octowright.browser_pool import close_helpers
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     CloseReservation,
     OperationGateInvariantError,
     SessionClosedError,

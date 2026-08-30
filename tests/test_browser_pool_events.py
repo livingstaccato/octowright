@@ -43,7 +43,7 @@ def _fake_session(
 ) -> Any:
     """A duck-typed session double carrying a REAL ``SessionOperationGate`` --
     the close coordinator drives ``_operation_gate`` directly."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     return SimpleNamespace(
         instance_id=instance_id,

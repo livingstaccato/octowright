@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Dependency-free primitives shared by ``operation_gate.py`` and ``operation_gate_close.py``.
+"""Dependency-free primitives shared by ``operation/gate/core.py`` and ``operation/gate/close.py``.
 
 Mirrors ``session/_constants.py``/``session/_protocols.py``: a third module
 with no dependency on either consumer, so mixin-style modules can share these
@@ -14,11 +14,12 @@ types without forming an import cycle (see ``session/core.py``'s
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import anyio
 
@@ -44,14 +45,93 @@ class SessionClosedError(RuntimeError):
     """The underlying browser session is already closed."""
 
 
+class SessionCloseAbortedError(SessionClosedError):
+    """A close was cancelled mid-teardown -- e.g. the active-duration ceiling
+    (``SessionOperationGate.enforce_active_timeout``) breaking a wedged
+    ``context.close()`` -- and never confirmed the browser actually finished
+    tearing down.
+
+    A ``SessionClosedError`` subclass, not a sibling type: existing broad
+    ``except SessionClosedError`` / ``except Exception`` handlers around
+    ``reservation.wait()`` (``lifecycle.shutdown_pool``,
+    ``driver_relaunch._relaunch_one``, ``core_ops_standalone_close``) must
+    keep working unchanged -- this refines what one specific failure MEANS,
+    it doesn't add a new failure category those call sites need to learn
+    about.
+
+    The distinction matters at exactly one place today:
+    ``relaunch._close_with_fallback_snapshot`` treats a plain
+    ``SessionClosedError`` from ``reservation.wait()`` as proof an external
+    close won the race for the gate BEFORE our own ``preparation`` callback
+    ever ran (``_coordinate_close``'s ``except SessionClosedError`` branch
+    always calls ``prepare_then_teardown(session, None, ...)`` in that
+    case) -- so falling back to a pre-close snapshot read is safe, and the
+    browser is confirmed torn down either way. Neither is true here:
+    ``preparation`` may well have already produced a snapshot before the
+    ceiling fired, and cancelling a wedged ``context.close()`` does not mean
+    the browser process actually finished releasing its profile lock --
+    only that we gave up waiting for it to. A caller that cannot tell the
+    two apart risks discarding a fresh snapshot for a stale one and racing
+    a replacement launch against an unconfirmed teardown (Chrome's
+    ``SingletonLock`` on a persistent profile).
+    """
+
+
 class OperationGateInvariantError(RuntimeError):
     """The gate's ownership/state invariants were violated."""
+
+
+class SessionOperationAbortedError(RuntimeError):
+    """The active-duration ceiling cancelled THIS operation while it owned the gate.
+
+    Raised to the one in-flight caller ``SessionOperationGate.
+    enforce_active_timeout`` actually cancelled, INSTEAD OF letting a bare
+    ``asyncio.CancelledError`` escape ``operation()`` -- see that method's
+    cancellation-absorption logic (``uncancel()`` compared against the
+    cancelling count captured when this lease's task became the gate's
+    owner, the same pattern ``asyncio.timeout.__aexit__`` uses to tell "my
+    own cancel" apart from a genuine outer one).
+
+    Review finding F1 (2026-08-29 hang-resilience plan, whole-branch pass):
+    a bare ``CancelledError`` reaching an MCP tool-call task -- or a task an
+    MCP caller awaits via ``asyncio.shield`` through the idempotency cache
+    -- is a ``BaseException``, not caught by ``except Exception``, so it
+    propagated all the way to the JSON-RPC dispatcher, which reported
+    ``"Connection closed"`` and tore down the WHOLE connection, including
+    every other concurrent call on it. This type is an ordinary
+    ``RuntimeError``, exactly like the gate's other errors, so a ceiling
+    breach now surfaces as a normal tool-call failure naming the ceiling
+    instead of a transport outage.
+
+    The gate itself is still driven to ``broken`` (``_break_locked``,
+    unchanged) for any SUBSEQUENT caller, who still gets the ordinary
+    ``OperationGateInvariantError`` -- this type only changes what the ONE
+    caller the ceiling actually cancelled sees.
+    """
 
 
 def validate_operation_name(name: str) -> str:
     if not _OPERATION_NAME_RE.fullmatch(name):
         raise ValueError(f"operation name must be a fixed identifier, got {name!r}")
     return name
+
+
+def _positive_finite_seconds(value: object, *, source: str) -> float:
+    """Shared by both timeout resolvers (``core.py``'s queue-admission one
+    and ``ceiling.py``'s active-duration one) -- lives here, not in either,
+    so neither has to import the other for it."""
+    try:
+        # value is genuinely untyped input (env var / caller-supplied
+        # override); float() rejects anything it can't parse via the
+        # except clause below, so a permissive Any is safe here -- mypy
+        # otherwise refuses `float(object)` outright regardless of the
+        # try/except.
+        parsed = float(cast(Any, value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be positive finite seconds, got {value!r}") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{source} must be positive finite seconds, got {value!r}")
+    return parsed
 
 
 _T = TypeVar("_T")

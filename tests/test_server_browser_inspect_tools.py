@@ -22,7 +22,7 @@ from octowright.server.browser import inspect_assertions as _inspect_assertions
 from octowright.server.browser import inspect_capture as _inspect_capture
 from octowright.server.browser import inspect_console as _inspect_console
 from octowright.server.browser import inspect_recording as _inspect_recording
-from octowright.session.operation_gate import SessionClosingError
+from octowright.session.operation.gate import SessionClosingError
 from tests._aria_stubs import stub_credential_scan
 from tests._pool_invariants import wait_for_active, wait_for_state
 
@@ -83,7 +83,7 @@ def _capture_session(log_root: Path | None = None, *, instance_id: str = "i", ki
     pool's close coordinator, which drives ``_operation_gate``/
     ``session.operation(...)`` directly -- an unspecced MagicMock's
     auto-mocked (non-awaitable) methods can't stand in for those."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     s = _session(log_root)
     s.instance_id = instance_id
@@ -881,6 +881,28 @@ async def test_browser_read_markdown_failure(_patch_pool: MagicMock) -> None:
     s.markdown_path = None
     s.capture_markdown = AsyncMock(return_value=None)
     with pytest.raises(RuntimeError, match="markdown generation"):
+        await _inspect.browser_read_markdown("i")
+
+
+@pytest.mark.anyio
+async def test_browser_read_markdown_names_a_hung_target(_patch_pool: MagicMock) -> None:
+    """capture_markdown() swallows its own exceptions and always returns
+    None on failure, so a hung target and a missing dependency look
+    identical unless the tool consults the recorded cause. When it was a
+    SessionCallTimeoutError, the tool must say so -- "ensure markitdown is
+    installed" is actively misleading for a target that simply stopped
+    answering."""
+    from octowright.session.timeouts import SessionCallTimeoutError
+
+    s = _session()
+    _patch_pool.get.return_value = s
+    s.markdown_path = None
+    s.capture_markdown = AsyncMock(return_value=None)
+    s._last_markdown_capture_error = SessionCallTimeoutError(
+        "markdown_capture did not answer within 10.0s -- the browser target is "
+        "unresponsive. Relaunch this session; other sessions are unaffected."
+    )
+    with pytest.raises(SessionCallTimeoutError, match="unresponsive"):
         await _inspect.browser_read_markdown("i")
 
 
