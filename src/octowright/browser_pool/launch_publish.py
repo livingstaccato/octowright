@@ -71,10 +71,13 @@ def _is_blank_newtab_url(url: str | None) -> bool:
 def _make_new_tab_redirector(new_session: BrowserSession) -> Any:
     """Return a sync page-event handler that redirects blank new tabs to /new-tab.
 
-    Waits for domcontentloaded (up to 800 ms) so the URL is settled before
-    checking — more reliable than a fixed sleep. This is the Firefox/WebKit
-    path (and a Chromium fallback); Chromium normally never reaches the goto
-    because the new-tab override extension already replaced the NTP.
+    Waits for domcontentloaded (up to 800 ms), then gives an initially blank
+    page a short event-driven grace period to receive a nonblank URL.  The
+    grace period prevents the context ``page`` event from racing a caller's
+    ``context.new_page(); page.goto(...)`` sequence.  This is the
+    Firefox/WebKit path (and a Chromium fallback); Chromium normally never
+    reaches the goto because the new-tab override extension already replaced
+    the NTP.
 
     The opener/load-state/URL/goto sequence runs under one
     ``new_tab_redirect`` lease on ``new_session`` — it queues normally
@@ -103,6 +106,14 @@ def _make_new_tab_redirector(new_session: BrowserSession) -> Any:
                         await new_page.wait_for_load_state("domcontentloaded", timeout=800)
                     except Exception:
                         pass
+                    if _is_blank_newtab_url(new_page.url):
+                        try:
+                            await new_page.wait_for_url(
+                                lambda url: not _is_blank_newtab_url(str(url)),
+                                timeout=250,
+                            )
+                        except Exception:
+                            pass
                     try:
                         if _is_blank_newtab_url(new_page.url):
                             await new_page.goto(get_default_url())

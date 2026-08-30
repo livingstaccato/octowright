@@ -104,6 +104,13 @@ class TestSessionSignatures:
 
         assert "timeout_ms" in inspect.signature(getattr(SessionLike, method)).parameters
 
+    def test_click_accepts_no_wait_after(self) -> None:
+        assert "no_wait_after" in inspect.signature(SessionPageMixin.click).parameters
+
+        from octowright.session._protocols import SessionLike
+
+        assert "no_wait_after" in inspect.signature(SessionLike.click).parameters
+
 
 class TestSessionHonoursTimeout:
     async def test_click_forwards_an_explicit_timeout(self) -> None:
@@ -112,6 +119,13 @@ class TestSessionHonoursTimeout:
         await session.click("#Choice6", timeout_ms=3000)
 
         assert session.target.calls == [("click", {"timeout": 3000})]
+
+    async def test_click_forwards_no_wait_after(self) -> None:
+        session = _Session()
+
+        await session.click("#sign-in", no_wait_after=True)
+
+        assert session.target.calls == [("click", {"timeout": DEFAULT_ACTION_TIMEOUT_MS, "no_wait_after": True})]
 
     async def test_fill_forwards_an_explicit_timeout(self) -> None:
         session = _Session()
@@ -168,6 +182,18 @@ class TestMacroDispatchKeepsTimeout:
 
         assert session.target.calls == [("fill", {"timeout": 2500})]
 
+    async def test_a_selector_click_keeps_no_wait_after(self) -> None:
+        session = _Session()
+
+        await _dispatch_click_or_fill(
+            session,  # type: ignore[arg-type]
+            "click",
+            {"selector": "#sign-in", "no_wait_after": True},
+            SEMANTIC_LOCATOR_KEYS,
+        )
+
+        assert session.target.calls == [("click", {"timeout": DEFAULT_ACTION_TIMEOUT_MS, "no_wait_after": True})]
+
 
 class TestLintStaysDerived:
     """`timeout_ms` was in the allowed set as a hardcoded literal, which is what
@@ -180,6 +206,12 @@ class TestLintStaysDerived:
         from octowright.macros.lint_fields import allowed_fields_for
 
         assert "timeout_ms" in allowed_fields_for(kind)
+
+    @pytest.mark.parametrize("kind", ["click", "click_by"])
+    def test_no_wait_after_is_allowed_for_clicks(self, kind: str) -> None:
+        from octowright.macros.lint_fields import allowed_fields_for
+
+        assert "no_wait_after" in allowed_fields_for(kind)
 
     def test_it_comes_from_the_signature_not_a_literal(self) -> None:
         from octowright.macros import lint_fields
@@ -197,7 +229,7 @@ class TestToolSurfaceForwardsTimeout:
     @pytest.mark.parametrize(
         "tool,call",
         [
-            ("browser_click", "await session.click(selector, timeout_ms=timeout_ms)"),
+            ("browser_click", "await session.click(selector, timeout_ms=timeout_ms, no_wait_after=no_wait_after)"),
             ("browser_fill", "await session.fill(selector, value, timeout_ms=timeout_ms)"),
         ],
     )
@@ -207,6 +239,15 @@ class TestToolSurfaceForwardsTimeout:
         source = inspect.getsource(getattr(_input, tool))
 
         assert call in source
+
+    def test_browser_click_forwards_no_wait_after_on_both_paths(self) -> None:
+        from octowright.server.browser import input as _input
+
+        signature = inspect.signature(_input.browser_click)
+        source = inspect.getsource(_input.browser_click)
+
+        assert "no_wait_after" in signature.parameters
+        assert "no_wait_after=no_wait_after" in source
 
 
 class TestZeroIsNotForwarded:

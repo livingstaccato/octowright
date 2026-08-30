@@ -77,11 +77,23 @@ class SessionLocatorMixin(SessionLike):
         return await _locators.build_locator(self, **finders)
 
     @gated_operation("browser_click")
-    async def click_by(self, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
+    async def click_by(
+        self,
+        *,
+        timeout_ms: int | None = None,
+        no_wait_after: bool = False,
+        **finders: Any,
+    ) -> dict[str, Any]:
         """Click an element matched by role, label, text, or data-testid."""
         locator = await self._locator(**finders)
-        await locator.click(timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("click_by", **finders)
+        click_kwargs: dict[str, Any] = {"timeout": timeout_ms or DEFAULT_ACTION_TIMEOUT_MS}
+        if no_wait_after:
+            click_kwargs["no_wait_after"] = True
+        await locator.click(**click_kwargs)
+        recorded_kwargs = dict(finders)
+        if no_wait_after:
+            recorded_kwargs["no_wait_after"] = True
+        self.recorder.record("click_by", **recorded_kwargs)
         return {"ok": True}
 
     @gated_operation("browser_fill")
