@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock
 import pytest
 
 from octowright.browser_pool import crash_recovery, incidents
-from octowright.session.operation_gate import SessionOperationGate
+from octowright.session.operation.gate import SessionOperationGate
 from tests._operation_gate_fakes import OperationAwareFake
 
 
