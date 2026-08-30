@@ -217,15 +217,20 @@ class _CeilingGateMixin:
             duration = self._clock() - active_since
             if duration < ceiling_seconds:
                 return False
-            # F4 (same review): owner.cancel() can return False if the task
-            # already finished -- its body returned and it is draining its
-            # OWN release via _run_shielded, which needs this SAME
-            # admission_lock this check holds, so that drain genuinely
-            # cannot have completed yet. Breaking an otherwise-healthy gate
-            # (and, per _run_shielded's re-raise-after-join, turning that
-            # caller's successful result into a stray CancelledError) over
-            # an operation that was never actually wedged would be strictly
-            # worse than doing nothing -- check BEFORE recording anything.
+            # F4 (same review): only break the gate if the cancel actually
+            # took. owner.cancel() returns False for an already-DONE task,
+            # and breaking an otherwise-healthy gate over an operation that
+            # was never wedged is strictly worse than doing nothing -- so
+            # check BEFORE recording anything.
+            #
+            # It does NOT cover the owner that has returned from its body
+            # and is draining its own release: that task is not done, so
+            # cancel() returns True. An earlier version of this comment
+            # claimed that case was safe here, and it was exactly the leak
+            # N1 later found -- the cancellation escaped through
+            # operation()'s finally as a bare CancelledError. It is handled
+            # there now, by wrapping the release in the same absorption the
+            # body already had, not by this guard.
             self._ceiling_cancelled_task = owner
             if not owner.cancel():
                 self._ceiling_cancelled_task = None

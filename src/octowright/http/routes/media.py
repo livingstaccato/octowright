@@ -30,7 +30,12 @@ from octowright.http.pairing import (
     pairing_required,
 )
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool
-from octowright.session.operation.gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
+from octowright.session.operation.gate import (
+    SessionBusyTimeoutError,
+    SessionClosedError,
+    SessionClosingError,
+    SessionOperationAbortedError,
+)
 
 # Production session ids are ``uuid.uuid4().hex[:12]`` (12 lower-case hex
 # chars), but tests and a few other call sites use longer alphanumeric ids.
@@ -265,7 +270,7 @@ async def session_screenshot_now(request: Request) -> Response:
     try:
         async with live.operation("dashboard_screenshot", wait_timeout_seconds=timeout):
             data = await live.page.screenshot(**kwargs)
-    except (SessionClosingError, SessionClosedError) as e:
+    except (SessionClosingError, SessionClosedError, SessionOperationAbortedError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     except SessionBusyTimeoutError as e:
         return JSONResponse({"error": str(e)}, status_code=503)

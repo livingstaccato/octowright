@@ -28,7 +28,12 @@ from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listene
 from octowright.browser_pool.visuals import wire_init_scripts
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
-from octowright.session.operation.gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
+from octowright.session.operation.gate import (
+    SessionBusyTimeoutError,
+    SessionClosedError,
+    SessionClosingError,
+    SessionOperationAbortedError,
+)
 
 if TYPE_CHECKING:
     from octowright.browser_pool.options import LaunchOptions
@@ -103,7 +108,12 @@ def _make_new_tab_redirector(new_session: BrowserSession) -> Any:
                             await new_page.goto(get_default_url())
                     except Exception:
                         pass
-            except (SessionClosingError, SessionClosedError, SessionBusyTimeoutError) as exc:
+            except (
+                SessionClosingError,
+                SessionClosedError,
+                SessionBusyTimeoutError,
+                SessionOperationAbortedError,
+            ) as exc:
                 log.info(
                     "octowright.launch.new_tab_redirect_gate_rejected",
                     instance_id=new_session.instance_id,
