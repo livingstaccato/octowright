@@ -22,7 +22,8 @@ from provide.telemetry import get_logger
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session._protocols import SessionLike
-from octowright.session.operation_gate import gated_operation
+from octowright.session.operation.gate import gated_operation
+from octowright.session.timeouts import bounded
 
 _BYTE_LIMIT_OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", "no"}
 
@@ -56,6 +57,7 @@ class SessionIOMixin(SessionLike):
     _last_markdown_capture_url: str | None
     _last_markdown_capture_key: str | None
     _pending_markdown_capture: Any | None
+    _last_markdown_capture_error: Exception | None
 
     def _append_websocket_cache(
         self,
@@ -217,7 +219,6 @@ class SessionIOMixin(SessionLike):
             force: Set to ``True`` to force a refresh even when the URL/key
                    matches the last cached capture.
         """
-        import asyncio
         import contextlib
 
         path = self._markdown_cache_path()
@@ -245,16 +246,29 @@ class SessionIOMixin(SessionLike):
             # Cap at 10s: pages with busy JS (SPAs retrying auth, WebSocket floods)
             # can hold the CDP evaluation lock for 60+ seconds, which stalls the
             # asyncio event loop and delays every other MCP response in the process.
-            html = await asyncio.wait_for(target.content(), timeout=10.0)
+            # operation="markdown_capture" -- the enclosing gate name, and the
+            # honest label here: this runs automatically after nearly every
+            # navigate/page-load/launch via _schedule_markdown_capture, so the
+            # caller is very often not browser_read_markdown at all.
+            html = await bounded(target.content(), operation="markdown_capture", timeout=10.0)
             markdown = await self._extract_markdown(html)
             temp_path.write_text(markdown, encoding="utf-8")
             temp_path.replace(path)
             self.markdown_path = path
             self._last_markdown_capture_url = current_url
             self._last_markdown_capture_key = key
+            self._last_markdown_capture_error = None
             self.recorder.record("markdown_cached", path=str(path), url=current_url)
             return path
         except Exception as exc:
+            # Recorded so a caller that gets None back (this method never
+            # raises) can tell a hung target apart from an ordinary
+            # rendering failure -- see _last_markdown_capture_error's
+            # docstring in session/core.py. The automatic path (scheduled
+            # after navigate/launch) stays best-effort either way: nothing
+            # here re-raises, so an ordinary navigate never fails because a
+            # markdown cache refresh timed out in the background.
+            self._last_markdown_capture_error = exc
             self.recorder.record("markdown_cache_error", error=repr(exc), url=current_url)
             with contextlib.suppress(Exception):
                 temp_path.unlink(missing_ok=True)

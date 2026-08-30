@@ -215,7 +215,7 @@ async def test_timeout_waiter_never_enters_body_and_leaves_no_recorder_row(tmp_p
     mock) so ``action_count`` reflects an actual disk-backed decision, not a
     mock call tally."""
     from octowright.recorder import Recorder
-    from octowright.session.operation_gate import SessionBusyTimeoutError
+    from octowright.session.operation.gate import SessionBusyTimeoutError
 
     page = MagicMock()
     page.click = AsyncMock()
@@ -416,7 +416,7 @@ async def test_reserve_close_browser_require_fresh_rejects_shared_ticket(
     attach its own preparation to a ticket it does not own."""
     from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool.lifecycle import reserve_close_browser
-    from octowright.session.operation_gate import SessionClosingError
+    from octowright.session.operation.gate import SessionClosingError
 
     monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
     pool = BrowserPool()
@@ -434,6 +434,242 @@ async def test_reserve_close_browser_require_fresh_rejects_shared_ticket(
             require_fresh=True,
         )
     await first.reservation.wait()
+
+
+@pytest.mark.asyncio
+async def test_active_timeout_ceiling_unwedges_a_close_in_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closing a wedged session is the first thing a human or agent does --
+    the ceiling must not be disarmed the moment ``reserve_close`` moves the
+    gate to CLOSING, or the backstop is off exactly when someone reaches
+    for it (Task 3 review, I3).
+
+    Real close machinery end to end: ``reserve_close_browser`` queues the
+    close reservation's waiter behind the still-active wedged owner (it can
+    never be granted while that owner holds the gate), so before this fix
+    ``enforce_active_timeout`` returned ``False`` for any non-OPEN state and
+    the close call hung forever. Extending it to also act while CLOSING
+    fails that queued waiter via the gate's ordinary ``_break_locked`` path,
+    which resolves ``reservation.wait()`` with an error instead of hanging,
+    AND ``_coordinate_close``'s own ``finally`` block still runs regardless
+    of whether the close body ever executed -- so the durability guarantee
+    (no permanently-stuck ``_sessions``/``_closing_sessions`` entry) holds
+    even though the underlying Playwright teardown itself never got a
+    chance to run for this specific reservation.
+    """
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.browser_pool.lifecycle import reserve_close_browser
+    from octowright.session.operation.gate import OperationGateInvariantError, SessionOperationAbortedError
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session("wedge-close", tmp_path)
+    pool._sessions[session.instance_id] = session
+
+    owner_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def owner() -> None:
+        async with session.operation("wedged"):
+            owner_entered.set()
+            await never.wait()
+
+    owner_task = asyncio.create_task(owner())
+    async with asyncio.timeout(5):
+        await owner_entered.wait()
+
+    entry = await reserve_close_browser(pool, session.instance_id, force=True, reason="agent_close")
+    # reserve_close_browser only returns after reserve_close has moved the
+    # gate to CLOSING under its own admission lock -- no polling needed.
+    assert session.operation_snapshot()["state"] == "closing"
+
+    # A ceiling of 0.0 breaches unconditionally (duration is never negative
+    # against a monotonic clock), so this doesn't need a fake clock -- the
+    # scenario under test is the CLOSING-state gap, not clock arithmetic.
+    async with asyncio.timeout(5):
+        assert await session._operation_gate.enforce_active_timeout(0.0) is True
+
+    done, _pending = await asyncio.wait({owner_task}, timeout=5)
+    assert done, "owner task was never cancelled -- the ceiling did not act while CLOSING"
+    # Not cancelled(): a bare CancelledError would escape to the JSON-RPC
+    # dispatcher as CONNECTION_CLOSED and kill the whole MCP connection.
+    assert not owner_task.cancelled()
+    assert isinstance(owner_task.exception(), SessionOperationAbortedError)
+
+    # The close call itself must resolve -- not hang -- once the ceiling acts.
+    async with asyncio.timeout(5):
+        with pytest.raises(OperationGateInvariantError):
+            await entry.reservation.wait()
+
+    # Durability: the coordinator's own `finally` still drains the pool's
+    # bookkeeping even though close_operation's body (and therefore the
+    # actual Playwright teardown) never ran for this reservation.
+    assert session.instance_id not in pool._sessions
+    assert session.instance_id not in pool._closing_sessions
+
+
+@pytest.mark.asyncio
+async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks_cancelled_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The already-granted-coordinator sub-case (Task 3 review round 2, N1).
+
+    Unlike the still-queued case above, here nothing else holds the gate
+    when the close is requested, so ``reserve_close`` grants the close
+    reservation immediately and the close COORDINATOR task itself becomes
+    the gate's owner while it runs the real teardown body. Driven, not
+    reasoned about: ``context.close()`` is replaced with a coroutine that
+    hangs until cancelled, so ``enforce_active_timeout`` cancels the
+    coordinator mid-``_teardown_after_close_cutoff``.
+
+    ``close_helpers.prepare_then_teardown`` catches that ``CancelledError``
+    with a bare ``except BaseException`` and RETURNS it as its ``error``
+    value instead of raising -- by design, since it must still attempt the
+    teardown even after an earlier step failed. That means
+    ``close_operation``'s body never raises, ``outcome`` stays ``"ok"``, and
+    ``_release_close`` (whose own ``CancelledError`` -> ``SessionClosedError``
+    conversion only runs for ``outcome != "ok"``) returns without converting
+    anything. Before the ``fail_close``-level fix, the raw ``CancelledError``
+    reached ``_coordinate_close``'s own ``fail_close`` call untouched, and
+    ``entry.reservation.wait()`` raised it as-is -- a ``BaseException`` an
+    ``except Exception`` handler cannot catch, and one that marks the
+    AWAITING task cancelled too. This test proves the caller instead gets an
+    ordinary, catchable ``SessionCloseAbortedError`` -- the ``SessionClosedError``
+    subclass ``_terminal_close_failure`` raises specifically for a close
+    aborted mid-teardown (Task 3 review round 3, D1), which
+    ``relaunch._close_with_fallback_snapshot`` relies on to tell this case
+    apart from an ordinary close-vs-eviction race (see
+    ``tests/test_handoff.py::test_handoff_close_aborted_by_ceiling_propagates_instead_of_stale_snapshot``).
+    """
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.browser_pool.lifecycle import reserve_close_browser
+    from octowright.session.operation.gate import SessionCloseAbortedError
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session("wedge-teardown", tmp_path)
+
+    close_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def _hang_close() -> None:
+        close_entered.set()
+        await never.wait()
+
+    # Overrides the AsyncMock _real_pool_session already installed --
+    # replaces "resolves immediately" with "hangs until cancelled".
+    session.context.close = _hang_close
+    pool._sessions[session.instance_id] = session
+
+    entry = await reserve_close_browser(pool, session.instance_id, force=True, reason="agent_close")
+    async with asyncio.timeout(5):
+        await close_entered.wait()
+    # Confirms the coordinator -- not some other task -- now owns the gate,
+    # so the cancellation below targets the teardown itself, not a
+    # displaced prior owner (that shape is the OTHER test above).
+    assert session.operation_snapshot()["active_operation"] == "browser_close"
+
+    async with asyncio.timeout(5):
+        assert await session._operation_gate.enforce_active_timeout(0.0) is True
+
+    async with asyncio.timeout(5):
+        with pytest.raises(SessionCloseAbortedError):
+            await entry.reservation.wait()
+
+    assert session.instance_id not in pool._sessions
+    assert session.instance_id not in pool._closing_sessions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cancellation_lands",
+    ["inside_prepare_then_teardown", "before_prepare_then_teardown"],
+)
+async def test_ceiling_abort_produces_the_same_error_type_regardless_of_where_it_lands(
+    cancellation_lands: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SessionCloseAbortedError must be uniform (Task 3 review round 4,
+    Defect 2). Two landing spots for the SAME cause -- a ceiling breach
+    cancelling a close that is already granted and mid-teardown:
+
+    - ``inside_prepare_then_teardown``: the cancellation lands in
+      ``context.close()``, which ``close_helpers.prepare_then_teardown``
+      catches and RETURNS rather than raising (round 2's scenario, the
+      other test above). ``close_operation``'s body never sees an
+      exception, ``outcome`` stays ``"ok"``, and ``_release_close`` returns
+      without converting anything -- the raw ``CancelledError`` reaches
+      ``fail_close`` from ``_coordinate_close``'s own ``finally``.
+    - ``before_prepare_then_teardown``: the cancellation lands in
+      ``close_helpers.remove_active_identity`` instead, which runs BEFORE
+      ``prepare_then_teardown`` and has nothing swallowing it -- the
+      ``CancelledError`` propagates directly out of ``close_operation``'s
+      body, hitting ``_release_close``'s ``outcome != "ok"`` branch (the
+      SAME branch a bare, direct ``coordinator_task.cancel()`` reaches at
+      the gate level -- see ``tests/session/test_operation_gate.py::
+      test_cancelled_close_coordinator_does_not_wedge_the_gate``).
+
+    Before this fix, ``_release_close`` built its OWN plain
+    ``SessionClosedError`` for the second case while ``_terminal_close_
+    failure`` built ``SessionCloseAbortedError`` for the first -- one cause,
+    two different error types purely depending on cancellation timing. This
+    pins that both landing spots now produce the identical TYPE (not just
+    an ``isinstance`` match against the shared base class).
+    """
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.browser_pool.lifecycle import reserve_close_browser
+    from octowright.session.operation.gate import SessionCloseAbortedError
+    from tests._pool_invariants import wait_until
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session(f"wedge-{cancellation_lands}", tmp_path)
+
+    hang_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    if cancellation_lands == "inside_prepare_then_teardown":
+
+        async def _hang_close() -> None:
+            hang_entered.set()
+            await never.wait()
+
+        session.context.close = _hang_close
+    else:
+
+        async def _hang_remove_active_identity(_pool: Any, _instance_id: str, _session: Any) -> None:
+            hang_entered.set()
+            await never.wait()
+
+        monkeypatch.setattr(_close_helpers, "remove_active_identity", _hang_remove_active_identity)
+
+    pool._sessions[session.instance_id] = session
+
+    entry = await reserve_close_browser(pool, session.instance_id, force=True, reason="agent_close")
+    async with asyncio.timeout(5):
+        await hang_entered.wait()
+    assert session.operation_snapshot()["active_operation"] == "browser_close"
+
+    async with asyncio.timeout(5):
+        assert await session._operation_gate.enforce_active_timeout(0.0) is True
+
+    async with asyncio.timeout(5):
+        with pytest.raises(SessionCloseAbortedError) as excinfo:
+            await entry.reservation.wait()
+    # Exact type, not just isinstance -- the whole point is that neither
+    # landing spot silently falls back to the plain base class.
+    assert type(excinfo.value) is SessionCloseAbortedError
+
+    # The "before" landing resolves `reservation.outcome` from INSIDE
+    # `close_operation`'s own `finally` (`_release_close`), a beat before
+    # `_coordinate_close`'s own outer `finally` (which pops the pool
+    # registries) necessarily runs -- both are scheduled via separate
+    # `call_soon` wake-ups, so asserting immediately after the raise above
+    # is a real, pre-existing race, not something this fix changed. Poll
+    # rather than assume a fixed number of loop turns (same reasoning as
+    # `wait_until`'s own docstring).
+    await wait_until(lambda: session.instance_id not in pool._sessions)
+    await wait_until(lambda: session.instance_id not in pool._closing_sessions)
 
 
 def _json_route_request(sid: str, payload: dict[str, Any]) -> SimpleNamespace:
@@ -596,7 +832,7 @@ async def test_handoff_close_fallback_awaits_in_flight_external_close(monkeypatc
     profile directory while the old process is still releasing it (e.g.
     Chrome's SingletonLock)."""
     from octowright.browser_pool import relaunch
-    from octowright.session.operation_gate import SessionClosingError
+    from octowright.session.operation.gate import SessionClosingError
 
     async def _raise_closing(*args: object, **kwargs: object) -> None:
         raise SessionClosingError("already closing")

@@ -27,6 +27,8 @@ from typing import Any, Final
 
 from provide.telemetry import get_logger
 
+from octowright.session.timeouts import bounded
+
 log = get_logger(__name__)
 
 NAV_MODES: Final = frozenset({"tab", "arrow", "keys"})
@@ -129,12 +131,17 @@ async def _check_verify(
     async with session.operation("browser_a11y_dragdrop"):
         target = session._target()
         if verify_js:
-            return bool(await target.evaluate(verify_js))
+            return bool(await bounded(target.evaluate(verify_js), operation="browser_a11y_dragdrop"))
         if verify_selector_appears:
             return await target.locator(verify_selector_appears).count() > 0
         if verify_selector_gone:
             return await target.locator(verify_selector_gone).count() == 0
-        return bool(await target.evaluate("(needle) => document.body.innerText.includes(needle)", verify_text_contains))
+        return bool(
+            await bounded(
+                target.evaluate("(needle) => document.body.innerText.includes(needle)", verify_text_contains),
+                operation="browser_a11y_dragdrop",
+            )
+        )
 
 
 async def run_a11y_dragdrop(

@@ -44,7 +44,7 @@ package "domain modules" #ecfccb {
 }
 
 package "session modules" #fdf4ff {
-  [session/operation_gate.py\nSessionOperationGate: FIFO per-session\nserialization, exact-task reentrancy] as GATE
+  [session/operation/gate/core.py\nSessionOperationGate: FIFO per-session\nserialization, exact-task reentrancy] as GATE
   [session/frames.py] as SF
   [session/downloads.py] as SD
   [session/locators.py] as SL

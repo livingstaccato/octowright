@@ -15,7 +15,7 @@ from octowright.browser_pool import BrowserPool
 
 
 def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     pool = BrowserPool()
     gate = SessionOperationGate("abc123", "webkit")
@@ -84,7 +84,7 @@ async def test_concurrent_close_claims_session_once() -> None:
     """Concurrent closes for the SAME identity coalesce onto one durable
     coordinator (Task 7): both callers get the SAME successful outcome
     (neither raises KeyError), and the teardown body runs exactly once."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     pool = BrowserPool()
     close_calls = 0

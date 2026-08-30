@@ -12,7 +12,7 @@ classified into one of four narrow, reasoned bypass categories.
 
 Deliberately NOT call-graph analysis: ``operation_name`` must always be a
 source-code string literal, which is what lets this scanner prove coverage
-per-function from syntax alone. See ``session/operation_gate.py`` and
+per-function from syntax alone. See ``session/operation/gate/core.py`` and
 ``server/browser/_operation.py`` for the runtime side of this contract.
 
 The scanner itself is split across sibling modules (kept under the

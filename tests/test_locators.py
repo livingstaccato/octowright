@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from octowright.session import BrowserSession
-from octowright.session.operation_gate import SessionOperationGate
+from octowright.session.operation.gate import SessionOperationGate
 
 # ---------------------------------------------------------------------------
 # Fake Locator

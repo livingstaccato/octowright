@@ -36,10 +36,11 @@ from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.events import RecoveryOutcome
 from octowright.session._protocols import SessionLike
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     OperationGateInvariantError,
     SessionClosedError,
     SessionClosingError,
+    SessionOperationAbortedError,
 )
 
 if TYPE_CHECKING:
@@ -165,7 +166,12 @@ async def _recover(session: Any, page: Any, reload_timeout_ms: float, url: str) 
     try:
         async with session.operation("crash_recovery", wait_timeout_seconds=None):
             return await _recover_owned(session, page, reload_timeout_ms, url)
-    except (SessionClosingError, SessionClosedError, OperationGateInvariantError):
+    except (
+        SessionClosingError,
+        SessionClosedError,
+        OperationGateInvariantError,
+        SessionOperationAbortedError,
+    ):
         log.info("octowright.crash.recovery_invalidated", instance_id=session.instance_id)
         return False
 

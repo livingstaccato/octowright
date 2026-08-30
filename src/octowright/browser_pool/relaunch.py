@@ -32,7 +32,11 @@ from octowright.browser_pool.lifecycle import (
     RelaunchSnapshot,
     reserve_close_browser,
 )
-from octowright.session.operation_gate import SessionClosedError, SessionClosingError
+from octowright.session.operation.gate import (
+    SessionCloseAbortedError,
+    SessionClosedError,
+    SessionClosingError,
+)
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
@@ -134,7 +138,8 @@ async def _close_with_fallback_snapshot(
     2. ``SessionClosingError`` -- another close/coordinator already owns the
        cutoff (``require_fresh=True``), e.g. a real external-close
        eviction's teardown-only reservation was installed first.
-    3. ``SessionClosedError`` from ``entry.reservation.wait()`` -- OUR OWN
+    3. A PLAIN ``SessionClosedError`` (never the ``SessionCloseAbortedError``
+       subclass -- see below) from ``entry.reservation.wait()`` -- OUR OWN
        ticket was admitted (``require_fresh=True`` guarantees it started
        fresh), but an external close won the race for the GATE ITSELF
        between admission and the coordinator task's bind (or grant, if the
@@ -142,12 +147,26 @@ async def _close_with_fallback_snapshot(
        branch ALWAYS calls ``prepare_then_teardown(session, None, ...)`` in
        that path -- i.e. the REAL ``preparation`` callback is passed
        explicitly as ``None`` and is therefore GUARANTEED never to have run
-       -- so this can only mean "our preparation never got its chance",
-       never "preparation ran and genuinely failed" (a failure from inside
-       the callback itself would surface as whatever THAT raised, not
-       ``SessionClosedError``, since exact-task reentrancy means our own
-       ``session.operation(...)`` call inside preparation cannot itself
-       raise it).
+       -- so THIS SPECIFIC error can only mean "our preparation never got
+       its chance", never "preparation ran and genuinely failed" (a failure
+       from inside the callback itself would surface as whatever THAT
+       raised, not ``SessionClosedError``, since exact-task reentrancy means
+       our own ``session.operation(...)`` call inside preparation cannot
+       itself raise it).
+
+    The rule above does NOT extend to ``SessionCloseAbortedError`` (a
+    ``SessionClosedError`` subclass -- ``operation/gate/types.py``), raised
+    when the active-duration ceiling cancels a close that was already
+    granted and mid-teardown. There, ``preparation`` (the REAL callback, not
+    ``None``) may well have already produced a snapshot before the wedge,
+    and -- unlike case 3 -- the browser's teardown never ran to completion
+    under ANY coordinator; cancelling a wedged ``context.close()`` does not
+    confirm the browser actually released its resources. Treating it as the
+    same safe race would discard a possibly-fresher snapshot for a stale
+    read and risk launching a replacement over an unconfirmed teardown
+    (Chrome's ``SingletonLock`` on a persistent profile) -- so it is
+    deliberately NOT caught by the ``except SessionClosedError`` below and
+    propagates to this function's own caller instead.
 
     A failure of any OTHER kind, at any point, is a REAL error and must
     propagate untouched. Coalescing those into the same fallback would
@@ -172,6 +191,11 @@ async def _close_with_fallback_snapshot(
 
     try:
         outcome = cast(CloseCoordinatorOutcome, await entry.reservation.wait())
+    except SessionCloseAbortedError:
+        # A ceiling breach mid-teardown, not a race -- see the docstring.
+        # Propagate loudly rather than silently launching a replacement over
+        # a browser whose close state is unconfirmed.
+        raise
     except SessionClosedError:
         log.warning(warning_event, instance_id=instance_id, kind=source.kind)
         return None, _relaunch_snapshot_from_session(source)
