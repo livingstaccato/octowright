@@ -30,10 +30,11 @@ import pytest
 
 from octowright.session.operation.gate import (
     OperationGateInvariantError,
+    SessionOperationAbortedError,
     SessionOperationGate,
     resolve_operation_active_timeout_seconds,
 )
-from octowright.session.operation.gate import core as operation_gate
+from octowright.session.operation.gate import ceiling as gate_ceiling
 from octowright.session.timeouts import SessionCallTimeoutError, bounded
 
 _ENV = "OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS"
@@ -59,8 +60,8 @@ def _make_clock(start: float = 0.0) -> tuple[Callable[[], float], Callable[[floa
     return clock, advance
 
 
-async def _assert_cancelled(task: asyncio.Task[object]) -> None:
-    """Assert *task* was cancelled, without a bound that can be caught away.
+async def _assert_ceiling_aborted(task: asyncio.Task[object]) -> None:
+    """Assert the ceiling aborted *task*, without a bound that can be caught away.
 
     ``async with asyncio.timeout(5): with pytest.raises(asyncio.CancelledError):
     await task`` looks like a bounded wait, but it is not one: if the
@@ -76,10 +77,23 @@ async def _assert_cancelled(task: asyncio.Task[object]) -> None:
     ``asyncio.wait(..., timeout=...)`` does not cancel the awaited task on
     timeout, so a regression here fails fast with an assertion instead of
     passing slow.
+
+    The task must NOT end up ``cancelled()``. A bare ``CancelledError`` is a
+    ``BaseException``, so it escapes the MCP server's own handler and the
+    JSON-RPC dispatcher answers ``CONNECTION_CLOSED`` -- killing the whole
+    connection, including concurrent healthy calls, and telling the agent
+    the daemon is dead. ``operation()`` absorbs the ceiling's own cancel and
+    raises ``SessionOperationAbortedError`` instead, which is a
+    ``RuntimeError`` and so renders as an ordinary tool error.
     """
     done, _pending = await asyncio.wait({task}, timeout=5)
     assert done, "owner task was never cancelled -- the ceiling did not act"
-    assert task.cancelled()
+    assert not task.cancelled(), (
+        "a bare CancelledError escaped: it would reach the JSON-RPC dispatcher as "
+        "CONNECTION_CLOSED and terminate the MCP connection"
+    )
+    exc = task.exception()
+    assert isinstance(exc, SessionOperationAbortedError), f"expected SessionOperationAbortedError, got {exc!r}"
 
 
 # --- Resolver: off by default, falsey tokens, unparsable falls back to OFF ---
@@ -169,7 +183,7 @@ async def test_duration_exactly_at_the_ceiling_breaches() -> None:
     async with asyncio.timeout(5):
         assert await gate.enforce_active_timeout(60.0) is True
 
-    await _assert_cancelled(owner_task)
+    await _assert_ceiling_aborted(owner_task)
 
 
 @pytest.mark.asyncio
@@ -206,7 +220,7 @@ async def test_ceiling_breach_never_fires_the_call_timeout_hook() -> None:
     async with asyncio.timeout(5):
         assert await gate.enforce_active_timeout(0.0) is True
 
-    await _assert_cancelled(owner_task)
+    await _assert_ceiling_aborted(owner_task)
     assert hook_calls == []
 
 
@@ -230,7 +244,7 @@ async def test_exceeding_ceiling_cancels_owner_and_breaks_gate() -> None:
     async with asyncio.timeout(5):
         assert await gate.enforce_active_timeout(60.0) is True
 
-    await _assert_cancelled(owner_task)
+    await _assert_ceiling_aborted(owner_task)
 
     assert gate.snapshot()["state"] == "broken"
 
@@ -254,7 +268,7 @@ async def test_subsequent_operation_rejected_fast_not_queued() -> None:
     advance(100.0)
     async with asyncio.timeout(5):
         assert await gate.enforce_active_timeout(60.0) is True
-    await _assert_cancelled(owner_task)
+    await _assert_ceiling_aborted(owner_task)
 
     async def later() -> None:
         async with gate.operation("after"):
@@ -286,7 +300,9 @@ async def test_operation_finishing_inside_ceiling_is_never_touched() -> None:
 @pytest.mark.asyncio
 async def test_metric_increments_exactly_once_per_breach(monkeypatch: pytest.MonkeyPatch) -> None:
     metric_cap = _MetricCapture()
-    monkeypatch.setattr(operation_gate, "_ACTIVE_TIMEOUT", metric_cap)
+    # The ceiling metric lives in gate/ceiling.py, not gate/core.py, since the
+    # operation_gate -> operation/gate/ package split.
+    monkeypatch.setattr(gate_ceiling, "_ACTIVE_TIMEOUT", metric_cap)
     clock, advance = _make_clock()
     gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30, clock=clock)
     owner_entered = asyncio.Event()
@@ -309,7 +325,7 @@ async def test_metric_increments_exactly_once_per_breach(monkeypatch: pytest.Mon
         # unwinding must see the state is no longer OPEN and return early.
         assert await gate.enforce_active_timeout(60.0) is False
 
-    await _assert_cancelled(owner_task)
+    await _assert_ceiling_aborted(owner_task)
 
     assert len(metric_cap.calls) == 1
     amount, attributes = metric_cap.calls[0]
@@ -358,7 +374,7 @@ async def test_other_gates_are_unaffected_by_one_gates_breach() -> None:
         assert await wedged_gate.enforce_active_timeout(60.0) is True
         assert await healthy_gate.enforce_active_timeout(60.0) is False
 
-    await _assert_cancelled(wedged_task)
+    await _assert_ceiling_aborted(wedged_task)
     assert wedged_gate.snapshot()["state"] == "broken"
 
     # The healthy session was never cancelled and finishes normally on its

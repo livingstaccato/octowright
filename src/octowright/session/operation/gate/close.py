@@ -47,6 +47,8 @@ class _CloseGateMixin:
     _owner_task: asyncio.Task[object] | None
     _root_operation: str | None
     _active_since: float | None
+    _owner_cancel_baseline: int | None
+    _ceiling_cancelled_task: asyncio.Task[object] | None
     _depth: int
     kind: str
     instance_id: str
@@ -151,6 +153,16 @@ class _CloseGateMixin:
             self._owner_task = task
             self._root_operation = reservation.operation_name
             self._active_since = self._clock()
+            # Same baseline the ceiling's uncancel()-and-compare check relies
+            # on for an ordinary lease (core.py's _grant_next_locked) --
+            # captured here too so the invariant ("whenever _owner_task is
+            # set, _owner_cancel_baseline reflects its cancelling() count at
+            # grant time") holds uniformly. operation()'s own check never
+            # runs for a close reservation (close_operation has its own,
+            # separate except/finally below), so nothing reads this in that
+            # path today, but a gate with only ONE grant path having a
+            # baseline is a trap for the next person to add one.
+            self._owner_cancel_baseline = task.cancelling()
             self._depth = 1
             self._publish_diagnostics_locked()
         outcome: Literal["ok", "error", "cancelled"] = "ok"
@@ -188,6 +200,8 @@ class _CloseGateMixin:
             self._owner_task = None
             self._root_operation = None
             self._active_since = None
+            self._owner_cancel_baseline = None
+            self._ceiling_cancelled_task = None
             if outcome == "ok":
                 self._publish_diagnostics_locked()
                 return

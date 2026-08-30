@@ -460,7 +460,7 @@ async def test_active_timeout_ceiling_unwedges_a_close_in_progress(
     """
     from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool.lifecycle import reserve_close_browser
-    from octowright.session.operation.gate import OperationGateInvariantError
+    from octowright.session.operation.gate import OperationGateInvariantError, SessionOperationAbortedError
 
     monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
     pool = BrowserPool()
@@ -492,7 +492,10 @@ async def test_active_timeout_ceiling_unwedges_a_close_in_progress(
 
     done, _pending = await asyncio.wait({owner_task}, timeout=5)
     assert done, "owner task was never cancelled -- the ceiling did not act while CLOSING"
-    assert owner_task.cancelled()
+    # Not cancelled(): a bare CancelledError would escape to the JSON-RPC
+    # dispatcher as CONNECTION_CLOSED and kill the whole MCP connection.
+    assert not owner_task.cancelled()
+    assert isinstance(owner_task.exception(), SessionOperationAbortedError)
 
     # The close call itself must resolve -- not hang -- once the ceiling acts.
     async with asyncio.timeout(5):

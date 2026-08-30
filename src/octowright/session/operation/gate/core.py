@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import math
 import os
 import threading
 import time
@@ -16,11 +15,12 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Concatenate, Literal, LiteralString, ParamSpec, TypedDict, TypeVar, cast
+from typing import Any, Concatenate, Literal, LiteralString, ParamSpec, TypedDict, TypeVar
 
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter, gauge, histogram
+from octowright.session.operation.gate.ceiling import _CeilingGateMixin
 from octowright.session.operation.gate.close import _CloseGateMixin
 from octowright.session.operation.gate.types import (
     CloseReservation,
@@ -30,7 +30,9 @@ from octowright.session.operation.gate.types import (
     SessionCloseAbortedError,
     SessionClosedError,
     SessionClosingError,
+    SessionOperationAbortedError,
     _LeaseToken,
+    _positive_finite_seconds,
     _run_shielded,
     _Waiter,
     validate_operation_name,
@@ -47,10 +49,10 @@ __all__ = [
     "SessionCloseAbortedError",
     "SessionClosedError",
     "SessionClosingError",
+    "SessionOperationAbortedError",
     "SessionOperationGate",
     "UseDefault",
     "gated_operation",
-    "resolve_operation_active_timeout_seconds",
     "resolve_operation_queue_timeout_seconds",
     "validate_operation_name",
 ]
@@ -71,21 +73,6 @@ class OperationGateSnapshot(TypedDict):
     queue_timeout_seconds: float
 
 
-def _positive_finite_seconds(value: object, *, source: str) -> float:
-    try:
-        # value is genuinely untyped input (env var / caller-supplied
-        # override); float() rejects anything it can't parse via the
-        # except clause below, so a permissive Any is safe here -- mypy
-        # otherwise refuses `float(object)` outright regardless of the
-        # try/except.
-        parsed = float(cast(Any, value))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{source} must be positive finite seconds, got {value!r}") from exc
-    if not math.isfinite(parsed) or parsed <= 0:
-        raise ValueError(f"{source} must be positive finite seconds, got {value!r}")
-    return parsed
-
-
 def resolve_operation_queue_timeout_seconds(
     explicit: float | None,
     *,
@@ -98,54 +85,9 @@ def resolve_operation_queue_timeout_seconds(
     return _positive_finite_seconds(raw, source=_OPERATION_TIMEOUT_ENV)
 
 
-# OFF by default (see resolve_operation_active_timeout_seconds) -- the ceiling
-# is a backstop for unenumerated call sites, and cancelling in-flight browser
-# work is a heavier intervention than Task 1's per-call budget failing one
-# call. Mirrors session/timeouts.py's _OFF_TOKENS plus "" for an env var set
-# to the empty string, which os.environ.get(..., default) alone would not
-# catch (an explicit empty value is not "unset").
-_OPERATION_ACTIVE_TIMEOUT_ENV = "OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS"
-_ACTIVE_TIMEOUT_OFF_TOKENS = frozenset({"", "0", "off", "never", "none", "disabled", "false", "no"})
-
-
-def resolve_operation_active_timeout_seconds(
-    explicit: float | None = None,
-    *,
-    environ: Mapping[str, str] | None = None,
-) -> float | None:
-    """Resolve the opt-in active-duration ceiling. ``None`` means disabled.
-
-    Same parser shape as ``resolve_operation_queue_timeout_seconds`` with one
-    deliberate difference. That resolver defaults ON (a per-call budget
-    trades an unbounded hang for a bounded one), so an unparsable value
-    there falls back to a working default rather than silently
-    reintroducing the hang. This ceiling defaults OFF -- cancelling
-    in-flight browser work is a heavier intervention than failing one call
-    -- so an unparsable value falls back to OFF too: the feature itself is
-    opt-in, and a typo in the env var must not silently turn on a hardcoded
-    quota nobody asked for.
-
-    ``explicit`` (a direct caller override, not an env var) is still
-    validated strictly and raises on an invalid value -- that path is a
-    programming error, not an operator typo, and Task 1's resolver treats
-    its own ``explicit`` parameter the same way.
-    """
-    if explicit is not None:
-        return _positive_finite_seconds(explicit, source="operation_active_timeout_seconds")
-    source = os.environ if environ is None else environ
-    raw = source.get(_OPERATION_ACTIVE_TIMEOUT_ENV)
-    if raw is None or raw.strip().lower() in _ACTIVE_TIMEOUT_OFF_TOKENS:
-        return None
-    try:
-        return _positive_finite_seconds(raw, source=_OPERATION_ACTIVE_TIMEOUT_ENV)
-    except ValueError:
-        return None
-
-
 _QUEUE_WAIT = histogram("octowright_operation_queue_wait_seconds", unit="s")
 _ACTIVE_DURATION = histogram("octowright_operation_active_duration_seconds", unit="s")
 _QUEUE_TIMEOUT = counter("octowright_operation_queue_timeout_total")
-_ACTIVE_TIMEOUT = counter("octowright_operation_active_timeout_total")
 _REJECTED = counter("octowright_operation_rejected_total")
 _QUEUE_DEPTH = gauge("octowright_operation_queue_depth", unit="1")
 
@@ -231,14 +173,16 @@ class _Diagnostics:
     queue_timeout_seconds: float
 
 
-class SessionOperationGate(_CloseGateMixin):
+class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
     """Serializes Playwright operations for one browser session.
 
     Exactly one asyncio ``Task`` may own the gate at a time, checked by
     ``asyncio.current_task()`` identity. The owning task may re-enter without
     queueing; every other task -- including one the owner spawns itself via
     ``asyncio.create_task`` -- queues FIFO behind it. Close/external-close/
-    control-plane methods come from ``_CloseGateMixin``, part of this API.
+    control-plane methods come from ``_CloseGateMixin``; the active-duration
+    ceiling (``enforce_active_timeout``) comes from ``_CeilingGateMixin`` --
+    both part of this API.
     """
 
     def __init__(
@@ -270,6 +214,18 @@ class SessionOperationGate(_CloseGateMixin):
         self._invariant_reason: str | None = None
         self._close_reservation: CloseReservation | None = None
         self._granted_close_reservation: CloseReservation | None = None
+        # F1 (2026-08-29 hang-resilience whole-branch review): which task's
+        # cancellation `enforce_active_timeout` itself requested, and the
+        # `Task.cancelling()` count the CURRENT owner had at the moment it
+        # became one -- together let `operation()` tell "the ceiling cancelled
+        # ME" apart from any other cancellation reaching the same task (a
+        # genuine client disconnect, daemon shutdown), the same uncancel()
+        # -and-compare pattern `asyncio.timeout.__aexit__` uses on itself.
+        # Both reset on every release; see `_grant_next_locked`/`_release`/
+        # `_cleanup_waiter` (ordinary leases) and `close_operation` (close
+        # reservations, `close.py`) for where the baseline is (re)captured.
+        self._ceiling_cancelled_task: asyncio.Task[object] | None = None
+        self._owner_cancel_baseline: int | None = None
         self._diagnostics_lock = threading.Lock()
         self._diagnostics = _Diagnostics(
             state=self._state,
@@ -471,6 +427,13 @@ class SessionOperationGate(_CloseGateMixin):
             self._depth = 0
         else:
             self._owner_task = waiter.task
+            # Baseline for the ceiling's uncancel()-and-compare check
+            # (operation()'s except-CancelledError branch) -- captured HERE,
+            # at grant time, not inside enforce_active_timeout itself: the
+            # ceiling fires from a different task, arbitrarily later, and
+            # needs to know how many cancellations were ALREADY pending on
+            # this task before it adds its own.
+            self._owner_cancel_baseline = waiter.task.cancelling()
             self._depth = 1
         self._publish_diagnostics_locked()
         waiter.ready.set_result(None)
@@ -499,6 +462,8 @@ class SessionOperationGate(_CloseGateMixin):
                 self._owner_task = None
                 self._root_operation = None
                 self._active_since = None
+                self._owner_cancel_baseline = None
+                self._ceiling_cancelled_task = None
                 self._depth = 0
                 self._grant_next_locked()
                 self._publish_diagnostics_locked()
@@ -538,126 +503,10 @@ class SessionOperationGate(_CloseGateMixin):
             self._owner_task = None
             self._root_operation = None
             self._active_since = None
+            self._owner_cancel_baseline = None
+            self._ceiling_cancelled_task = None
             self._grant_next_locked()
             self._publish_diagnostics_locked()
-
-    async def enforce_active_timeout(self, ceiling_seconds: float) -> bool:
-        """Cancel the active (root) operation if it has run past *ceiling_seconds*.
-
-        The backstop for the Playwright call sites nobody has bounded with
-        ``session/timeouts.bounded`` yet: rather than a per-call budget, this
-        reads what the gate already tracks for its ROOT lease --
-        ``_active_since`` and ``_root_operation`` -- and, if one operation
-        has held the gate open at least as long as the ceiling, cancels the owning
-        task and drives the gate to ``broken`` through the same
-        ``_break_locked`` invariant path every other broken-gate transition
-        uses. A subsequent operation on this gate then fails fast with the
-        ordinary ``OperationGateInvariantError`` rejection -- no new error
-        type, no new state, nothing for a caller to special-case.
-
-        Called from ``housekeeping.py``'s periodic loop (job 6 -- see its
-        module docstring), never from a per-gate background task: one timer
-        per session multiplied across a large pool is real overhead for a
-        rare event, and housekeeping already walks every session on its own
-        interval. A gate whose active operation is still inside budget (the
-        overwhelming common case, and the ENTIRE case when the feature is
-        off) costs one uncontended lock acquire and nothing else -- no
-        Playwright call, no per-session task.
-
-        Acts on ``OPEN`` **and** ``CLOSING`` (never ``CLOSED``/``BROKEN``,
-        which have no active root lease left to break). Closing a wedged
-        session is the first thing a human or agent reaches for, and
-        ``reserve_close`` queues the close reservation's waiter behind
-        whichever owner already holds the gate rather than granting it --
-        that owner is exactly what this method may need to cancel, so
-        checking ``OPEN`` only would disarm the ceiling the moment a close
-        was requested and leave ``reservation.wait()`` hanging forever
-        instead. Breaking here still resolves the close instead of
-        stranding it: ``_break_locked``'s ``_fail_queued_locked`` fails the
-        queued close waiter, which resolves ``reservation.wait()`` with an
-        error (not a hang) for the caller, and ``_coordinate_close``'s own
-        ``finally`` block runs regardless of whether ``close_operation``'s
-        body ever executed, so the pool's bookkeeping (``_sessions``,
-        ``_closing_sessions``, the manifest, the close-event publish) still
-        drains -- verified end to end in
-        ``tests/test_operation_gate_integration.py::test_active_timeout_ceiling_unwedges_a_close_in_progress``.
-        The one thing that does NOT happen on this path: the actual
-        Playwright teardown inside ``close_operation``'s body never runs for
-        a reservation that was still queued -- but an unclosed browser
-        process on a session that was already wedged and never going to
-        close cleanly either way predates this feature; what changes is
-        that the caller and the pool's own bookkeeping are no longer stuck
-        waiting on it.
-
-        This method can ALSO cancel a close reservation that was already
-        granted and is itself wedged mid-teardown (e.g. a hung
-        ``context.close()``). Such a cancellation can land in more than one
-        place -- swallowed and returned by ``prepare_then_teardown``, or
-        raised in the close body before it ever runs -- and every one of
-        them is normalized in a SINGLE seam, ``_terminal_close_failure``
-        (``operation/gate/close.py``), into ``SessionCloseAbortedError``.
-        ``_release_close`` deliberately converts nothing itself, so one
-        cause cannot yield two error types depending on where it landed; an
-        earlier design did exactly that, and a ceiling-aborted close then
-        read as an ordinary close race. See that class's docstring
-        (``operation/gate/types.py``) for the full mechanism, and
-        ``relaunch._close_with_fallback_snapshot`` for why the distinction
-        from a plain ``SessionClosedError`` matters.
-
-        Deliberately does NOT raise or publish a ``SessionCallTimeoutError``.
-        That machinery (``session/timeouts.bounded``, this gate's
-        ``on_call_timeout`` hook) exists for a call site that knows its own
-        operation and awaits it under a budget from the INSIDE. Cancelling
-        from the OUTSIDE, after the fact, is a different failure shape: the
-        exception delivered to the owning task is a plain
-        ``asyncio.CancelledError`` with no ``__cause__`` linking it to a
-        ``SessionCallTimeoutError``, so ``operation()``'s own ``finally``
-        block (the innermost-lease publish ``on_call_timeout`` machinery)
-        does not fire for a ceiling breach, PROVIDED the gated code under
-        the owning task does not itself convert that ``CancelledError`` into
-        a different exception type (e.g. catching it and raising a
-        ``SessionCallTimeoutError(...) from ce``) -- no production call site
-        does this today (checked every ``except asyncio.CancelledError`` /
-        ``except BaseException`` site that can swallow a cancellation; the
-        one that can re-raises the identical object), so in practice a
-        single wedge produces exactly one signal, never both an
-        "unresponsive" ``SessionCrashedEvent`` AND a ceiling-breach invariant
-        break that would contradict each other. The two backstops report
-        through deliberately separate channels: a per-call timeout that
-        escapes a gated operation is a target that answered *its own*
-        budget overrun (``on_call_timeout``); a ceiling breach is the gate
-        itself noticing nobody put a budget on the call at all.
-
-        Returns True if a breach was found and handled, else False. The
-        caller (``housekeeping._enforce_operation_active_timeout_once``)
-        checks each session independently and isolates a per-session
-        failure, so one wedged session's gate breaking never stops another
-        session's (healthy or also-wedged) gate from being checked.
-        """
-        async with self._admission_lock:
-            if self._state not in (OperationGateState.OPEN, OperationGateState.CLOSING):
-                return False
-            owner = self._owner_task
-            operation = self._root_operation
-            active_since = self._active_since
-            if owner is None or operation is None or active_since is None:
-                return False
-            duration = self._clock() - active_since
-            if duration < ceiling_seconds:
-                return False
-            _ACTIVE_TIMEOUT.add(1, attributes={"operation": operation, "kind": self.kind})
-            log.warning(
-                "octowright.operation.active_timeout",
-                instance_id=self.instance_id,
-                kind=self.kind,
-                operation=operation,
-                active_duration_ms=round(duration * 1000),
-                ceiling_seconds=ceiling_seconds,
-            )
-            owner.cancel()
-            self._break_locked(f"operation {operation!r} exceeded the active-duration ceiling of {ceiling_seconds}s")
-            self._publish_diagnostics_locked()
-            return True
 
     @asynccontextmanager
     async def operation(
@@ -666,6 +515,41 @@ class SessionOperationGate(_CloseGateMixin):
         *,
         wait_timeout_seconds: float | UseDefault | None = USE_DEFAULT,
     ) -> AsyncIterator[None]:
+        """Acquire (or re-enter) the gate's lease for *operation_name*.
+
+        F1 (2026-08-29 hang-resilience whole-branch review, CRITICAL): a
+        cancellation ``enforce_active_timeout`` requested on THIS lease's
+        owner must never reach the caller as a bare ``asyncio.CancelledError``.
+        In the daemon, that owning task either IS the MCP request task, or
+        is awaited by it through ``asyncio.shield`` (the idempotency cache),
+        and a ``CancelledError`` is a ``BaseException`` the ``mcp`` library
+        does not convert -- it reaches the JSON-RPC dispatcher's own
+        cancellation handling, which reports ``"Connection closed"`` and
+        tears down the WHOLE connection, taking every other concurrent call
+        on it down too. Driven end to end against a real ``MCPServer`` +
+        ``ClientSession`` before this fix: a ceiling breach on one wedged
+        call answered a concurrent, healthy ``ping`` with the same error,
+        and the server's own ``run()`` returned -- the session was over.
+
+        The ``except asyncio.CancelledError`` branch below tells "the
+        ceiling cancelled ME" apart from any other cancellation reaching the
+        same task (a genuine client disconnect, daemon shutdown) using
+        ``asyncio.timeout.__aexit__``'s own pattern: ``_grant_next_locked``
+        (and ``close_operation`` for a close reservation) records
+        ``task.cancelling()`` as ``_owner_cancel_baseline`` the moment this
+        task becomes the gate's owner; ``enforce_active_timeout`` records
+        the SAME task as ``_ceiling_cancelled_task`` right before calling
+        ``.cancel()`` on it. If, when the ``CancelledError`` arrives here,
+        this lease's owner is that recorded task AND ``uncancel()`` brings
+        the count back to (or below) that baseline -- meaning no OTHER
+        cancellation is still layered on top -- the ceiling's own
+        contribution is the only one in flight, so it is safe to convert.
+        Naming one specific task (not "any CancelledError") is what keeps a
+        genuine cancellation propagating normally: ``uncancel()`` is called
+        ONLY when the marker confirms the ceiling is the one that asked, and
+        exactly once, mirroring how ``asyncio.timeout`` only ever absorbs
+        its OWN cancellation.
+        """
         lease = await self._acquire(operation_name, wait_timeout_seconds)
         outcome: Literal["ok", "error", "cancelled"] = "ok"
         error: BaseException | None = None
@@ -673,6 +557,16 @@ class SessionOperationGate(_CloseGateMixin):
             yield
         except asyncio.CancelledError:
             outcome = "cancelled"
+            if self._ceiling_cancelled_task is lease.owner_task:
+                self._ceiling_cancelled_task = None
+                baseline = self._owner_cancel_baseline
+                if baseline is not None and lease.owner_task.uncancel() <= baseline:
+                    raise SessionOperationAbortedError(
+                        f"session {self.instance_id!r} operation {lease.operation_name!r} was "
+                        f"aborted: the active-duration ceiling cancelled it after it exceeded its "
+                        f"budget (kind={self.kind!r}); this gate is now broken -- relaunch the "
+                        f"session"
+                    ) from None
             raise
         except BaseException as exc:
             outcome = "error"
