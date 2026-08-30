@@ -141,8 +141,17 @@ async def test_repeated_launches_keep_only_the_last_outcome(monkeypatch: pytest.
 
 
 async def test_driver_death_retry_records_success_once_healed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The driver-death retry path in ``launch()`` must record the FINAL
-    outcome, not the transient first failure it retried past."""
+    """A launch that survives a driver-death retry is recorded ``ok``.
+
+    Scope, honestly: this pins the OUTCOME, not the mechanism. Recording
+    per-attempt inside ``_launch_with_driver_retry`` instead of once in
+    ``launch()`` also leaves this green, because the later write overwrites
+    the transient ``error`` before any assertion reads it. The split is
+    still the right design -- a concurrent ``octowright_status()`` landing
+    between the transient failure and the retry's success would briefly
+    report ``error`` under the per-attempt shape and never does under this
+    one -- but that race is not what this test proves.
+    """
     from unittest.mock import AsyncMock
 
     pool = BrowserPool()
