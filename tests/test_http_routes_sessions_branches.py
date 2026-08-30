@@ -37,7 +37,7 @@ from octowright.http.routes import sessions as session_routes
 from octowright.http.routes import sessions_recording as session_recording_routes
 from octowright.recorder import Recorder
 from octowright.server import _state
-from octowright.session.operation_gate import SessionOperationGate
+from octowright.session.operation.gate import SessionOperationGate
 from tests._aria_stubs import stub_credential_scan
 
 # ─── fixtures ────────────────────────────────────────────────────────────────
@@ -474,7 +474,7 @@ class TestSelectorValidate:
         """A SessionBusyTimeoutError from the gate maps to 503, distinctly
         from the generic locator-exception 400 branch -- locks in Task 10's
         Step 5 error-mapping contract."""
-        from octowright.session.operation_gate import SessionBusyTimeoutError
+        from octowright.session.operation.gate import SessionBusyTimeoutError
 
         pool: _FakePool = fakes["pool"]
         page = MagicMock()
@@ -496,7 +496,7 @@ class TestSelectorValidate:
         """A SessionClosingError from the gate maps to 409, not the generic
         locator-exception 400 branch -- locks in Task 10's Step 5
         error-mapping contract."""
-        from octowright.session.operation_gate import SessionClosingError
+        from octowright.session.operation.gate import SessionClosingError
 
         pool: _FakePool = fakes["pool"]
         page = MagicMock()

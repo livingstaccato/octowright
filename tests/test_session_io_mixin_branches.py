@@ -32,7 +32,7 @@ import pytest
 from octowright.session import core_io_mixin as _io
 from octowright.session import timeouts as _timeouts
 from octowright.session.core_io_mixin import SessionIOMixin, _looks_like_binary_text
-from octowright.session.operation_gate import SessionOperationGate
+from octowright.session.operation.gate import SessionOperationGate
 
 
 @pytest.fixture

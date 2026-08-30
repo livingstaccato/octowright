@@ -22,7 +22,7 @@ from octowright.server.browser import inspect_assertions as _inspect_assertions
 from octowright.server.browser import inspect_capture as _inspect_capture
 from octowright.server.browser import inspect_console as _inspect_console
 from octowright.server.browser import inspect_recording as _inspect_recording
-from octowright.session.operation_gate import SessionClosingError
+from octowright.session.operation.gate import SessionClosingError
 from tests._aria_stubs import stub_credential_scan
 from tests._pool_invariants import wait_for_active, wait_for_state
 
@@ -83,7 +83,7 @@ def _capture_session(log_root: Path | None = None, *, instance_id: str = "i", ki
     pool's close coordinator, which drives ``_operation_gate``/
     ``session.operation(...)`` directly -- an unspecced MagicMock's
     auto-mocked (non-awaitable) methods can't stand in for those."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     s = _session(log_root)
     s.instance_id = instance_id

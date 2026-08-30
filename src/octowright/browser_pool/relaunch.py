@@ -32,7 +32,7 @@ from octowright.browser_pool.lifecycle import (
     RelaunchSnapshot,
     reserve_close_browser,
 )
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     SessionCloseAbortedError,
     SessionClosedError,
     SessionClosingError,
@@ -155,7 +155,7 @@ async def _close_with_fallback_snapshot(
        itself raise it).
 
     The rule above does NOT extend to ``SessionCloseAbortedError`` (a
-    ``SessionClosedError`` subclass -- ``operation_gate_types.py``), raised
+    ``SessionClosedError`` subclass -- ``operation/gate/types.py``), raised
     when the active-duration ceiling cancels a close that was already
     granted and mid-teardown. There, ``preparation`` (the REAL callback, not
     ``None``) may well have already produced a snapshot before the wedge,

@@ -24,7 +24,7 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import LiteralString
 
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     USE_DEFAULT,
     OperationGateSnapshot,
     SessionOperationGate,

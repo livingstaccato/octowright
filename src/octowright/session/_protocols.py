@@ -13,7 +13,7 @@ from typing import Any, LiteralString, Protocol
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
 from octowright.recorder import Recorder
-from octowright.session.operation_gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
+from octowright.session.operation.gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
 
 
 class SessionLike(Protocol):

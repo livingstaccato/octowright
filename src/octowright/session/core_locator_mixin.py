@@ -23,7 +23,7 @@ from provide.telemetry import get_logger
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
 from octowright.session._protocols import SessionLike
-from octowright.session.operation_gate import gated_operation
+from octowright.session.operation.gate import gated_operation
 
 log = get_logger(__name__)
 
