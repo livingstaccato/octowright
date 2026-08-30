@@ -15,6 +15,7 @@ from octowright.session.operation_gate_types import (
     CloseReservation,
     OperationGateInvariantError,
     OperationGateState,
+    SessionCloseAbortedError,
     SessionClosedError,
     _LeaseToken,
     _observe_future_exception,
@@ -274,8 +275,9 @@ class _CloseGateMixin:
         without deliberately duplicating the check at each call site.
         """
         if isinstance(exc, asyncio.CancelledError):
-            return SessionClosedError(
+            return SessionCloseAbortedError(
                 f"session {self.instance_id!r} close operation {reservation.operation_name!r} was "
-                f"interrupted before completing; the session is now closed (kind={self.kind!r})"
+                f"aborted mid-teardown (cancelled) before completing; the browser's actual close "
+                f"state is unconfirmed (kind={self.kind!r})"
             )
         return exc

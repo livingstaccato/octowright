@@ -44,6 +44,38 @@ class SessionClosedError(RuntimeError):
     """The underlying browser session is already closed."""
 
 
+class SessionCloseAbortedError(SessionClosedError):
+    """A close was cancelled mid-teardown -- e.g. the active-duration ceiling
+    (``SessionOperationGate.enforce_active_timeout``) breaking a wedged
+    ``context.close()`` -- and never confirmed the browser actually finished
+    tearing down.
+
+    A ``SessionClosedError`` subclass, not a sibling type: existing broad
+    ``except SessionClosedError`` / ``except Exception`` handlers around
+    ``reservation.wait()`` (``lifecycle.shutdown_pool``,
+    ``driver_relaunch._relaunch_one``, ``core_ops_standalone_close``) must
+    keep working unchanged -- this refines what one specific failure MEANS,
+    it doesn't add a new failure category those call sites need to learn
+    about.
+
+    The distinction matters at exactly one place today:
+    ``relaunch._close_with_fallback_snapshot`` treats a plain
+    ``SessionClosedError`` from ``reservation.wait()`` as proof an external
+    close won the race for the gate BEFORE our own ``preparation`` callback
+    ever ran (``_coordinate_close``'s ``except SessionClosedError`` branch
+    always calls ``prepare_then_teardown(session, None, ...)`` in that
+    case) -- so falling back to a pre-close snapshot read is safe, and the
+    browser is confirmed torn down either way. Neither is true here:
+    ``preparation`` may well have already produced a snapshot before the
+    ceiling fired, and cancelling a wedged ``context.close()`` does not mean
+    the browser process actually finished releasing its profile lock --
+    only that we gave up waiting for it to. A caller that cannot tell the
+    two apart risks discarding a fresh snapshot for a stale one and racing
+    a replacement launch against an unconfirmed teardown (Chrome's
+    ``SingletonLock`` on a persistent profile).
+    """
+
+
 class OperationGateInvariantError(RuntimeError):
     """The gate's ownership/state invariants were violated."""
 
