@@ -11,10 +11,11 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Literal, LiteralString, TypeVar
 
-from octowright.session.operation_gate_types import (
+from octowright.session.operation.gate.types import (
     CloseReservation,
     OperationGateInvariantError,
     OperationGateState,
+    SessionCloseAbortedError,
     SessionClosedError,
     _LeaseToken,
     _observe_future_exception,
@@ -29,7 +30,7 @@ _T = TypeVar("_T")
 class _CloseGateMixin:
     """Close reservation, external-close, and control-plane mutation.
 
-    Split out of ``operation_gate.py`` to keep that module under the
+    Split out of ``operation/gate/core.py`` to keep that module under the
     repository's LOC ceiling; every method here only ever runs as part of a
     composed ``SessionOperationGate`` instance. The field/stub-method
     declarations below (never assigned here) describe that host's real
@@ -46,6 +47,8 @@ class _CloseGateMixin:
     _owner_task: asyncio.Task[object] | None
     _root_operation: str | None
     _active_since: float | None
+    _owner_cancel_baseline: int | None
+    _ceiling_cancelled_task: asyncio.Task[object] | None
     _depth: int
     kind: str
     instance_id: str
@@ -150,6 +153,16 @@ class _CloseGateMixin:
             self._owner_task = task
             self._root_operation = reservation.operation_name
             self._active_since = self._clock()
+            # Same baseline the ceiling's uncancel()-and-compare check relies
+            # on for an ordinary lease (core.py's _grant_next_locked) --
+            # captured here too so the invariant ("whenever _owner_task is
+            # set, _owner_cancel_baseline reflects its cancelling() count at
+            # grant time") holds uniformly. operation()'s own check never
+            # runs for a close reservation (close_operation has its own,
+            # separate except/finally below), so nothing reads this in that
+            # path today, but a gate with only ONE grant path having a
+            # baseline is a trap for the next person to add one.
+            self._owner_cancel_baseline = task.cancelling()
             self._depth = 1
             self._publish_diagnostics_locked()
         outcome: Literal["ok", "error", "cancelled"] = "ok"
@@ -187,6 +200,8 @@ class _CloseGateMixin:
             self._owner_task = None
             self._root_operation = None
             self._active_since = None
+            self._owner_cancel_baseline = None
+            self._ceiling_cancelled_task = None
             if outcome == "ok":
                 self._publish_diagnostics_locked()
                 return
@@ -197,14 +212,27 @@ class _CloseGateMixin:
             # same terminal way an in-band close finishes (state closed,
             # shared outcome set) so no `reservation.wait()` caller hangs
             # forever and a retry lands on the `state is CLOSED` branch above
-            # instead of a phantom-owner invariant error.
-            if exc is None or isinstance(exc, asyncio.CancelledError):
-                failure: BaseException = SessionClosedError(
+            # instead of a phantom-owner invariant error. Hand `fail_close`
+            # the RAW `exc` rather than converting a `CancelledError` here --
+            # `_terminal_close_failure` (below) is the SOLE place that
+            # normalizes one, so a cancellation reaching this branch
+            # directly (propagating cleanly through `close_operation`'s
+            # body) produces the exact same `SessionCloseAbortedError` as
+            # one a teardown helper swallowed and returned instead of
+            # raising, rather than a plain `SessionClosedError` for what is
+            # the same underlying cause with two different landing spots.
+            # `exc is None` (outcome != "ok" with nothing caught -- not
+            # reachable via `close_operation` today, but defensive) still
+            # needs a synthesized failure, since there is nothing to hand
+            # `fail_close` otherwise.
+            failure: BaseException = (
+                SessionClosedError(
                     f"session {self.instance_id!r} close operation {reservation.operation_name!r} was "
                     f"interrupted before completing; the session is now closed (kind={self.kind!r})"
                 )
-            else:
-                failure = exc
+                if exc is None
+                else exc
+            )
             self.fail_close(reservation, failure)
 
     def mark_closed_external(self) -> None:
@@ -247,4 +275,49 @@ class _CloseGateMixin:
         self._state = OperationGateState.CLOSED
         self._fail_queued_locked(SessionClosedError, reason="session_closed")
         if not reservation.outcome.done():
-            reservation.outcome.set_exception(exc)
+            reservation.outcome.set_exception(self._terminal_close_failure(reservation, exc))
+
+    def _terminal_close_failure(self, reservation: CloseReservation, exc: BaseException) -> BaseException:
+        """Never let a raw ``CancelledError`` reach a ``reservation.wait()`` caller.
+
+        The SOLE normalizer -- ``_release_close`` deliberately hands this
+        its raw ``exc`` rather than converting a cancellation itself, so a
+        ``CancelledError`` reaching ``fail_close`` produces the exact same
+        ``SessionCloseAbortedError`` regardless of WHERE it landed: swallowed
+        and returned by a teardown helper (``close_helpers.prepare_then_
+        teardown`` / ``core_ops_standalone_close._run_standalone_teardown``
+        both do this by design, since they must always attempt the teardown
+        even when a preceding step failed or was cancelled -- ``close_
+        operation`` then never sees an exception at all, ``outcome`` stays
+        ``"ok"``, and ``_release_close`` returns before ever calling
+        ``fail_close``, so the raw ``CancelledError`` reaches here from
+        ``_coordinate_close``'s own ``finally`` instead), OR propagating
+        directly through ``close_operation``'s body with nothing in between
+        to swallow it (``_release_close``'s ``outcome != "ok"`` branch,
+        reachable via a direct cancellation of the coordinator task --
+        see ``tests/session/test_operation_gate.py::
+        test_cancelled_close_coordinator_does_not_wedge_the_gate`` for the
+        gate-level shape of it). Before this was the sole choke point, the
+        two landing spots built two DIFFERENT types for the same underlying
+        cause -- a plain ``SessionClosedError`` from ``_release_close``,
+        this ``SessionCloseAbortedError`` from here -- so a caller like
+        ``relaunch._close_with_fallback_snapshot`` that discriminates on
+        type would treat one as an ordinary safe race and the other as the
+        loud failure it actually is, purely depending on cancellation
+        timing. A ``CancelledError`` is a ``BaseException``, not caught by
+        an MCP tool handler's ``except Exception``, and marks the AWAITING
+        task cancelled too if it escapes uncaught -- exactly the
+        "session-scoped problem looks like something bigger" failure this
+        whole plan exists to prevent. This is the single choke point every
+        ``fail_close`` caller passes through (the pool coordinator, the
+        standalone-session coordinator, and ``_release_close`` itself), so
+        normalizing here -- and ONLY here -- catches every landing spot
+        without duplicating (and risking diverging) the check anywhere else.
+        """
+        if isinstance(exc, asyncio.CancelledError):
+            return SessionCloseAbortedError(
+                f"session {self.instance_id!r} close operation {reservation.operation_name!r} was "
+                f"aborted mid-teardown (cancelled) before completing; the browser's actual close "
+                f"state is unconfirmed (kind={self.kind!r})"
+            )
+        return exc

@@ -28,7 +28,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from octowright.http import state as _http_state
-from octowright.session.operation_gate import SessionOperationGate
+from octowright.session.operation.gate import SessionOperationGate
 
 # Reuse fixtures from the existing http test module so we don't fork the
 # fake-pool plumbing.
@@ -370,7 +370,7 @@ async def test_live_screenshot_session_busy_timeout_error_maps_to_503(
     from types import SimpleNamespace as _SimpleNamespace
 
     from octowright.http.routes import media as _media
-    from octowright.session.operation_gate import SessionBusyTimeoutError
+    from octowright.session.operation.gate import SessionBusyTimeoutError
 
     log_path = isolated_recordings / "20260101T000000Z-chromium-busyerr00001.jsonl"
     log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
@@ -399,7 +399,7 @@ async def test_live_screenshot_session_closing_error_maps_to_409(
     from types import SimpleNamespace as _SimpleNamespace
 
     from octowright.http.routes import media as _media
-    from octowright.session.operation_gate import SessionClosingError
+    from octowright.session.operation.gate import SessionClosingError
 
     log_path = isolated_recordings / "20260101T000000Z-chromium-closingerr01.jsonl"
     log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")

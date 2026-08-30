@@ -9,6 +9,7 @@ import asyncio
 import hmac
 import sys
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +33,10 @@ from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
 from octowright.browser_pool.visuals import _tile_args_for_chromium
-from octowright.defaults import RECORDINGS_DIR, get_default_url
+from octowright.defaults import RECORDINGS_DIR, SUPPORTED_KINDS, get_default_url
 from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
 from octowright.session import BrowserSession
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     SessionClosedError,
     SessionClosingError,
     resolve_operation_queue_timeout_seconds,
@@ -74,6 +75,13 @@ class BrowserPool:
         self._pw_lock = asyncio.Lock()
         # Count of shared-driver rebuilds after a death (surfaced in status).
         self._driver_restarts: int = 0
+        # Last launch outcome per engine kind (surfaced at
+        # octowright_status()["pool"]["engine_health"]) — see
+        # _record_engine_health / engine_health(). A kind never launched has
+        # no entry here at all, deliberately: "no data" and "fine" are
+        # different answers, and the pool must not claim a kind is healthy
+        # just because nothing has failed yet.
+        self._engine_health: dict[str, dict[str, Any]] = {}
         self._sessions: dict[str, BrowserSession] = {}
         self._sessions_lock = asyncio.Lock()
         # Sessions mid-teardown: inserted by ``reserve_close_browser``/
@@ -140,8 +148,60 @@ class BrowserPool:
         """How many times the shared driver has been rebuilt after a death."""
         return self._driver_restarts
 
+    def _record_engine_health(self, kind: str, exc: Exception | None) -> None:
+        """Track the last launch outcome for one engine kind.
+
+        Diagnosing a real incident took an hour largely to establish "WebKit
+        is broken on this machine, Chromium is fine" — the pool already sees
+        every launch and every failure per kind; this just remembers the last
+        one so ``octowright_status`` can say so directly. Records only the
+        exception CLASS NAME, never the message: a launch failure message can
+        carry a filesystem path or a profile name, while the class name is the
+        diagnostic signal and carries nothing sensitive (the same reasoning
+        ``octowright_browser_launch_failed_total`` uses for its ``error``
+        label).
+        """
+        # Belt and braces: launch() already clamps, since the same value also
+        # becomes a metric label. Repeated here so a future direct caller
+        # cannot put an arbitrary string into a permanent, never-evicted dict
+        # echoed verbatim into every octowright_status().
+        kind = kind if kind in SUPPORTED_KINDS else "unknown"
+        at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        if exc is None:
+            self._engine_health[kind] = {"outcome": "ok", "at": at}
+        else:
+            self._engine_health[kind] = {"outcome": "error", "at": at, "error": type(exc).__name__}
+
+    def engine_health(self) -> dict[str, dict[str, Any]]:
+        """Per-kind snapshot of the last launch outcome (see
+        ``_record_engine_health``). A kind never launched is absent from the
+        result rather than reported healthy — "no data" and "fine" are
+        different answers."""
+        return {kind: dict(v) for kind, v in self._engine_health.items()}
+
     async def launch(self, **options: Any) -> dict[str, Any]:
-        async with launch_span(options.get("kind") or "chromium") as sp:
+        # Clamp here, not in _record_engine_health: kind_hint feeds TWO sinks.
+        # It also becomes the `kind` label on octowright_browser_launch_failed_
+        # _total and the octowright.browser.launch span attribute, and `kind`
+        # reaches launch() straight from the caller (browser_launch's signature
+        # is `kind: str`, not a Literal) and is validated only deeper, in
+        # LaunchOptions.validate(). An unbounded metric label is worse than an
+        # unbounded dict: it creates a permanent time series per distinct value
+        # in the metrics backend, fleet-wide. AGENTS.md states this label is
+        # bounded to the three engines plus "unknown"; this is what makes that
+        # true.
+        raw_kind = options.get("kind") or "chromium"
+        kind_hint = raw_kind if raw_kind in SUPPORTED_KINDS else "unknown"
+        try:
+            result = await self._launch_with_driver_retry(options, kind_hint)
+        except Exception as exc:
+            self._record_engine_health(kind_hint, exc)
+            raise
+        self._record_engine_health(kind_hint, None)
+        return result
+
+    async def _launch_with_driver_retry(self, options: dict[str, Any], kind_hint: str) -> dict[str, Any]:
+        async with launch_span(kind_hint) as sp:
             try:
                 return await self._launch_impl(options, sp)
             except Exception as exc:
