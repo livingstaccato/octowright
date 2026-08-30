@@ -283,7 +283,7 @@ async def test_leader_heartbeat_rearms_follower_deadline(monkeypatch: pytest.Mon
 
 
 def test_default_queue_timeout_is_comfortably_below_the_heartbeat_ceiling() -> None:
-    from octowright.session.operation_gate import DEFAULT_OPERATION_QUEUE_TIMEOUT_SECONDS
+    from octowright.session.operation.gate.core import DEFAULT_OPERATION_QUEUE_TIMEOUT_SECONDS
 
     assert DEFAULT_OPERATION_QUEUE_TIMEOUT_SECONDS == 300.0
     assert _heartbeat.HEARTBEAT_MAX_SECONDS == 600.0
@@ -353,7 +353,7 @@ async def test_heartbeat_pings_while_a_call_is_queued_behind_the_gate_then_stops
     heartbeat stops with it -- no lingering ping task."""
     from octowright.server.browser import input as _input
     from octowright.session import BrowserSession
-    from octowright.session.operation_gate import SessionBusyTimeoutError
+    from octowright.session.operation.gate import SessionBusyTimeoutError
     from tests._pool_invariants import wait_for_active
 
     monkeypatch.setattr(_heartbeat, "HEARTBEAT_INTERVAL_SECONDS", 0.02)

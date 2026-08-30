@@ -30,7 +30,7 @@ from octowright import http as _http
 from octowright.http import lifespan as _http_lifespan
 from octowright.http import state as _http_state
 from octowright.server import _state
-from octowright.session.operation_gate import SessionOperationGate
+from octowright.session.operation.gate import SessionOperationGate
 
 # ---------------------------------------------------------------------------
 # fixtures

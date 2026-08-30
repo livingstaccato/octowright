@@ -42,7 +42,12 @@ from octowright.http.routes._session_kinds import (
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.plugins.errors import ProtectedSessionCloseError
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
-from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
+from octowright.session.operation.gate import (
+    SessionBusyTimeoutError,
+    SessionClosedError,
+    SessionClosingError,
+    SessionOperationAbortedError,
+)
 from octowright.session.screencast_config import screencast_config_block
 
 
@@ -418,7 +423,7 @@ async def session_navigate(request: Request) -> JSONResponse:
     except ValueError as e:
         # Bad input (e.g. disallowed url scheme) — 400, not 500.
         return JSONResponse({"error": str(e)}, status_code=400)
-    except (SessionClosingError, SessionClosedError) as e:
+    except (SessionClosingError, SessionClosedError, SessionOperationAbortedError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     except SessionBusyTimeoutError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
@@ -450,7 +455,7 @@ async def session_selector_validate(request: Request) -> JSONResponse:
         session = pool.get(sid)  # in the try for session_navigate's reason: 409, not 500
         async with session.operation("dashboard_selector_validate", wait_timeout_seconds=timeout):
             count = await session.page.locator(selector).count()
-    except (SessionClosingError, SessionClosedError) as e:
+    except (SessionClosingError, SessionClosedError, SessionOperationAbortedError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     except SessionBusyTimeoutError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
