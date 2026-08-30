@@ -13,7 +13,7 @@ from typing import Any, LiteralString, Protocol
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
 from octowright.recorder import Recorder
-from octowright.session.operation_gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
+from octowright.session.operation.gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
 
 
 class SessionLike(Protocol):
@@ -65,6 +65,7 @@ class SessionLike(Protocol):
     _last_markdown_capture_url: str | None
     _last_markdown_capture_key: str | None
     _pending_markdown_capture: Any | None
+    _last_markdown_capture_error: Exception | None
     # Crash-recovery bookkeeping (browser_pool.crash_recovery): needed here so
     # ``_capture_recovery_screenshot`` can be typed against ``SessionLike``
     # (Task 6) instead of ``Any`` while still naming a postmortem screenshot

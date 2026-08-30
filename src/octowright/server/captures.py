@@ -18,6 +18,7 @@ from octowright.server.browser._operation import browser_operation
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
+from octowright.session.timeouts import SessionCallTimeoutError, bounded
 
 
 async def _capture_snapshot(session: SessionLike, _meta: dict[str, Any], _expression: str | None) -> str:
@@ -55,6 +56,13 @@ async def _capture_network(session: SessionLike, _meta: dict[str, Any], _express
 async def _capture_markdown(session: SessionLike, meta: dict[str, Any], _expression: str | None) -> str:
     path = await session.capture_markdown()
     if path is None:
+        # capture_markdown() catches its own exceptions and returns None, so
+        # a hung target must not be reported as "did not produce a file" --
+        # that reads as a missing dependency, not the actual cause. Consult
+        # the recorded cause rather than let the timeout vanish.
+        error = getattr(session, "_last_markdown_capture_error", None)
+        if isinstance(error, SessionCallTimeoutError):
+            raise error
         raise RuntimeError("markdown capture did not produce a file")
     meta["path"] = str(path)
     return path.read_text(encoding="utf-8", errors="replace")
@@ -143,7 +151,7 @@ async def capture_create(
             content=content,
             # _target().url so the capture's url matches the frame the content came from.
             url=session._target().url,
-            title=await session.page.title(),
+            title=await bounded(session.page.title(), operation="capture_create"),
             instance_id=instance_id,
             source=meta,
             preview_chars=preview_chars,

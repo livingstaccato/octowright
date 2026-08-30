@@ -833,7 +833,7 @@ async def test_gate_busy_timeout_isolates_failure_at_tool_boundary(
 
     from octowright.browser_pool import driver_health
     from octowright.server.browser import input as _input
-    from octowright.session.operation_gate import SessionBusyTimeoutError
+    from octowright.session.operation.gate import SessionBusyTimeoutError
     from tests._pool_invariants import hold_operation, wait_for_active
 
     pool = BrowserPool()
@@ -889,7 +889,7 @@ async def test_external_closure_fails_queued_call_without_driver_reset_or_restar
 
     from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.server.browser import input as _input
-    from octowright.session.operation_gate import SessionClosedError
+    from octowright.session.operation.gate import SessionClosedError
     from tests._pool_invariants import hold_operation, wait_for_active, wait_until
 
     monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)

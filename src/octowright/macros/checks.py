@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from octowright.session.timeouts import bounded
+
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
 
@@ -74,7 +76,7 @@ async def _check_selector(
 
 async def _check_js(session: SessionLike, expression: str, equals: Any = None) -> Any:
     async with session.operation("macro_check"):
-        result = await session._target().evaluate(expression)
+        result = await bounded(session._target().evaluate(expression), operation="macro_check")
         if equals is not None:
             if result != equals:
                 raise RuntimeError(
