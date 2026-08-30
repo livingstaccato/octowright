@@ -18,6 +18,7 @@ from octowright.session.operation.gate import (
     USE_DEFAULT,
     SessionClosedError,
     SessionClosingError,
+    SessionOperationAbortedError,
     UseDefault,
 )
 from octowright.session.operation.gate.types import _join_after_cancellation
@@ -260,7 +261,7 @@ class ScreencastManager:
         try:
             async with self._session.operation("screencast_stop"), self._lock:
                 await self._remove_viewer_locked(viewer)
-        except (SessionClosingError, SessionClosedError):
+        except (SessionClosingError, SessionClosedError, SessionOperationAbortedError):
             # The session can close out from under a still-attached viewer
             # (e.g. the dashboard was open when the browser closed) -- the
             # gate correctly refuses a fresh "screencast_stop" lease at that

@@ -25,6 +25,7 @@ from octowright.session.operation.gate import (
     SessionCloseAbortedError,
     SessionClosedError,
     SessionClosingError,
+    SessionOperationAbortedError,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "SessionCloseAbortedError",
     "SessionClosedError",
     "SessionClosingError",
+    "SessionOperationAbortedError",
 ]

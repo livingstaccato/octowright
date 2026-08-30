@@ -385,3 +385,93 @@ async def test_other_gates_are_unaffected_by_one_gates_breach() -> None:
         await healthy_task
     assert healthy_finished is True
     assert healthy_gate.snapshot()["state"] == "open"
+
+
+async def test_ceiling_breach_in_the_release_window_is_absorbed_too() -> None:
+    """A breach landing between "body returned" and "release completed".
+
+    ``operation()``'s absorption lives in its ``except asyncio.CancelledError``
+    clause, but the release runs in the ``finally`` -- a SIBLING of that clause,
+    not nested in it -- so a cancel arriving while the owner is suspended at
+    ``_run_shielded`` escaped unabsorbed as a bare ``CancelledError``, with the
+    full original blast radius: CONNECTION_CLOSED for the wedged call and every
+    concurrent healthy call on that connection.
+
+    The window is one scheduler iteration wide, which is why the first fix
+    missed it; the consequence when it lands is identical to the Critical it
+    was meant to close. Found by a whole-branch re-review sweeping the phase
+    between body completion and the ceiling check.
+    """
+    gate = SessionOperationGate("release-window", "chromium")
+    started = asyncio.Event()
+
+    async def owner() -> str:
+        async with gate.operation("browser_click"):
+            started.set()
+        return "ok"
+
+    task = asyncio.create_task(owner())
+    await started.wait()
+
+    assert await gate.enforce_active_timeout(0.0) is True
+
+    done, _pending = await asyncio.wait({task}, timeout=5)
+    assert done, "owner never finished -- the ceiling did not act in the release window"
+    assert not task.cancelled(), (
+        "a bare CancelledError escaped through the finally: it would reach the "
+        "JSON-RPC dispatcher as CONNECTION_CLOSED and kill the MCP connection"
+    )
+    assert isinstance(task.exception(), SessionOperationAbortedError)
+
+
+async def test_a_plain_cancel_with_no_ceiling_stays_cancelled() -> None:
+    """Absorption must not swallow an ordinary cancellation.
+
+    The marker is never set here, so nothing may be converted -- a client
+    disconnect or daemon shutdown has to keep propagating as cancellation or
+    structured concurrency breaks.
+    """
+    gate = SessionOperationGate("plain-cancel", "chromium")
+    started = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("browser_click"):
+            started.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(owner())
+    await started.wait()
+    task.cancel()
+
+    done, _pending = await asyncio.wait({task}, timeout=5)
+    assert done
+    assert task.cancelled(), "an ordinary cancellation was wrongly converted"
+
+
+async def test_a_genuine_cancel_layered_on_the_ceiling_is_not_absorbed() -> None:
+    """The ``uncancel() <= baseline`` half of the check, which nothing pinned.
+
+    Mutating that comparison to ``True`` left every test green in review. It is
+    the half that keeps a genuine cancel propagating when one is layered on top
+    of the ceiling's own: ``uncancel()`` then returns ABOVE the baseline
+    captured at grant time, so the ceiling's contribution is not the only one
+    in flight and conversion would swallow a real cancellation.
+    """
+    gate = SessionOperationGate("layered", "chromium")
+    started = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("browser_click"):
+            started.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(owner())
+    await started.wait()
+
+    assert await gate.enforce_active_timeout(0.0) is True
+    # A second, genuine cancellation before the owner resumes.
+    task.cancel()
+
+    done, _pending = await asyncio.wait({task}, timeout=5)
+    assert done
+    assert task.cancelled(), "a genuine cancel layered on the ceiling's was swallowed"

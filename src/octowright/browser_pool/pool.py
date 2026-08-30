@@ -161,15 +161,10 @@ class BrowserPool:
         ``octowright_browser_launch_failed_total`` uses for its ``error``
         label).
         """
-        # Clamp to the engines that actually exist. ``kind`` reaches launch()
-        # straight from the caller and is only validated deeper, in
-        # LaunchOptions.validate(), so a failed launch records whatever was
-        # passed -- and browser_launch's signature is ``kind: str``, not a
-        # Literal, so the MCP schema accepts anything. Unclamped, an LLM could
-        # put arbitrary caller-controlled strings into a permanent, never-
-        # evicted dict echoed verbatim into every octowright_status(). The
-        # repo bounds every other label this way (the ``kind`` metric label,
-        # the 256-entry macro-label cap with its overflow bucket).
+        # Belt and braces: launch() already clamps, since the same value also
+        # becomes a metric label. Repeated here so a future direct caller
+        # cannot put an arbitrary string into a permanent, never-evicted dict
+        # echoed verbatim into every octowright_status().
         kind = kind if kind in SUPPORTED_KINDS else "unknown"
         at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         if exc is None:
@@ -185,7 +180,18 @@ class BrowserPool:
         return {kind: dict(v) for kind, v in self._engine_health.items()}
 
     async def launch(self, **options: Any) -> dict[str, Any]:
-        kind_hint = options.get("kind") or "chromium"
+        # Clamp here, not in _record_engine_health: kind_hint feeds TWO sinks.
+        # It also becomes the `kind` label on octowright_browser_launch_failed_
+        # _total and the octowright.browser.launch span attribute, and `kind`
+        # reaches launch() straight from the caller (browser_launch's signature
+        # is `kind: str`, not a Literal) and is validated only deeper, in
+        # LaunchOptions.validate(). An unbounded metric label is worse than an
+        # unbounded dict: it creates a permanent time series per distinct value
+        # in the metrics backend, fleet-wide. AGENTS.md states this label is
+        # bounded to the three engines plus "unknown"; this is what makes that
+        # true.
+        raw_kind = options.get("kind") or "chromium"
+        kind_hint = raw_kind if raw_kind in SUPPORTED_KINDS else "unknown"
         try:
             result = await self._launch_with_driver_retry(options, kind_hint)
         except Exception as exc:
