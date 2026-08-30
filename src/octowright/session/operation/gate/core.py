@@ -434,6 +434,11 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
             # needs to know how many cancellations were ALREADY pending on
             # this task before it adds its own.
             self._owner_cancel_baseline = waiter.task.cancelling()
+            # Reset the ceiling marker HERE rather than in _release, so it
+            # survives long enough for the release-window absorption to read
+            # it (N1). A new owner is the point at which any previous
+            # owner's marker becomes meaningless.
+            self._ceiling_cancelled_task = None
             self._depth = 1
         self._publish_diagnostics_locked()
         waiter.ready.set_result(None)
@@ -503,10 +508,38 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
             self._owner_task = None
             self._root_operation = None
             self._active_since = None
-            self._owner_cancel_baseline = None
-            self._ceiling_cancelled_task = None
+            # _owner_cancel_baseline / _ceiling_cancelled_task are deliberately
+            # NOT cleared here. _release runs inside operation()'s finally, and
+            # the absorption check runs AFTER it -- clearing here would make a
+            # ceiling breach landing in the release window unreadable, which is
+            # N1. A new owner resets both in _grant_next_locked; a ceiling
+            # breach leaves the gate permanently broken, so no new grant follows
+            # one and the residue is unreachable.
             self._grant_next_locked()
             self._publish_diagnostics_locked()
+
+    def _absorb_ceiling_cancel(self, lease: _LeaseToken) -> bool:
+        """Is the arriving ``CancelledError`` the ceiling's own, for THIS lease?
+
+        Only then may it be converted. Naming one specific task -- rather
+        than absorbing any cancellation -- is what keeps a genuine cancel
+        (client disconnect, daemon shutdown, an outer ``asyncio.timeout``
+        scope) propagating as cancellation. ``uncancel()`` is called only
+        after the identity check confirms the ceiling asked, and exactly
+        once, mirroring ``asyncio.timeout.__aexit__``.
+        """
+        if self._ceiling_cancelled_task is not lease.owner_task:
+            return False
+        self._ceiling_cancelled_task = None
+        baseline = self._owner_cancel_baseline
+        return baseline is not None and lease.owner_task.uncancel() <= baseline
+
+    def _aborted_error(self, lease: _LeaseToken) -> SessionOperationAbortedError:
+        return SessionOperationAbortedError(
+            f"session {self.instance_id!r} operation {lease.operation_name!r} was "
+            f"aborted: the active-duration ceiling cancelled it after it exceeded its "
+            f"budget (kind={self.kind!r}); this gate is now broken -- relaunch the session"
+        )
 
     @asynccontextmanager
     async def operation(
@@ -557,16 +590,8 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
             yield
         except asyncio.CancelledError:
             outcome = "cancelled"
-            if self._ceiling_cancelled_task is lease.owner_task:
-                self._ceiling_cancelled_task = None
-                baseline = self._owner_cancel_baseline
-                if baseline is not None and lease.owner_task.uncancel() <= baseline:
-                    raise SessionOperationAbortedError(
-                        f"session {self.instance_id!r} operation {lease.operation_name!r} was "
-                        f"aborted: the active-duration ceiling cancelled it after it exceeded its "
-                        f"budget (kind={self.kind!r}); this gate is now broken -- relaunch the "
-                        f"session"
-                    ) from None
+            if self._absorb_ceiling_cancel(lease):
+                raise self._aborted_error(lease) from None
             raise
         except BaseException as exc:
             outcome = "error"
@@ -580,7 +605,24 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
             # against the ``_LeaseToken`` captured above instead, or every
             # cancellation-safe exit would falsely trip the ownership
             # invariant.
-            await _run_shielded(self._release(lease, outcome))
+            # N1 (whole-branch re-review): the absorption in the
+            # except-CancelledError clause above does NOT cover this
+            # release. A `finally` is a sibling of that clause, not nested
+            # in it, so a ceiling breach landing while the owner is
+            # suspended here -- between "body returned" and "release
+            # completed" -- escaped as a bare CancelledError with the
+            # original blast radius: CONNECTION_CLOSED for the wedged call
+            # AND every concurrent healthy call on that connection. The
+            # window is one scheduler iteration wide, which is why the
+            # first round missed it; the consequence when it lands is
+            # identical. Reproduced by sweeping the phase between body
+            # completion and the ceiling check.
+            try:
+                await _run_shielded(self._release(lease, outcome))
+            except asyncio.CancelledError:
+                if self._absorb_ceiling_cancel(lease):
+                    raise self._aborted_error(lease) from None
+                raise
             # Fire from the INNERMOST `operation()` frame that sees a
             # SessionCallTimeoutError escape it -- not "the root lease", which
             # assumes the timeout always makes it all the way out. It does
