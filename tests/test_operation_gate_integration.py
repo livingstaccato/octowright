@@ -506,6 +506,73 @@ async def test_active_timeout_ceiling_unwedges_a_close_in_progress(
     assert session.instance_id not in pool._closing_sessions
 
 
+@pytest.mark.asyncio
+async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks_cancelled_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The already-granted-coordinator sub-case (Task 3 review round 2, N1).
+
+    Unlike the still-queued case above, here nothing else holds the gate
+    when the close is requested, so ``reserve_close`` grants the close
+    reservation immediately and the close COORDINATOR task itself becomes
+    the gate's owner while it runs the real teardown body. Driven, not
+    reasoned about: ``context.close()`` is replaced with a coroutine that
+    hangs until cancelled, so ``enforce_active_timeout`` cancels the
+    coordinator mid-``_teardown_after_close_cutoff``.
+
+    ``close_helpers.prepare_then_teardown`` catches that ``CancelledError``
+    with a bare ``except BaseException`` and RETURNS it as its ``error``
+    value instead of raising -- by design, since it must still attempt the
+    teardown even after an earlier step failed. That means
+    ``close_operation``'s body never raises, ``outcome`` stays ``"ok"``, and
+    ``_release_close`` (whose own ``CancelledError`` -> ``SessionClosedError``
+    conversion only runs for ``outcome != "ok"``) returns without converting
+    anything. Before the ``fail_close``-level fix, the raw ``CancelledError``
+    reached ``_coordinate_close``'s own ``fail_close`` call untouched, and
+    ``entry.reservation.wait()`` raised it as-is -- a ``BaseException`` an
+    ``except Exception`` handler cannot catch, and one that marks the
+    AWAITING task cancelled too. This test proves the caller instead gets an
+    ordinary, catchable ``SessionClosedError``.
+    """
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.browser_pool.lifecycle import reserve_close_browser
+    from octowright.session.operation_gate import SessionClosedError
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session("wedge-teardown", tmp_path)
+
+    close_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def _hang_close() -> None:
+        close_entered.set()
+        await never.wait()
+
+    # Overrides the AsyncMock _real_pool_session already installed --
+    # replaces "resolves immediately" with "hangs until cancelled".
+    session.context.close = _hang_close
+    pool._sessions[session.instance_id] = session
+
+    entry = await reserve_close_browser(pool, session.instance_id, force=True, reason="agent_close")
+    async with asyncio.timeout(5):
+        await close_entered.wait()
+    # Confirms the coordinator -- not some other task -- now owns the gate,
+    # so the cancellation below targets the teardown itself, not a
+    # displaced prior owner (that shape is the OTHER test above).
+    assert session.operation_snapshot()["active_operation"] == "browser_close"
+
+    async with asyncio.timeout(5):
+        assert await session._operation_gate.enforce_active_timeout(0.0) is True
+
+    async with asyncio.timeout(5):
+        with pytest.raises(SessionClosedError):
+            await entry.reservation.wait()
+
+    assert session.instance_id not in pool._sessions
+    assert session.instance_id not in pool._closing_sessions
+
+
 def _json_route_request(sid: str, payload: dict[str, Any]) -> SimpleNamespace:
     """Minimal fake Starlette ``Request`` for calling a session route directly.
 

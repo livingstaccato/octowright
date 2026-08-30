@@ -247,4 +247,35 @@ class _CloseGateMixin:
         self._state = OperationGateState.CLOSED
         self._fail_queued_locked(SessionClosedError, reason="session_closed")
         if not reservation.outcome.done():
-            reservation.outcome.set_exception(exc)
+            reservation.outcome.set_exception(self._terminal_close_failure(reservation, exc))
+
+    def _terminal_close_failure(self, reservation: CloseReservation, exc: BaseException) -> BaseException:
+        """Never let a raw ``CancelledError`` reach a ``reservation.wait()`` caller.
+
+        ``_release_close`` already converts a cancellation it sees directly
+        into this same ``SessionClosedError`` -- but a teardown path can
+        swallow the cancellation itself and return it as an ordinary value
+        instead of raising it (``close_helpers.prepare_then_teardown`` /
+        ``core_ops_standalone_close._run_standalone_teardown`` both do this
+        by design, since they must always attempt the teardown even when a
+        preceding step failed or was cancelled). When that happens
+        ``close_operation`` never sees an exception at all -- ``outcome``
+        stays ``"ok"`` and ``_release_close`` returns without converting
+        anything -- so the raw ``CancelledError`` reaches ``fail_close``
+        here as an ordinary ``exc`` argument instead. A ``CancelledError``
+        is a ``BaseException``, not caught by an MCP tool handler's
+        ``except Exception``, and marks the AWAITING task cancelled too if
+        it escapes uncaught -- exactly the "session-scoped problem looks
+        like something bigger" failure this whole plan exists to prevent.
+        This is the single choke point every ``fail_close`` caller passes
+        through (the pool coordinator, the standalone-session coordinator,
+        and ``_release_close`` itself), so normalizing here catches the
+        case regardless of which teardown path let the cancellation through
+        without deliberately duplicating the check at each call site.
+        """
+        if isinstance(exc, asyncio.CancelledError):
+            return SessionClosedError(
+                f"session {self.instance_id!r} close operation {reservation.operation_name!r} was "
+                f"interrupted before completing; the session is now closed (kind={self.kind!r})"
+            )
+        return exc

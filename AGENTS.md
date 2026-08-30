@@ -369,8 +369,10 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
   `HEADED_LAUNCH_CONCURRENCY_DEFAULT`.
 - `OCTOWRIGHT_UNBOUNDED_CALL_TIMEOUT_SECONDS` — per-call budget on a
   Playwright call that accepts no `timeout` of its own (`evaluate`, `title`,
-  `content`, and ~25 similar sites — see `session/timeouts.bounded`, which
-  every such call site is routed through). **ON by default at `30` seconds**,
+  `content`, and every other such call site — all routed through
+  `session/timeouts.bounded` and pinned there by an AST scan,
+  `tests/session/test_no_unbounded_calls.py`, rather than a count kept by
+  hand here). **ON by default at `30` seconds**,
   unlike this repo's other new quotas: a target that stops answering
   (observed on 2026-08-29 as a full test suite wedged for 12.6 hours against
   a broken WebKit) hangs the calling coroutine forever otherwise, and
