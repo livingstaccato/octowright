@@ -436,6 +436,76 @@ async def test_reserve_close_browser_require_fresh_rejects_shared_ticket(
     await first.reservation.wait()
 
 
+@pytest.mark.asyncio
+async def test_active_timeout_ceiling_unwedges_a_close_in_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closing a wedged session is the first thing a human or agent does --
+    the ceiling must not be disarmed the moment ``reserve_close`` moves the
+    gate to CLOSING, or the backstop is off exactly when someone reaches
+    for it (Task 3 review, I3).
+
+    Real close machinery end to end: ``reserve_close_browser`` queues the
+    close reservation's waiter behind the still-active wedged owner (it can
+    never be granted while that owner holds the gate), so before this fix
+    ``enforce_active_timeout`` returned ``False`` for any non-OPEN state and
+    the close call hung forever. Extending it to also act while CLOSING
+    fails that queued waiter via the gate's ordinary ``_break_locked`` path,
+    which resolves ``reservation.wait()`` with an error instead of hanging,
+    AND ``_coordinate_close``'s own ``finally`` block still runs regardless
+    of whether the close body ever executed -- so the durability guarantee
+    (no permanently-stuck ``_sessions``/``_closing_sessions`` entry) holds
+    even though the underlying Playwright teardown itself never got a
+    chance to run for this specific reservation.
+    """
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.browser_pool.lifecycle import reserve_close_browser
+    from octowright.session.operation_gate import OperationGateInvariantError
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session("wedge-close", tmp_path)
+    pool._sessions[session.instance_id] = session
+
+    owner_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def owner() -> None:
+        async with session.operation("wedged"):
+            owner_entered.set()
+            await never.wait()
+
+    owner_task = asyncio.create_task(owner())
+    async with asyncio.timeout(5):
+        await owner_entered.wait()
+
+    entry = await reserve_close_browser(pool, session.instance_id, force=True, reason="agent_close")
+    # reserve_close_browser only returns after reserve_close has moved the
+    # gate to CLOSING under its own admission lock -- no polling needed.
+    assert session.operation_snapshot()["state"] == "closing"
+
+    # A ceiling of 0.0 breaches unconditionally (duration is never negative
+    # against a monotonic clock), so this doesn't need a fake clock -- the
+    # scenario under test is the CLOSING-state gap, not clock arithmetic.
+    async with asyncio.timeout(5):
+        assert await session._operation_gate.enforce_active_timeout(0.0) is True
+
+    done, _pending = await asyncio.wait({owner_task}, timeout=5)
+    assert done, "owner task was never cancelled -- the ceiling did not act while CLOSING"
+    assert owner_task.cancelled()
+
+    # The close call itself must resolve -- not hang -- once the ceiling acts.
+    async with asyncio.timeout(5):
+        with pytest.raises(OperationGateInvariantError):
+            await entry.reservation.wait()
+
+    # Durability: the coordinator's own `finally` still drains the pool's
+    # bookkeeping even though close_operation's body (and therefore the
+    # actual Playwright teardown) never ran for this reservation.
+    assert session.instance_id not in pool._sessions
+    assert session.instance_id not in pool._closing_sessions
+
+
 def _json_route_request(sid: str, payload: dict[str, Any]) -> SimpleNamespace:
     """Minimal fake Starlette ``Request`` for calling a session route directly.
 
