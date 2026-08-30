@@ -546,7 +546,7 @@ class SessionOperationGate(_CloseGateMixin):
         ``session/timeouts.bounded`` yet: rather than a per-call budget, this
         reads what the gate already tracks for its ROOT lease --
         ``_active_since`` and ``_root_operation`` -- and, if one operation
-        has held the gate open longer than the ceiling, cancels the owning
+        has held the gate open at least as long as the ceiling, cancels the owning
         task and drives the gate to ``broken`` through the same
         ``_break_locked`` invariant path every other broken-gate transition
         uses. A subsequent operation on this gate then fails fast with the
@@ -562,6 +562,33 @@ class SessionOperationGate(_CloseGateMixin):
         off) costs one uncontended lock acquire and nothing else -- no
         Playwright call, no per-session task.
 
+        Acts on ``OPEN`` **and** ``CLOSING`` (never ``CLOSED``/``BROKEN``,
+        which have no active root lease left to break). Closing a wedged
+        session is the first thing a human or agent reaches for, and
+        ``reserve_close`` queues the close reservation's waiter behind
+        whichever owner already holds the gate rather than granting it --
+        that owner is exactly what this method may need to cancel, so
+        checking ``OPEN`` only would disarm the ceiling the moment a close
+        was requested and leave ``reservation.wait()`` hanging forever
+        instead. Breaking here still resolves the close instead of
+        stranding it: ``_break_locked``'s ``_fail_queued_locked`` fails the
+        queued close waiter, which resolves ``reservation.wait()`` with an
+        error (not a hang) for the caller, and ``_coordinate_close``'s own
+        ``finally`` block runs regardless of whether ``close_operation``'s
+        body ever executed, so the pool's bookkeeping (``_sessions``,
+        ``_closing_sessions``, the manifest, the close-event publish) still
+        drains -- verified end to end in
+        ``tests/test_operation_gate_integration.py::test_active_timeout_ceiling_unwedges_a_close_in_progress``.
+        The one thing that does NOT happen on this path: the actual
+        Playwright teardown inside ``close_operation``'s body never runs for
+        a reservation that was still queued (as opposed to already granted
+        and itself wedged mid-teardown, which this method can also cancel,
+        and which unwinds through the pre-existing ``_release_close``
+        cancellation branch instead) -- but an unclosed browser process on a
+        session that was already wedged and never going to close cleanly
+        either way predates this feature; what changes is that the caller
+        and the pool's own bookkeeping are no longer stuck waiting on it.
+
         Deliberately does NOT raise or publish a ``SessionCallTimeoutError``.
         That machinery (``session/timeouts.bounded``, this gate's
         ``on_call_timeout`` hook) exists for a call site that knows its own
@@ -571,14 +598,20 @@ class SessionOperationGate(_CloseGateMixin):
         ``asyncio.CancelledError`` with no ``__cause__`` linking it to a
         ``SessionCallTimeoutError``, so ``operation()``'s own ``finally``
         block (the innermost-lease publish ``on_call_timeout`` machinery)
-        does not fire for a ceiling breach -- a single wedge therefore
-        produces exactly one signal, never both an "unresponsive"
-        ``SessionCrashedEvent`` AND a ceiling-breach invariant break that
-        would contradict each other. The two backstops report through
-        deliberately separate channels: a per-call timeout that escapes a
-        gated operation is a target that answered *its own* budget
-        overrun (``on_call_timeout``); a ceiling breach is the gate itself
-        noticing nobody put a budget on the call at all.
+        does not fire for a ceiling breach, PROVIDED the gated code under
+        the owning task does not itself convert that ``CancelledError`` into
+        a different exception type (e.g. catching it and raising a
+        ``SessionCallTimeoutError(...) from ce``) -- no production call site
+        does this today (checked every ``except asyncio.CancelledError`` /
+        ``except BaseException`` site that can swallow a cancellation; the
+        one that can re-raises the identical object), so in practice a
+        single wedge produces exactly one signal, never both an
+        "unresponsive" ``SessionCrashedEvent`` AND a ceiling-breach invariant
+        break that would contradict each other. The two backstops report
+        through deliberately separate channels: a per-call timeout that
+        escapes a gated operation is a target that answered *its own*
+        budget overrun (``on_call_timeout``); a ceiling breach is the gate
+        itself noticing nobody put a budget on the call at all.
 
         Returns True if a breach was found and handled, else False. The
         caller (``housekeeping._enforce_operation_active_timeout_once``)
@@ -587,7 +620,7 @@ class SessionOperationGate(_CloseGateMixin):
         session's (healthy or also-wedged) gate from being checked.
         """
         async with self._admission_lock:
-            if self._state is not OperationGateState.OPEN:
+            if self._state not in (OperationGateState.OPEN, OperationGateState.CLOSING):
                 return False
             owner = self._owner_task
             operation = self._root_operation
