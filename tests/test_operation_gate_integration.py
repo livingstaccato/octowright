@@ -578,6 +578,97 @@ async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks
     assert session.instance_id not in pool._closing_sessions
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cancellation_lands",
+    ["inside_prepare_then_teardown", "before_prepare_then_teardown"],
+)
+async def test_ceiling_abort_produces_the_same_error_type_regardless_of_where_it_lands(
+    cancellation_lands: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SessionCloseAbortedError must be uniform (Task 3 review round 4,
+    Defect 2). Two landing spots for the SAME cause -- a ceiling breach
+    cancelling a close that is already granted and mid-teardown:
+
+    - ``inside_prepare_then_teardown``: the cancellation lands in
+      ``context.close()``, which ``close_helpers.prepare_then_teardown``
+      catches and RETURNS rather than raising (round 2's scenario, the
+      other test above). ``close_operation``'s body never sees an
+      exception, ``outcome`` stays ``"ok"``, and ``_release_close`` returns
+      without converting anything -- the raw ``CancelledError`` reaches
+      ``fail_close`` from ``_coordinate_close``'s own ``finally``.
+    - ``before_prepare_then_teardown``: the cancellation lands in
+      ``close_helpers.remove_active_identity`` instead, which runs BEFORE
+      ``prepare_then_teardown`` and has nothing swallowing it -- the
+      ``CancelledError`` propagates directly out of ``close_operation``'s
+      body, hitting ``_release_close``'s ``outcome != "ok"`` branch (the
+      SAME branch a bare, direct ``coordinator_task.cancel()`` reaches at
+      the gate level -- see ``tests/session/test_operation_gate.py::
+      test_cancelled_close_coordinator_does_not_wedge_the_gate``).
+
+    Before this fix, ``_release_close`` built its OWN plain
+    ``SessionClosedError`` for the second case while ``_terminal_close_
+    failure`` built ``SessionCloseAbortedError`` for the first -- one cause,
+    two different error types purely depending on cancellation timing. This
+    pins that both landing spots now produce the identical TYPE (not just
+    an ``isinstance`` match against the shared base class).
+    """
+    from octowright.browser_pool import close_helpers as _close_helpers
+    from octowright.browser_pool.lifecycle import reserve_close_browser
+    from octowright.session.operation_gate import SessionCloseAbortedError
+    from tests._pool_invariants import wait_until
+
+    monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
+    pool = BrowserPool()
+    session = _real_pool_session(f"wedge-{cancellation_lands}", tmp_path)
+
+    hang_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    if cancellation_lands == "inside_prepare_then_teardown":
+
+        async def _hang_close() -> None:
+            hang_entered.set()
+            await never.wait()
+
+        session.context.close = _hang_close
+    else:
+
+        async def _hang_remove_active_identity(_pool: Any, _instance_id: str, _session: Any) -> None:
+            hang_entered.set()
+            await never.wait()
+
+        monkeypatch.setattr(_close_helpers, "remove_active_identity", _hang_remove_active_identity)
+
+    pool._sessions[session.instance_id] = session
+
+    entry = await reserve_close_browser(pool, session.instance_id, force=True, reason="agent_close")
+    async with asyncio.timeout(5):
+        await hang_entered.wait()
+    assert session.operation_snapshot()["active_operation"] == "browser_close"
+
+    async with asyncio.timeout(5):
+        assert await session._operation_gate.enforce_active_timeout(0.0) is True
+
+    async with asyncio.timeout(5):
+        with pytest.raises(SessionCloseAbortedError) as excinfo:
+            await entry.reservation.wait()
+    # Exact type, not just isinstance -- the whole point is that neither
+    # landing spot silently falls back to the plain base class.
+    assert type(excinfo.value) is SessionCloseAbortedError
+
+    # The "before" landing resolves `reservation.outcome` from INSIDE
+    # `close_operation`'s own `finally` (`_release_close`), a beat before
+    # `_coordinate_close`'s own outer `finally` (which pops the pool
+    # registries) necessarily runs -- both are scheduled via separate
+    # `call_soon` wake-ups, so asserting immediately after the raise above
+    # is a real, pre-existing race, not something this fix changed. Poll
+    # rather than assume a fixed number of loop turns (same reasoning as
+    # `wait_until`'s own docstring).
+    await wait_until(lambda: session.instance_id not in pool._sessions)
+    await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
+
 def _json_route_request(sid: str, payload: dict[str, Any]) -> SimpleNamespace:
     """Minimal fake Starlette ``Request`` for calling a session route directly.
 

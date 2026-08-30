@@ -22,6 +22,7 @@ from octowright.session.operation_gate import (
     OperationGateSnapshot,
     OperationGateState,
     SessionBusyTimeoutError,
+    SessionCloseAbortedError,
     SessionClosedError,
     SessionClosingError,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "OperationGateSnapshot",
     "OperationGateState",
     "SessionBusyTimeoutError",
+    "SessionCloseAbortedError",
     "SessionClosedError",
     "SessionClosingError",
 ]

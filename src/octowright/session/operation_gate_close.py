@@ -198,14 +198,27 @@ class _CloseGateMixin:
             # same terminal way an in-band close finishes (state closed,
             # shared outcome set) so no `reservation.wait()` caller hangs
             # forever and a retry lands on the `state is CLOSED` branch above
-            # instead of a phantom-owner invariant error.
-            if exc is None or isinstance(exc, asyncio.CancelledError):
-                failure: BaseException = SessionClosedError(
+            # instead of a phantom-owner invariant error. Hand `fail_close`
+            # the RAW `exc` rather than converting a `CancelledError` here --
+            # `_terminal_close_failure` (below) is the SOLE place that
+            # normalizes one, so a cancellation reaching this branch
+            # directly (propagating cleanly through `close_operation`'s
+            # body) produces the exact same `SessionCloseAbortedError` as
+            # one a teardown helper swallowed and returned instead of
+            # raising, rather than a plain `SessionClosedError` for what is
+            # the same underlying cause with two different landing spots.
+            # `exc is None` (outcome != "ok" with nothing caught -- not
+            # reachable via `close_operation` today, but defensive) still
+            # needs a synthesized failure, since there is nothing to hand
+            # `fail_close` otherwise.
+            failure: BaseException = (
+                SessionClosedError(
                     f"session {self.instance_id!r} close operation {reservation.operation_name!r} was "
                     f"interrupted before completing; the session is now closed (kind={self.kind!r})"
                 )
-            else:
-                failure = exc
+                if exc is None
+                else exc
+            )
             self.fail_close(reservation, failure)
 
     def mark_closed_external(self) -> None:
@@ -253,26 +266,39 @@ class _CloseGateMixin:
     def _terminal_close_failure(self, reservation: CloseReservation, exc: BaseException) -> BaseException:
         """Never let a raw ``CancelledError`` reach a ``reservation.wait()`` caller.
 
-        ``_release_close`` already converts a cancellation it sees directly
-        into this same ``SessionClosedError`` -- but a teardown path can
-        swallow the cancellation itself and return it as an ordinary value
-        instead of raising it (``close_helpers.prepare_then_teardown`` /
-        ``core_ops_standalone_close._run_standalone_teardown`` both do this
-        by design, since they must always attempt the teardown even when a
-        preceding step failed or was cancelled). When that happens
-        ``close_operation`` never sees an exception at all -- ``outcome``
-        stays ``"ok"`` and ``_release_close`` returns without converting
-        anything -- so the raw ``CancelledError`` reaches ``fail_close``
-        here as an ordinary ``exc`` argument instead. A ``CancelledError``
-        is a ``BaseException``, not caught by an MCP tool handler's
-        ``except Exception``, and marks the AWAITING task cancelled too if
-        it escapes uncaught -- exactly the "session-scoped problem looks
-        like something bigger" failure this whole plan exists to prevent.
-        This is the single choke point every ``fail_close`` caller passes
-        through (the pool coordinator, the standalone-session coordinator,
-        and ``_release_close`` itself), so normalizing here catches the
-        case regardless of which teardown path let the cancellation through
-        without deliberately duplicating the check at each call site.
+        The SOLE normalizer -- ``_release_close`` deliberately hands this
+        its raw ``exc`` rather than converting a cancellation itself, so a
+        ``CancelledError`` reaching ``fail_close`` produces the exact same
+        ``SessionCloseAbortedError`` regardless of WHERE it landed: swallowed
+        and returned by a teardown helper (``close_helpers.prepare_then_
+        teardown`` / ``core_ops_standalone_close._run_standalone_teardown``
+        both do this by design, since they must always attempt the teardown
+        even when a preceding step failed or was cancelled -- ``close_
+        operation`` then never sees an exception at all, ``outcome`` stays
+        ``"ok"``, and ``_release_close`` returns before ever calling
+        ``fail_close``, so the raw ``CancelledError`` reaches here from
+        ``_coordinate_close``'s own ``finally`` instead), OR propagating
+        directly through ``close_operation``'s body with nothing in between
+        to swallow it (``_release_close``'s ``outcome != "ok"`` branch,
+        reachable via a direct cancellation of the coordinator task --
+        see ``tests/session/test_operation_gate.py::
+        test_cancelled_close_coordinator_does_not_wedge_the_gate`` for the
+        gate-level shape of it). Before this was the sole choke point, the
+        two landing spots built two DIFFERENT types for the same underlying
+        cause -- a plain ``SessionClosedError`` from ``_release_close``,
+        this ``SessionCloseAbortedError`` from here -- so a caller like
+        ``relaunch._close_with_fallback_snapshot`` that discriminates on
+        type would treat one as an ordinary safe race and the other as the
+        loud failure it actually is, purely depending on cancellation
+        timing. A ``CancelledError`` is a ``BaseException``, not caught by
+        an MCP tool handler's ``except Exception``, and marks the AWAITING
+        task cancelled too if it escapes uncaught -- exactly the
+        "session-scoped problem looks like something bigger" failure this
+        whole plan exists to prevent. This is the single choke point every
+        ``fail_close`` caller passes through (the pool coordinator, the
+        standalone-session coordinator, and ``_release_close`` itself), so
+        normalizing here -- and ONLY here -- catches every landing spot
+        without duplicating (and risking diverging) the check anywhere else.
         """
         if isinstance(exc, asyncio.CancelledError):
             return SessionCloseAbortedError(
