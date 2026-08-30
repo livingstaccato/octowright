@@ -33,7 +33,7 @@ from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
 from octowright.browser_pool.visuals import _tile_args_for_chromium
-from octowright.defaults import RECORDINGS_DIR, get_default_url
+from octowright.defaults import RECORDINGS_DIR, SUPPORTED_KINDS, get_default_url
 from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
 from octowright.session import BrowserSession
 from octowright.session.operation.gate import (
@@ -161,6 +161,16 @@ class BrowserPool:
         ``octowright_browser_launch_failed_total`` uses for its ``error``
         label).
         """
+        # Clamp to the engines that actually exist. ``kind`` reaches launch()
+        # straight from the caller and is only validated deeper, in
+        # LaunchOptions.validate(), so a failed launch records whatever was
+        # passed -- and browser_launch's signature is ``kind: str``, not a
+        # Literal, so the MCP schema accepts anything. Unclamped, an LLM could
+        # put arbitrary caller-controlled strings into a permanent, never-
+        # evicted dict echoed verbatim into every octowright_status(). The
+        # repo bounds every other label this way (the ``kind`` metric label,
+        # the 256-entry macro-label cap with its overflow bucket).
+        kind = kind if kind in SUPPORTED_KINDS else "unknown"
         at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         if exc is None:
             self._engine_health[kind] = {"outcome": "ok", "at": at}
