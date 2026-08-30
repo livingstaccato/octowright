@@ -6,9 +6,17 @@ This package is entirely optional. Octowright core has no terminal-specific code
 
 ## Installation
 
-This package is **not on PyPI** — `uv pip install octowright-terminal` answers "No matching distribution found". Only its dependencies are: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published there on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout any more (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`). The package itself is installed from that repo.
+This package is **not on PyPI yet** — `uv pip install octowright-terminal` still answers "No matching distribution found". Its dependencies are all there: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout any more (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`).
 
-It also needs a core that carries the plugin machinery (`octowright.plugins`). **0.17.0 is the first release that does** — the published wheel contains `octowright/plugins/`. The `octowright` dependency in this package's `pyproject.toml` is unpinned, so installing against an *older* PyPI core still succeeds and then fails at daemon start with `ModuleNotFoundError: No module named 'octowright.plugins'`. Core and plugin still come from the same checkout in practice, now because this package is unpublished rather than because core lacks the machinery.
+The release path is wired: the octowright repo's `release.yml` builds this package into its own `dist-terminal/` and publishes it alongside core from the same GitHub Release, so the next release is its first upload. One thing gates that, and it is not something the repo can do for itself — PyPI needs a trusted publisher for the `octowright-terminal` project, registered as a *pending publisher* because the name has never been uploaded. Until it lands, install from the repo:
+
+```bash
+uv pip install ./packages/octowright-terminal   # from an octowright checkout
+```
+
+**Versions here move independently of core's.** This package is at 0.1.0 while core is at 0.17.0, because locking them would force a plugin release on every core release even when nothing here changed. The practical consequence is that most core releases re-present a plugin version the index already has, which is why the plugin's publish steps set `skip-existing` and core's do not.
+
+It needs a core carrying the plugin machinery (`octowright.plugins`). **0.17.0 is the first release that does** — the published wheel contains `octowright/plugins/`. That floor is declared here as `octowright>=0.17.0`, so an older core fails at resolve time with a readable error instead of installing cleanly and then dying at daemon start with `ModuleNotFoundError: No module named 'octowright.plugins'`.
 
 From that checkout, this package is a `[tool.uv.workspace]` member and installs in editable mode from the `terminal` dependency group — deliberately its own group rather than part of `dev`, so core stays uterm-free unless asked:
 
