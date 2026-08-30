@@ -168,6 +168,39 @@ async def test_capture_create_evaluate_requires_expression(tmp_path: Path, _patc
         await _tools.capture_create("abc", source="evaluate")
 
 
+@pytest.mark.anyio
+async def test_capture_create_markdown_failure_is_generic_without_a_recorded_cause(
+    tmp_path: Path, _patch_pool: MagicMock
+) -> None:
+    """capture_markdown() returning None with no recorded cause (an ordinary
+    rendering failure) keeps the existing generic message."""
+    s = _session(tmp_path)
+    s.capture_markdown = AsyncMock(return_value=None)
+    _patch_pool.get.return_value = s
+    with pytest.raises(RuntimeError, match="did not produce a file"):
+        await _tools.capture_create("abc", source="markdown")
+
+
+@pytest.mark.anyio
+async def test_capture_create_markdown_names_a_hung_target(tmp_path: Path, _patch_pool: MagicMock) -> None:
+    """capture_markdown() swallows its own exceptions and always returns
+    None on failure, so a hung target and an ordinary rendering failure
+    look identical unless this consults the recorded cause. When it was a
+    SessionCallTimeoutError, capture_create(source="markdown") must say so
+    rather than the generic "did not produce a file"."""
+    from octowright.session.timeouts import SessionCallTimeoutError
+
+    s = _session(tmp_path)
+    s.capture_markdown = AsyncMock(return_value=None)
+    s._last_markdown_capture_error = SessionCallTimeoutError(
+        "markdown_capture did not answer within 10.0s -- the browser target is "
+        "unresponsive. Relaunch this session; other sessions are unaffected."
+    )
+    _patch_pool.get.return_value = s
+    with pytest.raises(SessionCallTimeoutError, match="unresponsive"):
+        await _tools.capture_create("abc", source="markdown")
+
+
 def test_capture_summary_delegates_to_capture_store(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 

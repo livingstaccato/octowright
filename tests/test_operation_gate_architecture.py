@@ -230,7 +230,7 @@ def test_rejects_browser_operation_with_dynamic_third_argument(tmp_path: Path) -
 
 def test_the_two_real_operation_name_forwarders_are_registered() -> None:
     assert set(OPERATION_NAME_FORWARDERS) == {
-        "session/operation_gate.py:gated_operation._decorate._wrapped",
+        "session/operation/gate/core.py:gated_operation._decorate._wrapped",
         "server/browser/_operation.py:browser_operation",
     }
     for reason in OPERATION_NAME_FORWARDERS.values():

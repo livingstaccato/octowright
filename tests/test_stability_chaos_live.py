@@ -162,7 +162,7 @@ async def test_external_page_close_rejects_queued_waiter_without_poisoning_pool(
     from octowright import defaults as _defaults
     from octowright.browser_pool import BrowserPool
     from octowright.browser_pool import pool as _pool
-    from octowright.session.operation_gate import SessionClosedError, SessionClosingError
+    from octowright.session.operation.gate import SessionClosedError, SessionClosingError
 
     rec = tmp_path / "rec"  # type: ignore[operator]
     rec.mkdir()

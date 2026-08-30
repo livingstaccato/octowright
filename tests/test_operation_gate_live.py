@@ -35,7 +35,7 @@ import pytest
 from octowright.browser_pool import BrowserPool
 from octowright.macros import storage as macro_storage
 from octowright.macros.execution import run_macro
-from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosingError
+from octowright.session.operation.gate import SessionBusyTimeoutError, SessionClosingError
 
 pytestmark = [pytest.mark.live_browser, pytest.mark.integration_local]
 

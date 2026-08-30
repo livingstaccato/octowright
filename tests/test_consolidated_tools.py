@@ -41,7 +41,7 @@ def _gated_session(*, instance_id: str = "inst-1", kind: str = "chromium") -> Ma
     ``session.operation(...)`` directly from inside the pool's close
     coordinator, so a bare unspecced MagicMock (auto-mocked, non-awaitable
     methods) cannot stand in for the session anymore."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     session = MagicMock()
     session.instance_id = instance_id

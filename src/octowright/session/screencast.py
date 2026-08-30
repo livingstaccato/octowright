@@ -14,13 +14,14 @@ from typing import Any, LiteralString, Protocol
 
 from provide.telemetry import get_logger
 
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     USE_DEFAULT,
     SessionClosedError,
     SessionClosingError,
+    SessionOperationAbortedError,
     UseDefault,
 )
-from octowright.session.operation_gate_types import _join_after_cancellation
+from octowright.session.operation.gate.types import _join_after_cancellation
 
 log = get_logger(__name__)
 
@@ -260,7 +261,7 @@ class ScreencastManager:
         try:
             async with self._session.operation("screencast_stop"), self._lock:
                 await self._remove_viewer_locked(viewer)
-        except (SessionClosingError, SessionClosedError):
+        except (SessionClosingError, SessionClosedError, SessionOperationAbortedError):
             # The session can close out from under a still-attached viewer
             # (e.g. the dashboard was open when the browser closed) -- the
             # gate correctly refuses a fresh "screencast_stop" lease at that

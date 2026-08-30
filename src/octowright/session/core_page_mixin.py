@@ -27,8 +27,9 @@ from octowright.session.aria_redaction import (
 from octowright.session.aria_redaction import (
     aria_snapshot as redacted_aria_snapshot,
 )
-from octowright.session.operation_gate import gated_operation
+from octowright.session.operation.gate import gated_operation
 from octowright.session.screencast import notify_active_page
+from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
@@ -313,7 +314,7 @@ class SessionPageMixin(SessionLike):
                 # and should not be suppressed.
                 self._last_mcp_navigation = prior_mcp_navigation
                 raise
-            title = await self.page.title()
+            title = await bounded(self.page.title(), operation="browser_navigate")
             self.url = url
             self._schedule_markdown_capture()
             self.recorder.record("navigate", url=url)
@@ -477,11 +478,15 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("snapshot", **record_kwargs)
         # url comes from the snapshotted document (frame when active); title is
         # page-level — Playwright Frames have no title().
-        return {"aria": aria_yaml, "url": target.url, "title": await self.page.title()}
+        return {
+            "aria": aria_yaml,
+            "url": target.url,
+            "title": await bounded(self.page.title(), operation="browser_snapshot"),
+        }
 
     @gated_operation("browser_evaluate")
     async def evaluate(self, expression: str) -> Any:
-        result = await self._target().evaluate(expression)
+        result = await bounded(self._target().evaluate(expression), operation="browser_evaluate")
         self.recorder.record("evaluate", expression=_redact_sink_value(expression))
         return result
 

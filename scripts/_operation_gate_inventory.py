@@ -13,7 +13,7 @@ here against a real detected hit each run (see that module's docstring).
 from __future__ import annotations
 
 OPERATION_NAME_FORWARDERS: dict[str, str] = {
-    "session/operation_gate.py:gated_operation._decorate._wrapped": (
+    "session/operation/gate/core.py:gated_operation._decorate._wrapped": (
         "forwards the fixed name validated once when the decorator is constructed"
     ),
     "server/browser/_operation.py:browser_operation": (
