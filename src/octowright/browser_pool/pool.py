@@ -9,6 +9,7 @@ import asyncio
 import hmac
 import sys
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,13 @@ class BrowserPool:
         self._pw_lock = asyncio.Lock()
         # Count of shared-driver rebuilds after a death (surfaced in status).
         self._driver_restarts: int = 0
+        # Last launch outcome per engine kind (surfaced at
+        # octowright_status()["pool"]["engine_health"]) — see
+        # _record_engine_health / engine_health(). A kind never launched has
+        # no entry here at all, deliberately: "no data" and "fine" are
+        # different answers, and the pool must not claim a kind is healthy
+        # just because nothing has failed yet.
+        self._engine_health: dict[str, dict[str, Any]] = {}
         self._sessions: dict[str, BrowserSession] = {}
         self._sessions_lock = asyncio.Lock()
         # Sessions mid-teardown: inserted by ``reserve_close_browser``/
@@ -140,8 +148,44 @@ class BrowserPool:
         """How many times the shared driver has been rebuilt after a death."""
         return self._driver_restarts
 
+    def _record_engine_health(self, kind: str, exc: Exception | None) -> None:
+        """Track the last launch outcome for one engine kind.
+
+        Diagnosing a real incident took an hour largely to establish "WebKit
+        is broken on this machine, Chromium is fine" — the pool already sees
+        every launch and every failure per kind; this just remembers the last
+        one so ``octowright_status`` can say so directly. Records only the
+        exception CLASS NAME, never the message: a launch failure message can
+        carry a filesystem path or a profile name, while the class name is the
+        diagnostic signal and carries nothing sensitive (the same reasoning
+        ``octowright_browser_launch_failed_total`` uses for its ``error``
+        label).
+        """
+        at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        if exc is None:
+            self._engine_health[kind] = {"outcome": "ok", "at": at}
+        else:
+            self._engine_health[kind] = {"outcome": "error", "at": at, "error": type(exc).__name__}
+
+    def engine_health(self) -> dict[str, dict[str, Any]]:
+        """Per-kind snapshot of the last launch outcome (see
+        ``_record_engine_health``). A kind never launched is absent from the
+        result rather than reported healthy — "no data" and "fine" are
+        different answers."""
+        return {kind: dict(v) for kind, v in self._engine_health.items()}
+
     async def launch(self, **options: Any) -> dict[str, Any]:
-        async with launch_span(options.get("kind") or "chromium") as sp:
+        kind_hint = options.get("kind") or "chromium"
+        try:
+            result = await self._launch_with_driver_retry(options, kind_hint)
+        except Exception as exc:
+            self._record_engine_health(kind_hint, exc)
+            raise
+        self._record_engine_health(kind_hint, None)
+        return result
+
+    async def _launch_with_driver_retry(self, options: dict[str, Any], kind_hint: str) -> dict[str, Any]:
+        async with launch_span(kind_hint) as sp:
             try:
                 return await self._launch_impl(options, sp)
             except Exception as exc:

@@ -427,6 +427,12 @@ def octowright_status() -> dict[str, Any]:
             # Per-browser operation-gate state (busy/queue/closing/broken), reused
             # verbatim from list_sessions() rows -- no separate Page/Frame read.
             "operation_gates": operation_gates,
+            # Per-engine last-launch outcome ({"outcome": "ok"|"error", "at": iso,
+            # "error": <exception class name, on failure>}). A kind never
+            # launched is absent, not falsely reported healthy -- lets the LLM
+            # or operator see "chromium is fine, webkit is failing" in one call
+            # instead of grepping logs (see BrowserPool.engine_health).
+            "engine_health": pool.engine_health(),
         },
         # Renderer-crash + auto-recovery tallies (process-lifetime). Lets the
         # operator/LLM see that "random crashes" are happening and whether they
