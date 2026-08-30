@@ -30,7 +30,7 @@ from octowright.http.pairing import (
     pairing_required,
 )
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool
-from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
+from octowright.session.operation.gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 
 # Production session ids are ``uuid.uuid4().hex[:12]`` (12 lower-case hex
 # chars), but tests and a few other call sites use longer alphanumeric ids.

@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Dependency-free primitives shared by ``operation_gate.py`` and ``operation_gate_close.py``.
+"""Dependency-free primitives shared by ``operation/gate/core.py`` and ``operation/gate/close.py``.
 
 Mirrors ``session/_constants.py``/``session/_protocols.py``: a third module
 with no dependency on either consumer, so mixin-style modules can share these

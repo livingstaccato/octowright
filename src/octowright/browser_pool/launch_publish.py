@@ -28,7 +28,7 @@ from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listene
 from octowright.browser_pool.visuals import wire_init_scripts
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
-from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
+from octowright.session.operation.gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 
 if TYPE_CHECKING:
     from octowright.browser_pool.options import LaunchOptions

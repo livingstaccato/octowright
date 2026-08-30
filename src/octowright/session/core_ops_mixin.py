@@ -15,7 +15,7 @@ from octowright.console_levels import is_diagnostic_console_message
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
-from octowright.session.operation_gate import gated_operation
+from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
 from octowright.session.viewport_ops import SessionViewportMixin
 

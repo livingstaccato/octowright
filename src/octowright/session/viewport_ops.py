@@ -18,7 +18,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright.session._protocols import SessionLike
-from octowright.session.operation_gate import gated_operation
+from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)

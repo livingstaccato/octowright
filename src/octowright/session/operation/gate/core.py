@@ -21,8 +21,8 @@ from typing import Any, Concatenate, Literal, LiteralString, ParamSpec, TypedDic
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter, gauge, histogram
-from octowright.session.operation_gate_close import _CloseGateMixin
-from octowright.session.operation_gate_types import (
+from octowright.session.operation.gate.close import _CloseGateMixin
+from octowright.session.operation.gate.types import (
     CloseReservation,
     OperationGateInvariantError,
     OperationGateState,
@@ -595,12 +595,12 @@ class SessionOperationGate(_CloseGateMixin):
         place -- swallowed and returned by ``prepare_then_teardown``, or
         raised in the close body before it ever runs -- and every one of
         them is normalized in a SINGLE seam, ``_terminal_close_failure``
-        (``operation_gate_close.py``), into ``SessionCloseAbortedError``.
+        (``operation/gate/close.py``), into ``SessionCloseAbortedError``.
         ``_release_close`` deliberately converts nothing itself, so one
         cause cannot yield two error types depending on where it landed; an
         earlier design did exactly that, and a ceiling-aborted close then
         read as an ordinary close race. See that class's docstring
-        (``operation_gate_types.py``) for the full mechanism, and
+        (``operation/gate/types.py``) for the full mechanism, and
         ``relaunch._close_with_fallback_snapshot`` for why the distinction
         from a plain ``SessionClosedError`` matters.
 

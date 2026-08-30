@@ -29,7 +29,7 @@ from octowright.session.core_locator_mixin import SessionLocatorMixin
 from octowright.session.core_network_mixin import SessionNetworkMixin
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     USE_DEFAULT,
     OperationGateSnapshot,
     SessionOperationGate,
@@ -272,7 +272,7 @@ class BrowserSession(
         ``macro_artifact_run``, ``run_sequence(stop_on_failure=False)``) before
         it ever reaches one. ``error`` is always a ``SessionCallTimeoutError``
         even when the exception that actually escaped this frame was something
-        else that wrapped it (``_call_timeout_cause`` in ``operation_gate.py``
+        else that wrapped it (``_call_timeout_cause`` in ``operation/gate/core.py``
         walks the ``__cause__`` chain before calling this hook, so a caller
         like ``macros/execution.py`` re-raising as ``RuntimeError(...) from
         exc`` still reaches here). ``operation_name`` is THIS frame's own

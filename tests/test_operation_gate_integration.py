@@ -215,7 +215,7 @@ async def test_timeout_waiter_never_enters_body_and_leaves_no_recorder_row(tmp_p
     mock) so ``action_count`` reflects an actual disk-backed decision, not a
     mock call tally."""
     from octowright.recorder import Recorder
-    from octowright.session.operation_gate import SessionBusyTimeoutError
+    from octowright.session.operation.gate import SessionBusyTimeoutError
 
     page = MagicMock()
     page.click = AsyncMock()
@@ -416,7 +416,7 @@ async def test_reserve_close_browser_require_fresh_rejects_shared_ticket(
     attach its own preparation to a ticket it does not own."""
     from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool.lifecycle import reserve_close_browser
-    from octowright.session.operation_gate import SessionClosingError
+    from octowright.session.operation.gate import SessionClosingError
 
     monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
     pool = BrowserPool()
@@ -460,7 +460,7 @@ async def test_active_timeout_ceiling_unwedges_a_close_in_progress(
     """
     from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool.lifecycle import reserve_close_browser
-    from octowright.session.operation_gate import OperationGateInvariantError
+    from octowright.session.operation.gate import OperationGateInvariantError
 
     monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
     pool = BrowserPool()
@@ -541,7 +541,7 @@ async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks
     """
     from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool.lifecycle import reserve_close_browser
-    from octowright.session.operation_gate import SessionCloseAbortedError
+    from octowright.session.operation.gate import SessionCloseAbortedError
 
     monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
     pool = BrowserPool()
@@ -615,7 +615,7 @@ async def test_ceiling_abort_produces_the_same_error_type_regardless_of_where_it
     """
     from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool.lifecycle import reserve_close_browser
-    from octowright.session.operation_gate import SessionCloseAbortedError
+    from octowright.session.operation.gate import SessionCloseAbortedError
     from tests._pool_invariants import wait_until
 
     monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
@@ -829,7 +829,7 @@ async def test_handoff_close_fallback_awaits_in_flight_external_close(monkeypatc
     profile directory while the old process is still releasing it (e.g.
     Chrome's SingletonLock)."""
     from octowright.browser_pool import relaunch
-    from octowright.session.operation_gate import SessionClosingError
+    from octowright.session.operation.gate import SessionClosingError
 
     async def _raise_closing(*args: object, **kwargs: object) -> None:
         raise SessionClosingError("already closing")

@@ -28,12 +28,12 @@ from collections.abc import Callable
 
 import pytest
 
-from octowright.session import operation_gate
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     OperationGateInvariantError,
     SessionOperationGate,
     resolve_operation_active_timeout_seconds,
 )
+from octowright.session.operation.gate import core as operation_gate
 from octowright.session.timeouts import SessionCallTimeoutError, bounded
 
 _ENV = "OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS"
@@ -70,7 +70,7 @@ async def _assert_cancelled(task: asyncio.Task[object]) -> None:
     it), and the surrounding ``async with`` block then exits normally --
     the assertion passes whether or not production code did anything.
     Confirmed by mutation: replacing ``owner.cancel()``
-    (``operation_gate.py``) with ``pass`` left every test using that shape
+    (``operation/gate/core.py``) with ``pass`` left every test using that shape
     green, just five seconds slower.
 
     ``asyncio.wait(..., timeout=...)`` does not cancel the awaited task on

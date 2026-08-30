@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Literal, LiteralString, TypeVar
 
-from octowright.session.operation_gate_types import (
+from octowright.session.operation.gate.types import (
     CloseReservation,
     OperationGateInvariantError,
     OperationGateState,
@@ -30,7 +30,7 @@ _T = TypeVar("_T")
 class _CloseGateMixin:
     """Close reservation, external-close, and control-plane mutation.
 
-    Split out of ``operation_gate.py`` to keep that module under the
+    Split out of ``operation/gate/core.py`` to keep that module under the
     repository's LOC ceiling; every method here only ever runs as part of a
     composed ``SessionOperationGate`` instance. The field/stub-method
     declarations below (never assigned here) describe that host's real

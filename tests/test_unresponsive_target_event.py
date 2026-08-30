@@ -56,7 +56,7 @@ from octowright.browser_pool.events import SessionCrashedEvent
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.server.meta import octowright_status
 from octowright.session import BrowserSession
-from octowright.session.operation_gate import _call_timeout_cause
+from octowright.session.operation.gate.core import _call_timeout_cause
 from octowright.session.timeouts import SessionCallTimeoutError
 
 

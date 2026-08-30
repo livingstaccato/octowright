@@ -36,7 +36,7 @@ from octowright.browser_pool.visuals import _tile_args_for_chromium
 from octowright.defaults import RECORDINGS_DIR, get_default_url
 from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
 from octowright.session import BrowserSession
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     SessionClosedError,
     SessionClosingError,
     resolve_operation_queue_timeout_seconds,

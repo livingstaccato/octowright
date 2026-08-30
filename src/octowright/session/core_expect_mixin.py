@@ -12,7 +12,7 @@ from typing import Any
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
-from octowright.session.operation_gate import gated_operation
+from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
 
 _WAIT_FOR_POLL_SECONDS = 0.05

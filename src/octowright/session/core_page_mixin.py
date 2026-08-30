@@ -27,7 +27,7 @@ from octowright.session.aria_redaction import (
 from octowright.session.aria_redaction import (
     aria_snapshot as redacted_aria_snapshot,
 )
-from octowright.session.operation_gate import gated_operation
+from octowright.session.operation.gate import gated_operation
 from octowright.session.screencast import notify_active_page
 from octowright.session.timeouts import bounded
 
