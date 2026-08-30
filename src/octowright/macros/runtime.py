@@ -213,6 +213,8 @@ async def _dispatch_click_or_fill(
     else:
         if "timeout_ms" in kwargs:
             semantic_kwargs["timeout_ms"] = kwargs["timeout_ms"]
+        if not is_fill and "no_wait_after" in kwargs:
+            semantic_kwargs["no_wait_after"] = kwargs["no_wait_after"]
         if is_fill and "value" in kwargs:
             semantic_kwargs["value"] = kwargs["value"]
 

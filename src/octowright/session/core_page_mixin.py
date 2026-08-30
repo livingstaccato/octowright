@@ -341,7 +341,13 @@ class SessionPageMixin(SessionLike):
         return {}
 
     @gated_operation("browser_click")
-    async def click(self, selector: str, *, timeout_ms: int | None = None) -> None:
+    async def click(
+        self,
+        selector: str,
+        *,
+        timeout_ms: int | None = None,
+        no_wait_after: bool = False,
+    ) -> None:
         """Click a CSS selector, waiting at most ``timeout_ms``.
 
         ``None`` resolves to ``DEFAULT_ACTION_TIMEOUT_MS`` rather than being
@@ -356,8 +362,14 @@ class SessionPageMixin(SessionLike):
         """
         budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
         meta = await self._resolve_semantic_metadata(selector, timeout_ms=budget)
-        await self._target().click(selector, timeout=budget)
-        self.recorder.record("click", selector=selector, **meta)
+        click_kwargs: dict[str, Any] = {"timeout": budget}
+        if no_wait_after:
+            click_kwargs["no_wait_after"] = True
+        await self._target().click(selector, **click_kwargs)
+        recorded_kwargs: dict[str, Any] = {"selector": selector, **meta}
+        if no_wait_after:
+            recorded_kwargs["no_wait_after"] = True
+        self.recorder.record("click", **recorded_kwargs)
 
     @gated_operation("session_input_redaction")
     async def _is_password_input(self, selector: str) -> bool:
