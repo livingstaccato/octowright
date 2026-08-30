@@ -15,7 +15,10 @@ SessionCloseReason = Literal["agent_close", "user_close", "external_disconnect",
 # Where a crash happened. ``renderer`` is a Playwright ``page.on("crash")``
 # (a tab/"Aw, Snap"); a renderer crash that also takes the browser process down
 # additionally evicts the session with ``SessionClosedEvent(reason="crashed")``.
-CrashScope = Literal["renderer", "process"]
+# "unresponsive" is neither -- the target is alive and simply stopped
+# answering, which no Playwright event reports, so it is raised by the call
+# budget in session/timeouts.py rather than observed.
+CrashScope = Literal["renderer", "process", "unresponsive"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -78,6 +81,9 @@ class SessionCrashedEvent:
     # the dead page). Lets the client say "auto-recovering, hold" instead of the
     # stale "relaunch it now" — the authoritative outcome arrives as a
     # SessionRecoveredEvent. False when recovery is off/exhausted (relaunch IS needed).
+    # Always False for scope="unresponsive": replacing the page is right for a
+    # crash but wrong for a merely-slow target that may still be executing, so
+    # an unresponsive target is never auto-recovered -- see session/timeouts.py.
     recovering: bool = False
 
 

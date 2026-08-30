@@ -157,7 +157,7 @@ async def test_admitted_arbitrary_exception_releases_the_gate_without_breaking_i
 async def test_invariant_error_marks_only_that_session_broken(_patch_pool_input: MagicMock) -> None:
     """A genuine operation-gate invariant violation on session A must not
     reach session B or the MCP tool registry -- only A's gate goes broken."""
-    from octowright.session.operation_gate import OperationGateInvariantError
+    from octowright.session.operation.gate import OperationGateInvariantError
 
     session_a = _FakeSession()
     session_b = _FakeSession()

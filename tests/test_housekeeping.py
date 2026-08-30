@@ -733,3 +733,146 @@ def test_daemon_housekeeping_loop_runs_tmp_sweep_job(monkeypatch: pytest.MonkeyP
 
     asyncio.run(_run())
     assert calls["sweep"] >= 1
+
+
+class _FakeGatedSession:
+    """Stand-in for BrowserSession -- just enough surface for job 6."""
+
+    def __init__(self, instance_id: str, kind: str, outcome: bool | Exception) -> None:
+        self.instance_id = instance_id
+        self.kind = kind
+        self._outcome = outcome
+
+    async def enforce_operation_active_timeout(self, ceiling_seconds: float) -> bool:
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+def test_enforce_active_timeout_once_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import housekeeping as _hk
+    from octowright.server import pool as _pool
+
+    monkeypatch.delenv("OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS", raising=False)
+    iter_sessions = MagicMock(return_value=())
+    monkeypatch.setattr(_pool, "iter_sessions", iter_sessions)
+    log = MagicMock()
+
+    asyncio.run(_hk._enforce_operation_active_timeout_once(log=log))
+
+    # The pool must not even be consulted when the ceiling is off.
+    iter_sessions.assert_not_called()
+    log.warning.assert_not_called()
+
+
+def test_enforce_active_timeout_once_breaches_only_the_wedged_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import housekeeping as _hk
+    from octowright.server import pool as _pool
+
+    monkeypatch.setenv("OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS", "60")
+    wedged = _FakeGatedSession("wedged-1", "chromium", True)
+    healthy = _FakeGatedSession("healthy-1", "firefox", False)
+    monkeypatch.setattr(_pool, "iter_sessions", lambda: (wedged, healthy))
+    log = MagicMock()
+
+    asyncio.run(_hk._enforce_operation_active_timeout_once(log=log))
+
+    log.warning.assert_called_once_with(
+        "octowright.housekeeping.active_timeout_breaches",
+        count=1,
+        session_ids=["wedged-1"],
+    )
+
+
+def test_enforce_active_timeout_once_isolates_a_per_session_check_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from octowright import housekeeping as _hk
+    from octowright.server import pool as _pool
+
+    monkeypatch.setenv("OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS", "60")
+    broken = _FakeGatedSession("broken-1", "chromium", RuntimeError("boom"))
+    healthy = _FakeGatedSession("healthy-1", "firefox", True)
+    monkeypatch.setattr(_pool, "iter_sessions", lambda: (broken, healthy))
+    log = MagicMock()
+
+    # One session's check raising must not stop the other from being checked.
+    asyncio.run(_hk._enforce_operation_active_timeout_once(log=log))
+
+    logged = {c.args[0] for c in log.warning.call_args_list}
+    assert "octowright.housekeeping.active_timeout_check_failed" in logged
+    assert "octowright.housekeeping.active_timeout_breaches" in logged
+    breach_call = next(
+        c for c in log.warning.call_args_list if c.args[0] == "octowright.housekeeping.active_timeout_breaches"
+    )
+    assert breach_call.kwargs["session_ids"] == ["healthy-1"]
+
+
+def test_daemon_housekeeping_loop_runs_active_timeout_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import housekeeping as _hk
+
+    calls = {"active_timeout": 0}
+
+    async def _active_timeout(*, log: object) -> None:
+        calls["active_timeout"] += 1
+
+    monkeypatch.setattr(_hk, "_reap_orphans_once", lambda **_kw: None)
+    monkeypatch.setattr(_hk, "_guard_daemon_log_size", lambda **_kw: None)
+
+    async def _noop_follower_reap(*, log: object) -> None:
+        return None
+
+    monkeypatch.setattr(_hk, "_reap_dead_follower_sessions_once", _noop_follower_reap)
+    monkeypatch.setattr(_hk, "_sweep_bridge_state_tmp_once", lambda **_kw: None)
+    monkeypatch.setattr(_hk, "_enforce_operation_active_timeout_once", _active_timeout)
+    log = MagicMock()
+
+    async def _run() -> None:
+        task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
+        for _ in range(200):
+            await asyncio.sleep(0.001)
+            if calls["active_timeout"] >= 1:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_run())
+    assert calls["active_timeout"] >= 1
+
+
+def test_daemon_housekeeping_loop_survives_active_timeout_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import housekeeping as _hk
+
+    monkeypatch.setattr(_hk, "_reap_orphans_once", lambda **_kw: None)
+    monkeypatch.setattr(_hk, "_guard_daemon_log_size", lambda **_kw: None)
+
+    async def _noop_follower_reap(*, log: object) -> None:
+        return None
+
+    monkeypatch.setattr(_hk, "_reap_dead_follower_sessions_once", _noop_follower_reap)
+    monkeypatch.setattr(_hk, "_sweep_bridge_state_tmp_once", lambda **_kw: None)
+
+    async def _boom(*, log: object) -> None:
+        raise RuntimeError("active timeout boom")
+
+    monkeypatch.setattr(_hk, "_enforce_operation_active_timeout_once", _boom)
+    log = MagicMock()
+
+    async def _run() -> None:
+        task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
+        for _ in range(200):
+            await asyncio.sleep(0.001)
+            if log.warning.call_args_list:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_run())
+    logged = {c.args[0] for c in log.warning.call_args_list}
+    assert "octowright.housekeeping.active_timeout_failed" in logged

@@ -13,8 +13,7 @@ from typing import Literal
 
 import pytest
 
-from octowright.session import operation_gate
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     USE_DEFAULT,
     OperationGateInvariantError,
     SessionBusyTimeoutError,
@@ -24,6 +23,7 @@ from octowright.session.operation_gate import (
     resolve_operation_queue_timeout_seconds,
     validate_operation_name,
 )
+from octowright.session.operation.gate import core as operation_gate
 
 
 def test_operation_timeout_resolution_precedence(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -11,6 +11,17 @@ enough context (instance, url, outcome, timestamp) that an operator or the LLM
 can articulate "browser X at <url> crashed at <ts> and recovered" from a single
 status call instead of grepping the daemon log. Bounded by ``_RING_SIZE`` so a
 long-lived daemon can't grow it without limit.
+
+The ring is shared across ALL categories, not partitioned per category:
+``recent(category=...)`` filters after the fact, so a target that repeatedly
+goes unresponsive (``CATEGORY_UNRESPONSIVE_TARGET``) can evict older renderer-
+crash or driver records out of the ring entirely, not just out of its own
+category's view. This is accepted as-is rather than fixed -- splitting the
+ring per category would change the ordering ``recent()``/``counts()`` return
+to their three existing consumers (``server/meta.py``, ``crash_reports.py``,
+the recovery/driver-relaunch paths), a broader change than the incident this
+module was extended for warrants. Noted here so the interaction reads as
+deliberate, not overlooked, the next time it comes up.
 """
 
 from __future__ import annotations
@@ -27,6 +38,11 @@ CATEGORY_DRIVER_RESTART = "driver_restart"
 # A browser session lost when the shared driver died (H4a). Recorded with
 # outcome="relaunched" + new_instance_id when auto-relaunch reopens it.
 CATEGORY_DRIVER_LOST = "driver_lost"
+# A target that stopped answering a Playwright call within its budget
+# (SessionCallTimeoutError). No Playwright event reports this -- it is
+# recorded from session/timeouts.py's call budget rather than observed like
+# a renderer crash, and it has no crash report to correlate.
+CATEGORY_UNRESPONSIVE_TARGET = "unresponsive_target"
 
 _RING_SIZE = int(os.environ.get("OCTOWRIGHT_INCIDENT_RING_SIZE", "25"))
 _RING: deque[dict[str, Any]] = deque(maxlen=_RING_SIZE)
