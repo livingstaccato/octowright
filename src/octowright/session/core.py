@@ -361,6 +361,14 @@ class BrowserSession(
     def operation_snapshot(self) -> OperationGateSnapshot:
         return self._operation_gate.snapshot()
 
+    async def enforce_operation_active_timeout(self, ceiling_seconds: float) -> bool:
+        """Delegates to the gate -- see ``SessionOperationGate.enforce_active_timeout``.
+
+        The only caller is ``housekeeping._enforce_operation_active_timeout_once``,
+        which resolves the ceiling once per cycle and walks every live session.
+        """
+        return await self._operation_gate.enforce_active_timeout(ceiling_seconds)
+
     async def set_protected_state(
         self,
         protected: bool,

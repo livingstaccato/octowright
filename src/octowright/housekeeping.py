@@ -6,7 +6,7 @@
 """Periodic leader-only housekeeping: reap orphaned browsers + bound the daemon log.
 
 Armed once in the leader (see ``cli.serve._run_leader``) when
-``HOUSEKEEPING_INTERVAL_SECONDS`` is enabled. Five jobs run every interval:
+``HOUSEKEEPING_INTERVAL_SECONDS`` is enabled. Six jobs run every interval:
 
 1. **Reap orphaned browsers.** When a Playwright driver dies — crash, OOM, a
    killed daemon generation, or ``octowright restart`` taking out a previous
@@ -57,6 +57,20 @@ Armed once in the leader (see ``cli.serve._run_leader``) when
    2026-07-09; nothing swept them automatically, so they'd reaccumulate
    forever. Age-gated well past any real write's lifetime so it can never
    race one still in flight.
+
+6. **Enforce the operation-gate active-duration ceiling.**
+   ``OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS`` (off by default) is the
+   backstop for a Playwright call site nobody has bounded with
+   ``session/timeouts.bounded`` yet: every session's gate already tracks how
+   long its current root operation has been active, so this job walks every
+   live session once per cycle and, for any gate that has been active longer
+   than the ceiling, cancels the owning task and drives that ONE session's
+   gate to ``broken`` (see ``SessionOperationGate.enforce_active_timeout``).
+   Deliberately not a per-gate background task — one timer per session
+   multiplied across a large pool is real overhead for a rare event, and
+   this loop already walks sessions on its own interval. A per-session
+   failure here is isolated so one wedged session's check can never stop
+   another session's from running in the same cycle.
 """
 
 from __future__ import annotations
@@ -212,6 +226,10 @@ async def daemon_housekeeping(*, interval_seconds: float, log: Any) -> None:
             _sweep_bridge_state_tmp_once(log=log)
         except Exception as exc:
             log.warning("octowright.housekeeping.bridge_tmp_sweep_failed", error=repr(exc))
+        try:
+            await _enforce_operation_active_timeout_once(log=log)
+        except Exception as exc:
+            log.warning("octowright.housekeeping.active_timeout_failed", error=repr(exc))
 
 
 def _reap_orphans_once(*, log: Any) -> None:
@@ -391,6 +409,44 @@ async def _evict_sessions(instances: dict[str, Any], victims: list[str], tracker
         if tracker is not None:
             tracker.mark_closed(reaped)
     return evicted
+
+
+async def _enforce_operation_active_timeout_once(*, log: Any) -> None:
+    """Cancel any session whose gate's active operation outran the ceiling.
+
+    No-ops entirely when ``OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS`` is
+    unset (the default) -- ``resolve_operation_active_timeout_seconds``
+    returns ``None`` and the pool is never even touched. Each session is
+    checked and (on failure to check) logged independently: a wedged
+    session's gate breaking, or a bug while checking one session, must never
+    stop the loop from reaching the next session in the same cycle -- see
+    ``SessionOperationGate.enforce_active_timeout``'s docstring for why this
+    job exists instead of a per-gate timer.
+    """
+    from octowright.server import pool as _pool
+    from octowright.session.operation_gate import resolve_operation_active_timeout_seconds
+
+    ceiling = resolve_operation_active_timeout_seconds()
+    if ceiling is None:
+        return
+
+    breached: list[str] = []
+    for session in _pool.iter_sessions():
+        try:
+            if await session.enforce_operation_active_timeout(ceiling):
+                breached.append(session.instance_id)
+        except Exception as exc:
+            log.warning(
+                "octowright.housekeeping.active_timeout_check_failed",
+                instance_id=session.instance_id,
+                error=repr(exc),
+            )
+    if breached:
+        log.warning(
+            "octowright.housekeeping.active_timeout_breaches",
+            count=len(breached),
+            session_ids=breached,
+        )
 
 
 def _sweep_bridge_state_tmp_once(*, log: Any) -> None:

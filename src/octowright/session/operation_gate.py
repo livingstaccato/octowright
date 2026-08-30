@@ -48,6 +48,7 @@ __all__ = [
     "SessionOperationGate",
     "UseDefault",
     "gated_operation",
+    "resolve_operation_active_timeout_seconds",
     "resolve_operation_queue_timeout_seconds",
     "validate_operation_name",
 ]
@@ -95,9 +96,54 @@ def resolve_operation_queue_timeout_seconds(
     return _positive_finite_seconds(raw, source=_OPERATION_TIMEOUT_ENV)
 
 
+# OFF by default (see resolve_operation_active_timeout_seconds) -- the ceiling
+# is a backstop for unenumerated call sites, and cancelling in-flight browser
+# work is a heavier intervention than Task 1's per-call budget failing one
+# call. Mirrors session/timeouts.py's _OFF_TOKENS plus "" for an env var set
+# to the empty string, which os.environ.get(..., default) alone would not
+# catch (an explicit empty value is not "unset").
+_OPERATION_ACTIVE_TIMEOUT_ENV = "OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS"
+_ACTIVE_TIMEOUT_OFF_TOKENS = frozenset({"", "0", "off", "never", "none", "disabled", "false", "no"})
+
+
+def resolve_operation_active_timeout_seconds(
+    explicit: float | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> float | None:
+    """Resolve the opt-in active-duration ceiling. ``None`` means disabled.
+
+    Same parser shape as ``resolve_operation_queue_timeout_seconds`` with one
+    deliberate difference. That resolver defaults ON (a per-call budget
+    trades an unbounded hang for a bounded one), so an unparsable value
+    there falls back to a working default rather than silently
+    reintroducing the hang. This ceiling defaults OFF -- cancelling
+    in-flight browser work is a heavier intervention than failing one call
+    -- so an unparsable value falls back to OFF too: the feature itself is
+    opt-in, and a typo in the env var must not silently turn on a hardcoded
+    quota nobody asked for.
+
+    ``explicit`` (a direct caller override, not an env var) is still
+    validated strictly and raises on an invalid value -- that path is a
+    programming error, not an operator typo, and Task 1's resolver treats
+    its own ``explicit`` parameter the same way.
+    """
+    if explicit is not None:
+        return _positive_finite_seconds(explicit, source="operation_active_timeout_seconds")
+    source = os.environ if environ is None else environ
+    raw = source.get(_OPERATION_ACTIVE_TIMEOUT_ENV)
+    if raw is None or raw.strip().lower() in _ACTIVE_TIMEOUT_OFF_TOKENS:
+        return None
+    try:
+        return _positive_finite_seconds(raw, source=_OPERATION_ACTIVE_TIMEOUT_ENV)
+    except ValueError:
+        return None
+
+
 _QUEUE_WAIT = histogram("octowright_operation_queue_wait_seconds", unit="s")
 _ACTIVE_DURATION = histogram("octowright_operation_active_duration_seconds", unit="s")
 _QUEUE_TIMEOUT = counter("octowright_operation_queue_timeout_total")
+_ACTIVE_TIMEOUT = counter("octowright_operation_active_timeout_total")
 _REJECTED = counter("octowright_operation_rejected_total")
 _QUEUE_DEPTH = gauge("octowright_operation_queue_depth", unit="1")
 
@@ -492,6 +538,78 @@ class SessionOperationGate(_CloseGateMixin):
             self._active_since = None
             self._grant_next_locked()
             self._publish_diagnostics_locked()
+
+    async def enforce_active_timeout(self, ceiling_seconds: float) -> bool:
+        """Cancel the active (root) operation if it has run past *ceiling_seconds*.
+
+        The backstop for the Playwright call sites nobody has bounded with
+        ``session/timeouts.bounded`` yet: rather than a per-call budget, this
+        reads what the gate already tracks for its ROOT lease --
+        ``_active_since`` and ``_root_operation`` -- and, if one operation
+        has held the gate open longer than the ceiling, cancels the owning
+        task and drives the gate to ``broken`` through the same
+        ``_break_locked`` invariant path every other broken-gate transition
+        uses. A subsequent operation on this gate then fails fast with the
+        ordinary ``OperationGateInvariantError`` rejection -- no new error
+        type, no new state, nothing for a caller to special-case.
+
+        Called from ``housekeeping.py``'s periodic loop (job 6 -- see its
+        module docstring), never from a per-gate background task: one timer
+        per session multiplied across a large pool is real overhead for a
+        rare event, and housekeeping already walks every session on its own
+        interval. A gate whose active operation is still inside budget (the
+        overwhelming common case, and the ENTIRE case when the feature is
+        off) costs one uncontended lock acquire and nothing else -- no
+        Playwright call, no per-session task.
+
+        Deliberately does NOT raise or publish a ``SessionCallTimeoutError``.
+        That machinery (``session/timeouts.bounded``, this gate's
+        ``on_call_timeout`` hook) exists for a call site that knows its own
+        operation and awaits it under a budget from the INSIDE. Cancelling
+        from the OUTSIDE, after the fact, is a different failure shape: the
+        exception delivered to the owning task is a plain
+        ``asyncio.CancelledError`` with no ``__cause__`` linking it to a
+        ``SessionCallTimeoutError``, so ``operation()``'s own ``finally``
+        block (the innermost-lease publish ``on_call_timeout`` machinery)
+        does not fire for a ceiling breach -- a single wedge therefore
+        produces exactly one signal, never both an "unresponsive"
+        ``SessionCrashedEvent`` AND a ceiling-breach invariant break that
+        would contradict each other. The two backstops report through
+        deliberately separate channels: a per-call timeout that escapes a
+        gated operation is a target that answered *its own* budget
+        overrun (``on_call_timeout``); a ceiling breach is the gate itself
+        noticing nobody put a budget on the call at all.
+
+        Returns True if a breach was found and handled, else False. The
+        caller (``housekeeping._enforce_operation_active_timeout_once``)
+        checks each session independently and isolates a per-session
+        failure, so one wedged session's gate breaking never stops another
+        session's (healthy or also-wedged) gate from being checked.
+        """
+        async with self._admission_lock:
+            if self._state is not OperationGateState.OPEN:
+                return False
+            owner = self._owner_task
+            operation = self._root_operation
+            active_since = self._active_since
+            if owner is None or operation is None or active_since is None:
+                return False
+            duration = self._clock() - active_since
+            if duration < ceiling_seconds:
+                return False
+            _ACTIVE_TIMEOUT.add(1, attributes={"operation": operation, "kind": self.kind})
+            log.warning(
+                "octowright.operation.active_timeout",
+                instance_id=self.instance_id,
+                kind=self.kind,
+                operation=operation,
+                active_duration_ms=round(duration * 1000),
+                ceiling_seconds=ceiling_seconds,
+            )
+            owner.cancel()
+            self._break_locked(f"operation {operation!r} exceeded the active-duration ceiling of {ceiling_seconds}s")
+            self._publish_diagnostics_locked()
+            return True
 
     @asynccontextmanager
     async def operation(
