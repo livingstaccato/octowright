@@ -149,6 +149,10 @@ _CREDENTIAL_FOR_KIND = {
     "url": "https://u:pw@somewhere.com/x",
     "pattern": "https://u:pw@somewhere.com/x",
     "expression": "fetch('/x', {headers: {a: 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'}})",  # pragma: allowlist secret
+    # a11y_dragdrop's two code sinks, spelled differently from `expression`
+    # but reaching the same `evaluate`.
+    "verify_js": "() => fetch('/x?t=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345')",  # pragma: allowlist secret
+    "grabbed_predicate_js": "() => fetch('/x?t=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345')",  # pragma: allowlist secret
 }
 
 

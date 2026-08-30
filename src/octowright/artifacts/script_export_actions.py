@@ -95,6 +95,141 @@ def _mock_handler(action: dict[str, Any]) -> Any:
         await route.fulfill(status=status, body=body, content_type=content_type, headers=headers)
 
     return _fulfill
+
+
+# Keyboard (WAI-ARIA APG) drag-and-drop navigation key tables, mirroring
+# session/a11y_dragdrop.py's _TAB_KEYS / _ARROW_KEYS exactly.
+_A11Y_TAB_KEYS = {"forward": "Tab", "backward": "Shift+Tab"}
+_A11Y_ARROW_KEYS = {"up": "ArrowUp", "down": "ArrowDown", "left": "ArrowLeft", "right": "ArrowRight"}
+# Mirrors _DEFAULT_GRABBED_JS: a widget in grab mode almost always keeps focus
+# on the grabbed element, so this is the check that works without the caller
+# knowing anything about the widget.
+_A11Y_DEFAULT_GRABBED_JS = "(el) => document.activeElement === el"
+
+
+_A11Y_VERIFY_FIELDS = ("verify_js", "verify_selector_appears", "verify_selector_gone", "verify_text_contains")
+
+
+def _a11y_validate(action: dict[str, Any]) -> None:
+    """Mirrors ``a11y_dragdrop.validate_params``: refuse impossible shapes.
+
+    Without it the exported script diverged from replay on exactly the inputs
+    that need an error: ``nav_key="swipe"`` raised on replay but fell through
+    to Tab navigation here, ``nav_key="keys"`` with no sequence silently sent
+    zero keys, and a missing verify field reached the dispatch below as a bare
+    ``KeyError``. An exported script is run without octowright's lint, so this
+    is the only thing standing between a hand-edited macro and a silent
+    behaviour difference.
+    """
+    nav_key = action.get("nav_key", "tab")
+    if nav_key not in ("tab", "arrow", "keys"):
+        raise RuntimeError(f"a11y_dragdrop nav_key must be one of ['arrow', 'keys', 'tab'], got {nav_key!r}")
+    if nav_key == "keys" and not action.get("nav_key_sequence"):
+        raise RuntimeError("a11y_dragdrop nav_key='keys' requires a non-empty nav_key_sequence")
+    if nav_key != "keys" and action.get("nav_key_sequence"):
+        raise RuntimeError(f"a11y_dragdrop nav_key_sequence is only valid with nav_key='keys', not {nav_key!r}")
+    nav_direction = action.get("nav_direction")
+    table = _A11Y_ARROW_KEYS if nav_key == "arrow" else _A11Y_TAB_KEYS
+    if nav_key != "keys" and nav_direction is not None and nav_direction not in table:
+        raise RuntimeError(
+            f"a11y_dragdrop nav_direction for nav_key={nav_key!r} must be one of "
+            f"{sorted(table)}, got {nav_direction!r}"
+        )
+    provided = [f for f in _A11Y_VERIFY_FIELDS if action.get(f)]
+    if len(provided) != 1:
+        raise RuntimeError(
+            f"a11y_dragdrop requires exactly one verify_* field "
+            f"({', '.join(_A11Y_VERIFY_FIELDS)}), got {len(provided)}"
+        )
+
+
+def _a11y_nav_keys(action: dict[str, Any]) -> list[str]:
+    """The concrete key-press sequence, mirroring ``a11y_dragdrop._nav_keys``."""
+    nav_key = action.get("nav_key", "tab")
+    if nav_key == "keys":
+        return list(action.get("nav_key_sequence") or [])
+    nav_direction = action.get("nav_direction")
+    if nav_key == "arrow":
+        key = _A11Y_ARROW_KEYS[nav_direction or "down"]
+    else:
+        key = _A11Y_TAB_KEYS[nav_direction or "forward"]
+    return [key] * int(action.get("max_nav_steps", 12))
+
+
+async def _a11y_check_verify(state: dict[str, Any], action: dict[str, Any]) -> bool:
+    """One evaluation of whichever verify_* field is set.
+
+    Mirrors ``session/a11y_dragdrop.py``'s ``_check_verify`` dispatch order
+    exactly: js, then selector-appears, then selector-gone, then text-contains
+    as the unconditional fallback. Dispatch is by TRUTHINESS, matching the
+    engine and the lint's arity count -- an ``is not None`` test here would
+    take the ``verify_js`` branch on ``verify_js=""`` and evaluate the empty
+    string while the author's real check went unrun. ``_a11y_validate`` has
+    already guaranteed exactly one field is truthy by the time this runs, so
+    the fallback is reached only with a real needle.
+    """
+    target = _target(state)
+    if action.get("verify_js"):
+        return bool(await target.evaluate(action["verify_js"]))
+    if action.get("verify_selector_appears"):
+        return await target.locator(action["verify_selector_appears"]).count() > 0
+    if action.get("verify_selector_gone"):
+        return await target.locator(action["verify_selector_gone"]).count() == 0
+    return bool(
+        await target.evaluate(
+            "(needle) => document.body.innerText.includes(needle)", action.get("verify_text_contains")
+        )
+    )
+
+
+async def _a11y_dragdrop(state: dict[str, Any], action: dict[str, Any]) -> None:
+    """Keyboard (WAI-ARIA APG) drag-and-drop: grab, navigate, drop, verify, release.
+
+    Mirrors ``session/a11y_dragdrop.run_a11y_dragdrop`` behaviourally, with
+    none of its infrastructure -- no operation gate, no recorder, no
+    telemetry, since this runs against a bare Playwright page/frame with no
+    octowright session. The release-on-failure semantics are the part that
+    must not drift: a grabbed-predicate returning False skips release outright
+    (the key was pressed but the widget demonstrably never entered grab mode
+    -- nothing to release), while a failed verify OR any exception during
+    grab/navigate/drop/verify DOES release, matching the engine's own
+    carve-out (a grab that succeeded followed by a drop that did not would
+    otherwise leave the widget stuck in grab mode). ``focus()`` stays outside
+    the protected region for the same reason it does in the engine: no key has
+    been delivered yet.
+    """
+    _a11y_validate(action)
+    target = _target(state)
+    keyboard = _page(state).keyboard
+    source = target.locator(action["source_selector"])
+    release_key = action.get("release_key", "Escape")
+
+    await source.focus()
+    try:
+        await keyboard.press(action.get("grab_key", "Space"))
+        grabbed_js = action.get("grabbed_predicate_js") or _A11Y_DEFAULT_GRABBED_JS
+        if not bool(await source.evaluate(grabbed_js)):
+            return
+        for key in _a11y_nav_keys(action):
+            await keyboard.press(key)
+        await keyboard.press(action.get("drop_key", "Space"))
+
+        verify_timeout_ms = int(action.get("verify_timeout_ms", 2000))
+        verify_poll_ms = int(action.get("verify_poll_ms", 100))
+        deadline = time.monotonic() + verify_timeout_ms / 1000
+        while True:
+            if await _a11y_check_verify(state, action):
+                return
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(verify_poll_ms / 1000)
+        await keyboard.press(release_key)
+    except Exception:
+        try:
+            await keyboard.press(release_key)
+        except Exception:
+            pass
+        raise
 '''
 
 #: ``kind -> dispatch body``. Each body runs with ``action`` and ``state`` in
@@ -215,6 +350,15 @@ executed += 1
 source = action.get("source") or action["source_selector"]
 target = action.get("target") or action["target_selector"]
 await _target(state).drag_and_drop(source, target)
+executed += 1
+""",
+    # `_a11y_dragdrop` (STATE_HELPERS) always returns normally on an ordinary
+    # failed grab/verify -- it never raises for those, matching how the live
+    # session method never raises for them either (macros.runtime._dispatch_standard
+    # just awaits the call and counts it as executed). Only a genuine exception
+    # (e.g. a selector that never resolves) propagates and aborts the script.
+    "a11y_dragdrop": """
+await _a11y_dragdrop(state, action)
 executed += 1
 """,
     "set_input_files": """

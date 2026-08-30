@@ -12,6 +12,7 @@ to make every browser_* tool callable.
 
 from __future__ import annotations
 
+from octowright.server.browser import a11y as _a11y  # noqa: F401
 from octowright.server.browser import artifact_manifest as _artifact_manifest  # noqa: F401
 from octowright.server.browser import each as _each  # noqa: F401
 from octowright.server.browser import input as _input  # noqa: F401
@@ -22,6 +23,7 @@ from octowright.server.browser import trace as _trace  # noqa: F401
 from octowright.server.browser import views as _views  # noqa: F401
 
 # Re-export selected tool functions for direct test access.
+from octowright.server.browser.a11y import browser_a11y_dragdrop
 from octowright.server.browser.artifact_manifest import browser_artifact_manifest
 from octowright.server.browser.each import browser_each
 from octowright.server.browser.input import (
@@ -97,6 +99,7 @@ from octowright.server.browser.views import (
 )
 
 __all__ = [
+    "browser_a11y_dragdrop",
     "browser_artifact_manifest",
     "browser_brief",
     "browser_capture_and_close",

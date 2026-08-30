@@ -62,6 +62,7 @@ _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "hover": ("selector",),
     "select_option": ("selector",),
     "drag": (),
+    "a11y_dragdrop": ("source_selector",),
     "resize": ("width", "height"),
     "open_url": ("url",),
     "switch_page": ("index",),
@@ -80,7 +81,11 @@ _MACRO_CALL_ACTION = "macro_call"
 #: Candidate fields that hold a URL, and so are scanned by URL part.
 _URL_LIKE_KEYS: frozenset[str] = frozenset({"url", "pattern"})
 #: Candidate fields that hold JavaScript, scanned for embedded tokens only.
-_CODE_LIKE_KEYS: frozenset[str] = frozenset({"expression"})
+#: ``a11y_dragdrop`` spells two of its own (``verify_js``,
+#: ``grabbed_predicate_js``) rather than reusing ``expression``, and both reach
+#: ``evaluate`` — so the code-shaped scan has to know their names too, exactly
+#: as ``substitution.CREDENTIAL_UNSAFE_KEYS`` does for the run-time guard.
+_CODE_LIKE_KEYS: frozenset[str] = frozenset({"expression", "verify_js", "grabbed_predicate_js"})
 
 #: The finder keys a click_by/fill_by must set EXACTLY one of — the arity
 #: `build_locator` enforces. Derived from substitution rather than listed:
@@ -173,6 +178,7 @@ def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: l
 
     _check_simple_locator_fields(action, kind, _report)
     _check_simple_drag_fields(action, kind, _report)
+    _check_a11y_dragdrop_verify_arity(action, kind, _report)
     _check_simple_required_fields(action, kind, _report)
 
 
@@ -273,6 +279,33 @@ def _check_simple_drag_fields(action: dict[str, Any], kind: str, report: _Report
         report("action 'drag' is missing required field 'source' (or 'source_selector')")
     if not (action.get("target") or action.get("target_selector")):
         report("action 'drag' is missing required field 'target' (or 'target_selector')")
+
+
+_A11Y_VERIFY_FIELDS: tuple[str, ...] = (
+    "verify_js",
+    "verify_selector_appears",
+    "verify_selector_gone",
+    "verify_text_contains",
+)
+
+
+def _check_a11y_dragdrop_verify_arity(action: dict[str, Any], kind: str, report: _Report) -> None:
+    """Verify ARITY, mirroring the tool's own validation.
+
+    The linter is the only thing standing between a hand-edited macro and a
+    drag step that checks nothing: with zero verify fields the action reports
+    success without having confirmed the drop, and with two it is ambiguous
+    which one gates success. The tool rejects both at call time; without this
+    the macro would lint clean and fail at replay.
+    """
+    if kind != "a11y_dragdrop":
+        return
+    provided = [f for f in _A11Y_VERIFY_FIELDS if action.get(f)]
+    if len(provided) != 1:
+        report(
+            f"action 'a11y_dragdrop' requires exactly one verify_* field "
+            f"({', '.join(_A11Y_VERIFY_FIELDS)}), got {len(provided)}"
+        )
 
 
 def _check_simple_required_fields(action: dict[str, Any], kind: str, report: _Report) -> None:

@@ -48,6 +48,12 @@ ALLOWED: dict[str, frozenset[int]] = {
     "session/aria_redaction.py": frozenset({154}),
     # Same shape: `locator.first.evaluate(...)` on a Locator parameter.
     "session/core_locator_mixin.py": frozenset({36}),
+    # `source = target.locator(source_selector)` a few statements above, then
+    # `source.evaluate(...)` -- a genuine Locator.evaluate, which takes a real
+    # timeout and falls back to Playwright's action timeout, so it is already
+    # bounded. Flagged only because the receiver is a bare local rather than an
+    # inline `.locator(...)` chain the scanner could recognise structurally.
+    "session/a11y_dragdrop.py": frozenset({218}),
     # `loc = self._target().locator(selector).first` two statements above,
     # then `loc.evaluate(...)` -- a genuine Locator.evaluate call, just not
     # inline where a syntactic check could see the `.locator(` in the same
